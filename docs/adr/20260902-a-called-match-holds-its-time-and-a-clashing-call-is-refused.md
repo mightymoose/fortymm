@@ -38,6 +38,12 @@ per-player fixed spans that in-progress occupancy and rest shadows use, so a pin
 a running match, or another pin, cannot wedge the day. Unpinned fixtures schedule around the
 merged union.
 
+Existing pin-to-pin and pin-to-running overlaps are reported as placement conflicts,
+including player rest gaps. Soft pre-live placements can already clash when the day
+goes live, and a running match can overrun a later pin; refusing new live clashes
+does not prevent either case. The director sees the named conflicts without the
+solver moving either promise or blanking the rest of the board.
+
 The apply in `api/app/schedule_solves.py` echoes a pin's placement and writes nothing for it.
 The "slid later" branch is gone. The only correction the apply still sends is the
 withdrawal void.

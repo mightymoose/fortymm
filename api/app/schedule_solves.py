@@ -1925,7 +1925,7 @@ async def _apply_result(
 
         # Placement conflicts are orthogonal to the verdict (ADR "overlapping
         # in-progress matches are tolerated and reported"): the solver reports
-        # in-progress-vs-in-progress overlaps on ANY verdict — a fully-placed
+        # fixed-fixture overlaps (running or pinned) on ANY verdict — a fully-placed
         # ``optimal``/``feasible`` board can carry them, and so can an
         # ``infeasible``/``unknown`` one — so this write is NOT gated on a
         # branch above. Resolved (ids → player names, table labels) against the

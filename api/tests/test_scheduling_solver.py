@@ -1489,6 +1489,51 @@ class TestInProgressConflicts:
     collision on ``result.conflicts`` for the director to resolve — it never
     picks a survivor and never moves a live match."""
 
+    @pytest.mark.parametrize("first_is_running", [False, True])
+    @pytest.mark.parametrize("shared_table", [False, True])
+    def test_inherited_pin_clashes_are_reported_without_moving_promises(
+        self, first_is_running: bool, shared_table: bool
+    ) -> None:
+        """Soft pre-live placements can enter a live snapshot already clashing."""
+        p1, p2, p3, p4, p5, p6 = _players(6)
+        second_table = TableId("T1" if shared_table else "T2")
+        # Different tables exercise the rest floor too: match 1 ends at 25,
+        # but its player remains occupied until 35.
+        second_start = 10 if shared_table else 30
+        snapshot = dataclasses.replace(
+            _one_reservation_snapshot(
+                (
+                    _fixture(1, p1, p2, pin=Pin(TableId("T1"), 0)),
+                    _fixture(
+                        2,
+                        p3 if shared_table else p1,
+                        p4,
+                        pin=Pin(second_table, second_start),
+                    ),
+                    _fixture(3, p5, p6),
+                ),
+                in_progress=(InProgressMatch(FixtureId("F1"), TableId("T1"), 0),)
+                if first_is_running
+                else (),
+            ),
+            is_live=True,
+        )
+        result = solve(snapshot, time_cap_s=CAP)
+        assert result.verdict in SOLVED
+        assert result.conflicts == (
+            TableConflict(TableId("T1"), (FixtureId("F1"), FixtureId("F2")))
+            if shared_table
+            else PlayerConflict(p1, (FixtureId("F1"), FixtureId("F2"))),
+        )
+        placements = {
+            placement.fixture_id: placement for placement in result.placements
+        }
+        assert placements[FixtureId("F2")].table_id == second_table
+        assert placements[FixtureId("F2")].start_min == second_start
+        assert FixtureId("F3") in placements
+        if not first_is_running:
+            assert placements[FixtureId("F1")].start_min == 0
+
     def test_overlap_on_a_table_is_tolerated_and_reported(self) -> None:
         """Two in-progress matches recorded on the SAME table at overlapping
         times. Before #1144 this handed two rigid, overlapping fixed intervals
@@ -1566,6 +1611,25 @@ class TestInProgressConflicts:
             in_progress=(InProgressMatch(FixtureId("F1"), TableId("T1"), 0),),
         )
         result = solve(snapshot, time_cap_s=CAP)
+        assert result.verdict in SOLVED
+        assert result.conflicts == ()
+
+    def test_pins_touching_at_the_rest_boundary_do_not_conflict(self) -> None:
+        p1, p2, p3 = _players(3)
+        result = solve(
+            _one_reservation_snapshot(
+                (
+                    _fixture(1, p1, p2, pin=Pin(TableId("T1"), 0)),
+                    _fixture(
+                        2,
+                        p1,
+                        p3,
+                        pin=Pin(TableId("T1"), match_minutes(3) + REST_MIN),
+                    ),
+                )
+            ),
+            time_cap_s=CAP,
+        )
         assert result.verdict in SOLVED
         assert result.conflicts == ()
 

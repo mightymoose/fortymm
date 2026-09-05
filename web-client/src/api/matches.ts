@@ -1,9 +1,11 @@
 import {
   keepPreviousData,
+  onlineManager,
   queryOptions,
   useMutation,
   useQuery,
   useQueryClient,
+  type Mutation,
 } from '@tanstack/react-query'
 import {
   ApiError,
@@ -22,6 +24,7 @@ import {
 import type { components } from './schema'
 import {
   readScoreSaveContext,
+  readScoreSavePoints,
   scoreBaselineConflict,
   type ScoreSaveContext,
 } from './score-save-baseline'
@@ -487,6 +490,63 @@ function prepareScoreSave(
   }
 }
 
+function waitForScoreSave(queryClient: QueryClientArg, mutation: Mutation) {
+  return new Promise<boolean>((resolve) => {
+    if (mutation.state.status !== 'pending') {
+      resolve(mutation.state.status === 'success')
+      return
+    }
+    const unsubscribe = queryClient.getMutationCache().subscribe((event) => {
+      if (
+        mutation.state.status !== 'pending' ||
+        (event.type === 'removed' && event.mutation === mutation)
+      ) {
+        unsubscribe()
+        resolve(mutation.state.status === 'success')
+      }
+    })
+  })
+}
+
+/** Offline entry may advance past failed scratch saves. Before an online
+ * create, restore that prefix in order. Concurrent callers join the same
+ * pending earlier attempt; dependencies only point to lower game numbers. */
+async function restoreScorePrerequisites(
+  queryClient: QueryClientArg,
+  matchId: string,
+  gameNumber: number,
+) {
+  for (let n = 1; n < gameNumber; n += 1) {
+    const saved = queryClient
+      .getQueryData<MatchDetails>(matchQueryKey(matchId))
+      ?.games.some((game) => game.game_number === n && game.score !== null)
+    if (saved) continue
+    const previous = queryClient
+      .getMutationCache()
+      .findAll({ mutationKey: scoreMutationKey(matchId, n), exact: true })
+      .at(-1)
+    // No local attempt to recover: the server owns the missing-game refusal.
+    if (!previous) continue
+    let recovered = false
+    if (previous.state.status === 'pending') {
+      recovered = await waitForScoreSave(queryClient, previous)
+    } else if (previous.state.status === 'error') {
+      const points = readScoreSavePoints(previous.state.variables)
+      if (points) {
+        recovered =
+          (await fireScoreSave(queryClient, matchId, n, points)) !== undefined
+      }
+    } else {
+      continue
+    }
+    if (!recovered) {
+      throw new ApiError(
+        422, `Save game ${n} before game ${gameNumber}.`, 'save score',
+      )
+    }
+  }
+}
+
 /** Shared scratchpad mutation. Failed attempts retain their points and original
  * committed identity for thirty minutes, across navigation and refetch. */
 export function scoreSaveMutationOptions(
@@ -510,6 +570,9 @@ export function scoreSaveMutationOptions(
       scoreBaseline: input.scoreBaseline,
     }),
     mutationFn: async (input: ScoreSaveInput): Promise<MatchDetails> => {
+      if (!input.scoreBaseline && onlineManager.isOnline()) {
+        await restoreScorePrerequisites(queryClient, matchId, gameNumber)
+      }
       const cached = queryClient.getQueryData<MatchDetails>(
         matchQueryKey(matchId),
       )

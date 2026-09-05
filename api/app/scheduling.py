@@ -68,13 +68,13 @@ variable interval (only unpinned fixtures have one now) still routes
 conservatively around the merged occupancy (nobody else is scheduled onto a
 genuinely-held or genuinely-promised table or human). The solver does **not**
 pick which of the colliding matches is "real" and never moves, re-times, or
-drops a live match or a pin; it reports the in-progress-vs-in-progress overlaps
+drops a live match or a pin; it reports overlaps between in-progress matches and pins
 as :data:`PlacementConflict`s on :attr:`SolveResult.conflicts` — orthogonal to
 the verdict, so a fully-placed ``optimal`` board can still carry them — for the
-director to resolve. A pin-vs-pin or pin-vs-occupancy overlap is reported at
-the write boundary instead (a live placement clash is *refused*, not written —
-``app.tournament_placement``), so it never reaches this module in the first
-place; nothing here reports it a second time. Rest-shadow overlaps are merged
+director to resolve. The live write boundary refuses new clashing calls, but
+soft pre-live pins can already clash when the day goes live, and a running
+match can overrun a later pin. These existing clashes must still be reported.
+Rest-shadow overlaps are merged
 the same way but not reported (they are not a director-actionable
 double-booking).
 
@@ -578,7 +578,7 @@ InfeasibilityReason = (
 
 @dataclass(frozen=True, slots=True)
 class TableConflict:
-    """Two or more in-progress matches recorded on the *same table* at
+    """Two or more in-progress matches or pins recorded on the *same table* at
     overlapping times — physically impossible (a table holds one match), so it
     can only be contradictory data from a soft manual placement PATCH. Carries
     the shared ``table_id`` and the overlapping ``fixture_ids`` (sorted). The
@@ -593,7 +593,7 @@ class TableConflict:
 
 @dataclass(frozen=True, slots=True)
 class PlayerConflict:
-    """Two or more in-progress matches sharing a *human* whose rest-padded
+    """Two or more in-progress matches or pins sharing a *human* whose rest-padded
     occupancy intervals overlap — physically impossible (a human plays one
     match at a time), so it is contradictory data from a soft manual PATCH.
     Carries the shared ``player_id`` and the overlapping ``fixture_ids``
@@ -609,7 +609,7 @@ class PlayerConflict:
 #: orthogonal to the verdict and can ride on a fully-placed ``optimal`` board).
 #: A discriminated union over ``kind``, DB-blind exactly like the reasons union:
 #: ids + minute-ints only, so a downstream DB-aware layer resolves them into
-#: names and wall-clock. Each arm names one shared resource and the in-progress
+#: names and wall-clock. Each arm names one shared resource and the fixed
 #: fixtures colliding on it — the director-actionable "you double-booked" signal.
 PlacementConflict = TableConflict | PlayerConflict
 
@@ -629,18 +629,17 @@ class SolveResult:
     *why* the day does not fit — see :data:`InfeasibilityReason` (including the
     pre-live :class:`PastWindow` "the day is dated in the past" cause).
 
-    ``conflicts`` is **orthogonal to the verdict**: it reports the in-progress-
-    vs-in-progress overlaps found in the snapshot (two matches recorded on one
+    ``conflicts`` is **orthogonal to the verdict**: it reports overlaps between
+    in-progress matches and pins found in the snapshot (two matches recorded on one
     table, or one human in two matches — contradictory data from a soft manual
     PATCH). Such overlaps are *tolerated*, not fatal — the solver merges the
     overlapping fixed occupancy into its union so it can never blank the board
     (#1144) — so a fully-placed ``optimal`` / ``feasible`` result can still carry
     conflicts. It never adjudicates which match is real and never moves a live
     match; the report is the director-actionable "you double-booked" signal.
-    A pin overlapping a running match, or another pin, is merged the same way
-    but never reported here — that clash is refused at the write boundary
-    before it can ever reach a snapshot (``app.tournament_placement``, ADR "A
-    called match holds its time, and a clashing call is refused"). See
+    This includes pre-live pins that already clash when the day goes live,
+    and running matches that overrun later promises: refusing new clashing
+    calls at the live write boundary cannot prevent either case. See
     :data:`PlacementConflict`.
 
     ``overrunning`` is also orthogonal to the verdict — a *success qualifier*,
@@ -942,42 +941,50 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
             return max(reservation.window.end_min, latest_fixed_end + overrun_span)
         return reservation.window.end_min
 
-    # The *fixed* occupancy spans each in-progress match projects onto its table
+    # The *fixed* occupancy spans each in-progress match or pin projects onto its table
     # and its two humans (the human span is rest-padded, so a shared-human
     # overlap is judged on the same padded interval per-player NoOverlap uses).
     # Kept as numeric half-open spans so they can be both (a) merged before
     # AddNoOverlap — two overlapping fixed facts are contradictory data that
     # must never blank the board (#1144) — and (b) scanned for the director-
-    # actionable in-progress-vs-in-progress conflicts reported on the result.
-    table_inprog: defaultdict[TableId, list[tuple[int, int, FixtureId]]] = defaultdict(
-        list
+    # actionable fixed-vs-fixed conflicts reported on the result.
+    table_occupancy: defaultdict[TableId, list[tuple[int, int, FixtureId]]] = (
+        defaultdict(list)
     )
-    player_inprog: defaultdict[PlayerId, list[tuple[int, int, FixtureId]]] = (
+    player_occupancy: defaultdict[PlayerId, list[tuple[int, int, FixtureId]]] = (
         defaultdict(list)
     )
     for fixture in in_progress:
         match_row = running[fixture.id]
         occ_end = occupancy_ends[fixture.id]
-        table_inprog[match_row.table_id].append(
+        table_occupancy[match_row.table_id].append(
             (match_row.start_min, occ_end, fixture.id)
         )
         for player in (fixture.player_a_id, fixture.player_b_id):
-            player_inprog[player].append(
+            player_occupancy[player].append(
                 (match_row.start_min, occ_end + REST_MIN, fixture.id)
             )
 
-    # Report narrowly: only in-progress-vs-in-progress overlaps (rest-shadow
+    for fixture, pin in pinned:
+        pin_end = pin.start_min + duration_of(fixture)
+        table_occupancy[pin.table_id].append((pin.start_min, pin_end, fixture.id))
+        for player in (fixture.player_a_id, fixture.player_b_id):
+            player_occupancy[player].append(
+                (pin.start_min, pin_end + REST_MIN, fixture.id)
+            )
+
+    # Report fixed fixture overlaps, including inherited pre-live pins (rest-shadow
     # overlaps are merged below but never reported). Deterministically ordered
     # by shared resource id, each resource reported once with its colliding set.
     conflicts: tuple[PlacementConflict, ...] = (
         *(
             TableConflict(table_id=table_id, fixture_ids=overlapping)
-            for table_id, spans in sorted(table_inprog.items())
+            for table_id, spans in sorted(table_occupancy.items())
             if (overlapping := _overlapping_fixture_ids(spans))
         ),
         *(
             PlayerConflict(player_id=player_id, fixture_ids=overlapping)
-            for player_id, spans in sorted(player_inprog.items())
+            for player_id, spans in sorted(player_occupancy.items())
             if (overlapping := _overlapping_fixture_ids(spans))
         ),
     )
@@ -1239,7 +1246,7 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     # per-player fixed-span reservation as the in-progress occupancy so the merge below
     # absorbs any shadow-vs-occupancy overlap too.
     player_fixed_spans: defaultdict[PlayerId, list[tuple[int, int]]] = defaultdict(list)
-    for player_id, spans in player_inprog.items():
+    for player_id, spans in player_occupancy.items():
         player_fixed_spans[player_id].extend((s, e) for s, e, _ in spans)
     for shadow in coalesce_rest_shadows(snapshot.rest_shadows):
         player_fixed_spans[shadow.player_id].append(
@@ -1261,7 +1268,7 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     # not CP-SAT expressions — so :func:`solve` can echo the placement
     # verbatim with no ``solver.Value()`` lookup.
     table_fixed_spans: defaultdict[TableId, list[tuple[int, int]]] = defaultdict(list)
-    for table_id, spans in table_inprog.items():
+    for table_id, spans in table_occupancy.items():
         table_fixed_spans[table_id].extend((s, e) for s, e, _ in spans)
     pin_tables: dict[FixtureId, TableId] = {}
     pin_starts: dict[FixtureId, int] = {}
@@ -1269,9 +1276,6 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     for fixture, pin in pinned:
         duration = duration_of(fixture)
         pin_end = pin.start_min + duration
-        table_fixed_spans[pin.table_id].append((pin.start_min, pin_end))
-        for player in (fixture.player_a_id, fixture.player_b_id):
-            player_fixed_spans[player].append((pin.start_min, pin_end + REST_MIN))
         fixed_ends.append(pin_end)
         pin_tables[fixture.id] = pin.table_id
         pin_starts[fixture.id] = pin.start_min

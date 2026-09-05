@@ -27,6 +27,36 @@ import {
  * player types.
  */
 test.describe('Score entry — the board stays contiguous', () => {
+  test('saving after reconnect replays failed earlier games first', async ({
+    page,
+    baseURL,
+  }) => {
+    const a = await guestFromContext(page.request)
+    const b = await mintGuest(baseURL!)
+    const matchId = await createMatch(a, await findUserId(a, b.username), 5)
+    const entry = await ScoreEntryPage.navigateToNew(page, matchId, 1)
+    await entry.scoreInput(a.username).fill('11')
+    await entry.scoreInput(b.username).fill('5')
+    const failed = page.waitForEvent('requestfailed', {
+      predicate: (request) =>
+        request.method() === 'POST' &&
+        request.url().endsWith('/games/1/scores/new'),
+    })
+    await page.context().setOffline(true)
+    await entry.saveNextButton.click()
+    await failed
+    await page.context().setOffline(false)
+    await expect(entry.heading).toHaveText('Enter game 2 score.')
+    await expect(entry.failedGameLink(1)).toBeVisible()
+    await entry.scoreInput(a.username).fill('5')
+    await entry.scoreInput(b.username).fill('11')
+    await entry.saveNextButton.click()
+    await expect(entry.heading).toHaveText('Enter game 3 score.')
+    await expect(entry.savedGameLink(1)).toBeVisible({ timeout: 15_000 })
+    await expect(entry.savedGameLink(2)).toBeVisible()
+    await b.ctx.dispose()
+  })
+
   test('a game cannot be saved past an unsaved one, nor cleared from under a later one', async ({
     page,
     baseURL,

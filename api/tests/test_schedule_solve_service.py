@@ -1644,13 +1644,17 @@ class TestSolveJob:
         assert ledger.status is ScheduleSolveStatus.failed
         assert ledger.infeasibility_reasons is None
 
+    @pytest.mark.parametrize(
+        "match_status", [MatchStatus.in_progress, MatchStatus.pending]
+    )
     async def test_placement_conflicts_are_resolved_and_persisted_on_placed_board(
         self,
         db_session: AsyncSession,
         solver_queue: Queue,
         monkeypatch: pytest.MonkeyPatch,
+        match_status: MatchStatus,
     ) -> None:
-        """Two in-progress matches recorded on one table AND sharing a player
+        """Two running matches or inherited pins on one table AND sharing a player
         are contradictory data the solver tolerates (it merges the occupancy so
         the board still places) yet REPORTS. At apply the id-and-minute
         conflicts are humanized — table label, player name, each colliding
@@ -1672,12 +1676,11 @@ class TestSolveJob:
                 break
         assert partner is not None and shared_entry_id is not None
 
-        # Stage both as physically underway on the SAME table at the SAME start
-        # (a soft double-book): pinned, live, promised start already arrived.
+        # A soft double-book can be underway or still awaiting the call gate.
         colliding = (first_fixture, partner)
         table_1, _table_2 = await table_ids_of(db_session, tournament_id)
         for fixture in colliding:
-            await _link_match(db_session, fixture, status=MatchStatus.in_progress)
+            await _link_match(db_session, fixture, status=match_status)
             fixture.table_id = table_1
             fixture.scheduled_start = BASE
             fixture.pinned_at = BASE - timedelta(minutes=5)

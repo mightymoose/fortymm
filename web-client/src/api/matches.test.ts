@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { http, HttpResponse } from 'msw'
-import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, onlineManager, useQuery } from '@tanstack/react-query'
 import { act, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 
@@ -48,7 +48,76 @@ beforeEach(() => {
 
 afterEach(() => {
   queryClient.clear()
+  onlineManager.setOnline(true)
   vi.restoreAllMocks()
+})
+
+it.each(['later save', 'retry all'] as const)(
+  'replays missing prerequisites in game order before %s',
+  async (action) => {
+    const matchId = 'ordered-recovery'
+    let offline = true
+    const committed: MatchDetails['games'] = []
+    const writes: number[] = []
+    const game1Entered = deferred<void>()
+    const game1Release = deferred<void>()
+    queryClient.setQueryData(matchQueryKey(matchId), matchDetails({ id: matchId, games: [] }))
+    server.use(http.post('*/v1/matches/:matchId/games/:gameNumber/scores/new', async ({ params }) => {
+      if (offline) return HttpResponse.error()
+      const n = Number(params.gameNumber)
+      writes.push(n)
+      if (n === 1) {
+        game1Entered.resolve()
+        await game1Release.promise
+      }
+      if (committed.length !== n - 1) {
+        return HttpResponse.json({ detail: 'Save the earlier game first.' }, { status: 422 })
+      }
+      committed.push({ id: `g-${n}`, game_number: n, score: {
+        id: `s-${n}`, version: 1, side_1_points: 11, side_2_points: 5, winner_side_number: 1,
+      } })
+      return HttpResponse.json(matchDetails({ id: matchId, games: [...committed] }))
+    }))
+    onlineManager.setOnline(false)
+    const points = { side_1_points: 11, side_2_points: 5 }
+    await fireScoreSave(queryClient, matchId, 1, points)
+    await fireScoreSave(queryClient, matchId, 2, points)
+    onlineManager.setOnline(true)
+    offline = false
+    const recovery = action === 'later save'
+      ? fireScoreSave(queryClient, matchId, 3, points)
+      : Promise.all([1, 2, 3].map((n) => fireScoreSave(queryClient, matchId, n, points)))
+    // A replay must begin at game 1, and its held response must block later writes.
+    await waitFor(() => expect(writes).toEqual([1]))
+    await game1Entered.promise
+    game1Release.resolve()
+    await recovery
+    expect(writes).toEqual([1, 2, 3])
+    expect(committed.map((game) => game.game_number)).toEqual([1, 2, 3])
+    for (const n of [1, 2, 3]) {
+      expect(queryClient.getMutationCache().findAll({ mutationKey: scoreMutationKey(matchId, n), exact: true }).at(-1)?.state.status).toBe('success')
+    }
+  },
+)
+
+it('keeps a later score as failed scratch when its prerequisite cannot be restored', async () => {
+  const matchId = 'failed-prerequisite'
+  const writes: number[] = []
+  const points = { side_1_points: 11, side_2_points: 5 }
+  queryClient.setQueryData(matchQueryKey(matchId), matchDetails({ id: matchId, games: [] }))
+  server.use(http.post('*/v1/matches/:matchId/games/:gameNumber/scores/new', ({ params }) => {
+    writes.push(Number(params.gameNumber))
+    return HttpResponse.error()
+  }))
+  onlineManager.setOnline(false)
+  await fireScoreSave(queryClient, matchId, 1, points)
+  onlineManager.setOnline(true)
+  await fireScoreSave(queryClient, matchId, 2, points)
+  expect(writes).toEqual([1, 1])
+  const later = queryClient.getMutationCache()
+    .findAll({ mutationKey: scoreMutationKey(matchId, 2), exact: true }).at(-1)
+  expect(later?.state.status).toBe('error')
+  expect(later?.state.variables).toMatchObject(points)
 })
 
 /**
@@ -273,27 +342,25 @@ it('does not drop a concurrently-saved game when an older save response settles 
   server.use(
     http.post(
       '*/v1/matches/:matchId/games/:gameNumber/scores/new',
-      async ({ params }) => {
-        if (params.gameNumber === '1') {
-          await game1Gate
-          return HttpResponse.json(game1Response)
-        }
-        return HttpResponse.json(game2Response)
-      },
+      () => HttpResponse.json(game2Response),
     ),
   )
 
-  // Warm the cache with an observer-free empty snapshot. The scoring screen
-  // always has a mounted `useMatch`, so the match cache is warm during play;
+  // Warm the cache with game 1 already committed: editing it can overlap a
+  // game-2 create, while two new games must now commit in number order.
+  // The scoring screen always has a mounted `useMatch`, so its cache is warm;
   // since #870 a cold cache is left unseeded (the wholesale `return data` seed
   // that would clobber a concurrent game is gone), so this composition test must
   // seed a present `prev` to exercise the narrow-upsert path it's about. It
   // stays observer-free so no refetch fires — the refetch-heal path is covered
   // separately (#843 refetch race).
-  queryClient.setQueryData(matchQueryKey(matchId), matchDetails({ id: matchId, games: [] }))
+  queryClient.setQueryData(matchQueryKey(matchId), matchDetails({ id: matchId, games: [game1] }))
 
-  // Both fire against the (empty-`games`) cache; the row is absent so each takes
-  // the POST (create) path.
+  server.use(http.put('*/v1/matches/:matchId/games/1/scores', async () => {
+    await game1Gate
+    return HttpResponse.json(game1Response)
+  }))
+  // The edit and the later create remain independent writes.
   const p1 = fireScoreSave(queryClient, matchId, 1, {
     side_1_points: 11,
     side_2_points: 5,

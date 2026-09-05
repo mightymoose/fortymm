@@ -53,6 +53,10 @@ export class ScoreEntryPage {
     return this.page.getByRole('button', { name: /Save changes/ })
   }
 
+  get saveNextButton(): Locator {
+    return this.page.getByRole('button', { name: /Save game & next/ })
+  }
+
   failedGameLink(gameNumber: number): Locator {
     return this.page.getByRole('link', {
       name: new RegExp(`Game ${gameNumber} didn't save,`),

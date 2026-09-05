@@ -5,6 +5,16 @@ const scoreSaveContextSchema = z.object({
   scoreBaseline: z.object({ id: z.string(), version: z.number() }).nullable(),
 })
 
+const scoreSavePointsSchema = z.object({
+  side_1_points: z.number(),
+  side_2_points: z.number(),
+})
+
+export function readScoreSavePoints(variables: unknown) {
+  const parsed = scoreSavePointsSchema.safeParse(variables)
+  return parsed.success ? parsed.data : undefined
+}
+
 export type ScoreSaveContext = z.infer<typeof scoreSaveContextSchema>
 
 export function readScoreSaveContext(
