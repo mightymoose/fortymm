@@ -1,3 +1,5 @@
+import { StrictMode } from 'react'
+
 import { interactiveControlsIn, interactiveElementsIn } from '@/test/read-only'
 import { render, screen, type Container } from '@/test/utilities'
 
@@ -12,6 +14,21 @@ const scoped = (container: Container) => ({
 
   getNameInput() {
     return container.getByLabelText(/Name/)
+  },
+  getDescriptionInput() {
+    return container.getByLabelText('Description')
+  },
+  /** A field-level validation message — the red `<p>` under the control, by its
+   * exact sentence, whether it came from the Zod schema or from a server refusal
+   * the form attributed to that box. Absent when the field is clean. */
+  queryFieldMessage(text: string) {
+    return container.queryByText(text)
+  },
+  /** The form-level save-failure alert — every refused write the form cannot pin
+   * to one box (a nested-address 422, another 4xx, a 5xx, an outage, a bug), in
+   * the client's own words. Absent while the last attempt did not fail. */
+  querySaveError() {
+    return container.queryByTestId('details-save-error')
   },
   /** The six venue boxes, in the order the Venue & address card lays them out.
    * A tournament with NO VENUE (`address: null`) still gets all six — empty — so
@@ -72,9 +89,35 @@ const scoped = (container: Container) => ({
 })
 
 /** Test page-object for `DetailsTab`. */
+const renderDetailsTab = (
+  overrides: Partial<DetailsTabProps> = {},
+  strictMode = false,
+) => {
+  const props = buildDetailsTabProps(overrides)
+  const subject = (next: Partial<DetailsTabProps> = {}) => {
+    const tab = <DetailsTab {...props} {...next} />
+    return strictMode ? <StrictMode>{tab}</StrictMode> : tab
+  }
+  const utils = render(subject())
+  return {
+    ...utils,
+    /** Rerender with prop overrides merged over the FIRST render's props, so a
+     * test changes only the query result or visibility edge it means to model.
+     * In particular, `rerenderWith({ active })` cannot accidentally introduce a
+     * different committed Details snapshot. */
+    rerenderWith(next: Partial<DetailsTabProps> = {}) {
+      utils.rerender(subject(next))
+    },
+  }
+}
+
 export const detailsTabPage = {
-  render(overrides: Partial<DetailsTabProps> = {}) {
-    render(<DetailsTab {...buildDetailsTabProps(overrides)} />)
+  render: renderDetailsTab,
+
+  /** Effect-lifecycle regressions run under the app root's StrictMode so its
+   * mount → cleanup → remount cycle is part of the behavior under test. */
+  renderStrict(overrides: Partial<DetailsTabProps> = {}) {
+    return renderDetailsTab(overrides, true)
   },
 
   within(container: Container = screen) {

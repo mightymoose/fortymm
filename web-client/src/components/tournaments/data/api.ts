@@ -721,7 +721,7 @@ type TournamentDetail = {
 function tournamentDetailQuery(id: string) {
   return queryOptions({
     queryKey: tournamentKey(id),
-    queryFn: async (): Promise<TournamentDetail> => {
+    queryFn: async ({ signal }): Promise<TournamentDetail> => {
       let payload: TournamentDetailRead
       try {
         // The parse boundary: `apiToTournament` runs `parseFixtures` over every event's
@@ -730,6 +730,7 @@ function tournamentDetailQuery(id: string) {
         payload = unwrap(
           'load tournament',
           await api.GET('/v1/tournaments/{tournament_id}', {
+            signal,
             params: { path: { tournament_id: id } },
           }),
         )
@@ -841,22 +842,59 @@ export function useCreateTournament() {
 
 /** Patch tournament-level fields (name/dates/description/address/
  * table_catalogue) — never events, and never `status` (ADR-0017: the lifecycle
- * moves only through `POST /v1/tournaments/{id}/transitions`). */
+ * moves only through `POST /v1/tournaments/{id}/transitions`).
+ *
+ * **No global `onError` toast** (#1593): the `DetailsTab` awaits this through
+ * `mutateAsync` and surfaces every refusal inline, in the form it keeps open —
+ * a toast on top would tell the director the same thing twice and then take it
+ * away after four seconds. (Same convention as `useCreateTournament` above and
+ * the RBAC form mutations — see `rbac/queries.ts`.) The Tables tab's catalogue
+ * write does not come through here — it is `useUpdateTableCatalogue` below,
+ * which has always surfaced its own refusal. */
 export function useUpdateTournament() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (input: {
       id: string
       patch: TournamentUpdate
-    }): Promise<TournamentRead> =>
-      unwrap(
-        'update tournament',
-        await api.PATCH('/v1/tournaments/{tournament_id}', {
-          params: { path: { tournament_id: input.id } },
-          body: input.patch,
-        }),
-      ),
-    onSettled: (_data, _error, input) => reconcileTournament(qc, input.id),
+    }): Promise<TournamentRead> => {
+      const controller = new AbortController()
+      let timeout: ReturnType<typeof setTimeout>
+      const deadline = new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          const error = new DOMException(
+            'Tournament save timed out',
+            'TimeoutError',
+          )
+          reject(error)
+          controller.abort(error)
+          // A late refetch must not reconcile an abandoned attempt over a retry.
+          void qc.cancelQueries({ queryKey: tournamentKey(input.id) })
+        }, 30_000)
+      })
+      const saveAndReconcile = async () => {
+        try {
+          return unwrap(
+            'update tournament',
+            await api.PATCH('/v1/tournaments/{tournament_id}', {
+              params: { path: { tournament_id: input.id } },
+              body: input.patch,
+              signal: controller.signal,
+            }),
+          )
+        } finally {
+          controller.signal.throwIfAborted()
+          await reconcileTournament(qc, input.id)
+        }
+      }
+      try {
+        // Save owns its refetch: a subsequent attempt cannot replace its snapshot
+        // until reconciliation completes. The same deadline bounds both waits.
+        return await Promise.race([saveAndReconcile(), deadline])
+      } finally {
+        clearTimeout(timeout!)
+      }
+    },
   })
 }
 

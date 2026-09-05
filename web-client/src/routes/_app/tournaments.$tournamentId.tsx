@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import {
   createFileRoute,
   notFound,
+  useBlocker,
   useNavigate,
   useRouter,
 } from '@tanstack/react-router'
@@ -80,6 +81,26 @@ function TournamentDetailRoute() {
   const createEvent = useCreateEvent(tournamentId)
   const updateEvent = useUpdateEvent(tournamentId)
   const deleteEvent = useDeleteEvent(tournamentId)
+
+  /** The Details form is the one durable owner of its mutation refusal while
+   * this route exists. Block every in-app departure while that write is pending
+   * so neither browser Back nor an AppShell navigation can unmount the form
+   * before the awaited rejection lands. Search-only updates stay on this pathname
+   * and are safe: they open and close the event editor without unmounting the
+   * force-mounted Details form. Refresh/tab-close gets the browser's native prompt
+   * through the matching `enableBeforeUnload` predicate. The one safe pathname
+   * departure is `/login`: a structured session-ended 401 has already cleared the
+   * departed identity's cache and must be allowed to send the signed-out user back
+   * to sign-in while the mutation is still settling. No resolver is needed: there
+   * is no user-driven "leave anyway" action while this sole reporter is waiting
+   * for the server (#1593 review). */
+  useBlocker({
+    shouldBlockFn: ({ current, next }) =>
+      updateTournament.isPending &&
+      next.pathname !== '/login' &&
+      current.pathname !== next.pathname,
+    enableBeforeUnload: () => updateTournament.isPending,
+  })
 
   const back = () => navigate({ to: '/tournaments' })
 
@@ -167,12 +188,23 @@ function TournamentDetailRoute() {
       openEditorFor={openEditorFor}
       onOpenEditor={openEditor}
       onCloseEditor={closeEditor}
-      onUpdate={(next) =>
-        updateTournament.mutateAsync({
+      // `mutateAsync`, and the rejection is deliberately NOT caught here: the
+      // `DetailsTab` awaits it, keeps the draft (and its Save affordance) over a
+      // refusal, and reports every failure inline — field-level where the server
+      // names a box, in the tab's own alert where it cannot (#1593). Catching it
+      // here — or letting the mutation toast — would either bin the report or
+      // take it away after four seconds, exactly the silent-failure shape #614
+      // and #933 ended for the modals.
+      onUpdate={async (next) => {
+        await updateTournament.mutateAsync({
           id: next.id,
           patch: tournamentToUpdateBody(next),
         })
-      }
+      }}
+      // The route blocker above is the guarantee for every departure. Also
+      // remove this local breadcrumb's affordance while pending so it does not
+      // invite a click the blocker must refuse.
+      savingDetails={updateTournament.isPending}
       // `mutateAsync`, and the rejection is deliberately NOT caught here: the
       // `TablesTab` awaits it, turns the in-use 409 into a confirm carrying the
       // server's sentence, and re-sends the identical diff with the opt-in when the

@@ -9,7 +9,7 @@ export function buildTournamentDetailPageProps(
   return {
     tournament: buildTournament(),
     allTables: buildTables(12),
-    onUpdate: () => {},
+    onUpdate: async () => {},
     onChangeCatalogue: async () => {},
     onCreateEvent: async () => {},
     onUpdateEvent: async () => {},

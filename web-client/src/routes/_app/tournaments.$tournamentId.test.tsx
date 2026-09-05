@@ -9,6 +9,7 @@ import {
 } from '@tanstack/react-router'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
+import { StrictMode } from 'react'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -90,15 +91,22 @@ function renderRoute(initialEntry: string) {
     path: '/tournaments',
     component: () => <div>tournaments list</div>,
   })
+  const loginRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/login',
+    component: () => <div>login</div>,
+  })
   const router = createRouter({
-    routeTree: rootRoute.addChildren([listRoute, detailRoute]),
+    routeTree: rootRoute.addChildren([listRoute, detailRoute, loginRoute]),
     history: createMemoryHistory({ initialEntries: [initialEntry] }),
   })
   return {
     ...render(
-      <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
-      </QueryClientProvider>,
+      <StrictMode>
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>
+      </StrictMode>,
     ),
     router,
     // Exposed so a test can force the background refetch every event mutation
@@ -568,5 +576,194 @@ describe('tournament detail route — which event editor is open lives in the UR
     // The delete confirmation, and only it.
     expect(await screen.findByText('Delete event?')).toBeInTheDocument()
     expect(discardDialog()).not.toBeInTheDocument()
+  })
+})
+
+/**
+ * **The Details save is a promise, not a fire-and-forget** (#1593).
+ *
+ * These live at the ROUTE because the claim is about the WIRING: the route's
+ * `onUpdate` must `await` `mutateAsync` and hand the rejection to `DetailsTab`,
+ * which words it inline. The predecessor shape — `mutate(...)` with the rejection
+ * left to a global toast — is exactly what a component test cannot see: the prop
+ * spy resolves just the same. A refused PATCH here is the only assertion that
+ * cannot pass while the promise is swallowed on the way from the route to the
+ * form.
+ */
+describe('tournament detail route — a refused Details save is reported inline (#1593)', () => {
+  /** What FastAPI really answers an over-long name with — the string that must
+   * never reach the UI (ADR-0968, `DEFINITION_OF_COMPLETE.md`). */
+  const PYDANTIC = 'String should have at most 255 characters'
+
+  /** Serve a real, parseable, editable tournament (the creator's view). */
+  function mockEditableTournament() {
+    server.use(
+      http.get('*/v1/tournaments/:id', () =>
+        HttpResponse.json(buildTournamentDetailRead({ id: UNKNOWN_ID })),
+      ),
+    )
+  }
+
+  it('carries a PATCH rejection to the Details form, which words it itself', async () => {
+    const user = userEvent.setup()
+    mockEditableTournament()
+    let patches = 0
+    server.use(
+      http.patch('*/v1/tournaments/:id', () => {
+        patches += 1
+        return HttpResponse.json(
+          {
+            detail: [
+              { type: 'string_too_long', loc: ['body', 'name'], msg: PYDANTIC },
+            ],
+          },
+          { status: 422 },
+        )
+      }),
+    )
+
+    renderRoute(`/tournaments/${UNKNOWN_ID}`)
+    await screen.findByRole('heading', { level: 1 })
+
+    await user.click(screen.getByRole('tab', { name: 'Details' }))
+    await user.type(screen.getByLabelText(/Name/), '!')
+    await user.click(screen.getByRole('button', { name: /Save changes/ }))
+
+    // The client-owned sentence, under the box the server blamed — and never
+    // the wire's own prose.
+    expect(
+      await screen.findByText(
+        'The Name was rejected. Check that field and try again.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(PYDANTIC)).not.toBeInTheDocument()
+    // The form-level alert stays out of it: this refusal was attributed.
+    expect(screen.queryByTestId('details-save-error')).not.toBeInTheDocument()
+    expect(patches).toBe(1)
+  })
+
+  it('lets the identity-loss login redirect bypass a pending PATCH blocker', async () => {
+    const user = userEvent.setup()
+    mockEditableTournament()
+    let patches = 0
+    let refuse!: () => void
+    server.use(
+      http.patch('*/v1/tournaments/:id', async () => {
+        patches += 1
+        await new Promise<void>((resolve) => {
+          refuse = resolve
+        })
+        return HttpResponse.json(
+          {
+            detail: {
+              code: 'session_ended',
+              message: 'Your session has ended. Sign in to continue.',
+            },
+          },
+          { status: 401 },
+        )
+      }),
+    )
+
+    const { router } = renderRoute(`/tournaments/${UNKNOWN_ID}`)
+    await screen.findByRole('heading', { level: 1 })
+
+    await user.click(screen.getByRole('tab', { name: 'Details' }))
+    await user.type(screen.getByLabelText(/Name/), '!')
+    await user.click(screen.getByRole('button', { name: /Save changes/ }))
+    await waitFor(() => expect(patches).toBe(1))
+
+    try {
+      // `main.tsx` makes this exact navigation from the structured-401 handler.
+      // It must bypass the pending-save blocker before the PATCH has settled.
+      void router.navigate({
+        to: '/login',
+        search: { email: undefined, error: undefined },
+      })
+      await waitFor(
+        () => expect(router.state.location.pathname).toBe('/login'),
+        { timeout: 250 },
+      )
+    } finally {
+      await act(async () => refuse())
+    }
+  })
+
+  it('allows event search updates but blocks route departure while a PATCH is pending', async () => {
+    const user = userEvent.setup()
+    mockEditableTournament()
+    let patches = 0
+    let refuse!: () => void
+    server.use(
+      http.patch('*/v1/tournaments/:id', async () => {
+        patches += 1
+        await new Promise<void>((resolve) => {
+          refuse = resolve
+        })
+        return HttpResponse.json(
+          {
+            detail: [
+              { type: 'string_too_long', loc: ['body', 'name'], msg: PYDANTIC },
+            ],
+          },
+          { status: 422 },
+        )
+      }),
+    )
+
+    const { router } = renderRoute(`/tournaments/${UNKNOWN_ID}`)
+    await screen.findByRole('heading', { level: 1 })
+
+    await user.click(screen.getByRole('tab', { name: 'Details' }))
+    await user.type(screen.getByLabelText(/Name/), '!')
+    await user.click(screen.getByRole('button', { name: /Save changes/ }))
+    await waitFor(() => expect(patches).toBe(1))
+
+    // The save remains pending. With no breadcrumb button there is no route
+    // departure to unmount the form that owns this mutation's one error channel.
+    expect(
+      screen.queryByRole('button', { name: 'Tournaments' }),
+    ).not.toBeInTheDocument()
+    expect(screen.getByText('Tournaments')).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe(`/tournaments/${UNKNOWN_ID}`)
+
+    // Switching tabs does not unmount the force-mounted Details form, and opening
+    // an event only adds search state to this same tournament route. The pending
+    // blocker must let that navigation through so the deliberately-enabled Events
+    // UI keeps working while the write is in flight.
+    await user.click(screen.getByRole('tab', { name: /^Events/ }))
+    await user.click(
+      screen.getByRole('button', { name: /New event|Add an event/ }),
+    )
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe(`/tournaments/${UNKNOWN_ID}`)
+    expect(router.state.location.search).toEqual({ event: 'new' })
+
+    // The breadcrumb is not the only way out. A global AppShell link (or any
+    // other router navigation) is refused by the route-level pending blocker.
+    await act(async () => {
+      // A blocked router navigation deliberately leaves its promise pending;
+      // fire it as the AppShell link would, then let the blocker's predicate run.
+      void router.navigate({ to: '/tournaments' })
+      await Promise.resolve()
+    })
+    expect(router.state.location.pathname).toBe(`/tournaments/${UNKNOWN_ID}`)
+    expect(screen.queryByText('tournaments list')).not.toBeInTheDocument()
+
+    await act(async () => refuse())
+
+    expect(
+      await screen.findByText(
+        'The Name was rejected. Check that field and try again.',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(PYDANTIC)).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+    )
+    expect(
+      screen.getByRole('button', { name: 'Tournaments' }),
+    ).toBeInTheDocument()
   })
 })
