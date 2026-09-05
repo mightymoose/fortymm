@@ -48,3 +48,12 @@ it('honors completed recovery in shared storage when a closed tab returns', asyn
   const reopened = await import('./browser-session')
   expect(reopened.readEndedSession()).toBeNull()
 })
+
+it('keeps completed recovery after reload when shared writes fail', async () => {
+  rememberSessionEnd({ message: 'Old ended session.' })
+  blockLocalStorage('setItem')
+  forgetSessionEnd()
+  vi.resetModules()
+  const reloaded = await import('./browser-session')
+  expect(reloaded.readEndedSession()).toBeNull()
+})

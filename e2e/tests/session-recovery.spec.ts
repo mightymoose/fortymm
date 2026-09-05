@@ -88,8 +88,7 @@ test('another claimed account’s confirmation link waits for approval and cance
 })
 
 
-test('a timed-out recovery tab follows its peer to the recovered dashboard', async ({ context, page }) => {
-  await context.addInitScript(() => { Object.defineProperty(navigator, 'locks', { value: undefined }) })
+test('a waiting recovery tab follows its peer to the recovered dashboard', async ({ context, page }) => {
   await page.goto('/dashboard')
   const second = await context.newPage()
   await second.goto('/dashboard')
@@ -117,7 +116,7 @@ test('a timed-out recovery tab follows its peer to the recovered dashboard', asy
     await firstRecovery.newGuest.click()
     await startedRequest
     await new SessionRecoveryPage(second).newGuest.click()
-    await expect(second.getByText("We couldn't start a new guest. Please try again.")).toBeVisible({ timeout: 15_000 })
+    await expect(new SessionRecoveryPage(second).newGuest).toBeDisabled()
   } finally {
     release()
   }

@@ -377,11 +377,14 @@ describe('/confirm-email transient failures (#1616)', () => {
     // "This link is incomplete", which would hide the retry control and
     // offer a misleading route back to Settings mid-attempt (#1616).
     let calls = 0
+    let finishRetry!: () => void
+    const held = new Promise<void>((resolve) => { finishRetry = resolve })
     server.use(
-      http.post('*/v1/me/email/confirm', () => {
+      http.post('*/v1/me/email/confirm', async () => {
         calls += 1
         if (calls === 1) return HttpResponse.error()
-        return new Promise(() => {}) // hang: the retry stays pending
+        await held
+        return HttpResponse.json(mockSession)
       }),
     )
     renderAt('/confirm-email?token=slow-retry-token')
@@ -406,6 +409,8 @@ describe('/confirm-email transient failures (#1616)', () => {
     expect(
       screen.queryByRole('button', { name: /try again/i }),
     ).not.toBeInTheDocument()
+    finishRetry()
+    await screen.findByText(/you’re in\./i)
   })
 
   it('keeps a non-coded 4xx on the expired screen', async () => {

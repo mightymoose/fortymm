@@ -2210,6 +2210,15 @@ async def preview_merge(
     if token_row.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX):
         if owner.email != _old_email_from_context(token_row.context):
             return MergePreview(is_merge=False)
+        claimed = (
+            await db.execute(
+                select(User.id)
+                .where(User.email == token_row.sent_to, User.id != owner.id)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if claimed is not None:
+            return MergePreview(is_merge=False)
     elif _is_first_sign_in_context(token_row.context):
         if (
             not token_row.sent_to

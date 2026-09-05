@@ -13,13 +13,29 @@ let unavailableStorageValue: string | null = null
 let storageWriteFailed = false
 
 function tabSnapshot(): string | null {
-  try { return sessionStorage.getItem(KEY) } catch { return null }
+  try {
+    const value = sessionStorage.getItem(KEY)
+    if (value === null) return null
+    // A fallback overrides only the shared value that failed to update.
+    // A newer peer value takes precedence, even across reloads.
+    try {
+      const baseline = sessionStorage.getItem(KEY + '.shared')
+      if (baseline !== null && JSON.stringify(localStorage.getItem(KEY)) !== baseline) return null
+    } catch { /* Shared storage is still unavailable. */ }
+    return value
+  } catch { return null }
 }
 
 function persistTabSnapshot(value: string | null): void {
   try {
-    if (value === null) sessionStorage.removeItem(KEY)
-    else sessionStorage.setItem(KEY, value)
+    if (value === null) {
+      sessionStorage.removeItem(KEY)
+      sessionStorage.removeItem(KEY + '.shared')
+    } else {
+      sessionStorage.setItem(KEY, value)
+      try { sessionStorage.setItem(KEY + '.shared', JSON.stringify(localStorage.getItem(KEY))) }
+      catch { sessionStorage.removeItem(KEY + '.shared') }
+    }
   } catch { /* The in-memory fallback still protects this open tab. */ }
 }
 
@@ -31,7 +47,7 @@ function persist(value: string | null): void {
     persistTabSnapshot(null)
   } catch {
     storageWriteFailed = true
-    persistTabSnapshot(value)
+    persistTabSnapshot(value ?? 'null')
   }
 }
 
@@ -46,7 +62,7 @@ function broadcast(value: string | null): void {
 
 function snapshot(): string | null {
   if (storageWriteFailed) return unavailableStorageValue
-  try { return localStorage.getItem(KEY) ?? tabSnapshot() }
+  try { return tabSnapshot() ?? localStorage.getItem(KEY) }
   catch { return unavailableStorageValue ?? tabSnapshot() }
 }
 
@@ -54,7 +70,7 @@ function snapshot(): string | null {
 export function synchronizeSessionEnd(): void {
   try {
     const shared = localStorage.getItem(KEY)
-    const value = shared ?? snapshot() ?? 'null'
+    const value = tabSnapshot() ?? shared ?? snapshot() ?? 'null'
     // A stored null records completed recovery, even if this tab still has a
     // fallback ended marker and has not received the peer's broadcast yet.
     endedSchema.nullable().parse(JSON.parse(value))

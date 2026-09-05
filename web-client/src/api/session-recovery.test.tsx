@@ -1,7 +1,7 @@
 import { createElement, type ReactNode } from 'react'
 import { act, renderHook } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, expect, it, vi } from 'vitest'
 import { delay, http, HttpResponse } from 'msw'
 import { mockSession } from '@/mocks/handlers'
 import { server } from '@/mocks/server'
@@ -16,13 +16,6 @@ function wrapper() {
   return ({ children }: { children: ReactNode }) =>
     createElement(QueryClientProvider, { client }, children)
 }
-
-beforeEach(() => {
-  // Explicitly exercise the fallback: newer test browsers expose Web Locks.
-  vi.stubGlobal('navigator', new Proxy(navigator, {
-    get: (target, key) => key === 'locks' ? undefined : Reflect.get(target, key),
-  }))
-})
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -50,6 +43,7 @@ it.each([
   [false, undefined], [false, 'getItem'], [false, 'setItem'],
   [true, undefined], [true, 'getItem'], [true, 'setItem'],
 ] as const)('coordinates recovery with Web Locks %s and %s blocked', async (webLocks, blockedMethod) => {
+  if (!webLocks) vi.stubGlobal('navigator', { locks: undefined })
   if (webLocks) {
     let queue: Promise<unknown> = Promise.resolve()
     vi.stubGlobal('navigator', { locks: { request: (_name: string, run: () => Promise<unknown>) => {
@@ -82,7 +76,7 @@ it.each([
   const first = renderHook(() => useStartNewGuest(), { wrapper: wrapper() })
   const second = renderHook(() => useStartNewGuest(), { wrapper: wrapper() })
   await act(async () => {
-    if (blockedMethod) {
+    if (blockedMethod || !webLocks) {
       await expect(first.result.current.mutateAsync()).rejects.toThrow()
       await expect(second.result.current.mutateAsync()).rejects.toThrow()
     } else {
@@ -92,11 +86,11 @@ it.each([
       expect(a.data.user.id).toBe(b.data.user.id)
     }
   })
-  expect(minted).toBe(blockedMethod ? 0 : 1)
-  expect(deletes).toBe(blockedMethod ? 0 : 1)
+  expect(minted).toBe(blockedMethod || !webLocks ? 0 : 1)
+  expect(deletes).toBe(blockedMethod || !webLocks ? 0 : 1)
 })
 
-it('keeps a slow new-guest recovery exclusive beyond the fallback lock TTL', async () => {
+it('keeps a slow new-guest recovery exclusive across repeated choices', async () => {
   rememberSessionEnd({ message: 'Your session ended.' })
   document.cookie = 'csrf_token=ended-session; path=/'
   let deletes = 0
@@ -179,6 +173,7 @@ it.each([
   [false, 'getItem'], [false, 'setItem'],
   [true, 'getItem'], [true, 'setItem'],
 ] as const)('revokes logout with Web Locks %s and %s blocked', async (webLocks, blockedMethod) => {
+  if (!webLocks) vi.stubGlobal('navigator', { locks: undefined })
   if (webLocks) vi.stubGlobal('navigator', { locks: { request: (_name: string, run: () => Promise<unknown>) => run() } })
   blockLocalStorage(blockedMethod)
   let deletes = 0
@@ -190,4 +185,34 @@ it.each([
   await act(() => result.current.mutateAsync())
   expect(deletes).toBe(1)
   expect(readEndedSession()?.logoutPending).toBe(false)
+})
+
+it.each([useConfirmEmail, useConsumeLoginToken])('serializes link redemption with an active new-guest choice', async (useFinalize) => {
+  rememberSessionEnd({ message: 'Your session ended.' })
+  let release!: () => void
+  let started!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  const waiting = new Promise<void>((resolve) => { started = resolve })
+  let redemptions = 0
+  server.use(
+    http.delete('*/v1/session', () => new HttpResponse(null, { status: 204 })),
+    http.get('*/v1/session', async () => { started(); await held; return HttpResponse.json(mockSession) }),
+    http.post('*/v1/login/consume', () => { redemptions++; return HttpResponse.json(mockSession) }),
+    http.post('*/v1/me/email/confirm', () => { redemptions++; return HttpResponse.json(mockSession) }),
+  )
+  const guest = renderHook(() => useStartNewGuest(), { wrapper: wrapper() })
+  const link = renderHook(() => useFinalize(), { wrapper: wrapper() })
+  await act(async () => {
+    const recovering = guest.result.current.mutateAsync()
+    await waiting
+    const redeeming = link.result.current.mutateAsync({ token: 'approved-link' })
+    try {
+      await delay(25)
+      expect(redemptions).toBe(0)
+    } finally {
+      release()
+      await Promise.all([recovering, redeeming])
+    }
+  })
+  expect(redemptions).toBe(1)
 })

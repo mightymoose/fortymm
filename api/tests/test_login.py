@@ -1882,3 +1882,29 @@ async def test_first_sign_in_switch_names_the_automatically_adopted_guest(
         )
         assert confirmed.status_code == 200
         assert confirmed.json()["data"]["user"]["username"] == expected_username
+
+
+async def test_email_change_preview_rejects_destination_claimed_after_issuance(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    owner = await _make_confirmed_user(db_session, "owner-preview@example.com")
+    browsing = await start_session(api_client, db_session)
+    browsing.email = "browsing-preview@example.com"
+    browsing.confirmed_at = datetime.now(UTC)
+    raw = "email-change-claimed-destination"
+    db_session.add(
+        UserToken(
+            user_id=owner.id,
+            token=hashlib.sha256(raw.encode()).digest(),
+            context="change:owner-preview@example.com",
+            sent_to="claimed-preview@example.com",
+        )
+    )
+    await db_session.commit()
+    valid = await api_client.post("/v1/merge/preview", json={"token": raw})
+    assert valid.json()["account_switch"] is not None
+    await _make_confirmed_user(db_session, "claimed-preview@example.com")
+    preview = await api_client.post("/v1/merge/preview", json={"token": raw})
+    assert preview.status_code == 200
+    assert preview.json()["is_merge"] is False
+    assert preview.json()["account_switch"] is None

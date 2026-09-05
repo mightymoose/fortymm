@@ -129,7 +129,8 @@ async function withSessionBootstrapLock<T>(fn: () => Promise<T>, mode: 'bootstra
   if (typeof navigator !== 'undefined' && navigator.locks?.request) {
     return navigator.locks.request(SESSION_LOCK_NAME, run)
   }
-  return withLocalSessionLock(() => withStorageLock(run, alwaysLock, mode === 'recovery'))
+  if (mode === 'recovery') throw new Error('Session recovery requires a browser with Web Locks support. Please use a supported browser.')
+  return withLocalSessionLock(() => withStorageLock(run, alwaysLock, false))
 }
 
 export function sessionQueryOptions() {
@@ -296,15 +297,17 @@ function cacheSession(qc: QueryClient, session: Session): void {
   qc.setQueryData(SESSION_QUERY_KEY, { ...session, merged: null })
 }
 
-async function afterPendingLogout<T>(fn: () => Promise<T>): Promise<T> {
-  if (!readEndedSession()?.logoutPending) return fn()
+async function withLinkRedemption<T>(fn: () => Promise<T>): Promise<T> {
   return withSessionBootstrapLock(async () => {
     if (readEndedSession()?.logoutPending) {
       restoreCsrfCompanion()
       unwrap('finish sign out', await api.DELETE('/v1/session'), { allowEmpty: true })
       rememberSessionEnd({ message: 'You have signed out. Sign in to continue.', logoutPending: false }, { notifyLocal: false })
     }
-    return fn()
+    const result = await fn()
+    forgetSessionEnd()
+    announceIdentityChange()
+    return result
   }, 'recovery')
 }
 
@@ -316,7 +319,7 @@ export function useConfirmEmail() {
       skipMerge = false,
       switchFromUserId,
     }: FinalizeTokenInput): Promise<Session> =>
-      afterPendingLogout(async () => unwrap(
+      withLinkRedemption(async () => unwrap(
         'confirm email',
         await api.POST('/v1/me/email/confirm', {
           body: { token, skip_merge: skipMerge, switch_from_user_id: switchFromUserId },
@@ -333,8 +336,6 @@ export function useConfirmEmail() {
         clearQueryCache: () => qc.clear(),
       })
       cacheSession(qc, session)
-      forgetSessionEnd()
-      announceIdentityChange()
     },
   })
 }
@@ -404,7 +405,7 @@ export function useConsumeLoginToken() {
       skipMerge = false,
       switchFromUserId,
     }: FinalizeTokenInput): Promise<Session> =>
-      afterPendingLogout(async () => unwrap(
+      withLinkRedemption(async () => unwrap(
         'sign in',
         await api.POST('/v1/login/consume', {
           body: { token, skip_merge: skipMerge, switch_from_user_id: switchFromUserId },
@@ -418,8 +419,6 @@ export function useConsumeLoginToken() {
         clearQueryCache: () => qc.clear(),
       })
       cacheSession(qc, session)
-      forgetSessionEnd()
-      announceIdentityChange()
     },
   })
 }
