@@ -66,3 +66,31 @@ mise run regen-ios-api-types
 That boots the API if needed, fetches `openapi.json`, runs it through `openapi/fix_openapi_nullable.py`, and writes `Fortymm/Generated/Types.swift`. The fix-up script is required, not cosmetic: `swift-openapi-generator` silently drops any `Optional[T]` field shaped the way Pydantic/FastAPI emit it in OpenAPI 3.1 (`anyOf: [T, {type: null}]`) — no build error, just a warning easy to miss. The script rewrites that into the `nullable: true` form the generator does understand. The `verify-ios` job in the `openapi-schema` CI workflow regenerates the same way and fails the build if the committed file is stale.
 
 `ios/Tools/OpenAPIGeneratorCLI` is a standalone `Package.swift` that only pins the generator version for `swift run` — it's never built as part of the Xcode project. The one real app dependency this adds is `OpenAPIRuntime` (a normal SPM package dependency on the `Fortymm` target, imported by the generated file).
+
+### Tournaments
+
+The bottom bar has five slots: Home, Matches, New match (center action),
+Tournaments, and You. The dashboard's tournament panel also opens tournament detail.
+
+The regular-player experience mirrors the web's tournament features with native
+layouts: name/status search, opt-in Near me (25/50/100 miles), distance badges,
+event details and rating eligibility, entry/withdrawal, entrants, stage/group draws,
+complete standings (including Swiss Buchholz), placements, and match-detail links.
+Venue maps, reservation windows, and table usage are visible to every player.
+Schedules can be read as a list or grouped by table/player, with estimated/called
+states and reservation warnings. The active schedule refreshes every 15 seconds
+while live, or every 3 seconds while a schedule solve is queued/running; it stops
+when the app backgrounds. These grouped native views replace the web's wide Gantt
+and player timeline layouts.
+
+Creation requires `tournament.create`; organizer controls require the API's
+`can_edit`, just as on the web. Those controls never appear for ordinary readers.
+Basic organizer flows from the initial implementation remain available to authorized
+users; expanding venue/table editing, existing-event editing, director-added
+entrants, or schedule placement/solver controls is outside this player-parity scope.
+
+Run the tournament transport/model/store checks with:
+
+```bash
+bash Tests/run-tournament-tests.sh
+```

@@ -155,6 +155,14 @@ struct APIClient {
         try await send("DELETE", path, body: Optional<Empty>.none)
     }
 
+    /// DELETE endpoints that return 204 have no JSON body to decode.
+    func deleteWithoutResponse(_ path: String) async throws {
+        let (data, http) = try await perform("DELETE", path, body: Optional<Empty>.none)
+        guard (200..<300).contains(http.statusCode) else {
+            throw APIError.http(status: http.statusCode, detail: Self.detail(from: data))
+        }
+    }
+
     /// Empty stand-in body for verbs that take no payload, so the generic
     /// `body:` parameter has a concrete type to bind against.
     private struct Empty: Encodable {}
@@ -468,6 +476,13 @@ struct APIClient {
         struct StringDetail: Decodable { let detail: String }
         if let parsed = try? JSONDecoder().decode(StringDetail.self, from: data) {
             return humanize(parsed.detail)
+        }
+        struct CodedDetail: Decodable {
+            struct Detail: Decodable { let message: String }
+            let detail: Detail
+        }
+        if let parsed = try? JSONDecoder().decode(CodedDetail.self, from: data) {
+            return humanize(parsed.detail.message)
         }
         struct ValidationDetail: Decodable {
             struct Item: Decodable { let msg: String }

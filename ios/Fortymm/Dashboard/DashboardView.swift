@@ -30,6 +30,7 @@ struct DashboardView: View {
     /// the destination for `review`/`dispute` rows (and a decided-but-unposted
     /// `score` row), fetched from the row's match id.
     @State private var selected: FinalMatch?
+    @State private var selectedTournament: TournamentDestination?
 
     private static let longDate: DateFormatter = {
         let f = DateFormatter()
@@ -89,6 +90,9 @@ struct DashboardView: View {
         .resumeScoringCover($resuming) { Task { await store.load(force: true) } }
         // Detail covers review/dispute (and decided-but-unposted) rows; refetch
         // on dismissal so a resolved row drops off the panel.
+        .fullScreenCover(item: $selectedTournament, onDismiss: { Task { await store.load(force: true) } }) { destination in
+            TournamentDetailView(id: destination.id)
+        }
         .fullScreenCover(item: $selected) { match in
             MatchDetailView(initial: match, onBack: {
                 selected = nil
@@ -183,7 +187,7 @@ struct DashboardView: View {
             // exactly as it did before. Mirrors the web dashboard, which renders
             // its `TournamentPanel` above the attention panel.
             ForEach(projectTournamentPanels(data.tournaments, youName: currentUsername)) { panel in
-                DashboardTournamentPanel(view: panel, onAct: { act(on: $0) })
+                DashboardTournamentPanel(view: panel, onAct: { act(on: $0) }, onOpenTournament: { selectedTournament = TournamentDestination(id: panel.id) })
             }
 
             // Server-ranked triage of every match needing the user's move —
