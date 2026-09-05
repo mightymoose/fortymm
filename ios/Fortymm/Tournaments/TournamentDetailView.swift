@@ -172,7 +172,7 @@ struct TournamentFixtureRow: View {
             FMCard {
                 VStack(alignment: .leading, spacing: 9) {
                     HStack {
-                        Text("Round \(fixture.round) · \(event.groupLabel(fixture.groupId))")
+                        Text(event.fixtureHeading(fixture))
                         Spacer()
                         Text(fixture.statusLabel).foregroundStyle(fixture.winnerEntryId != nil ? FMColor.serve500 : FMColor.ball500)
                     }.font(FMFont.ui(12)).foregroundStyle(FMColor.fg3)

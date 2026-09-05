@@ -69,10 +69,10 @@ struct NewTournamentEventView: View {
                     TextField("Event name", text: $name)
                     Picker("Draw", selection: $drawType) { ForEach(formats) { Text($0.name).tag($0.key) } }
                     if let format = formats.first(where: { $0.key == drawType }) { Text(format.description).font(.footnote).foregroundStyle(.secondary) }
-                    if drawType == "rr-then-ko" { Stepper("Qualifiers per group: \(qualifiers)", value: $qualifiers, in: 1...8) }
-                    if drawType == "swiss" { Stepper("Rounds: \(rounds)", value: $rounds, in: 1...20) }
+                    if drawType == "rr-then-ko" { Stepper("Qualifiers per group: \(qualifiers)", value: $qualifiers, in: TournamentEventLimits.qualifiers) }
+                    if drawType == "swiss" { Stepper("Rounds: \(rounds)", value: $rounds, in: TournamentEventLimits.rounds) }
                     Toggle("Limit players", isOn: $capped)
-                    if capped { Stepper("Maximum players: \(maxPlayers)", value: $maxPlayers, in: 2...256) }
+                    if capped { Stepper("Maximum players: \(maxPlayers)", value: $maxPlayers, in: TournamentEventLimits.players) }
                     TextField("Entry fee", text: $entryFee).keyboardType(.decimalPad)
                 }
                 Section("Schedule") {

@@ -10,13 +10,16 @@ final class TournamentLocation: NSObject, ObservableObject, @preconcurrency CLLo
     @Published private(set) var locating = false
     @Published private(set) var message: String?
     @Published private var coordinate: CLLocationCoordinate2D?
-    private let manager = CLLocationManager()
+    private let manager: CLLocationManager
+    private let locationTimeout: Duration
     private var timeout: Task<Void, Never>?
     var filter: TournamentNearMe? {
         guard enabled, let coordinate else { return nil }
         return TournamentNearMe(latitude: coordinate.latitude, longitude: coordinate.longitude, radiusMiles: radiusMiles)
     }
-    override init() {
+    init(manager: CLLocationManager = CLLocationManager(), locationTimeout: Duration = .seconds(20)) {
+        self.manager = manager
+        self.locationTimeout = locationTimeout
         super.init()
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyKilometer
@@ -28,21 +31,26 @@ final class TournamentLocation: NSObject, ObservableObject, @preconcurrency CLLo
         message = nil
         locating = value
         guard value else { manager.stopUpdatingLocation(); return }
+        switch manager.authorizationStatus {
+        case .notDetermined: manager.requestWhenInUseAuthorization()
+        case .authorizedAlways, .authorizedWhenInUse: requestLocation()
+        default: fail()
+        }
+    }
+    /// Permission prompts have no deadline; only the location fix does.
+    private func requestLocation() {
+        timeout?.cancel()
         timeout = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(20))
+            try? await Task.sleep(for: self?.locationTimeout ?? .seconds(20))
             guard !Task.isCancelled else { return }
             self?.fail()
         }
-        switch manager.authorizationStatus {
-        case .notDetermined: manager.requestWhenInUseAuthorization()
-        case .authorizedAlways, .authorizedWhenInUse: manager.requestLocation()
-        default: fail()
-        }
+        manager.requestLocation()
     }
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         guard enabled else { return }
         switch manager.authorizationStatus {
-        case .authorizedAlways, .authorizedWhenInUse: manager.requestLocation()
+        case .authorizedAlways, .authorizedWhenInUse: requestLocation()
         case .denied, .restricted: fail()
         default: break
         }

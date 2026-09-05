@@ -1,4 +1,5 @@
 import Foundation
+import CoreLocation
 
 private struct TestKeychain: SessionKeychain {
     let service = "tournament-tests"
@@ -21,6 +22,15 @@ private final class TournamentTransport: URLProtocol {
         client?.urlProtocolDidFinishLoading(self)
     }
     override func stopLoading() {}
+}
+
+private final class TestLocationManager: CLLocationManager {
+    var testAuthorization: CLAuthorizationStatus = .notDetermined
+    var locationRequests = 0
+    override var authorizationStatus: CLAuthorizationStatus { testAuthorization }
+    override func requestWhenInUseAuthorization() {}
+    override func requestLocation() { locationRequests += 1 }
+    override func stopUpdatingLocation() {}
 }
 
 @main struct TournamentTests {
@@ -58,6 +68,47 @@ private final class TournamentTransport: URLProtocol {
         precondition(tournaments[0].schedulePollSeconds == nil)
         print("PASS: near-me query, distances, eligibility rules, reservations, match settings and Swiss tiebreaks")
         let event = tournaments[0].events[0]
+        var roundTwoFailures: [String] = []
+        if event.fixtureHeading(event.fixtures[0]) != "Round 1" { roundTwoFailures.append("Swiss fixtures show a structural group") }
+        if TournamentCopy.entryFee("45.005", locale: Locale(identifier: "en_US")) != nil { roundTwoFailures.append("sub-cent fee admitted") }
+        if TournamentCopy.entryFee("1000000", locale: Locale(identifier: "en_US")) != nil { roundTwoFailures.append("over-limit fee admitted") }
+        if TournamentEventLimits.players.upperBound != 512 { roundTwoFailures.append("player limit stops below 512") }
+        let manager = TestLocationManager()
+        let location = TournamentLocation(manager: manager, locationTimeout: .milliseconds(20))
+        location.setEnabled(true)
+        try await Task.sleep(for: .milliseconds(60))
+        if !location.enabled { roundTwoFailures.append("permission prompt consumed the location timeout") }
+        precondition(roundTwoFailures.isEmpty, roundTwoFailures.joined(separator: "; "))
+        manager.testAuthorization = .authorizedAlways
+        location.locationManagerDidChangeAuthorization(manager)
+        precondition(manager.locationRequests == 1)
+        location.locationManager(manager, didUpdateLocations: [CLLocation(latitude: 41.8, longitude: -87.6)])
+        try await Task.sleep(for: .milliseconds(60))
+        precondition(location.enabled && location.filter?.latitude == 41.8)
+        location.setEnabled(true)
+        try await Task.sleep(for: .milliseconds(60))
+        precondition(!location.enabled && location.message != nil, "Actual location requests must still time out")
+        precondition(TournamentCopy.entryFee("999999.99", locale: Locale(identifier: "en_US")) == 999999.99)
+        precondition(TournamentCopy.entryFee("0,01", locale: Locale(identifier: "de_DE")) == 0.01)
+        precondition(TournamentEventLimits.players.lowerBound == 1)
+        precondition(TournamentEventLimits.rounds.upperBound == 32)
+        precondition(TournamentEventLimits.qualifiers.upperBound == 1000)
+        var stagedPayload = payload
+        var stagedEvent = eventPayload
+        stagedEvent["draw_type"] = "rr-then-ko"
+        stagedEvent["stages"] = [["id": event.stages[0].id.uuidString, "position": 1, "draw_type": "single-elim"]]
+        stagedPayload[0]["events"] = [stagedEvent]
+        let savedBody = TournamentTransport.body
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: stagedPayload), encoding: .utf8)!
+        let knockout = try await service.list()[0].events[0]
+        precondition(knockout.fixtureHeading(knockout.fixtures[0]) == "Round 1")
+        stagedEvent["stages"] = [["id": event.stages[0].id.uuidString, "position": 0, "draw_type": "round-robin"]]
+        stagedPayload[0]["events"] = [stagedEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: stagedPayload), encoding: .utf8)!
+        let grouped = try await service.list()[0].events[0]
+        precondition(grouped.fixtureHeading(grouped.fixtures[0]) == "Round 1 · Group A")
+        TournamentTransport.body = savedBody
+        print("PASS: authorization waits, location deadlines, grouped-stage labels and API write bounds")
         var reviewFailures: [String] = []
         if !event.canCutDraw(status: .published, canEdit: true) { reviewFailures.append("existing published draw cannot be re-cut") }
         if TournamentCopy.entryFee("12,50", locale: Locale(identifier: "de_DE")) != 12.5 { reviewFailures.append("comma-decimal fee refused") }

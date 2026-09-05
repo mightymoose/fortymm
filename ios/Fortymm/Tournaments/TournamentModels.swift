@@ -205,6 +205,11 @@ struct TournamentEventDTO: Decodable, Identifiable {
             var id: UUID { entryId }
         }
     }
+    func fixtureHeading(_ fixture: Fixture) -> String {
+        let round = "Round \(fixture.round)"
+        guard stages.first(where: { $0.id == fixture.stageId })?.drawType == "round-robin" else { return round }
+        return "\(round) · \(groupLabel(fixture.groupId))"
+    }
     func canCutDraw(status: TournamentStatus, canEdit: Bool) -> Bool {
         canEdit && status == .published
     }
@@ -237,7 +242,11 @@ enum TournamentCopy {
         let scanner = Scanner(string: trimmed)
         scanner.locale = locale
         guard !trimmed.isEmpty, let value = scanner.scanDouble(), scanner.isAtEnd,
-              value.isFinite, value >= 0 else { return nil }
+              value.isFinite, value >= 0, value <= 999_999.99,
+              var decimal = Decimal(string: String(value), locale: Locale(identifier: "en_US_POSIX")) else { return nil }
+        var cents = Decimal()
+        NSDecimalRound(&cents, &decimal, 2, .down)
+        guard decimal == cents else { return nil }
         return value
     }
     static func count(_ count: Int, _ noun: String, plural: String? = nil) -> String {
@@ -262,4 +271,11 @@ struct TournamentNearMe: Equatable {
     var query: [URLQueryItem] {
         [URLQueryItem(name: "lat", value: String(latitude)), URLQueryItem(name: "lng", value: String(longitude)), URLQueryItem(name: "radius_miles", value: String(radiusMiles))]
     }
+}
+
+/// Bounds shared with the tournament write schema in api/app/schemas/tournament.py.
+enum TournamentEventLimits {
+    static let players = 1...512
+    static let rounds = 1...32
+    static let qualifiers = 1...1000
 }
