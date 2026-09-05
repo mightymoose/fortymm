@@ -15,15 +15,12 @@ import SwiftUI
 /// web's `TournamentPanel`, laid out for one narrow column instead of the web's
 /// two-track grid.
 ///
-/// The web header carries a "View group & standings" link into the tournament
-/// screen. iOS has no tournament screen yet, so `view.destinationLabel` is
-/// deliberately **not** rendered: a link to nowhere is worse than no link. It
-/// stays on the view model, ready for the day that screen lands.
 struct DashboardTournamentPanel: View {
     let view: TournamentPanelView
     /// Open the tapped match — the dashboard fetches it and presents scoring or
     /// detail through the same cover the attention panel uses.
     let onAct: (TournamentMatchTarget) -> Void
+    var onOpenTournament: (() -> Void)? = nil
 
     /// Which event's tab is showing. Tab state is local to the panel, and keyed
     /// by **event id** rather than an index because the tab set can change under
@@ -83,6 +80,11 @@ struct DashboardTournamentPanel: View {
                 .font(FMFont.ui(FMFont.sm))
                 .foregroundStyle(FMColor.fg3)
                 .fixedSize(horizontal: false, vertical: true)
+            if let onOpenTournament {
+                Button("View tournament", action: onOpenTournament)
+                    .font(FMFont.ui(13, weight: .semibold))
+                    .foregroundStyle(FMColor.ball500)
+            }
         }
     }
 
