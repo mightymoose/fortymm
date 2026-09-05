@@ -1,5 +1,9 @@
 # A session-invalid 401 carries a structured code that ends the session
 
+The passive-reload exception below is superseded by
+[explicit identity recovery for #1641](20260904-session-eviction-requires-explicit-identity-recovery.md).
+The structured error-code decision remains in force.
+
 When the session cookie no longer resolves to a usable user, `get_current_user`
 raises a `401` carrying a **structured `session_ended` code** (mirroring the
 existing `session_merged` code for a tombstoned/merged cookie). The web client
@@ -51,7 +55,8 @@ sign back in."
   inline would mean the save awaits its response before navigating, regressing
   the #567 keyboard behavior on every save, not just the rare signed-out one.
 
-- **A durable "this browser held a claimed account" marker (rejected).** Would
+- **A durable "this browser held a claimed account" marker (originally rejected;
+  passive-reload exception superseded by #1641).** Would
   additionally kill the silently-minted guest on a *passive reload* (where no
   request 401s, so the reactive handler can't fire). Rejected as fragile: the
   marker's clearing rule trades a redirect-loop risk against a silent-guest

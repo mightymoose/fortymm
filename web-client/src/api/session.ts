@@ -104,9 +104,11 @@ export function sessionQueryOptions() {
     queryFn: (): Promise<Session> =>
       withSessionBootstrapLock(async () => {
         const ended = readEndedSession()
-        if (ended) throw new ApiError(401, ended.message, 'load session', {
-          detail: { code: 'session_ended', ...ended },
-        })
+        if (ended) {
+          throw new ApiError(401, ended.message, 'load session', {
+            detail: { code: 'session_ended', ...ended },
+          })
+        }
         return unwrap('load session', await api.GET('/v1/session'))
       }),
     staleTime: 1000 * 60 * 5,
@@ -219,12 +221,28 @@ export function useResendEmailConfirmation() {
 
 export type MergePreview = components['schemas']['MergePreview']
 
+const accountSwitchSchema = z.object({
+  from_user_id: z.string(),
+  from_username: z.string(),
+  to_username: z.string(),
+})
+const mergePreviewSchema = z.object({
+  is_merge: z.boolean(),
+  owner_username: z.string().nullable().optional(),
+  guest_username: z.string().nullable().optional(),
+  guest_matches_count: z.number().int().nonnegative().default(0),
+  adopts_guest_username: z.boolean().default(false),
+  account_switch: accountSwitchSchema.nullable().optional(),
+})
+
 /** Side-effect-free look at an emailed link, to decide whether to show the
  * "bring N matches over?" gate before finalizing. */
 export function useMergePreview() {
   return useMutation({
     mutationFn: async (token: string): Promise<MergePreview> =>
-      unwrap('check link', await api.POST('/v1/merge/preview', { body: { token } })),
+      mergePreviewSchema.parse(
+        unwrap('check link', await api.POST('/v1/merge/preview', { body: { token } })),
+      ),
   })
 }
 
@@ -384,7 +402,6 @@ export function useLoginSender() {
   return useQuery(loginSenderQueryOptions())
 }
 
-
 /** An explicit choice to abandon the ended session and start a separate guest. */
 export function useStartNewGuest() {
   const qc = useQueryClient()
@@ -394,18 +411,22 @@ export function useStartNewGuest() {
       return unwrap('start a new guest', await api.GET('/v1/session'))
     },
     onSuccess: (session) => {
-      handleIdentityChange({ closeRealtime: closeRealtimeConnections, clearQueryCache: () => qc.clear() })
+      handleIdentityChange({
+        closeRealtime: closeRealtimeConnections,
+        clearQueryCache: () => qc.clear(),
+      })
       cacheSession(qc, session)
       forgetSessionEnd()
     },
   })
 }
 
-
-const switchConflictSchema = z.object({ detail: z.object({
-  code: z.literal('account_switch_required'),
-  account_switch: z.object({ from_user_id: z.string(), from_username: z.string(), to_username: z.string() }).nullable(),
-}) })
+const switchConflictSchema = z.object({
+  detail: z.object({
+    code: z.literal('account_switch_required'),
+    account_switch: accountSwitchSchema.nullable(),
+  }),
+})
 
 export function accountSwitchConflict(error: unknown) {
   if (!(error instanceof ApiError) || error.status !== 409) return null

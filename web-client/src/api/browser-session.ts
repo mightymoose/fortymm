@@ -3,7 +3,10 @@ import { z } from 'zod'
 
 const KEY = 'fortymm.session-ended'
 const CHANGE = 'fortymm:session-ended'
-const endedSchema = z.object({ message: z.string(), email: z.string().optional() })
+const endedSchema = z.object({
+  message: z.string(),
+  email: z.string().optional(),
+})
 export type EndedSession = z.infer<typeof endedSchema>
 let unavailableStorageValue: string | null = null
 
@@ -40,13 +43,21 @@ export function rememberSessionEnd(info: EndedSession): void {
   const value = JSON.stringify(info)
   if (snapshot() === value) return
   unavailableStorageValue = value
-  try { localStorage.setItem(KEY, value) } catch { /* Keep this tab signed out. */ }
+  try {
+    localStorage.setItem(KEY, value)
+  } catch {
+    /* Keep this tab signed out. */
+  }
   window.dispatchEvent(new Event(CHANGE))
 }
 
 export function forgetSessionEnd(): void {
   unavailableStorageValue = null
-  try { localStorage.removeItem(KEY) } catch { /* Storage may be disabled. */ }
+  try {
+    localStorage.removeItem(KEY)
+  } catch {
+    /* Storage may be disabled. */
+  }
   window.dispatchEvent(new Event(CHANGE))
 }
 

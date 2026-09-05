@@ -435,7 +435,9 @@ async def _require_account_switch_approval(
         status_code=409,
         detail={
             "code": "account_switch_required",
-            "message": "Your sign-in changed. Review this account switch before continuing.",
+            "message": (
+                "Your sign-in changed. Review this account switch before continuing."
+            ),
             "account_switch": switch.model_dump(mode="json") if switch else None,
         },
     )

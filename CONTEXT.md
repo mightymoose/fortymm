@@ -366,10 +366,18 @@ _Avoid_: log out (button copy may say "Log out"; the act is "sign out").
 
 **Session-ended**:
 The state a tab lands in when its session cookie no longer resolves to a usable
-user — the holder signed out elsewhere, or was merged away. The app's response
-is to drop the stale identity and send the holder to sign in, never to quietly
-mint a fresh guest in their place.
+user — the holder signed out elsewhere, a mailed link revoked the session, or
+it was merged away. Detected on the next request. The app drops the stale
+identity and persists the signed-out state across reloads and tabs, until the
+holder signs in or explicitly starts a new guest. It never quietly mints a
+fresh guest in their place.
 _Avoid_: logged out, expired, unauthenticated.
+
+**Account switch**:
+Redeeming a mailed link in a browser already signed in to a different claimed
+account. Requires explicit approval naming both accounts before the link is
+consumed; cancel leaves the current account signed in and the link unused.
+Distinct from a guest merge, which may require its own choice afterward.
 
 ## Players roster
 

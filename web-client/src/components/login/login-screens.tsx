@@ -782,6 +782,7 @@ const receiptDiv: CSSProperties = { height: 1, background: 'var(--ink-700)' }
 /* ─── Screens ───────────────────────────────────────────────────────── */
 
 export interface ScreenEmailProps {
+  notice?: ReactNode
   initialEmail?: string
   submitting?: boolean
   errorMessage?: string | null
@@ -793,6 +794,7 @@ export interface ScreenEmailProps {
 }
 
 export function ScreenEmail({
+  notice,
   initialEmail = '',
   submitting = false,
   errorMessage = null,
@@ -848,6 +850,7 @@ export function ScreenEmail({
           title="Your email"
           subtitle="Drop your email. We send a one-tap link — open it and you’re in. We never made a password, so we can’t lose yours."
         >
+          {notice}
           <form
             onSubmit={handleSubmit}
             style={{ display: 'flex', flexDirection: 'column', gap: 18 }}

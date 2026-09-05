@@ -19,8 +19,8 @@ internal protocol APIProtocol: Sendable {
     /// the session), and a cookie that resolves to a merged-away guest raises the
     /// structured ``session_merged`` 401 instead of silently swapping identities.
     ///
-    /// Only when the cookie resolves no user (no/garbage cookie) does it mint a fresh
-    /// guest and Set-Cookie it — the zero-friction first visit.
+    /// Only a missing cookie mints a fresh guest. A rejected cookie ends the
+    /// session explicitly instead of silently replacing the caller's identity.
     ///
     /// - Remark: HTTP `GET /v1/session`.
     /// - Remark: Generated from `#/paths//v1/session/get(get_session_endpoint_v1_session_get)`.
@@ -1174,8 +1174,8 @@ extension APIProtocol {
     /// the session), and a cookie that resolves to a merged-away guest raises the
     /// structured ``session_merged`` 401 instead of silently swapping identities.
     ///
-    /// Only when the cookie resolves no user (no/garbage cookie) does it mint a fresh
-    /// guest and Set-Cookie it — the zero-friction first visit.
+    /// Only a missing cookie mints a fresh guest. A rejected cookie ends the
+    /// session explicitly instead of silently replacing the caller's identity.
     ///
     /// - Remark: HTTP `GET /v1/session`.
     /// - Remark: Generated from `#/paths//v1/session/get(get_session_endpoint_v1_session_get)`.
@@ -2874,6 +2874,35 @@ internal enum Servers {}
 internal enum Components {
     /// Types generated from the `#/components/schemas` section of the OpenAPI document.
     internal enum Schemas {
+        /// - Remark: Generated from `#/components/schemas/AccountSwitchPreview`.
+        internal struct AccountSwitchPreview: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/AccountSwitchPreview/from_user_id`.
+            internal var fromUserId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AccountSwitchPreview/from_username`.
+            internal var fromUsername: Swift.String
+            /// - Remark: Generated from `#/components/schemas/AccountSwitchPreview/to_username`.
+            internal var toUsername: Swift.String
+            /// Creates a new `AccountSwitchPreview`.
+            ///
+            /// - Parameters:
+            ///   - fromUserId:
+            ///   - fromUsername:
+            ///   - toUsername:
+            internal init(
+                fromUserId: Swift.String,
+                fromUsername: Swift.String,
+                toUsername: Swift.String
+            ) {
+                self.fromUserId = fromUserId
+                self.fromUsername = fromUsername
+                self.toUsername = toUsername
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case fromUserId = "from_user_id"
+                case fromUsername = "from_username"
+                case toUsername = "to_username"
+            }
+        }
         /// A tournament venue address as **stored and read**. A JSONB value-object.
         ///
         /// The six free-text components a client sends (:class:`AddressInput`) **plus**
@@ -3952,6 +3981,8 @@ internal enum Components {
         }
         /// - Remark: Generated from `#/components/schemas/ConfirmEmailRequest`.
         internal struct ConfirmEmailRequest: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ConfirmEmailRequest/switch_from_user_id`.
+            internal var switchFromUserId: Swift.String?
             /// - Remark: Generated from `#/components/schemas/ConfirmEmailRequest/token`.
             internal var token: Swift.String
             /// - Remark: Generated from `#/components/schemas/ConfirmEmailRequest/skip_merge`.
@@ -3959,16 +3990,20 @@ internal enum Components {
             /// Creates a new `ConfirmEmailRequest`.
             ///
             /// - Parameters:
+            ///   - switchFromUserId:
             ///   - token:
             ///   - skipMerge:
             internal init(
+                switchFromUserId: Swift.String? = nil,
                 token: Swift.String,
                 skipMerge: Swift.Bool? = nil
             ) {
+                self.switchFromUserId = switchFromUserId
                 self.token = token
                 self.skipMerge = skipMerge
             }
             internal enum CodingKeys: String, CodingKey {
+                case switchFromUserId = "switch_from_user_id"
                 case token
                 case skipMerge = "skip_merge"
             }
@@ -4011,6 +4046,8 @@ internal enum Components {
         }
         /// - Remark: Generated from `#/components/schemas/ConsumeLoginRequest`.
         internal struct ConsumeLoginRequest: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/ConsumeLoginRequest/switch_from_user_id`.
+            internal var switchFromUserId: Swift.String?
             /// - Remark: Generated from `#/components/schemas/ConsumeLoginRequest/token`.
             internal var token: Swift.String
             /// - Remark: Generated from `#/components/schemas/ConsumeLoginRequest/skip_merge`.
@@ -4018,16 +4055,20 @@ internal enum Components {
             /// Creates a new `ConsumeLoginRequest`.
             ///
             /// - Parameters:
+            ///   - switchFromUserId:
             ///   - token:
             ///   - skipMerge:
             internal init(
+                switchFromUserId: Swift.String? = nil,
                 token: Swift.String,
                 skipMerge: Swift.Bool? = nil
             ) {
+                self.switchFromUserId = switchFromUserId
                 self.token = token
                 self.skipMerge = skipMerge
             }
             internal enum CodingKeys: String, CodingKey {
+                case switchFromUserId = "switch_from_user_id"
                 case token
                 case skipMerge = "skip_merge"
             }
@@ -6722,6 +6763,26 @@ internal enum Components {
         ///
         /// - Remark: Generated from `#/components/schemas/MergePreview`.
         internal struct MergePreview: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/MergePreview/account_switch`.
+            internal struct AccountSwitchPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/MergePreview/account_switch/value1`.
+                internal var value1: Components.Schemas.AccountSwitchPreview
+                /// Creates a new `AccountSwitchPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.AccountSwitchPreview) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try .init(from: decoder)
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try self.value1.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/MergePreview/account_switch`.
+            internal var accountSwitch: Components.Schemas.MergePreview.AccountSwitchPayload?
             /// - Remark: Generated from `#/components/schemas/MergePreview/is_merge`.
             internal var isMerge: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/MergePreview/owner_username`.
@@ -6735,18 +6796,21 @@ internal enum Components {
             /// Creates a new `MergePreview`.
             ///
             /// - Parameters:
+            ///   - accountSwitch:
             ///   - isMerge:
             ///   - ownerUsername:
             ///   - guestUsername:
             ///   - guestMatchesCount:
             ///   - adoptsGuestUsername:
             internal init(
+                accountSwitch: Components.Schemas.MergePreview.AccountSwitchPayload? = nil,
                 isMerge: Swift.Bool,
                 ownerUsername: Swift.String? = nil,
                 guestUsername: Swift.String? = nil,
                 guestMatchesCount: Swift.Int? = nil,
                 adoptsGuestUsername: Swift.Bool? = nil
             ) {
+                self.accountSwitch = accountSwitch
                 self.isMerge = isMerge
                 self.ownerUsername = ownerUsername
                 self.guestUsername = guestUsername
@@ -6754,6 +6818,7 @@ internal enum Components {
                 self.adoptsGuestUsername = adoptsGuestUsername
             }
             internal enum CodingKeys: String, CodingKey {
+                case accountSwitch = "account_switch"
                 case isMerge = "is_merge"
                 case ownerUsername = "owner_username"
                 case guestUsername = "guest_username"
@@ -13427,8 +13492,8 @@ internal enum Operations {
     /// the session), and a cookie that resolves to a merged-away guest raises the
     /// structured ``session_merged`` 401 instead of silently swapping identities.
     ///
-    /// Only when the cookie resolves no user (no/garbage cookie) does it mint a fresh
-    /// guest and Set-Cookie it — the zero-friction first visit.
+    /// Only a missing cookie mints a fresh guest. A rejected cookie ends the
+    /// session explicitly instead of silently replacing the caller's identity.
     ///
     /// - Remark: HTTP `GET /v1/session`.
     /// - Remark: Generated from `#/paths//v1/session/get(get_session_endpoint_v1_session_get)`.

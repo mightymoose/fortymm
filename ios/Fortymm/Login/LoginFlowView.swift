@@ -57,7 +57,8 @@ struct LoginFlowView: View {
             VerifyLoginView(
                 token: token,
                 onSignedIn: onSignedIn,
-                onRestart: { step = .email(prefill: "") }
+                onRestart: { step = .email(prefill: "") },
+                onClose: onClose
             )
         }
     }

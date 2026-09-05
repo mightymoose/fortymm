@@ -78,10 +78,11 @@ final class SessionStore: ObservableObject {
             .store(in: &cancellables)
     }
 
-    /// Drop into the signed-out state (merged away). Clears any pending deep
-    /// link so its cover doesn't sit over the sign-in screen.
+    /// Drop into the signed-out state while keeping pending recovery links.
     func signedOut(reason: String, email: String?) {
-        pendingDeepLink = nil
+        // Keep email links: they are how the holder recovers this session.
+        // A protected match link must not cover the sign-in screen.
+        if case .match = pendingDeepLink { pendingDeepLink = nil }
         state = .signedOut(reason: reason, email: email)
     }
 

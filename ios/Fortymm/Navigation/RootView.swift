@@ -12,9 +12,12 @@ struct RootView: View {
             .environmentObject(session)
             .task { await session.load() }
             // Universal Links land here (cold launch or while running). The
-            // store parses + holds the link; the cover below presents it once
-            // the session has loaded.
+            // store parses + holds the link; the cover also allows recovery
+            // links while the session is signed out.
             .onOpenURL { session.handle($0) }
+            .fullScreenCover(item: $session.pendingDeepLink) { link in
+                deepLinkDestination(link)
+            }
     }
 
     @ViewBuilder
@@ -24,9 +27,7 @@ struct RootView: View {
             LoadingView()
         case .loaded:
             MainTabView()
-                .fullScreenCover(item: $session.pendingDeepLink) { link in
-                    deepLinkDestination(link)
-                }
+                .id(session.user?.username)
                 // Now that a session exists to attach the device token to, ask
                 // for notification permission and register with APNs, and route
                 // a tapped match notification to its detail. Runs once the

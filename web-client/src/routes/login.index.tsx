@@ -3,6 +3,7 @@ import { createFileRoute, useNavigate } from '@tanstack/react-router'
 
 import { ApiError } from '@/api/client'
 import { useRequestLogin, useStartNewGuest } from '@/api/session'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { useEndedSession } from '@/api/browser-session'
 import {
   ScreenEmail,
@@ -49,18 +50,20 @@ function LoginPage() {
   }
 
   return (
-    <>
-      {ended && <div role="alert" className="mx-auto max-w-lg px-6 pt-6">
-        <p>{ended.message}</p>
-        <button type="button" className="mt-3 underline" disabled={newGuest.isPending}
-          onClick={() => newGuest.mutate(undefined, {
-            onSuccess: () => navigate({ to: '/dashboard' }),
-          })}>
-          Continue as a new guest
-        </button>
-        {newGuest.isError && <p>We couldn't start a new guest. Please try again.</p>}
-      </div>}
     <ScreenEmail
+      notice={ended && <Alert className="mb-2 border-[var(--warn)]/40">
+        <AlertTitle>Signed out</AlertTitle>
+        <AlertDescription>
+          <p>{ended.message}</p>
+          <button type="button" className="mt-3 underline" disabled={newGuest.isPending}
+            onClick={() => newGuest.mutate(undefined, {
+              onSuccess: () => navigate({ to: '/dashboard' }),
+            })}>
+            Continue as a new guest
+          </button>
+          {newGuest.isError && <p>We couldn't start a new guest. Please try again.</p>}
+        </AlertDescription>
+      </Alert>}
       initialEmail={initialEmail ?? ''}
       submitting={requestLogin.isPending}
       errorMessage={serverError}
@@ -111,6 +114,5 @@ function LoginPage() {
         }
       }}
     />
-    </>
   )
 }

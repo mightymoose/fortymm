@@ -25,12 +25,16 @@ struct ConfirmEmailView: View {
     private enum Phase {
         case verifying
         case gate(MergePreview)
+        case accountSwitch(AccountSwitchPreview?)
         case success(SessionResponse)
         case expired
         case replaced
         case unreachable
     }
     @State private var phase: Phase = .verifying
+    @State private var approvedSwitch: String?
+    @State private var pendingMerge: MergePreview?
+    @State private var chosenSkipMerge = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -45,6 +49,13 @@ struct ConfirmEmailView: View {
     private var content: some View {
         switch phase {
         case .verifying: verifying
+        case let .accountSwitch(change):
+            AccountSwitchGateView(change: change, onContinue: {
+                approvedSwitch = change?.fromUserId
+                if change == nil { Task { await start() } }
+                else if let merge = pendingMerge { phase = .gate(merge) }
+                else { Task { await confirm(skipMerge: chosenSkipMerge) } }
+            }, onCancel: onClose)
         case let .gate(preview):
             MergeGateView(
                 preview: preview,
@@ -241,20 +252,29 @@ struct ConfirmEmailView: View {
     /// Preview the link first; a merge that would carry matches over waits at
     /// the gate, everything else confirms straight away.
     private func start() async {
+        approvedSwitch = nil
         let preview = await loginService.mergePreview(token: token)
-        if preview.isMerge, preview.guestMatchesCount > 0 {
-            phase = .gate(preview)
+        pendingMerge = preview.isMerge && preview.guestMatchesCount > 0 ? preview : nil
+        if let change = preview.accountSwitch {
+            phase = .accountSwitch(change)
+        } else if let merge = pendingMerge {
+            phase = .gate(merge)
         } else {
             await confirm(skipMerge: false)
         }
     }
 
     private func confirm(skipMerge: Bool) async {
+        chosenSkipMerge = skipMerge
+        pendingMerge = nil
         phase = .verifying
         do {
             phase = .success(
-                try await service.confirmEmail(token: token, skipMerge: skipMerge)
+                try await service.confirmEmail(token: token, skipMerge: skipMerge, switchFromUserId: approvedSwitch)
             )
+        } catch LoginConsumeError.accountSwitchRequired(let change) {
+            approvedSwitch = nil
+            phase = .accountSwitch(change)
         } catch LoginConsumeError.replaced {
             // A newer resend superseded this link — opening the most recent
             // email is the fix; resending would kill that newer link (#1616).

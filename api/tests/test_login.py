@@ -1449,7 +1449,13 @@ async def test_confirming_an_email_change_revokes_the_users_other_sessions(
     """The same hole in the Settings claim flow (#1294 shares it). The browser
     that requested the claim must not keep a live session for the account once
     the mailed link is confirmed elsewhere."""
-    guest = await start_session(api_client, db_session)
+    guest = await _make_confirmed_user(db_session, "quinn-original@example.com")
+    await _issue_login_token(db_session, guest, "quinn-initial-login")
+    assert (
+        await api_client.post(
+            "/v1/login/consume", json={"token": "quinn-initial-login"}
+        )
+    ).status_code == 200
     held_cookie = api_client.cookies.get(SESSION_COOKIE_NAME)
     assert held_cookie
 
@@ -1493,6 +1499,9 @@ async def test_confirming_an_email_change_revokes_the_users_other_sessions(
         .all()
     )
     assert surviving == []
+    ended = await api_client.get("/v1/session")
+    assert ended.status_code == 401
+    assert ended.json()["detail"]["code"] == "session_ended"
 
 
 # ---- structured codes on a dead sign-in link (#1466) ----------------------
@@ -1797,6 +1806,12 @@ async def test_claimed_account_switch_requires_approval_without_consuming_link(
     assert (await api_client.get("/v1/session")).json()["data"]["user"]["id"] == str(
         alice.id
     )
+    # Approval from an account that is no longer current cannot consume the link.
+    stale_approval = await api_client.post(
+        endpoint, json={"token": "bob-sign-in", "switch_from_user_id": str(bob.id)}
+    )
+    assert stale_approval.status_code == 409
+    assert stale_approval.json()["detail"]["code"] == "account_switch_required"
     # Declining is read-only: the link remains live until explicitly approved.
     accepted = await api_client.post(
         endpoint, json={"token": "bob-sign-in", "switch_from_user_id": str(alice.id)}

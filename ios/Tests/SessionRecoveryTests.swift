@@ -17,7 +17,7 @@ final class SessionTransport: URLProtocol {
 }
 
 @main struct SessionRecoveryTests {
-    static func main() async throws {
+    @MainActor static func main() async throws {
         let keychain = KeychainStore(service: "fortymm-session-tests", account: UUID().uuidString)
         defer {
             keychain.delete()
@@ -35,6 +35,12 @@ final class SessionTransport: URLProtocol {
             precondition(message == "You've been signed out. Sign in to continue.")
         }
         print("PASS: an evicted session reaches the native signed-out flow")
+        let store = SessionStore(client: client)
+        store.handle(URL(string: "https://fortymm.com/login/verifying?token=recovery-link")!)
+        await store.load()
+        precondition(store.pendingDeepLink == .login(token: "recovery-link"),
+                     "Session eviction must not discard the link needed to sign back in")
+        print("PASS: native recovery retains the incoming sign-in link")
         // Simulate relaunch with the same durable credential store. A server
         // willing to mint a guest must never be reached until an explicit choice.
         SessionTransport.status = 200
@@ -48,5 +54,25 @@ final class SessionTransport: URLProtocol {
         _ = try await relaunched.startNewGuest()
         await tokens.clear()
         print("PASS: sign-out survives relaunch until an explicit new-guest choice")
+        let login = LoginService(client: client)
+        SessionTransport.body = #"{"is_merge":false,"guest_matches_count":0,"account_switch":{"from_user_id":"alice-id","from_username":"alice","to_username":"bob"}}"#
+        let preview = await login.mergePreview(token: "bobs-link")
+        precondition(preview.accountSwitch?.fromUsername == "alice")
+        precondition(preview.accountSwitch?.toUsername == "bob")
+        SessionTransport.status = 409
+        SessionTransport.body = #"{"detail":{"code":"account_switch_required","account_switch":{"from_user_id":"charlie-id","from_username":"charlie","to_username":"bob"}}}"#
+        do {
+            _ = try await login.consume(token: "bobs-link")
+            fatalError("A changed sign-in requires fresh approval")
+        } catch LoginConsumeError.accountSwitchRequired(let change) {
+            precondition(change?.fromUsername == "charlie")
+        }
+        do {
+            _ = try await ProfileService(client: client).confirmEmail(token: "bobs-link")
+            fatalError("A confirmation link must require fresh approval too")
+        } catch LoginConsumeError.accountSwitchRequired(let change) {
+            precondition(change?.fromUsername == "charlie")
+        }
+        print("PASS: native link flows preserve account-switch previews and conflicts")
     }
 }

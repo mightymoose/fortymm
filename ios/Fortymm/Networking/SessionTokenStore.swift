@@ -123,8 +123,7 @@ actor SessionTokenStore {
     }
 }
 
-
-struct SessionEndReason: Codable {
+nonisolated struct SessionEndReason: Codable, Sendable {
     let message: String
     let email: String?
 }

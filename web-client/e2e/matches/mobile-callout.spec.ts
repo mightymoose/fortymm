@@ -1,3 +1,4 @@
+import { stubUnreadNotifications } from '../support/notifications'
 import { test, expect, Page, Locator } from '@playwright/test';
 import { matchDetails, sessionResponse } from '../../src/test/factories';
 import type { components } from '../../src/api/schema';
@@ -76,6 +77,7 @@ class Harness {
 
     async mock(match: MatchDetails) {
         await stubRealtimeStream(this.page);
+        await stubUnreadNotifications(this.page);
         await this.page.route('**/api/v1/session', (route) =>
             route.fulfill({
                 status: 200,
