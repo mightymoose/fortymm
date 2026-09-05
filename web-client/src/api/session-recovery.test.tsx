@@ -174,3 +174,20 @@ it('reuses peer recovery before its completion broadcast reaches a fallback tab'
   expect(deletes).toBe(0)
   expect(readEndedSession()).toBeNull()
 })
+
+it.each([
+  [false, 'getItem'], [false, 'setItem'],
+  [true, 'getItem'], [true, 'setItem'],
+] as const)('revokes logout with Web Locks %s and %s blocked', async (webLocks, blockedMethod) => {
+  if (webLocks) vi.stubGlobal('navigator', { locks: { request: (_name: string, run: () => Promise<unknown>) => run() } })
+  blockLocalStorage(blockedMethod)
+  let deletes = 0
+  server.use(http.delete('*/v1/session', () => {
+    deletes += 1
+    return new HttpResponse(null, { status: 204 })
+  }))
+  const { result } = renderHook(() => useLogout(), { wrapper: wrapper() })
+  await act(() => result.current.mutateAsync())
+  expect(deletes).toBe(1)
+  expect(readEndedSession()?.logoutPending).toBe(false)
+})

@@ -58,7 +58,7 @@ export function readStorageLock(): StorageLockRecord | null {
 // the way `navigator.locks` does — but it narrows the race window to
 // milliseconds, and the TTL means a tab that crashes mid-bootstrap can never
 // wedge the others (they just wait out the TTL and proceed).
-async function withStorageLock<T>(fn: () => Promise<T>, alwaysLock = false): Promise<T> {
+async function withStorageLock<T>(fn: () => Promise<T>, alwaysLock = false, requireStorage = alwaysLock): Promise<T> {
   const owner = `${Date.now()}-${Math.random()}`
   const deadline = Date.now() + SESSION_LOCK_TTL_MS
   for (;;) {
@@ -77,7 +77,7 @@ async function withStorageLock<T>(fn: () => Promise<T>, alwaysLock = false): Pro
     } catch {
       // Destructive recovery needs cross-tab exclusion; an in-tab queue
       // cannot safely replace it when the shared backend is unavailable.
-      if (alwaysLock) throw new Error('Session recovery is unavailable. Please enable browser storage and try again.')
+      if (requireStorage) throw new Error('Session recovery is unavailable. Please enable browser storage and try again.')
       return fn()
     }
     if (Date.now() > deadline) throw new Error('Another tab is updating your session. Please try again.')
@@ -113,17 +113,23 @@ function withLocalSessionLock<T>(fn: () => Promise<T>): Promise<T> {
 
 /** Single-flights the `/v1/session` cold-bootstrap request across every tab
  * on the origin, not just within one TanStack QueryClient. */
-async function withSessionBootstrapLock<T>(fn: () => Promise<T>, alwaysLock = false): Promise<T> {
+async function withSessionBootstrapLock<T>(fn: () => Promise<T>, mode: 'bootstrap' | 'recovery' | 'logout' = 'bootstrap'): Promise<T> {
+  const alwaysLock = mode !== 'bootstrap'
   // A session already exists — no mint race to guard against.
   if (!alwaysLock && hasCsrfCookie()) return fn()
   const run = () => {
-    if (alwaysLock) synchronizeSessionEnd()
+    if (mode === 'recovery') synchronizeSessionEnd()
+    if (mode === 'logout') {
+      // Refresh stale retry state when possible, but storage failures must
+      // never prevent revocation of the current server-side credential.
+      try { synchronizeSessionEnd() } catch { /* Revocation remains available. */ }
+    }
     return fn()
   }
   if (typeof navigator !== 'undefined' && navigator.locks?.request) {
     return navigator.locks.request(SESSION_LOCK_NAME, run)
   }
-  return withLocalSessionLock(() => withStorageLock(run, alwaysLock))
+  return withLocalSessionLock(() => withStorageLock(run, alwaysLock, mode === 'recovery'))
 }
 
 export function sessionQueryOptions() {
@@ -299,7 +305,7 @@ async function afterPendingLogout<T>(fn: () => Promise<T>): Promise<T> {
       rememberSessionEnd({ message: 'You have signed out. Sign in to continue.', logoutPending: false }, { notifyLocal: false })
     }
     return fn()
-  }, true)
+  }, 'recovery')
 }
 
 export function useConfirmEmail() {
@@ -370,7 +376,7 @@ export function useLogout(retryOnly = false) {
       if (readEndedSession()?.logoutPending) {
         rememberSessionEnd({ message: 'You have signed out. Sign in to continue.', logoutPending: false })
       }
-    }, true),
+    }, 'logout'),
     // Drop ALL cached per-user data (matches, dashboard, players, ...), not
     // just SESSION_QUERY_KEY — otherwise the prior user's BFF responses leak
     // into the next ephemeral session.
@@ -467,7 +473,7 @@ export function useStartNewGuest() {
       forgetSessionEnd()
       announceIdentityChange()
       return session
-    }, true),
+    }, 'recovery'),
     onSuccess: (session) => {
       handleIdentityChange({
         closeRealtime: closeRealtimeConnections,
