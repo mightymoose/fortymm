@@ -6,7 +6,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import { z } from 'zod'
-import { ApiError, api, hasCsrfCookie, unwrap } from './client'
+import { ApiError, api, hasCsrfCookie, restoreCsrfCompanion, unwrap } from './client'
 import { handleIdentityChange } from './identity-change'
 import { announceIdentityChange, forgetSessionEnd, readEndedSession, rememberSessionEnd } from './browser-session'
 import { closeRealtimeConnections } from './realtime/connection'
@@ -290,6 +290,7 @@ async function afterPendingLogout<T>(fn: () => Promise<T>): Promise<T> {
   if (!readEndedSession()?.logoutPending) return fn()
   return withSessionBootstrapLock(async () => {
     if (readEndedSession()?.logoutPending) {
+      restoreCsrfCompanion()
       unwrap('finish sign out', await api.DELETE('/v1/session'), { allowEmpty: true })
       rememberSessionEnd({ message: 'You have signed out. Sign in to continue.', logoutPending: false }, { notifyLocal: false })
     }
@@ -359,6 +360,7 @@ export function useLogout(retryOnly = false) {
   return useMutation({
     mutationFn: (): Promise<void> => withSessionBootstrapLock(async () => {
       if (retryOnly && !readEndedSession()?.logoutPending) return
+      restoreCsrfCompanion()
       rememberSessionEnd({ message: 'Sign-out is not complete. Retry to finish signing out.', logoutPending: true })
       unwrap('sign out', await api.DELETE('/v1/session'), { allowEmpty: true })
       if (readEndedSession()?.logoutPending) {
@@ -453,6 +455,7 @@ export function useStartNewGuest() {
       // A preceding recovery in another tab may already have replaced the
       // ended session. Reuse that identity instead of deleting it again.
       if (readEndedSession()) {
+        restoreCsrfCompanion()
         unwrap('clear old session', await api.DELETE('/v1/session'), { allowEmpty: true })
       }
       const session = unwrap('start a new guest', await api.GET('/v1/session'))

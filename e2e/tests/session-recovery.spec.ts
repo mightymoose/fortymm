@@ -165,3 +165,39 @@ for (const kind of ['sign-in', 'confirmation'] as const) {
     expect((await (await context.request.get('/api/v1/session')).json()).data.user.id).toBe(original.id)
   })
 }
+
+for (const attempt of ['initial', 'retry'] as const) {
+  test(`revokes the old session when its CSRF companion is missing on ${attempt} logout`, async ({ context, page }) => {
+    await page.goto('/dashboard')
+    const recovery = new SessionRecoveryPage(page)
+    await expect(recovery.userMenu).toBeVisible()
+    const oldSession = (await context.cookies()).find((cookie) => cookie.name === 'session')
+    if (!oldSession) throw new Error('The test must start with a session cookie')
+    if (attempt === 'retry') {
+      await page.route('**/api/v1/session', async (route) => {
+        if (route.request().method() === 'DELETE') await route.fulfill({ status: 503, body: '' })
+        else await route.continue()
+      })
+      const failed = page.waitForResponse((response) => response.request().method() === 'DELETE' && response.status() === 503)
+      await recovery.userMenu.click()
+      await recovery.logout.click()
+      await failed
+      await page.unroute('**/api/v1/session')
+    }
+    await context.clearCookies({ name: 'csrf_token' })
+    const revoked = page.waitForResponse((response) => response.request().method() === 'DELETE' && response.status() === 204)
+    if (attempt === 'retry') {
+      await page.getByRole('button', { name: 'Retry sign-out' }).click()
+    } else {
+      await recovery.userMenu.click()
+      await recovery.logout.click()
+    }
+    await revoked
+    await expect(page).toHaveURL(/\/login(?:\?.*)?$/)
+    await expect(page.getByRole('button', { name: 'Retry sign-out' })).not.toBeVisible()
+    const borrowed = await context.request.get('/api/v1/session', {
+      headers: { Cookie: `session=${oldSession.value}` },
+    })
+    expect(borrowed.status()).toBe(401)
+  })
+}

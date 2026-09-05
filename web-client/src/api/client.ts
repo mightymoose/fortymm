@@ -106,8 +106,20 @@ export function hasCsrfCookie(): boolean {
   return readCookie(CSRF_COOKIE_NAME) !== null
 }
 
+/** Repair the non-credential double-submit companion before revocation.
+ * The server compares cookie and header equality; the companion need not be
+ * issued by a session bootstrap (which could mint an unwanted guest).
+ */
+export function restoreCsrfCompanion(): void {
+  if (typeof document === 'undefined' || readCookie(CSRF_COOKIE_NAME)) return
+  const token = Array.from(crypto.getRandomValues(new Uint8Array(32)),
+    (byte) => byte.toString(16).padStart(2, '0')).join('')
+  const secure = location.protocol === 'https:' ? '; Secure' : ''
+  document.cookie = `${CSRF_COOKIE_NAME}=${token}; Path=/; SameSite=Lax${secure}`
+}
+
 api.use({
-  // Double-submit CSRF: echo the server-set `csrf_token` cookie back in a
+  // Double-submit CSRF: echo the `csrf_token` companion cookie back in a
   // header on every mutating request. The backend (app/main.py:csrf_protect)
   // 403s any unsafe-method request whose header doesn't match the cookie.
   onRequest({ request }) {
