@@ -11524,6 +11524,129 @@ async def test_a_replacement_of_a_called_fixture_sends_the_moved_correction(
     assert all("10:30" in row.body for row in moved)
 
 
+# ----- a live call that clashes is refused, over the wire -------------------
+# (ADR "A called match holds its time, and a clashing call is refused",
+# #1661 items 1 and 3). The branch matrix (table-clash, player-clash, a
+# re-place of the in-progress fixture itself, a free call, the pre-live
+# soft path) lives in ``tests/test_tournament_placement.py``, driving the
+# domain verb directly; these two pin the wire contract this HTTP route maps
+# each refusal to — status code and the sentence in ``detail``.
+
+
+async def _call_fixture_directly(
+    db_session: AsyncSession,
+    tournament_id: str,
+    fixture: TournamentFixture,
+    *,
+    table_id: str,
+    start: datetime,
+) -> None:
+    """Manufacture an already-**called** (``in_progress``, pinned) state on
+    ``fixture`` directly on the rows. ``_go_live_directly`` (above) deliberately
+    skips match materialization so ordinary placement tests can freely
+    re-place a fixture with no linked match in the way — but the clash gate
+    reads real ``in_progress`` ``Match`` occupancy
+    (``app.match_calls._held_resources``), so these two tests need one."""
+    tournament = await db_session.get(Tournament, uuid.UUID(tournament_id))
+    assert tournament is not None
+    match = Match(
+        match_settings=MatchSettings(team_size=1, best_of=1, affects_rating=False),
+        league_id=tournament.league_id,
+        created_by_user_id=tournament.created_by_user_id,
+        status=MatchStatus.in_progress,
+    )
+    db_session.add(match)
+    await db_session.flush()
+    fixture.match_id = match.id
+    fixture.table_id = table_id
+    fixture.scheduled_start = start
+    fixture.pinned_at = start
+    fixture.call_notified_count = 1
+    await db_session.commit()
+
+
+async def test_a_live_call_that_clashes_on_the_table_is_a_409(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+) -> None:
+    """A live call landing on a table an unfinished ``in_progress`` match
+    already occupies is a 409 naming the table. Nothing is written, and
+    nobody is newly notified."""
+    client, _ = authed_client
+    tournament_id, event_id, _fixture = await _drawn_fixture(
+        client, db_session, prefix="tclash"
+    )
+    fixtures = await _fixture_rows(db_session, event_id)
+    held, challenger = fixtures[0], fixtures[1]
+    challenger_id = challenger.id
+    table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
+    await _go_live_directly(db_session, tournament_id)
+    await _call_fixture_directly(
+        db_session,
+        tournament_id,
+        held,
+        table_id=table_1,
+        start=datetime(2026, 6, 13, 10, 0, tzinfo=UTC),
+    )
+    jobs_before = len(fake_notifications_queue.jobs)
+
+    response = await client.patch(
+        _placement_url(tournament_id, str(challenger_id)),
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T10:05:00"},
+    )
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert "Table 1" in detail
+    assert "called there" in detail
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(TournamentFixture).where(TournamentFixture.id == challenger_id)
+        )
+    ).scalar_one()
+    assert row.table_id is None
+    assert row.pinned_at is None
+    assert len(fake_notifications_queue.jobs) == jobs_before
+
+
+async def test_a_live_call_that_clashes_on_a_player_is_a_409(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """A live call onto a FREE table is still a 409 when one of its own
+    players is held by an unfinished ``in_progress`` match elsewhere — a
+    3-entrant round robin is a complete graph, so ``fixtures[1]`` necessarily
+    shares exactly one player with ``fixtures[0]``."""
+    client, _ = authed_client
+    tournament_id, event_id, _fixture = await _drawn_fixture(
+        client, db_session, prefix="pclash"
+    )
+    fixtures = await _fixture_rows(db_session, event_id)
+    held, challenger = fixtures[0], fixtures[1]
+    table_1, table_2 = await _catalogue_table_ids(client, tournament_id)
+    await _go_live_directly(db_session, tournament_id)
+    await _call_fixture_directly(
+        db_session,
+        tournament_id,
+        held,
+        table_id=table_1,
+        start=datetime(2026, 6, 13, 10, 0, tzinfo=UTC),
+    )
+
+    response = await client.patch(
+        _placement_url(tournament_id, str(challenger.id)),
+        json={"table_id": table_2, "scheduled_start": "2026-06-13T10:05:00"},
+    )
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert "already called" in detail
+    assert "Table 1" in detail  # the table the held match is AT, not table 2
+
+
 async def test_a_pre_live_placement_is_a_silent_pin(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,

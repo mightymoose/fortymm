@@ -192,6 +192,16 @@ function ScoreEntryInner({
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const { data, isLoading } = useMatch(matchId)
+  // This game's committed version as of THIS render — read at the top,
+  // before the loading guard, the same way `seedScoreValues` reads the
+  // persisted score early (see its own comment). Feeds the frozen-baseline
+  // resync below; the render body re-derives the same value further down
+  // (as part of `persistedScore`) once it's back in scope.
+  const topPersistedVersion =
+    data?.games.find((g) => g.game_number === gameNumber)?.score?.version ??
+    null
+  const topPersistedId =
+    data?.games.find((g) => g.game_number === gameNumber)?.score?.id ?? null
   const saveMutation = useSaveGameScore(matchId, gameNumber)
   const deleteMutation = useDeleteScore(matchId, gameNumber)
   const cellDeleteMutation = useDeleteScoreForMatch(matchId)
@@ -207,13 +217,100 @@ function ScoreEntryInner({
   // silently overwrite it.
   const failedSaves = useFailedGameSaves(matchId)
 
+  // Guard against losing un-submitted typing on refresh/close or an in-app
+  // navigation (#441). `isDirty` is driven by the score change handlers as the
+  // user types (set below, once `data`-derived baselines are in scope) — the
+  // blocker only reads it. The app's own navigations (Save's next-game hop,
+  // finalize's success hop, the clear-then-recreate hop) bypass the guard by
+  // passing `ignoreBlocker: true` on the navigation itself — a per-hop argument
+  // rather than a stored latch (ADR 0014, #818).
+  //
+  // `isDirty` stays stored state (not derived per-render from `computeDirty`)
+  // on purpose (ADR 0014). The dirty baseline folds in a failed save
+  // (`baselineMe = failedMe != null ? String(failedMe) : persistedMe…`), so a
+  // derived `isDirty` would compute `false` the instant an offline deciding-game
+  // save fails; `enableBeforeUnload` would then return `false` and closing the
+  // tab would silently discard that deciding score — it was never on the server,
+  // and the mutation cache holding it is in-memory only (no `persistQueryClient`).
+  // Deriving `isDirty` trades a stale boolean for silent data loss; leave it
+  // stored.
+  //
+  // Declared here, ahead of `freshSeed`/`baseline` below, because the frozen
+  // baseline's render-time resync reads it — hooks must all be declared before
+  // any early return, but a plain `useState` has no ordering dependency on
+  // anything else, so moving it up is free.
+  const [isDirty, setIsDirty] = useState(false)
+  const [isReplacing, setIsReplacing] = useState(false)
+  const replacingRef = useRef(false)
+
+  // The fresh seed as of THIS render — failed scratch → persisted → empty
+  // (`seedScoreValues`'s own comment). NOT what the form reads directly: see
+  // `baseline` immediately below, which freezes this while the page is dirty.
+  const freshSeed = data ? seedScoreValues(data, gameNumber, ownSave) : null
+
+  // The frozen baseline: what RHF's `values` actually feeds the inputs, what
+  // `computeDirty` measures typing against, and (via its `version`) what a
+  // live conflict (#1661 item 6) compares the committed score to. Tracked in
+  // component state, not read fresh from `data`/`ownSave` on every render — it
+  // must hold BOTH fields steady together while the page is dirty.
+  //
+  // This is the fix for a real bug: RHF's `values` + `keepDirtyValues` only
+  // preserves a field the user actually TYPED IN — per field, not per form. A
+  // player who edits only the opponent's score (leaving "me" untouched) has a
+  // "me" field RHF considers clean, so a background refetch that changes the
+  // committed score silently re-seeds "me" alone, out from under a dirty page,
+  // while "opp" stays as typed. The conflict notice then read a Frankenstein
+  // pair — the fresh committed "me" next to the player's own typed "opp" — as
+  // if the player had typed both. Freezing the SOURCE (`baseline`, not RHF's
+  // per-field bookkeeping) fixes it at the root: while dirty, `values` never
+  // changes at all, so RHF has nothing to reset either field from.
+  //
+  // Resynced HERE, during render, rather than in a `useEffect` — an effect
+  // would commit the stale baseline for one extra frame (a `liveConflict`
+  // false-positive on the very refetch that should be resyncing quietly) and
+  // trips `react-hooks/set-state-in-effect` besides. This is React's
+  // documented "adjust state during render" pattern (an idempotent update: it
+  // only fires when a value actually needs to move, converging in the same
+  // pass rather than looping) — the same shape as the inputs' own seeding used
+  // to be. Once `isDirty` is true this stops updating, so the WHOLE pair holds
+  // steady together until the user explicitly resolves the conflict
+  // (`keepCommittedScore` / `overwriteWithMyScore`, both of which clear
+  // `isDirty` and let this resync on the very next render).
+  const [baseline, setBaseline] = useState<{
+    me: string
+    opp: string
+    version: number | null
+    scoreId: string | null
+  }>(() => ({
+    me: freshSeed?.me ?? '',
+    opp: freshSeed?.opp ?? '',
+    version: topPersistedVersion,
+    scoreId: topPersistedId,
+  }))
+  if (
+    !isDirty &&
+    freshSeed &&
+    (baseline.me !== freshSeed.me ||
+      baseline.opp !== freshSeed.opp ||
+      baseline.version !== topPersistedVersion ||
+      baseline.scoreId !== topPersistedId)
+  ) {
+    setBaseline({
+      me: freshSeed.me,
+      opp: freshSeed.opp,
+      version: topPersistedVersion,
+      scoreId: topPersistedId,
+    })
+  }
+
   // React Hook Form owns the two score fields and their Zod validation — and
-  // nothing else (ADR-0018). Its `values` are seeded from the same baseline the
-  // render body computes (failed scratch → persisted → empty); `keepDirtyValues`
-  // makes a later refetch (e.g. the conflict re-sync) leave the user's typed
-  // entry alone, exactly like the old `meTyped ?? baseline` fall-through did.
-  // `keepSubmitCount` keeps the errors-after-first-submit gate from silently
-  // resetting when a background refetch changes the baseline mid-edit.
+  // nothing else (ADR-0018). Its `values` are the FROZEN `baseline` above, not
+  // a fresh recompute — see that declaration for why. The frozen baseline
+  // protects both fields while dirty. Do not also keep RHF's dirty values:
+  // those flags can outlive a successful save and would retain stale inputs
+  // when a clean page receives the next score. `keepSubmitCount` keeps the
+  // errors-after-first-submit gate from silently resetting when a background
+  // refetch changes the baseline mid-edit.
   //
   // `mode: 'onSubmit'` + `reValidateMode: 'onChange'`: nothing is red while the
   // user first types; the first submit surfaces the errors; thereafter they
@@ -225,9 +322,8 @@ function ScoreEntryInner({
     mode: 'onSubmit',
     reValidateMode: 'onChange',
     defaultValues: { me: '', opp: '' },
-    values: data ? seedScoreValues(data, gameNumber, ownSave) : undefined,
+    values: data ? { me: baseline.me, opp: baseline.opp } : undefined,
     resetOptions: {
-      keepDirtyValues: true,
       keepSubmitCount: true,
       keepIsSubmitted: true,
     },
@@ -257,24 +353,6 @@ function ScoreEntryInner({
     null,
   )
 
-  // Guard against losing un-submitted typing on refresh/close or an in-app
-  // navigation (#441). `isDirty` is driven by the score change handlers as the
-  // user types (set below, once `data`-derived baselines are in scope) — the
-  // blocker only reads it. The app's own navigations (Save's next-game hop,
-  // finalize's success hop, the clear-then-recreate hop) bypass the guard by
-  // passing `ignoreBlocker: true` on the navigation itself — a per-hop argument
-  // rather than a stored latch (ADR 0014, #818).
-  //
-  // `isDirty` stays stored state (not derived per-render from `computeDirty`)
-  // on purpose (ADR 0014). The dirty baseline folds in a failed save
-  // (`baselineMe = failedMe != null ? String(failedMe) : persistedMe…`), so a
-  // derived `isDirty` would compute `false` the instant an offline deciding-game
-  // save fails; `enableBeforeUnload` would then return `false` and closing the
-  // tab would silently discard that deciding score — it was never on the server,
-  // and the mutation cache holding it is in-memory only (no `persistQueryClient`).
-  // Deriving `isDirty` trades a stale boolean for silent data loss; leave it
-  // stored.
-  const [isDirty, setIsDirty] = useState(false)
   // Synchronous finalize-in-flight guard. `finalizeMutation.isPending` is a
   // render snapshot that only flips on the next commit, so a fast double-click
   // on "Finalize result" lands a second tap before React re-renders — firing
@@ -438,8 +516,59 @@ function ScoreEntryInner({
     return <Navigate {...matchDetailRoute(matchId)} ignoreBlocker />
   }
 
+  // The scratchpad is contiguous (ADR "the scratchpad is contiguous", #1661
+  // item 5): a create-mode entry for a game past an unsaved earlier one is
+  // refused at the boundary, in the server's own words, before the player
+  // ever sees inputs the write would 422 on. Edit mode never reaches here —
+  // it requires a persisted score for THIS game, and editing an earlier game
+  // in place never creates a gap.
+  //
+  // "Unsaved" here counts a game the SAME way `predictNextScoringRoute`
+  // below does: persisted OR sitting in the mutation cache as a pending/
+  // failed scratch save. The offline flow deliberately lets a player advance
+  // through every game even though each individual write failed (the
+  // fire-and-forget posture — a failed scratch is still an attempt, retried
+  // from the scoreline/banner) — this guard exists to catch a game nobody has
+  // touched at all, not to re-litigate that design.
+  if (mode.kind === 'create') {
+    const recorded = recordedGameNumbers(queryClient, matchId)
+    let firstUnsaved: number | null = null
+    for (let n = 1; n < gameNumber; n += 1) {
+      if (!isScored(n) && !recorded.has(n)) {
+        firstUnsaved = n
+        break
+      }
+    }
+    if (firstUnsaved !== null) {
+      return (
+        <div className="entry-wrap">
+          <Alert variant="destructive" className="mb-3">
+            <TriangleAlert aria-hidden />
+            <AlertTitle>Can't enter a score here</AlertTitle>
+            <AlertDescription>
+              {`Save game ${firstUnsaved} before game ${gameNumber}.`}
+            </AlertDescription>
+          </Alert>
+        </div>
+      )
+    }
+  }
+
   const game = data.games.find((g) => g.game_number === gameNumber) ?? null
   const persistedScore = game?.score ?? null
+
+  // A dirty page whose committed version has moved since the baseline was
+  // seeded (#1661 item 6) — a score appeared where the page held none, or the
+  // committed score changed under a typed-but-unsaved entry. Gates the
+  // mode-swap redirects below: while this is true the user has a real
+  // decision to make (the live conflict notice, rendered further down), and
+  // navigating out from under them would silently discard their typing and
+  // hide the very state they need to see.
+  const versionDiffered =
+    (ownSave?.status === 'error' && isScoreConflict(ownSave.error)) ||
+    (isDirty &&
+      (baseline.version !== (persistedScore?.version ?? null) ||
+        baseline.scoreId !== (persistedScore?.id ?? null)))
 
   // Mode/URL/state alignment: in create mode but a score exists → swap to
   // the edit URL so Save doesn't try to POST .../scores/new and 409. The
@@ -447,12 +576,17 @@ function ScoreEntryInner({
   // Skipped while this page's own save is settling: the success cache
   // write makes the score "exist" a beat before onSettled navigates to the
   // next game, and this redirect must not outrun that navigation.
-  if (mode.kind === 'create' && persistedScore && !saveMutation.isSuccess) {
+  if (
+    mode.kind === 'create' &&
+    persistedScore &&
+    !saveMutation.isSuccess &&
+    !versionDiffered
+  ) {
     return (
       <Navigate {...scoringEditRoute(matchId, gameNumber)} replace ignoreBlocker />
     )
   }
-  if (mode.kind === 'edit' && !persistedScore) {
+  if (mode.kind === 'edit' && !persistedScore && !versionDiffered) {
     return (
       <Navigate {...scoringNewRoute(matchId, gameNumber)} replace ignoreBlocker />
     )
@@ -474,6 +608,16 @@ function ScoreEntryInner({
   const bestOf = data.best_of
   const meWins = firstSide.games_won
   const oppWins = secondSide.games_won
+  // The highest-numbered game with a committed score — the only one the
+  // scratchpad's contiguity rule (#1661 item 5) offers a Clear for, in-page
+  // or from a scoreline cell. Clearing anything earlier would leave a gap
+  // under a later saved game (the server's own 422: "Clear game M first, or
+  // edit game N instead."); an earlier game stays editable, just not
+  // clearable.
+  const highestSavedGame = data.games.reduce(
+    (max, g) => (g.score ? Math.max(max, g.game_number) : max),
+    0,
+  )
 
   const persistedMe =
     persistedScore &&
@@ -505,20 +649,38 @@ function ScoreEntryInner({
   // scoreline/banner just offer to retry.
   const conflict = ownSave?.status === 'error' && isScoreConflict(ownSave.error)
 
-  // The baseline is what the inputs read with no local typing — the failed
-  // scratch save, else the persisted score, else empty. Input is "dirty"
-  // (worth guarding on exit) only when the user has actually typed something
-  // that diverges from that baseline: a clean page, or input that merely
-  // matches what's already saved, must not nag. Derived from the SAME helper
-  // that seeds RHF's `values` above, so the seed and the dirty check can't drift
-  // — `keepDirtyValues` must agree with `computeDirty` (ADR-0014). The
-  // decomposed `persistedMe`/`failedMe`/… above stay for the conflict notice,
-  // `keepCommittedScore`, and retry.
-  const { me: baselineMe, opp: baselineOpp } = seedScoreValues(
-    data,
-    gameNumber,
-    ownSave,
-  )
+  // The SAME notice, reached a different way (#1661 item 6): the committed
+  // score for this game moved out from under a dirty page with no save of
+  // its own ever attempted — `versionDiffered`, minus the `conflict` case
+  // above (which already has its own, save-driven story to tell — a rejected
+  // write). This is the pushed-hint refetch landing on a page the viewer is
+  // still typing into: nothing has been sent, so there's nothing to retry,
+  // only a choice to make against the fresh committed value.
+  const liveConflict = versionDiffered && !conflict
+  // Either conflict shows the SAME notice; only the "your entry" side reads
+  // from a different source — the rejected scratch save's variables for a
+  // real 409, or the live, still-unsaved input for a background one.
+  const noticeYourMe = conflict ? (failedMe ?? null) : me !== '' ? Number(me) : null
+  const noticeYourOpp = conflict
+    ? (failedOpp ?? null)
+    : opp !== ''
+      ? Number(opp)
+      : null
+
+  // The baseline is what the inputs read with no local typing — the FROZEN
+  // `baseline` state above (failed scratch → persisted → empty, as of the
+  // last render the page was clean on), which is also exactly what RHF's
+  // `values` fed the inputs. Input is "dirty" (worth guarding on exit) only
+  // when the user has actually typed something that diverges from that
+  // baseline: a clean page, or input that merely matches what's already
+  // saved, must not nag.
+  //
+  // Reading the FROZEN `baseline` here — not a fresh `seedScoreValues(data, …)`
+  // recompute — is what keeps this agreeing with what's on screen once the
+  // page is dirty: a fresh recompute would measure new keystrokes against a
+  // baseline that had already silently moved (the bug this fix closes), even
+  // though the rendered fields themselves stayed put.
+  //
   // Whether the live inputs (me/opp) diverge from the baseline — i.e. there's
   // genuinely-unsaved typing worth guarding on exit. Recomputed by the change
   // handlers below as the user types (a clean page, or input matching the
@@ -528,7 +690,7 @@ function ScoreEntryInner({
   // (#441) — the baseline is always a clean digit-string, so this matches it.
   const digitsOnly = (value: string) => value.replace(/[^0-9]/g, '')
   const computeDirty = (nextMe: string, nextOpp: string) =>
-    digitsOnly(nextMe) !== baselineMe || digitsOnly(nextOpp) !== baselineOpp
+    digitsOnly(nextMe) !== baseline.me || digitsOnly(nextOpp) !== baseline.opp
 
   // Take the typed value verbatim — no stripping, no truncating (#624); the
   // shared `isAcceptableScoreInput` only blocks characters that can't begin a
@@ -690,6 +852,11 @@ function ScoreEntryInner({
   // and RHF's async `handleSubmit` would defer that navigation into a microtask
   // AFTER the tap — dropping the keyboard between games.
   function onSubmit() {
+    // A conflict notice is on screen — either kind (#1661 item 6): the user
+    // has a real decision to make (Keep saved score / Replace with mine)
+    // before this game writes anything at all. Save/Finalize must not fire a
+    // write out from under that choice.
+    if (conflict || liveConflict) return
     // A Zod-invalid score, or a locally-legal score the board can't take (the
     // cross-game overrun: it would leave the match decided before its last
     // game): surface the messages but write nothing. `revealErrors` bumps
@@ -852,29 +1019,57 @@ function ScoreEntryInner({
   // committed score; now they pick one — the explicit re-decision the version
   // guard forces before any further write to this game.
   function keepCommittedScore() {
+    if (replacingRef.current) return
     // Drop our rejected scratch save; the inputs fall back to the committed
     // score and the conflict notice clears. `form.reset` to the committed score
-    // clears RHF's dirty flags so the recomputed `values` (now the persisted
-    // score, with the failed scratch gone) don't get kept as our losing entry by
-    // `keepDirtyValues`, and drops `submitCount` so the fresh state starts clean.
+    // replaces both fields and clears RHF's dirty flags. Explicitly discard
+    // the inherited submit state so this fresh entry starts without errors.
     forgetScoreSaves(queryClient, matchId, gameNumber)
-    form.reset({
-      me: persistedMe != null ? String(persistedMe) : '',
-      opp: persistedOpp != null ? String(persistedOpp) : '',
-    })
+    form.reset(
+      {
+        me: persistedMe != null ? String(persistedMe) : '',
+        opp: persistedOpp != null ? String(persistedOpp) : '',
+      },
+      { keepSubmitCount: false, keepIsSubmitted: false },
+    )
     setIsDirty(false)
   }
 
   function overwriteWithMyScore() {
-    if (!failedEntry) return
+    if (replacingRef.current) return
+    if (!failedEntry && (!parseResult.success || overrunAt !== null)) {
+      void revealErrors()
+      return
+    }
+    // `failedEntry` is the rejected scratch save's own points, for the
+    // 409-driven conflict; a live conflict (#1661 item 6) never attempted a
+    // save, so there's no rejected scratch — the write is the CURRENTLY
+    // TYPED entry instead (`toBody`). Both are the same shape.
+    const body = failedEntry ?? (parseResult.success ? toBody() : null)
+    if (!body) return
     // Re-fire the save. The cache now holds the committed score (and its newer
-    // version), so the mutation PUTs with that fresh version and overwrites
-    // deliberately — no longer a blind last-write-wins, but a choice made
-    // against the value we just showed them. This path never navigates, so
-    // there is nothing for the unsaved-input blocker to bypass here (ADR 0014,
-    // #818): a later user-initiated navigation while still dirty must stay
-    // blocked, which the old always-armed latch wrongly waved through.
-    saveMutation.mutate(failedEntry)
+    // version — `replaceCommitted` captures it at call time, never
+    // the frozen `baseline.version` this component tracks), so the mutation
+    // PUTs with that fresh version and overwrites deliberately — no longer a blind
+    // last-write-wins, but a choice made against the value we just showed
+    // them. This path never navigates, so there is nothing for the
+    // unsaved-input blocker to bypass here (ADR 0014, #818): a later
+    // user-initiated navigation while still dirty must stay blocked, which the
+    // old always-armed latch wrongly waved through.
+    //
+    // Clear our own `isDirty` on success — without it, a live conflict (which
+    // has no mutation-error to fall back to false on its own) would stay
+    // "dirty against a stale baseline" forever, and the very next background
+    // refetch would re-open the notice we just resolved.
+    replacingRef.current = true
+    setIsReplacing(true)
+    saveMutation.replaceCommitted(body, {
+      onSuccess: () => setIsDirty(false),
+      onSettled: () => {
+        replacingRef.current = false
+        setIsReplacing(false)
+      },
+    })
   }
 
   function handleKey(
@@ -904,7 +1099,8 @@ function ScoreEntryInner({
   // fire-and-forget, so we don't want to make the UI feel laggy on those. Also
   // lock during the 409 redirect window so the still-valid submit can't re-fire
   // the same conflict while the match refetches and the early-return navigates.
-  const inputsLocked = finalizeMutation.isPending || finalizeRedirecting
+  const inputsLocked =
+    finalizeMutation.isPending || finalizeRedirecting || isReplacing
   const isEdit = mode.kind === 'edit'
 
   const heading = isEdit
@@ -962,16 +1158,17 @@ function ScoreEntryInner({
           proposeMutation={finalizeMutation}
         />
 
-        {conflict && (
+        {(conflict || liveConflict) && (
           <ScoreConflictNotice
             meName={meName}
             oppName={oppName}
             committedMe={persistedMe ?? null}
             committedOpp={persistedOpp ?? null}
-            yourMe={failedMe ?? null}
-            yourOpp={failedOpp ?? null}
+            yourMe={noticeYourMe}
+            yourOpp={noticeYourOpp}
             onKeepCommitted={keepCommittedScore}
             onUseMine={overwriteWithMyScore}
+            isPending={isReplacing}
           />
         )}
 
@@ -1025,7 +1222,14 @@ function ScoreEntryInner({
           // 409-redirect window), handled inside ScorePad.
           canSubmit
           onSubmit={onSubmit}
-          onClear={isEdit ? onClear : undefined}
+          // The scratchpad is contiguous (#1661 item 5): Clear is offered only
+          // for the HIGHEST saved game — clearing an earlier one would leave a
+          // gap under a later saved game, the same 422 the write path itself
+          // guards. An earlier game stays editable via the inputs above; it
+          // just loses its own Clear affordance.
+          onClear={
+            isEdit && gameNumber === highestSavedGame ? onClear : undefined
+          }
           clearDisabled={deleteMutation.isPending}
         />
 
@@ -1036,6 +1240,7 @@ function ScoreEntryInner({
             decider={decider}
             matchId={matchId}
             mySideNumber={mySideNumber}
+            highestSavedGame={highestSavedGame}
             onClearCell={onClearCell}
             clearDisabled={inputsLocked || cellDeleteMutation.isPending}
           />
@@ -1144,6 +1349,7 @@ function ScoreConflictNotice({
   yourOpp,
   onKeepCommitted,
   onUseMine,
+  isPending,
 }: {
   meName: string
   oppName: string
@@ -1153,6 +1359,7 @@ function ScoreConflictNotice({
   yourOpp: number | null
   onKeepCommitted: () => void
   onUseMine: () => void
+  isPending: boolean
 }) {
   const fmt = (value: number | null) => (value == null ? '—' : value)
   return (
@@ -1179,6 +1386,7 @@ function ScoreConflictNotice({
             size="sm"
             className="border-[color:var(--loss)]/50 text-[color:var(--loss)] hover:bg-[color:var(--loss)]/10 hover:text-[color:var(--loss)]"
             onClick={onKeepCommitted}
+            disabled={isPending}
           >
             Keep saved score
           </Button>
@@ -1188,6 +1396,7 @@ function ScoreConflictNotice({
             size="sm"
             className="border-[color:var(--loss)]/50 text-[color:var(--loss)] hover:bg-[color:var(--loss)]/10 hover:text-[color:var(--loss)]"
             onClick={onUseMine}
+            disabled={isPending}
           >
             Replace with my score
           </Button>
@@ -1203,6 +1412,7 @@ function Scoreline({
   decider,
   matchId,
   mySideNumber,
+  highestSavedGame,
   onClearCell,
   clearDisabled,
 }: {
@@ -1217,9 +1427,22 @@ function Scoreline({
   decider: number | null
   matchId: string
   mySideNumber: 1 | 2
+  /** The highest-numbered committed game (computed by the parent) — the only
+   * one whose ✕ is offered (#1661 item 5). */
+  highestSavedGame: number
   onClearCell: (gameNumber: number) => void
   clearDisabled: boolean
 }) {
+  // The first UNCOMMITTED game, overall — the scratchpad's one contiguous
+  // frontier (#1661 item 5). Every other blank cell renders inert: tapping it
+  // would open a create screen the write path would 422 on ("Save game K
+  // before game N."), so it isn't offered as a link at all.
+  const nextUnsaved = (() => {
+    for (let n = 1; n <= data.best_of; n += 1) {
+      if (!data.games.find((g) => g.game_number === n)?.score) return n
+    }
+    return null
+  })()
   // Each cell observes its *own* save in the shared mutation cache (saving /
   // failed / saved), so the strip reflects per-game outcomes independently —
   // two failed saves light two cells, each retried and resolved on its own.
@@ -1244,7 +1467,9 @@ function Scoreline({
               score={game?.score ?? null}
               isActive={n === activeGameNumber}
               playable={playable}
+              nextUnsaved={nextUnsaved}
               mySideNumber={mySideNumber}
+              canClear={n === highestSavedGame}
               clearDisabled={clearDisabled}
               onClear={onClearCell}
             />
@@ -1261,7 +1486,9 @@ function ScorelineCell({
   score,
   isActive,
   playable,
+  nextUnsaved,
   mySideNumber,
+  canClear,
   clearDisabled,
   onClear,
 }: {
@@ -1270,7 +1497,17 @@ function ScorelineCell({
   score: PersistedScore | null
   isActive: boolean
   playable: boolean
+  /** The scratchpad's one open frontier — the first uncommitted game overall
+   * (computed by the parent), or `null` when every game is committed. Only
+   * this game's blank cell is a link (#1661 item 5); every other blank cell
+   * renders inert, since tapping it would open an entry screen the write path
+   * would refuse. */
+  nextUnsaved: number | null
   mySideNumber: 1 | 2
+  /** Whether THIS cell may offer its ✕ — true only for the highest committed
+   * game (#1661 item 5); an earlier saved game stays editable but not
+   * clearable, mirroring the write path's own guard. */
+  canClear: boolean
   clearDisabled: boolean
   onClear: (gameNumber: number) => void
 }) {
@@ -1364,7 +1601,7 @@ function ScorelineCell({
   // The ⚠ / spinner badge owns the cell's corner while saving or failed, so
   // the hover-✕ only shows on a plainly-saved cell.
   const clearBtn =
-    score && !saving && !failed && !showResolved ? (
+    score && !saving && !failed && !showResolved && canClear ? (
       <button
         type="button"
         className="sl-clear"
@@ -1448,6 +1685,21 @@ function ScorelineCell({
       : score
         ? `Game ${n}, saved, ${myPoints} to ${oppPoints}`
         : `Game ${n}, not yet played`
+
+  // The scratchpad is contiguous (#1661 item 5): a blank cell that is NOT the
+  // next unsaved game is not a navigation target at all — the entry screen it
+  // would open is exactly the boundary refusal ("Save game K before game N."),
+  // so offering the link would be a dead end dressed as a normal one. Only a
+  // genuinely blank cell is affected — a failed/saving scratch keeps its own
+  // link so it stays retryable regardless of position.
+  if (!score && !failed && n !== nextUnsaved) {
+    return (
+      <div className={cls} aria-label={ariaLabel}>
+        {inner}
+      </div>
+    )
+  }
+
   return (
     <Link {...target} className={cls} aria-label={ariaLabel}>
       {inner}

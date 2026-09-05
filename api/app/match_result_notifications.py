@@ -14,7 +14,7 @@ import uuid
 
 from app.match_queries import my_side, opponent_side
 from app.match_serialization import negotiation
-from app.models import Match
+from app.models import Match, User
 from app.notifications.apns import MATCH_RESULT_CONFIRMATION_CATEGORY
 from app.notifications.service import NotificationService
 from app.notifications.taxonomy import NotificationCategory
@@ -154,6 +154,108 @@ async def notify_result_accepted(
                 collapse_id=f"result-accepted:{match.id}",
             )
         )
+
+
+def _result_recorded_copy(
+    match: Match, poster: User, *, is_director: bool
+) -> tuple[str, str] | None:
+    """Title + body for the "your match result was recorded" notice (ADR "a
+    result finalized without a player's acceptance is announced") — framed for
+    every player who did NOT post it.
+
+    Returns ``None`` when the match doesn't have two real (player-holding)
+    sides — a solo match has nobody else to tell.
+
+    The headline always reads winner-first (``side_win_counts`` decides who
+    won; a plain ``>=`` breaks a tie in side-1's favor, same as
+    ``_result_confirmation_copy``'s poster-relative headline), independent of
+    who posted or who is being told — unlike the propose/accept notices above,
+    which are framed relative to the *poster*'s side, this one has no
+    poster-side framing to inherit: a director poster is on no side at all."""
+    sides = sorted(
+        (side for side in match.sides if side.players), key=lambda s: s.side_number
+    )
+    if len(sides) < 2:
+        return None
+    side_a, side_b = sides[0], sides[1]
+    wins = side_win_counts(match)
+    wins_a, wins_b = wins.get(side_a.side_number, 0), wins.get(side_b.side_number, 0)
+    winner_side, loser_side = (side_a, side_b) if wins_a >= wins_b else (side_b, side_a)
+    hi, lo = wins.get(winner_side.side_number, 0), wins.get(loser_side.side_number, 0)
+    winner_name = winner_side.players[0].user.username
+    loser_name = loser_side.players[0].user.username
+    games = _game_scores_text(match, winner_side.side_number)
+    recorded_by = (
+        f"Recorded by {poster.username}, the tournament director."
+        if is_director
+        else f"Recorded by {poster.username}."
+    )
+    headline = f"{winner_name} beat {loser_name} {hi}{_SCORE_DASH}{lo}"
+    body = (
+        f"{headline}. Games: {games}. {recorded_by} It's now official."
+        if games
+        else f"{headline}. {recorded_by} It's now official."
+    )
+    return "Your match result was recorded", body
+
+
+async def notify_result_recorded(
+    notifications: NotificationService, match: Match, poster: User
+) -> None:
+    """Tell every player on a side ``poster`` is NOT on that their match result
+    was just recorded — the announcement half of ADR "a result finalized
+    without a player's acceptance is announced" (#1661 item 4): the self-accept
+    path (solo, unrated, or a tournament director's result) finalizes with no
+    round trip, so without this a player could find their match over, and
+    their public record changed, without ever seeing a message.
+
+    Takes the poster's live ``User`` row, not just their id — unlike
+    :func:`notify_result_accepted`/:func:`notify_result_posted`, which derive
+    the poster's name from :func:`~app.match_queries.my_side`. The primary
+    caller here is a tournament director, who is on *no* side at all, so
+    ``match.sides`` carries no row to read their username off; the HTTP and
+    MCP adapters already hold (or can cheaply load) the acting ``User``, so
+    this stays query-free.
+
+    Recipients are every side the poster is not on: for a participant poster
+    (an unrated two-human match) that is the one opposing side; for a director
+    poster (on no side) that is both sides. Filed under the same
+    ``RESULT_CONFIRM`` category as the sibling notices, with no push category
+    or APNs action group — the match is already final, there's nothing left to
+    accept or counter — and a collapse id distinct from both. A solo match (no
+    second human side) enqueues nothing."""
+    sides_with_players = [side for side in match.sides if side.players]
+    if len(sides_with_players) < 2:
+        return
+    poster_side = my_side(match, poster.id)
+    recipient_sides = (
+        sides_with_players
+        if poster_side is None
+        else [
+            side
+            for side in sides_with_players
+            if side.side_number != poster_side.side_number
+        ]
+    )
+    if not recipient_sides:
+        return
+    copy = _result_recorded_copy(match, poster, is_director=poster_side is None)
+    if copy is None:
+        return
+    title, body = copy
+    for side in recipient_sides:
+        for player in side.players:
+            notifications.enqueue_notification(
+                NotificationJob(
+                    user_id=player.user_id,
+                    category=NotificationCategory.RESULT_CONFIRM,
+                    title=title,
+                    body=body,
+                    link=f"/matches/{match.id}",
+                    action_label="View result",
+                    collapse_id=f"result-recorded:{match.id}",
+                )
+            )
 
 
 async def notify_result_posted(

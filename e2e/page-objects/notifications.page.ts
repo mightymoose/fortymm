@@ -22,4 +22,18 @@ export class NotificationsPage {
   callNotice(tableLabel: string): Locator {
     return this.page.getByText(`You're up soon — ${tableLabel}`).first()
   }
+
+  /** A *moved* correction's title (`match_call_moved_message`): `Your match moved
+   * to {table}`. Asserted **absent** by the specs whose whole point is that a
+   * called player is never re-pinged (#1661). */
+  get movedNotice(): Locator {
+    return this.page.getByText(/^Your match moved to /)
+  }
+
+  /** The notice a player receives when someone else — the tournament director, or
+   * an opponent on an unrated match — recorded a final result on their match
+   * without their acceptance (#1661 item 4, #1585, #1650). */
+  get resultRecordedNotice(): Locator {
+    return this.page.getByText('Your match result was recorded').first()
+  }
 }

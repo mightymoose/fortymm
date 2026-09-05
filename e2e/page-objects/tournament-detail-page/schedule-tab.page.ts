@@ -101,6 +101,58 @@ export class ScheduleTabPage {
     return this.page.getByTestId(`schedule-status-${fixtureId}`)
   }
 
+  // ----- the director's placement editor (owner-only, per row) ------------------
+
+  /** The row's **Move** / **Place** trigger — opens the inline placement editor. */
+  placeTrigger(fixtureId: string): Locator {
+    return this.page.getByTestId(`place-trigger-${fixtureId}`)
+  }
+
+  /** The inline editor once open: table picker, time input, Save / Clear / Cancel. */
+  placeEditor(fixtureId: string): Locator {
+    return this.page.getByTestId(`place-editor-${fixtureId}`)
+  }
+
+  /** Open the editor and pick a table by its catalogue label and a `HH:MM` time —
+   * the director's whole hand, short of Save. The table picker is a Radix Select:
+   * a `combobox` trigger whose options render into a portal as `option`s. */
+  async editPlacement(
+    fixtureId: string,
+    table: { label: string },
+    time: string,
+  ): Promise<void> {
+    await this.placeTrigger(fixtureId).click()
+    const editor = this.placeEditor(fixtureId)
+    await editor.getByRole('combobox').click()
+    // An option's accessible name is the catalogue label, possibly suffixed with
+    // ` · reservation table` for a booked-reservation match's own tables — so
+    // match the label as a whole word at the start, not the whole name.
+    const escaped = table.label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    await this.page
+      .getByRole('option', { name: new RegExp(`^${escaped}( ·|$)`) })
+      .click()
+    await this.page.getByTestId(`place-time-${fixtureId}`).fill(time)
+  }
+
+  /** The editor's Save. While live it opens the consequence-stating confirm
+   * (`ConfirmCallDialog`) rather than writing straight away. */
+  placeSave(fixtureId: string): Locator {
+    return this.page.getByTestId(`place-save-${fixtureId}`)
+  }
+
+  /** The confirm's **Call the match** / **Move and notify** button — the last thing
+   * a director reads before a placement notifies anyone. */
+  get confirmCall(): Locator {
+    return this.page.getByTestId('confirm-call-confirm')
+  }
+
+  /** The refusal toast a rejected placement raises (`notifyError('place the
+   * match')`): "Couldn't place the match", with the server's own sentence as its
+   * description. Located by the description text the spec expects. */
+  placementRefusal(text: string | RegExp): Locator {
+    return this.page.getByText(text)
+  }
+
   // ----- the Gantt view ---------------------------------------------------------
 
   /** The view toggle's Gantt option (`ToggleGroupItem` renders `role="radio"`). */

@@ -1,9 +1,11 @@
 import {
   keepPreviousData,
+  onlineManager,
   queryOptions,
   useMutation,
   useQuery,
   useQueryClient,
+  type Mutation,
 } from '@tanstack/react-query'
 import {
   ApiError,
@@ -20,6 +22,12 @@ import {
   matchDetailsResultFromPayload,
 } from '@/components/matches/match-details/match-details-query'
 import type { components } from './schema'
+import {
+  readScoreSaveContext,
+  readScoreSavePoints,
+  scoreBaselineConflict,
+  type ScoreSaveContext,
+} from './score-save-baseline'
 
 export type Player = components['schemas']['PlayerRead']
 export type MatchCreate = components['schemas']['MatchCreate']
@@ -69,8 +77,17 @@ export function matchListQueryKey(params: MatchListParams) {
   return ['matches', 'list', params] as const
 }
 
+/** The prefix every `matchQueryKey(matchId)` shares — exported so a caller that
+ * needs to invalidate EVERY open match's detail cache (not just one) can do so
+ * without re-spelling `['matches', 'detail']`. Used by the realtime
+ * invalidation table (`api/realtime/invalidation.ts`): a pushed hint doesn't
+ * name which match changed, so it invalidates every match query this prefix
+ * matches — cheap, since only an actually-mounted, actually-observed query
+ * refetches. */
+export const MATCH_QUERY_KEY_PREFIX = ['matches', 'detail'] as const
+
 export function matchQueryKey(matchId: string) {
-  return ['matches', 'detail', matchId] as const
+  return [...MATCH_QUERY_KEY_PREFIX, matchId] as const
 }
 
 /** Mutation-cache key for one game's scratch-pad score save. Keyed per game so
@@ -440,22 +457,98 @@ function applyBoardWriteCache(
   queryClient.invalidateQueries({ queryKey: NOTIFICATIONS_QUERY_KEY })
 }
 
-/**
- * Options for one game's scratch-pad score save, shared by the entry screen's
- * submit (`useSaveGameScore`) and the imperative retries fired from the
- * scoreline / banner (`fireScoreSave`). Whether to POST (create the game's
- * first score, lazily inserting the row) or PUT (replace an existing one) is
- * decided from the match cache at call time — so a retry after a failed create
- * still POSTs and a retry after a failed edit still PUTs.
- *
- * Fire-and-forget: per-game writes are scratchpad-only — the canonical commit
- * lives in `POST .../results`, which obliterates and replaces the saved
- * scores. We never throw, so a failure simply lives on the mutation in the
- * cache (status `error`, with the entered points in `variables`) as the
- * failed-save state each scoreline cell reads back. A generous `gcTime` keeps
- * that failed state around for the length of a scoring session rather than the
- * default 5 minutes.
- */
+/** The local baseline travels with the points; it is never sent as wire data. */
+type ScoreSaveInput = MatchGameScoreWrite & ScoreSaveContext
+
+/** Capture before React Query yields to onMutate. A retry keeps its original
+ * baseline; only the player's explicit replacement accepts current truth. */
+function prepareScoreSave(
+  queryClient: QueryClientArg,
+  matchId: string,
+  gameNumber: number,
+  input: MatchGameScoreWrite,
+  replaceCommitted = false,
+): ScoreSaveInput {
+  const previous = queryClient
+    .getMutationCache()
+    .findAll({ mutationKey: scoreMutationKey(matchId, gameNumber), exact: true })
+    .at(-1)
+  const retryContext =
+    !replaceCommitted && previous?.state.status === 'error'
+      ? readScoreSaveContext(previous.state.context)
+      : undefined
+  const score = queryClient
+    .getQueryData<MatchDetails>(matchQueryKey(matchId))
+    ?.games.find((game) => game.game_number === gameNumber)?.score
+  return {
+    ...input,
+    scoreBaseline: retryContext
+      ? retryContext.scoreBaseline
+      : score
+        ? { id: score.id, version: score.version }
+        : null,
+  }
+}
+
+function waitForScoreSave(queryClient: QueryClientArg, mutation: Mutation) {
+  return new Promise<boolean>((resolve) => {
+    if (mutation.state.status !== 'pending') {
+      resolve(mutation.state.status === 'success')
+      return
+    }
+    const unsubscribe = queryClient.getMutationCache().subscribe((event) => {
+      if (
+        mutation.state.status !== 'pending' ||
+        (event.type === 'removed' && event.mutation === mutation)
+      ) {
+        unsubscribe()
+        resolve(mutation.state.status === 'success')
+      }
+    })
+  })
+}
+
+/** Offline entry may advance past failed scratch saves. Before an online
+ * create, restore that prefix in order. Concurrent callers join the same
+ * pending earlier attempt; dependencies only point to lower game numbers. */
+async function restoreScorePrerequisites(
+  queryClient: QueryClientArg,
+  matchId: string,
+  gameNumber: number,
+) {
+  for (let n = 1; n < gameNumber; n += 1) {
+    const saved = queryClient
+      .getQueryData<MatchDetails>(matchQueryKey(matchId))
+      ?.games.some((game) => game.game_number === n && game.score !== null)
+    if (saved) continue
+    const previous = queryClient
+      .getMutationCache()
+      .findAll({ mutationKey: scoreMutationKey(matchId, n), exact: true })
+      .at(-1)
+    // No local attempt to recover: the server owns the missing-game refusal.
+    if (!previous) continue
+    let recovered = false
+    if (previous.state.status === 'pending') {
+      recovered = await waitForScoreSave(queryClient, previous)
+    } else if (previous.state.status === 'error') {
+      const points = readScoreSavePoints(previous.state.variables)
+      if (points) {
+        recovered =
+          (await fireScoreSave(queryClient, matchId, n, points)) !== undefined
+      }
+    } else {
+      continue
+    }
+    if (!recovered) {
+      throw new ApiError(
+        422, `Save game ${n} before game ${gameNumber}.`, 'save score',
+      )
+    }
+  }
+}
+
+/** Shared scratchpad mutation. Failed attempts retain their points and original
+ * committed identity for thirty minutes, across navigation and refetch. */
 export function scoreSaveMutationOptions(
   queryClient: QueryClientArg,
   matchId: string,
@@ -473,13 +566,25 @@ export function scoreSaveMutationOptions(
     // the fire-and-forget posture where failures live on the mutation, not in
     // a paused limbo.
     networkMode: 'always' as const,
-    mutationFn: async (input: MatchGameScoreWrite): Promise<MatchDetails> => {
+    onMutate: (input: ScoreSaveInput): ScoreSaveContext => ({
+      scoreBaseline: input.scoreBaseline,
+    }),
+    mutationFn: async (input: ScoreSaveInput): Promise<MatchDetails> => {
+      if (!input.scoreBaseline && onlineManager.isOnline()) {
+        await restoreScorePrerequisites(queryClient, matchId, gameNumber)
+      }
       const cached = queryClient.getQueryData<MatchDetails>(
         matchQueryKey(matchId),
       )
       const existing = cached?.games.find(
         (g) => g.game_number === gameNumber,
       )?.score
+      const retryConflict = scoreBaselineConflict(input, existing ?? null)
+      if (retryConflict) throw retryConflict
+      const points = {
+        side_1_points: input.side_1_points,
+        side_2_points: input.side_2_points,
+      }
       const path = { match_id: matchId, game_number: gameNumber }
       // Exactly one conditional write per save — no swallow-and-retry. Editing
       // an existing score asserts the version we last read: if a concurrent
@@ -488,12 +593,12 @@ export function scoreSaveMutationOptions(
       // re-issue the other verb — that promotion was the last-write-wins
       // data-loss path. The rejection surfaces as a conflict the user must
       // resolve against fresh state (see `onError` re-sync + the conflict UI).
-      if (existing) {
+      if (input.scoreBaseline) {
         return unwrap(
           'update score',
           await api.PUT('/v1/matches/{match_id}/games/{game_number}/scores', {
             params: { path },
-            body: { ...input, expected_version: existing.version },
+            body: { ...points, expected_version: input.scoreBaseline.version },
           }),
         )
       }
@@ -504,7 +609,7 @@ export function scoreSaveMutationOptions(
         'submit score',
         await api.POST(
           '/v1/matches/{match_id}/games/{game_number}/scores/new',
-          { params: { path }, body: input },
+          { params: { path }, body: points },
         ),
       )
     },
@@ -554,7 +659,25 @@ export function scoreSaveMutationOptions(
  * scoreline cells and banner observe it. */
 export function useSaveGameScore(matchId: string, gameNumber: number) {
   const queryClient = useQueryClient()
-  return useMutation(scoreSaveMutationOptions(queryClient, matchId, gameNumber))
+  const mutation = useMutation(
+    scoreSaveMutationOptions(queryClient, matchId, gameNumber),
+  )
+  type Options = Parameters<typeof mutation.mutate>[1]
+  return {
+    ...mutation,
+    mutate: (input: MatchGameScoreWrite, options?: Options) =>
+      mutation.mutate(
+        prepareScoreSave(queryClient, matchId, gameNumber, input), options,
+      ),
+    mutateAsync: (input: MatchGameScoreWrite, options?: Options) =>
+      mutation.mutateAsync(
+        prepareScoreSave(queryClient, matchId, gameNumber, input), options,
+      ),
+    replaceCommitted: (input: MatchGameScoreWrite, options?: Options) =>
+      mutation.mutate(
+        prepareScoreSave(queryClient, matchId, gameNumber, input, true), options,
+      ),
+  }
 }
 
 /**
@@ -571,10 +694,11 @@ export function fireScoreSave(
   gameNumber: number,
   input: MatchGameScoreWrite,
 ) {
+  const attempt = prepareScoreSave(queryClient, matchId, gameNumber, input)
   return queryClient
     .getMutationCache()
     .build(queryClient, scoreSaveMutationOptions(queryClient, matchId, gameNumber))
-    .execute(input)
+    .execute(attempt)
     .catch(() => undefined)
 }
 

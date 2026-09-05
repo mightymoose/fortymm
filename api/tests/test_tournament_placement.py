@@ -25,7 +25,7 @@ tempted somebody into validating the whole placement.
 """
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -50,15 +50,18 @@ from app.models import (
     User,
 )
 from app.schemas.tournament import TournamentFixturePlacementUpdate
+from app.tournament_draws import cut_draw
 from app.tournament_errors import (
     FixtureNotFoundError,
     FixturePlacementFrozenError,
     NotTournamentOwnerError,
+    PlacementClashError,
     PlacementTableNotFoundError,
     TournamentNotFoundError,
 )
 from app.tournament_event_stages import mint_stages
 from app.tournament_placement import place_fixture
+from app.tournament_queries import stage_ids_for_events
 from tests._helpers import (
     make_user,
     venue_tables,
@@ -498,3 +501,376 @@ async def test_an_out_of_window_start_still_saves_as_a_flag(
         == out_of_window
     )
     assert row.pinned_at is not None
+
+
+# ----- a live call that clashes is refused (ADR "A called match holds its ----
+# time, and a clashing call is refused") -------------------------------------
+
+_CLASH_TAGS = ("clash-a", "clash-b", "clash-c", "clash-d")
+
+
+async def _seed_live_four_way_tournament(
+    db: AsyncSession,
+    owner: User,
+    league: League,
+    *,
+    status: TournamentStatus = TournamentStatus.live,
+) -> tuple[Tournament, TournamentEvent, dict[str, TournamentFixture]]:
+    """A tournament with four entrants (``clash-a``..``clash-d``) and two
+    tables, cut as a single-group round robin — six fixtures pairing every
+    entrant against every other, on one reservation spanning both tables.
+
+    Returns the fixtures keyed by their two entrants' usernames, sorted and
+    joined with ``" vs "`` (e.g. ``"clash-a vs clash-b"``), so a clash test can
+    address the fixture it needs by the players it names rather than by
+    draw-order position."""
+    tournament = Tournament(
+        name="Clash Cup",
+        status=status,
+        address={
+            "venue": "Berkeley TT Club",
+            "street": "2727 Milvia St",
+            "city": "Berkeley",
+            "region": "CA",
+            "postal": "94703",
+            "country": "USA",
+            "latitude": 37.8703,
+            "longitude": -122.2731,
+        },
+        tables=venue_tables(("Table 1", "A"), ("Table 2", "A")),
+        league_id=league.id,
+        created_by_user_id=owner.id,
+    )
+    db.add(tournament)
+    await db.flush()
+    stages = mint_stages(DrawType.round_robin)
+    event = TournamentEvent(
+        tournament_id=tournament.id,
+        name="Open Singles",
+        format=EventFormat.singles,
+        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
+        max_players=None,
+        entry_fee=Decimal("0.00"),
+        timezone="America/Chicago",
+        slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
+        match_settings={"rated": False, "length_games": 1},
+        stages=stages,
+    )
+    stages[0].groups = with_table_aliases(
+        event,
+        tournament,
+        [
+            {
+                "name": "Reservation A",
+                "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
+                "table_ids": ["t1", "t2"],
+            }
+        ],
+    )
+    db.add(event)
+    await db.flush()
+    await db.refresh(event, attribute_names=["groups"])
+
+    # Plain tags, not uuid-suffixed: the ``db_session`` fixture truncates every
+    # table between tests, so these never collide with another test's rows,
+    # and the plain names are what make the fixture-lookup-by-pair below (and
+    # the assertions on the refusal sentence) readable.
+    users: dict[str, User] = {tag: await make_user(db, tag) for tag in _CLASH_TAGS}
+    for user in users.values():
+        db.add(TournamentEntry(event_id=event.id, user_id=user.id))
+    await db.flush()
+    await db.commit()
+    await db.refresh(event, attribute_names=["groups"])
+
+    await cut_draw(db, event)
+    await db.commit()
+
+    fixtures = (
+        (
+            await db.execute(
+                select(TournamentFixture)
+                .where(TournamentFixture.stage_id.in_(stage_ids_for_events([event.id])))
+                .order_by(TournamentFixture.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    entry_user: dict[uuid.UUID, uuid.UUID] = {
+        entry_id: user_id
+        for entry_id, user_id in (
+            await db.execute(
+                select(TournamentEntry.id, TournamentEntry.user_id).where(
+                    TournamentEntry.event_id == event.id
+                )
+            )
+        ).all()
+    }
+    user_username = {user.id: tag for tag, user in users.items()}
+    by_pair: dict[str, TournamentFixture] = {}
+    for fixture in fixtures:
+        # A round-robin cut always seats both sides — assert rather than
+        # silently skip, so a draw-shape regression fails loudly here.
+        assert fixture.entry_a_id is not None
+        assert fixture.entry_b_id is not None
+        a = user_username[entry_user[fixture.entry_a_id]]
+        b = user_username[entry_user[fixture.entry_b_id]]
+        key = " vs ".join(sorted((a, b)))
+        by_pair[key] = fixture
+    return tournament, event, by_pair
+
+
+async def _call_fixture_directly(
+    db: AsyncSession,
+    tournament: Tournament,
+    fixture: TournamentFixture,
+    *,
+    table_id: str,
+    start: datetime,
+) -> None:
+    """Manufacture an already-**called** (``in_progress``, pinned, told) state
+    on ``fixture`` directly on the rows, bypassing the real call pipeline —
+    exactly the "state manufacturing for unit tests" convention
+    ``tests/test_match_calls.py``'s ``_pin_directly``/``_link_match`` use.
+    The clash tests need an exact held pre-state, not a solve."""
+    match = Match(
+        match_settings=MatchSettings(team_size=1, best_of=1, affects_rating=False),
+        league_id=tournament.league_id,
+        created_by_user_id=tournament.created_by_user_id,
+        status=MatchStatus.in_progress,
+    )
+    db.add(match)
+    await db.flush()
+    # ``scheduled_start``/``pinned_at`` are ``timestamptz`` (api/CLAUDE.md: seed
+    # aware). ``start`` is handed in as the naive wall-clock the other seeds in
+    # this file use; anchor it to a real instant the same way the write path
+    # (``anchor_wallclock``) does, so a later comparison against another
+    # fixture's already-anchored ``scheduled_start`` never trips a naive/aware
+    # ``TypeError``.
+    anchored = start.replace(tzinfo=UTC)
+    fixture.match_id = match.id
+    fixture.table_id = table_id
+    fixture.scheduled_start = anchored
+    fixture.pinned_at = anchored
+    fixture.call_notified_count = 1
+    await db.commit()
+
+
+async def test_live_call_onto_a_held_table_is_refused(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A live full placement that would land onto a table an unfinished
+    ``in_progress`` match already occupies is refused with
+    :class:`PlacementClashError`, naming the table — even though the fixture
+    being placed shares no player with the held match. Nothing is written."""
+    owner = await make_user(db_session, f"clash-owner-{uuid.uuid4().hex[:8]}")
+    tournament, _event, fixtures = await _seed_live_four_way_tournament(
+        db_session, owner, default_league
+    )
+    held = fixtures["clash-a vs clash-b"]
+    table1 = _table(tournament, 1)
+    await _call_fixture_directly(
+        db_session,
+        tournament,
+        held,
+        table_id=table1,
+        start=datetime(2026, 6, 13, 9, 30),
+    )
+    # Disjoint players from the held match, same table.
+    challenger = fixtures["clash-c vs clash-d"]
+    challenger_id = challenger.id
+
+    with pytest.raises(PlacementClashError) as exc_info:
+        await place_fixture(
+            db_session,
+            tournament_id=tournament.id,
+            fixture_id=challenger_id,
+            actor=owner,
+            placement=_placement(table1, datetime(2026, 6, 13, 9, 35)),
+        )
+    message = str(exc_info.value)
+    assert "Table 1" in message
+    assert "clash-a" in message
+    assert "clash-b" in message
+    assert "called there" in message
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(TournamentFixture).where(TournamentFixture.id == challenger_id)
+        )
+    ).scalar_one()
+    assert row.table_id is None
+    assert row.scheduled_start is None
+    assert row.pinned_at is None
+
+
+async def test_live_call_onto_a_held_player_is_refused(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """A live full placement onto a FREE table is still refused when one of
+    its own players is held by an unfinished ``in_progress`` match elsewhere —
+    naming the held player, not the table."""
+    owner = await make_user(db_session, f"clash-owner-{uuid.uuid4().hex[:8]}")
+    tournament, _event, fixtures = await _seed_live_four_way_tournament(
+        db_session, owner, default_league
+    )
+    held = fixtures["clash-a vs clash-b"]
+    table1 = _table(tournament, 1)
+    await _call_fixture_directly(
+        db_session,
+        tournament,
+        held,
+        table_id=table1,
+        start=datetime(2026, 6, 13, 9, 30),
+    )
+    # Shares "clash-a" with the held match, but a DIFFERENT (free) table.
+    challenger = fixtures["clash-a vs clash-c"]
+    challenger_id = challenger.id
+    table2 = _table(tournament, 2)
+
+    with pytest.raises(PlacementClashError) as exc_info:
+        await place_fixture(
+            db_session,
+            tournament_id=tournament.id,
+            fixture_id=challenger_id,
+            actor=owner,
+            placement=_placement(table2, datetime(2026, 6, 13, 9, 35)),
+        )
+    message = str(exc_info.value)
+    assert "clash-a" in message
+    assert "already called" in message
+    assert "Table 1" in message  # the table the held match is AT, not table 2
+    assert "clash-b" in message
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(TournamentFixture).where(TournamentFixture.id == challenger_id)
+        )
+    ).scalar_one()
+    assert row.table_id is None
+    assert row.pinned_at is None
+
+
+async def test_re_placing_the_in_progress_fixture_itself_is_not_a_clash(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Re-placing the SAME fixture that is already ``in_progress`` and called
+    onto its own table is a move, not a clash — ``_held_resources`` excludes
+    the fixture's own match, so this succeeds (200-equivalent: no exception)."""
+    owner = await make_user(db_session, f"clash-owner-{uuid.uuid4().hex[:8]}")
+    tournament, _event, fixtures = await _seed_live_four_way_tournament(
+        db_session, owner, default_league
+    )
+    held = fixtures["clash-a vs clash-b"]
+    table1 = _table(tournament, 1)
+    await _call_fixture_directly(
+        db_session,
+        tournament,
+        held,
+        table_id=table1,
+        start=datetime(2026, 6, 13, 9, 30),
+    )
+    held_id = held.id
+
+    read = await place_fixture(
+        db_session,
+        tournament_id=tournament.id,
+        fixture_id=held_id,
+        actor=owner,
+        placement=_placement(table1, datetime(2026, 6, 13, 9, 40)),
+    )
+
+    assert read.id == held_id
+    assert read.table_id == table1
+
+
+async def test_live_call_with_a_free_table_and_free_players_still_calls(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """No over-refusal: a live placement onto a free table with free players
+    still succeeds and calls the fixture, even with another match running
+    elsewhere (different table, different humans)."""
+    owner = await make_user(db_session, f"clash-owner-{uuid.uuid4().hex[:8]}")
+    tournament, _event, fixtures = await _seed_live_four_way_tournament(
+        db_session, owner, default_league
+    )
+    held = fixtures["clash-a vs clash-b"]
+    table1 = _table(tournament, 1)
+    await _call_fixture_directly(
+        db_session,
+        tournament,
+        held,
+        table_id=table1,
+        start=datetime(2026, 6, 13, 9, 30),
+    )
+    free = fixtures["clash-c vs clash-d"]
+    free_id = free.id
+    table2 = _table(tournament, 2)
+
+    read = await place_fixture(
+        db_session,
+        tournament_id=tournament.id,
+        fixture_id=free_id,
+        actor=owner,
+        placement=_placement(table2, datetime(2026, 6, 13, 9, 35)),
+    )
+
+    assert read.id == free_id
+    assert read.table_id == table2
+    assert read.pinned_at is not None
+
+    db_session.expire_all()
+    row = (
+        await db_session.execute(
+            select(TournamentFixture).where(TournamentFixture.id == free_id)
+        )
+    ).scalar_one()
+    assert row.table_id == table2
+    assert row.pinned_at is not None
+    assert row.call_notified_count == 1
+
+
+async def test_pre_live_table_and_player_overlap_still_saves_as_a_flag(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """Pre-live (ADR-0790), the same table/player overlap that a live call
+    refuses SAVES silently, as a flag on read, exactly as it always has —
+    a pre-live placement calls nobody, so there is nothing to clash with."""
+    owner = await make_user(db_session, f"clash-owner-{uuid.uuid4().hex[:8]}")
+    tournament, _event, fixtures = await _seed_live_four_way_tournament(
+        db_session, owner, default_league, status=TournamentStatus.draft
+    )
+    held = fixtures["clash-a vs clash-b"]
+    table1 = _table(tournament, 1)
+    # A pre-live tournament never links a real in_progress match through the
+    # ordinary pipeline, but the clash guard only cares whether the row is
+    # readable as held — manufacture the same in_progress fact directly, the
+    # way the two refusal tests above do, to prove the STATUS gate (not the
+    # absence of held state) is what makes this save.
+    await _call_fixture_directly(
+        db_session,
+        tournament,
+        held,
+        table_id=table1,
+        start=datetime(2026, 6, 13, 9, 30),
+    )
+    challenger = fixtures["clash-c vs clash-d"]
+    challenger_id = challenger.id
+
+    read = await place_fixture(
+        db_session,
+        tournament_id=tournament.id,
+        fixture_id=challenger_id,
+        actor=owner,
+        placement=_placement(table1, datetime(2026, 6, 13, 9, 35)),
+    )
+
+    assert read.id == challenger_id
+    assert read.table_id == table1

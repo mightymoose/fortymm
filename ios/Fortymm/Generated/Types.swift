@@ -941,13 +941,17 @@ internal protocol APIProtocol: Sendable {
     /// is an invariant rather than a flag. A placement whose table does not exist is not a
     /// state you chose; it is a dangling reference nothing can render.
     ///
-    /// **The placement is otherwise soft.** `scheduled_start` is a *prediction* until
-    /// pinned, and the placement's other constraints — the table belongs to the fixture's
-    /// group's reservation, the time falls inside that reservation's window, nothing is
-    /// double-booked — are flags derived on read, **not** invariants. So an out-of-window
-    /// time, or a table outside the fixture's group's reservation, is **stored, not
-    /// rejected**; the queued re-solve is what judges
-    /// the consequences.
+    /// **The placement is otherwise soft — except a live call.** `scheduled_start` is a
+    /// *prediction* until pinned, and the placement's other constraints — the table belongs
+    /// to the fixture's group's reservation, the time falls inside that reservation's
+    /// window, nothing is double-booked — are flags derived on read, **not** invariants. So
+    /// an out-of-window time, or a table outside the fixture's group's reservation, is
+    /// **stored, not rejected**; the queued re-solve is what judges the consequences. The
+    /// one exception: while the tournament is **live**, a full placement that would *call*
+    /// this fixture (both entrants known) onto a table or a player an unfinished
+    /// `in_progress` match already holds is a `409` naming the clash — nothing is written
+    /// and nobody is notified (ADR "A called match holds its time, and a clashing call is
+    /// refused"). Pre-live, a double-booking still saves as a flag, not a refusal.
     ///
     /// **The one hard rule about the fixture:** a fixture whose linked match is `completed`
     /// or `voided` is history, so its placement can no longer be changed — a `409`. A
@@ -2578,13 +2582,17 @@ extension APIProtocol {
     /// is an invariant rather than a flag. A placement whose table does not exist is not a
     /// state you chose; it is a dangling reference nothing can render.
     ///
-    /// **The placement is otherwise soft.** `scheduled_start` is a *prediction* until
-    /// pinned, and the placement's other constraints — the table belongs to the fixture's
-    /// group's reservation, the time falls inside that reservation's window, nothing is
-    /// double-booked — are flags derived on read, **not** invariants. So an out-of-window
-    /// time, or a table outside the fixture's group's reservation, is **stored, not
-    /// rejected**; the queued re-solve is what judges
-    /// the consequences.
+    /// **The placement is otherwise soft — except a live call.** `scheduled_start` is a
+    /// *prediction* until pinned, and the placement's other constraints — the table belongs
+    /// to the fixture's group's reservation, the time falls inside that reservation's
+    /// window, nothing is double-booked — are flags derived on read, **not** invariants. So
+    /// an out-of-window time, or a table outside the fixture's group's reservation, is
+    /// **stored, not rejected**; the queued re-solve is what judges the consequences. The
+    /// one exception: while the tournament is **live**, a full placement that would *call*
+    /// this fixture (both entrants known) onto a table or a player an unfinished
+    /// `in_progress` match already holds is a `409` naming the clash — nothing is written
+    /// and nobody is notified (ADR "A called match holds its time, and a clashing call is
+    /// refused"). Pre-live, a double-booking still saves as a flag, not a refusal.
     ///
     /// **The one hard rule about the fixture:** a fixture whose linked match is `completed`
     /// or `voided` is history, so its placement can no longer be changed — a `409`. A
@@ -26154,13 +26162,17 @@ internal enum Operations {
     /// is an invariant rather than a flag. A placement whose table does not exist is not a
     /// state you chose; it is a dangling reference nothing can render.
     ///
-    /// **The placement is otherwise soft.** `scheduled_start` is a *prediction* until
-    /// pinned, and the placement's other constraints — the table belongs to the fixture's
-    /// group's reservation, the time falls inside that reservation's window, nothing is
-    /// double-booked — are flags derived on read, **not** invariants. So an out-of-window
-    /// time, or a table outside the fixture's group's reservation, is **stored, not
-    /// rejected**; the queued re-solve is what judges
-    /// the consequences.
+    /// **The placement is otherwise soft — except a live call.** `scheduled_start` is a
+    /// *prediction* until pinned, and the placement's other constraints — the table belongs
+    /// to the fixture's group's reservation, the time falls inside that reservation's
+    /// window, nothing is double-booked — are flags derived on read, **not** invariants. So
+    /// an out-of-window time, or a table outside the fixture's group's reservation, is
+    /// **stored, not rejected**; the queued re-solve is what judges the consequences. The
+    /// one exception: while the tournament is **live**, a full placement that would *call*
+    /// this fixture (both entrants known) onto a table or a player an unfinished
+    /// `in_progress` match already holds is a `409` naming the clash — nothing is written
+    /// and nobody is notified (ADR "A called match holds its time, and a clashing call is
+    /// refused"). Pre-live, a double-booking still saves as a flag, not a refusal.
     ///
     /// **The one hard rule about the fixture:** a fixture whose linked match is `completed`
     /// or `voided` is history, so its placement can no longer be changed — a `409`. A

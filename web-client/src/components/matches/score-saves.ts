@@ -1,9 +1,19 @@
-import { useMutationState, type Mutation } from '@tanstack/react-query'
+import {
+  useMutationState,
+  useQuery,
+  type Mutation,
+} from '@tanstack/react-query'
+import {
+  readScoreSaveContext,
+  scoreBaselineConflict,
+  type ScoreSaveContext,
+} from '@/api/score-save-baseline'
 import { ApiError, conflictDetail } from '@/api/client'
 import {
   gameNumberFromScoreMutationKey,
   matchScoreMutationPrefix,
   scoreMutationKey,
+  matchQueryOptions,
   type MatchGameScoreWrite,
 } from '@/api/matches'
 
@@ -41,6 +51,7 @@ export interface GameSaveState {
    * surfaces distinctly from an ordinary failed save. */
   error: ApiError | null
   submittedAt: number
+  context?: ScoreSaveContext
 }
 
 const asApiError = (error: unknown): ApiError | null =>
@@ -54,6 +65,7 @@ const selectGameSaveState = (mutation: Mutation): GameSaveState => ({
     (mutation.state.variables as MatchGameScoreWrite | undefined) ?? null,
   error: asApiError(mutation.state.error),
   submittedAt: mutation.state.submittedAt,
+  context: readScoreSaveContext(mutation.state.context),
 })
 
 interface ScoreSaveProbe {
@@ -62,6 +74,7 @@ interface ScoreSaveProbe {
   variables: MatchGameScoreWrite | undefined
   error: ApiError | null
   submittedAt: number
+  context?: ScoreSaveContext
 }
 const selectScoreSaveProbe = (mutation: Mutation): ScoreSaveProbe => ({
   gameNumber: gameNumberFromScoreMutationKey(mutation.options.mutationKey),
@@ -69,6 +82,7 @@ const selectScoreSaveProbe = (mutation: Mutation): ScoreSaveProbe => ({
   variables: mutation.state.variables as MatchGameScoreWrite | undefined,
   error: asApiError(mutation.state.error),
   submittedAt: mutation.state.submittedAt,
+  context: readScoreSaveContext(mutation.state.context),
 })
 
 /** Latest score-save state for a single game, or `null` if it's never been
@@ -78,6 +92,9 @@ export function useGameSaveState(
   matchId: string,
   gameNumber: number,
 ): GameSaveState | null {
+  // Observe server truth without initiating another request. A failed save's
+  // conflict classification must update when the open match refetches.
+  const { data } = useQuery({ ...matchQueryOptions(matchId), enabled: false })
   const states = useMutationState({
     filters: {
       mutationKey: scoreMutationKey(matchId, gameNumber),
@@ -85,7 +102,16 @@ export function useGameSaveState(
     },
     select: selectGameSaveState,
   })
-  return states.length ? states[states.length - 1] : null
+  const latest = states.at(-1)
+  if (!latest) return null
+  const committed =
+    data?.games.find((game) => game.game_number === gameNumber)?.score ?? null
+  return latest.status === 'error' && data
+    ? {
+        ...latest,
+        error: scoreBaselineConflict(latest.context, committed) ?? latest.error,
+      }
+    : latest
 }
 
 export interface FailedGameSave {
@@ -110,6 +136,7 @@ export interface FailedGameSave {
  * ("Game 3 didn't save." vs "2 games didn't save.") and its retry-all.
  */
 export function useFailedGameSaves(matchId: string): FailedGameSave[] {
+  const { data } = useQuery({ ...matchQueryOptions(matchId), enabled: false })
   const states = useMutationState({
     filters: { mutationKey: matchScoreMutationPrefix(matchId) },
     select: selectScoreSaveProbe,
@@ -130,7 +157,14 @@ export function useFailedGameSaves(matchId: string): FailedGameSave[] {
     .map((state) => ({
       gameNumber: state.gameNumber as number,
       variables: state.variables as MatchGameScoreWrite,
-      conflict: isScoreConflict(state.error),
+      conflict:
+        isScoreConflict(state.error) ||
+        (data != null &&
+          scoreBaselineConflict(
+            state.context,
+            data.games.find((game) => game.game_number === state.gameNumber)
+              ?.score ?? null,
+          ) !== null),
       submittedAt: state.submittedAt,
     }))
 }

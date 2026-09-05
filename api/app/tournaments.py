@@ -78,6 +78,7 @@ from app.tournament_errors import (
     NonSinglesEntryError,
     NotAllowedToWithdrawError,
     NotTournamentOwnerError,
+    PlacementClashError,
     PlacementTableNotFoundError,
     PlayerNotFoundError,
     ReservationNotInEventError,
@@ -1490,13 +1491,17 @@ async def place_fixture(
     is an invariant rather than a flag. A placement whose table does not exist is not a
     state you chose; it is a dangling reference nothing can render.
 
-    **The placement is otherwise soft.** `scheduled_start` is a *prediction* until
-    pinned, and the placement's other constraints — the table belongs to the fixture's
-    group's reservation, the time falls inside that reservation's window, nothing is
-    double-booked — are flags derived on read, **not** invariants. So an out-of-window
-    time, or a table outside the fixture's group's reservation, is **stored, not
-    rejected**; the queued re-solve is what judges
-    the consequences.
+    **The placement is otherwise soft — except a live call.** `scheduled_start` is a
+    *prediction* until pinned, and the placement's other constraints — the table belongs
+    to the fixture's group's reservation, the time falls inside that reservation's
+    window, nothing is double-booked — are flags derived on read, **not** invariants. So
+    an out-of-window time, or a table outside the fixture's group's reservation, is
+    **stored, not rejected**; the queued re-solve is what judges the consequences. The
+    one exception: while the tournament is **live**, a full placement that would *call*
+    this fixture (both entrants known) onto a table or a player an unfinished
+    `in_progress` match already holds is a `409` naming the clash — nothing is written
+    and nobody is notified (ADR "A called match holds its time, and a clashing call is
+    refused"). Pre-live, a double-booking still saves as a flag, not a refusal.
 
     **The one hard rule about the fixture:** a fixture whose linked match is `completed`
     or `voided` is history, so its placement can no longer be changed — a `409`. A
@@ -1520,6 +1525,7 @@ async def place_fixture(
     #   FixtureNotFoundError         -> 404 "Fixture not found."
     #   FixturePlacementFrozenError  -> 409 "This fixture's match is already {status}…"
     #   PlacementTableNotFoundError  -> 422 on ``body.table_id`` (ADR 20260801)
+    #   PlacementClashError          -> 409 naming the busy table/held player
     try:
         return await place_fixture_core(
             db,
@@ -1545,6 +1551,12 @@ async def place_fixture(
     except PlacementTableNotFoundError as exc:
         # Verb-specific: the placement named no table of this tournament (ADR 20260801).
         raise _placement_table_not_found(exc) from exc
+    except PlacementClashError as exc:
+        # Verb-specific: a live call onto a table or a player an unfinished
+        # in_progress match already holds — the domain-authored sentence naming
+        # the clash, rebuilt verbatim with ``str`` (ADR "A called match holds its
+        # time, and a clashing call is refused"). Nothing was written.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 # ----- the schedule solver (ADR "the schedule is solved; the call is pinned") -----

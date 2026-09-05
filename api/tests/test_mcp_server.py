@@ -1286,7 +1286,9 @@ async def test_enter_game_score_on_frozen_match_raises_scorable_reason(
 
 
 async def test_director_can_enter_game_score_via_mcp(
-    api_client: httpx.AsyncClient, db_session: AsyncSession
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
 ) -> None:
     """AC: 'The same widened authorization reaches the MCP tools
     enter_game_score, update_game_score, propose_result and
@@ -1319,6 +1321,9 @@ async def test_director_can_enter_game_score_via_mcp(
     assert entered.isError is False
     score = _game_score(entered.structuredContent, 1)
     assert (score["side_1_points"], score["side_2_points"]) == (11, 5)
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    assert {job.user_id for job in jobs} == {p1.id, p2.id}
+    assert all(job.title == "Your game score was recorded" for job in jobs)
 
 
 async def test_score_write_tools_keep_the_directors_scoring_flags_via_mcp(
@@ -1563,6 +1568,48 @@ async def test_propose_awaits_acceptance_notifies_and_accept_completes(
     assert accepted.structuredContent is not None
     assert accepted.structuredContent["status"] == "completed"
     assert accepted.structuredContent["negotiation"]["viewer_state"] == "final"
+
+
+async def test_propose_self_accept_notifies_the_opponent_of_the_recorded_result(
+    api_client: httpx.AsyncClient,
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+) -> None:
+    """The MCP ``propose_result`` tool mirrors the HTTP handler's self-accept
+    branch (ADR "a result finalized without a player's acceptance is
+    announced", #1661 item 4): an unrated match self-accepts at once and the
+    opponent — who did not post it — gets the "recorded" notice, not the
+    accept/counter prompt."""
+    a = await start_session(api_client, db_session)
+    b = await make_user(db_session, "mcp-recorded-rival")
+    token_a = await _mint(db_session, a)
+    # Unrated (not the default-rated ``_create_match`` helper): the poster
+    # self-accepts immediately (#1650), which is the shape under test.
+    created = await api_client.post(
+        "/v1/matches",
+        json={"opponent_user_id": str(b.id), "best_of": 1, "rated": False},
+    )
+    assert created.status_code == 201, created.text
+    match_id = str(created.json()["id"])
+
+    async with _mcp_client(token_a) as client_a, client_a:
+        proposed = await client_a.call_tool_mcp(
+            "propose_result",
+            {
+                "match_id": match_id,
+                "games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 4}],
+            },
+        )
+
+    assert proposed.isError is False
+    body = proposed.structuredContent
+    assert body is not None
+    assert body["status"] == "completed"
+
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    assert [job.user_id for job in jobs] == [b.id]
+    assert jobs[0].title == "Your match result was recorded"
+    assert jobs[0].collapse_id == f"result-recorded:{match_id}"
 
 
 async def test_counter_supersedes_standing_proposal(

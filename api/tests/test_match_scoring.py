@@ -504,6 +504,173 @@ async def test_enter_game_score_overrunning_the_decider_raises_not_allowed(
     )
 
 
+# ----- the scratchpad is contiguous (ADR "the scratchpad is contiguous") ---
+
+
+async def test_enter_game_score_past_a_gap_raises_not_allowed(
+    db_session: AsyncSession,
+) -> None:
+    match = await _rated_match(db_session, "gap-save")
+
+    with pytest.raises(ScoreNotAllowedError) as excinfo:
+        # Game 1 was never saved, so game 3 can't be either.
+        await enter_game_score(
+            db_session,
+            match.id,
+            match.created_by_user_id,
+            game_number=3,
+            side_1_points=11,
+            side_2_points=7,
+        )
+
+    assert str(excinfo.value) == "Save game 1 before game 3."
+
+
+async def test_enter_game_score_names_the_first_unsaved_game(
+    db_session: AsyncSession,
+) -> None:
+    match = await _rated_match(db_session, "gap-save-first-unsaved")
+    await enter_game_score(
+        db_session,
+        match.id,
+        match.created_by_user_id,
+        game_number=1,
+        side_1_points=11,
+        side_2_points=7,
+    )
+
+    with pytest.raises(ScoreNotAllowedError) as excinfo:
+        # Game 1 is saved, game 2 is not: game 4 names game 2, not game 3.
+        await enter_game_score(
+            db_session,
+            match.id,
+            match.created_by_user_id,
+            game_number=4,
+            side_1_points=11,
+            side_2_points=7,
+        )
+
+    assert str(excinfo.value) == "Save game 2 before game 4."
+
+
+async def test_enter_game_score_in_order_saves(db_session: AsyncSession) -> None:
+    match = await _rated_match(db_session, "gap-save-in-order")
+    await enter_game_score(
+        db_session,
+        match.id,
+        match.created_by_user_id,
+        game_number=1,
+        side_1_points=11,
+        side_2_points=7,
+    )
+
+    updated = await enter_game_score(
+        db_session,
+        match.id,
+        match.created_by_user_id,
+        game_number=2,
+        side_1_points=11,
+        side_2_points=8,
+    )
+
+    assert sorted(g.game_number for g in updated.games) == [1, 2]
+
+
+async def test_delete_game_score_under_a_later_saved_game_raises_not_allowed(
+    db_session: AsyncSession,
+) -> None:
+    match = await _rated_match(db_session, "gap-delete")
+    await enter_game_score(
+        db_session,
+        match.id,
+        match.created_by_user_id,
+        game_number=1,
+        side_1_points=11,
+        side_2_points=7,
+    )
+    await enter_game_score(
+        db_session,
+        match.id,
+        match.created_by_user_id,
+        game_number=2,
+        side_1_points=11,
+        side_2_points=8,
+    )
+
+    with pytest.raises(ScoreNotAllowedError) as excinfo:
+        # Game 2 is still saved: clearing game 1 would leave a hole.
+        await delete_game_score(
+            db_session, match.id, match.created_by_user_id, game_number=1
+        )
+
+    assert str(excinfo.value) == "Clear game 2 first, or edit game 1 instead."
+
+
+async def test_delete_game_score_last_game_clears(db_session: AsyncSession) -> None:
+    match = await _rated_match(db_session, "gap-delete-last")
+    await enter_game_score(
+        db_session,
+        match.id,
+        match.created_by_user_id,
+        game_number=1,
+        side_1_points=11,
+        side_2_points=7,
+    )
+    await enter_game_score(
+        db_session,
+        match.id,
+        match.created_by_user_id,
+        game_number=2,
+        side_1_points=11,
+        side_2_points=8,
+    )
+
+    updated = await delete_game_score(
+        db_session, match.id, match.created_by_user_id, game_number=2
+    )
+    game = next(g for g in updated.games if g.game_number == 2)
+    assert game.score is None
+
+    # Now game 1 is the last saved game — it clears too.
+    updated = await delete_game_score(
+        db_session, match.id, match.created_by_user_id, game_number=1
+    )
+    game = next(g for g in updated.games if g.game_number == 1)
+    assert game.score is None
+
+
+async def test_update_game_score_does_not_require_contiguity(
+    db_session: AsyncSession,
+) -> None:
+    """``update_game_score`` edits a game already on the board in place — it
+    cannot open a gap, so it carries no contiguity guard of its own. This is
+    just ``test_update_game_score_with_the_right_version_replaces_it``'s
+    scenario restated to pin the "unaffected" half of the ADR."""
+    match = await _rated_match(db_session, "gap-update-unaffected")
+    await enter_game_score(
+        db_session,
+        match.id,
+        match.created_by_user_id,
+        game_number=1,
+        side_1_points=11,
+        side_2_points=4,
+    )
+
+    updated = await update_game_score(
+        db_session,
+        match.id,
+        match.created_by_user_id,
+        game_number=1,
+        side_1_points=11,
+        side_2_points=9,
+        expected_version=1,
+    )
+
+    score = _score_for(updated, 1)
+    assert score.side_1_points == 11
+    assert score.side_2_points == 9
+
+
 # ----- concurrent-participant conflicts (ScoreConflictError) ---------------
 
 
