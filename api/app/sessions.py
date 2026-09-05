@@ -1584,7 +1584,11 @@ async def confirm_email(
         # unreplaced row) — sweep them here rather than waiting for a later
         # issuance that may never come (#1616).
         await _sweep_replaced_email_tokens(db, user.id)
-        merged = await _maybe_merge_prior_session(db, session_cookie, user)
+        merged = (
+            None
+            if payload.skip_merge
+            else await _maybe_merge_prior_session(db, session_cookie, user)
+        )
         # After the cookie lookup above, before the replacement token below.
         await _revoke_other_sessions(db, user)
         db.add(

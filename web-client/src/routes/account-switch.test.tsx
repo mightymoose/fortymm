@@ -124,3 +124,44 @@ it.each([
     )
   },
 )
+
+it('offers retry when rechecking a changed sign-in cannot reach the server', async () => {
+  const user = userEvent.setup()
+  let previews = 0
+  let consumes = 0
+  server.use(
+    http.post('*/v1/merge/preview', () => {
+      previews += 1
+      return previews === 1
+        ? HttpResponse.json({ is_merge: false, account_switch: {
+            from_user_id: 'alice-id', from_username: 'alice', to_username: 'bob',
+          } })
+        : new HttpResponse(null, { status: 503 })
+    }),
+    http.post('*/v1/login/consume', () => {
+      consumes += 1
+      return consumes === 1
+        ? HttpResponse.json({ detail: {
+            code: 'account_switch_required', account_switch: null,
+          } }, { status: 409 })
+        : new HttpResponse(null, { status: 503 })
+    }),
+  )
+  const root = createRootRoute()
+  const verifying = createRoute({
+    getParentRoute: () => root,
+    path: '/login/verifying',
+    component: VerifyRoute.options.component!,
+    validateSearch: VerifyRoute.options.validateSearch,
+  })
+  const router = createRouter({
+    routeTree: root.addChildren([verifying]),
+    history: createMemoryHistory({ initialEntries: ['/login/verifying?token=bobs-link'] }),
+  })
+  render(<QueryClientProvider client={new QueryClient()}>
+    <RouterProvider router={router} />
+  </QueryClientProvider>)
+  await user.click(await screen.findByRole('button', { name: 'Continue as bob' }))
+  await user.click(await screen.findByRole('button', { name: 'Review link' }))
+  expect(await screen.findByRole('button', { name: 'Retry verification' })).toBeVisible()
+})

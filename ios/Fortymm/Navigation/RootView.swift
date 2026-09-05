@@ -15,7 +15,7 @@ struct RootView: View {
             // store parses + holds the link; the cover also allows recovery
             // links while the session is signed out.
             .onOpenURL { session.handle($0) }
-            .fullScreenCover(item: $session.pendingDeepLink) { link in
+            .fullScreenCover(item: $session.presentedDeepLink) { link in
                 deepLinkDestination(link)
             }
     }

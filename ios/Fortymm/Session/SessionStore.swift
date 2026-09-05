@@ -23,6 +23,18 @@ final class SessionStore: ObservableObject {
     /// matching flow over the shell. Cleared once that flow is dismissed.
     @Published var pendingDeepLink: DeepLink?
 
+    /// Delay link POSTs until bootstrap has restored the CSRF companion, while
+    /// still allowing a recovery link after bootstrap resolves to signed out.
+    var presentedDeepLink: DeepLink? {
+        get {
+            switch state {
+            case .loaded, .signedOut: return pendingDeepLink
+            case .idle, .loading, .failed: return nil
+            }
+        }
+        set { pendingDeepLink = newValue }
+    }
+
     /// Record an opened URL as a pending deep link if it's one we recognise.
     /// Stored rather than acted on directly: a link can arrive at cold launch
     /// before `GET /v1/session` resolves, so `RootView` only presents it once

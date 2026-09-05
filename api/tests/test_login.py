@@ -1818,3 +1818,36 @@ async def test_claimed_account_switch_requires_approval_without_consuming_link(
     )
     assert accepted.status_code == 200
     assert accepted.json()["data"]["user"]["id"] == str(bob.id)
+
+
+async def test_email_change_confirmation_can_leave_previewed_guest_matches_behind(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    owner = await _make_confirmed_user(db_session, "owner@example.com")
+    guest = await start_session(api_client, db_session)
+    opponent = await make_user(db_session, "confirmation-opponent")
+    await _record_singles_match(db_session, guest, opponent)
+    raw = "email-change-declined-merge"
+    db_session.add(
+        UserToken(
+            user_id=owner.id,
+            context="change:owner@example.com",
+            token=sessions.hash_token(raw),
+            sent_to="owner-new@example.com",
+        )
+    )
+    await db_session.commit()
+    preview = await api_client.post("/v1/merge/preview", json={"token": raw})
+    assert preview.json()["is_merge"] is True
+    assert preview.json()["guest_matches_count"] == 1
+    async with make_client() as other_guest_tab:
+        other_guest_tab.cookies.update(api_client.cookies)
+        response = await api_client.post(
+            "/v1/me/email/confirm", json={"token": raw, "skip_merge": True}
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["user"]["id"] == str(owner.id)
+        assert response.json().get("merged") is None
+        surviving = await other_guest_tab.get("/v1/session")
+        assert surviving.status_code == 200
+        assert surviving.json()["data"]["user"]["id"] == str(guest.id)

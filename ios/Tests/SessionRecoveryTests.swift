@@ -37,9 +37,12 @@ final class SessionTransport: URLProtocol {
         print("PASS: an evicted session reaches the native signed-out flow")
         let store = SessionStore(client: client)
         store.handle(URL(string: "https://fortymm.com/login/verifying?token=recovery-link")!)
+        precondition(store.presentedDeepLink == nil,
+                     "A cold-launch link must wait for session bootstrap")
         await store.load()
         precondition(store.pendingDeepLink == .login(token: "recovery-link"),
                      "Session eviction must not discard the link needed to sign back in")
+        precondition(store.presentedDeepLink == .login(token: "recovery-link"))
         print("PASS: native recovery retains the incoming sign-in link")
         // Simulate relaunch with the same durable credential store. A server
         // willing to mint a guest must never be reached until an explicit choice.
@@ -52,6 +55,14 @@ final class SessionTransport: URLProtocol {
             fatalError("Relaunch silently minted a guest after eviction")
         } catch APIError.sessionMerged { }
         _ = try await relaunched.startNewGuest()
+        let bootstrapping = SessionStore(client: relaunched)
+        bootstrapping.handle(URL(string: "https://fortymm.com/confirm-email?token=confirmation")!)
+        precondition(bootstrapping.presentedDeepLink == nil)
+        await bootstrapping.load()
+        precondition(bootstrapping.presentedDeepLink == .confirmEmail(token: "confirmation"))
+        bootstrapping.presentedDeepLink = nil
+        precondition(bootstrapping.pendingDeepLink == nil)
+        print("PASS: native link presentation waits for a restored session")
         await tokens.clear()
         print("PASS: sign-out survives relaunch until an explicit new-guest choice")
         let login = LoginService(client: client)

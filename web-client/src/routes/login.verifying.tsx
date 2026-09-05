@@ -98,7 +98,7 @@ function LoginVerifyingPage() {
   const fired = useRef(false)
   const [approvedSwitch, setApprovedSwitch] = useState<string | undefined>()
 
-  const runConsume = (skipMerge: boolean, switchFromUserId = approvedSwitch) => {
+  const runConsume = (skipMerge: boolean, switchFromUserId?: string) => {
     setGate(null)
     consume.mutate(
       { token, skipMerge, switchFromUserId },
@@ -229,6 +229,8 @@ function LoginVerifyingPage() {
           preview.mutate(token, { onSuccess: (p) => {
             if (p.account_switch || (p.is_merge && p.guest_matches_count > 0)) setGate(p)
             else runConsume(false)
+          }, onError: () => {
+            navigate({ to: '/login/verifying', search: { token, error: 'net' } })
           } })
         }} />
   }
@@ -250,8 +252,8 @@ function LoginVerifyingPage() {
         matchesCount={gate.guest_matches_count}
         adoptsGuestUsername={gate.adopts_guest_username}
         busy={consume.isPending}
-        onBringThemOver={() => runConsume(false)}
-        onNotNow={() => runConsume(true)}
+        onBringThemOver={() => runConsume(false, approvedSwitch)}
+        onNotNow={() => runConsume(true, approvedSwitch)}
       />
     )
   }
