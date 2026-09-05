@@ -1,7 +1,7 @@
 import { createElement, type ReactNode } from 'react'
 import { act, renderHook } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { delay, http, HttpResponse } from 'msw'
 import { mockSession } from '@/mocks/handlers'
 import { server } from '@/mocks/server'
@@ -16,7 +16,15 @@ function wrapper() {
     createElement(QueryClientProvider, { client }, children)
 }
 
+beforeEach(() => {
+  // Explicitly exercise the fallback: newer test browsers expose Web Locks.
+  vi.stubGlobal('navigator', new Proxy(navigator, {
+    get: (target, key) => key === 'locks' ? undefined : Reflect.get(target, key),
+  }))
+})
+
 afterEach(() => {
+  vi.unstubAllGlobals()
   vi.restoreAllMocks()
   clients.splice(0).forEach((client) => client.clear())
   forgetSessionEnd()
