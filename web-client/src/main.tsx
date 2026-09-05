@@ -80,7 +80,11 @@ subscribeIdentityChange(() => {
       void queryClient.resetQueries({ type: 'active' })
     },
   })
-  void router.invalidate()
+  if (router.state.location.pathname === '/login') {
+    void router.navigate({ to: '/dashboard', replace: true })
+  } else {
+    void router.invalidate()
+  }
 })
 
 async function unregisterServiceWorkers() {

@@ -138,10 +138,14 @@ async def test_returns_existing_session_when_cookie_valid(
     assert tokens[0].token == hashlib.sha256(first_token.encode("utf-8")).digest()
 
 
-async def test_invalid_cookie_ends_session_on_repeated_loads(api_client: AsyncClient):
+@pytest.mark.parametrize("has_companion", [False, True])
+async def test_invalid_cookie_ends_session_on_repeated_loads(
+    api_client: AsyncClient, has_companion: bool
+):
     # The companion survives the first 401 clearing the rejected session cookie.
     api_client.cookies.set(SESSION_COOKIE_NAME, "not-a-real-token")
-    api_client.cookies.set(CSRF_COOKIE_NAME, "existing-browser")
+    if has_companion:
+        api_client.cookies.set(CSRF_COOKIE_NAME, "existing-browser")
     for _ in range(2):
         response = await api_client.get("/v1/session")
         assert response.status_code == 401

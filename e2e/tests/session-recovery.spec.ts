@@ -88,7 +88,8 @@ test('another claimed account’s confirmation link waits for approval and cance
 })
 
 
-test('logout reaches every tab and concurrent guest recovery shares one identity', async ({ context, page }) => {
+test('a timed-out recovery tab follows its peer to the recovered dashboard', async ({ context, page }) => {
+  await context.addInitScript(() => { Object.defineProperty(navigator, 'locks', { value: undefined }) })
   await page.goto('/dashboard')
   const second = await context.newPage()
   await second.goto('/dashboard')
@@ -116,6 +117,7 @@ test('logout reaches every tab and concurrent guest recovery shares one identity
     await firstRecovery.newGuest.click()
     await startedRequest
     await new SessionRecoveryPage(second).newGuest.click()
+    await expect(second.getByText("We couldn't start a new guest. Please try again.")).toBeVisible({ timeout: 15_000 })
   } finally {
     release()
   }

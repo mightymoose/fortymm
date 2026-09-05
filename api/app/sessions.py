@@ -17,6 +17,7 @@ from fastapi import (
     Response,
     status,
 )
+from fastapi.responses import JSONResponse
 from pyrate_limiter import Duration, Rate
 from rq.job import Job
 from sqlalchemy import ColumnElement, delete, func, or_, select, update
@@ -713,6 +714,21 @@ def _invalid_or_expired_exception() -> HTTPException:
     )
 
 
+class SessionEndedException(HTTPException):
+    """An ended identity needs a durable cookie companion on its 401."""
+
+
+async def session_ended_exception_handler(
+    request: Request, exc: SessionEndedException
+) -> Response:
+    response = JSONResponse(
+        status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers
+    )
+    if not request.cookies.get(CSRF_COOKIE_NAME):
+        _set_csrf_cookie(response)
+    return response
+
+
 def _session_ended_exception() -> HTTPException:
     """Build the 401 for a request whose session cookie no longer resolves to a
     usable user — a signed-out or expired session. Carries the stable
@@ -720,7 +736,7 @@ def _session_ended_exception() -> HTTPException:
     as an ordinary auth failure (or silently minting a fresh guest), and clears
     any lingering dead cookie so the login screen can start a clean guest. There
     is no email to prefill — the holder isn't a known account here."""
-    return HTTPException(
+    return SessionEndedException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail={
             "code": SESSION_ENDED_CODE,
@@ -744,7 +760,7 @@ async def _merged_session_exception(db: AsyncSession, user: User) -> HTTPExcepti
     }
     if owner is not None and owner.email:
         detail["email"] = owner.email
-    return HTTPException(
+    return SessionEndedException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail=detail,
         headers=_clear_cookie_header(),
