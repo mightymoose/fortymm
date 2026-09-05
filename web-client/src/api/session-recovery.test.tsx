@@ -216,3 +216,36 @@ it.each([useConfirmEmail, useConsumeLoginToken])('serializes link redemption wit
   })
   expect(redemptions).toBe(1)
 })
+
+it.each([useConfirmEmail, useConsumeLoginToken])('redeems an ordinary link without recovery storage or Web Locks', async (useFinalize) => {
+  forgetSessionEnd()
+  vi.stubGlobal('navigator', { locks: undefined })
+  blockLocalStorage('setItem')
+  let posts = 0
+  server.use(
+    http.post('*/v1/login/consume', () => { posts++; return HttpResponse.json(mockSession) }),
+    http.post('*/v1/me/email/confirm', () => { posts++; return HttpResponse.json(mockSession) }),
+  )
+  const { result } = renderHook(() => useFinalize(), { wrapper: wrapper() })
+  await act(() => result.current.mutateAsync({ token: 'ordinary-link' }))
+  expect(posts).toBe(1)
+})
+
+it('does not redeem a queued link after another tab replaces the identity', async () => {
+  let run!: () => Promise<unknown>
+  vi.stubGlobal('navigator', { locks: { request: (_name: string, callback: () => Promise<unknown>) => {
+    return new Promise((resolve, reject) => { run = async () => { try { resolve(await callback()) } catch (error) { reject(error) } } })
+  } } })
+  let posts = 0
+  server.use(http.post('*/v1/login/consume', () => { posts++; return HttpResponse.json(mockSession) }))
+  const { result } = renderHook(() => useConsumeLoginToken(), { wrapper: wrapper() })
+  await act(async () => {
+    const pending = result.current.mutateAsync({ token: 'queued-link' })
+    while (!run) await delay(0)
+    localStorage.setItem('fortymm.identity-change', JSON.stringify({ sender: 'another-tab', revision: crypto.randomUUID() }))
+    const rejected = expect(pending).rejects.toThrow()
+    await run()
+    await rejected
+  })
+  expect(posts).toBe(0)
+})

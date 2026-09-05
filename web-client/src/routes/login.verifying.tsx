@@ -12,6 +12,7 @@ import {
   type MergePreview,
   useConsumeLoginToken,
   useMergePreview,
+  SessionChangedError,
 } from '@/api/session'
 import { btnGhost, btnPrimary, fineprint } from '@/components/login/styles'
 import { LinkCheckPage } from '@/components/login/link-check-page/link-check-page'
@@ -133,6 +134,10 @@ function LoginVerifyingPage() {
           navigate({ to: '/login/welcome' })
         },
         onError: (err) => {
+          if (err instanceof SessionChangedError) {
+            void navigate({ to: '/dashboard', replace: true })
+            return
+          }
           if (accountSwitchConflict(err)) return
           if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
             const code = loginConsumeErrorCode(err)

@@ -8,11 +8,12 @@ import Foundation
 actor SessionTokenStore {
     static let shared = SessionTokenStore()
 
-    private let keychain: KeychainStore
+    private let keychain: any SessionKeychain
     private let endedKey: String
     private var endedFallback: SessionEndReason?
     private var cached: String?
     private var didLoad = false
+    private var recoveredInProcess = false
 
     /// Set when `cached` holds a token the Keychain write didn't persist — e.g.
     /// a session minted on a background/locked launch, before the device's
@@ -29,7 +30,7 @@ actor SessionTokenStore {
     /// start in the Keychain the way the session token does.
     private var csrf: String?
 
-    init(keychain: KeychainStore = KeychainStore(account: "session-token")) {
+    init(keychain: any SessionKeychain = KeychainStore(account: "session-token")) {
         self.keychain = keychain
         self.endedKey = keychain.service + "." + keychain.account + ".ended"
     }
@@ -60,11 +61,15 @@ actor SessionTokenStore {
     /// resumed session doesn't rewrite the Keychain on every call.
     func update(_ token: String) {
         endedFallback = nil
-        UserDefaults.standard.removeObject(forKey: endedKey)
-        guard token != cached else { return }
-        cached = token
-        didLoad = true
-        needsPersist = !keychain.save(token)
+        recoveredInProcess = true
+        if token == cached {
+            retryPersistIfNeeded()
+        } else {
+            cached = token
+            didLoad = true
+            needsPersist = !keychain.save(token)
+        }
+        if !needsPersist { UserDefaults.standard.removeObject(forKey: endedKey) }
     }
 
     /// Re-attempt a previously-failed Keychain write. Called from `token()`,
@@ -74,6 +79,7 @@ actor SessionTokenStore {
     private func retryPersistIfNeeded() {
         guard needsPersist, let token = cached else { return }
         needsPersist = !keychain.save(token)
+        if !needsPersist { UserDefaults.standard.removeObject(forKey: endedKey) }
     }
 
     /// Forget the session (sign-out). Clears both the cache and the vault, plus
@@ -86,6 +92,7 @@ actor SessionTokenStore {
     }
 
     private func clearCredentials() {
+        recoveredInProcess = false
         cached = nil
         csrf = nil
         needsPersist = false
@@ -94,6 +101,9 @@ actor SessionTokenStore {
     }
 
     func endedSession() -> SessionEndReason? {
+        // A cached replacement is usable now, but the durable marker remains
+        // until its Keychain write succeeds so relaunch cannot look new.
+        if recoveredInProcess { return nil }
         if let raw = UserDefaults.standard.string(forKey: endedKey), let data = raw.data(using: .utf8),
            let reason = try? JSONDecoder().decode(SessionEndReason.self, from: data) {
             return reason

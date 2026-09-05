@@ -13,6 +13,7 @@ import {
   type Session,
   useConfirmEmail,
   useMergePreview,
+  SessionChangedError,
 } from '@/api/session'
 import { btnGhost, btnPrimary } from '@/components/login/styles'
 import {
@@ -179,7 +180,9 @@ function ConfirmEmailPage() {
     confirming.current = true
     setSkipMerge(input.skipMerge ?? false)
     firedInput.current = input
-    confirm.mutate(input, { onSuccess: showMergeToast, onSettled: () => { confirming.current = false } })
+    confirm.mutate(input, { onSuccess: showMergeToast, onError: (error) => {
+      if (error instanceof SessionChangedError) void navigate({ to: '/dashboard', replace: true })
+    }, onSettled: () => { confirming.current = false } })
   }
 
   // Preview the link first. A merge that would carry matches over waits for the
@@ -205,10 +208,14 @@ function ConfirmEmailPage() {
   // displayed state is driven by the mutation result, not the search param, so
   // clearing `token` here doesn't revert the page to "missing token".
   useEffect(() => {
+    if (confirm.error instanceof SessionChangedError) {
+      void navigate({ to: '/dashboard', replace: true })
+      return
+    }
     if ((confirm.isSuccess || (confirm.isError && !accountSwitchConflict(confirm.error))) && token) {
       navigate({ to: '/confirm-email', search: { token: '' }, replace: true })
     }
-  }, [confirm.isSuccess, confirm.isError, token, navigate])
+  }, [confirm.isSuccess, confirm.isError, confirm.error, token, navigate])
 
   const conflict = accountSwitchConflict(confirm.error)
   if (conflict) {

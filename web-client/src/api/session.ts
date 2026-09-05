@@ -8,7 +8,7 @@ import {
 import { z } from 'zod'
 import { ApiError, api, hasCsrfCookie, restoreCsrfCompanion, unwrap } from './client'
 import { handleIdentityChange } from './identity-change'
-import { announceIdentityChange, forgetSessionEnd, readEndedSession, rememberSessionEnd, synchronizeSessionEnd } from './browser-session'
+import { announceIdentityChange, forgetSessionEnd, readEndedSession, readPeerIdentityRevision, rememberSessionEnd, synchronizeSessionEnd } from './browser-session'
 import { closeRealtimeConnections } from './realtime/connection'
 import { clearAppEntered } from '@/lib/landing-redirect'
 import type { components } from './schema'
@@ -113,12 +113,13 @@ function withLocalSessionLock<T>(fn: () => Promise<T>): Promise<T> {
 
 /** Single-flights the `/v1/session` cold-bootstrap request across every tab
  * on the origin, not just within one TanStack QueryClient. */
-async function withSessionBootstrapLock<T>(fn: () => Promise<T>, mode: 'bootstrap' | 'recovery' | 'logout' = 'bootstrap'): Promise<T> {
+async function withSessionBootstrapLock<T>(fn: () => Promise<T>, mode: 'bootstrap' | 'recovery' | 'redemption' | 'logout' = 'bootstrap'): Promise<T> {
   const alwaysLock = mode !== 'bootstrap'
   // A session already exists — no mint race to guard against.
   if (!alwaysLock && hasCsrfCookie()) return fn()
+  const requiresRecovery = () => mode === 'recovery' || (mode === 'redemption' && readEndedSession() !== null)
   const run = () => {
-    if (mode === 'recovery') synchronizeSessionEnd()
+    if (requiresRecovery()) synchronizeSessionEnd()
     if (mode === 'logout') {
       // Refresh stale retry state when possible, but storage failures must
       // never prevent revocation of the current server-side credential.
@@ -129,7 +130,7 @@ async function withSessionBootstrapLock<T>(fn: () => Promise<T>, mode: 'bootstra
   if (typeof navigator !== 'undefined' && navigator.locks?.request) {
     return navigator.locks.request(SESSION_LOCK_NAME, run)
   }
-  if (mode === 'recovery') throw new Error('Session recovery requires a browser with Web Locks support. Please use a supported browser.')
+  if (requiresRecovery()) throw new Error('Session recovery requires a browser with Web Locks support. Please use a supported browser.')
   return withLocalSessionLock(() => withStorageLock(run, alwaysLock, false))
 }
 
@@ -297,8 +298,16 @@ function cacheSession(qc: QueryClient, session: Session): void {
   qc.setQueryData(SESSION_QUERY_KEY, { ...session, merged: null })
 }
 
+export class SessionChangedError extends Error {
+  constructor() { super('Your session changed in another tab. Open the link again to continue.') }
+}
+
 async function withLinkRedemption<T>(fn: () => Promise<T>): Promise<T> {
+  const peerRevision = readPeerIdentityRevision()
   return withSessionBootstrapLock(async () => {
+    if (readPeerIdentityRevision() !== peerRevision) {
+      throw new SessionChangedError()
+    }
     if (readEndedSession()?.logoutPending) {
       restoreCsrfCompanion()
       unwrap('finish sign out', await api.DELETE('/v1/session'), { allowEmpty: true })
@@ -308,7 +317,7 @@ async function withLinkRedemption<T>(fn: () => Promise<T>): Promise<T> {
     forgetSessionEnd()
     announceIdentityChange()
     return result
-  }, 'recovery')
+  }, 'redemption')
 }
 
 export function useConfirmEmail() {

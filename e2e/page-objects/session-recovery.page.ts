@@ -9,5 +9,6 @@ export class SessionRecoveryPage {
   get cancelSwitch() { return this.page.getByRole('button', { name: 'Cancel', exact: true }) }
   switchHeading(username: string) { return this.page.getByRole('heading', { name: `Continue as ${username}?` }) }
   continueAs(username: string) { return this.page.getByRole('button', { name: `Continue as ${username}`, exact: true }) }
+  get linkCheck() { return this.page.getByTestId('link-check-page') }
   get dashboardLink() { return this.page.getByRole('link', { name: 'Go to dashboard' }) }
 }

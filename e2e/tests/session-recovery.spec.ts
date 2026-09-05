@@ -200,3 +200,43 @@ for (const attempt of ['initial', 'retry'] as const) {
     expect(borrowed.status()).toBe(401)
   })
 }
+
+for (const kind of ['sign-in', 'confirmation'] as const) {
+  test(`a duplicate ${kind} tab follows peer completion to the dashboard`, async ({ context, page }) => {
+    const email = `duplicate-${randomUUID()}@example.com`
+    await page.goto(await requestLoginLink(context, mailpit!, email))
+    await expect(page).toHaveURL(/\/dashboard$/)
+    let link: string
+    if (kind === 'sign-in') link = await requestLoginLink(context, mailpit!, email)
+    else {
+      const nextEmail = `duplicate-next-${randomUUID()}@example.com`
+      const response = await context.request.post('/api/v1/me/email', {
+        headers: await csrfHeaders(context),
+        data: { email: nextEmail, captcha_token: 'test-token', fmm_hp_token: '' },
+      })
+      expect(response.status()).toBe(202)
+      link = await receivedLink(context.request, mailpit!, nextEmail)
+    }
+    const second = await context.newPage()
+    let release!: () => void
+    let started!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const waiting = new Promise<void>((resolve) => { started = resolve })
+    const endpoint = kind === 'sign-in' ? 'login/consume' : 'me/email/confirm'
+    let posts = 0
+    await context.route(`**/api/v1/${endpoint}`, async (route) => {
+      posts++
+      started()
+      await held
+      await route.continue()
+    })
+    try {
+      await page.goto(link)
+      await waiting
+      await second.goto(link)
+      await expect(new SessionRecoveryPage(second).linkCheck).toBeVisible()
+    } finally { release() }
+    await expect(second).toHaveURL(/\/dashboard$/)
+    expect(posts).toBe(1)
+  })
+}

@@ -145,6 +145,16 @@ const IDENTITY_KEY = 'fortymm.identity-change'
 const IDENTITY_CHANNEL = 'fortymm:identity-change'
 const tabId = crypto.randomUUID()
 const identityMessageSchema = z.object({ sender: z.string(), revision: z.string() })
+let peerRevision: string | null = null
+
+/** Read peer completion synchronously after acquiring an identity lock. */
+export function readPeerIdentityRevision(): string | null {
+  try {
+    const parsed = identityMessageSchema.safeParse(JSON.parse(localStorage.getItem(IDENTITY_KEY) ?? 'null'))
+    if (parsed.success && parsed.data.sender !== tabId) return parsed.data.revision
+  } catch { /* BroadcastChannel supplies the fallback revision. */ }
+  return peerRevision
+}
 
 /** Tell other tabs to reload their account data after credentials change. */
 export function announceIdentityChange(): void {
@@ -165,6 +175,7 @@ export function subscribeIdentityChange(listener: () => void): () => void {
       const parsed = identityMessageSchema.safeParse(JSON.parse(raw))
       if (!parsed.success || parsed.data.sender === tabId || parsed.data.revision === lastRevision) return
       lastRevision = parsed.data.revision
+      peerRevision = parsed.data.revision
       listener()
     } catch { /* Ignore malformed storage or channel messages. */ }
   }

@@ -18,8 +18,27 @@ final class SessionTransport: URLProtocol {
     override func stopLoading() {}
 }
 
+struct UnwritableSessionKeychain: SessionKeychain {
+    let service = "fortymm-unwritable-session-tests"
+    let account = UUID().uuidString
+    func save(_ value: String) -> Bool { false }
+    func load() -> String? { nil }
+    func delete() {}
+}
+
 @main struct SessionRecoveryTests {
     @MainActor static func main() async throws {
+        let unwritable = UnwritableSessionKeychain()
+        defer { UserDefaults.standard.removeObject(forKey: unwritable.service + "." + unwritable.account + ".ended") }
+        let recovering = SessionTokenStore(keychain: unwritable)
+        _ = await recovering.endIfCurrent(nil, message: "Recover your session", email: nil)
+        await recovering.update("recovered-but-not-durable")
+        let activeReason = await recovering.endedSession()
+        precondition(activeReason == nil, "The current process can use its recovered credential")
+        let restarted = SessionTokenStore(keychain: unwritable)
+        let restartedReason = await restarted.endedSession()
+        precondition(restartedReason != nil, "Failed credential persistence must preserve recovery across relaunch")
+        print("PASS: a failed Keychain save preserves the durable recovery marker")
         let keychain = KeychainStore(service: "fortymm-session-tests", account: UUID().uuidString)
         defer {
             keychain.delete()

@@ -80,7 +80,7 @@ subscribeIdentityChange(() => {
       void queryClient.resetQueries({ type: 'active' })
     },
   })
-  if (router.state.location.pathname === '/login') {
+  if (['/login', '/login/verifying', '/confirm-email'].includes(router.state.location.pathname)) {
     void router.navigate({ to: '/dashboard', replace: true })
   } else {
     void router.invalidate()
