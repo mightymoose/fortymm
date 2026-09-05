@@ -19,6 +19,11 @@ same-origin tabs. The app closes realtime connections, clears account caches,
 and routes to sign-in with a visible explanation. Reloading or opening an app
 route directly must not create a guest. Successful sign-in or an explicit
 “Continue as a new guest” is the recovery choice; sign-in leads to the dashboard.
+Explicit sign-out publishes the ended state before clearing browser cookies.
+New-guest recovery uses the shared session-bootstrap lock and reuses an identity
+already recovered by another tab. Successful identity changes tell other tabs
+to discard their old account caches and reload the current session; a later
+sign-out takes precedence over a delayed identity-change notification.
 The native app persists the noncredential explanation in UserDefaults while
 credentials remain in Keychain. Incoming email links remain available while
 signed out, so recovery itself is never blocked by session bootstrap.
@@ -31,7 +36,8 @@ the approval's source user against the request's current session; a changed
 source returns `account_switch_required` without consuming the link. The client
 asks again using the new identity instead of misreporting an expired link.
 An existing guest-merge choice still follows account-switch approval when both
-apply. Same-account and cookieless links need no account-switch prompt.
+apply. Rechecks and retries retain a declined merge; native preview failures stay
+retryable rather than authorizing an automatic merge. Same-account and cookieless links need no account-switch prompt.
 
 No new session table or multi-device login policy is introduced. Unsaved-score
 recovery is separate work; this change does not replay rejected writes. A

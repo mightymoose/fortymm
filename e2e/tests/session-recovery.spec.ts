@@ -57,6 +57,8 @@ test('another claimed account’s confirmation link waits for approval and cance
   await page.goto(await requestLoginLink(context, mailpit!, aliceEmail))
   await expect(page).toHaveURL(/\/dashboard$/)
   const alice = (await (await context.request.get('/api/v1/session')).json()).data.user
+  const sameBrowserTab = await context.newPage()
+  await sameBrowserTab.goto('/dashboard')
   const bobContext = await browser.newContext({ baseURL })
   try {
     const bobPage = await bobContext.newPage()
@@ -81,5 +83,45 @@ test('another claimed account’s confirmation link waits for approval and cance
     await recovery.dashboardLink.click()
     await expect(page).toHaveURL(/\/dashboard$/)
     expect((await (await context.request.get('/api/v1/session')).json()).data.user.id).toBe(bob.id)
+    await expect(new SessionRecoveryPage(sameBrowserTab).userMenu).toContainText(bob.username)
   } finally { await bobContext.close() }
+})
+
+
+test('logout reaches every tab and concurrent guest recovery shares one identity', async ({ context, page }) => {
+  await page.goto('/dashboard')
+  const second = await context.newPage()
+  await second.goto('/dashboard')
+  const firstRecovery = new SessionRecoveryPage(page)
+  await firstRecovery.userMenu.click()
+  await firstRecovery.logout.click()
+  await expect(second).toHaveURL(/\/login(?:\?.*)?$/)
+  await page.goto('/login')
+  await second.reload()
+  await expect(firstRecovery.newGuest).toBeVisible()
+  await expect(new SessionRecoveryPage(second).newGuest).toBeVisible()
+
+  let release!: () => void
+  let started!: () => void
+  const held = new Promise<void>((resolve) => { release = resolve })
+  const startedRequest = new Promise<void>((resolve) => { started = resolve })
+  await context.route('**/api/v1/session', async (route) => {
+    if (route.request().method() === 'GET') {
+      started()
+      await held
+    }
+    await route.continue()
+  })
+  try {
+    await firstRecovery.newGuest.click()
+    await startedRequest
+    await new SessionRecoveryPage(second).newGuest.click()
+  } finally {
+    release()
+  }
+  await expect(page).toHaveURL(/\/dashboard$/)
+  await expect(second).toHaveURL(/\/dashboard$/)
+  const user = (await (await context.request.get('/api/v1/session')).json()).data.user
+  await expect(firstRecovery.userMenu).toContainText(user.username)
+  await expect(new SessionRecoveryPage(second).userMenu).toContainText(user.username)
 })

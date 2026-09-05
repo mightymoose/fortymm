@@ -73,3 +73,42 @@ export function useEndedSession(): EndedSession | null {
   useSyncExternalStore(subscribeSessionEnd, snapshot, () => null)
   return readEndedSession()
 }
+
+const IDENTITY_KEY = 'fortymm.identity-change'
+const IDENTITY_CHANNEL = 'fortymm:identity-change'
+const tabId = crypto.randomUUID()
+const identityMessageSchema = z.object({ sender: z.string(), revision: z.string() })
+
+/** Tell other tabs to reload their account data after credentials change. */
+export function announceIdentityChange(): void {
+  const message = JSON.stringify({ sender: tabId, revision: crypto.randomUUID() })
+  try { localStorage.setItem(IDENTITY_KEY, message) } catch { /* Channel fallback. */ }
+  if (typeof BroadcastChannel !== 'undefined') {
+    const channel = new BroadcastChannel(IDENTITY_CHANNEL)
+    channel.postMessage(message)
+    channel.close()
+  }
+}
+
+export function subscribeIdentityChange(listener: () => void): () => void {
+  let lastRevision: string | undefined
+  const receive = (raw: unknown) => {
+    try {
+      if (typeof raw !== 'string') return
+      const parsed = identityMessageSchema.safeParse(JSON.parse(raw))
+      if (!parsed.success || parsed.data.sender === tabId || parsed.data.revision === lastRevision) return
+      lastRevision = parsed.data.revision
+      listener()
+    } catch { /* Ignore malformed storage or channel messages. */ }
+  }
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === IDENTITY_KEY) receive(event.newValue)
+  }
+  const channel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(IDENTITY_CHANNEL)
+  if (channel) channel.onmessage = (event) => receive(event.data)
+  window.addEventListener('storage', onStorage)
+  return () => {
+    channel?.close()
+    window.removeEventListener('storage', onStorage)
+  }
+}

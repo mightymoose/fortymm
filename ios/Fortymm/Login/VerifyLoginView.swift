@@ -193,7 +193,7 @@ struct VerifyLoginView: View {
                     .init(status: "ERR", method: "···", path: "/auth/session", note: "gave up after 12s"),
                 ])
                 HStack(spacing: 10) {
-                    LoginButton(title: "Retry") { Task { await verify(skipMerge: false) } }
+                    LoginButton(title: "Retry") { Task { await start() } }
                     LoginButton(title: "Send a new link", kind: .ghost, fullWidth: false) { onRestart() }
                 }
             }
@@ -206,14 +206,19 @@ struct VerifyLoginView: View {
     /// the gate, everything else signs in straight away.
     private func start() async {
         approvedSwitch = nil
-        let preview = await service.mergePreview(token: token)
-        pendingMerge = preview.isMerge && preview.guestMatchesCount > 0 ? preview : nil
-        if let change = preview.accountSwitch {
-            phase = .accountSwitch(change)
-        } else if let merge = pendingMerge {
-            phase = .gate(merge)
-        } else {
-            await verify(skipMerge: false)
+        phase = .verifying
+        do {
+            let preview = try await service.mergePreview(token: token)
+            pendingMerge = !chosenSkipMerge && preview.isMerge && preview.guestMatchesCount > 0 ? preview : nil
+            if let change = preview.accountSwitch {
+                phase = .accountSwitch(change)
+            } else if let merge = pendingMerge {
+                phase = .gate(merge)
+            } else {
+                await verify(skipMerge: chosenSkipMerge)
+            }
+        } catch {
+            phase = .unreachable
         }
     }
 

@@ -8,7 +8,7 @@ import {
 import { z } from 'zod'
 import { ApiError, api, hasCsrfCookie, unwrap } from './client'
 import { handleIdentityChange } from './identity-change'
-import { forgetSessionEnd, readEndedSession } from './browser-session'
+import { announceIdentityChange, forgetSessionEnd, readEndedSession, rememberSessionEnd } from './browser-session'
 import { closeRealtimeConnections } from './realtime/connection'
 import { clearAppEntered } from '@/lib/landing-redirect'
 import type { components } from './schema'
@@ -58,7 +58,7 @@ export function readStorageLock(): StorageLockRecord | null {
 // the way `navigator.locks` does — but it narrows the race window to
 // milliseconds, and the TTL means a tab that crashes mid-bootstrap can never
 // wedge the others (they just wait out the TTL and proceed).
-async function withStorageLock<T>(fn: () => Promise<T>): Promise<T> {
+async function withStorageLock<T>(fn: () => Promise<T>, alwaysLock = false): Promise<T> {
   const owner = `${Date.now()}-${Math.random()}`
   const deadline = Date.now() + SESSION_LOCK_TTL_MS
   for (;;) {
@@ -74,7 +74,7 @@ async function withStorageLock<T>(fn: () => Promise<T>): Promise<T> {
       if (readStorageLock()?.owner === owner) break
     }
     if (Date.now() > deadline) break
-    if (hasCsrfCookie()) return fn()
+    if (!alwaysLock && hasCsrfCookie()) return fn()
     await new Promise((resolve) => setTimeout(resolve, SESSION_LOCK_POLL_MS))
   }
   try {
@@ -88,14 +88,14 @@ async function withStorageLock<T>(fn: () => Promise<T>): Promise<T> {
 
 /** Single-flights the `/v1/session` cold-bootstrap request across every tab
  * on the origin, not just within one TanStack QueryClient. */
-async function withSessionBootstrapLock<T>(fn: () => Promise<T>): Promise<T> {
+async function withSessionBootstrapLock<T>(fn: () => Promise<T>, alwaysLock = false): Promise<T> {
   // A session already exists — no mint race to guard against.
-  if (hasCsrfCookie()) return fn()
+  if (!alwaysLock && hasCsrfCookie()) return fn()
   if (typeof navigator !== 'undefined' && navigator.locks?.request) {
     return navigator.locks.request(SESSION_LOCK_NAME, () => fn())
   }
   if (typeof localStorage === 'undefined') return fn()
-  return withStorageLock(fn)
+  return withStorageLock(fn, alwaysLock)
 }
 
 export function sessionQueryOptions() {
@@ -288,6 +288,7 @@ export function useConfirmEmail() {
       })
       cacheSession(qc, session)
       forgetSessionEnd()
+      announceIdentityChange()
     },
   })
 }
@@ -321,9 +322,10 @@ export function useRequestLogin() {
 export function useLogout() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (): Promise<void> => {
+    mutationFn: (): Promise<void> => withSessionBootstrapLock(async () => {
+      rememberSessionEnd({ message: 'You have signed out. Sign in to continue.' })
       unwrap('sign out', await api.DELETE('/v1/session'), { allowEmpty: true })
-    },
+    }, true),
     // Drop ALL cached per-user data (matches, dashboard, players, ...), not
     // just SESSION_QUERY_KEY — otherwise the prior user's BFF responses leak
     // into the next ephemeral session.
@@ -365,6 +367,7 @@ export function useConsumeLoginToken() {
       })
       cacheSession(qc, session)
       forgetSessionEnd()
+      announceIdentityChange()
     },
   })
 }
@@ -406,17 +409,24 @@ export function useLoginSender() {
 export function useStartNewGuest() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (): Promise<Session> => {
-      unwrap('clear old session', await api.DELETE('/v1/session'), { allowEmpty: true })
-      return unwrap('start a new guest', await api.GET('/v1/session'))
-    },
+    mutationFn: (): Promise<Session> => withSessionBootstrapLock(async () => {
+      // A preceding recovery in another tab may already have replaced the
+      // ended session. Reuse that identity instead of deleting it again.
+      if (readEndedSession()) {
+        unwrap('clear old session', await api.DELETE('/v1/session'), { allowEmpty: true })
+      }
+      const session = unwrap('start a new guest', await api.GET('/v1/session'))
+      // Publish completion before releasing the origin-wide lock.
+      forgetSessionEnd()
+      announceIdentityChange()
+      return session
+    }, true),
     onSuccess: (session) => {
       handleIdentityChange({
         closeRealtime: closeRealtimeConnections,
         clearQueryCache: () => qc.clear(),
       })
       cacheSession(qc, session)
-      forgetSessionEnd()
     },
   })
 }

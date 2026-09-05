@@ -59,25 +59,12 @@ struct LoginService {
         }
     }
 
-    /// Side-effect-free preview of an emailed link (`POST /v1/merge/preview`),
-    /// used by both the sign-in and email-confirm landings to decide whether to
-    /// show the "bring N matches over?" gate before finalizing. Non-throwing: a
-    /// preview failure simply reports "not a merge" so the caller finalizes
-    /// straight away rather than blocking on a hiccup.
-    func mergePreview(token: String) async -> MergePreview {
-        do {
-            return try await client.post(
-                "/v1/merge/preview", body: MergePreviewBody(token: token)
-            )
-        } catch {
-            return MergePreview(
-                isMerge: false,
-                ownerUsername: nil,
-                guestUsername: nil,
-                guestMatchesCount: 0
-            )
-        }
+    /// Preview failure must stay retryable; it cannot stand in for consent to
+    /// merge guest data when an account-switch approval is being rechecked.
+    func mergePreview(token: String) async throws -> MergePreview {
+        try await client.post("/v1/merge/preview", body: MergePreviewBody(token: token))
     }
+
 }
 
 /// Why redeeming an emailed link failed, classified for the UI.

@@ -7,7 +7,7 @@ import { toast } from 'sonner'
 import './index.css'
 import { Toaster } from '@/components/ui/sonner'
 import { NotFoundPage } from '@/components/not-found-page'
-import { readEndedSession, subscribeSessionEnd } from '@/api/browser-session'
+import { readEndedSession, subscribeIdentityChange, subscribeSessionEnd } from '@/api/browser-session'
 import { closeRealtimeConnections } from '@/api/realtime/connection'
 import { handleIdentityChange } from '@/api/identity-change'
 import { clearAppEntered } from '@/lib/landing-redirect'
@@ -68,6 +68,19 @@ subscribeSessionEnd(() => {
     },
     info,
   )
+})
+
+subscribeIdentityChange(() => {
+  if (readEndedSession()) return
+  handleIdentityChange({
+    closeRealtime: closeRealtimeConnections,
+    clearQueryCache: () => {
+      queryClient.removeQueries({ type: 'inactive' })
+      // Keep mounted observers attached while dropping their old account data.
+      void queryClient.resetQueries({ type: 'active' })
+    },
+  })
+  void router.invalidate()
 })
 
 async function unregisterServiceWorkers() {

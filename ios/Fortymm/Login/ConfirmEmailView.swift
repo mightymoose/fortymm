@@ -240,7 +240,7 @@ struct ConfirmEmailView: View {
                     )
                 }
                 HStack(spacing: 10) {
-                    LoginButton(title: "Retry") { Task { await confirm(skipMerge: false) } }
+                    LoginButton(title: "Retry") { Task { await start() } }
                     LoginButton(title: "Close", kind: .ghost, fullWidth: false) { onClose() }
                 }
             }
@@ -253,14 +253,19 @@ struct ConfirmEmailView: View {
     /// the gate, everything else confirms straight away.
     private func start() async {
         approvedSwitch = nil
-        let preview = await loginService.mergePreview(token: token)
-        pendingMerge = preview.isMerge && preview.guestMatchesCount > 0 ? preview : nil
-        if let change = preview.accountSwitch {
-            phase = .accountSwitch(change)
-        } else if let merge = pendingMerge {
-            phase = .gate(merge)
-        } else {
-            await confirm(skipMerge: false)
+        phase = .verifying
+        do {
+            let preview = try await loginService.mergePreview(token: token)
+            pendingMerge = !chosenSkipMerge && preview.isMerge && preview.guestMatchesCount > 0 ? preview : nil
+            if let change = preview.accountSwitch {
+                phase = .accountSwitch(change)
+            } else if let merge = pendingMerge {
+                phase = .gate(merge)
+            } else {
+                await confirm(skipMerge: chosenSkipMerge)
+            }
+        } catch {
+            phase = .unreachable
         }
     }
 

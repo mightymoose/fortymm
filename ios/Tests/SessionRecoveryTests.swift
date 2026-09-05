@@ -70,9 +70,16 @@ final class SessionTransport: URLProtocol {
         print("PASS: sign-out survives relaunch until an explicit new-guest choice")
         let login = LoginService(client: client)
         SessionTransport.body = #"{"is_merge":false,"guest_matches_count":0,"account_switch":{"from_user_id":"alice-id","from_username":"alice","to_username":"bob"}}"#
-        let preview = await login.mergePreview(token: "bobs-link")
+        let preview = try await login.mergePreview(token: "bobs-link")
         precondition(preview.accountSwitch?.fromUsername == "alice")
         precondition(preview.accountSwitch?.toUsername == "bob")
+        SessionTransport.status = 503
+        do {
+            _ = try await login.mergePreview(token: "bobs-link")
+            fatalError("A failed preview must not authorize automatic merging")
+        } catch APIError.http(let status, _) {
+            precondition(status == 503)
+        }
         SessionTransport.status = 409
         SessionTransport.body = #"{"detail":{"code":"account_switch_required","account_switch":{"from_user_id":"charlie-id","from_username":"charlie","to_username":"bob"}}}"#
         do {
