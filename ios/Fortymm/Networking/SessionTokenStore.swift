@@ -91,6 +91,12 @@ actor SessionTokenStore {
         clearCredentials()
     }
 
+    /// Explicit guest recovery discards the old credential but keeps its
+    /// durable recovery marker until a replacement is safely persisted.
+    func prepareNewGuest() {
+        clearCredentials()
+    }
+
     private func clearCredentials() {
         recoveredInProcess = false
         cached = nil

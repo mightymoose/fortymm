@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import re
 from collections.abc import AsyncIterator
@@ -8,7 +9,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app import sessions
 from app.db import get_session
@@ -1908,3 +1909,122 @@ async def test_email_change_preview_rejects_destination_claimed_after_issuance(
     assert preview.status_code == 200
     assert preview.json()["is_merge"] is False
     assert preview.json()["account_switch"] is None
+
+
+@pytest.mark.parametrize("link_kind", ["login", "change", "merge"])
+async def test_competing_approved_switches_consume_source_session_once(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    link_kind: str,
+):
+    source = await _make_confirmed_user(db_session, "source-switch@example.com")
+    source_cookie = "shared-source-session"
+    db_session.add(
+        UserToken(
+            user_id=source.id,
+            context=SESSION_TOKEN_CONTEXT,
+            token=sessions.hash_token(source_cookie),
+        )
+    )
+    links = ["switch-first", "switch-second"]
+    for index, raw in enumerate(links):
+        target = await _make_confirmed_user(db_session, f"target-{index}@example.com")
+        if link_kind == "login":
+            await _issue_login_token(db_session, target, raw)
+        else:
+            owner = (
+                await make_user(db_session, f"merge-guest-{index}")
+                if link_kind == "merge"
+                else target
+            )
+            db_session.add(
+                UserToken(
+                    user_id=owner.id,
+                    token=sessions.hash_token(raw),
+                    context=f"merge:{target.id}"
+                    if link_kind == "merge"
+                    else f"change:{target.email}",
+                    sent_to=target.email
+                    if link_kind == "merge"
+                    else f"changed-{index}@example.com",
+                )
+            )
+            await db_session.commit()
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def independent_session():
+        async with factory() as transaction:
+            yield transaction
+
+    app.dependency_overrides[get_session] = independent_session
+    endpoint = "/v1/login/consume" if link_kind == "login" else "/v1/me/email/confirm"
+    async with make_client() as first, make_client() as second:
+        for client in [first, second]:
+            client.cookies.set(SESSION_COOKIE_NAME, source_cookie)
+            client.cookies.set("csrf_token", "test-csrf")
+        responses = await asyncio.gather(
+            *[
+                client.post(
+                    endpoint, json={"token": raw, "switch_from_user_id": str(source.id)}
+                )
+                for client, raw in zip([first, second], links, strict=True)
+            ]
+        )
+    assert sorted(response.status_code for response in responses) == [200, 409]
+    losing_index = next(
+        index for index, response in enumerate(responses) if response.status_code == 409
+    )
+    assert responses[losing_index].json()["detail"]["code"] == "account_switch_required"
+    async with make_client() as retry:
+        response = await retry.post(endpoint, json={"token": links[losing_index]})
+        assert response.status_code == 200, (
+            "The losing request must leave its link unused"
+        )
+
+
+async def test_opposing_approved_switches_do_not_deadlock(
+    api_client: AsyncClient, db_session: AsyncSession, engine: AsyncEngine
+):
+    users = [
+        await _make_confirmed_user(db_session, f"opposing-{index}@example.com")
+        for index in range(2)
+    ]
+    for index, user in enumerate(users):
+        await _issue_login_token(db_session, user, f"opposing-link-{index}")
+        db_session.add(
+            UserToken(
+                user_id=user.id,
+                context=SESSION_TOKEN_CONTEXT,
+                token=sessions.hash_token(f"opposing-session-{index}"),
+            )
+        )
+    await db_session.commit()
+    # Warm both connections so connection setup cannot serialize the requests.
+    async with engine.connect() as one, engine.connect() as two:
+        await one.execute(select(1))
+        await two.execute(select(1))
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def independent_session():
+        async with factory() as transaction:
+            yield transaction
+
+    app.dependency_overrides[get_session] = independent_session
+    async with make_client() as first, make_client() as second:
+        for index, client in enumerate([first, second]):
+            client.cookies.set(SESSION_COOKIE_NAME, f"opposing-session-{index}")
+            client.cookies.set("csrf_token", "test-csrf")
+        responses = await asyncio.gather(
+            *[
+                client.post(
+                    "/v1/login/consume",
+                    json={
+                        "token": f"opposing-link-{1 - index}",
+                        "switch_from_user_id": str(users[index].id),
+                    },
+                )
+                for index, client in enumerate([first, second])
+            ]
+        )
+    assert sorted(response.status_code for response in responses) == [200, 409]

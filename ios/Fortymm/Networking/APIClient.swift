@@ -108,8 +108,9 @@ struct APIClient {
     }
 
     func startNewGuest() async throws -> SessionResponse {
-        await tokens.clear()
-        return try await getSession()
+        await tokens.prepareNewGuest()
+        // Only this explicit choice bypasses the persisted recovery gate.
+        return try await get("/v1/session")
     }
 
     // MARK: - Verbs

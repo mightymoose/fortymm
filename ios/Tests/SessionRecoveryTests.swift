@@ -4,13 +4,14 @@ import Foundation
 final class SessionTransport: URLProtocol {
     static var requestCount = 0
     static var status = 401
+    static var headers: [String: String] = [:]
     static var body = #"{"detail":{"code":"session_ended","message":"You've been signed out. Sign in to continue."}}"#
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         Self.requestCount += 1
         let response = HTTPURLResponse(url: request.url!, statusCode: Self.status,
-                                       httpVersion: nil, headerFields: nil)!
+                                       httpVersion: nil, headerFields: Self.headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(Self.body.utf8))
         client?.urlProtocolDidFinishLoading(self)
@@ -48,6 +49,18 @@ struct UnwritableSessionKeychain: SessionKeychain {
         await tokens.update("evicted-token")
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [SessionTransport.self]
+        SessionTransport.status = 200
+        SessionTransport.body = #"{"data":{"user":{"id":"00000000-0000-0000-0000-000000000001","username":"new-guest","permissions":[]}}}"#
+        SessionTransport.headers = ["Set-Cookie": "session=new-guest-token; Path=/; HttpOnly"]
+        let guestRecovery = APIClient(session: URLSession(configuration: config), tokens: restarted)
+        _ = try await guestRecovery.startNewGuest()
+        let guestRelaunched = SessionTokenStore(keychain: unwritable)
+        let guestReason = await guestRelaunched.endedSession()
+        precondition(guestReason != nil, "A new guest must remain recoverable until its token is durable")
+        SessionTransport.status = 401
+        SessionTransport.headers = [:]
+        SessionTransport.body = #"{"detail":{"code":"session_ended","message":"You've been signed out. Sign in to continue."}}"#
+        print("PASS: explicit native guest recovery retains its marker until persistence")
         let client = APIClient(session: URLSession(configuration: config), tokens: tokens)
         do {
             _ = try await client.getSession()
@@ -78,7 +91,9 @@ struct UnwritableSessionKeychain: SessionKeychain {
             _ = try await relaunched.getSession()
             fatalError("Relaunch silently minted a guest after eviction")
         } catch APIError.sessionMerged { }
+        SessionTransport.headers = ["Set-Cookie": "session=durable-new-guest; Path=/; HttpOnly"]
         _ = try await relaunched.startNewGuest()
+        SessionTransport.headers = [:]
         let bootstrapping = SessionStore(client: relaunched)
         bootstrapping.handle(URL(string: "https://fortymm.com/confirm-email?token=confirmation")!)
         precondition(bootstrapping.presentedDeepLink == nil)

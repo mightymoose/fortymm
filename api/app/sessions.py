@@ -448,6 +448,33 @@ async def _require_account_switch_approval(
     *,
     destination_username: str | None = None,
 ) -> None:
+    source_token = None
+    if session_cookie and switch_from_user_id is not None:
+        # Approval belongs to this credential, not just the user UUID. Lock
+        # the source and sessions the target will revoke in a stable order;
+        # opposing account switches must not acquire those rows in reverse.
+        source_hash = hash_token(session_cookie)
+        locked = (
+            (
+                await db.execute(
+                    select(UserToken)
+                    .where(
+                        UserToken.context == SESSION_TOKEN_CONTEXT,
+                        or_(
+                            UserToken.token == source_hash,
+                            UserToken.user_id == target.id,
+                        ),
+                    )
+                    .order_by(UserToken.id)
+                    .with_for_update()
+                )
+            )
+            .scalars()
+            .all()
+        )
+        source_token = next(
+            (token for token in locked if token.token == source_hash), None
+        )
     switch = await _account_switch_preview(
         db, session_cookie, target, destination_username=destination_username
     )
@@ -455,7 +482,12 @@ async def _require_account_switch_approval(
         current = (
             await _find_session_user(db, session_cookie) if session_cookie else None
         )
-        if current is not None and current.id == switch_from_user_id:
+        if (
+            source_token is not None
+            and current is not None
+            and current.id == switch_from_user_id
+        ):
+            await db.delete(source_token)
             return
     elif switch is None:
         return
