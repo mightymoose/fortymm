@@ -75,8 +75,9 @@ async function withStorageLock<T>(fn: () => Promise<T>, alwaysLock = false): Pro
         if (readStorageLock()?.owner === owner) break
       }
     } catch {
-      // Storage may exist but be disabled or full. The caller still holds
-      // the in-tab queue, so overlapping local recovery remains serialized.
+      // Destructive recovery needs cross-tab exclusion; an in-tab queue
+      // cannot safely replace it when the shared backend is unavailable.
+      if (alwaysLock) throw new Error('Session recovery is unavailable. Please enable browser storage and try again.')
       return fn()
     }
     if (Date.now() > deadline) throw new Error('Another tab is updating your session. Please try again.')
@@ -285,6 +286,17 @@ function cacheSession(qc: QueryClient, session: Session): void {
   qc.setQueryData(SESSION_QUERY_KEY, { ...session, merged: null })
 }
 
+async function afterPendingLogout<T>(fn: () => Promise<T>): Promise<T> {
+  if (!readEndedSession()?.logoutPending) return fn()
+  return withSessionBootstrapLock(async () => {
+    if (readEndedSession()?.logoutPending) {
+      unwrap('finish sign out', await api.DELETE('/v1/session'), { allowEmpty: true })
+      rememberSessionEnd({ message: 'You have signed out. Sign in to continue.', logoutPending: false })
+    }
+    return fn()
+  }, true)
+}
+
 export function useConfirmEmail() {
   const qc = useQueryClient()
   return useMutation({
@@ -293,12 +305,12 @@ export function useConfirmEmail() {
       skipMerge = false,
       switchFromUserId,
     }: FinalizeTokenInput): Promise<Session> =>
-      unwrap(
+      afterPendingLogout(async () => unwrap(
         'confirm email',
         await api.POST('/v1/me/email/confirm', {
           body: { token, skip_merge: skipMerge, switch_from_user_id: switchFromUserId },
         }),
-      ),
+      )),
     // This can sign the caller into a *different* existing account
     // (skip_merge). Drop the prior identity's cached per-user data first — the
     // same leak useLogout guards against (#754) — then reseed the session so
@@ -380,12 +392,12 @@ export function useConsumeLoginToken() {
       skipMerge = false,
       switchFromUserId,
     }: FinalizeTokenInput): Promise<Session> =>
-      unwrap(
+      afterPendingLogout(async () => unwrap(
         'sign in',
         await api.POST('/v1/login/consume', {
           body: { token, skip_merge: skipMerge, switch_from_user_id: switchFromUserId },
         }),
-      ),
+      )),
     // Same identity-leak guard as useConfirmEmail (#754): this can sign a
     // browsing guest into a different existing account.
     onSuccess: (session) => {

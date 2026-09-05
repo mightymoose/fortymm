@@ -12,13 +12,40 @@ export type EndedSession = z.infer<typeof endedSchema>
 let unavailableStorageValue: string | null = null
 let storageWriteFailed = false
 
+function tabSnapshot(): string | null {
+  try { return sessionStorage.getItem(KEY) } catch { return null }
+}
+
+function persistTabSnapshot(value: string | null): void {
+  try {
+    if (value === null) sessionStorage.removeItem(KEY)
+    else sessionStorage.setItem(KEY, value)
+  } catch { /* The in-memory fallback still protects this open tab. */ }
+}
+
+function persist(value: string | null): void {
+  unavailableStorageValue = value
+  persistTabSnapshot(value)
+  try {
+    if (value === null) localStorage.removeItem(KEY)
+    else localStorage.setItem(KEY, value)
+    storageWriteFailed = false
+  } catch { storageWriteFailed = true }
+}
+
+function broadcast(value: string | null): void {
+  if (typeof BroadcastChannel === 'undefined') return
+  try {
+    const channel = new BroadcastChannel(CHANGE)
+    channel.postMessage(JSON.stringify({ sender: tabId, value: value === null ? null : JSON.parse(value) }))
+    channel.close()
+  } catch { /* Shared storage remains the primary broadcast transport. */ }
+}
+
 function snapshot(): string | null {
   if (storageWriteFailed) return unavailableStorageValue
-  try {
-    return localStorage.getItem(KEY)
-  } catch {
-    return unavailableStorageValue
-  }
+  try { return localStorage.getItem(KEY) ?? tabSnapshot() }
+  catch { return unavailableStorageValue ?? tabSnapshot() }
 }
 
 export function readEndedSession(): EndedSession | null {
@@ -35,12 +62,26 @@ export function subscribeSessionEnd(listener: () => void): () => void {
     if (event.key === KEY || event.key === null) {
       storageWriteFailed = false
       unavailableStorageValue = event.newValue
+      persistTabSnapshot(event.newValue)
       listener()
     }
+  }
+  const channel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel(CHANGE)
+  if (channel) channel.onmessage = (event) => {
+    try {
+      if (typeof event.data !== 'string') return
+      const parsed = z.object({ sender: z.string(), value: endedSchema.nullable() }).safeParse(JSON.parse(event.data))
+      if (!parsed.success || parsed.data.sender === tabId) return
+      const value = parsed.data.value === null ? null : JSON.stringify(parsed.data.value)
+      if (snapshot() === value) return
+      persist(value)
+      window.dispatchEvent(new Event(CHANGE))
+    } catch { /* Ignore malformed channel messages. */ }
   }
   window.addEventListener('storage', onStorage)
   window.addEventListener(CHANGE, listener)
   return () => {
+    channel?.close()
     window.removeEventListener('storage', onStorage)
     window.removeEventListener(CHANGE, listener)
   }
@@ -49,24 +90,14 @@ export function subscribeSessionEnd(listener: () => void): () => void {
 export function rememberSessionEnd(info: EndedSession): void {
   const value = JSON.stringify(info)
   if (snapshot() === value) return
-  unavailableStorageValue = value
-  try {
-    localStorage.setItem(KEY, value)
-    storageWriteFailed = false
-  } catch {
-    storageWriteFailed = true
-  }
+  persist(value)
+  broadcast(value)
   window.dispatchEvent(new Event(CHANGE))
 }
 
 export function forgetSessionEnd(): void {
-  unavailableStorageValue = null
-  try {
-    localStorage.removeItem(KEY)
-    storageWriteFailed = false
-  } catch {
-    storageWriteFailed = true
-  }
+  persist(null)
+  broadcast(null)
   window.dispatchEvent(new Event(CHANGE))
 }
 

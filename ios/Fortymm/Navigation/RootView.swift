@@ -27,7 +27,7 @@ struct RootView: View {
             LoadingView()
         case .loaded:
             MainTabView()
-                .id(session.user?.username)
+                .id(session.user?.id)
                 // Now that a session exists to attach the device token to, ask
                 // for notification permission and register with APNs, and route
                 // a tapped match notification to its detail. Runs once the

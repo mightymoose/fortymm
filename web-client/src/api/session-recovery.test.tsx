@@ -6,7 +6,7 @@ import { delay, http, HttpResponse } from 'msw'
 import { mockSession } from '@/mocks/handlers'
 import { server } from '@/mocks/server'
 import { forgetSessionEnd, readEndedSession, rememberSessionEnd } from './browser-session'
-import { sessionQueryOptions, useLogout, useStartNewGuest, type SessionUser } from './session'
+import { sessionQueryOptions, useLogout, useStartNewGuest, useConfirmEmail, useConsumeLoginToken, type SessionUser } from './session'
 
 const clients: QueryClient[] = []
 function wrapper() {
@@ -37,7 +37,7 @@ it('shares sign-out before cookies are cleared and prevents another guest bootst
   await expect(anotherTab.fetchQuery(sessionQueryOptions())).rejects.toMatchObject({ status: 401 })
 })
 
-it.each([undefined, 'getItem', 'setItem'] as const)('concurrent new-guest choices recover the same identity with %s blocked', async (blockedMethod) => {
+it.each([undefined, 'getItem', 'setItem'] as const)('coordinates recovery or fails safely with %s blocked', async (blockedMethod) => {
   if (blockedMethod) vi.spyOn(Storage.prototype, blockedMethod).mockImplementation(() => { throw new Error('Storage unavailable') })
   rememberSessionEnd({ message: 'Your session ended.' })
   document.cookie = 'csrf_token=ended-session; path=/'
@@ -62,13 +62,18 @@ it.each([undefined, 'getItem', 'setItem'] as const)('concurrent new-guest choice
   const first = renderHook(() => useStartNewGuest(), { wrapper: wrapper() })
   const second = renderHook(() => useStartNewGuest(), { wrapper: wrapper() })
   await act(async () => {
-    const [a, b] = await Promise.all([
-      first.result.current.mutateAsync(), second.result.current.mutateAsync(),
-    ])
-    expect(a.data.user.id).toBe(b.data.user.id)
+    if (blockedMethod) {
+      await expect(first.result.current.mutateAsync()).rejects.toThrow()
+      await expect(second.result.current.mutateAsync()).rejects.toThrow()
+    } else {
+      const [a, b] = await Promise.all([
+        first.result.current.mutateAsync(), second.result.current.mutateAsync(),
+      ])
+      expect(a.data.user.id).toBe(b.data.user.id)
+    }
   })
-  expect(minted).toBe(1)
-  expect(deletes).toBe(1)
+  expect(minted).toBe(blockedMethod ? 0 : 1)
+  expect(deletes).toBe(blockedMethod ? 0 : 1)
 })
 
 it('keeps a slow new-guest recovery exclusive beyond the fallback lock TTL', async () => {
@@ -96,3 +101,32 @@ it('keeps a slow new-guest recovery exclusive beyond the fallback lock TTL', asy
     await Promise.all([firstRecovery, secondRecovery])
   })
 }, 30_000)
+
+it.each([
+  ['/v1/me/email/confirm', useConfirmEmail],
+  ['/v1/login/consume', useConsumeLoginToken],
+] as const)('finishes pending logout before redeeming %s', async (endpoint, useFinalize) => {
+  rememberSessionEnd({ message: 'Sign-out incomplete.', logoutPending: true })
+  let deletes = 0
+  let redemptions = 0
+  server.use(
+    http.delete('*/v1/session', () => {
+      deletes += 1
+      return new HttpResponse(null, { status: deletes === 1 ? 503 : 204 })
+    }),
+    http.post(`*${endpoint}`, () => {
+      redemptions += 1
+      return HttpResponse.json(mockSession)
+    }),
+  )
+  const { result } = renderHook(() => useFinalize(), { wrapper: wrapper() })
+  await act(async () => {
+    await expect(result.current.mutateAsync({ token: 'other-account' })).rejects.toThrow()
+    expect(redemptions).toBe(0)
+    expect(readEndedSession()?.logoutPending).toBe(true)
+    await result.current.mutateAsync({ token: 'other-account' })
+  })
+  expect(deletes).toBe(2)
+  expect(redemptions).toBe(1)
+  expect(readEndedSession()).toBeNull()
+})

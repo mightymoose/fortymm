@@ -13,6 +13,7 @@ struct SessionData: Decodable {
 }
 
 struct SessionUser: Decodable {
+    let id: UUID
     let username: String
     let permissions: [String]
     let email: String?

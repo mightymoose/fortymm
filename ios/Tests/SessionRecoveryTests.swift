@@ -52,7 +52,7 @@ final class SessionTransport: URLProtocol {
         // Simulate relaunch with the same durable credential store. A server
         // willing to mint a guest must never be reached until an explicit choice.
         SessionTransport.status = 200
-        SessionTransport.body = #"{"data":{"user":{"username":"new-guest","permissions":[]}}}"#
+        SessionTransport.body = #"{"data":{"user":{"id":"00000000-0000-0000-0000-000000000001","username":"new-guest","permissions":[]}}}"#
         let relaunched = APIClient(session: URLSession(configuration: config),
                                    tokens: SessionTokenStore(keychain: keychain))
         do {
@@ -81,7 +81,7 @@ final class SessionTransport: URLProtocol {
         print("PASS: canceling native recovery refreshes the source identity")
         await tokens.clear()
         SessionTransport.status = 200
-        SessionTransport.body = #"{"data":{"user":{"username":"new-guest","permissions":[]}}}"#
+        SessionTransport.body = #"{"data":{"user":{"id":"00000000-0000-0000-0000-000000000001","username":"new-guest","permissions":[]}}}"#
         store.signedOut(reason: "Choose recovery", email: nil)
         SessionTransport.requestCount = 0
         await withTaskGroup(of: Void.self) { group in
