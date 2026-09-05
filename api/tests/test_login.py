@@ -1851,3 +1851,34 @@ async def test_email_change_confirmation_can_leave_previewed_guest_matches_behin
         surviving = await other_guest_tab.get("/v1/session")
         assert surviving.status_code == 200
         assert surviving.json()["data"]["user"]["id"] == str(guest.id)
+
+
+async def test_first_sign_in_switch_names_the_automatically_adopted_guest(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    guest = await start_session(api_client, db_session)
+    expected_username = guest.username
+    await api_client.post("/v1/login/request", json=UNKNOWN_BODY)
+    raw = _login_email_tokens(fake_email_queue)[-1]
+    alice = await _make_confirmed_user(db_session, "alice-switch@example.com")
+    await _issue_login_token(db_session, alice, "alice-switch-token")
+    async with make_client() as clicking_browser:
+        signed_in = await clicking_browser.post(
+            "/v1/login/consume", json={"token": "alice-switch-token"}
+        )
+        assert signed_in.status_code == 200
+        preview = await clicking_browser.post("/v1/merge/preview", json={"token": raw})
+        assert preview.json()["guest_matches_count"] == 0
+        assert preview.json()["account_switch"]["to_username"] == expected_username
+        conflict = await clicking_browser.post("/v1/login/consume", json={"token": raw})
+        assert conflict.status_code == 409
+        assert (
+            conflict.json()["detail"]["account_switch"]["to_username"]
+            == expected_username
+        )
+        confirmed = await clicking_browser.post(
+            "/v1/login/consume",
+            json={"token": raw, "switch_from_user_id": str(alice.id)},
+        )
+        assert confirmed.status_code == 200
+        assert confirmed.json()["data"]["user"]["username"] == expected_username

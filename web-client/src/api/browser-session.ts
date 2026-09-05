@@ -9,8 +9,10 @@ const endedSchema = z.object({
 })
 export type EndedSession = z.infer<typeof endedSchema>
 let unavailableStorageValue: string | null = null
+let storageWriteFailed = false
 
 function snapshot(): string | null {
+  if (storageWriteFailed) return unavailableStorageValue
   try {
     return localStorage.getItem(KEY)
   } catch {
@@ -29,7 +31,11 @@ export function readEndedSession(): EndedSession | null {
 
 export function subscribeSessionEnd(listener: () => void): () => void {
   const onStorage = (event: StorageEvent) => {
-    if (event.key === KEY || event.key === null) listener()
+    if (event.key === KEY || event.key === null) {
+      storageWriteFailed = false
+      unavailableStorageValue = event.newValue
+      listener()
+    }
   }
   window.addEventListener('storage', onStorage)
   window.addEventListener(CHANGE, listener)
@@ -45,8 +51,9 @@ export function rememberSessionEnd(info: EndedSession): void {
   unavailableStorageValue = value
   try {
     localStorage.setItem(KEY, value)
+    storageWriteFailed = false
   } catch {
-    /* Keep this tab signed out. */
+    storageWriteFailed = true
   }
   window.dispatchEvent(new Event(CHANGE))
 }
@@ -55,8 +62,9 @@ export function forgetSessionEnd(): void {
   unavailableStorageValue = null
   try {
     localStorage.removeItem(KEY)
+    storageWriteFailed = false
   } catch {
-    /* Storage may be disabled. */
+    storageWriteFailed = true
   }
   window.dispatchEvent(new Event(CHANGE))
 }

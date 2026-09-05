@@ -398,8 +398,31 @@ async def _merge_guest_into(
     return MergeSummary(matches_moved=summary.matches_moved)
 
 
+async def _automatic_login_destination(
+    db: AsyncSession, token_row: UserToken, target: User, *, skip_merge: bool = False
+) -> str:
+    """Name an empty guest's automatic first-sign-in username adoption."""
+    if skip_merge or not _is_first_sign_in_context(token_row.context):
+        return target.username
+    guest_id = _guest_id_from_login_context(token_row.context)
+    guest = await db.get(User, guest_id) if guest_id is not None else None
+    if (
+        guest is not None
+        and guest.id != target.id
+        and guest.confirmed_at is None
+        and guest.merged_into_user_id is None
+        and await _guest_match_count(db, guest.id) == 0
+    ):
+        return guest.username
+    return target.username
+
+
 async def _account_switch_preview(
-    db: AsyncSession, session_cookie: str | None, target: User
+    db: AsyncSession,
+    session_cookie: str | None,
+    target: User,
+    *,
+    destination_username: str | None = None,
 ) -> AccountSwitchPreview | None:
     current = await _find_session_user(db, session_cookie) if session_cookie else None
     if (
@@ -412,7 +435,7 @@ async def _account_switch_preview(
     return AccountSwitchPreview(
         from_user_id=current.id,
         from_username=current.username,
-        to_username=target.username,
+        to_username=destination_username or target.username,
     )
 
 
@@ -421,8 +444,12 @@ async def _require_account_switch_approval(
     session_cookie: str | None,
     target: User,
     switch_from_user_id: uuid.UUID | None,
+    *,
+    destination_username: str | None = None,
 ) -> None:
-    switch = await _account_switch_preview(db, session_cookie, target)
+    switch = await _account_switch_preview(
+        db, session_cookie, target, destination_username=destination_username
+    )
     if switch_from_user_id is not None:
         current = (
             await _find_session_user(db, session_cookie) if session_cookie else None
@@ -2030,7 +2057,13 @@ async def consume_login_token(
         )
 
     await _require_account_switch_approval(
-        db, session_cookie, user, payload.switch_from_user_id
+        db,
+        session_cookie,
+        user,
+        payload.switch_from_user_id,
+        destination_username=await _automatic_login_destination(
+            db, token_row, user, skip_merge=payload.skip_merge
+        ),
     )
 
     # Token-bound merge: fold the guest recorded at request time (follows the
@@ -2171,7 +2204,12 @@ async def preview_merge(
     elif token_row.sent_to and owner.email != token_row.sent_to:
         return MergePreview(is_merge=False)
 
-    switch = await _account_switch_preview(db, session_cookie, owner) if owner else None
+    switch = await _account_switch_preview(
+        db,
+        session_cookie,
+        owner,
+        destination_username=await _automatic_login_destination(db, token_row, owner),
+    )
 
     # Only a *mergeable* guest counts — mirror ``_merge_guest_into``'s guards so
     # the preview matches what confirm/consume will actually do.

@@ -1,3 +1,6 @@
+import { useQueryClient } from '@tanstack/react-query'
+import { handleIdentityChange } from '@/api/identity-change'
+import { closeRealtimeConnections } from '@/api/realtime/connection'
 import { useEffect, useRef, useState } from 'react'
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { toast } from 'sonner'
@@ -90,6 +93,14 @@ export const Route = createFileRoute('/login/verifying')({
 function LoginVerifyingPage() {
   const { token, error } = Route.useSearch()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const cancelSwitch = () => {
+    handleIdentityChange({
+      closeRealtime: closeRealtimeConnections,
+      clearQueryCache: () => queryClient.clear(),
+    })
+    void navigate({ to: '/dashboard', replace: true })
+  }
   const preview = useMergePreview()
   const consume = useConsumeLoginToken()
   // Holds the preview only while the cross-device gate is up; everything else
@@ -219,11 +230,10 @@ function LoginVerifyingPage() {
   const conflict = accountSwitchConflict(consume.error)
   if (conflict) {
     const change = conflict.account_switch
-    const cancel = () => navigate({ to: '/dashboard', replace: true })
     return change
       ? <AccountSwitchGate fromUsername={change.from_username} toUsername={change.to_username}
-          onCancel={cancel} onContinue={() => runConsume(consume.variables?.skipMerge ?? false, change.from_user_id)} />
-      : <ReviewAccountSwitch onCancel={cancel} onReview={() => {
+          onCancel={cancelSwitch} onContinue={() => runConsume(consume.variables?.skipMerge ?? false, change.from_user_id)} />
+      : <ReviewAccountSwitch onCancel={cancelSwitch} onReview={() => {
           consume.reset()
           setApprovedSwitch(undefined)
           preview.mutate(token, { onSuccess: (p) => {
@@ -238,7 +248,7 @@ function LoginVerifyingPage() {
   if (gate?.account_switch && !approvedSwitch) {
     const change = gate.account_switch
     return <AccountSwitchGate fromUsername={change.from_username} toUsername={change.to_username}
-      onCancel={() => navigate({ to: '/dashboard', replace: true })}
+      onCancel={cancelSwitch}
       onContinue={() => {
         setApprovedSwitch(change.from_user_id)
         if (!(gate.is_merge && gate.guest_matches_count > 0)) runConsume(false, change.from_user_id)

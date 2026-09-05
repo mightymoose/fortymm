@@ -1,3 +1,6 @@
+import { useQueryClient } from '@tanstack/react-query'
+import { handleIdentityChange } from '@/api/identity-change'
+import { closeRealtimeConnections } from '@/api/realtime/connection'
 import { useEffect, useRef, useState } from 'react'
 import { Link, createFileRoute, useNavigate } from '@tanstack/react-router'
 import { toast } from 'sonner'
@@ -128,6 +131,14 @@ function isRejectedConfirmError(err: unknown): boolean {
 function ConfirmEmailPage() {
   const { token } = Route.useSearch()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
+  const cancelSwitch = () => {
+    handleIdentityChange({
+      closeRealtime: closeRealtimeConnections,
+      clearQueryCache: () => queryClient.clear(),
+    })
+    void navigate({ to: '/dashboard', replace: true })
+  }
   const preview = useMergePreview()
   const confirm = useConfirmEmail()
   const fired = useRef(false)
@@ -175,10 +186,10 @@ function ConfirmEmailPage() {
     preview.mutate(token, {
       onSuccess: (p) => {
         if (!p.account_switch && !(p.is_merge && p.guest_matches_count > 0)) {
-          confirmWithToast({ token })
+          confirmWithToast({ token, skipMerge: firedInput.current?.skipMerge ?? false })
         }
       },
-      onError: () => confirmWithToast({ token }),
+      onError: () => confirmWithToast({ token, skipMerge: firedInput.current?.skipMerge ?? false }),
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, preview, confirm])
@@ -197,12 +208,11 @@ function ConfirmEmailPage() {
   const conflict = accountSwitchConflict(confirm.error)
   if (conflict) {
     const change = conflict.account_switch
-    const cancel = () => navigate({ to: '/dashboard', replace: true })
     return change
       ? <AccountSwitchGate fromUsername={change.from_username} toUsername={change.to_username}
-          onCancel={cancel}
+          onCancel={cancelSwitch}
           onContinue={() => confirmWithToast({ ...firedInput.current!, switchFromUserId: change.from_user_id })} />
-      : <ReviewAccountSwitch onCancel={cancel} onReview={() => {
+      : <ReviewAccountSwitch onCancel={cancelSwitch} onReview={() => {
           fired.current = false
           setApprovedSwitch(undefined)
           confirm.reset()
@@ -214,7 +224,7 @@ function ConfirmEmailPage() {
   if (confirm.isIdle && p?.account_switch && !approvedSwitch) {
     const change = p.account_switch
     return <AccountSwitchGate fromUsername={change.from_username} toUsername={change.to_username}
-      onCancel={() => navigate({ to: '/dashboard', replace: true })}
+      onCancel={cancelSwitch}
       onContinue={() => {
         setApprovedSwitch(change.from_user_id)
         if (!(p.is_merge && p.guest_matches_count > 0)) {

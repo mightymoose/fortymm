@@ -28,7 +28,10 @@ final class SessionStore: ObservableObject {
     var presentedDeepLink: DeepLink? {
         get {
             switch state {
-            case .loaded, .signedOut: return pendingDeepLink
+            case .loaded: return pendingDeepLink
+            case .signedOut:
+                if case .match = pendingDeepLink { return nil }
+                return pendingDeepLink
             case .idle, .loading, .failed: return nil
             }
         }

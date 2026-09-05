@@ -44,6 +44,9 @@ final class SessionTransport: URLProtocol {
                      "Session eviction must not discard the link needed to sign back in")
         precondition(store.presentedDeepLink == .login(token: "recovery-link"))
         print("PASS: native recovery retains the incoming sign-in link")
+        store.openMatch(UUID())
+        precondition(store.presentedDeepLink == nil,
+                     "A protected match must not cover signed-out recovery")
         // Simulate relaunch with the same durable credential store. A server
         // willing to mint a guest must never be reached until an explicit choice.
         SessionTransport.status = 200
