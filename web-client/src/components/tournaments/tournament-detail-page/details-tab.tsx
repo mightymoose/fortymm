@@ -285,6 +285,7 @@ export const DetailsTab = ({
    * it has moved — the organizer's next save, against the draft actually on
    * screen, speaks for itself. */
   const attemptGenRef = useRef(0)
+  const submittedRef = useRef<FormValues | null>(null)
 
   /** The failure alert's own DOM node (#1538 pattern). `submit` does
    * `form.clearErrors('root')` before every attempt and `form.setError('root',
@@ -379,12 +380,23 @@ export const DetailsTab = ({
       tournament.id !== committedRef.current.id ||
       !sameValues(committedValues, committedRef.current.values)
     ) {
+      const submitted = submittedRef.current
+      const currentValues = form.getValues()
+      const laterFields = tournament.id === committedRef.current.id && submitted
+        ? FIELD_ORDER.filter((field) => currentValues[field] !== submitted[field])
+        : []
+      submittedRef.current = null
       committedRef.current = { id: tournament.id, values: committedValues }
       // The re-seed abandons the snapshot a pending save was sent, exactly as
       // the Revert button does — bump the generation with the reset (#1593
       // review).
       attemptGenRef.current += 1
       form.reset(committedValues)
+      // The response commits only the submitted snapshot. Later typing remains
+      // a draft against that new baseline, so Revert still means the saved values.
+      for (const field of laterFields) {
+        form.setValue(field, currentValues[field], { shouldDirty: true, shouldValidate: true })
+      }
     }
   }, [tournament, form])
 
@@ -401,12 +413,14 @@ export const DetailsTab = ({
       // Revert or reconciliation reset before the PATCH settles moves it out
       // from under the attempt (#1593 review).
       const attemptGen = attemptGenRef.current
+      submittedRef.current = values
       // Last attempt's banner belongs to last attempt (a field's red clears
       // itself: `mode: 'onChange'` re-validates the box as it is retyped).
       form.clearErrors('root')
       try {
         await onUpdate(draftFrom(tournament, values))
       } catch (err) {
+        submittedRef.current = null
         // A refusal is about the draft this attempt SENT, and two guards
         // decide whether the form still holds it. The first is dirtiness:
         // Revert or the reconciliation effect can reset the form while the
@@ -427,6 +441,13 @@ export const DetailsTab = ({
         // nothing; the next save, started against the draft actually on
         // screen, speaks for itself.
         if (attemptGenRef.current !== attemptGen) return
+        if (err instanceof DOMException && err.name === 'TimeoutError') {
+          form.setError('root', {
+            type: 'timeout',
+            message: 'The save took too long. It may still complete on the server. Your edits are still here; reload to check before trying again.',
+          })
+          return
+        }
         // Classify first, word second (`data/save-failure`, ADR-0968) — the SAME
         // classifier and the same copy table the event editor uses. A 422's
         // `detail` is Pydantic's own prose ("String should have at most 255
@@ -575,10 +596,12 @@ export const DetailsTab = ({
           className="mb-4 focus:ring-3 focus:ring-destructive/50"
         >
           <TriangleAlert size={16} />
-          <AlertTitle>Couldn't save your changes</AlertTitle>
+          <AlertTitle>
+            {errors.root.type === 'timeout' ? "Couldn't confirm your save" : "Couldn't save your changes"}
+          </AlertTitle>
           <AlertDescription>
-            {errors.root.message} Nothing was saved — your changes are still
-            here.
+            {errors.root.message}
+            {errors.root.type !== 'timeout' && ' Nothing was saved — your changes are still here.'}
           </AlertDescription>
         </Alert>
       )}

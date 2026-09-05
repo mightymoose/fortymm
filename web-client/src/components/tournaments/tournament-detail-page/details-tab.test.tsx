@@ -76,6 +76,44 @@ describe('DetailsTab', () => {
     )
   })
 
+  it('preserves edits typed after a submitted snapshot when its save is reconciled', async () => {
+    let complete!: () => void
+    const onUpdate = vi.fn(() => new Promise<void>((resolve) => { complete = resolve }))
+    const tournament = buildTournament()
+    const view = detailsTabPage.renderStrict({ tournament, onUpdate })
+    await userEvent.type(detailsTabPage.getNameInput(), '!')
+    await userEvent.click(detailsTabPage.querySaveButton()!)
+    await userEvent.type(detailsTabPage.getNameInput(), ' Later')
+    await userEvent.type(detailsTabPage.getDescriptionInput(), ' Later description')
+    await act(async () => complete())
+    view.rerenderWith({ tournament: { ...tournament, name: tournament.name + '!' } })
+
+    expect(detailsTabPage.getNameInput()).toHaveValue(tournament.name + '! Later')
+    expect(detailsTabPage.getDescriptionInput()).toHaveValue(tournament.description + ' Later description')
+    expect(detailsTabPage.querySaveButton()).toBeEnabled()
+    await userEvent.click(detailsTabPage.getRevertButton())
+    expect(detailsTabPage.getNameInput()).toHaveValue(tournament.name + '!')
+    expect(detailsTabPage.getDescriptionInput()).toHaveValue(tournament.description)
+    expect(detailsTabPage.querySaveButton()).toBeNull()
+  })
+
+  it('preserves a fresh draft after Revert when the earlier save later succeeds', async () => {
+    let complete!: () => void
+    const onUpdate = vi.fn(() => new Promise<void>((resolve) => { complete = resolve }))
+    const tournament = buildTournament()
+    const view = detailsTabPage.renderStrict({ tournament, onUpdate })
+    await userEvent.type(detailsTabPage.getNameInput(), '!')
+    await userEvent.click(detailsTabPage.querySaveButton()!)
+    await userEvent.click(detailsTabPage.getRevertButton())
+    await userEvent.type(detailsTabPage.getDescriptionInput(), ' Fresh draft')
+    await act(async () => complete())
+    view.rerenderWith({ tournament: { ...tournament, name: tournament.name + '!' } })
+
+    expect(detailsTabPage.getDescriptionInput()).toHaveValue(tournament.description + ' Fresh draft')
+    expect(detailsTabPage.getNameInput()).toHaveValue(tournament.name)
+    expect(detailsTabPage.querySaveButton()).toBeEnabled()
+  })
+
   it('reverts the draft back to the committed tournament', async () => {
     detailsTabPage.render({
       tournament: buildTournament({ name: 'Bay Area Open 2026' }),

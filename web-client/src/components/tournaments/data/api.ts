@@ -854,14 +854,24 @@ export function useUpdateTournament() {
     mutationFn: async (input: {
       id: string
       patch: TournamentUpdate
-    }): Promise<TournamentRead> =>
-      unwrap(
-        'update tournament',
-        await api.PATCH('/v1/tournaments/{tournament_id}', {
-          params: { path: { tournament_id: input.id } },
-          body: input.patch,
-        }),
-      ),
+    }): Promise<TournamentRead> => {
+      const controller = new AbortController()
+      const timeout = setTimeout(() => {
+        controller.abort(new DOMException('Tournament save timed out', 'TimeoutError'))
+      }, 30_000)
+      try {
+        return unwrap(
+          'update tournament',
+          await api.PATCH('/v1/tournaments/{tournament_id}', {
+            params: { path: { tournament_id: input.id } },
+            body: input.patch,
+            signal: controller.signal,
+          }),
+        )
+      } finally {
+        clearTimeout(timeout)
+      }
+    },
     onSuccess: (_data, input) => invalidateTournament(qc, input.id),
   })
 }
