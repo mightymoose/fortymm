@@ -286,3 +286,34 @@ enum TournamentEventLimits {
     static let rounds = 1...32
     static let qualifiers = 1...1000
 }
+
+/// Index entrants once, then assign each sorted fixture to its participating users.
+struct TournamentPlayerSchedule {
+    let players: [TournamentEventDTO.Entrant]
+    let fixturesByUser: [UUID: [UUID]]
+
+    init(events: [TournamentEventDTO], fixtureOrder: [UUID]) {
+        var playersByUser: [UUID: TournamentEventDTO.Entrant] = [:]
+        var usersByFixture: [UUID: Set<UUID>] = [:]
+        for event in events {
+            var userByEntry: [UUID: UUID] = [:]
+            for entrant in event.entrants {
+                userByEntry[entrant.id] = entrant.userId
+                if playersByUser[entrant.userId] == nil { playersByUser[entrant.userId] = entrant }
+            }
+            for fixture in event.fixtures {
+                usersByFixture[fixture.id] = Set([fixture.entryAId, fixture.entryBId].compactMap { entry in
+                    entry.flatMap { userByEntry[$0] }
+                })
+            }
+        }
+        var grouped: [UUID: [UUID]] = [:]
+        for fixtureId in fixtureOrder {
+            for userId in usersByFixture[fixtureId] ?? [] {
+                grouped[userId, default: []].append(fixtureId)
+            }
+        }
+        players = playersByUser.values.sorted { $0.username.localizedStandardCompare($1.username) == .orderedAscending }
+        fixturesByUser = grouped
+    }
+}

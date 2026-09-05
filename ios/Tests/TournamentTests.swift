@@ -135,6 +135,28 @@ private final class TestLocationManager: CLLocationManager {
         }
         TournamentTransport.body = savedBody
         print("PASS: draw play-evidence gate and Unicode code-point limits")
+        var secondEventPayload = eventPayload
+        secondEventPayload["id"] = UUID().uuidString
+        var secondEntrants = secondEventPayload["entrants"] as! [[String: Any]]
+        let secondEntryId = UUID()
+        secondEntrants[0]["id"] = secondEntryId.uuidString
+        secondEventPayload["entrants"] = secondEntrants
+        var secondFixtures = secondEventPayload["fixtures"] as! [[String: Any]]
+        let secondFixtureId = UUID()
+        secondFixtures[0]["id"] = secondFixtureId.uuidString
+        secondFixtures[0]["entry_a_id"] = secondEntryId.uuidString
+        secondFixtures[0]["entry_b_id"] = secondEntryId.uuidString
+        secondEventPayload["fixtures"] = secondFixtures
+        var schedulePayload = payload
+        schedulePayload[0]["events"] = [eventPayload, secondEventPayload]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: schedulePayload), encoding: .utf8)!
+        let scheduleEvents = try await service.list()[0].events
+        let fixtureOrder = [secondFixtureId, event.fixtures[0].id]
+        let scheduleIndex = TournamentPlayerSchedule(events: scheduleEvents, fixtureOrder: fixtureOrder)
+        precondition(scheduleIndex.players.count == 1)
+        precondition(scheduleIndex.fixturesByUser[event.entrants[0].userId] == fixtureOrder)
+        TournamentTransport.body = savedBody
+        print("PASS: player schedule joins entries across events, preserves order and avoids duplicate fixtures")
         precondition(!event.canCutDraw(canEdit: false))
         precondition(TournamentCopy.entryFee("12.50", locale: Locale(identifier: "en_US")) == 12.5)
         precondition(TournamentCopy.entryFee("12,50oops", locale: Locale(identifier: "de_DE")) == nil)

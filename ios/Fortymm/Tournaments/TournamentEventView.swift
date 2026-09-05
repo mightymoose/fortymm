@@ -88,7 +88,10 @@ struct TournamentEventView: View {
         }
         .background(FMColor.bgApp.ignoresSafeArea()).foregroundStyle(FMColor.fg1)
         .navigationTitle("Event").navigationBarTitleDisplayMode(.inline)
-        .refreshable { await tournamentStore.load(force: true) }
+        .refreshable {
+            await tournamentStore.load(force: true)
+            if tournamentStore.refreshError == nil { error = nil }
+        }
         .overlay { if busy { FMBlockingSpinner() } }
         .fullScreenCover(item: $match) { selected in
             MatchDetailView(initial: selected, onBack: { match = nil; Task { await tournamentStore.load(force: true) } })
@@ -213,8 +216,9 @@ struct TournamentEventView: View {
         guard !busy else { return }
         busy = true
         Task {
-            do { try await action(); error = nil; await tournamentStore.load(force: true) }
+            do { try await action(); error = nil }
             catch { self.error = error.fmMessage }
+            await tournamentStore.load(force: true)
             busy = false
         }
     }

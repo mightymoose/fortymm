@@ -19,9 +19,13 @@ struct TournamentScheduleView: View {
                 return left == right ? $0.id.uuidString < $1.id.uuidString : left < right
             }
     }
-    private var players: [TournamentEventDTO.Entrant] {
-        var seen = Set<UUID>()
-        return tournament.events.flatMap(\.entrants).filter { seen.insert($0.userId).inserted }.sorted { $0.username.localizedStandardCompare($1.username) == .orderedAscending }
+    private var playerSections: [(player: TournamentEventDTO.Entrant, rows: [Row])] {
+        let sortedRows = rows
+        let rowsById = Dictionary(uniqueKeysWithValues: sortedRows.map { ($0.id, $0) })
+        let index = TournamentPlayerSchedule(events: tournament.events, fixtureOrder: sortedRows.map(\.id))
+        return index.players.map { player in
+            (player, (index.fixturesByUser[player.userId] ?? []).compactMap { rowsById[$0] })
+        }
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -51,11 +55,8 @@ struct TournamentScheduleView: View {
                     }
                     section("Unassigned", rows: rows.filter { $0.fixture.tableId == nil })
                 case .players:
-                    ForEach(players, id: \.userId) { player in
-                        section(player.username, rows: rows.filter { row in
-                            let entries = row.event.entrants.filter { $0.userId == player.userId }.map(\.id)
-                            return entries.contains { $0 == row.fixture.entryAId || $0 == row.fixture.entryBId }
-                        })
+                    ForEach(playerSections, id: \.player.userId) { group in
+                        section(group.player.username, rows: group.rows)
                     }
                     section("Players to be determined", rows: rows.filter { $0.fixture.entryAId == nil && $0.fixture.entryBId == nil })
                 }
