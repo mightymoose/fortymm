@@ -856,11 +856,21 @@ export function useUpdateTournament() {
       patch: TournamentUpdate
     }): Promise<TournamentRead> => {
       const controller = new AbortController()
-      const timeout = setTimeout(() => {
-        controller.abort(new DOMException('Tournament save timed out', 'TimeoutError'))
-      }, 30_000)
-      try {
-        return unwrap(
+      let timeout: ReturnType<typeof setTimeout>
+      const deadline = new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          const error = new DOMException(
+            'Tournament save timed out',
+            'TimeoutError',
+          )
+          reject(error)
+          controller.abort(error)
+          // A late refetch must not reconcile an abandoned attempt over a retry.
+          void qc.cancelQueries({ queryKey: tournamentKey(input.id) })
+        }, 30_000)
+      })
+      const saveAndReconcile = async () => {
+        const saved = unwrap(
           'update tournament',
           await api.PATCH('/v1/tournaments/{tournament_id}', {
             params: { path: { tournament_id: input.id } },
@@ -868,11 +878,18 @@ export function useUpdateTournament() {
             signal: controller.signal,
           }),
         )
+        controller.signal.throwIfAborted()
+        await reconcileTournament(qc, input.id)
+        return saved
+      }
+      try {
+        // Save owns its refetch: a subsequent attempt cannot replace its snapshot
+        // until reconciliation completes. The same deadline bounds both waits.
+        return await Promise.race([saveAndReconcile(), deadline])
       } finally {
-        clearTimeout(timeout)
+        clearTimeout(timeout!)
       }
     },
-    onSuccess: (_data, input) => invalidateTournament(qc, input.id),
   })
 }
 
