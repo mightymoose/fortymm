@@ -42,8 +42,10 @@ checks allowing a replacement to be completed within one transaction.
 Format edits lock that event before validating the roster, so a racing member edit
 produces the existing format conflict rather than a commit-time server error.
 
-Membership starts cannot be future-dated: an open interval is current and must be
-eligible for immediate lineup capture. Historical starts remain supported.
+Membership starts and departures cannot be future-dated: an open interval is
+current and a closed interval has already ended. Historical intervals remain
+supported. Lineup recording times likewise cannot be later than insertion time;
+the existing chronology constraint also bounds their start time.
 Every closed membership interval records a departure Account alongside its end
 time; both fields must be absent for a current member and present for a departed
 member, including before go-live.
@@ -139,6 +141,9 @@ Result inserts and acceptance updates acquire their submitter and acceptor Accou
 locks before the proposal guard locks the match, with retryable refusal if those
 actors are being merged.
 Entry adders and lineup correction actors follow the same Account-first contract.
+The existing director registration service secures its adder Account before the
+tournament lock, so a concurrent Account merge cannot turn registration into an
+unhandled serialization failure. Its existing refusal order remains unchanged.
 Status-only entry updates do not re-lock an unchanged historical adder.
 Direct lineup headers lock the match before recording participants, serializing
 the first capture with settings reassignment. A contested match or subsequent

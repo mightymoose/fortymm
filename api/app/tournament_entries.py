@@ -350,6 +350,15 @@ async def enter_event(
         if client_ip is not None:
             await _enforce_entry_rate_limit(client_ip)
 
+    if not self_registration:
+        # The entry's adder FK must be secured before the tournament: Account merge
+        # locks its actor before owned tournaments. This changes no refusal ordering.
+        await db.execute(
+            select(User.id)
+            .where(User.id == actor.id)
+            .with_for_update(read=True, key_share=True)
+        )
+
     # Load first, then decide — the 404-before-anything-else ordering. The tournament is
     # loaded *locked*, and locked first (the row whose status decides this request must
     # not change between the checks and the INSERT — otherwise an entry passes the

@@ -92,6 +92,10 @@ ENTRY_INTEGRITY_DDL = (
             RAISE EXCEPTION 'membership cannot start in the future'
                 USING ERRCODE = '23514';
         END IF;
+        IF NEW.left_at > clock_timestamp() THEN
+            RAISE EXCEPTION 'membership cannot end in the future'
+                USING ERRCODE = '23514';
+        END IF;
         BEGIN
             PERFORM id FROM accounts
             WHERE id IN (NEW.joined_by_account_id, NEW.left_by_account_id)
@@ -511,6 +515,10 @@ ENTRY_INTEGRITY_DDL = (
             )) INTO evidence_state FROM matches m WHERE m.id = NEW.match_id;
         END IF;
         IF TG_TABLE_NAME = 'match_lineups' THEN
+            IF NEW.recorded_at > clock_timestamp() THEN
+                RAISE EXCEPTION 'lineup cannot be recorded in the future'
+                    USING ERRCODE = '23514';
+            END IF;
             BEGIN
                 PERFORM id FROM accounts WHERE id = NEW.recorded_by_account_id
                 FOR KEY SHARE NOWAIT;

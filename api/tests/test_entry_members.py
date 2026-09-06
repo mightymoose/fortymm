@@ -565,6 +565,60 @@ async def test_membership_join_time_is_when_the_member_is_inserted(db_session):
     assert entry.members[0].joined_at >= boundary
 
 
+async def test_director_registration_waits_for_its_actor_before_tournament(
+    db_session, engine
+):
+    from app.models import User
+    from app.tournament_entries import enter_event
+
+    owner = await make_user(db_session, "registration-director")
+    player = await make_user(db_session, "registration-player")
+    event = await _make_event(db_session, owner=owner)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as merging, sessions() as registration:
+        actor = await registration.get(User, owner.id)
+        merging_pid = await merging.scalar(text("SELECT pg_backend_pid()"))
+        registering_pid = await registration.scalar(text("SELECT pg_backend_pid()"))
+        await merging.execute(
+            text("SELECT id FROM accounts WHERE id = :id FOR UPDATE"),
+            {"id": owner.id},
+        )
+        registering = asyncio.create_task(
+            enter_event(
+                registration,
+                tournament_id=event.tournament_id,
+                event_id=event.id,
+                actor=actor,
+                user_id=player.player_id,
+            )
+        )
+        try:
+
+            async def wait_for_actor():
+                while merging_pid not in await db_session.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": registering_pid}
+                ):
+                    if registering.done():
+                        await registering
+                        pytest.fail("registration did not wait for its actor")
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_actor(), timeout=5)
+            # The merger can still acquire its owned tournament while registration
+            # waits: registration must not hold that parent ahead of its Account.
+            await merging.execute(
+                text("SELECT id FROM tournaments WHERE id = :id FOR UPDATE NOWAIT"),
+                {"id": event.tournament_id},
+            )
+            await merging.commit()
+            result = await asyncio.wait_for(registering, timeout=5)
+            assert result.user_id == player.player_id
+        finally:
+            if not registering.done():
+                registering.cancel()
+            await asyncio.gather(registering, return_exceptions=True)
+
+
 async def test_membership_cannot_start_in_the_future(db_session):
     event = await _make_event(db_session)
     player = await make_user(db_session, "future-member")
@@ -585,6 +639,25 @@ async def test_membership_cannot_start_in_the_future(db_session):
                 ),
                 {"entry": entry_id, "player": player.player_id},
             )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_membership_cannot_end_in_the_future(db_session):
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    member_id, entry_id = entries[0].members[0].id, entries[0].id
+    with pytest.raises(IntegrityError, match="membership cannot end in the future"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE tournament_entry_members SET left_at = clock_timestamp() "
+                    "+ interval '1 day', left_by_account_id = :actor WHERE id = :id"
+                ),
+                {"id": member_id, "actor": players[0].id},
+            )
+            db_session.add(
+                TournamentEntryMember(entry_id=entry_id, player_id=players[4].player_id)
+            )
+            await db_session.flush()
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
 
@@ -1024,9 +1097,15 @@ async def test_settings_reassignment_waits_for_direct_lineup(db_session, engine)
         )
 
 
-async def test_lineup_cannot_be_recorded_before_its_start(db_session):
+@pytest.mark.parametrize("future_recording", [False, True])
+async def test_lineup_requires_valid_recording_chronology(db_session, future_recording):
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
-    with pytest.raises(IntegrityError, match="ck_match_lineups_chronology"):
+    error = (
+        "lineup cannot be recorded in the future"
+        if future_recording
+        else "ck_match_lineups_chronology"
+    )
+    with pytest.raises(IntegrityError, match=error):
         async with db_session.begin_nested():
             await db_session.execute(
                 text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
@@ -1036,10 +1115,10 @@ async def test_lineup_cannot_be_recorded_before_its_start(db_session):
                 text(
                     "INSERT INTO match_lineups (match_id, started_at, recorded_at) "
                     "VALUES (:match, clock_timestamp() + interval '1 day', "
-                    "clock_timestamp()) "
+                    "clock_timestamp() + (:days * interval '1 day')) "
                     "RETURNING id"
                 ),
-                {"match": match.id},
+                {"match": match.id, "days": int(future_recording)},
             )
             await db_session.execute(
                 text(
