@@ -828,6 +828,34 @@ async def test_fixture_attaching_an_already_played_match_captures_history(
     ) == {player.player_id for player in players[:4]}
 
 
+async def test_lineup_cannot_use_entries_from_another_event(db_session):
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    other_event = await make_drawn_event(db_session)
+    with pytest.raises(
+        IntegrityError, match="fixture entries must belong to its event"
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE tournament_fixtures SET stage_id = :stage, "
+                    "group_id = :group WHERE id = :id"
+                ),
+                {
+                    "stage": other_event.stages[0].id,
+                    "group": other_event.groups[0].id,
+                    "id": fixture.id,
+                },
+            )
+            await db_session.execute(
+                text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
+                {"id": match.id},
+            )
+            await db_session.execute(
+                text("SET CONSTRAINTS capture_match_lineup IMMEDIATE")
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
 async def test_fixture_cannot_seat_the_same_entry_twice(db_session):
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
     with pytest.raises(IntegrityError, match="ck_tournament_fixtures_distinct_entries"):
@@ -1323,6 +1351,127 @@ async def test_evidence_write_aborts_when_deletion_commits_first(
                 )
             with pytest.raises(
                 DBAPIError, match="tournament association was deleted"
+            ) as exc:
+                await asyncio.wait_for(write_task, timeout=5)
+            assert exc.value.orig.sqlstate == "40001"
+        finally:
+            if not write_task.done():
+                write_task.cancel()
+            await asyncio.gather(write_task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("parent", ["tournaments", "tournament_events"])
+async def test_roster_update_refuses_inverted_parent_lock_order(
+    db_session, engine, parent
+):
+    from sqlalchemy.exc import DBAPIError
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as deletion, sessions() as roster:
+        await deletion.execute(
+            text(f"SELECT id FROM {parent} WHERE id = :id FOR UPDATE"),
+            {"id": event.tournament_id if parent == "tournaments" else event.id},
+        )
+        await roster.execute(text("SET LOCAL lock_timeout = '200ms'"))
+        with pytest.raises(
+            DBAPIError, match="roster update requires parent locks"
+        ) as exc:
+            await roster.execute(
+                text(
+                    "UPDATE tournament_entry_members SET left_at = clock_timestamp() "
+                    "WHERE id = :id"
+                ),
+                {"id": entries[0].members[0].id},
+            )
+        assert exc.value.orig.sqlstate == "40001"
+        await roster.rollback()
+        await deletion.rollback()
+        await roster.execute(
+            text("SELECT id FROM tournaments WHERE id = :id FOR SHARE"),
+            {"id": event.tournament_id},
+        )
+        await roster.execute(
+            text("SELECT id FROM tournament_events WHERE id = :id FOR UPDATE"),
+            {"id": event.id},
+        )
+        await roster.execute(
+            text(
+                "UPDATE tournament_entry_members SET left_at = clock_timestamp() "
+                "WHERE id = :id"
+            ),
+            {"id": entries[0].members[0].id},
+        )
+        await roster.execute(
+            text(
+                "INSERT INTO tournament_entry_members (entry_id, player_id) "
+                "VALUES (:entry, :player)"
+            ),
+            {"entry": entries[0].id, "player": players[4].player_id},
+        )
+        await roster.commit()
+
+
+@pytest.mark.parametrize("evidence", ["game", "result", "status"])
+@pytest.mark.parametrize("action", ["unlink", "replace"])
+async def test_evidence_write_aborts_when_fixture_link_changes_first(
+    db_session, engine, evidence, action
+):
+    from sqlalchemy.exc import DBAPIError
+
+    from app.models import MatchGame, MatchResult
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    replacement = Match(
+        league_id=match.league_id,
+        created_by_user_id=match.created_by_user_id,
+        status=MatchStatus.pending,
+        match_settings=MatchSettings(team_size=2, best_of=5, affects_rating=False),
+    )
+    db_session.add(replacement)
+    await db_session.commit()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as linking, sessions() as writer:
+        link_pid = await linking.scalar(text("SELECT pg_backend_pid()"))
+        writer_pid = await writer.scalar(text("SELECT pg_backend_pid()"))
+        await linking.execute(
+            text("UPDATE tournament_fixtures SET match_id = :match WHERE id = :id"),
+            {
+                "id": fixture.id,
+                "match": replacement.id if action == "replace" else None,
+            },
+        )
+
+        async def write_evidence():
+            if evidence == "game":
+                writer.add(MatchGame(match_id=match.id, game_number=1))
+            elif evidence == "result":
+                writer.add(
+                    MatchResult(
+                        match_id=match.id, submitted_by_user_id=players[0].id, games=[]
+                    )
+                )
+            else:
+                await writer.execute(
+                    text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
+                    {"id": match.id},
+                )
+            await writer.commit()
+
+        write_task = asyncio.create_task(write_evidence())
+        try:
+
+            async def wait_for_block():
+                while link_pid not in await db_session.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": writer_pid}
+                ):
+                    assert not write_task.done()
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_block(), timeout=5)
+            await linking.commit()
+            with pytest.raises(
+                DBAPIError, match="tournament association changed"
             ) as exc:
                 await asyncio.wait_for(write_task, timeout=5)
             assert exc.value.orig.sqlstate == "40001"
@@ -1973,6 +2122,16 @@ async def test_roster_rechecks_director_when_go_live_commits_first(db_session, e
         )
 
         async def replace():
+            # Follow the direct-writer parent-first contract before taking the
+            # membership tuple; authorization must still see go-live's commit.
+            await roster.execute(
+                text("SELECT id FROM tournaments WHERE id = :id FOR SHARE"),
+                {"id": tournament.id},
+            )
+            await roster.execute(
+                text("SELECT id FROM tournament_events WHERE id = :id FOR UPDATE"),
+                {"id": event.id},
+            )
             await roster.execute(
                 text(
                     "UPDATE tournament_entry_members SET left_at = clock_timestamp() "

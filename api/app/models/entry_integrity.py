@@ -89,6 +89,21 @@ ENTRY_INTEGRITY_DDL = (
     LANGUAGE plpgsql AS $$
     DECLARE owner_uuid uuid; actor_uuid uuid;
     BEGIN
+        IF TG_OP = 'UPDATE' THEN
+            -- The row is already locked: do not wait backwards on its parents.
+            BEGIN
+                PERFORM t.id FROM tournament_entries en
+                JOIN tournament_events e ON e.id = en.event_id
+                JOIN tournaments t ON t.id = e.tournament_id
+                WHERE en.id = NEW.entry_id FOR SHARE OF t NOWAIT;
+                PERFORM e.id FROM tournament_entries en
+                JOIN tournament_events e ON e.id = en.event_id
+                WHERE en.id = NEW.entry_id FOR UPDATE OF e NOWAIT;
+            EXCEPTION WHEN lock_not_available THEN
+                RAISE EXCEPTION 'roster update requires parent locks; retry transaction'
+                    USING ERRCODE = '40001';
+            END;
+        END IF;
         -- SHARE conflicts with go-live's status UPDATE as well as its owner lock.
         -- Hold it before authorizing and before the member's event lock.
         PERFORM t.id FROM tournament_entries en
@@ -190,6 +205,15 @@ ENTRY_INTEGRITY_DDL = (
         SELECT * INTO fixture FROM tournament_fixtures WHERE match_id = lineup.match_id;
         IF NOT FOUND THEN
             RAISE EXCEPTION 'lineup requires an event fixture' USING ERRCODE = '23514';
+        END IF;
+        IF EXISTS (
+            SELECT 1 FROM tournament_entries en
+            JOIN tournament_event_stages s ON s.id = fixture.stage_id
+            WHERE en.id IN (fixture.entry_a_id, fixture.entry_b_id)
+                AND en.event_id <> s.event_id
+        ) THEN
+            RAISE EXCEPTION 'fixture entries must belong to its event'
+                USING ERRCODE = '23514';
         END IF;
         IF EXISTS (
             SELECT 1 FROM match_lineup_players p
@@ -406,7 +430,7 @@ ENTRY_INTEGRITY_DDL = (
     """
     CREATE OR REPLACE FUNCTION lock_entry_event() RETURNS trigger
     LANGUAGE plpgsql AS $$
-    DECLARE event_uuid uuid;
+    DECLARE event_uuid uuid; fixture_uuid uuid; match_uuid uuid;
     BEGIN
         IF TG_TABLE_NAME IN ('match_games', 'match_results') AND TG_OP = 'UPDATE' THEN
             IF NEW.match_id IS DISTINCT FROM OLD.match_id THEN
@@ -443,13 +467,17 @@ ENTRY_INTEGRITY_DDL = (
             END LOOP;
             RETURN NEW;
         ELSIF TG_TABLE_NAME = 'matches' THEN
-            SELECT s.event_id INTO event_uuid FROM tournament_fixtures f
+            match_uuid := NEW.id;
+            SELECT s.event_id, f.id INTO event_uuid, fixture_uuid
+            FROM tournament_fixtures f
             JOIN tournament_event_stages s ON s.id = f.stage_id
-            WHERE f.match_id = NEW.id;
+            WHERE f.match_id = match_uuid;
         ELSIF TG_TABLE_NAME IN ('match_lineups', 'match_games', 'match_results') THEN
-            SELECT s.event_id INTO event_uuid FROM tournament_fixtures f
+            match_uuid := NEW.match_id;
+            SELECT s.event_id, f.id INTO event_uuid, fixture_uuid
+            FROM tournament_fixtures f
             JOIN tournament_event_stages s ON s.id = f.stage_id
-            WHERE f.match_id = NEW.match_id;
+            WHERE f.match_id = match_uuid;
         ELSIF TG_TABLE_NAME = 'tournament_events' THEN
             event_uuid := NEW.id;
         ELSIF TG_TABLE_NAME = 'tournament_entries' THEN
@@ -468,6 +496,15 @@ ENTRY_INTEGRITY_DDL = (
             'matches', 'match_lineups', 'match_games', 'match_results'
         ) THEN
             RAISE EXCEPTION 'tournament association was deleted; retry transaction'
+                USING ERRCODE = '40001';
+        END IF;
+        IF fixture_uuid IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM tournament_fixtures f
+            JOIN tournament_event_stages s ON s.id = f.stage_id
+            WHERE f.id = fixture_uuid AND f.match_id = match_uuid
+                AND s.event_id = event_uuid
+        ) THEN
+            RAISE EXCEPTION 'tournament association changed; retry transaction'
                 USING ERRCODE = '40001';
         END IF;
         RETURN COALESCE(NEW, OLD);

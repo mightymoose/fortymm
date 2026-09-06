@@ -84,6 +84,8 @@ committed lineup outside its member's recorded interval.
 Direct headers take this lock immediately, before participant foreign keys acquire
 member locks, matching deletion's event-before-member ordering.
 Every participant must be a current member of the entry seated on their side.
+Both seated entries must belong to the fixture stage's event before a lineup can
+be recorded, including snapshots supplied directly by database writers.
 Team rosters may be larger than the actual lineup; `MatchSettings.team_size`
 determines the number playing on each side.
 
@@ -102,6 +104,15 @@ their insertion serializes with the deletion guard on the event.
 If deletion wins that race, a writer that had resolved the tournament association
 must abort with retryable SQLSTATE `40001` when its event lock finds no surviving
 row. Existing game and result records cannot be reassigned to another match.
+After obtaining the event lock, evidence and status writers recheck the original
+fixture association. A concurrent unlink, replacement, or move to another event
+requires a retry rather than committing against a stale association.
+
+Direct membership updates follow the same parent-first locking contract as fixture
+updates. Since a row trigger already holds the member tuple, it refuses contested
+tournament or event locks with SQLSTATE `40001`; the writer retries with tournament
+and event locks acquired before the membership update. This avoids deadlocking
+against deletion, which locks parents before membership rows.
 
 The snapshot references the original entry membership and Player. Later roster
 changes and sign-in reconciliation cannot rewrite it. Before starting a match,
