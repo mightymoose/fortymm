@@ -83,6 +83,10 @@ class MergeSummary:
     matches_voided: int
 
 
+class _ConcurrentEntryCollision(Exception):
+    """Re-run a merge whose initial entry scan missed a concurrent registration."""
+
+
 async def merge_user(
     db: AsyncSession,
     *,
@@ -113,6 +117,7 @@ async def merge_user(
     if source.merged_into_user_id is not None or target.merged_into_user_id is not None:
         raise ValueError("Cannot merge a tombstoned account")
     source_player, target_player = source.primary_player, target.primary_player
+    source_display_name = source.username
     if len(source.player_grants) > 1:
         raise ValueError("Merging accounts that manage multiple players is not enabled")
     summary = MergeSummary(matches_moved=0, matches_voided=0)
@@ -131,9 +136,44 @@ async def merge_user(
         )
         if other_manager is not None:
             raise ValueError("Merging a player with other managers is not enabled")
-        summary = await _merge_players(
-            db, from_user_id=source_player.id, to_user_id=target_player.id
-        )
+        source_player_id, target_player_id = source_player.id, target_player.id
+        for attempt in range(3):
+            try:
+                async with db.begin_nested():
+                    summary = await _merge_players(
+                        db, from_user_id=source_player_id, to_user_id=target_player_id
+                    )
+                    # Registration may commit after collision discovery but before
+                    # the Player update takes its event locks. Validate here while
+                    # those locks are held, so reconciliation can retry atomically
+                    # against the newly visible entry instead of failing at COMMIT.
+                    collision = await db.scalar(
+                        text(
+                            """
+                            WITH RECURSIVE identities(id) AS (
+                                SELECT CAST(:player AS uuid)
+                                UNION SELECT p.id FROM players p
+                                    JOIN identities i ON p.merged_into_player_id = i.id
+                            )
+                            SELECT EXISTS (
+                                SELECT e.event_id FROM identities i
+                                JOIN tournament_entry_members m ON m.player_id = i.id
+                                JOIN tournament_entries e ON e.id = m.entry_id
+                                JOIN tournament_events ev ON ev.id = e.event_id
+                                WHERE m.left_at IS NULL AND e.status = 'entered'
+                                    AND NOT ev.allow_multiple_entries_per_player
+                                GROUP BY e.event_id HAVING count(DISTINCT e.id) > 1
+                            )
+                            """
+                        ),
+                        {"player": target_player_id},
+                    )
+                    if collision:
+                        raise _ConcurrentEntryCollision()
+                break
+            except _ConcurrentEntryCollision:
+                if attempt == 2:
+                    raise
     elif source_player is not None and target_player is None:
         existing = next(
             (
@@ -149,7 +189,7 @@ async def merge_user(
             target.player_grants.append(
                 AccountPlayer(player=source_player, is_primary=True)
             )
-    source.display_name = source.username
+    source.display_name = source_display_name
     source.player_grants.clear()
     await db.flush()
     await db.execute(

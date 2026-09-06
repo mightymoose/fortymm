@@ -269,6 +269,60 @@ async def test_reentry_and_identity_merge_share_event_before_player_lock_order(
             await asyncio.gather(merge_task, return_exceptions=True)
 
 
+async def test_identity_merge_reconciles_registration_committed_during_merge(
+    db_session, engine
+):
+    event = await _make_event(db_session)
+    source = await make_user(db_session, "concurrent-source")
+    target = await make_user(db_session, "concurrent-target")
+    db_session.add(TournamentEntry(event_id=event.id, user_id=target.player_id))
+    await db_session.commit()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as registration, sessions() as merger:
+        registration_pid = await registration.scalar(text("SELECT pg_backend_pid()"))
+        merger_pid = await merger.scalar(text("SELECT pg_backend_pid()"))
+        # Hold a real identity edit open, so registration can finish while the
+        # merge waits to finalize its source Player. There is no source entry yet.
+        await registration.execute(
+            text("SELECT id FROM players WHERE id = :id FOR NO KEY UPDATE"),
+            {"id": source.player_id},
+        )
+        merge_task = asyncio.create_task(
+            merge_user(merger, from_user_id=source.id, to_user_id=target.id)
+        )
+        try:
+
+            async def wait_for_block():
+                while registration_pid not in await db_session.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": merger_pid}
+                ):
+                    assert not merge_task.done()
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_block(), timeout=5)
+            registration.add(
+                TournamentEntry(event_id=event.id, user_id=source.player_id)
+            )
+            await registration.commit()
+            await asyncio.wait_for(merge_task, timeout=5)
+            await merger.commit()
+            assert (
+                await db_session.scalar(
+                    text(
+                        "SELECT count(*) FROM tournament_entries "
+                        "WHERE event_id = :event "
+                        "AND status = 'entered' AND entry_single_player(id) = :player"
+                    ),
+                    {"event": event.id, "player": target.player_id},
+                )
+                == 1
+            )
+        finally:
+            if not merge_task.done():
+                merge_task.cancel()
+            await asyncio.gather(merge_task, return_exceptions=True)
+
+
 @pytest.mark.parametrize("through_alias", [False, True])
 async def test_identity_merge_does_not_validate_unrelated_deferred_entry_changes(
     db_session, through_alias
