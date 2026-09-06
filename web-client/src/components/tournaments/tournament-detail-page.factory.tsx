@@ -8,6 +8,7 @@ export function buildTournamentDetailPageProps(
 ): TournamentDetailPageProps {
   return {
     tournament: buildTournament(),
+    tournamentDetailUpdatedAt: 1,
     allTables: buildTables(12),
     onUpdate: async () => {},
     onChangeCatalogue: async () => {},

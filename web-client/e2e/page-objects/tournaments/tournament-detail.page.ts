@@ -928,6 +928,28 @@ export class TournamentDetailPage {
     return this.page.getByTestId('run-scheduler-notice')
   }
 
+  /** The **Placement updates in progress** notice — on while the latest solve
+   * is queued/running and the placements on screen are provisional, gone once a
+   * terminal solve lands (#1614). */
+  get placementUpdating(): Locator {
+    return this.page.getByTestId('schedule-placement-updating')
+  }
+
+  /** The awaiting-placement group — fixtures with no table yet. */
+  get awaitingSection(): Locator {
+    return this.page.getByTestId('schedule-awaiting')
+  }
+
+  /** One list row, by fixture id. */
+  matchRow(fixtureId: string): Locator {
+    return this.page.getByTestId(`schedule-match-${fixtureId}`)
+  }
+
+  /** One table's column section, by catalogue id. */
+  tableSection(tableId: string): Locator {
+    return this.page.getByTestId(`schedule-table-${tableId}`)
+  }
+
   // ----- the schedule boards (Gantt / player timeline, chore 2a) -------------
 
   /** The tab's view toggle — List | Gantt | Player timeline. Its items are
