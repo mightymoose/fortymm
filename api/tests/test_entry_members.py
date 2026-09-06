@@ -856,6 +856,36 @@ async def test_lineup_cannot_use_entries_from_another_event(db_session):
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
 
+@pytest.mark.parametrize("change", ["team_size", "settings_reference"])
+async def test_played_lineup_keeps_its_match_topology(db_session, change):
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    match.status = MatchStatus.in_progress
+    replacement = MatchSettings(team_size=1, best_of=5, affects_rating=False)
+    db_session.add(replacement)
+    await db_session.commit()
+    statement = (
+        "UPDATE match_settings SET team_size = 1 WHERE id = :settings"
+        if change == "team_size"
+        else "UPDATE matches SET match_settings_id = :replacement WHERE id = :match"
+    )
+    with pytest.raises(
+        IntegrityError, match="recorded match topology must be retained"
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(statement),
+                {
+                    "settings": match.match_settings_id,
+                    "match": match.id,
+                    "replacement": replacement.id,
+                },
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    assert (
+        await db_session.scalar(text("SELECT count(*) FROM match_lineup_players")) == 4
+    )
+
+
 async def test_fixture_cannot_seat_the_same_entry_twice(db_session):
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
     with pytest.raises(IntegrityError, match="ck_tournament_fixtures_distinct_entries"):
@@ -891,6 +921,34 @@ async def test_a_match_can_belong_to_only_one_fixture(db_session):
             second.match_id = match.id
             await db_session.flush()
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_team_size_edit_cannot_overtake_first_lineup(db_session, engine):
+    from sqlalchemy.exc import DBAPIError
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as capture, sessions() as settings:
+        await capture.execute(
+            text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
+            {"id": match.id},
+        )
+        await capture.execute(text("SET CONSTRAINTS capture_match_lineup IMMEDIATE"))
+        await settings.execute(text("SET LOCAL lock_timeout = '200ms'"))
+        with pytest.raises(
+            DBAPIError, match="match topology requires match lock"
+        ) as exc:
+            await settings.execute(
+                text("UPDATE match_settings SET team_size = 1 WHERE id = :id"),
+                {"id": match.match_settings_id},
+            )
+        assert exc.value.orig.sqlstate == "40001"
+        await settings.rollback()
+        await capture.commit()
+        assert (
+            await db_session.scalar(text("SELECT count(*) FROM match_lineup_players"))
+            == 4
+        )
 
 
 async def test_lineup_cannot_be_recorded_before_its_start(db_session):
@@ -1441,6 +1499,75 @@ async def test_direct_player_merge_refuses_inverted_tournament_lock_order(
         await merging.commit()
 
 
+async def test_crossed_ownership_and_participation_merges_serialize(db_session, engine):
+    events = [await _make_event(db_session) for _ in range(2)]
+    sources = [await make_user(db_session, f"cross-source-{i}") for i in range(2)]
+    targets = [await make_user(db_session, f"cross-target-{i}") for i in range(2)]
+    for i, event in enumerate(events):
+        tournament = await db_session.get(Tournament, event.tournament_id)
+        tournament.owner_account_id = sources[1 - i].id
+        db_session.add(TournamentEntry(event_id=event.id, user_id=sources[i].player_id))
+    await db_session.commit()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as gate, sessions() as first, sessions() as second:
+        gate_pid = await gate.scalar(text("SELECT pg_backend_pid()"))
+        merge_pids = [
+            await session.scalar(text("SELECT pg_backend_pid()"))
+            for session in (first, second)
+        ]
+        await gate.execute(
+            text("SELECT id FROM players WHERE id = ANY(:ids) FOR NO KEY UPDATE"),
+            {"ids": [source.player_id for source in sources]},
+        )
+
+        async def merge(session, i):
+            await merge_user(
+                session, from_user_id=sources[i].id, to_user_id=targets[i].id
+            )
+            await session.commit()
+
+        tasks = [
+            asyncio.create_task(merge(session, i))
+            for i, session in enumerate((first, second))
+        ]
+        try:
+
+            async def wait_for_contention():
+                while True:
+                    blockers = [
+                        await db_session.scalar(
+                            text("SELECT pg_blocking_pids(:pid)"), {"pid": pid}
+                        )
+                        for pid in merge_pids
+                    ]
+                    if all(blockers) and any(
+                        gate_pid in blocked for blocked in blockers
+                    ):
+                        return
+                    assert not any(task.done() for task in tasks)
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_contention(), timeout=5)
+            await gate.rollback()
+            results = await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True), timeout=10
+            )
+            assert results == [None, None]
+            for i, event in enumerate(events):
+                assert (
+                    await db_session.scalar(
+                        text("SELECT owner_account_id FROM tournaments WHERE id = :id"),
+                        {"id": event.tournament_id},
+                    )
+                    == targets[1 - i].id
+                )
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+
 @pytest.mark.parametrize("parent", ["tournaments", "tournament_events"])
 async def test_roster_update_refuses_inverted_parent_lock_order(
     db_session, engine, parent
@@ -1490,6 +1617,65 @@ async def test_roster_update_refuses_inverted_parent_lock_order(
             ),
             {"entry": entries[0].id, "player": players[4].player_id},
         )
+        await roster.commit()
+
+
+async def test_direct_member_delete_refuses_without_waiting_on_event(
+    db_session, engine
+):
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as deletion, sessions() as roster:
+        await deletion.execute(
+            text("SELECT id FROM tournament_events WHERE id = :id FOR UPDATE"),
+            {"id": event.id},
+        )
+        await roster.execute(text("SET LOCAL lock_timeout = '200ms'"))
+        with pytest.raises(IntegrityError, match="membership history must be retained"):
+            await roster.execute(
+                text("DELETE FROM tournament_entry_members WHERE id = :id"),
+                {"id": entries[0].members[0].id},
+            )
+
+
+@pytest.mark.parametrize("action", ["join", "depart"])
+async def test_roster_actor_lock_precedes_tournament_lock(db_session, engine, action):
+    from sqlalchemy.exc import DBAPIError
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    event.format = EventFormat.teams
+    tournament = await db_session.get(Tournament, event.tournament_id)
+    tournament.status = TournamentStatus.live
+    await db_session.commit()
+    statement = (
+        "INSERT INTO tournament_entry_members "
+        "(entry_id, player_id, joined_by_account_id) "
+        "VALUES (:entry, :player, :actor)"
+        if action == "join"
+        else "UPDATE tournament_entry_members SET left_at = clock_timestamp(), "
+        "left_by_account_id = :actor WHERE id = :member"
+    )
+    params = {
+        "entry": entries[0].id,
+        "player": players[4].player_id,
+        "actor": tournament.owner_account_id,
+        "member": entries[0].members[0].id,
+    }
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as merging, sessions() as roster:
+        await merging.execute(
+            text("SELECT id FROM accounts WHERE id = :id FOR UPDATE"),
+            {"id": tournament.owner_account_id},
+        )
+        await roster.execute(text("SET LOCAL lock_timeout = '200ms'"))
+        with pytest.raises(
+            DBAPIError, match="roster actor requires account locks"
+        ) as exc:
+            await roster.execute(text(statement), params)
+        assert exc.value.orig.sqlstate == "40001"
+        await roster.rollback()
+        await merging.rollback()
+        await roster.execute(text(statement), params)
         await roster.commit()
 
 
@@ -1763,8 +1949,8 @@ async def test_old_lineup_rejects_appends_when_transaction_status_is_unavailable
     match.status = MatchStatus.in_progress
     await db_session.commit()
     lineup = await db_session.scalar(text("SELECT id FROM match_lineups"))
-    # Increase side size so cardinality alone cannot mask a history-guard failure.
-    match.match_settings.team_size = 2
+    # Recorded topology is immutable. Require the specific history refusal below,
+    # not the deferred cardinality error that an overfull lineup would also cause.
     sandbox = await db_session.begin_nested()
     try:
         # Mock the external transaction-status retention boundary in this test DB,

@@ -88,6 +88,9 @@ Both seated entries must belong to the fixture stage's event before a lineup can
 be recorded, including snapshots supplied directly by database writers.
 Team rosters may be larger than the actual lineup; `MatchSettings.team_size`
 determines the number playing on each side.
+Once a lineup exists, its match cannot change team size or switch settings rows.
+Team-size edits serialize with first capture through the match row; a contested
+match lock yields retryable `40001` instead of waiting while holding settings.
 
 An event or tournament containing recorded play cannot be deleted. Historical
 membership references block cascading deletion in the database; the existing
@@ -117,6 +120,10 @@ against deletion, which locks parents before membership rows.
 Standalone entry deletion is forbidden while its event remains: withdraw the entry
 instead, retaining all membership intervals and fixture references. An unplayed
 event or tournament deletion may still cascade through its entries.
+Standalone member deletion is likewise refused immediately, before waiting on
+parents; close its membership interval instead. This also avoids a deletion race.
+Roster actors acquire ordered Account key-share locks before tournament locks,
+with retryable refusal on contention, matching Account merge's actor-first order.
 
 The snapshot references the original entry membership and Player. Later roster
 changes and sign-in reconciliation cannot rewrite it. Before starting a match,
@@ -192,6 +199,8 @@ The post-update check stays scoped to the merged identities and does not force
 unrelated deferred constraints. Historical Account names survive that retry.
 Before reconciling match sides, a merge locks the tournaments containing either
 identity's memberships in stable order, even when their entries do not collide.
+The same ordered set includes tournaments whose ownership will transfer, so
+independent merges with crossed ownership and participation serialize safely.
 Go-live therefore finishes materialization before reconciliation or waits for it,
 instead of crossing the merge's event locks with its own tournament lock.
 Direct Player identity updates also acquire affected tournaments in stable order

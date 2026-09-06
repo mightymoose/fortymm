@@ -89,6 +89,14 @@ ENTRY_INTEGRITY_DDL = (
     LANGUAGE plpgsql AS $$
     DECLARE owner_uuid uuid; actor_uuid uuid;
     BEGIN
+        BEGIN
+            PERFORM id FROM accounts
+            WHERE id IN (NEW.joined_by_account_id, NEW.left_by_account_id)
+            ORDER BY id FOR KEY SHARE NOWAIT;
+        EXCEPTION WHEN lock_not_available THEN
+            RAISE EXCEPTION 'roster actor requires account locks before parents; retry'
+                USING ERRCODE = '40001';
+        END;
         IF TG_OP = 'UPDATE' THEN
             -- The row is already locked: do not wait backwards on its parents.
             BEGIN
@@ -136,6 +144,41 @@ ENTRY_INTEGRITY_DDL = (
     CREATE TRIGGER authorize_entry_membership BEFORE INSERT OR UPDATE
     ON tournament_entry_members FOR EACH ROW EXECUTE FUNCTION
         authorize_entry_membership()
+    """,
+    """
+    CREATE OR REPLACE FUNCTION preserve_match_topology() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        IF TG_TABLE_NAME = 'match_settings' THEN
+            IF NEW.team_size IS NOT DISTINCT FROM OLD.team_size THEN RETURN NEW; END IF;
+            BEGIN
+                PERFORM id FROM matches WHERE match_settings_id = OLD.id
+                ORDER BY id FOR UPDATE NOWAIT;
+            EXCEPTION WHEN lock_not_available THEN
+                RAISE EXCEPTION 'match topology requires match lock; retry'
+                    USING ERRCODE = '40001';
+            END;
+            IF NOT EXISTS (
+                SELECT 1 FROM matches m JOIN match_lineups l ON l.match_id = m.id
+                WHERE m.match_settings_id = OLD.id
+            ) THEN RETURN NEW; END IF;
+        ELSE
+            IF NEW.match_settings_id IS NOT DISTINCT FROM OLD.match_settings_id
+                OR NOT EXISTS (SELECT 1 FROM match_lineups WHERE match_id = OLD.id)
+            THEN RETURN NEW; END IF;
+        END IF;
+        RAISE EXCEPTION 'recorded match topology must be retained'
+            USING ERRCODE = '23514';
+    END $$
+    """,
+    """
+    CREATE TRIGGER preserve_match_topology BEFORE UPDATE OF team_size ON match_settings
+    FOR EACH ROW EXECUTE FUNCTION preserve_match_topology()
+    """,
+    """
+    CREATE TRIGGER preserve_match_settings_reference
+    BEFORE UPDATE OF match_settings_id ON matches
+    FOR EACH ROW EXECUTE FUNCTION preserve_match_topology()
     """,
     """
     CREATE OR REPLACE FUNCTION check_match_lineup() RETURNS trigger
@@ -433,6 +476,12 @@ ENTRY_INTEGRITY_DDL = (
     LANGUAGE plpgsql AS $$
     DECLARE event_uuid uuid; fixture_uuid uuid; match_uuid uuid; player_events uuid[];
     BEGIN
+        IF TG_TABLE_NAME = 'tournament_entry_members' AND TG_OP = 'DELETE' THEN
+            IF EXISTS (SELECT 1 FROM tournament_entries WHERE id = OLD.entry_id) THEN
+                RAISE EXCEPTION 'membership history must be retained'
+                    USING ERRCODE = '23514';
+            END IF;
+        END IF;
         IF TG_TABLE_NAME IN ('match_games', 'match_results') AND TG_OP = 'UPDATE' THEN
             IF NEW.match_id IS DISTINCT FROM OLD.match_id THEN
                 RAISE EXCEPTION 'recorded evidence match is immutable'

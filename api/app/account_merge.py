@@ -141,7 +141,10 @@ async def merge_user(
             try:
                 async with db.begin_nested():
                     summary = await _merge_players(
-                        db, from_user_id=source_player_id, to_user_id=target_player_id
+                        db,
+                        from_user_id=source_player_id,
+                        to_user_id=target_player_id,
+                        transferring_account_id=from_user_id,
                     )
                     # Registration may commit after collision discovery but before
                     # the Player update takes its event locks. Validate here while
@@ -206,6 +209,7 @@ async def _merge_players(
     *,
     from_user_id: uuid.UUID,
     to_user_id: uuid.UUID,
+    transferring_account_id: uuid.UUID,
 ) -> MergeSummary:
     """Combine sporting records under the existing collision and rating rules."""
     # Go-live materializes participants under the tournament lock. Take every
@@ -224,12 +228,18 @@ async def _merge_players(
                 JOIN tournament_entry_members m ON m.player_id = i.id
                 JOIN tournament_entries en ON en.id = m.entry_id
                 JOIN tournament_events e ON e.id = en.event_id
+                UNION
+                SELECT id FROM tournaments WHERE owner_account_id = :account
             )
             SELECT t.id FROM tournaments t JOIN affected a ON a.tournament_id = t.id
             ORDER BY t.id FOR UPDATE OF t
             """
         ),
-        {"source": from_user_id, "target": to_user_id},
+        {
+            "source": from_user_id,
+            "target": to_user_id,
+            "account": transferring_account_id,
+        },
     )
     collision = await _self_play_collision(
         db, from_user_id=from_user_id, to_user_id=to_user_id
