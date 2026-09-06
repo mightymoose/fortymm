@@ -930,10 +930,13 @@ def upgrade() -> None:
             "(accepted_by_user_id IS NULL) = (accepted_at IS NULL)",
             name="ck_match_results_accepted_pair",
         ),
+        sa.CheckConstraint(
+            "supersedes_result_id <> id", name="ck_match_results_not_self"
+        ),
         sa.ForeignKeyConstraint(
             ["accepted_by_user_id"], ["accounts.id"], ondelete="RESTRICT"
         ),
-        sa.ForeignKeyConstraint(["match_id"], ["matches.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["match_id"], ["matches.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(
             ["submitted_by_user_id"], ["accounts.id"], ondelete="RESTRICT"
         ),
@@ -941,8 +944,12 @@ def upgrade() -> None:
             ["submitted_for_player_id"], ["players.id"], ondelete="RESTRICT"
         ),
         sa.ForeignKeyConstraint(
-            ["supersedes_result_id"], ["match_results.id"], ondelete="CASCADE"
+            ["supersedes_result_id", "match_id"],
+            ["match_results.id", "match_results.match_id"],
+            name="fk_match_results_predecessor_match",
+            ondelete="RESTRICT",
         ),
+        sa.UniqueConstraint("id", "match_id", name="uq_match_results_id_match"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "supersedes_result_id", name="uq_match_results_supersedes_result_id"
@@ -951,6 +958,162 @@ def upgrade() -> None:
     op.create_index(
         "ix_match_results_match_id", "match_results", ["match_id"], unique=False
     )
+    op.create_index(
+        "uq_match_results_root",
+        "match_results",
+        ["match_id"],
+        unique=True,
+        postgresql_where=sa.text("supersedes_result_id IS NULL"),
+    )
+    op.execute("""
+        CREATE FUNCTION guard_proposal_insert() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+            -- Serialize appends and acceptance even for direct SQL writers.
+            -- A real row version (not just FOR UPDATE) also makes stale
+            -- REPEATABLE READ / SERIALIZABLE writers fail with 40001.
+            UPDATE matches SET id = id WHERE id = NEW.match_id;
+            IF NEW.submitted_for_player_id IS NOT NULL THEN
+                -- Bump the Player version as well as locking it: a merge
+                -- using an older Repeatable Read snapshot must retry rather
+                -- than miss this proposal in its representation update.
+                UPDATE players SET id = id
+                WHERE id = NEW.submitted_for_player_id
+                  AND merged_into_player_id IS NULL;
+                IF NOT FOUND THEN
+                    RAISE EXCEPTION 'a proposal must represent an active Player'
+                        USING ERRCODE = '23514';
+                END IF;
+            END IF;
+            -- A non-deferrable FK alone checks at statement end, permitting
+            -- circular multi-row INSERTs. Require an already inserted parent.
+            IF NEW.supersedes_result_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM match_results
+                WHERE id = NEW.supersedes_result_id AND match_id = NEW.match_id
+            ) THEN
+                RAISE EXCEPTION 'proposal predecessor must already exist in this match'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $$
+    """)
+    op.execute("""
+        CREATE TRIGGER guard_proposal_insert
+        BEFORE INSERT ON match_results
+        FOR EACH ROW EXECUTE FUNCTION guard_proposal_insert()
+    """)
+    op.execute("""
+        CREATE FUNCTION guard_proposal_update() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+            IF ROW(NEW.id, NEW.match_id, NEW.supersedes_result_id, NEW.games,
+                   NEW.submitted_by_user_id, NEW.submitted_at)
+                IS DISTINCT FROM
+               ROW(OLD.id, OLD.match_id, OLD.supersedes_result_id, OLD.games,
+                   OLD.submitted_by_user_id, OLD.submitted_at) THEN
+                RAISE EXCEPTION 'proposal snapshot and links are immutable'
+                    USING ERRCODE = '23514';
+            END IF;
+            IF NEW.submitted_for_player_id IS DISTINCT FROM OLD.submitted_for_player_id
+            THEN
+                -- Only the nested write from apply_player_merge_to_proposals
+                -- may repoint representation; ordinary SQL cannot borrow a
+                -- previously recorded merge as permission to rewrite history.
+                IF pg_trigger_depth() <> 2 OR
+                   NEW.submitted_for_player_id IS NULL OR
+                   OLD.submitted_for_player_id IS NULL OR NOT EXISTS (
+                    SELECT 1 FROM players WHERE id = OLD.submitted_for_player_id
+                      AND merged_into_player_id = NEW.submitted_for_player_id
+                      AND merged_at IS NOT NULL
+                ) THEN
+                    RAISE EXCEPTION
+                        'represented Player changes require a same-person merge'
+                        USING ERRCODE = '23514';
+                END IF;
+            END IF;
+            IF OLD.accepted_by_user_id IS NOT NULL AND
+                ROW(NEW.accepted_by_user_id, NEW.accepted_at) IS DISTINCT FROM
+                ROW(OLD.accepted_by_user_id, OLD.accepted_at) THEN
+                RAISE EXCEPTION 'proposal acceptance is immutable'
+                    USING ERRCODE = '23514';
+            END IF;
+            IF OLD.accepted_by_user_id IS NULL AND
+               NEW.accepted_by_user_id IS NOT NULL THEN
+                UPDATE matches SET id = id WHERE id = OLD.match_id;
+                IF EXISTS (
+                    SELECT 1 FROM match_results WHERE supersedes_result_id = OLD.id
+                ) THEN
+                    RAISE EXCEPTION 'only the proposal head can receive acceptance'
+                        USING ERRCODE = '23514';
+                END IF;
+            END IF;
+            RETURN NEW;
+        END;
+        $$
+    """)
+    op.execute("""
+        CREATE TRIGGER guard_proposal_update
+        BEFORE UPDATE ON match_results
+        FOR EACH ROW EXECUTE FUNCTION guard_proposal_update()
+    """)
+    op.execute("""
+        CREATE FUNCTION prevent_proposal_delete() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+            RAISE EXCEPTION 'proposal history cannot be deleted'
+                USING ERRCODE = '23514';
+        END;
+        $$
+    """)
+    op.execute("""
+        CREATE TRIGGER prevent_proposal_delete
+        BEFORE DELETE ON match_results
+        FOR EACH ROW EXECUTE FUNCTION prevent_proposal_delete()
+    """)
+    op.execute("""
+        CREATE FUNCTION apply_player_merge_to_proposals() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+            UPDATE match_results SET submitted_for_player_id = NEW.merged_into_player_id
+            WHERE submitted_for_player_id = NEW.id;
+            RETURN NEW;
+        END;
+        $$
+    """)
+    op.execute("""
+        CREATE TRIGGER apply_player_merge_to_proposals
+        AFTER UPDATE ON players
+        FOR EACH ROW WHEN (OLD.merged_into_player_id IS NULL
+                           AND NEW.merged_into_player_id IS NOT NULL)
+        EXECUTE FUNCTION apply_player_merge_to_proposals()
+    """)
+    op.execute("""
+        CREATE FUNCTION preserve_player_merge() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+            IF TG_OP = 'DELETE' THEN
+                IF OLD.merged_into_player_id IS NOT NULL THEN
+                    RAISE EXCEPTION 'recorded Player merges cannot be deleted'
+                        USING ERRCODE = '23514';
+                END IF;
+                RETURN OLD;
+            END IF;
+            IF OLD.merged_into_player_id IS NOT NULL AND
+               ROW(NEW.merged_into_player_id, NEW.merged_at) IS DISTINCT FROM
+               ROW(OLD.merged_into_player_id, OLD.merged_at) THEN
+                RAISE EXCEPTION 'recorded Player merges are immutable'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $$
+    """)
+    op.execute("""
+        CREATE TRIGGER preserve_player_merge
+        BEFORE UPDATE OR DELETE ON players
+        FOR EACH ROW EXECUTE FUNCTION preserve_player_merge()
+    """)
     op.create_table(
         "match_sides",
         sa.Column(
@@ -2077,3 +2240,13 @@ def downgrade() -> None:
     postgresql.ENUM(name="tournament_status").drop(op.get_bind(), checkfirst=True)
 
     postgresql.ENUM(name="verification_policy").drop(op.get_bind(), checkfirst=True)
+
+    # Dropping tables removes their triggers, but not their function definitions.
+    for function in (
+        "guard_proposal_insert",
+        "guard_proposal_update",
+        "prevent_proposal_delete",
+        "apply_player_merge_to_proposals",
+        "preserve_player_merge",
+    ):
+        op.execute(f"DROP FUNCTION {function}()")

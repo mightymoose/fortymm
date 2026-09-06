@@ -3,24 +3,20 @@
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.db import Base
 from app.match_creation import create_match
 from app.models import Account, Player
-from tests._migration_database import migrated_database
+from tests._migration_database import empty_database, migrated_database
 
 
 @pytest.fixture(scope="session", params=["metadata", "alembic"])
 async def engine(request, postgres_url):
     if request.param == "metadata":
-        database = create_async_engine(postgres_url)
-        async with database.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
-        try:
+        async with empty_database(postgres_url) as database:
+            async with database.begin() as connection:
+                await connection.run_sync(Base.metadata.create_all)
             yield database
-        finally:
-            await database.dispose()
     else:
         async with migrated_database(postgres_url) as database:
             # Standard conftest fixtures supply representative catalogue seeds.

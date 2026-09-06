@@ -36,8 +36,11 @@ def standing_result(match: Match) -> MatchResult | None:
 
 
 def accepted_result(match: Match) -> MatchResult | None:
-    """The accepted (final) result, or ``None`` if none has been accepted.
+    """The accepted head, or ``None`` while the head is still standing.
 
-    A result is accepted ⟺ ``accepted_by_user_id is not None``, which implies
-    the match is completed/final."""
-    return next((r for r in match.results if r.accepted_by_user_id is not None), None)
+    Earlier acceptances remain history when a successor is appended; they
+    cannot hide a standing head or replace its newer accepted snapshot."""
+    head = head_result(match)
+    if head is not None and head.accepted_by_user_id is not None:
+        return head
+    return None

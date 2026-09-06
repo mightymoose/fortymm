@@ -19,7 +19,6 @@ from app.models import (
     DeviceToken,
     LeagueMembership,
     Match,
-    MatchResult,
     MatchSide,
     MatchSidePlayer,
     Notification,
@@ -175,11 +174,6 @@ async def _merge_players(
     to_user_id: uuid.UUID,
 ) -> MergeSummary:
     """Combine sporting records under the existing collision and rating rules."""
-    await db.execute(
-        update(MatchResult)
-        .where(MatchResult.submitted_for_player_id == from_user_id)
-        .values(submitted_for_player_id=to_user_id)
-    )
     collision = await _self_play_collision(
         db, from_user_id=from_user_id, to_user_id=to_user_id
     )
@@ -317,6 +311,8 @@ async def _merge_players(
     await db.execute(
         delete(LeagueMembership).where(LeagueMembership.user_id == from_user_id)
     )
+    # Recording the Player merge atomically repoints proposal representation
+    # through the database trigger; original Account actors remain immutable.
     await db.execute(
         update(Player)
         .where(Player.id == from_user_id)

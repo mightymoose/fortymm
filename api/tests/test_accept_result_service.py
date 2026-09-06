@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.match_creation import create_match
-from app.models import MatchStatus, RatingHistory
+from app.models import MatchResult, MatchStatus, RatingHistory
 from app.result_acceptance import (
     CannotAcceptOwnProposalError,
     NegotiationConflictError,
@@ -144,9 +144,8 @@ async def test_a_bystander_submitter_cannot_accept_their_own_standing_proposal(
 
     ``_requires_confirmation`` (``app.result_proposal``) is what stops such a
     proposal ever standing, so this state cannot arise through
-    ``propose_result``. The test hand-crafts it — re-pointing a player's
-    standing result at the director — precisely because the guard's job is to
-    hold when that upstream invariant does not.
+    ``propose_result``. The test inserts it with the director as its original
+    submitter because the guard must hold when that upstream invariant does not.
     """
     creator = await make_user(db_session, "bystander-accept-proposer")
     opponent = await make_user(db_session, "bystander-accept-opp")
@@ -170,17 +169,16 @@ async def test_a_bystander_submitter_cannot_accept_their_own_standing_proposal(
         p1=creator,
         p2=opponent,
     )
-    outcome = await propose_result(
-        db_session,
-        match_id,
-        creator.id,
-        games=_decisive_board(winner_side=1),
-        supersedes_result_id=None,
+    result_id = uuid.uuid4()
+    match.status = MatchStatus.in_progress
+    db_session.add(
+        MatchResult(
+            id=result_id,
+            match=match,
+            submitted_by_user_id=director_id,
+            games=[game.model_dump() for game in _decisive_board(winner_side=1)],
+        )
     )
-    standing = standing_result(outcome.match)
-    assert standing is not None
-    result_id = standing.id
-    standing.submitted_by_user_id = director_id
     await db_session.commit()
 
     with pytest.raises(CannotAcceptOwnProposalError):

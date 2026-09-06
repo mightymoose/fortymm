@@ -52,6 +52,10 @@ _Avoid_: extra games, overflow, trailing games.
 **Result**:
 A claim about how a match ended — a decided board that one participant puts
 forward for the other to agree to. Frozen when proposed; never edited in place.
+Proposals form one append-only chain per match and cannot be deleted. Acceptance
+is recorded once on the head and retained even if a future proposal follows it.
+See [proposal history](docs/adr/20260906-proposals-form-an-immutable-linear-history.md)
+for the database invariants and the same-person Player merge exception.
 
 **Standing result**:
 The current result on the table — the one a participant can accept or counter.

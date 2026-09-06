@@ -6,6 +6,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     UniqueConstraint,
     func,
@@ -30,6 +31,9 @@ class MatchResult(Base):
     proposal it replaces, so the full negotiation history survives as a linear
     chain instead of being mutated away on the working ``match_games`` scratchpad.
 
+    Alembic installs the append-order, immutable-write and deletion guards;
+    metadata alone does not define a complete application database.
+
     Derived roles (never stored): a result is *accepted* iff
     ``accepted_by_user_id IS NOT NULL``; *superseded* iff some other row's
     ``supersedes_result_id`` equals its id; the *head* of the chain is the one
@@ -39,7 +43,21 @@ class MatchResult(Base):
 
     __tablename__ = "match_results"
     __table_args__ = (
+        CheckConstraint("supersedes_result_id <> id", name="ck_match_results_not_self"),
+        UniqueConstraint("id", "match_id", name="uq_match_results_id_match"),
+        ForeignKeyConstraint(
+            ["supersedes_result_id", "match_id"],
+            ["match_results.id", "match_results.match_id"],
+            name="fk_match_results_predecessor_match",
+            ondelete="RESTRICT",
+        ),
         Index("ix_match_results_match_id", "match_id"),
+        Index(
+            "uq_match_results_root",
+            "match_id",
+            unique=True,
+            postgresql_where=text("supersedes_result_id IS NULL"),
+        ),
         # The acceptance columns are written together (propose's self-accept,
         # accept's stamp), so a row with exactly one of them set is an illegal
         # state — forbid it at the DB rather than trusting every write path.
@@ -63,7 +81,7 @@ class MatchResult(Base):
     )
     match_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("matches.id", ondelete="CASCADE"),
+        ForeignKey("matches.id", ondelete="RESTRICT"),
         nullable=False,
     )
     # Preserve the original acting Account, including after a same-person merge.
@@ -84,7 +102,6 @@ class MatchResult(Base):
     # same parent collide and one 409s.
     supersedes_result_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("match_results.id", ondelete="CASCADE"),
         nullable=True,
     )
     # The opposing-side participant who accepted this proposal. NULL while the
@@ -115,7 +132,7 @@ class MatchResult(Base):
     games: Mapped[list[dict[str, int]]] = mapped_column(JSONB, nullable=False)
 
     match: Mapped["Match"] = relationship(back_populates="results")
-    # Two FKs point at ``users`` (submitted_by_user_id, accepted_by_user_id), so
+    # Two FKs point at ``accounts`` (submitted_by_user_id, accepted_by_user_id), so
     # both relationships MUST pin foreign_keys explicitly or SQLAlchemy raises
     # AmbiguousForeignKeysError.
     submitted_by: Mapped["Account"] = relationship(

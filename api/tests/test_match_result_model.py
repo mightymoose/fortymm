@@ -32,7 +32,7 @@ async def _make_match(db: AsyncSession, creator: User) -> Match:
 
 
 async def test_supersedes_result_id_is_unique(db_session: AsyncSession):
-    """The metadata-built schema must encode the linear result-chain invariant:
+    """The database must encode the linear result-chain invariant:
     a proposal can have at most one successor. Two counters pointing at the same
     parent violate ``uq_match_results_supersedes_result_id`` and one collides —
     the same IntegrityError the concurrent-counter code path relies on."""
