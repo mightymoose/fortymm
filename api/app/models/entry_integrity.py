@@ -258,6 +258,27 @@ ENTRY_INTEGRITY_DDL = (
     FOR EACH ROW EXECUTE FUNCTION reset_pristine_match_lineup()
     """,
     """
+    CREATE OR REPLACE FUNCTION check_pristine_match_reset() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        IF EXISTS (SELECT 1 FROM tournament_fixtures WHERE match_id = NEW.id)
+            AND NOT EXISTS (SELECT 1 FROM match_lineups WHERE match_id = NEW.id)
+            AND (EXISTS (SELECT 1 FROM match_games WHERE match_id = NEW.id)
+                OR EXISTS (SELECT 1 FROM match_results WHERE match_id = NEW.id))
+        THEN
+            RAISE EXCEPTION 'uncall must preserve recorded play'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN NULL;
+    END $$
+    """,
+    """
+    CREATE CONSTRAINT TRIGGER check_pristine_match_reset
+    AFTER UPDATE OF status ON matches DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW WHEN (OLD.status = 'in_progress' AND NEW.status = 'pending')
+    EXECUTE FUNCTION check_pristine_match_reset()
+    """,
+    """
     CREATE OR REPLACE FUNCTION capture_match_lineup() RETURNS trigger
     LANGUAGE plpgsql AS $$
     DECLARE fixture tournament_fixtures; lineup_uuid uuid;
@@ -373,6 +394,10 @@ ENTRY_INTEGRITY_DDL = (
                 UPDATE tournament_events SET id = id WHERE id = event_uuid;
             END LOOP;
             RETURN NEW;
+        ELSIF TG_TABLE_NAME = 'match_lineups' THEN
+            SELECT s.event_id INTO event_uuid FROM tournament_fixtures f
+            JOIN tournament_event_stages s ON s.id = f.stage_id
+            WHERE f.match_id = NEW.match_id;
         ELSIF TG_TABLE_NAME = 'tournament_events' THEN
             event_uuid := NEW.id;
         ELSIF TG_TABLE_NAME = 'tournament_entries' THEN
@@ -460,6 +485,10 @@ ENTRY_INTEGRITY_DDL = (
     """
     CREATE TRIGGER lock_entry_event BEFORE INSERT OR UPDATE OR DELETE
     ON tournament_entries FOR EACH ROW EXECUTE FUNCTION lock_entry_event()
+    """,
+    """
+    CREATE TRIGGER lock_lineup_event BEFORE INSERT ON match_lineups
+    FOR EACH ROW EXECUTE FUNCTION lock_entry_event()
     """,
     """
     CREATE TRIGGER lock_player_entry_events BEFORE UPDATE OF merged_into_player_id

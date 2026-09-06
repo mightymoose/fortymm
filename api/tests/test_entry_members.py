@@ -560,22 +560,32 @@ async def test_first_lineup_waits_for_roster_replacement(
             text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
             {"id": match.id},
         )
-        if manual_lineup:
-            lineup_id = await capture.scalar(
-                text("INSERT INTO match_lineups (match_id) VALUES (:id) RETURNING id"),
-                {"id": match.id},
-            )
-            await capture.execute(
-                text(
-                    "INSERT INTO match_lineup_players "
-                    "(lineup_id, side_number, entry_member_id, player_id) "
-                    "SELECT :lineup, CASE WHEN entry_id = :a THEN 1 ELSE 2 END, "
-                    "id, player_id FROM tournament_entry_members "
-                    "WHERE entry_id IN (:a, :b) AND left_at IS NULL"
-                ),
-                {"lineup": lineup_id, "a": entries[0].id, "b": entries[1].id},
-            )
-        capture_task = asyncio.create_task(capture.commit())
+
+        async def record_lineup():
+            if manual_lineup:
+                lineup_id = await capture.scalar(
+                    text(
+                        "INSERT INTO match_lineups (match_id) VALUES (:id) RETURNING id"
+                    ),
+                    {"id": match.id},
+                )
+                await capture.execute(
+                    text(
+                        "INSERT INTO match_lineup_players "
+                        "(lineup_id, side_number, entry_member_id, player_id) "
+                        "SELECT :lineup, CASE WHEN entry_id = :a THEN 1 ELSE 2 END, "
+                        "id, player_id FROM tournament_entry_members "
+                        "WHERE id = ANY(:ids)"
+                    ),
+                    {
+                        "lineup": lineup_id,
+                        "a": entries[0].id,
+                        "ids": [m.id for entry in entries for m in entry.members],
+                    },
+                )
+            await capture.commit()
+
+        capture_task = asyncio.create_task(record_lineup())
         try:
 
             async def wait_for_block():
@@ -699,6 +709,35 @@ async def test_recalling_an_untouched_match_captures_the_replacement(
 
 
 @pytest.mark.parametrize("evidence", ["game", "result"])
+async def test_uncall_cannot_discard_lineup_before_later_play_evidence(
+    db_session, evidence
+):
+    from app.models import MatchGame, MatchResult
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    match.status = MatchStatus.in_progress
+    await db_session.commit()
+    original = await db_session.scalar(text("SELECT id FROM match_lineups"))
+    with pytest.raises(IntegrityError, match="uncall must preserve recorded play"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("UPDATE matches SET status = 'pending' WHERE id = :id"),
+                {"id": match.id},
+            )
+            if evidence == "game":
+                db_session.add(MatchGame(match_id=match.id, game_number=1))
+            else:
+                db_session.add(
+                    MatchResult(
+                        match_id=match.id, submitted_by_user_id=players[0].id, games=[]
+                    )
+                )
+            await db_session.flush()
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    assert await db_session.scalar(text("SELECT id FROM match_lineups")) == original
+
+
+@pytest.mark.parametrize("evidence", ["game", "result"])
 async def test_cancelling_a_call_with_play_keeps_its_lineup(db_session, evidence):
     from app.match_calls import apply_manual_placement
     from app.models import MatchGame, MatchResult
@@ -735,8 +774,9 @@ async def test_cancelling_a_call_with_play_keeps_its_lineup(db_session, evidence
 
 
 @pytest.mark.parametrize("target", ["event", "tournament"])
+@pytest.mark.parametrize("manual_lineup", [False, True])
 async def test_deletion_racing_first_lineup_reports_recorded_play(
-    db_session, engine, target
+    db_session, engine, target, manual_lineup
 ):
     from app.models import User
     from app.tournament_errors import RecordedPlayDeletionError
@@ -755,7 +795,25 @@ async def test_deletion_racing_first_lineup_reports_recorded_play(
             text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
             {"id": match.id},
         )
-        await capture.execute(text("SET CONSTRAINTS capture_match_lineup IMMEDIATE"))
+        if manual_lineup:
+            lineup_id = await capture.scalar(
+                text("INSERT INTO match_lineups (match_id) VALUES (:id) RETURNING id"),
+                {"id": match.id},
+            )
+            await capture.execute(
+                text(
+                    "INSERT INTO match_lineup_players "
+                    "(lineup_id, side_number, entry_member_id, player_id) "
+                    "SELECT :lineup, CASE WHEN entry_id = :a THEN 1 ELSE 2 END, "
+                    "id, player_id FROM tournament_entry_members "
+                    "WHERE entry_id IN (:a, :b) AND left_at IS NULL"
+                ),
+                {"lineup": lineup_id, "a": entries[0].id, "b": entries[1].id},
+            )
+        else:
+            await capture.execute(
+                text("SET CONSTRAINTS capture_match_lineup IMMEDIATE")
+            )
         if target == "event":
             delete_task = asyncio.create_task(
                 delete_event(

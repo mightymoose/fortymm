@@ -57,6 +57,8 @@ the match must be in progress or have a played terminal outcome.
 Automatic capture and direct lineup validation acquire the roster's event lock
 before checking member eligibility, so a concurrent replacement cannot leave a
 committed lineup outside its member's recorded interval.
+Direct headers take this lock immediately, before participant foreign keys acquire
+member locks, matching deletion's event-before-member ordering.
 Every participant must be a current member of the entry seated on their side.
 Team rosters may be larger than the actual lineup; `MatchSettings.team_size`
 determines the number playing on each side.
@@ -86,6 +88,8 @@ captures the then-current participants; the cancelled call is not recorded play
 and does not prevent event deletion. Any game or result keeps the lineup and
 deletion protection intact. Only this guarded un-call transition can clear a
 provisional snapshot; direct lineup deletion remains forbidden. No UI is added.
+Cancellation also validates the final transaction state: later game or result
+inserts cannot commit after the same transaction discarded their lineup.
 
 Membership joins use wall-clock insertion time, not transaction-start time, so a
 long-running roster transaction cannot backdate a replacement's eligibility.
