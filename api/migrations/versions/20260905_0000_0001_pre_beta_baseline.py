@@ -475,6 +475,16 @@ ENTRY_INTEGRITY_DDL = (
     LANGUAGE plpgsql AS $$
     DECLARE event_uuid uuid; fixture_uuid uuid; match_uuid uuid; player_events uuid[];
     BEGIN
+        IF TG_TABLE_NAME = 'match_results' THEN
+            BEGIN
+                PERFORM id FROM accounts
+                WHERE id IN (NEW.submitted_by_user_id, NEW.accepted_by_user_id)
+                ORDER BY id FOR KEY SHARE NOWAIT;
+            EXCEPTION WHEN lock_not_available THEN
+                RAISE EXCEPTION 'result actor requires account locks; retry'
+                    USING ERRCODE = '40001';
+            END;
+        END IF;
         IF TG_TABLE_NAME = 'tournament_entry_members' AND TG_OP = 'DELETE' THEN
             IF EXISTS (SELECT 1 FROM tournament_entries WHERE id = OLD.entry_id) THEN
                 RAISE EXCEPTION 'membership history must be retained'

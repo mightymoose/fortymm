@@ -124,6 +124,8 @@ Standalone member deletion is likewise refused immediately, before waiting on
 parents; close its membership interval instead. This also avoids a deletion race.
 Roster actors acquire ordered Account key-share locks before tournament locks,
 with retryable refusal on contention, matching Account merge's actor-first order.
+Result inserts likewise acquire their submitter and acceptor Account locks before
+the event lock, with retryable refusal if those actors are being merged.
 
 The snapshot references the original entry membership and Player. Later roster
 changes and sign-in reconciliation cannot rewrite it. Before starting a match,

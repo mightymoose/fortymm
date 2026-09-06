@@ -1679,6 +1679,40 @@ async def test_roster_actor_lock_precedes_tournament_lock(db_session, engine, ac
         await roster.commit()
 
 
+@pytest.mark.parametrize("actor", ["submitter", "acceptor"])
+async def test_result_actor_lock_precedes_event_lock(db_session, engine, actor):
+    from sqlalchemy.exc import DBAPIError
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    statement = text(
+        "INSERT INTO match_results (match_id, submitted_by_user_id, "
+        "accepted_by_user_id, accepted_at, games) "
+        "VALUES (:match, :submitter, :acceptor, :accepted_at, '[]')"
+    )
+    params = {
+        "match": match.id,
+        "submitter": players[0].id if actor == "submitter" else players[2].id,
+        "acceptor": players[0].id if actor == "acceptor" else None,
+        "accepted_at": datetime.now(UTC) if actor == "acceptor" else None,
+    }
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as merging, sessions() as proposal:
+        await merging.execute(
+            text("SELECT id FROM accounts WHERE id = :id FOR UPDATE"),
+            {"id": players[0].id},
+        )
+        await proposal.execute(text("SET LOCAL lock_timeout = '200ms'"))
+        with pytest.raises(
+            DBAPIError, match="result actor requires account locks"
+        ) as exc:
+            await proposal.execute(statement, params)
+        assert exc.value.orig.sqlstate == "40001"
+        await proposal.rollback()
+        await merging.rollback()
+        await proposal.execute(statement, params)
+        await proposal.commit()
+
+
 @pytest.mark.parametrize("evidence", ["game", "result", "status"])
 @pytest.mark.parametrize("action", ["unlink", "replace"])
 async def test_evidence_write_aborts_when_fixture_link_changes_first(
