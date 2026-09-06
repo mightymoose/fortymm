@@ -281,6 +281,11 @@ async def test_identity_merge_reconciles_registration_committed_during_merge(
     async with sessions() as registration, sessions() as merger:
         registration_pid = await registration.scalar(text("SELECT pg_backend_pid()"))
         merger_pid = await merger.scalar(text("SELECT pg_backend_pid()"))
+        # Registration takes its ordinary parent lock before its identity edit.
+        await registration.execute(
+            text("SELECT id FROM tournaments WHERE id = :id FOR SHARE"),
+            {"id": event.tournament_id},
+        )
         # Hold a real identity edit open, so registration can finish while the
         # merge waits to finalize its source Player. There is no source entry yet.
         await registration.execute(
@@ -1113,6 +1118,43 @@ async def test_deletion_racing_first_lineup_reports_recorded_play(
             await asyncio.gather(delete_task, return_exceptions=True)
 
 
+@pytest.mark.parametrize("action", ["unlink", "replace", "delete"])
+@pytest.mark.parametrize("evidence", ["game", "result", "lineup"])
+async def test_recorded_match_cannot_lose_its_fixture(db_session, action, evidence):
+    from app.models import MatchGame, MatchResult
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    if evidence == "game":
+        db_session.add(MatchGame(match_id=match.id, game_number=1))
+    elif evidence == "result":
+        db_session.add(
+            MatchResult(match_id=match.id, submitted_by_user_id=players[0].id, games=[])
+        )
+    else:
+        match.status = MatchStatus.in_progress
+    replacement = Match(
+        league_id=match.league_id,
+        created_by_user_id=match.created_by_user_id,
+        status=MatchStatus.pending,
+        match_settings=MatchSettings(team_size=2, best_of=5, affects_rating=False),
+    )
+    db_session.add(replacement)
+    await db_session.commit()
+    statement = {
+        "unlink": "UPDATE tournament_fixtures SET match_id = NULL WHERE id = :id",
+        "replace": (
+            "UPDATE tournament_fixtures SET match_id = :replacement WHERE id = :id"
+        ),
+        "delete": "DELETE FROM tournament_fixtures WHERE id = :id",
+    }[action]
+    with pytest.raises(IntegrityError, match="recorded match fixture must be retained"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(statement), {"id": fixture.id, "replacement": replacement.id}
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
 @pytest.mark.parametrize("parent", ["tournaments", "tournament_events"])
 async def test_fixture_link_refuses_inverted_parent_lock_order(
     db_session, engine, parent
@@ -1380,9 +1422,7 @@ async def test_deleting_a_parent_cannot_cascade_away_recorded_membership(
         "event": ("DELETE FROM tournament_events WHERE id = :id", event.id),
         "tournament": ("DELETE FROM tournaments WHERE id = :id", event.tournament_id),
     }[parent]
-    with pytest.raises(
-        IntegrityError, match="match_lineup_players_entry_member_id_fkey"
-    ):
+    with pytest.raises(IntegrityError, match="recorded match fixture must be retained"):
         async with db_session.begin_nested():
             await db_session.execute(text(statement), {"id": parent_id})
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
@@ -1581,6 +1621,82 @@ async def test_older_transaction_cannot_bypass_live_roster_director(db_session, 
                 ),
                 {"entry": entry.id, "player": players[1].player_id},
             )
+
+
+async def test_go_live_serializes_with_identity_merge(
+    db_session, engine, default_league
+):
+    from app.models import User
+    from app.tournament_draws import cut_draw
+    from app.tournament_lifecycle import transition_tournament
+    from tests.test_tournament_lifecycle import _enter, _make_tournament_at, _one_event
+
+    owner = await make_user(db_session, "merge-live-owner")
+    target = await make_user(db_session, "merge-live-survivor")
+    tournament = await _make_tournament_at(
+        db_session,
+        owner=owner,
+        league=default_league,
+        status=TournamentStatus.published,
+        with_event=True,
+    )
+    event = await _one_event(db_session, tournament.id)
+    await _enter(db_session, event, 4)
+    await cut_draw(db_session, event)
+    source = (
+        await db_session.execute(
+            text(
+                "SELECT ap.account_id, m.player_id FROM tournament_entry_members m "
+                "JOIN tournament_entries e ON e.id = m.entry_id "
+                "JOIN account_players ap ON ap.player_id = m.player_id "
+                "WHERE e.event_id = :event AND ap.is_primary LIMIT 1"
+            ),
+            {"event": event.id},
+        )
+    ).one()
+    await db_session.commit()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as lifecycle, sessions() as merger:
+        live_pid = await lifecycle.scalar(text("SELECT pg_backend_pid()"))
+        merge_pid = await merger.scalar(text("SELECT pg_backend_pid()"))
+        actor = await lifecycle.get(User, owner.id)
+        await lifecycle.execute(
+            text("SELECT id FROM tournaments WHERE id = :id FOR UPDATE"),
+            {"id": tournament.id},
+        )
+        merge_task = asyncio.create_task(
+            merge_user(
+                merger,
+                from_user_id=source.account_id,
+                to_user_id=target.id,
+            )
+        )
+        try:
+
+            async def wait_until_blocked_or_done():
+                while not merge_task.done() and live_pid not in await db_session.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": merge_pid}
+                ):
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_until_blocked_or_done(), timeout=5)
+            await transition_tournament(
+                lifecycle,
+                tournament_id=tournament.id,
+                actor=actor,
+                to=TournamentStatus.live,
+            )
+            await asyncio.wait_for(merge_task, timeout=5)
+            await merger.commit()
+            participants = set(
+                await db_session.scalars(text("SELECT user_id FROM match_side_players"))
+            )
+            assert target.player_id in participants
+            assert source.player_id not in participants
+        finally:
+            if not merge_task.done():
+                merge_task.cancel()
+            await asyncio.gather(merge_task, return_exceptions=True)
 
 
 async def test_go_live_waits_for_roster_replacement(db_session, engine, default_league):

@@ -208,6 +208,29 @@ async def _merge_players(
     to_user_id: uuid.UUID,
 ) -> MergeSummary:
     """Combine sporting records under the existing collision and rating rules."""
+    # Go-live materializes participants under the tournament lock. Take every
+    # affected parent before reading/repointing sides, even without an entry
+    # collision, and before the Player trigger later locks individual events.
+    await db.execute(
+        text(
+            """
+            WITH RECURSIVE identities(id) AS (
+                SELECT CAST(:source AS uuid)
+                UNION SELECT CAST(:target AS uuid)
+                UNION SELECT p.id FROM players p
+                    JOIN identities i ON p.merged_into_player_id = i.id
+            ), affected AS (
+                SELECT DISTINCT e.tournament_id FROM identities i
+                JOIN tournament_entry_members m ON m.player_id = i.id
+                JOIN tournament_entries en ON en.id = m.entry_id
+                JOIN tournament_events e ON e.id = en.event_id
+            )
+            SELECT t.id FROM tournaments t JOIN affected a ON a.tournament_id = t.id
+            ORDER BY t.id FOR UPDATE OF t
+            """
+        ),
+        {"source": from_user_id, "target": to_user_id},
+    )
     collision = await _self_play_collision(
         db, from_user_id=from_user_id, to_user_id=to_user_id
     )

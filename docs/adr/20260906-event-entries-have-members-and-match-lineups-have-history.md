@@ -71,6 +71,8 @@ order. The row trigger takes available parent locks without waiting; if another
 transaction already holds one, it raises retryable SQLSTATE `40001` rather than
 waiting backwards after the fixture row lock. Retry the transaction with a shared
 tournament lock and an exclusive event lock acquired before updating the fixture.
+A fixture with a lineup, game, or result cannot be unlinked, linked to another
+match, or deleted; the recorded association remains available to deletion guards.
 Direct database writes cannot create an initial played lineup for a pending match;
 the match must be in progress or have a played terminal outcome.
 Automatic capture and direct lineup validation acquire the roster's event lock
@@ -164,6 +166,10 @@ If registration commits between collision discovery and the Player update, the
 merge retries its sporting reconciliation within a savepoint, at most three times.
 The post-update check stays scoped to the merged identities and does not force
 unrelated deferred constraints. Historical Account names survive that retry.
+Before reconciling match sides, a merge locks the tournaments containing either
+identity's memberships in stable order, even when their entries do not collide.
+Go-live therefore finishes materialization before reconciliation or waits for it,
+instead of crossing the merge's event locks with its own tournament lock.
 
 ## Migration and verification
 

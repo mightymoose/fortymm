@@ -563,19 +563,30 @@ ENTRY_INTEGRITY_DDL = (
     """
     CREATE OR REPLACE FUNCTION lock_fixture_link() RETURNS trigger
     LANGUAGE plpgsql AS $$
+    DECLARE stage_uuid uuid;
     BEGIN
-        IF NEW.match_id IS NULL THEN RETURN NEW; END IF;
+        stage_uuid := COALESCE(NEW.stage_id, OLD.stage_id);
+        IF TG_OP = 'INSERT' AND NEW.match_id IS NULL THEN RETURN NEW; END IF;
         IF TG_OP = 'UPDATE' THEN
             IF NEW.match_id IS NOT DISTINCT FROM OLD.match_id THEN RETURN NEW; END IF;
         END IF;
         PERFORM t.id FROM tournaments t
         JOIN tournament_events e ON e.tournament_id = t.id
         JOIN tournament_event_stages s ON s.event_id = e.id
-        WHERE s.id = NEW.stage_id FOR SHARE OF t NOWAIT;
+        WHERE s.id = stage_uuid FOR SHARE OF t NOWAIT;
         PERFORM e.id FROM tournament_events e
         JOIN tournament_event_stages s ON s.event_id = e.id
-        WHERE s.id = NEW.stage_id FOR UPDATE OF e NOWAIT;
-        RETURN NEW;
+        WHERE s.id = stage_uuid FOR UPDATE OF e NOWAIT;
+        IF TG_OP <> 'INSERT' THEN
+            IF EXISTS (SELECT 1 FROM match_lineups WHERE match_id = OLD.match_id)
+                OR EXISTS (SELECT 1 FROM match_games WHERE match_id = OLD.match_id)
+                OR EXISTS (SELECT 1 FROM match_results WHERE match_id = OLD.match_id)
+            THEN
+                RAISE EXCEPTION 'recorded match fixture must be retained'
+                    USING ERRCODE = '23514';
+            END IF;
+        END IF;
+        RETURN COALESCE(NEW, OLD);
     EXCEPTION WHEN lock_not_available THEN
         -- UPDATE has already locked the fixture before this row trigger. Never
         -- wait backwards: direct writers must retry with parent locks first.
@@ -584,7 +595,7 @@ ENTRY_INTEGRITY_DDL = (
     END $$
     """,
     """
-    CREATE TRIGGER lock_fixture_link BEFORE INSERT OR UPDATE OF match_id
+    CREATE TRIGGER lock_fixture_link BEFORE INSERT OR UPDATE OF match_id OR DELETE
     ON tournament_fixtures FOR EACH ROW EXECUTE FUNCTION lock_fixture_link()
     """,
     """
