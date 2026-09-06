@@ -114,6 +114,16 @@ ENTRY_INTEGRITY_DDL = (
             RAISE EXCEPTION 'lineup history requires a new correction revision'
                 USING ERRCODE = '23514';
         END IF;
+        IF lineup.revision = 1 AND NOT EXISTS (
+            SELECT 1 FROM matches WHERE id = lineup.match_id
+                AND (status = 'in_progress'
+                    OR (status = 'completed' AND ending IS NULL)
+                    OR (status IN ('completed', 'voided')
+                        AND ending = 'stopped_during_play'))
+        ) THEN
+            RAISE EXCEPTION 'lineup requires a started match'
+                USING ERRCODE = '23514';
+        END IF;
         SELECT t.owner_account_id INTO owner_uuid
         FROM tournament_fixtures f
         JOIN tournament_event_stages s ON s.id = f.stage_id
@@ -339,9 +349,16 @@ ENTRY_INTEGRITY_DDL = (
             END IF;
         END IF;
         IF TG_TABLE_NAME = 'players' THEN
-            FOR event_uuid IN SELECT DISTINCT e.event_id FROM tournament_entry_members m
-                JOIN tournament_entries e ON e.id = m.entry_id
-                WHERE entry_canonical_player(m.player_id) = OLD.id ORDER BY e.event_id
+            FOR event_uuid IN
+                WITH RECURSIVE affected_players(id) AS (
+                    SELECT OLD.id
+                    UNION
+                    SELECT p.id FROM players p
+                    JOIN affected_players a ON p.merged_into_player_id = a.id
+                )
+                SELECT DISTINCT e.event_id FROM affected_players a
+                JOIN tournament_entry_members m ON m.player_id = a.id
+                JOIN tournament_entries e ON e.id = m.entry_id ORDER BY e.event_id
             LOOP
                 UPDATE tournament_events SET id = id WHERE id = event_uuid;
             END LOOP;
@@ -361,10 +378,22 @@ ENTRY_INTEGRITY_DDL = (
     """
     CREATE OR REPLACE FUNCTION check_entry_event() RETURNS trigger
     LANGUAGE plpgsql AS $$
-    DECLARE event_uuid uuid;
+    DECLARE event_uuid uuid; affected_events uuid[];
     BEGIN
         IF TG_TABLE_NAME = 'players' THEN
-            event_uuid := NULL;
+            -- Only source identities change their canonical projection. Include
+            -- aliases already merged into the source, without resolving every
+            -- membership across the platform.
+            WITH RECURSIVE affected_players(id) AS (
+                SELECT NEW.id
+                UNION
+                SELECT p.id FROM players p
+                JOIN affected_players a ON p.merged_into_player_id = a.id
+            )
+            SELECT array_agg(DISTINCT e.event_id) INTO affected_events
+            FROM affected_players a
+            JOIN tournament_entry_members m ON m.player_id = a.id
+            JOIN tournament_entries e ON e.id = m.entry_id;
         ELSIF TG_TABLE_NAME = 'tournament_events' THEN
             event_uuid := NEW.id;
         ELSIF TG_TABLE_NAME = 'tournament_entries' THEN
@@ -373,10 +402,13 @@ ENTRY_INTEGRITY_DDL = (
             SELECT event_id INTO event_uuid FROM tournament_entries
             WHERE id = COALESCE(NEW.entry_id, OLD.entry_id);
         END IF;
+        IF TG_TABLE_NAME <> 'players' THEN
+            affected_events := ARRAY[event_uuid];
+        END IF;
         IF EXISTS (
             SELECT m.entry_id FROM tournament_entry_members m
             JOIN tournament_entries e ON e.id = m.entry_id
-            WHERE (event_uuid IS NULL OR e.event_id = event_uuid)
+            WHERE e.event_id = ANY(affected_events)
                 AND e.status = 'entered' AND m.left_at IS NULL
             GROUP BY m.entry_id, entry_canonical_player(m.player_id)
             HAVING count(*) > 1
@@ -388,7 +420,7 @@ ENTRY_INTEGRITY_DDL = (
             SELECT entry_canonical_player(m.player_id) FROM tournament_entry_members m
             JOIN tournament_entries e ON e.id = m.entry_id
             JOIN tournament_events ev ON ev.id = e.event_id
-            WHERE (event_uuid IS NULL OR e.event_id = event_uuid) AND e.status =
+            WHERE e.event_id = ANY(affected_events) AND e.status =
         'entered'
               AND m.left_at IS NULL
               AND NOT ev.allow_multiple_entries_per_player

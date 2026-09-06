@@ -172,8 +172,9 @@ async def test_team_event_can_explicitly_allow_multiple_entries(db_session):
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
 
+@pytest.mark.parametrize("through_alias", [False, True])
 async def test_permissive_team_still_rejects_merged_duplicates_within_one_entry(
-    db_session,
+    db_session, through_alias
 ):
     event = await _make_event(db_session, format=EventFormat.teams)
     event.allow_multiple_entries_per_player = True
@@ -185,12 +186,123 @@ async def test_permissive_team_still_rejects_merged_duplicates_within_one_entry(
         )
     )
     await db_session.commit()
+    source_account_id = players[0].id
+    if through_alias:
+        successor = await make_user(db_session, "same-team-successor")
+        await merge_user(
+            db_session, from_user_id=source_account_id, to_user_id=successor.id
+        )
+        await db_session.commit()
+        source_account_id = successor.id
     with pytest.raises(IntegrityError, match="duplicate.*member"):
         async with db_session.begin_nested():
             await merge_user(
-                db_session, from_user_id=players[0].id, to_user_id=players[1].id
+                db_session, from_user_id=source_account_id, to_user_id=players[1].id
             )
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_reentry_and_identity_merge_share_event_before_player_lock_order(
+    db_session, engine
+):
+    from app.models import TournamentEntryStatus
+
+    event = await _make_event(db_session)
+    source = await make_user(db_session, "reentry-source")
+    target = await make_user(db_session, "reentry-target")
+    db_session.add(
+        TournamentEntry(
+            event_id=event.id,
+            user_id=source.player_id,
+            status=TournamentEntryStatus.withdrawn,
+        )
+    )
+    await db_session.commit()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as registration, sessions() as merger:
+        registration_pid = await registration.scalar(text("SELECT pg_backend_pid()"))
+        merger_pid = await merger.scalar(text("SELECT pg_backend_pid()"))
+        entry_id = await registration.scalar(
+            text(
+                "INSERT INTO tournament_entries (event_id) VALUES (:event) RETURNING id"
+            ),
+            {"event": event.id},
+        )
+        merge_task = asyncio.create_task(
+            merge_user(merger, from_user_id=source.id, to_user_id=target.id)
+        )
+        try:
+
+            async def wait_for_block():
+                while registration_pid not in await db_session.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": merger_pid}
+                ):
+                    assert not merge_task.done()
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_block(), timeout=5)
+            # The member FK must still be acquirable while merge waits for the
+            # event. NOWAIT exposes an inverted lock without a deadlock timeout.
+            await registration.execute(
+                text("SELECT id FROM players WHERE id = :id FOR KEY SHARE NOWAIT"),
+                {"id": source.player_id},
+            )
+            await registration.execute(
+                text(
+                    "INSERT INTO tournament_entry_members (entry_id, player_id) "
+                    "VALUES (:entry, :player)"
+                ),
+                {"entry": entry_id, "player": source.player_id},
+            )
+            await registration.commit()
+            await asyncio.wait_for(merge_task, timeout=5)
+            await merger.commit()
+            assert (
+                await db_session.scalar(
+                    text("SELECT entry_single_player(:entry)"), {"entry": entry_id}
+                )
+                == target.player_id
+            )
+        finally:
+            if not merge_task.done():
+                merge_task.cancel()
+            await asyncio.gather(merge_task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("through_alias", [False, True])
+async def test_identity_merge_does_not_validate_unrelated_deferred_entry_changes(
+    db_session, through_alias
+):
+    affected = await _make_event(db_session)
+    unrelated = await _make_event(db_session)
+    source = await make_user(db_session, "scoped-source")
+    target = await make_user(db_session, "scoped-target")
+    other = await make_user(db_session, "scoped-other")
+    registered_player = source.player_id
+    if through_alias:
+        alias = await make_user(db_session, "scoped-alias")
+        registered_player = alias.player_id
+        await merge_user(db_session, from_user_id=alias.id, to_user_id=source.id)
+    db_session.add(TournamentEntry(event_id=affected.id, user_id=registered_player))
+    await db_session.commit()
+    # An unrelated event can have a temporary duplicate during an atomic edit.
+    # Checking this merge must not force that event's deferred checks early.
+    db_session.add_all(
+        [
+            TournamentEntry(event_id=unrelated.id, user_id=other.player_id)
+            for _ in range(2)
+        ]
+    )
+    await db_session.flush()
+    await merge_user(db_session, from_user_id=source.id, to_user_id=target.id)
+    await db_session.execute(
+        text("SET CONSTRAINTS check_player_entry_events IMMEDIATE")
+    )
+    # The unrelated event still has its own integrity checks; they were scoped,
+    # not disabled. Never commit its deliberately unfinished edit.
+    with pytest.raises(IntegrityError, match="player already entered"):
+        await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await db_session.rollback()
 
 
 @pytest.mark.parametrize("exclusive_collision", [False, True])
@@ -416,6 +528,27 @@ async def seed_doubles_match(db_session):
     db_session.add(fixture)
     await db_session.commit()
     return event, players, entries, match, fixture
+
+
+async def test_pending_match_cannot_record_a_complete_played_lineup(db_session):
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    with pytest.raises(IntegrityError, match="lineup requires a started match"):
+        async with db_session.begin_nested():
+            lineup_id = await db_session.scalar(
+                text("INSERT INTO match_lineups (match_id) VALUES (:id) RETURNING id"),
+                {"id": match.id},
+            )
+            await db_session.execute(
+                text(
+                    "INSERT INTO match_lineup_players "
+                    "(lineup_id, side_number, entry_member_id, player_id) "
+                    "SELECT :lineup, CASE WHEN entry_id = :a THEN 1 ELSE 2 END, "
+                    "id, player_id FROM tournament_entry_members "
+                    "WHERE entry_id IN (:a, :b) AND left_at IS NULL"
+                ),
+                {"lineup": lineup_id, "a": entries[0].id, "b": entries[1].id},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
 
 @pytest.mark.parametrize("commit_call", [False, True])

@@ -52,6 +52,8 @@ captures those participants into a separate **Match lineup** and its member rows
 An ordinary result that completes a pending match directly captures the lineup at
 completion, the first recorded evidence of play when no start signal was saved.
 An explicit walkover remains lineup-free.
+Direct database writes cannot create an initial played lineup for a pending match;
+the match must be in progress or have a played terminal outcome.
 Every participant must be a current member of the entry seated on their side.
 Team rosters may be larger than the actual lineup; `MatchSettings.team_size`
 determines the number playing on each side.
@@ -124,6 +126,8 @@ seed/order reconciliation and uncut/re-solve rules continue. An Account transfer
 alone changes neither membership nor actual participants.
 Distinct entries in a team event that explicitly allows multiple entries per
 Player are not collisions and remain entered through an identity merge.
+Merge membership locks and duplicate checks are scoped to events containing the
+source Player or its earlier merged aliases, not unrelated platform entries.
 
 ## Migration and verification
 
