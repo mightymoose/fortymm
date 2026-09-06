@@ -46,7 +46,7 @@ class TournamentEntryMember(Base):
         ForeignKey("players.id", ondelete="RESTRICT"), nullable=False
     )
     joined_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.clock_timestamp(), nullable=False
     )
     left_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     joined_by_account_id: Mapped[uuid.UUID | None] = mapped_column(

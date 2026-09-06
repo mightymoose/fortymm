@@ -47,6 +47,9 @@ public registration window stays closed after go-live, including for directors.
 `match_side_players` continues to serve today's scheduled participants and singles
 contracts. At the first persisted transition to `in_progress`, a tournament match
 captures those participants into a separate **Match lineup** and its member rows.
+An ordinary result that completes a pending match directly captures the lineup at
+completion, the first recorded evidence of play when no start signal was saved.
+An explicit walkover remains lineup-free.
 Every participant must be a current member of the entry seated on their side.
 Team rosters may be larger than the actual lineup; `MatchSettings.team_size`
 determines the number playing on each side.
@@ -63,6 +66,12 @@ a database writer can amend its scheduled participants to reflect an eligible
 replacement. No such scheduling or substitution workflow is exposed here. An
 existing match call is the backend's start signal; subsequent call corrections
 do not rewrite an already recorded lineup.
+
+Membership joins use wall-clock insertion time, not transaction-start time, so a
+long-running roster transaction cannot backdate a replacement's eligibility.
+Format edits incompatible with current member counts or the team's participation
+exception are refused by the existing HTTP/MCP adapters before mutation; database
+constraints remain the final guard for direct writers.
 
 A **Lineup correction** is another complete revision, with the same start time,
 the next revision number, the current director's Account, and a nonblank reason.

@@ -35,8 +35,16 @@ from tests.test_tournament_entries import _entries_url, _make_event
 from tests.test_tournament_fixtures import _make_event as make_drawn_event
 
 
-@pytest_asyncio.fixture(scope="session", params=["metadata", "alembic"])
-async def postgres_url(postgres_url, request):
+@pytest.fixture(scope="session", params=["metadata", "alembic"])
+def entry_schema(request):
+    # Parametrize schema selection, not the postgres_url override itself: the
+    # latter also keys its inherited fixture and restarts the shared container,
+    # stranding the application's cached engine on a stopped port in later tests.
+    return request.param
+
+
+@pytest_asyncio.fixture(scope="session")
+async def postgres_url(postgres_url, entry_schema):
     """Every integrity scenario runs against ORM DDL and a real fresh migration."""
     database = "entry_members_" + uuid.uuid4().hex
     url = make_url(postgres_url).set(database=database)
@@ -44,7 +52,7 @@ async def postgres_url(postgres_url, request):
     async with admin.connect() as connection:
         await connection.execute(text(f'CREATE DATABASE "{database}"'))
     try:
-        if request.param == "alembic":
+        if entry_schema == "alembic":
             installed = subprocess.run(
                 [sys.executable, "-m", "alembic", "upgrade", "head"],
                 cwd=Path(__file__).parents[1],
@@ -107,6 +115,29 @@ async def test_a_player_can_enter_multiple_events_but_not_twice_in_one(
     duplicate = await api_client.post(first_url)
     assert duplicate.status_code == 409
     assert duplicate.json()["detail"]["code"] == "already_entered"
+
+
+async def test_format_edit_refuses_incompatible_existing_members(
+    api_client, db_session
+):
+    from app.models import DrawType
+    from app.tournament_event_stages import mint_stages
+
+    actor = await start_session(api_client, db_session)
+    event = await _make_event(db_session)
+    event.stages = mint_stages(DrawType.single_elim)
+    tournament = await db_session.get(Tournament, event.tournament_id)
+    tournament.owner_account_id = actor.id
+    await db_session.commit()
+    assert (await api_client.post(_entries_url(event))).status_code == 201
+    response = await api_client.patch(
+        f"/v1/tournaments/{tournament.id}/events/{event.id}",
+        json={"format": "doubles", "lock_version": event.lock_version},
+    )
+    assert response.status_code == 409, response.text
+    assert "existing entry membership" in response.json()["detail"]
+    await db_session.refresh(event)
+    assert event.format is EventFormat.singles
 
 
 async def test_team_event_can_explicitly_allow_multiple_entries(db_session):
@@ -196,6 +227,18 @@ async def test_director_correction_adds_a_revision_without_rewriting_original(
                 {"id": original_id, "player": players[0].player_id},
             )
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_membership_join_time_is_when_the_member_is_inserted(db_session):
+    event = await _make_event(db_session)
+    player = await make_user(db_session, "late-join")
+    # Start the transaction, then record a later wall-clock boundary before insert.
+    await db_session.execute(text("SELECT transaction_timestamp()"))
+    boundary = await db_session.scalar(text("SELECT clock_timestamp()"))
+    entry = TournamentEntry(event_id=event.id, user_id=player.player_id)
+    db_session.add(entry)
+    await db_session.commit()
+    assert entry.members[0].joined_at >= boundary
 
 
 async def test_partner_replacement_keeps_membership_history_and_entry(db_session):
@@ -313,6 +356,28 @@ async def seed_doubles_match(db_session):
     db_session.add(fixture)
     await db_session.commit()
     return event, players, entries, match, fixture
+
+
+async def test_direct_result_completion_preserves_actual_lineup(db_session):
+    from app.result_proposal import propose_result
+    from app.schemas.match import MatchResultsGameWrite
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    assert match.status is MatchStatus.pending
+    await propose_result(
+        db_session,
+        match.id,
+        players[0].id,
+        games=[
+            MatchResultsGameWrite(game_number=n, side_1_points=11, side_2_points=4)
+            for n in range(1, 4)
+        ],
+        supersedes_result_id=None,
+    )
+    assert match.status is MatchStatus.completed
+    assert (
+        await db_session.scalar(text("SELECT count(*) FROM match_lineup_players")) == 4
+    )
 
 
 async def test_start_captures_actual_doubles_lineup_independent_of_roster(db_session):

@@ -10995,6 +10995,7 @@ async def test_a_decided_matchs_placement_flags_neither_axis(
 
     match = await _make_match(db_session, owner, default_league)
     match.status = frozen_status
+    await seed_fixture_match_sides(db_session, fixture, match)
     fixture.match_id = match.id
     await db_session.commit()
 
@@ -11226,6 +11227,7 @@ async def test_a_played_out_fixture_refuses_a_placement_move(
 
     match = await _make_match(db_session, owner, default_league)
     match.status = frozen_status
+    await seed_fixture_match_sides(db_session, fixture, match)
     fixture.match_id = match.id
     await db_session.commit()
 

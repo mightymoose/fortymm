@@ -214,7 +214,8 @@ ENTRY_INTEGRITY_DDL = (
     LANGUAGE plpgsql AS $$
     DECLARE fixture tournament_fixtures; lineup_uuid uuid;
     BEGIN
-        IF NEW.status <> 'in_progress' OR EXISTS (
+        IF NOT (NEW.status = 'in_progress'
+            OR (NEW.status = 'completed' AND NEW.ending IS NULL)) OR EXISTS (
             SELECT 1 FROM match_lineups WHERE match_id = NEW.id
         ) THEN RETURN NULL; END IF;
         SELECT * INTO fixture FROM tournament_fixtures WHERE match_id = NEW.id;

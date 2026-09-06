@@ -81,6 +81,25 @@ async def test_fresh_alembic_install_has_schema_parity(postgres_url):
                         text("UPDATE accounts SET merged_at = NULL WHERE id = :id"),
                         {"id": guest.id},
                     )
+        rollback = subprocess.run(
+            [sys.executable, "-m", "alembic", "downgrade", "base"],
+            cwd=Path(__file__).parents[1],
+            env={
+                **os.environ,
+                "DATABASE_URL": migration_url.render_as_string(hide_password=False),
+            },
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert rollback.returncode == 0, rollback.stderr
+        async with migrated.connect() as connection:
+            assert (
+                await connection.scalar(
+                    text("SELECT to_regprocedure('check_match_lineup()')")
+                )
+                is None
+            )
     finally:
         await migrated.dispose()
         async with admin.connect() as connection:

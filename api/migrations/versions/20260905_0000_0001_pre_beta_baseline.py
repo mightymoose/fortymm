@@ -213,7 +213,8 @@ ENTRY_INTEGRITY_DDL = (
     LANGUAGE plpgsql AS $$
     DECLARE fixture tournament_fixtures; lineup_uuid uuid;
     BEGIN
-        IF NEW.status <> 'in_progress' OR EXISTS (
+        IF NOT (NEW.status = 'in_progress'
+            OR (NEW.status = 'completed' AND NEW.ending IS NULL)) OR EXISTS (
             SELECT 1 FROM match_lineups WHERE match_id = NEW.id
         ) THEN RETURN NULL; END IF;
         SELECT * INTO fixture FROM tournament_fixtures WHERE match_id = NEW.id;
@@ -2313,7 +2314,7 @@ def upgrade() -> None:
         sa.Column(
             "joined_at",
             sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
+            server_default=sa.text("clock_timestamp()"),
             nullable=False,
         ),
         sa.Column("left_at", sa.DateTime(timezone=True), nullable=True),
@@ -2460,6 +2461,21 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # These functions and their dependent triggers belong to this baseline.
+    # Remove them before the table row types referenced by their bodies.
+    for signature in (
+        "check_match_ending()",
+        "authorize_entry_membership()",
+        "check_match_lineup()",
+        "preserve_match_lineup()",
+        "capture_match_lineup()",
+        "preserve_entry_membership()",
+        "lock_entry_event()",
+        "check_entry_event()",
+        "entry_single_player(uuid)",
+        "entry_canonical_player(uuid)",
+    ):
+        op.execute(f"DROP FUNCTION IF EXISTS {signature} CASCADE")
     op.drop_table("match_lineup_players")
     op.drop_table("match_lineups")
     op.drop_table("tournament_entry_members")

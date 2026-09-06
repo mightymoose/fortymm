@@ -23,14 +23,18 @@ import uuid
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.draws import group_label
 from app.models import (
     DrawType,
+    EventFormat,
     ScheduleSolveTrigger,
+    TournamentEntry,
+    TournamentEntryMember,
+    TournamentEntryStatus,
     TournamentEvent,
     TournamentEventReservation,
     TournamentFixture,
@@ -68,6 +72,7 @@ from app.tournament_draws import (
 from app.tournament_edit import _load_owned_tournament_for_update
 from app.tournament_errors import (
     DrawTypeFrozenError,
+    EventFormatMembershipError,
     EventNotFoundError,
     EventVersionConflictError,
     GroupSetFrozenError,
@@ -916,6 +921,38 @@ async def _reanchor_placements_for_timezone_change(
             fixture.scheduled_start = _reanchor(fixture.scheduled_start)
 
 
+async def _enforce_entry_format(
+    db: AsyncSession, event: TournamentEvent, target: EventFormat | None
+) -> None:
+    if target is None or target is event.format:
+        return
+    if event.allow_multiple_entries_per_player and target is not EventFormat.teams:
+        raise EventFormatMembershipError()
+    count = func.count(TournamentEntryMember.id)
+    invalid = (
+        count < 1
+        if target is EventFormat.teams
+        else count != (1 if target is EventFormat.singles else 2)
+    )
+    incompatible = await db.scalar(
+        select(TournamentEntry.id)
+        .outerjoin(
+            TournamentEntryMember,
+            (TournamentEntryMember.entry_id == TournamentEntry.id)
+            & TournamentEntryMember.left_at.is_(None),
+        )
+        .where(
+            TournamentEntry.event_id == event.id,
+            TournamentEntry.status == TournamentEntryStatus.entered,
+        )
+        .group_by(TournamentEntry.id)
+        .having(invalid)
+        .limit(1)
+    )
+    if incompatible is not None:
+        raise EventFormatMembershipError()
+
+
 async def update_event(
     db: AsyncSession,
     *,
@@ -1023,6 +1060,7 @@ async def update_event(
     # refusal writes nothing at all.
     await _enforce_group_set_frozen(db, event, updates)
     await _enforce_draw_settings_frozen(db, event, updates)
+    await _enforce_entry_format(db, event, updates.format)
     # The reservation cap (#1482) is judged after both freezes: the freeze is the
     # refusal a director can act on, so a cut event over the cap answers the 409 that
     # names its groups before this 422.
