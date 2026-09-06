@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
+    BigInteger,
     DateTime,
     Enum,
     ForeignKey,
@@ -108,6 +109,9 @@ class TournamentEntry(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    created_transaction_id: Mapped[int] = mapped_column(
+        BigInteger, server_default=text("txid_current()"), nullable=False
     )
 
     event: Mapped["TournamentEvent"] = relationship(back_populates="entries")

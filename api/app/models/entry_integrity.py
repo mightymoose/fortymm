@@ -78,7 +78,7 @@ ENTRY_INTEGRITY_DDL = (
         JOIN tournament_events e ON e.id = en.event_id
         JOIN tournaments t ON t.id = e.tournament_id
         WHERE en.id = NEW.entry_id AND t.status IN ('live', 'archived')
-            AND en.created_at < transaction_timestamp();
+            AND en.created_transaction_id <> txid_current();
         IF NOT FOUND THEN RETURN NEW; END IF;
         IF TG_OP = 'INSERT' THEN actor_uuid := NEW.joined_by_account_id;
         ELSIF NEW.left_at IS DISTINCT FROM OLD.left_at THEN actor_uuid :=
@@ -374,8 +374,16 @@ ENTRY_INTEGRITY_DDL = (
     LANGUAGE plpgsql AS $$
     DECLARE event_uuid uuid;
     BEGIN
-        IF TG_TABLE_NAME = 'tournament_entries' AND TG_OP = 'UPDATE' THEN
-            IF NEW.event_id IS DISTINCT FROM OLD.event_id THEN
+        IF TG_TABLE_NAME = 'tournament_entries' THEN
+            IF TG_OP = 'INSERT' THEN
+                NEW.created_transaction_id := txid_current();
+            ELSIF TG_OP = 'UPDATE' AND
+                NEW.created_transaction_id IS DISTINCT FROM OLD.created_transaction_id
+            THEN
+                RAISE EXCEPTION 'entry creation transaction is immutable'
+                    USING ERRCODE = '23514';
+            END IF;
+            IF TG_OP = 'UPDATE' AND NEW.event_id IS DISTINCT FROM OLD.event_id THEN
                 RAISE EXCEPTION 'entry event is immutable' USING ERRCODE = '23514';
             END IF;
         END IF;

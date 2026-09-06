@@ -305,6 +305,42 @@ async def test_identity_merge_does_not_validate_unrelated_deferred_entry_changes
     await db_session.rollback()
 
 
+@pytest.mark.parametrize("has_collision", [False, True])
+async def test_merge_collision_lookup_ignores_unrelated_identity_edits(
+    db_session, has_collision
+):
+    event = await _make_event(db_session)
+    source = await make_user(db_session, "lookup-source")
+    target = await make_user(db_session, "lookup-target")
+    others = [await make_user(db_session, f"lookup-other-{n}") for n in range(2)]
+    db_session.add(TournamentEntry(event_id=event.id, user_id=others[0].player_id))
+    await db_session.commit()
+    if has_collision:
+        affected = await _make_event(db_session)
+        db_session.add_all(
+            [
+                TournamentEntry(event_id=affected.id, user_id=p.player_id)
+                for p in (source, target)
+            ]
+        )
+        await db_session.commit()
+    # An unrelated identity edit is temporarily cyclic with deferred validation.
+    # Collision discovery for these two players must not evaluate that entry.
+    for original, destination in [(others[0], others[1]), (others[1], others[0])]:
+        await db_session.execute(
+            text(
+                "UPDATE players SET merged_into_player_id = :destination, "
+                "merged_at = clock_timestamp() WHERE id = :original"
+            ),
+            {"original": original.player_id, "destination": destination.player_id},
+        )
+    await merge_user(db_session, from_user_id=source.id, to_user_id=target.id)
+    # Its own deferred validation still rejects the unrelated unfinished edit.
+    with pytest.raises(IntegrityError, match="cyclic player identity"):
+        await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await db_session.rollback()
+
+
 @pytest.mark.parametrize("exclusive_collision", [False, True])
 async def test_merge_preserves_distinct_entries_in_a_permissive_team_event(
     db_session, exclusive_collision
@@ -1157,6 +1193,88 @@ async def test_lineup_correction_requires_the_director(db_session):
                 {"id": match.id, "actor": players[0].id},
             )
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_format_change_racing_roster_addition_reports_format_conflict(
+    db_session, engine
+):
+    from app.models import User
+    from app.schemas.tournament import TournamentEventUpdate
+    from app.tournament_errors import EventFormatMembershipError
+    from app.tournament_events import update_event
+
+    event = await make_drawn_event(db_session)
+    event.format = EventFormat.teams
+    players = [await make_user(db_session, f"format-race-{n}") for n in range(2)]
+    entry = TournamentEntry(event_id=event.id, user_id=players[0].player_id)
+    db_session.add(entry)
+    await db_session.commit()
+    tournament = await db_session.get(Tournament, event.tournament_id)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as roster, sessions() as editor:
+        roster_pid = await roster.scalar(text("SELECT pg_backend_pid()"))
+        editor_pid = await editor.scalar(text("SELECT pg_backend_pid()"))
+        actor = await editor.get(User, tournament.owner_account_id)
+        await roster.execute(
+            text(
+                "INSERT INTO tournament_entry_members (entry_id, player_id) "
+                "VALUES (:entry, :player)"
+            ),
+            {"entry": entry.id, "player": players[1].player_id},
+        )
+
+        async def edit():
+            await update_event(
+                editor,
+                tournament_id=event.tournament_id,
+                event_id=event.id,
+                actor=actor,
+                updates=TournamentEventUpdate(
+                    format=EventFormat.singles, lock_version=event.lock_version
+                ),
+            )
+            await editor.commit()
+
+        edit_task = asyncio.create_task(edit())
+        try:
+
+            async def wait_for_block():
+                while roster_pid not in await db_session.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": editor_pid}
+                ):
+                    assert not edit_task.done()
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_block(), timeout=5)
+            await roster.commit()
+            with pytest.raises(EventFormatMembershipError):
+                await edit_task
+        finally:
+            if not edit_task.done():
+                edit_task.cancel()
+            await asyncio.gather(edit_task, return_exceptions=True)
+
+
+async def test_older_transaction_cannot_bypass_live_roster_director(db_session, engine):
+    event = await _make_event(db_session, format=EventFormat.teams)
+    players = [await make_user(db_session, f"old-transaction-{n}") for n in range(2)]
+    tournament = await db_session.get(Tournament, event.tournament_id)
+    tournament.status = TournamentStatus.live
+    await db_session.commit()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as older:
+        await older.execute(text("SELECT transaction_timestamp()"))
+        entry = TournamentEntry(event_id=event.id, user_id=players[0].player_id)
+        db_session.add(entry)
+        await db_session.commit()
+        with pytest.raises(IntegrityError, match="director"):
+            await older.execute(
+                text(
+                    "INSERT INTO tournament_entry_members (entry_id, player_id) "
+                    "VALUES (:entry, :player)"
+                ),
+                {"entry": entry.id, "player": players[1].player_id},
+            )
 
 
 async def test_roster_changes_after_go_live_record_the_director(db_session):

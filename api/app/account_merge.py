@@ -512,40 +512,55 @@ async def _resolve_entry_collisions(
     solve per tournament under the existing tournament-row locks. This runs in
     the caller's transaction, making withdrawal and draw reconciliation atomic.
     """
-    params = {
+    params: dict[str, Any] = {
         "from_id": from_user_id,
         "to_id": to_user_id,
         "active": _ACTIVE_ENTRY_STATUS,
     }
 
     # Read before withdrawal removes the active collision from these queries.
-    collided_event_ids = set(
+    collisions = (
         (
             await db.execute(
                 text(
                     """
-                    SELECT guest.event_id
-                    FROM tournament_entries AS guest
-                    JOIN tournament_entries AS survivor
+                    WITH RECURSIVE identities(id) AS (
+                        SELECT CAST(:from_id AS uuid)
+                        UNION SELECT CAST(:to_id AS uuid)
+                        UNION SELECT p.id FROM players p
+                            JOIN identities i ON p.merged_into_player_id = i.id
+                    ), candidate_entries AS MATERIALIZED (
+                        SELECT DISTINCT m.entry_id FROM identities i
+                        JOIN tournament_entry_members m ON m.player_id = i.id
+                        WHERE m.left_at IS NULL
+                    ), projected_entries AS MATERIALIZED (
+                        SELECT e.id, e.event_id, entry_single_player(e.id) AS player_id
+                        FROM candidate_entries c
+                        JOIN tournament_entries e ON e.id = c.entry_id
+                        JOIN tournament_events ev ON ev.id = e.event_id
+                        WHERE e.status = :active
+                            AND NOT ev.allow_multiple_entries_per_player
+                    )
+                    SELECT guest.event_id, guest.id, survivor.id
+                    FROM projected_entries AS guest
+                    JOIN projected_entries AS survivor
                       ON survivor.event_id = guest.event_id
-                     AND entry_single_player(survivor.id) = :to_id
-                     AND survivor.status = :active
-                    WHERE entry_single_player(guest.id) = :from_id
-                      AND guest.status = :active
-                      AND guest.event_id IN (
-                        SELECT id FROM tournament_events
-                        WHERE NOT allow_multiple_entries_per_player
-                      )
+                     AND survivor.player_id = :to_id
+                    WHERE guest.player_id = :from_id
                     """
                 ),
                 params,
             )
         )
-        .scalars()
+        .tuples()
         .all()
     )
+    collided_event_ids = {row[0] for row in collisions}
     if not collided_event_ids:
         return
+    source_entry_ids = {row[1] for row in collisions}
+    params["source_entry_ids"] = list(source_entry_ids)
+    params["target_entry_ids"] = list({row[2] for row in collisions})
 
     # Every mutation below is a **scheduling input** changing (ADR "the schedule
     # is solved; the call is pinned"): a withdrawal or an un-cut.
@@ -619,7 +634,7 @@ async def _resolve_entry_collisions(
                         TournamentEntry.event_id == TournamentEvent.id,
                     )
                     .where(
-                        TournamentEntry.user_id == from_user_id,
+                        TournamentEntry.id.in_(source_entry_ids),
                         TournamentEntry.status == TournamentEntryStatus.entered,
                         TournamentEntry.event_id.in_(played_event_ids),
                         exists(
@@ -641,7 +656,7 @@ async def _resolve_entry_collisions(
         await db.execute(
             update(TournamentEntry)
             .where(
-                TournamentEntry.user_id == from_user_id,
+                TournamentEntry.id.in_(source_entry_ids),
                 TournamentEntry.status == TournamentEntryStatus.entered,
                 TournamentEntry.event_id.in_(played_event_ids),
             )
@@ -657,9 +672,9 @@ async def _resolve_entry_collisions(
             SET created_at = LEAST(survivor.created_at, guest.created_at),
                 seed = COALESCE(survivor.seed, guest.seed)
             FROM tournament_entries AS guest
-            WHERE entry_single_player(survivor.id) = :to_id
+            WHERE survivor.id = ANY(:target_entry_ids)
               AND survivor.status = :active
-              AND entry_single_player(guest.id) = :from_id
+              AND guest.id = ANY(:source_entry_ids)
               AND guest.status = :active
               AND guest.event_id = survivor.event_id
               AND guest.event_id IN (
@@ -696,7 +711,7 @@ async def _resolve_entry_collisions(
         text(
             """
             UPDATE tournament_entries AS te SET status = 'withdrawn'
-            WHERE entry_single_player(te.id) = :from_id
+            WHERE te.id = ANY(:source_entry_ids)
               AND te.status = :active
               AND te.event_id IN (
                 SELECT id FROM tournament_events
@@ -704,7 +719,7 @@ async def _resolve_entry_collisions(
               )
               AND EXISTS (
                 SELECT 1 FROM tournament_entries other
-                WHERE entry_single_player(other.id) = :to_id
+                WHERE other.id = ANY(:target_entry_ids)
                   AND other.event_id = te.event_id
                   AND other.status = :active
               )

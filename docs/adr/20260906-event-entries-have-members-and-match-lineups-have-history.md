@@ -36,10 +36,14 @@ membership frees their place for another entry in that event. The team exception
 cannot be enabled on singles or doubles events. These rules are enforced for SQL
 writers as well as the backend: writes serialize on the event row, with deferred
 checks allowing a replacement to be completed within one transaction.
+Format edits lock that event before validating the roster, so a racing member edit
+produces the existing format conflict rather than a commit-time server error.
 
 After the tournament goes live, changes to existing entry membership must record
 the current director's Account as the joining/leaving actor. Initial entry/member
 construction in one transaction remains possible for seeds and model construction.
+The database stamps and preserves the entry's creation transaction ID; an older
+transaction does not become its creator merely because its timestamp is earlier.
 This is attribution and domain validation for trusted database writers, not a new
 authentication mechanism: any future workflow must authenticate its actor. Today's
 public registration window stays closed after go-live, including for directors.
@@ -135,6 +139,8 @@ Distinct entries in a team event that explicitly allows multiple entries per
 Player are not collisions and remain entered through an identity merge.
 Merge membership locks and duplicate checks are scoped to events containing the
 source Player or its earlier merged aliases, not unrelated platform entries.
+Collision discovery starts from indexed memberships for both merging identities
+and their aliases, then reuses the candidate entry IDs for reconciliation.
 
 ## Migration and verification
 

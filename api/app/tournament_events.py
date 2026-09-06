@@ -90,7 +90,11 @@ from app.tournament_retention import require_no_recorded_play
 
 
 async def _load_event(
-    db: AsyncSession, tournament_id: uuid.UUID, event_id: uuid.UUID
+    db: AsyncSession,
+    tournament_id: uuid.UUID,
+    event_id: uuid.UUID,
+    *,
+    for_update: bool = False,
 ) -> TournamentEvent:
     """Load the event ``event_id`` **under the named tournament**, or raise
     :class:`EventNotFoundError`.
@@ -101,14 +105,15 @@ async def _load_event(
     edit. Raises the domain exception the adapter maps to the existing 404
     ``"Event not found."``; never an ``HTTPException``.
     """
-    event = (
-        await db.execute(
-            select(TournamentEvent).where(
-                TournamentEvent.id == event_id,
-                TournamentEvent.tournament_id == tournament_id,
-            )
+    statement = select(TournamentEvent).where(
+        TournamentEvent.id == event_id,
+        TournamentEvent.tournament_id == tournament_id,
+    )
+    if for_update:
+        statement = statement.with_for_update(of=TournamentEvent).execution_options(
+            populate_existing=True
         )
-    ).scalar_one_or_none()
+    event = (await db.execute(statement)).scalar_one_or_none()
     if event is None:
         raise EventNotFoundError()
     return event
@@ -1023,7 +1028,7 @@ async def update_event(
     # re-solve trigger below run under it — and its ``league_id`` is returned to the
     # adapter so the read it shapes need not re-query that column.
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
-    event = await _load_event(db, tournament_id, event_id)
+    event = await _load_event(db, tournament_id, event_id, for_update=True)
     # FIRST of every payload gate, and after all three identity gates (#1499). The
     # ordering is the whole point of the device, in both directions:
     #
