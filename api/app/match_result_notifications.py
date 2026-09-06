@@ -228,7 +228,10 @@ async def notify_result_recorded(
     sides_with_players = [side for side in match.sides if side.players]
     if len(sides_with_players) < 2:
         return
-    poster_side = my_side(match, poster.player_id)
+    poster_player = poster.primary_player
+    poster_side = (
+        my_side(match, poster_player.id) if poster_player is not None else None
+    )
     recipient_sides = (
         sides_with_players
         if poster_side is None

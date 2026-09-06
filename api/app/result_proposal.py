@@ -303,6 +303,8 @@ async def propose_result(
     from app.player_accounts import primary_player_id
 
     player_id = await primary_player_id(db, user_id)
+    if player_id is not None and not is_participant(match, player_id):
+        player_id = None
     result = MatchResult(
         submitted_for_player_id=player_id,
         submitted_by_user_id=user_id,

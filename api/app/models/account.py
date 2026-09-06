@@ -42,6 +42,9 @@ class Account(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
+    display_name: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="Account", server_default="Account"
+    )
     email: Mapped[str | None] = mapped_column(
         String(320), unique=True, nullable=True, index=True
     )
@@ -171,6 +174,7 @@ class Account(Base):
         # experience. Account(email=...) alone creates no sporting identity.
         username = kwargs.pop("username", None)
         auth0_sub = kwargs.pop("auth0_sub", None)
+        kwargs.setdefault("display_name", username or "Account")
         kwargs.setdefault("player_grants", [])
         kwargs.setdefault("login_identities", [])
         if username is not None:
@@ -205,7 +209,7 @@ class Account(Base):
     @hybrid_property
     def username(self) -> str:
         player = self.primary_player
-        return player.username if player else ""
+        return player.username if player else self.display_name
 
     @username.inplace.setter
     def _set_username(self, value: str) -> None:
@@ -213,6 +217,7 @@ class Account(Base):
         if player is None:
             raise ValueError("Account has no primary player")
         player.username = value
+        self.display_name = value
 
     @username.inplace.expression
     @classmethod
@@ -225,7 +230,9 @@ class Account(Base):
             .scalar_subquery()
         )
         # Referencing the outer account also supports select(Account.username).
-        return case((cls.id.is_not(None), func.coalesce(name, "")), else_="")
+        return case(
+            (cls.id.is_not(None), func.coalesce(name, cls.display_name)), else_=""
+        )
 
 
 class AccountPlayer(Base):

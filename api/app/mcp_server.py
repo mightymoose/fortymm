@@ -102,7 +102,7 @@ from app.match_serialization import (
 from app.models import Match, Tournament, TournamentEvent, TournamentStatus, User
 from app.notifications.dependencies import get_push_sender
 from app.notifications.service import NotificationService
-from app.player_accounts import primary_player_id
+from app.player_accounts import PlayerAccessDenied, primary_player_id
 from app.player_matches import paginated_player_matches
 from app.player_search import SEARCH_DEFAULT_LIMIT, search_players_by_username
 from app.rate_limiting import RedisRateLimiter
@@ -1698,6 +1698,8 @@ async def enter_event(
                 event_id=event_id,
                 owner_denial="enter other players into",
             ) from exc
+        except PlayerAccessDenied as exc:
+            raise ToolError("A primary player is required to enter yourself.") from exc
         except EntryRateLimitedError as exc:
             # The self-registration per-IP rate limit — asked only on the self path,
             # the same ceiling the HTTP route enforces there.

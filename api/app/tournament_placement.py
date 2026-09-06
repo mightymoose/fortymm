@@ -184,8 +184,8 @@ def _holder_names(
     for an ``in_progress`` match (both entrants are known by construction) but
     is handled rather than indexed into blindly (api/CLAUDE.md: no bare
     ``[0]`` on a value that could be absent)."""
-    a = ingredients.user_for_entry(holder.entry_a_id)
-    b = ingredients.user_for_entry(holder.entry_b_id)
+    a = ingredients.player_for_entry(holder.entry_a_id)
+    b = ingredients.player_for_entry(holder.entry_b_id)
     a_name = a.username if a is not None else "TBD"
     b_name = b.username if b is not None else "TBD"
     return a_name, b_name
@@ -259,7 +259,7 @@ async def _enforce_no_live_call_clash(
             else "another table"
         )
         a_name, b_name = _holder_names(ingredients, player_holder)
-        user = ingredients.user_for_entry(entry_id)
+        user = ingredients.player_for_entry(entry_id)
         player_name = user.username if user is not None else "This player"
         raise PlacementClashError(
             f"{player_name} is already called to {holder_table_label} for "

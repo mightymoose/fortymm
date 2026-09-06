@@ -17,7 +17,10 @@ Player is never selected implicitly. Authorization excludes both Account and Pla
 tombstones. The current HTTP and MCP workflows act as the primary Player, preserving
 today's interface. Accounts without a primary Player read as spectators: personal
 panels are empty, while match browsing and player profiles remain available.
-Player switching and grant-management UI remain deferred.
+Player switching and grant-management UI remain deferred. Self-entry without a
+primary Player returns a deliberate authorization refusal. The existing event
+`entry_state` continues to describe rating eligibility and capacity, not grant
+authority; a new account-selection or account-only entry affordance is deferred.
 
 LoginIdentity belongs to Account. Its issuer/provider/subject tuple is unique, with
 at most one identity per Account and issuer/provider. Existing Auth0 behavior uses
@@ -45,20 +48,22 @@ refused pending an explicit reconciliation design. Account transfer is the only
 Player-management move exposed by today's flows.
 
 Match-call occupancy uses the stable Player ID; managing Accounts are resolved
-separately for notification delivery. A transfer cannot free a busy Player.
+separately for notification delivery. Every live manager receives the call; an
+unclaimed entrant does not prevent the other entrant being called. A transfer
+cannot free a busy Player.
 
 Result submission records both the acting Account and the represented Player, so
 acceptance and retirement find the correct side after an Account transfer or Player
 merge. Notifications resolve Player recipients to live managing Accounts. Existing
 automatic acceptance records the owing Player's current managing Account. Retirement
-with no managing Account, player selection and multi-manager call affordances are
-not enabled by this change.
+with no managing Account and player-selection UI are not enabled by this change.
 
 ## Classification of every former User foreign key
 
 Legacy column names remain where needed for API compatibility; their FK target is
 the authoritative identity domain. `User` is a backend alias for Account, and its
-username property projects its primary Player's username.
+username property projects its primary Player's username, falling back to a durable
+Account display name after transfer or for an account-only director.
 
 | Columns | Target and merge treatment |
 | --- | --- |

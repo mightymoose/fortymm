@@ -214,7 +214,8 @@ def test_a_call_names_a_group_only_for_a_group_stage(
     group_id = uuid.uuid4()
     ingredients = CopyIngredients(
         entry_user={},
-        users={},
+        players={},
+        accounts_by_player={},
         events={event.id: event},
         table_labels={},
         group_labels={event.id: {group_id: "Group A"}},
@@ -2231,3 +2232,37 @@ class TestTickEnqueueSelection:
         assert enqueued == [live_id]
         assert [job.func_name for job in solver_queue.jobs] == [RUN_PIN_TICK_JOB]
         assert solver_queue.jobs[0].args == (str(live_id),)
+
+
+@pytest.mark.parametrize("recipient_case", ["unclaimed", "secondary_manager"])
+async def test_match_calls_reach_every_available_manager(
+    db_session, fake_notifications_queue, monkeypatch, recipient_case
+):
+    from app.models import Account, AccountPlayer
+
+    tournament_id, event_id = await _make_tournament(db_session)
+    await _place_fixture(
+        db_session, event_id, table_id="t1", start=BASE + timedelta(minutes=5)
+    )
+    entrants = await _entrant_user_ids(db_session, event_id)
+    first_id = sorted(entrants)[0]
+    first = await db_session.get(Account, first_id)
+    expected = set(entrants)
+    if recipient_case == "unclaimed":
+        first.player_grants.clear()
+        expected.remove(first.id)
+    else:
+        manager = Account(player_grants=[AccountPlayer(player=first.primary_player)])
+        db_session.add(manager)
+        await db_session.flush()
+        expected.add(manager.id)
+    await db_session.commit()
+    _freeze_clocks(monkeypatch, BASE)
+    run_pin_tick(str(tournament_id))
+    db_session.expire_all()
+    fixture = await _the_fixture(db_session, event_id)
+    assert fixture.pinned_at == BASE
+    assert fixture.call_notified_count == 1
+    rows = await _call_notifications(db_session)
+    assert {row.user_id for row in rows} == expected
+    assert len(rows) == len(expected)

@@ -142,9 +142,21 @@ async def merge_user(
             db, from_user_id=source_player.id, to_user_id=target_player.id
         )
     elif source_player is not None and target_player is None:
-        target.player_grants.append(
-            AccountPlayer(player=source_player, is_primary=True)
+        existing = next(
+            (
+                grant
+                for grant in target.player_grants
+                if grant.player_id == source_player.id
+            ),
+            None,
         )
+        if existing is not None:
+            existing.is_primary = True
+        else:
+            target.player_grants.append(
+                AccountPlayer(player=source_player, is_primary=True)
+            )
+    source.display_name = source.username
     source.player_grants.clear()
     await db.flush()
     await db.execute(

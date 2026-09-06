@@ -614,3 +614,109 @@ async def test_account_without_primary_player_can_read_existing_pages(
     attention = await api_client.get("/v1/matches?attention=true")
     assert attention.status_code == 200
     assert attention.json()["items"] == []
+
+
+async def test_account_keeps_actor_name_after_player_transfer(db_session):
+    from app.account_merge import merge_user
+
+    source = Account(username="original-director")
+    target = Account(email="actor-destination@example.com")
+    db_session.add_all([source, target])
+    await db_session.commit()
+    await merge_user(db_session, from_user_id=source.id, to_user_id=target.id)
+    await db_session.commit()
+    assert source.username == "original-director"
+    assert (
+        await db_session.scalar(select(Account.username).where(Account.id == source.id))
+        == "original-director"
+    )
+    assert Account(email="nonplaying@example.com").username == "Account"
+
+
+async def test_transfer_promotes_existing_destination_management_grant(db_session):
+    from app.account_merge import merge_user
+    from app.models import AccountPlayer
+
+    source = Account(username="already-managed-player")
+    target = Account(player_grants=[AccountPlayer(player=source.primary_player)])
+    db_session.add_all([source, target])
+    await db_session.commit()
+    player_id = source.player_id
+    await merge_user(db_session, from_user_id=source.id, to_user_id=target.id)
+    await db_session.commit()
+    assert target.player_id == player_id
+    assert len(target.player_grants) == 1
+    assert source.primary_player is None
+
+
+async def test_playerless_director_receives_structured_negotiation_conflicts(
+    api_client, db_session
+):
+    from app.match_creation import create_match
+    from app.result_proposal import propose_result
+    from app.schemas.match import MatchResultsGameWrite
+    from tests._helpers import attach_match_to_director_tournament
+
+    await api_client.get("/v1/session")
+    director = await db_session.scalar(select(Account))
+    director.player_grants.clear()
+    first, second = (
+        Account(username="conflict-first"),
+        Account(username="conflict-second"),
+    )
+    db_session.add_all([first, second])
+    await db_session.commit()
+    match = await create_match(
+        db_session,
+        creator=first,
+        opponent_user_id=second.player_id,
+        league_id=None,
+        best_of=1,
+        rated=True,
+    )
+    await attach_match_to_director_tournament(
+        db_session,
+        match.id,
+        tag="playerless-conflict",
+        director=director,
+        p1=first,
+        p2=second,
+        best_of=1,
+    )
+    board = [MatchResultsGameWrite(game_number=1, side_1_points=11, side_2_points=4)]
+    proposal = await propose_result(
+        db_session, match.id, first.id, games=board, supersedes_result_id=None
+    )
+    old_result = proposal.match.results[0].id
+    await propose_result(
+        db_session, match.id, second.id, games=board, supersedes_result_id=old_result
+    )
+    response = await api_client.post(
+        f"/v1/matches/{match.id}/results",
+        json={"games": [game.model_dump() for game in board]},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["viewer_state"] == "review"
+    response = await api_client.post(
+        f"/v1/matches/{match.id}/results/{old_result}/acceptance"
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"]["viewer_state"] == "review"
+
+
+async def test_playerless_self_entry_is_a_client_refusal(api_client, db_session):
+    from app.models import Tournament, TournamentStatus
+    from tests.test_account_merge import _make_event
+
+    await api_client.get("/v1/session")
+    account = await db_session.scalar(select(Account))
+    event = await _make_event(db_session, account)
+    tournament = await db_session.get(Tournament, event.tournament_id)
+    tournament.status = TournamentStatus.published
+    account.player_grants.clear()
+    await db_session.commit()
+    response = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/events/{event.id}/entries"
+    )
+    assert response.status_code == 403
+    assert "primary player" in response.json()["detail"].lower()

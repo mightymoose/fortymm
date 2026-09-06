@@ -113,6 +113,12 @@ def upgrade() -> None:
     op.create_table(
         "accounts",
         sa.Column("id", sa.UUID(), nullable=False),
+        sa.Column(
+            "display_name",
+            sa.String(length=255),
+            server_default="Account",
+            nullable=False,
+        ),
         sa.Column("email", sa.String(length=320), nullable=True),
         sa.Column("agent_access_linked_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("agent_access_revoked_at", sa.DateTime(timezone=True), nullable=True),

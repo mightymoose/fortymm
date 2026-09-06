@@ -19,6 +19,7 @@ from app.models import (
     Tournament,
     User,
 )
+from app.player_accounts import PlayerAccessDenied
 from app.rate_limiting import RedisRateLimiter
 from app.rbac import require_permission
 from app.schedule_preview_solve import (
@@ -1023,6 +1024,7 @@ async def delete_event(
 # transport copy lives here in the adapter: the self-path permission 403, the named-
 # player 404, the singles-only 400, and the four coded entry refusals (ADR-0968).
 _ENTRY_WRITE_ERRORS = (
+    PlayerAccessDenied,
     PlayerNotFoundError,
     NonSinglesEntryError,
     EntryRefusedError,
@@ -1044,7 +1046,8 @@ def _client_ip(request: Request) -> str:
 
 
 def _map_entry_write_error(
-    exc: PlayerNotFoundError
+    exc: PlayerAccessDenied
+    | PlayerNotFoundError
     | NonSinglesEntryError
     | EntryRefusedError
     | EntryRateLimitedError,
@@ -1056,6 +1059,10 @@ def _map_entry_write_error(
     ``{"detail": {"code": ..., "message": ...}}`` body, ADR-0968), and
     ``EntryRateLimitedError`` → 429 with its retry-shortly sentence (the per-IP
     self-entry ceiling)."""
+    if isinstance(exc, PlayerAccessDenied):
+        return HTTPException(
+            status_code=403, detail="A primary player is required to enter yourself."
+        )
     if isinstance(exc, PlayerNotFoundError):
         return HTTPException(status_code=404, detail="Player not found.")
     if isinstance(exc, NonSinglesEntryError):

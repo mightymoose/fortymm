@@ -5355,7 +5355,9 @@ async def test_director_game_writes_notify_both_players_only_after_success(
             assert notice.link == f"/matches/{created['id']}"
 
 
+@pytest.mark.parametrize("playerless", [False, True])
 async def test_director_result_notifies_both_players_not_the_director(
+    playerless: bool,
     api_client: AsyncClient,
     db_session: AsyncSession,
     fake_notifications_queue: Queue,
@@ -5380,6 +5382,10 @@ async def test_director_result_notifies_both_players_not_the_director(
             p2=p2,
             best_of=1,
         )
+
+        if playerless:
+            director.player_grants.clear()
+            await db_session.commit()
 
         response = await director_client.post(
             f"/v1/matches/{created['id']}/results",

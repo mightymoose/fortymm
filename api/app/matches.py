@@ -822,7 +822,9 @@ async def delete_game_score(
     return await _serialize_written_match(db, match_service, reloaded, current_user.id)
 
 
-def _negotiation_conflict(match: Match, current_user_id: uuid.UUID) -> HTTPException:
+def _negotiation_conflict(
+    match: Match, current_user_id: uuid.UUID | None
+) -> HTTPException:
     """A 409 whose body carries the viewer-relative negotiation state, so a
     client that lost a propose/accept race can re-render from the conflict
     response without an extra round-trip. The standing proposal has moved on
@@ -910,7 +912,10 @@ async def post_match_result(
         # The propose lost the negotiation race (a result already exists, the
         # counter targeted a stale standing id, or the unique constraint tripped).
         # The 409 carries the viewer-relative moved-on state from the loaded match.
-        raise _negotiation_conflict(exc.match, current_user.player_id) from exc
+        raise _negotiation_conflict(
+            exc.match,
+            current_user.primary_player.id if current_user.primary_player else None,
+        ) from exc
     except MatchNotFoundError as exc:
         # The concurrent-counter reload found the match gone — today's 404.
         raise HTTPException(status_code=404, detail="Match not found.") from exc
@@ -1007,7 +1012,10 @@ async def accept_match_result(
         # The targeted result is no longer the live standing proposal (superseded,
         # already accepted, or none standing). The 409 carries the viewer-relative
         # moved-on state from the loaded match.
-        raise _negotiation_conflict(exc.match, current_user.player_id) from exc
+        raise _negotiation_conflict(
+            exc.match,
+            current_user.primary_player.id if current_user.primary_player else None,
+        ) from exc
     except PostedGamesNotDecisiveError as exc:
         raise HTTPException(
             status_code=409, detail="The posted games no longer decide this match."

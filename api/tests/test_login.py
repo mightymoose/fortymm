@@ -1268,17 +1268,18 @@ async def test_accepted_first_sign_in_merge_takes_the_guest_username(
         )
     ).scalar_one()
     assert signed_in.username == guest_name
-    # The tombstone gave the name up rather than holding the unique index.
+    # The Account retains its historical actor name; Player owns uniqueness.
     await db_session.refresh(guest)
-    assert guest.username != guest_name
+    assert guest.username == guest_name
     assert guest.merged_into_user_id == signed_in.id
     # The dead name is still a name the product would accept. The dashed uuid
     # form is 43 characters and breaks USERNAME_MAX_LENGTH silently, because no
     # response model constrains `username`.
-    assert len(guest.username) <= USERNAME_MAX_LENGTH
     from app.models import Player
 
     retired_player = await db_session.get(Player, guest.id)
+    assert retired_player.username != guest_name
+    assert len(retired_player.username) <= USERNAME_MAX_LENGTH
     assert re.fullmatch(USERNAME_PATTERN, retired_player.username)
 
 
