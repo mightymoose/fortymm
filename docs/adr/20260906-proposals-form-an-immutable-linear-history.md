@@ -48,3 +48,9 @@ This refines the merge mechanics in
 the database now performs representation changes when the merge is recorded,
 and preserves that merge record. Its Account/Player distinction and same-person
 merge policy remain in force. No earlier domain decision is superseded.
+
+Proposal insertion also writes the represented Player's row version and rejects
+a Player already merged. This serializes insertion with the merge transition in
+both orders, including stale Repeatable Read transactions. Recorded Player merge
+rows cannot be deleted. Match-details readers select acceptance from the chain
+head, so retained earlier acceptances cannot hide a successor or its score.

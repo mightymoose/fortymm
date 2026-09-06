@@ -973,6 +973,18 @@ def upgrade() -> None:
             -- A real row version (not just FOR UPDATE) also makes stale
             -- REPEATABLE READ / SERIALIZABLE writers fail with 40001.
             UPDATE matches SET id = id WHERE id = NEW.match_id;
+            IF NEW.submitted_for_player_id IS NOT NULL THEN
+                -- Bump the Player version as well as locking it: a merge
+                -- using an older Repeatable Read snapshot must retry rather
+                -- than miss this proposal in its representation update.
+                UPDATE players SET id = id
+                WHERE id = NEW.submitted_for_player_id
+                  AND merged_into_player_id IS NULL;
+                IF NOT FOUND THEN
+                    RAISE EXCEPTION 'a proposal must represent an active Player'
+                        USING ERRCODE = '23514';
+                END IF;
+            END IF;
             -- A non-deferrable FK alone checks at statement end, permitting
             -- circular multi-row INSERTs. Require an already inserted parent.
             IF NEW.supersedes_result_id IS NOT NULL AND NOT EXISTS (
@@ -1080,6 +1092,13 @@ def upgrade() -> None:
         CREATE FUNCTION preserve_player_merge() RETURNS trigger
         LANGUAGE plpgsql AS $$
         BEGIN
+            IF TG_OP = 'DELETE' THEN
+                IF OLD.merged_into_player_id IS NOT NULL THEN
+                    RAISE EXCEPTION 'recorded Player merges cannot be deleted'
+                        USING ERRCODE = '23514';
+                END IF;
+                RETURN OLD;
+            END IF;
             IF OLD.merged_into_player_id IS NOT NULL AND
                ROW(NEW.merged_into_player_id, NEW.merged_at) IS DISTINCT FROM
                ROW(OLD.merged_into_player_id, OLD.merged_at) THEN
@@ -1092,7 +1111,7 @@ def upgrade() -> None:
     """)
     op.execute("""
         CREATE TRIGGER preserve_player_merge
-        BEFORE UPDATE ON players
+        BEFORE UPDATE OR DELETE ON players
         FOR EACH ROW EXECUTE FUNCTION preserve_player_merge()
     """)
     op.create_table(

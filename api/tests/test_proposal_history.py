@@ -49,6 +49,22 @@ async def append(db, match, predecessor=None, *, result_id=None):
     return result_id
 
 
+async def wait_for_blocked(observer, backend_pid, attempt):
+    async def observe():
+        while True:
+            if attempt.done():
+                await attempt
+                pytest.fail("competing write did not wait for the open transaction")
+            if await observer.scalar(
+                text("SELECT cardinality(pg_blocking_pids(:pid)) > 0"),
+                dict(pid=backend_pid),
+            ):
+                return
+            await asyncio.sleep(0.01)
+
+    await asyncio.wait_for(observe(), timeout=5)
+
+
 async def test_match_cannot_have_two_proposal_roots(db_session, proposal_match):
     await append(db_session, proposal_match)
     with pytest.raises(IntegrityError):
@@ -219,22 +235,7 @@ async def test_acceptance_cannot_race_past_an_append(
         await append(writer, proposal_match, root)
         attempt = asyncio.create_task(accept(reader, root, proposal_match[1]))
         try:
-
-            async def wait_for_contention():
-                while True:
-                    if attempt.done():
-                        await attempt
-                        pytest.fail(
-                            "acceptance did not wait for the uncommitted append"
-                        )
-                    if await writer.scalar(
-                        text("SELECT cardinality(pg_blocking_pids(:pid)) > 0"),
-                        dict(pid=reader_pid),
-                    ):
-                        return
-                    await asyncio.sleep(0.01)
-
-            await asyncio.wait_for(wait_for_contention(), timeout=5)
+            await wait_for_blocked(writer, reader_pid, attempt)
             await writer.commit()
             with pytest.raises(DBAPIError) as error:
                 await asyncio.wait_for(attempt, timeout=5)
@@ -396,3 +397,122 @@ async def test_rolling_back_a_merge_restores_proposal_representation(
         )
         is None
     )
+
+
+@pytest.mark.parametrize("isolation", ["READ COMMITTED", "REPEATABLE READ"])
+async def test_proposal_cannot_race_past_a_player_merge(
+    db_session,
+    engine,
+    proposal_match,
+    isolation,
+):
+    survivor = Account(username="concurrent-merge-survivor")
+    db_session.add(survivor)
+    await db_session.commit()
+    async with engine.connect() as merger, engine.connect() as poster:
+        await poster.execution_options(isolation_level=isolation)
+        await poster.execute(text("SELECT count(*) FROM players"))
+        poster_pid = await poster.scalar(text("SELECT pg_backend_pid()"))
+        await merger.execute(
+            text(
+                "UPDATE players SET merged_into_player_id = :target, merged_at = now() "
+                "WHERE id = :source"
+            ),
+            dict(source=proposal_match[2], target=survivor.player_id),
+        )
+        attempt = asyncio.create_task(append(poster, proposal_match))
+        try:
+            await wait_for_blocked(merger, poster_pid, attempt)
+            await merger.commit()
+            with pytest.raises(DBAPIError) as error:
+                await asyncio.wait_for(attempt, timeout=5)
+            assert error.value.orig.sqlstate in {"23514", "40001"}
+        finally:
+            if not attempt.done():
+                attempt.cancel()
+            await asyncio.gather(attempt, return_exceptions=True)
+
+
+@pytest.mark.parametrize("isolation", ["READ COMMITTED", "REPEATABLE READ"])
+async def test_player_merge_cannot_miss_an_uncommitted_proposal(
+    db_session,
+    engine,
+    proposal_match,
+    isolation,
+):
+    survivor = Account(username="merge-after-proposal")
+    db_session.add(survivor)
+    await db_session.commit()
+    merge = text(
+        "UPDATE players SET merged_into_player_id = :target, merged_at = now() "
+        "WHERE id = :source"
+    )
+    params = dict(source=proposal_match[2], target=survivor.player_id)
+    async with engine.connect() as poster, engine.connect() as merger:
+        await merger.execution_options(isolation_level=isolation)
+        await merger.execute(text("SELECT count(*) FROM match_results"))
+        merger_pid = await merger.scalar(text("SELECT pg_backend_pid()"))
+        result_id = await append(poster, proposal_match)
+        attempt = asyncio.create_task(merger.execute(merge, params))
+        try:
+            await wait_for_blocked(poster, merger_pid, attempt)
+            await poster.commit()
+            try:
+                await asyncio.wait_for(attempt, timeout=5)
+                await merger.commit()
+            except DBAPIError as exc:
+                assert isolation == "REPEATABLE READ" and exc.orig.sqlstate == "40001"
+                await merger.rollback()
+                await merger.execute(merge, params)
+                await merger.commit()
+            assert (
+                await poster.scalar(
+                    text(
+                        "SELECT submitted_for_player_id FROM match_results "
+                        "WHERE id = :id"
+                    ),
+                    dict(id=result_id),
+                )
+                == survivor.player_id
+            )
+        finally:
+            if not attempt.done():
+                attempt.cancel()
+            await asyncio.gather(attempt, return_exceptions=True)
+
+
+async def test_recorded_player_merge_cannot_be_deleted(db_session, proposal_match):
+    await append(db_session, proposal_match)
+    survivor = Account(username="retained-merge-survivor")
+    db_session.add(survivor)
+    await db_session.commit()
+    await merge_user(db_session, from_user_id=proposal_match[1], to_user_id=survivor.id)
+    await db_session.commit()
+    with pytest.raises(IntegrityError):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("DELETE FROM players WHERE id = :source"),
+                dict(source=proposal_match[2]),
+            )
+
+
+@pytest.mark.parametrize("head_accepted", [False, True])
+async def test_match_details_show_the_head_instead_of_historical_acceptance(
+    api_client,
+    db_session,
+    proposal_match,
+    head_accepted,
+):
+    root = await append(db_session, proposal_match)
+    await accept(db_session, root, proposal_match[1])
+    await db_session.commit()
+    head = await append(db_session, proposal_match, root)
+    if head_accepted:
+        await accept(db_session, head, proposal_match[1])
+    await db_session.commit()
+    db_session.expire_all()
+    response = await api_client.get(f"/v1/matches/{proposal_match[0]}")
+    assert response.status_code == 200
+    result = response.json()["negotiation"]
+    assert result["standing_result"]["id"] == str(head)
+    assert result["viewer_state"] == ("final" if head_accepted else "review")
