@@ -411,6 +411,120 @@ async def seed_doubles_match(db_session):
     return event, players, entries, match, fixture
 
 
+@pytest.mark.parametrize("commit_call", [False, True])
+async def test_cancelling_an_untouched_call_resets_its_provisional_lineup(
+    db_session, commit_call
+):
+    from app.match_calls import apply_manual_placement
+    from app.models import User
+    from app.tournament_events import delete_event
+    from app.tournament_retention import require_no_recorded_play
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    tournament = await db_session.get(Tournament, event.tournament_id)
+    match.status = MatchStatus.in_progress
+    if commit_call:
+        await db_session.commit()
+        assert await db_session.scalar(text("SELECT count(*) FROM match_lineups")) == 1
+    else:
+        await db_session.flush()
+    await apply_manual_placement(
+        db_session,
+        tournament,
+        fixture,
+        table_id=None,
+        scheduled_start=None,
+        event_timezone="America/Chicago",
+    )
+    await db_session.commit()
+    assert match.status is MatchStatus.pending
+    assert await db_session.scalar(text("SELECT count(*) FROM match_lineups")) == 0
+    await require_no_recorded_play(db_session, tournament_id=tournament.id)
+    owner = await db_session.get(User, tournament.owner_account_id)
+    await delete_event(
+        db_session, tournament_id=tournament.id, event_id=event.id, actor=owner
+    )
+
+
+@pytest.mark.parametrize("commit_cancellation", [False, True])
+async def test_recalling_an_untouched_match_captures_the_replacement(
+    db_session, commit_cancellation
+):
+    from app.match_calls import apply_manual_placement
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    tournament = await db_session.get(Tournament, event.tournament_id)
+    match.status = MatchStatus.in_progress
+    await db_session.commit()
+    await apply_manual_placement(
+        db_session,
+        tournament,
+        fixture,
+        table_id=None,
+        scheduled_start=None,
+        event_timezone="America/Chicago",
+    )
+    if commit_cancellation:
+        await db_session.commit()
+    entries[0].members[0].left_at = datetime.now(UTC)
+    entries[0].members.append(TournamentEntryMember(player_id=players[4].player_id))
+    await db_session.execute(
+        text(
+            "UPDATE match_side_players SET user_id = :replacement "
+            "WHERE match_id = :match AND user_id = :original"
+        ),
+        {
+            "replacement": players[4].player_id,
+            "match": match.id,
+            "original": players[0].player_id,
+        },
+    )
+    match.status = MatchStatus.in_progress
+    await db_session.commit()
+    recorded = set(
+        (
+            await db_session.scalars(text("SELECT player_id FROM match_lineup_players"))
+        ).all()
+    )
+    assert recorded == {player.player_id for player in players[1:]}
+
+
+@pytest.mark.parametrize("evidence", ["game", "result"])
+async def test_cancelling_a_call_with_play_keeps_its_lineup(db_session, evidence):
+    from app.match_calls import apply_manual_placement
+    from app.models import MatchGame, MatchResult
+    from app.tournament_errors import RecordedPlayDeletionError
+    from app.tournament_retention import require_no_recorded_play
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    tournament = await db_session.get(Tournament, event.tournament_id)
+    match.status = MatchStatus.in_progress
+    if evidence == "game":
+        db_session.add(MatchGame(match_id=match.id, game_number=1))
+    else:
+        db_session.add(
+            MatchResult(match_id=match.id, submitted_by_user_id=players[0].id, games=[])
+        )
+    await db_session.commit()
+    original = await db_session.scalar(text("SELECT id FROM match_lineups"))
+    await apply_manual_placement(
+        db_session,
+        tournament,
+        fixture,
+        table_id=None,
+        scheduled_start=None,
+        event_timezone="America/Chicago",
+    )
+    await db_session.commit()
+    assert match.status is MatchStatus.in_progress
+    assert await db_session.scalar(text("SELECT id FROM match_lineups")) == original
+    with pytest.raises(RecordedPlayDeletionError):
+        await require_no_recorded_play(db_session, tournament_id=tournament.id)
+    with pytest.raises(IntegrityError, match="lineup history"):
+        async with db_session.begin_nested():
+            await db_session.execute(text("DELETE FROM match_lineups"))
+
+
 async def test_direct_result_completion_preserves_actual_lineup(db_session):
     from app.result_proposal import propose_result
     from app.schemas.match import MatchResultsGameWrite

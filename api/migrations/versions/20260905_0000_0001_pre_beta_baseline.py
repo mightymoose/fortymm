@@ -190,7 +190,15 @@ ENTRY_INTEGRITY_DDL = (
             WHERE id = lineup_uuid;
         END IF;
         IF NOT EXISTS (SELECT 1 FROM matches WHERE id = match_uuid)
-        THEN RETURN NULL; END IF;
+        THEN RETURN COALESCE(NEW, OLD); END IF;
+        -- Only the nested pristine-un-call trigger may delete a provisional
+        -- snapshot. Direct deletes and all updates remain forbidden.
+        IF TG_OP = 'DELETE' AND pg_trigger_depth() > 1 AND EXISTS (
+            SELECT 1 FROM matches WHERE id = match_uuid AND status = 'pending'
+                AND ending IS NULL
+        ) AND NOT EXISTS (SELECT 1 FROM match_games WHERE match_id = match_uuid)
+          AND NOT EXISTS (SELECT 1 FROM match_results WHERE match_id = match_uuid)
+        THEN RETURN OLD; END IF;
         IF TG_OP <> 'INSERT' OR EXISTS (
             SELECT 1 FROM match_lineups WHERE id = lineup_uuid
                 AND recorded_transaction_id <> txid_current()
@@ -198,27 +206,53 @@ ENTRY_INTEGRITY_DDL = (
             RAISE EXCEPTION 'lineup history requires a new correction revision'
                 USING ERRCODE = '23514';
         END IF;
+        RETURN COALESCE(NEW, OLD);
+    END $$
+    """,
+    """
+    CREATE TRIGGER preserve_match_lineup BEFORE UPDATE OR DELETE
+    ON match_lineups
+    FOR EACH ROW EXECUTE FUNCTION preserve_match_lineup()
+    """,
+    """
+    CREATE CONSTRAINT TRIGGER preserve_match_lineup_player AFTER INSERT
+    ON match_lineup_players DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION preserve_match_lineup()
+    """,
+    """
+    CREATE TRIGGER preserve_match_lineup_player_history BEFORE UPDATE OR DELETE
+    ON match_lineup_players FOR EACH ROW EXECUTE FUNCTION preserve_match_lineup()
+    """,
+    """
+    CREATE OR REPLACE FUNCTION reset_pristine_match_lineup() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        IF OLD.status = 'in_progress' AND NEW.status = 'pending'
+            AND OLD.ending IS NULL AND NEW.ending IS NULL
+            AND NOT EXISTS (SELECT 1 FROM match_games WHERE match_id = NEW.id)
+            AND NOT EXISTS (SELECT 1 FROM match_results WHERE match_id = NEW.id)
+        THEN
+            DELETE FROM match_lineups WHERE match_id = NEW.id;
+        END IF;
         RETURN NULL;
     END $$
     """,
     """
-    CREATE CONSTRAINT TRIGGER preserve_match_lineup AFTER UPDATE OR DELETE
-    ON match_lineups DEFERRABLE INITIALLY DEFERRED
-    FOR EACH ROW EXECUTE FUNCTION preserve_match_lineup()
-    """,
-    """
-    CREATE CONSTRAINT TRIGGER preserve_match_lineup_player AFTER INSERT OR UPDATE
-        OR DELETE
-    ON match_lineup_players DEFERRABLE INITIALLY DEFERRED
-    FOR EACH ROW EXECUTE FUNCTION preserve_match_lineup()
+    CREATE TRIGGER reset_pristine_match_lineup AFTER UPDATE OF status ON matches
+    FOR EACH ROW EXECUTE FUNCTION reset_pristine_match_lineup()
     """,
     """
     CREATE OR REPLACE FUNCTION capture_match_lineup() RETURNS trigger
     LANGUAGE plpgsql AS $$
     DECLARE fixture tournament_fixtures; lineup_uuid uuid;
+        current_status match_status; current_ending match_ending;
     BEGIN
-        IF NOT (NEW.status = 'in_progress'
-            OR (NEW.status = 'completed' AND NEW.ending IS NULL)) OR EXISTS (
+        -- Deferred events can precede an un-call in the same transaction.
+        SELECT status, ending INTO current_status, current_ending
+        FROM matches WHERE id = NEW.id;
+        IF NOT FOUND THEN RETURN NULL; END IF;
+        IF NOT (current_status = 'in_progress'
+            OR (current_status = 'completed' AND current_ending IS NULL)) OR EXISTS (
             SELECT 1 FROM match_lineups WHERE match_id = NEW.id
         ) THEN RETURN NULL; END IF;
         SELECT * INTO fixture FROM tournament_fixtures WHERE match_id = NEW.id;
@@ -2490,6 +2524,7 @@ def downgrade() -> None:
         "check_match_lineup()",
         "preserve_match_lineup()",
         "capture_match_lineup()",
+        "reset_pristine_match_lineup()",
         "preserve_entry_membership()",
         "lock_entry_event()",
         "check_entry_event()",

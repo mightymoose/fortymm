@@ -205,6 +205,9 @@ The actual participants recorded on each side when a tournament match starts,
 independent of its entries' later membership. Earlier lineups remain preserved
 when a director records a complete, attributed **lineup correction** revision.
 Distinct from scheduled participants and an entry's current roster.
+The initial call snapshot is provisional: cancelling an untouched call before any
+game or result resets it, and a later call captures a fresh lineup. Once play is
+recorded, cancelling a call cannot erase the lineup.
 
 **Director entry**:
 The tournament **owner** adding a player to an event on their behalf — a phone

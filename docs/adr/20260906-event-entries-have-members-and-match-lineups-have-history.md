@@ -69,6 +69,14 @@ replacement. No such scheduling or substitution workflow is exposed here. An
 existing match call is the backend's start signal; subsequent call corrections
 do not rewrite an already recorded lineup.
 
+A call is provisional until a score or result is recorded. The existing director
+action that cancels an untouched call returns the match from `in_progress` to
+`pending` and clears its provisional lineup in the same transaction. A later call
+captures the then-current participants; the cancelled call is not recorded play
+and does not prevent event deletion. Any game or result keeps the lineup and
+deletion protection intact. Only this guarded un-call transition can clear a
+provisional snapshot; direct lineup deletion remains forbidden. No UI is added.
+
 Membership joins use wall-clock insertion time, not transaction-start time, so a
 long-running roster transaction cannot backdate a replacement's eligibility.
 Format edits incompatible with current member counts or the team's participation
@@ -85,7 +93,8 @@ correction feature by this change.
 
 Each revision stores its full creating transaction ID. Participants can be added
 only within that transaction, including its savepoints; committed revisions remain
-immutable even after PostgreSQL discards old transaction-status information.
+immutable even after PostgreSQL discards old transaction-status information,
+except for the explicitly provisional, untouched-call cancellation above.
 
 The database can record `matches.ending = walkover` without an actual lineup, or
 `stopped_during_play` with one. Both are terminal outcomes; the fixture can retain

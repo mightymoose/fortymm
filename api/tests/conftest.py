@@ -11,6 +11,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from rq import Queue
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -236,8 +237,14 @@ async def db_session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
         finally:
             await session.rollback()
     async with engine.begin() as conn:
-        for table in reversed(Base.metadata.sorted_tables):
-            await conn.execute(table.delete())
+        # Reset this disposable test database, not through domain DELETE verbs:
+        # immutable history now rejects row deletion immediately. Name every
+        # metadata table explicitly; no CASCADE into unrelated tables/schemas.
+        tables = ", ".join(
+            conn.dialect.identifier_preparer.format_table(table)
+            for table in Base.metadata.sorted_tables
+        )
+        await conn.execute(text(f"TRUNCATE TABLE {tables}"))
 
 
 GLICKO2_STATE_SCHEMA = {
