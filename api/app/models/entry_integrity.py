@@ -421,7 +421,7 @@ ENTRY_INTEGRITY_DDL = (
                 UPDATE tournament_events SET id = id WHERE id = event_uuid;
             END LOOP;
             RETURN NEW;
-        ELSIF TG_TABLE_NAME = 'match_lineups' THEN
+        ELSIF TG_TABLE_NAME IN ('match_lineups', 'match_games', 'match_results') THEN
             SELECT s.event_id INTO event_uuid FROM tournament_fixtures f
             JOIN tournament_event_stages s ON s.id = f.stage_id
             WHERE f.match_id = NEW.match_id;
@@ -520,6 +520,14 @@ ENTRY_INTEGRITY_DDL = (
     """,
     """
     CREATE TRIGGER lock_lineup_event BEFORE INSERT ON match_lineups
+    FOR EACH ROW EXECUTE FUNCTION lock_entry_event()
+    """,
+    """
+    CREATE TRIGGER lock_game_event BEFORE INSERT ON match_games
+    FOR EACH ROW EXECUTE FUNCTION lock_entry_event()
+    """,
+    """
+    CREATE TRIGGER lock_result_event BEFORE INSERT ON match_results
     FOR EACH ROW EXECUTE FUNCTION lock_entry_event()
     """,
     """

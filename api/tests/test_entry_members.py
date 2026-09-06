@@ -341,6 +341,61 @@ async def test_merge_collision_lookup_ignores_unrelated_identity_edits(
     await db_session.rollback()
 
 
+async def test_dashboard_membership_lookup_ignores_unrelated_identity_edits(db_session):
+    from app.dashboard_tournaments import build_tournament_panels
+
+    event = await _make_event(db_session)
+    caller = await make_user(db_session, "dashboard-caller")
+    others = [await make_user(db_session, f"dashboard-other-{n}") for n in range(2)]
+    db_session.add(TournamentEntry(event_id=event.id, user_id=others[0].player_id))
+    await db_session.commit()
+    tournament = await db_session.get(Tournament, event.tournament_id)
+    tournament.status = TournamentStatus.live
+    await db_session.commit()
+    for original, destination in [(others[0], others[1]), (others[1], others[0])]:
+        await db_session.execute(
+            text(
+                "UPDATE players SET merged_into_player_id = :destination, "
+                "merged_at = clock_timestamp() WHERE id = :original"
+            ),
+            {"original": original.player_id, "destination": destination.player_id},
+        )
+    assert await build_tournament_panels(db_session, caller.player_id) == []
+    with pytest.raises(IntegrityError, match="cyclic player identity"):
+        await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await db_session.rollback()
+
+
+@pytest.mark.parametrize("doubles", [False, True])
+async def test_dashboard_preserves_single_player_projection_after_identity_merge(
+    db_session, doubles
+):
+    from app.dashboard_tournaments import build_tournament_panels
+
+    event = await _make_event(db_session)
+    original = await make_user(db_session, "dashboard-original")
+    caller = await make_user(db_session, "dashboard-survivor")
+    members = [TournamentEntryMember(player_id=original.player_id)]
+    if doubles:
+        event.format = EventFormat.doubles
+        partner = await make_user(db_session, "dashboard-partner")
+        members.append(TournamentEntryMember(player_id=partner.player_id))
+    db_session.add(TournamentEntry(event_id=event.id, members=members))
+    await db_session.commit()
+    await db_session.execute(
+        text(
+            "UPDATE players SET merged_into_player_id = :destination, "
+            "merged_at = clock_timestamp() WHERE id = :original"
+        ),
+        {"original": original.player_id, "destination": caller.player_id},
+    )
+    tournament = await db_session.get(Tournament, event.tournament_id)
+    tournament.status = TournamentStatus.live
+    await db_session.commit()
+    panels = await build_tournament_panels(db_session, caller.player_id)
+    assert [panel.id for panel in panels] == ([] if doubles else [tournament.id])
+
+
 @pytest.mark.parametrize("exclusive_collision", [False, True])
 async def test_merge_preserves_distinct_entries_in_a_permissive_team_event(
     db_session, exclusive_collision
@@ -668,6 +723,29 @@ async def test_fixture_attaching_an_already_played_match_captures_history(
     ) == {player.player_id for player in players[:4]}
 
 
+async def test_a_match_can_belong_to_only_one_fixture(db_session):
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    second = TournamentFixture(
+        stage_id=fixture.stage_id,
+        group_id=fixture.group_id,
+        round=1,
+        position=2,
+    )
+    third = TournamentFixture(
+        stage_id=fixture.stage_id,
+        group_id=fixture.group_id,
+        round=1,
+        position=3,
+    )
+    db_session.add_all([second, third])
+    await db_session.commit()
+    with pytest.raises(IntegrityError, match="ix_tournament_fixtures_match_id"):
+        async with db_session.begin_nested():
+            second.match_id = match.id
+            await db_session.flush()
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
 async def test_pending_match_cannot_record_a_complete_played_lineup(db_session):
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
     with pytest.raises(IntegrityError, match="lineup requires a started match"):
@@ -833,11 +911,11 @@ async def test_cancelling_a_call_with_play_keeps_its_lineup(db_session, evidence
 
 
 @pytest.mark.parametrize("target", ["event", "tournament"])
-@pytest.mark.parametrize("manual_lineup", [False, True])
+@pytest.mark.parametrize("capture_kind", ["status", "lineup", "game", "result"])
 async def test_deletion_racing_first_lineup_reports_recorded_play(
-    db_session, engine, target, manual_lineup
+    db_session, engine, target, capture_kind
 ):
-    from app.models import User
+    from app.models import MatchGame, MatchResult, User
     from app.tournament_errors import RecordedPlayDeletionError
     from app.tournament_events import delete_event
     from app.tournament_lifecycle import delete_tournament
@@ -850,11 +928,12 @@ async def test_deletion_racing_first_lineup_reports_recorded_play(
         actor = await deletion.get(User, match.created_by_user_id)
         # First capture holds the membership FK locks but is not yet visible to
         # deletion. This is the commit-time DB path of a pending rated proposal.
-        await capture.execute(
-            text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
-            {"id": match.id},
-        )
-        if manual_lineup:
+        if capture_kind in ("status", "lineup"):
+            await capture.execute(
+                text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
+                {"id": match.id},
+            )
+        if capture_kind == "lineup":
             lineup_id = await capture.scalar(
                 text("INSERT INTO match_lineups (match_id) VALUES (:id) RETURNING id"),
                 {"id": match.id},
@@ -869,10 +948,20 @@ async def test_deletion_racing_first_lineup_reports_recorded_play(
                 ),
                 {"lineup": lineup_id, "a": entries[0].id, "b": entries[1].id},
             )
-        else:
+        elif capture_kind == "status":
             await capture.execute(
                 text("SET CONSTRAINTS capture_match_lineup IMMEDIATE")
             )
+        elif capture_kind == "game":
+            capture.add(MatchGame(match_id=match.id, game_number=1))
+            await capture.flush()
+        else:
+            capture.add(
+                MatchResult(
+                    match_id=match.id, submitted_by_user_id=players[0].id, games=[]
+                )
+            )
+            await capture.flush()
         if target == "event":
             delete_task = asyncio.create_task(
                 delete_event(
@@ -907,6 +996,41 @@ async def test_deletion_racing_first_lineup_reports_recorded_play(
             if not delete_task.done():
                 delete_task.cancel()
             await asyncio.gather(delete_task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("target", ["event", "tournament"])
+@pytest.mark.parametrize("evidence", ["game", "result"])
+async def test_deletion_preserves_pending_match_with_recorded_evidence(
+    db_session, target, evidence
+):
+    from app.models import MatchGame, MatchResult, User
+    from app.tournament_errors import RecordedPlayDeletionError
+    from app.tournament_events import delete_event
+    from app.tournament_lifecycle import delete_tournament
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    if evidence == "game":
+        db_session.add(MatchGame(match_id=match.id, game_number=1))
+    else:
+        db_session.add(
+            MatchResult(match_id=match.id, submitted_by_user_id=players[0].id, games=[])
+        )
+    await db_session.commit()
+    actor = await db_session.get(User, match.created_by_user_id)
+    with pytest.raises(RecordedPlayDeletionError):
+        if target == "event":
+            await delete_event(
+                db_session,
+                tournament_id=event.tournament_id,
+                event_id=event.id,
+                actor=actor,
+            )
+        else:
+            await delete_tournament(
+                db_session,
+                tournament_id=event.tournament_id,
+                actor=actor,
+            )
 
 
 async def test_direct_result_completion_preserves_actual_lineup(db_session):

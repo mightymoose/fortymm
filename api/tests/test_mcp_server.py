@@ -66,6 +66,8 @@ from app.models import (
     League,
     Match,
     MatchSettings,
+    MatchSide,
+    MatchSidePlayer,
     MatchStatus,
     Permission,
     Role,
@@ -93,7 +95,7 @@ from app.tournament_draws import cut_draw
 from app.tournament_event_stages import mint_stages
 from app.tournament_queries import stage_ids_for_events
 from app.tournaments import TOURNAMENT_CREATE
-from tests._entry_seeds import entry_with_members
+from tests._entry_seeds import entry_with_members, seed_fixture_match_sides
 from tests._helpers import (
     attach_match_to_director_tournament,
     enqueued_notification_jobs,
@@ -840,13 +842,26 @@ async def _wire_fixture_to_match(
     db_session.add(event)
     await db_session.flush()
 
+    participants = (
+        await db_session.execute(
+            select(MatchSide.side_number, MatchSidePlayer.user_id)
+            .join(MatchSidePlayer, MatchSidePlayer.match_side_id == MatchSide.id)
+            .where(MatchSide.match_id == uuid.UUID(match_id))
+        )
+    ).all()
+    entries = {
+        number: TournamentEntry(event_id=event.id, user_id=player_id)
+        for number, player_id in participants
+    }
+    db_session.add_all(entries.values())
+    await db_session.flush()
     fixture = TournamentFixture(
         stage_id=stages[0].id,
         group_id=stages[0].groups[0].id,
         round=1,
         position=1,
-        entry_a_id=None,
-        entry_b_id=None,
+        entry_a_id=entries[1].id,
+        entry_b_id=entries[2].id,
         match_id=uuid.UUID(match_id),
         table_id=None,
     )
@@ -5224,6 +5239,7 @@ async def test_place_fixture_played_out_fixture_raises_tool_error(
     match.status = MatchStatus.completed
     db_session.add(match)
     await db_session.commit()
+    await seed_fixture_match_sides(db_session, fixture, match)
     fixture.match_id = match.id
     await db_session.commit()
 

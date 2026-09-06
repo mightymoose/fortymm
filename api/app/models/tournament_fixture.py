@@ -132,7 +132,9 @@ class TournamentFixture(Base):
         Index("ix_tournament_fixtures_stage_id", "stage_id"),
         # A completed match is the trigger to write ``winner_entry_id`` back and re-run
         # ``advance()``, and that path arrives holding a match id, not a fixture id.
-        Index("ix_tournament_fixtures_match_id", "match_id"),
+        # One match materializes exactly one fixture; unmaterialized fixtures
+        # may all retain NULL without competing for this unique key.
+        Index("ix_tournament_fixtures_match_id", "match_id", unique=True),
         # The index Postgres does NOT create for a REFERENCING column, and under
         # ``ON DELETE RESTRICT`` it is the one that pays for itself: every delete of a
         # ``tournament_tables`` row must prove no fixture references it, which unindexed

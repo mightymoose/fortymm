@@ -34,7 +34,7 @@ from datetime import UTC, date, datetime
 from typing import assert_never
 
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.attention import list_attention_kind
@@ -43,8 +43,10 @@ from app.match_queries import current_game_number, match_eager_options
 from app.models import (
     Match,
     MatchStatus,
+    Player,
     Tournament,
     TournamentEntry,
+    TournamentEntryMember,
     TournamentEntryStatus,
     TournamentEvent,
     TournamentStatus,
@@ -219,13 +221,44 @@ async def _my_live_entries(
     played yet and a ``archived`` one is over; neither is something to put at the top of
     a dashboard. Withdrawn entries are not entries (the soft-delete on
     ``TournamentEntry.status``), so a player who pulled out sees no panel."""
+    # Start from this canonical player and their preserved aliases, using the
+    # indexed membership player_id. Do not project every live entry's identity.
+    identities = (
+        select(Player.id)
+        .where(Player.id == user_id, Player.merged_into_player_id.is_(None))
+        .cte("dashboard_identities", recursive=True)
+    )
+    identities = identities.union(
+        select(Player.id).join(
+            identities, Player.merged_into_player_id == identities.c.id
+        )
+    )
+    candidates = (
+        select(TournamentEntryMember.entry_id)
+        .join(identities, TournamentEntryMember.player_id == identities.c.id)
+        .where(TournamentEntryMember.left_at.is_(None))
+        .distinct()
+        .cte("dashboard_entries")
+        .prefix_with("MATERIALIZED")
+    )
+    member_count = (
+        select(func.count())
+        .select_from(TournamentEntryMember)
+        .where(
+            TournamentEntryMember.entry_id == TournamentEntry.id,
+            TournamentEntryMember.left_at.is_(None),
+        )
+        .correlate(TournamentEntry)
+        .scalar_subquery()
+    )
     rows = (
         await db.execute(
             select(TournamentEntry.id, TournamentEvent, Tournament)
+            .join(candidates, candidates.c.entry_id == TournamentEntry.id)
             .join(TournamentEvent, TournamentEvent.id == TournamentEntry.event_id)
             .join(Tournament, Tournament.id == TournamentEvent.tournament_id)
             .where(
-                TournamentEntry.user_id == user_id,
+                member_count == 1,
                 TournamentEntry.status == TournamentEntryStatus.entered,
                 Tournament.status == TournamentStatus.live,
             )

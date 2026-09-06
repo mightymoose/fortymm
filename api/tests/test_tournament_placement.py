@@ -342,6 +342,7 @@ async def test_a_played_out_fixture_refuses_the_placement(
     match.status = frozen_status
     db_session.add(match)
     await db_session.commit()
+    await seed_fixture_match_sides(db_session, fixture, match)
     fixture.match_id = match.id
     await db_session.commit()
 

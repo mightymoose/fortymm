@@ -2,15 +2,19 @@
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
+    MatchGame,
     MatchLineup,
     MatchLineupPlayer,
+    MatchResult,
     TournamentEntry,
     TournamentEntryMember,
     TournamentEvent,
+    TournamentEventStage,
+    TournamentFixture,
 )
 from app.tournament_errors import RecordedPlayDeletionError
 
@@ -56,4 +60,26 @@ async def require_no_recorded_play(
     if event_id is not None:
         query = query.where(TournamentEvent.id == event_id)
     if await db.scalar(query) is not None:
+        raise RecordedPlayDeletionError()
+    # Direct score/result writers can record evidence before a status change
+    # captures a lineup. Pending status alone never makes that history disposable.
+    evidence = (
+        select(TournamentFixture.id)
+        .join(
+            TournamentEventStage, TournamentEventStage.id == TournamentFixture.stage_id
+        )
+        .where(
+            TournamentEventStage.event_id.in_(event_ids),
+            or_(
+                select(MatchGame.id)
+                .where(MatchGame.match_id == TournamentFixture.match_id)
+                .exists(),
+                select(MatchResult.id)
+                .where(MatchResult.match_id == TournamentFixture.match_id)
+                .exists(),
+            ),
+        )
+        .limit(1)
+    )
+    if await db.scalar(evidence) is not None:
         raise RecordedPlayDeletionError()
