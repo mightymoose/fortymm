@@ -1101,6 +1101,11 @@ async def update_current_user(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> SessionResponse:
+    if current_user.primary_player is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="A primary player is required to change your username.",
+        )
     # Skip the uniqueness probe on a no-op submit so the user's own row
     # doesn't trip a 409 against itself.
     if payload.username != current_user.username:

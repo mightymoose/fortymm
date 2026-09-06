@@ -5255,3 +5255,60 @@ async def test_mcp_match_views_follow_an_independently_managed_player(db_session
             "search_players", {"query": "mcp-managed-player"}
         )
         assert found.structuredContent["result"] == []
+
+
+async def test_playerless_match_creation_is_explicit_tool_refusal(db_session):
+    me = await make_user(db_session, "mcp-playerless-match")
+    me.player_grants.clear()
+    await db_session.commit()
+    raw = await _mint(db_session, me)
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="A primary player is required"):
+            await client.call_tool("create_match", {"best_of": 3, "rated": False})
+
+
+@pytest.mark.parametrize("transport", ["http", "mcp"])
+@pytest.mark.parametrize("operation", ["edit", "transition"])
+async def test_transferred_tournament_mutations_keep_historical_creator(
+    api_client, db_session, default_league, transport, operation
+):
+    from app.account_merge import merge_user
+
+    owner = await start_session(api_client, db_session)
+    creator = await make_user(db_session, "original-director")
+    tournament = await _seed_owned_tournament(
+        db_session, creator, default_league, "Transfer Cup", TournamentStatus.draft
+    )
+    tournament_id = str(tournament.id)
+    await merge_user(db_session, from_user_id=creator.id, to_user_id=owner.id)
+    await db_session.commit()
+    raw = await _mint(db_session, owner)
+    if transport == "http":
+        if operation == "edit":
+            response = await api_client.patch(
+                f"/v1/tournaments/{tournament_id}",
+                json={"details_version": 1, "name": "Renamed Cup"},
+            )
+        else:
+            response = await api_client.post(
+                f"/v1/tournaments/{tournament_id}/transitions", json={"to": "published"}
+            )
+        assert response.status_code == (200 if operation == "edit" else 201)
+        data = response.json()
+    else:
+        async with _mcp_client(raw) as client, client:
+            result = await client.call_tool_mcp(
+                "edit_tournament" if operation == "edit" else "transition_tournament",
+                {
+                    "tournament_id": tournament_id,
+                    **(
+                        {"updates": {"details_version": 1, "name": "Renamed Cup"}}
+                        if operation == "edit"
+                        else {"to": "published"}
+                    ),
+                },
+            )
+        assert result.isError is False
+        data = result.structuredContent
+    assert data["created_by_username"] == "original-director"
+    assert data["can_edit"] is True

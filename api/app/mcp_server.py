@@ -198,6 +198,7 @@ from app.tournament_lifecycle import (
 from app.tournament_list import list_tournament_details, tournament_detail
 from app.tournament_placement import place_fixture as place_fixture_core
 from app.tournament_queries import (
+    creator_username,
     fixtures_by_event,
     visible_to,
 )
@@ -648,6 +649,8 @@ async def create_match(
                 best_of=best_of,
                 rated=rated,
             )
+        except PlayerAccessDenied as err:
+            raise ToolError("A primary player is required to start a match.") from err
         except SelfMatchError as err:
             raise ToolError("You cannot start a match against yourself.") from err
         except OpponentNotFoundError as err:
@@ -1187,12 +1190,9 @@ async def edit_tournament(
             ) from exc
         except AddressNotGeocodableError as exc:
             raise _map_address_not_geocodable_tool_error(exc) from exc
-        # The core raised ``NotTournamentOwnerError`` unless the caller is the owner,
-        # so here the actor is the creator — the owner's perspective the HTTP PATCH
-        # serializes from (``created_by_username`` known, ``can_edit`` true).
         return serialize(
             tournament,
-            created_by_username=actor.username,
+            created_by_username=await creator_username(db, tournament),
             current_user_id=actor.id,
         )
 
@@ -1266,7 +1266,7 @@ async def create_tournament(payload: TournamentCreate) -> TournamentRead:
         # serializes from (``created_by_username`` known, ``can_edit`` true).
         return serialize(
             tournament,
-            created_by_username=actor.username,
+            created_by_username=await creator_username(db, tournament),
             current_user_id=actor.id,
         )
 
@@ -1376,12 +1376,9 @@ async def transition_tournament(
             # single-ended wording, the illegal edge's two-ended wording, and the
             # go-live precondition's event-naming body — surfaced verbatim to the agent.
             raise ToolError(str(exc)) from exc
-        # The verb's owner gate just confirmed the caller is the creator, so the owner's
-        # perspective the HTTP route serializes from (``created_by_username`` known,
-        # ``can_edit`` true).
         return serialize(
             tournament,
-            created_by_username=actor.username,
+            created_by_username=await creator_username(db, tournament),
             current_user_id=actor.id,
         )
 

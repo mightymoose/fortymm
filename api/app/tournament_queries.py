@@ -25,6 +25,7 @@ from sqlalchemy.orm import contains_eager
 from sqlalchemy.sql.expression import ScalarSelect
 
 from app.models import (
+    Account,
     DrawTypeOption,
     Match,
     MatchGame,
@@ -897,3 +898,12 @@ async def entrant_ratings_by_league(
     for league_id, rating_value in rows:
         ratings[league_id] = rating_value
     return ratings
+
+
+async def creator_username(db: AsyncSession, tournament: Tournament) -> str:
+    """Resolve historical authorship independently of current ownership."""
+    return (
+        await db.execute(
+            select(Account.username).where(Account.id == tournament.created_by_user_id)
+        )
+    ).scalar_one()

@@ -111,6 +111,7 @@ from app.tournament_list import (
     tournament_detail,
 )
 from app.tournament_placement import place_fixture as place_fixture_core
+from app.tournament_queries import creator_username
 from app.tournament_queries import visible_to as _visible_to
 from app.tournament_serialization import (
     serialize,
@@ -372,7 +373,7 @@ async def create_tournament(
         ) from exc
     return serialize(
         tournament,
-        created_by_username=current_user.username,
+        created_by_username=await creator_username(db, tournament),
         current_user_id=current_user.id,
     )
 
@@ -576,10 +577,9 @@ async def update_tournament(
         # create path answers. The verb geocodes before the lock and before any
         # ``setattr``/commit, so the edit wrote nothing.
         raise _address_not_geocodable() from exc
-    # The owner is the current user, so the username and can_edit are known.
     return serialize(
         tournament,
-        created_by_username=current_user.username,
+        created_by_username=await creator_username(db, tournament),
         current_user_id=current_user.id,
     )
 
@@ -687,11 +687,9 @@ async def create_tournament_transition(
         # (``str(exc)``): the self-transition's single-ended wording, the illegal
         # edge's two-ended wording, and the go-live precondition's event-naming body.
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    # The owner is the current user (the verb's owner gate just said so), so the
-    # creator's username and can_edit are both known without another query.
     return serialize(
         tournament,
-        created_by_username=current_user.username,
+        created_by_username=await creator_username(db, tournament),
         current_user_id=current_user.id,
     )
 

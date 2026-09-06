@@ -720,3 +720,13 @@ async def test_playerless_self_entry_is_a_client_refusal(api_client, db_session)
     )
     assert response.status_code == 403
     assert "primary player" in response.json()["detail"].lower()
+
+
+async def test_playerless_username_edit_is_explicit_refusal(api_client, db_session):
+    await api_client.get("/v1/session")
+    account = await db_session.scalar(select(Account))
+    account.player_grants.clear()
+    await db_session.commit()
+    response = await api_client.patch("/v1/me", json={"username": "new-player-name"})
+    assert response.status_code == 403
+    assert "primary player" in response.json()["detail"].lower()

@@ -21,6 +21,10 @@ Player switching and grant-management UI remain deferred. Self-entry without a
 primary Player returns a deliberate authorization refusal. The existing event
 `entry_state` continues to describe rating eligibility and capacity, not grant
 authority; a new account-selection or account-only entry affordance is deferred.
+The legacy session ID remains non-null for compatibility. A primaryless Account
+uses its Account ID there; it is not a Player profile ID. Hiding the existing
+self-profile link for that state, together with exposing an optional Player ID
+in the session contract, is deferred with the account-only UI affordances.
 
 LoginIdentity belongs to Account. Its issuer/provider/subject tuple is unique, with
 at most one identity per Account and issuer/provider. Existing Auth0 behavior uses
