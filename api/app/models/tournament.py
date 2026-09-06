@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -230,6 +231,10 @@ class TournamentEvent(Base):
 
     __tablename__ = "tournament_events"
     __table_args__ = (
+        CheckConstraint(
+            "NOT allow_multiple_entries_per_player OR format = 'teams'",
+            name="ck_tournament_events_multiple_entries_teams_only",
+        ),
         Index(
             "ix_tournament_events_tournament_id_created_at",
             "tournament_id",
@@ -275,6 +280,9 @@ class TournamentEvent(Base):
             values_callable=lambda e: [m.value for m in e],
         ),
         nullable=False,
+    )
+    allow_multiple_entries_per_player: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
     )
     # The event's draw configuration, as a row (ADR "an event's draw configuration
     # is a row, not a column"). NOT NULL, and the FK lives HERE on the parent —

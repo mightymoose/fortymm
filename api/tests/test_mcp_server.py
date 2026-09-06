@@ -93,6 +93,7 @@ from app.tournament_draws import cut_draw
 from app.tournament_event_stages import mint_stages
 from app.tournament_queries import stage_ids_for_events
 from app.tournaments import TOURNAMENT_CREATE
+from tests._entry_seeds import entry_with_members
 from tests._helpers import (
     attach_match_to_director_tournament,
     enqueued_notification_jobs,
@@ -2876,9 +2877,10 @@ async def _seed_drawable_tournament(
     await db_session.refresh(event, attribute_names=["groups"])
     db_session.add_all(
         [
-            TournamentEntry(
-                event_id=event.id,
-                user_id=(await make_user(db_session, "draw-e-" + uuid.uuid4().hex)).id,
+            entry_with_members(
+                db_session,
+                event,
+                (await make_user(db_session, "draw-e-" + uuid.uuid4().hex)).player_id,
                 status=TournamentEntryStatus.entered,
                 seed=n,
             )
@@ -3816,6 +3818,24 @@ async def test_create_tournament_naming_end_date_raises_tool_error(
 
 
 # ----- delete_tournament tool ----------------------------------------------
+
+
+@pytest.mark.parametrize("parent", ["event", "tournament"])
+async def test_delete_tool_refuses_recorded_play(db_session, parent):
+    from tests.test_entry_members import seed_doubles_match
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    owner = await db_session.get(User, match.created_by_user_id)
+    raw = await _mint(db_session, owner)
+    match.status = MatchStatus.in_progress
+    await db_session.commit()
+    arguments = {"tournament_id": str(event.tournament_id)}
+    if parent == "event":
+        arguments["event_id"] = str(event.id)
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="Recorded play must be preserved"):
+            await client.call_tool(f"delete_{parent}", arguments)
+    assert await db_session.get(Tournament, event.tournament_id) is not None
 
 
 async def test_delete_tournament_is_registered(db_session: AsyncSession) -> None:

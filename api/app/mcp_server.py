@@ -174,6 +174,7 @@ from app.tournament_errors import (
     PlacementClashError,
     PlacementTableNotFoundError,
     PlayerNotFoundError,
+    RecordedPlayDeletionError,
     ReservationNotInEventError,
     ReservationOutsideEventWindowError,
     ScheduleQueueUnavailableError,
@@ -1029,6 +1030,7 @@ async def list_my_tournaments() -> list[TournamentDetailRead]:
 # league 404, the two draw freezes, the entry refusal, the placement freeze — stay
 # inline in their tool, because each is one tool's alone.
 _TOURNAMENT_WRITE_TOOL_ERRORS = (
+    RecordedPlayDeletionError,
     TournamentNotFoundError,
     EventNotFoundError,
     NotTournamentOwnerError,

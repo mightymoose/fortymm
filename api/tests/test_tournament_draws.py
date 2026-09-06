@@ -45,6 +45,7 @@ from app.tournament_queries import (
     fixtures_by_event,
     game_counts_by_match,
 )
+from tests._entry_seeds import seed_fixture_match_sides
 from tests._helpers import (
     event_groups,
     make_user,
@@ -182,6 +183,10 @@ async def _fixture(
     )
     db.add(fixture)
     await db.flush()
+    if match_id is not None:
+        match = await db.get(Match, match_id)
+        assert match is not None
+        await seed_fixture_match_sides(db, fixture, match)
     return fixture
 
 

@@ -40,6 +40,7 @@ from app.tournament_errors import (
 )
 from app.tournament_event_stages import mint_stages
 from app.tournament_queries import stage_ids_for_events
+from tests._entry_seeds import entry_with_members
 from tests._helpers import (
     event_groups,
     make_user,
@@ -140,9 +141,10 @@ async def _enter_field(
     """``count`` active, seeded (1..N) entrants — enough for the round-robin snake to
     deal a clean draw across the two groups."""
     entries = [
-        TournamentEntry(
-            event_id=event.id,
-            user_id=(await make_user(db, f"{prefix}{n}")).id,
+        entry_with_members(
+            db,
+            event,
+            (await make_user(db, f"{prefix}{n}")).player_id,
             status=TournamentEntryStatus.entered,
             seed=n,
         )

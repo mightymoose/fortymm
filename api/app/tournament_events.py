@@ -81,6 +81,7 @@ from app.tournament_reservations import (
     ordered_reservations,
     stored_reservations,
 )
+from app.tournament_retention import require_no_recorded_play
 
 
 async def _load_event(
@@ -252,10 +253,9 @@ async def delete_event(
     * **404** — an event id that names no event under this tournament (a mismatched
       pair included) raises :class:`EventNotFoundError`.
 
-    There is deliberately no further refusal: deleting an event carries no
-    drawn/live guard (the delete route has none), so this issues the ``DELETE`` and
-    commits it. Never raises ``HTTPException`` — the caller adapts each domain
-    exception to its transport.
+    Recorded actual play prevents deletion. An unplayed event can still be deleted
+    regardless of publication or draw state. Never raises ``HTTPException`` — the
+    caller adapts each domain exception to its transport.
 
     The event's ``draw_settings`` row goes with it. That is the ORM's
     ``delete-orphan`` on :attr:`TournamentEvent.draw_settings`, not a database
@@ -267,6 +267,7 @@ async def delete_event(
     """
     await _load_owned_tournament_for_update(db, tournament_id, actor)
     event = await _load_event(db, tournament_id, event_id)
+    await require_no_recorded_play(db, tournament_id=tournament_id, event_id=event.id)
     await db.delete(event)
     await db.commit()
 

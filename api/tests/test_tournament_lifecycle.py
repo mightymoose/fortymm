@@ -60,6 +60,7 @@ from app.tournament_lifecycle import (
     transition_tournament,
 )
 from app.tournament_queries import stage_ids_for_events
+from tests._entry_seeds import entry_with_members
 from tests._helpers import (
     CountingGeocoder,
     assert_tournament_address_is_sql_null,
@@ -702,9 +703,10 @@ async def _one_event(db: AsyncSession, tournament_id: uuid.UUID) -> TournamentEv
 async def _enter(db: AsyncSession, event: TournamentEvent, count: int) -> None:
     for _ in range(count):
         db.add(
-            TournamentEntry(
-                event_id=event.id,
-                user_id=(await make_user(db, f"tx-entrant-{uuid.uuid4().hex}")).id,
+            entry_with_members(
+                db,
+                event,
+                (await make_user(db, f"tx-entrant-{uuid.uuid4().hex}")).player_id,
                 status=TournamentEntryStatus.entered,
             )
         )

@@ -67,6 +67,7 @@ from app.tournament_geocoding import geocode_address
 from app.tournament_materialization import materialize_live_draw
 from app.tournament_queries import stage_ids_for_tournament
 from app.tournament_realtime import stage_tournament_entrant_hints
+from app.tournament_retention import require_no_recorded_play
 from app.tournament_tables import stored_tables
 
 # The lifecycle runs forward only, and exactly three transitions exist (ADR-0017):
@@ -239,6 +240,7 @@ async def delete_tournament(
     from under a fixture that survives it.
     """
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
+    await require_no_recorded_play(db, tournament_id=tournament.id)
     settings_ids = await draw_settings_ids_for_tournament(db, tournament.id)
     # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5); the event
     # is reachable through the stage.

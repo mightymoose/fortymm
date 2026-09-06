@@ -183,13 +183,28 @@ _Avoid_: home league, main league, global league.
 ## Tournament entry
 
 **Entry**:
-A player's place in one tournament **event**. Soft-deleted on withdrawal, so a
-player may re-enter (ADR-0016). An entry knows **who created it**: `NULL` means the
+A competing unit's place in one tournament **event**, with one current member for
+singles, two for doubles, and a variable team roster. Its identity, seed, draw
+position and results survive membership changes. Soft-deleted on withdrawal, so a
+player may re-enter (ADR-0016, amended by the September 6 entry-members ADR).
+An entry knows **who created it**: `NULL` means the
 player entered themselves, otherwise it names the director who added them
 (ADR-0784). Those are the only two ways an entry comes to exist, and the second is
 not a different endpoint — it is the same one, told who to enter.
 _Avoid_: registration, signup, ticket (an entry is the row; *registration* is the
 window it may be created in).
+
+**Entry member**:
+A Player's recorded interval of membership in an **entry**. A current member has
+not left; ending membership retains the original player and join time. A Player
+can enter multiple events, but holds at most one active entry per event unless a
+team event explicitly allows more. These capabilities are database-only for now.
+
+**Match lineup**:
+The actual participants recorded on each side when a tournament match starts,
+independent of its entries' later membership. Earlier lineups remain preserved
+when a director records a complete, attributed **lineup correction** revision.
+Distinct from scheduled participants and an entry's current roster.
 
 **Director entry**:
 The tournament **owner** adding a player to an event on their behalf — a phone

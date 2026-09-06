@@ -230,24 +230,27 @@ async def _all_entries(
     return list(rows.scalars())
 
 
-async def test_the_active_entry_index_is_unique_and_partial(
+async def test_current_member_index_is_unique_and_partial(
     db_session: AsyncSession,
 ) -> None:
-    """The guard is a UNIQUE index carrying a ``WHERE status = 'entered'``
-    predicate — not a plain unique index over the whole table."""
+    """Repeated membership intervals are allowed; duplicate current membership is not.
+
+    Event-wide participation is enforced by deferred database constraints and
+    exercised through the registration tests below.
+    """
     indexdef = (
         await db_session.execute(
             text(
                 "SELECT indexdef FROM pg_indexes "
-                "WHERE tablename = 'tournament_entries' AND indexname = :name"
+                "WHERE tablename = 'tournament_entry_members' AND indexname = :name"
             ),
-            {"name": ACTIVE_ENTRY_INDEX},
+            {"name": "uq_tournament_entry_members_current_player"},
         )
     ).scalar_one()
 
     assert "CREATE UNIQUE INDEX" in indexdef, indexdef
-    assert "(event_id, user_id)" in indexdef, indexdef
-    assert "WHERE (status = 'entered'" in indexdef, indexdef
+    assert "(entry_id, player_id)" in indexdef, indexdef
+    assert "WHERE (left_at IS NULL)" in indexdef, indexdef
 
 
 async def test_an_entry_persists_with_its_defaults(

@@ -62,6 +62,7 @@ from app.tournament_errors import (
 from app.tournament_event_stages import mint_stages
 from app.tournament_placement import place_fixture
 from app.tournament_queries import stage_ids_for_events
+from tests._entry_seeds import seed_fixture_match_sides
 from tests._helpers import (
     make_user,
     venue_tables,
@@ -648,6 +649,7 @@ async def _call_fixture_directly(
     # fixture's already-anchored ``scheduled_start`` never trips a naive/aware
     # ``TypeError``.
     anchored = start.replace(tzinfo=UTC)
+    await seed_fixture_match_sides(db, fixture, match)
     fixture.match_id = match.id
     fixture.table_id = table_id
     fixture.scheduled_start = anchored

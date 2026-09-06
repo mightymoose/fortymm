@@ -1,5 +1,10 @@
 # Accounts authorize durable Players
 
+The entry-repoint/deletion clauses below are superseded by
+[Entry members and lineup history](20260906-event-entries-have-members-and-match-lineups-have-history.md).
+Memberships preserve their original Player and project the explicit merge chain;
+duplicate entries are withdrawn without erasing their membership history.
+
 Status: Accepted. Implements #1671; the pre-beta baseline freezes at #1670.
 
 ## Decision

@@ -83,6 +83,7 @@ from app.tournament_errors import (
     PlacementClashError,
     PlacementTableNotFoundError,
     PlayerNotFoundError,
+    RecordedPlayDeletionError,
     ReservationNotInEventError,
     ReservationOutsideEventWindowError,
     ScheduleQueueUnavailableError,
@@ -224,6 +225,7 @@ _TournamentWriteError = (
     | NotTournamentOwnerError
     | EventNotFoundError
     | DrawUnderWayError
+    | RecordedPlayDeletionError
     | LeagueNotEditableError
 )
 _TOURNAMENT_WRITE_ERRORS = (
@@ -232,6 +234,7 @@ _TOURNAMENT_WRITE_ERRORS = (
     EventNotFoundError,
     DrawUnderWayError,
     LeagueNotEditableError,
+    RecordedPlayDeletionError,
 )
 
 
