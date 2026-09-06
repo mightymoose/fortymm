@@ -42,6 +42,9 @@ produces the existing format conflict rather than a commit-time server error.
 After the tournament goes live, changes to existing entry membership must record
 the current director's Account as the joining/leaving actor. Initial entry/member
 construction in one transaction remains possible for seeds and model construction.
+An inserted closed interval must attribute both joining and departure. Roster
+writers hold a shared tournament lock before authorization and event locking,
+serializing with go-live's status write and materialization.
 The database stamps and preserves the entry's creation transaction ID; an older
 transaction does not become its creator merely because its timestamp is earlier.
 This is attribution and domain validation for trusted database writers, not a new
@@ -56,6 +59,8 @@ captures those participants into a separate **Match lineup** and its member rows
 An ordinary result that completes a pending match directly captures the lineup at
 completion, the first recorded evidence of play when no start signal was saved.
 An explicit walkover remains lineup-free.
+Assigning an already-started match to a fixture also runs capture and eligibility
+validation, recording its participants when it first becomes tournament play.
 Direct database writes cannot create an initial played lineup for a pending match;
 the match must be in progress or have a played terminal outcome.
 Automatic capture and direct lineup validation acquire the roster's event lock

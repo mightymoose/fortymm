@@ -73,6 +73,12 @@ ENTRY_INTEGRITY_DDL = (
     LANGUAGE plpgsql AS $$
     DECLARE owner_uuid uuid; actor_uuid uuid;
     BEGIN
+        -- SHARE conflicts with go-live's status UPDATE as well as its owner lock.
+        -- Hold it before authorizing and before the member's event lock.
+        PERFORM t.id FROM tournament_entries en
+        JOIN tournament_events e ON e.id = en.event_id
+        JOIN tournaments t ON t.id = e.tournament_id
+        WHERE en.id = NEW.entry_id FOR SHARE OF t;
         SELECT t.owner_account_id INTO owner_uuid FROM tournament_entries en
         JOIN tournament_events e ON e.id = en.event_id
         JOIN tournaments t ON t.id = e.tournament_id
@@ -83,7 +89,10 @@ ENTRY_INTEGRITY_DDL = (
         ELSIF NEW.left_at IS DISTINCT FROM OLD.left_at THEN actor_uuid :=
         NEW.left_by_account_id;
         ELSE RETURN NEW; END IF;
-        IF actor_uuid IS DISTINCT FROM owner_uuid OR NOT EXISTS (
+        IF actor_uuid IS DISTINCT FROM owner_uuid
+            OR (TG_OP = 'INSERT' AND NEW.left_at IS NOT NULL
+                AND NEW.left_by_account_id IS DISTINCT FROM owner_uuid)
+            OR NOT EXISTS (
             SELECT 1 FROM accounts WHERE id = actor_uuid AND merged_at IS NULL
         ) THEN
             RAISE EXCEPTION 'roster change after start requires the tournament director'
@@ -280,18 +289,23 @@ ENTRY_INTEGRITY_DDL = (
     """
     CREATE OR REPLACE FUNCTION capture_match_lineup() RETURNS trigger
     LANGUAGE plpgsql AS $$
-    DECLARE fixture tournament_fixtures; lineup_uuid uuid;
+    DECLARE fixture tournament_fixtures; lineup_uuid uuid; match_uuid uuid;
         current_status match_status; current_ending match_ending;
     BEGIN
+        IF TG_TABLE_NAME = 'tournament_fixtures' THEN
+            SELECT match_id INTO match_uuid FROM tournament_fixtures WHERE id = NEW.id;
+        ELSE
+            match_uuid := NEW.id;
+        END IF;
         -- Deferred events can precede an un-call in the same transaction.
         SELECT status, ending INTO current_status, current_ending
-        FROM matches WHERE id = NEW.id;
+        FROM matches WHERE id = match_uuid FOR UPDATE;
         IF NOT FOUND THEN RETURN NULL; END IF;
         IF NOT (current_status = 'in_progress'
             OR (current_status = 'completed' AND current_ending IS NULL)) OR EXISTS (
-            SELECT 1 FROM match_lineups WHERE match_id = NEW.id
+            SELECT 1 FROM match_lineups WHERE match_id = match_uuid
         ) THEN RETURN NULL; END IF;
-        SELECT * INTO fixture FROM tournament_fixtures WHERE match_id = NEW.id;
+        SELECT * INTO fixture FROM tournament_fixtures WHERE match_id = match_uuid;
         IF NOT FOUND THEN RETURN NULL; END IF;
         -- Serialize the snapshot with roster edits before reading eligibility.
         -- A member FK's KEY SHARE lock alone permits concurrent interval closure.
@@ -306,12 +320,12 @@ ENTRY_INTEGRITY_DDL = (
                 AND m.entry_id = CASE WHEN s.side_number = 1
                     THEN fixture.entry_a_id ELSE fixture.entry_b_id END
                 AND m.left_at IS NULL
-            WHERE s.match_id = NEW.id AND m.id IS NULL
+            WHERE s.match_id = match_uuid AND m.id IS NULL
         ) THEN
             RAISE EXCEPTION 'participant must be a current entry member'
                 USING ERRCODE = '23514';
         END IF;
-        INSERT INTO match_lineups (match_id) VALUES (NEW.id) RETURNING id INTO
+        INSERT INTO match_lineups (match_id) VALUES (match_uuid) RETURNING id INTO
         lineup_uuid;
         INSERT INTO match_lineup_players (lineup_id, side_number, entry_member_id,
         player_id)
@@ -322,13 +336,18 @@ ENTRY_INTEGRITY_DDL = (
             AND m.entry_id = CASE WHEN s.side_number = 1
                 THEN fixture.entry_a_id ELSE fixture.entry_b_id END
             AND m.left_at IS NULL
-        WHERE s.match_id = NEW.id;
+        WHERE s.match_id = match_uuid;
         RETURN NULL;
     END $$
     """,
     """
     CREATE CONSTRAINT TRIGGER capture_match_lineup AFTER INSERT OR UPDATE OF status
     ON matches DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION capture_match_lineup()
+    """,
+    """
+    CREATE CONSTRAINT TRIGGER capture_fixture_lineup AFTER INSERT OR UPDATE OF match_id
+    ON tournament_fixtures DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION capture_match_lineup()
     """,
     """
@@ -412,6 +431,11 @@ ENTRY_INTEGRITY_DDL = (
         ELSE
             SELECT event_id INTO event_uuid FROM tournament_entries
             WHERE id = COALESCE(NEW.entry_id, OLD.entry_id);
+        END IF;
+        IF TG_TABLE_NAME = 'tournament_entries' THEN
+            PERFORM t.id FROM tournaments t
+            JOIN tournament_events e ON e.tournament_id = t.id
+            WHERE e.id = event_uuid FOR SHARE OF t;
         END IF;
         UPDATE tournament_events SET id = id WHERE id = event_uuid;
         RETURN COALESCE(NEW, OLD);

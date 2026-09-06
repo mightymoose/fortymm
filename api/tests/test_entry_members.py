@@ -645,6 +645,29 @@ async def test_first_lineup_waits_for_roster_replacement(
             await asyncio.gather(capture_task, return_exceptions=True)
 
 
+@pytest.mark.parametrize("status", ["in_progress", "completed"])
+async def test_fixture_attaching_an_already_played_match_captures_history(
+    db_session, status
+):
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    fixture.match_id = None
+    await db_session.commit()
+    await db_session.execute(
+        text("UPDATE matches SET status = :status WHERE id = :id"),
+        {"id": match.id, "status": status},
+    )
+    await db_session.commit()
+    assert await db_session.scalar(text("SELECT count(*) FROM match_lineups")) == 0
+    await db_session.execute(
+        text("UPDATE tournament_fixtures SET match_id = :match WHERE id = :id"),
+        {"match": match.id, "id": fixture.id},
+    )
+    await db_session.commit()
+    assert set(
+        await db_session.scalars(text("SELECT player_id FROM match_lineup_players"))
+    ) == {player.player_id for player in players[:4]}
+
+
 async def test_pending_match_cannot_record_a_complete_played_lineup(db_session):
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
     with pytest.raises(IntegrityError, match="lineup requires a started match"):
@@ -1274,6 +1297,161 @@ async def test_older_transaction_cannot_bypass_live_roster_director(db_session, 
                     "VALUES (:entry, :player)"
                 ),
                 {"entry": entry.id, "player": players[1].player_id},
+            )
+
+
+async def test_go_live_waits_for_roster_replacement(db_session, engine, default_league):
+    from app.models import User
+    from app.tournament_draws import cut_draw
+    from app.tournament_lifecycle import transition_tournament
+    from tests.test_tournament_lifecycle import _enter, _make_tournament_at, _one_event
+
+    owner = await make_user(db_session, "roster-live-owner")
+    tournament = await _make_tournament_at(
+        db_session,
+        owner=owner,
+        league=default_league,
+        status=TournamentStatus.published,
+        with_event=True,
+    )
+    event = await _one_event(db_session, tournament.id)
+    await _enter(db_session, event, 4)
+    await cut_draw(db_session, event)
+    replacement = await make_user(db_session, "roster-live-replacement")
+    original = (
+        await db_session.execute(
+            text(
+                "SELECT m.id, m.entry_id, m.player_id FROM tournament_entry_members m "
+                "JOIN tournament_entries e ON e.id = m.entry_id "
+                "WHERE e.event_id = :event LIMIT 1"
+            ),
+            {"event": event.id},
+        )
+    ).one()
+    await db_session.commit()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as roster, sessions() as lifecycle:
+        roster_pid = await roster.scalar(text("SELECT pg_backend_pid()"))
+        lifecycle_pid = await lifecycle.scalar(text("SELECT pg_backend_pid()"))
+        actor = await lifecycle.get(User, owner.id)
+        await roster.execute(
+            text(
+                "UPDATE tournament_entry_members SET left_at = clock_timestamp() "
+                "WHERE id = :id"
+            ),
+            {"id": original.id},
+        )
+        await roster.execute(
+            text(
+                "INSERT INTO tournament_entry_members (entry_id, player_id) "
+                "VALUES (:entry, :player)"
+            ),
+            {"entry": original.entry_id, "player": replacement.player_id},
+        )
+        live_task = asyncio.create_task(
+            transition_tournament(
+                lifecycle,
+                tournament_id=tournament.id,
+                actor=actor,
+                to=TournamentStatus.live,
+            )
+        )
+        try:
+
+            async def wait_for_block():
+                while roster_pid not in await db_session.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": lifecycle_pid}
+                ):
+                    assert not live_task.done(), "go-live bypassed the roster edit"
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_block(), timeout=5)
+            await roster.commit()
+            await live_task
+            participants = set(
+                await db_session.scalars(text("SELECT user_id FROM match_side_players"))
+            )
+            assert replacement.player_id in participants
+            assert original.player_id not in participants
+        finally:
+            if not live_task.done():
+                live_task.cancel()
+            await asyncio.gather(live_task, return_exceptions=True)
+
+
+async def test_roster_rechecks_director_when_go_live_commits_first(db_session, engine):
+    event = await _make_event(db_session)
+    players = [await make_user(db_session, f"live-first-{n}") for n in range(2)]
+    entry = TournamentEntry(event_id=event.id, user_id=players[0].player_id)
+    db_session.add(entry)
+    tournament = await db_session.get(Tournament, event.tournament_id)
+    tournament.status = TournamentStatus.published
+    await db_session.commit()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as lifecycle, sessions() as roster:
+        lifecycle_pid = await lifecycle.scalar(text("SELECT pg_backend_pid()"))
+        roster_pid = await roster.scalar(text("SELECT pg_backend_pid()"))
+        await lifecycle.execute(
+            text("UPDATE tournaments SET status = 'live' WHERE id = :id"),
+            {"id": tournament.id},
+        )
+
+        async def replace():
+            await roster.execute(
+                text(
+                    "UPDATE tournament_entry_members SET left_at = clock_timestamp() "
+                    "WHERE entry_id = :entry"
+                ),
+                {"entry": entry.id},
+            )
+            await roster.execute(
+                text(
+                    "INSERT INTO tournament_entry_members (entry_id, player_id) "
+                    "VALUES (:entry, :player)"
+                ),
+                {"entry": entry.id, "player": players[1].player_id},
+            )
+            await roster.commit()
+
+        roster_task = asyncio.create_task(replace())
+        try:
+
+            async def wait_for_block():
+                while lifecycle_pid not in await db_session.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": roster_pid}
+                ):
+                    assert not roster_task.done()
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_block(), timeout=5)
+            await lifecycle.commit()
+            with pytest.raises(IntegrityError, match="director"):
+                await roster_task
+        finally:
+            if not roster_task.done():
+                roster_task.cancel()
+            await asyncio.gather(roster_task, return_exceptions=True)
+
+
+async def test_closed_membership_insert_requires_departure_director(db_session):
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    tournament = await db_session.get(Tournament, event.tournament_id)
+    tournament.status = TournamentStatus.live
+    await db_session.commit()
+    with pytest.raises(IntegrityError, match="director"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "INSERT INTO tournament_entry_members "
+                    "(entry_id, player_id, joined_at, left_at, joined_by_account_id) "
+                    "VALUES (:entry, :player, clock_timestamp() - interval '1 minute', "
+                    "clock_timestamp(), :director)"
+                ),
+                {
+                    "entry": entries[0].id,
+                    "player": players[4].player_id,
+                    "director": tournament.owner_account_id,
+                },
             )
 
 
