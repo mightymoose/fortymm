@@ -130,7 +130,8 @@ actors are being merged.
 Entry adders and lineup correction actors follow the same Account-first contract.
 Status-only entry updates do not re-lock an unchanged historical adder.
 Direct lineup headers lock the match before recording participants, serializing
-the first capture with settings reassignment. A contested match produces `40001`.
+the first capture with settings reassignment. A contested match or subsequent
+event lock produces `40001`, avoiding inversion against event-first evidence writes.
 Match status writers use non-waiting tournament/event locks after the match tuple
 is locked, returning `40001` on contention. Direct writers can acquire parents
 first to wait safely before the status write; fixture capture cannot deadlock

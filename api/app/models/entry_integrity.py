@@ -591,6 +591,15 @@ ENTRY_INTEGRITY_DDL = (
             SELECT event_id INTO event_uuid FROM tournament_entries
             WHERE id = COALESCE(NEW.entry_id, OLD.entry_id);
         END IF;
+        IF TG_TABLE_NAME = 'match_lineups' THEN
+            BEGIN
+                PERFORM id FROM tournament_events
+                WHERE id = event_uuid FOR UPDATE NOWAIT;
+            EXCEPTION WHEN lock_not_available THEN
+                RAISE EXCEPTION 'lineup requires event lock; retry'
+                    USING ERRCODE = '40001';
+            END;
+        END IF;
         IF TG_TABLE_NAME IN ('tournament_entries', 'matches') THEN
             IF TG_OP = 'UPDATE' THEN
                 BEGIN

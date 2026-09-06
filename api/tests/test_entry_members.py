@@ -1591,6 +1591,41 @@ async def test_match_status_refuses_inverted_parent_locks(db_session, engine, pa
         await starting.commit()
 
 
+async def test_direct_lineup_refuses_inverted_event_lock(db_session, engine):
+    from sqlalchemy.exc import DBAPIError
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    statement = text("INSERT INTO match_lineups (match_id) VALUES (:id) RETURNING id")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as evidence, sessions() as capture:
+        await evidence.execute(
+            text("SELECT id FROM tournament_events WHERE id = :id FOR UPDATE"),
+            {"id": event.id},
+        )
+        await capture.execute(text("SET LOCAL lock_timeout = '200ms'"))
+        with pytest.raises(DBAPIError, match="lineup requires event lock") as exc:
+            await capture.scalar(statement, {"id": match.id})
+        assert exc.value.orig.sqlstate == "40001"
+        await capture.rollback()
+        await evidence.rollback()
+        lineup = await capture.scalar(statement, {"id": match.id})
+        await capture.execute(
+            text(
+                "INSERT INTO match_lineup_players "
+                "(lineup_id, side_number, entry_member_id, player_id) "
+                "SELECT :lineup, CASE WHEN entry_id = :a THEN 1 ELSE 2 END, "
+                "id, player_id FROM tournament_entry_members "
+                "WHERE entry_id IN (:a, :b) AND left_at IS NULL"
+            ),
+            {"lineup": lineup, "a": entries[0].id, "b": entries[1].id},
+        )
+        await capture.execute(
+            text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
+            {"id": match.id},
+        )
+        await capture.commit()
+
+
 async def test_crossed_ownership_and_participation_merges_serialize(db_session, engine):
     events = [await _make_event(db_session) for _ in range(2)]
     sources = [await make_user(db_session, f"cross-source-{i}") for i in range(2)]
