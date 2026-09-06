@@ -14,6 +14,7 @@ ticket asks to keep it honest against."""
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 from rq import Queue
 from sqlalchemy import select
@@ -270,16 +271,18 @@ async def test_review_prompt_hides_after_retirement_auto_accept(
     await _deliver_pending_jobs(notifications, fake_notifications_queue)
     assert await _titles(notifications, opponent.id) != []
 
-    # Force the standing result's deadline into the past. Capture the ids
-    # before the commit/expire below — the real job reloads by id, not by
-    # holding onto these (now-expired) in-memory objects.
+    # Advance the worker's clock past the immutable proposal's deadline.
+    # The real job reloads by id, not by holding onto these objects.
     match_id, standing_id, opponent_id = match.id, standing.id, opponent.id
     match.match_settings.retirement_window = timedelta(days=7)
-    standing.submitted_at = datetime.now(UTC) - timedelta(days=8)
     await db_session.commit()
     db_session.expire_all()
 
-    outcome = await retire_if_lapsed(db_session, match_id, standing_id, notifications)
+    with patch("app.retirement_jobs.datetime", wraps=datetime) as clock:
+        clock.now.return_value = datetime.now(UTC) + timedelta(days=8)
+        outcome = await retire_if_lapsed(
+            db_session, match_id, standing_id, notifications
+        )
 
     assert outcome is RetirementOutcome.retired
 

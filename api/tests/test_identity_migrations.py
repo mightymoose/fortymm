@@ -1,45 +1,21 @@
 """A fresh Alembic install must match the ORM, without legacy backfills."""
 
-import os
-import subprocess
-import sys
-import uuid
-from pathlib import Path
-
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from sqlalchemy import text
-from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.account_merge import merge_user
 from app.db import Base
 from app.models import Account, LoginIdentity, Player
 from app.player_accounts import primary_player_id, require_player
+from tests._migration_database import migrated_database, run_alembic
 
 
 async def test_fresh_alembic_install_has_schema_parity(postgres_url):
-    database = "fortymm_migration_test_" + uuid.uuid4().hex
-    admin = create_async_engine(postgres_url, isolation_level="AUTOCOMMIT")
-    migration_url = make_url(postgres_url).set(database=database)
-    migrated = create_async_engine(migration_url)
-    async with admin.connect() as connection:
-        await connection.execute(text(f'CREATE DATABASE "{database}"'))
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "alembic", "upgrade", "head"],
-            cwd=Path(__file__).parents[1],
-            env={
-                **os.environ,
-                "DATABASE_URL": migration_url.render_as_string(hide_password=False),
-            },
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        assert result.returncode == 0, result.stderr
+    async with migrated_database(postgres_url) as migrated:
         async with migrated.connect() as connection:
             differences = await connection.run_sync(
                 lambda conn: compare_metadata(
@@ -81,18 +57,11 @@ async def test_fresh_alembic_install_has_schema_parity(postgres_url):
                         text("UPDATE accounts SET merged_at = NULL WHERE id = :id"),
                         {"id": guest.id},
                     )
-        rollback = subprocess.run(
-            [sys.executable, "-m", "alembic", "downgrade", "base"],
-            cwd=Path(__file__).parents[1],
-            env={
-                **os.environ,
-                "DATABASE_URL": migration_url.render_as_string(hide_password=False),
-            },
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        assert rollback.returncode == 0, rollback.stderr
+
+
+async def test_disposable_baseline_can_be_downgraded_and_reinstalled(postgres_url):
+    async with migrated_database(postgres_url) as migrated:
+        run_alembic(migrated.url, "downgrade", "base")
         async with migrated.connect() as connection:
             assert (
                 await connection.scalar(
@@ -100,20 +69,9 @@ async def test_fresh_alembic_install_has_schema_parity(postgres_url):
                 )
                 is None
             )
-        reinstall = subprocess.run(
-            [sys.executable, "-m", "alembic", "upgrade", "head"],
-            cwd=Path(__file__).parents[1],
-            env={
-                **os.environ,
-                "DATABASE_URL": migration_url.render_as_string(hide_password=False),
-            },
-            capture_output=True,
-            text=True,
-            timeout=60,
-        )
-        assert reinstall.returncode == 0, reinstall.stderr
-    finally:
-        await migrated.dispose()
-        async with admin.connect() as connection:
-            await connection.execute(text(f'DROP DATABASE "{database}" WITH (FORCE)'))
-        await admin.dispose()
+        run_alembic(migrated.url, "upgrade", "head")
+        async with migrated.connect() as connection:
+            assert (
+                await connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "0001"
+            )

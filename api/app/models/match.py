@@ -139,7 +139,7 @@ class Match(Base):
     )
     results: Mapped[list["MatchResult"]] = relationship(
         back_populates="match",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
+        cascade="save-update, merge",
+        passive_deletes="all",
         order_by="MatchResult.submitted_at",
     )

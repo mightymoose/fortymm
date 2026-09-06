@@ -122,11 +122,13 @@ against code the push doesn't carry.
 
 ## Testing gotchas
 
-**Most fixtures build tables with `Base.metadata.create_all`.** That alone does
-not verify Alembic. `tests/test_identity_migrations.py` additionally creates an
-isolated database, runs the actual `alembic upgrade head`, checks catalogue seeds
-and requires an empty metadata diff. Run it for every schema or migration change.
-Never reset a shared database as a side effect of running tests.
+**Backend fixtures run the actual Alembic baseline in a fresh named database.**
+This includes the proposal-history triggers, which `Base.metadata.create_all`
+cannot install. `TEST_DATABASE_URL` selects the server on which to create that
+disposable database; the supplied database is not reset. Between tests, TRUNCATE
+resets the disposable database and fixtures restore representative seeds.
+`tests/test_identity_migrations.py` additionally checks untouched catalogue seeds,
+schema parity and baseline reinstall. Run it for every schema or migration change.
 
 **A race test written the obvious way passes against a broken implementation.**
 `asyncio.Barrier` + `asyncio.gather` over two sessions both hitting the endpoint only
@@ -152,8 +154,8 @@ confirm the test reds *for the stated reason*, put it back. See
 **Some display strings are DB seed data, not app code.** Notification category and
 channel display names are seed rows: the pre-beta baseline inserts them,
 `tests/conftest.py` re-seeds them by hand
-(`NOTIFICATION_TYPE_LABELS` / `NOTIFICATION_CHANNEL_LABELS`, because `create_all`
-skips the migration), and `web-client/src/test/factories.ts` mirrors them for MSW.
+(`NOTIFICATION_TYPE_LABELS` / `NOTIFICATION_CHANNEL_LABELS`, after each test reset),
+and `web-client/src/test/factories.ts` mirrors them for MSW.
 Three places that must change together — and a copy/wording sweep that greps `app/`
 finds none of them.
 

@@ -52,6 +52,13 @@ async def postgres_url(postgres_url, entry_schema):
     async with admin.connect() as connection:
         await connection.execute(text(f'CREATE DATABASE "{database}"'))
     try:
+        if entry_schema == "metadata":
+            metadata_engine = create_async_engine(url)
+            try:
+                async with metadata_engine.begin() as connection:
+                    await connection.run_sync(Base.metadata.create_all)
+            finally:
+                await metadata_engine.dispose()
         if entry_schema == "alembic":
             installed = subprocess.run(
                 [sys.executable, "-m", "alembic", "upgrade", "head"],

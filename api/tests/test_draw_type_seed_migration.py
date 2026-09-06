@@ -1,40 +1,16 @@
-"""The one test in the suite that actually runs Alembic.
+"""Dedicated checks of the untouched Alembic schema and catalogue seeds.
 
-Everything else builds its schema with ``Base.metadata.create_all`` (see the
-``engine`` fixture in ``conftest.py``), so the migrations are entirely
-unexercised: deleting migration 0010's whole ``op.bulk_insert`` of
-``draw_types`` leaves the rest of the suite green. That is the hole this file
-closes, and it is the guard the ADR "a draw type is a seeded row, and the enum
-holds only what runs" promises.
+The backend suite also runs Alembic, then resets data and restores representative
+fixtures between tests. These checks inspect a separate fresh install before
+those resets, so missing migration seeds cannot be hidden by test fixtures.
 
-The claim under test is the ADR's central one: **a row in ``draw_types`` means
-"this draw type has an implementation"**, so the ``key`` set a migrated database
-ends up with must equal ``{t.value for t in DrawType}`` — the closed set the code
-dispatches on. The seed is hardcoded in the migration, which by design cannot
-import app code (``conftest.DRAW_TYPE_SEED`` now reads it back out of that
-migration by path rather than re-typing it), and nothing compared it to the enum
-until now.
+A row in ``draw_types`` means its implementation exists: the migrated key set
+must equal the closed ``DrawType`` enum. The tests also inspect migrated columns,
+foreign keys and uniqueness directly, alongside the general schema parity test
+in ``test_identity_migrations.py``.
 
-**Where the database comes from.** Migrating the suite's own database would
-prove nothing — it is already fully built by ``create_all``, so ``upgrade head``
-would either collide or no-op. So this creates a *separate, brand-new* database
-on the same Postgres server the suite already has (testcontainer, or whatever
-``TEST_DATABASE_URL`` points at), asserts it is genuinely empty, and migrates
-that. The main ``db_session`` database is never touched and no extra container
-is started.
-
-**Alembic runs as a subprocess**, not via ``alembic.command``: ``migrations/env.py``
-ends in ``asyncio.run(...)``, which cannot be called from inside pytest-asyncio's
-already-running session loop. The subprocess uses ``sys.executable`` — the same
-interpreter running pytest, i.e. this checkout's virtualenv — and this
-directory's ``alembic.ini``, so what gets migrated is provably the working tree's
-migrations and not some other checkout's.
-
-**Cost:** a full ``upgrade head`` runs *once per session* (session-scoped
-fixtures), not once per test. There is no slow/integration marker convention in
-this repo — no ``markers`` in ``[tool.pytest.ini_options]`` and no
-``pytest.mark.slow`` anywhere in ``tests/`` — so this file deliberately adds
-none rather than inventing one.
+The database is isolated on the test PostgreSQL server. Alembic runs through
+this checkout's interpreter and configuration, with one install per session.
 """
 
 import os

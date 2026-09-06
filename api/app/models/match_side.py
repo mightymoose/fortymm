@@ -25,6 +25,7 @@ class MatchSide(Base):
 
     __tablename__ = "match_sides"
     __table_args__ = (
+        UniqueConstraint("id", "match_id", name="uq_match_sides_id_match_id"),
         UniqueConstraint(
             "match_id", "side_number", name="uq_match_sides_match_id_side_number"
         ),
@@ -52,6 +53,7 @@ class MatchSide(Base):
     match: Mapped["Match"] = relationship(back_populates="sides")
     players: Mapped[list["MatchSidePlayer"]] = relationship(
         back_populates="match_side",
+        foreign_keys="MatchSidePlayer.match_side_id",
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
