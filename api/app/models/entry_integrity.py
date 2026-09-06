@@ -561,6 +561,33 @@ ENTRY_INTEGRITY_DDL = (
     FOR EACH ROW EXECUTE FUNCTION lock_entry_event()
     """,
     """
+    CREATE OR REPLACE FUNCTION lock_fixture_link() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        IF NEW.match_id IS NULL THEN RETURN NEW; END IF;
+        IF TG_OP = 'UPDATE' THEN
+            IF NEW.match_id IS NOT DISTINCT FROM OLD.match_id THEN RETURN NEW; END IF;
+        END IF;
+        PERFORM t.id FROM tournaments t
+        JOIN tournament_events e ON e.tournament_id = t.id
+        JOIN tournament_event_stages s ON s.event_id = e.id
+        WHERE s.id = NEW.stage_id FOR SHARE OF t NOWAIT;
+        PERFORM e.id FROM tournament_events e
+        JOIN tournament_event_stages s ON s.event_id = e.id
+        WHERE s.id = NEW.stage_id FOR UPDATE OF e NOWAIT;
+        RETURN NEW;
+    EXCEPTION WHEN lock_not_available THEN
+        -- UPDATE has already locked the fixture before this row trigger. Never
+        -- wait backwards: direct writers must retry with parent locks first.
+        RAISE EXCEPTION 'fixture link requires parent locks before update; retry'
+            USING ERRCODE = '40001';
+    END $$
+    """,
+    """
+    CREATE TRIGGER lock_fixture_link BEFORE INSERT OR UPDATE OF match_id
+    ON tournament_fixtures FOR EACH ROW EXECUTE FUNCTION lock_fixture_link()
+    """,
+    """
     CREATE TRIGGER lock_game_event BEFORE INSERT ON match_games
     FOR EACH ROW EXECUTE FUNCTION lock_entry_event()
     """,

@@ -17,6 +17,8 @@ Player's membership interval: joining and leaving are recorded separately, and
 ending membership does not replace or erase its original Player, entry or join
 time. A returning member gets another interval. Entries remain soft-withdrawn;
 the active entry count is derived from entries, not from the number of members.
+Intervals for the same entry and original Player cannot overlap. Departure is an
+exclusive boundary, so a returning interval may begin exactly at that instant.
 
 At transaction completion an active singles entry has one current member, a
 doubles entry has two, and a team entry has at least one. Replacing a doubles
@@ -61,6 +63,14 @@ completion, the first recorded evidence of play when no start signal was saved.
 An explicit walkover remains lineup-free.
 Assigning an already-started match to a fixture also runs capture and eligibility
 validation, recording its participants when it first becomes tournament play.
+A match belongs to at most one fixture; unmaterialized fixtures may share a null
+match reference. Match status writes lock the parent tournament before the event,
+before deferred capture, so deletion cannot remove the fixture in between.
+Direct fixture-link writers must use tournament-before-event-before-fixture lock
+order. The row trigger takes available parent locks without waiting; if another
+transaction already holds one, it raises retryable SQLSTATE `40001` rather than
+waiting backwards after the fixture row lock. Retry the transaction with a shared
+tournament lock and an exclusive event lock acquired before updating the fixture.
 Direct database writes cannot create an initial played lineup for a pending match;
 the match must be in progress or have a played terminal outcome.
 Automatic capture and direct lineup validation acquire the roster's event lock
@@ -82,6 +92,8 @@ Deletion locks the event and membership rows before checking history. A concurre
 first lineup holds membership foreign-key locks, so deletion waits and then reports
 the recorded-play refusal rather than leaking a foreign-key error. The event-first
 lock order also prevents roster changes from invalidating that check.
+Game and result rows also prevent deletion when a pending match has no lineup yet;
+their insertion serializes with the deletion guard on the event.
 
 The snapshot references the original entry membership and Player. Later roster
 changes and sign-in reconciliation cannot rewrite it. Before starting a match,
@@ -125,6 +137,8 @@ the advancing entry. `NULL` preserves ordinary result negotiation. The latter na
 avoids overloading **Retirement**, which already means automatic acceptance of an
 unanswered standing result. This does not expose special-result submission or
 implement new rating, standings or advancement policies for those outcomes.
+Walkovers cannot contain game or result records either; validation covers both
+evidence written before the ending and evidence added afterward.
 
 ## Identity reconciliation and compatibility
 
@@ -146,6 +160,10 @@ Merge membership locks and duplicate checks are scoped to events containing the
 source Player or its earlier merged aliases, not unrelated platform entries.
 Collision discovery starts from indexed memberships for both merging identities
 and their aliases, then reuses the candidate entry IDs for reconciliation.
+If registration commits between collision discovery and the Player update, the
+merge retries its sporting reconciliation within a savepoint, at most three times.
+The post-update check stays scoped to the merged identities and does not force
+unrelated deferred constraints. Historical Account names survive that retry.
 
 ## Migration and verification
 

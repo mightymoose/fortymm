@@ -1012,7 +1012,8 @@ async def test_cancelling_a_call_with_play_keeps_its_lineup(db_session, evidence
 
 @pytest.mark.parametrize("target", ["event", "tournament"])
 @pytest.mark.parametrize(
-    "capture_kind", ["status", "deferred_status", "lineup", "game", "result"]
+    "capture_kind",
+    ["status", "deferred_status", "fixture_link", "lineup", "game", "result"],
 )
 async def test_deletion_racing_first_lineup_reports_recorded_play(
     db_session, engine, target, capture_kind
@@ -1023,6 +1024,11 @@ async def test_deletion_racing_first_lineup_reports_recorded_play(
     from app.tournament_lifecycle import delete_tournament
 
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    if capture_kind == "fixture_link":
+        fixture.match_id = None
+        await db_session.commit()
+        match.status = MatchStatus.in_progress
+        await db_session.commit()
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with sessions() as capture, sessions() as deletion:
         capture_pid = await capture.scalar(text("SELECT pg_backend_pid()"))
@@ -1056,6 +1062,11 @@ async def test_deletion_racing_first_lineup_reports_recorded_play(
             )
         elif capture_kind == "deferred_status":
             pass  # Normal SQL writers leave capture deferred until COMMIT.
+        elif capture_kind == "fixture_link":
+            await capture.execute(
+                text("UPDATE tournament_fixtures SET match_id = :match WHERE id = :id"),
+                {"id": fixture.id, "match": match.id},
+            )
         elif capture_kind == "game":
             capture.add(MatchGame(match_id=match.id, game_number=1))
             await capture.flush()
@@ -1100,6 +1111,50 @@ async def test_deletion_racing_first_lineup_reports_recorded_play(
             if not delete_task.done():
                 delete_task.cancel()
             await asyncio.gather(delete_task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("parent", ["tournaments", "tournament_events"])
+async def test_fixture_link_refuses_inverted_parent_lock_order(
+    db_session, engine, parent
+):
+    from sqlalchemy.exc import DBAPIError
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    fixture.match_id = None
+    await db_session.commit()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as deletion, sessions() as linking:
+        await deletion.execute(
+            text(f"SELECT id FROM {parent} WHERE id = :id FOR UPDATE"),
+            {"id": event.tournament_id if parent == "tournaments" else event.id},
+        )
+        # Bound the regression if a trigger mistakenly waits after taking the
+        # fixture row. Correct behavior is a retryable refusal, not this timeout.
+        await linking.execute(text("SET LOCAL lock_timeout = '200ms'"))
+        with pytest.raises(
+            DBAPIError, match="fixture link requires parent locks"
+        ) as exc:
+            await linking.execute(
+                text("UPDATE tournament_fixtures SET match_id = :match WHERE id = :id"),
+                {"match": match.id, "id": fixture.id},
+            )
+        assert exc.value.orig.sqlstate == "40001"
+        await linking.rollback()
+        await deletion.rollback()
+        # Retrying with the parent order established succeeds.
+        await linking.execute(
+            text("SELECT id FROM tournaments WHERE id = :id FOR SHARE"),
+            {"id": event.tournament_id},
+        )
+        await linking.execute(
+            text("SELECT id FROM tournament_events WHERE id = :id FOR UPDATE"),
+            {"id": event.id},
+        )
+        await linking.execute(
+            text("UPDATE tournament_fixtures SET match_id = :match WHERE id = :id"),
+            {"match": match.id, "id": fixture.id},
+        )
+        await linking.commit()
 
 
 @pytest.mark.parametrize("target", ["event", "tournament"])
