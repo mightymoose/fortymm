@@ -494,6 +494,12 @@ ENTRY_INTEGRITY_DDL = (
                 RAISE EXCEPTION 'lineup actor requires account locks; retry'
                     USING ERRCODE = '40001';
             END;
+            BEGIN
+                PERFORM id FROM matches WHERE id = NEW.match_id FOR UPDATE NOWAIT;
+            EXCEPTION WHEN lock_not_available THEN
+                RAISE EXCEPTION 'lineup requires match lock; retry'
+                    USING ERRCODE = '40001';
+            END;
         END IF;
         IF TG_TABLE_NAME = 'tournament_entry_members' AND TG_OP = 'DELETE' THEN
             IF EXISTS (SELECT 1 FROM tournament_entries WHERE id = OLD.entry_id) THEN
@@ -508,7 +514,9 @@ ENTRY_INTEGRITY_DDL = (
             END IF;
         END IF;
         IF TG_TABLE_NAME = 'tournament_entries' THEN
-            IF TG_OP <> 'DELETE' THEN
+            IF TG_OP = 'INSERT' OR (TG_OP = 'UPDATE' AND
+                NEW.added_by_user_id IS DISTINCT FROM OLD.added_by_user_id
+            ) THEN
                 BEGIN
                     PERFORM id FROM accounts WHERE id = NEW.added_by_user_id
                     FOR KEY SHARE NOWAIT;
@@ -768,7 +776,8 @@ ENTRY_INTEGRITY_DDL = (
     FOR EACH ROW EXECUTE FUNCTION lock_entry_event()
     """,
     """
-    CREATE TRIGGER lock_result_event BEFORE INSERT OR UPDATE OF match_id
+    CREATE TRIGGER a_lock_result_event BEFORE INSERT
+    OR UPDATE OF match_id, submitted_by_user_id, accepted_by_user_id, accepted_at
     ON match_results
     FOR EACH ROW EXECUTE FUNCTION lock_entry_event()
     """,

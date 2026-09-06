@@ -124,9 +124,13 @@ Standalone member deletion is likewise refused immediately, before waiting on
 parents; close its membership interval instead. This also avoids a deletion race.
 Roster actors acquire ordered Account key-share locks before tournament locks,
 with retryable refusal on contention, matching Account merge's actor-first order.
-Result inserts likewise acquire their submitter and acceptor Account locks before
-the event lock, with retryable refusal if those actors are being merged.
+Result inserts and acceptance updates acquire their submitter and acceptor Account
+locks before the proposal guard locks the match, with retryable refusal if those
+actors are being merged.
 Entry adders and lineup correction actors follow the same Account-first contract.
+Status-only entry updates do not re-lock an unchanged historical adder.
+Direct lineup headers lock the match before recording participants, serializing
+the first capture with settings reassignment. A contested match produces `40001`.
 Match status writers use non-waiting tournament/event locks after the match tuple
 is locked, returning `40001` on contention. Direct writers can acquire parents
 first to wait safely before the status write; fixture capture cannot deadlock

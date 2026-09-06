@@ -959,6 +959,41 @@ async def test_team_size_edit_cannot_overtake_first_lineup(db_session, engine):
         )
 
 
+async def test_settings_reassignment_waits_for_direct_lineup(db_session, engine):
+    from sqlalchemy.exc import DBAPIError
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    replacement = MatchSettings(team_size=1, best_of=5, affects_rating=False)
+    db_session.add(replacement)
+    await db_session.commit()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as capture, sessions() as settings:
+        # A caller can insert its header before completing the lineup and status
+        # in the same transaction. Topology must serialize from that first write.
+        await capture.execute(
+            text("INSERT INTO match_lineups (match_id) VALUES (:id)"),
+            {"id": match.id},
+        )
+        statement = text(
+            "UPDATE matches SET match_settings_id = :settings WHERE id = :id"
+        )
+        params = {"settings": replacement.id, "id": match.id}
+        await settings.execute(text("SET LOCAL lock_timeout = '200ms'"))
+        with pytest.raises(DBAPIError, match="lock timeout"):
+            await settings.execute(statement, params)
+        await settings.rollback()
+        await capture.rollback()
+        await settings.execute(statement, params)
+        await settings.commit()
+        assert (
+            await settings.scalar(
+                text("SELECT match_settings_id FROM matches WHERE id = :id"),
+                {"id": match.id},
+            )
+            == replacement.id
+        )
+
+
 async def test_lineup_cannot_be_recorded_before_its_start(db_session):
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
     with pytest.raises(IntegrityError, match="ck_match_lineups_chronology"):
@@ -1770,6 +1805,45 @@ async def test_result_actor_lock_precedes_event_lock(db_session, engine, actor):
         await proposal.commit()
 
 
+async def test_result_acceptance_refuses_locked_actor_before_match(db_session, engine):
+    from sqlalchemy.exc import DBAPIError
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    result = await db_session.scalar(
+        text(
+            "INSERT INTO match_results (match_id, submitted_by_user_id, games) "
+            "VALUES (:match, :actor, '[]') RETURNING id"
+        ),
+        {"match": match.id, "actor": players[0].id},
+    )
+    await db_session.commit()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as merging, sessions() as accepting:
+        await merging.execute(
+            text("SELECT id FROM accounts WHERE id = :id FOR UPDATE"),
+            {"id": players[2].id},
+        )
+        await merging.execute(
+            text("SELECT id FROM matches WHERE id = :id FOR UPDATE"),
+            {"id": match.id},
+        )
+        statement = text(
+            "UPDATE match_results SET accepted_by_user_id = :actor, "
+            "accepted_at = clock_timestamp() WHERE id = :id"
+        )
+        params = {"actor": players[2].id, "id": result}
+        await accepting.execute(text("SET LOCAL lock_timeout = '200ms'"))
+        with pytest.raises(
+            DBAPIError, match="result actor requires account locks"
+        ) as exc:
+            await accepting.execute(statement, params)
+        assert exc.value.orig.sqlstate == "40001"
+        await accepting.rollback()
+        await merging.rollback()
+        await accepting.execute(statement, params)
+        await accepting.commit()
+
+
 async def test_entry_adder_lock_precedes_parent_locks(db_session, engine):
     from sqlalchemy.exc import DBAPIError
 
@@ -1795,6 +1869,35 @@ async def test_entry_adder_lock_precedes_parent_locks(db_session, engine):
         await merging.rollback()
         await registering.execute(statement, params)
         await registering.commit()
+
+
+async def test_entry_withdrawal_does_not_relock_unchanged_adder(db_session, engine):
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    await db_session.execute(
+        text("UPDATE tournament_entries SET added_by_user_id = :actor WHERE id = :id"),
+        {"actor": match.created_by_user_id, "id": entries[0].id},
+    )
+    await db_session.commit()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as merging, sessions() as withdrawing:
+        await merging.execute(
+            text("SELECT id FROM accounts WHERE id = :id FOR UPDATE"),
+            {"id": match.created_by_user_id},
+        )
+        await withdrawing.execute(text("SET LOCAL lock_timeout = '200ms'"))
+        await withdrawing.execute(
+            text("UPDATE tournament_entries SET status = 'withdrawn' WHERE id = :id"),
+            {"id": entries[0].id},
+        )
+        await withdrawing.commit()
+        assert (
+            await withdrawing.scalar(
+                text("SELECT status FROM tournament_entries WHERE id = :id"),
+                {"id": entries[0].id},
+            )
+            == "withdrawn"
+        )
+        await merging.rollback()
 
 
 async def test_lineup_correction_actor_lock_precedes_event_lock(db_session, engine):
