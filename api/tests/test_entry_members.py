@@ -173,8 +173,9 @@ async def test_team_event_can_explicitly_allow_multiple_entries(db_session):
 
 
 @pytest.mark.parametrize("through_alias", [False, True])
+@pytest.mark.parametrize("status", ["entered", "withdrawn"])
 async def test_permissive_team_still_rejects_merged_duplicates_within_one_entry(
-    db_session, through_alias
+    db_session, through_alias, status
 ):
     event = await _make_event(db_session, format=EventFormat.teams)
     event.allow_multiple_entries_per_player = True
@@ -182,6 +183,7 @@ async def test_permissive_team_still_rejects_merged_duplicates_within_one_entry(
     db_session.add(
         TournamentEntry(
             event_id=event.id,
+            status=status,
             members=[TournamentEntryMember(player_id=p.player_id) for p in players],
         )
     )
@@ -1517,6 +1519,40 @@ async def test_entry_update_refuses_inverted_parent_lock_order(
             {"id": entries[0].id},
         )
         await writer.commit()
+
+
+async def test_pending_match_starts_after_direct_player_merge(db_session):
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    await db_session.execute(
+        text(
+            "UPDATE players SET merged_into_player_id = :target, "
+            "merged_at = clock_timestamp() WHERE id = :id"
+        ),
+        {"id": players[0].player_id, "target": players[4].player_id},
+    )
+    await db_session.commit()
+    await db_session.execute(
+        text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
+        {"id": match.id},
+    )
+    await db_session.commit()
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT count(*) FROM match_lineup_players p "
+                "JOIN match_lineups l ON l.id = p.lineup_id WHERE l.match_id = :id"
+            ),
+            {"id": match.id},
+        )
+        == 4
+    )
+    assert (
+        await db_session.scalar(
+            text("SELECT count(*) FROM match_lineup_players WHERE player_id = :id"),
+            {"id": players[0].player_id},
+        )
+        == 1
+    )
 
 
 async def test_direct_player_merge_refuses_inverted_tournament_lock_order(

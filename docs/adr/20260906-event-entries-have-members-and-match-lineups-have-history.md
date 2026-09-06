@@ -24,7 +24,8 @@ At transaction completion an active singles entry has one current member, a
 doubles entry has two, and a team entry has at least one. Replacing a doubles
 partner closes one interval and adds another atomically. The database rejects
 duplicate current members within an entry, including identities joined by a Player
-merge. The team exception never permits duplicate members within one entry.
+merge. The team exception never permits duplicate members within one entry,
+including a withdrawn entry whose membership intervals remain current.
 Scoped participation rules are:
 
 | Event format | Active participation per Player in this event |
@@ -146,7 +147,9 @@ can finish without causing a false proposal conflict. Row locks remain authorita
 
 The snapshot references the original entry membership and Player. Later roster
 changes and sign-in reconciliation cannot rewrite it. Before starting a match,
-a database writer can amend its scheduled participants to reflect an eligible
+eligibility compares canonical identities on both the scheduled and membership
+sides, so a direct Player merge does not strand an already scheduled match.
+A database writer can amend its scheduled participants to reflect an eligible
 replacement. No such scheduling or substitution workflow is exposed here. An
 existing match call is the backend's start signal; subsequent call corrections
 do not rewrite an already recorded lineup.

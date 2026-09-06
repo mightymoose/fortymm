@@ -399,7 +399,8 @@ ENTRY_INTEGRITY_DDL = (
             SELECT 1 FROM match_sides s
             JOIN match_side_players p ON p.match_side_id = s.id
             LEFT JOIN tournament_entry_members m
-                ON entry_canonical_player(m.player_id) = p.user_id
+                ON entry_canonical_player(m.player_id)
+                    = entry_canonical_player(p.user_id)
                 AND m.entry_id = CASE WHEN s.side_number = 1
                     THEN fixture.entry_a_id ELSE fixture.entry_b_id END
                 AND m.left_at IS NULL
@@ -415,7 +416,7 @@ ENTRY_INTEGRITY_DDL = (
         SELECT lineup_uuid, s.side_number, m.id, m.player_id
         FROM match_sides s JOIN match_side_players p ON p.match_side_id = s.id
         JOIN tournament_entry_members m
-            ON entry_canonical_player(m.player_id) = p.user_id
+            ON entry_canonical_player(m.player_id) = entry_canonical_player(p.user_id)
             AND m.entry_id = CASE WHEN s.side_number = 1
                 THEN fixture.entry_a_id ELSE fixture.entry_b_id END
             AND m.left_at IS NULL
@@ -687,7 +688,7 @@ ENTRY_INTEGRITY_DDL = (
             SELECT m.entry_id FROM tournament_entry_members m
             JOIN tournament_entries e ON e.id = m.entry_id
             WHERE e.event_id = ANY(affected_events)
-                AND e.status = 'entered' AND m.left_at IS NULL
+                AND m.left_at IS NULL
             GROUP BY m.entry_id, entry_canonical_player(m.player_id)
             HAVING count(*) > 1
         ) THEN
