@@ -49,16 +49,19 @@ export function grantBetaTester(username: string): boolean {
     throw new Error(`refusing to grant a role to an unexpected username: ${username}`)
   }
 
-  // CROSS JOIN the one matching user against the one matching role, guarded by a
+  // Resolve the Player username to its primary managing Account, guarded by a
   // NOT EXISTS so the (user_id, role_id) composite PK is never violated on a
   // re-run. No ON CONFLICT target needed, so it does not depend on the
   // constraint's name.
   const sql =
     'INSERT INTO user_roles (user_id, role_id) ' +
-    'SELECT u.id, r.id FROM users u CROSS JOIN roles r ' +
-    `WHERE u.username = '${username}' AND r.name = '${BETA_TESTER_ROLE}' ` +
+    'SELECT a.id, r.id FROM accounts a ' +
+    'JOIN account_players ap ON ap.account_id = a.id AND ap.is_primary ' +
+    'JOIN players p ON p.id = ap.player_id CROSS JOIN roles r ' +
+    `WHERE p.username = '${username}' AND r.name = '${BETA_TESTER_ROLE}' ` +
+    'AND a.merged_into_user_id IS NULL AND p.merged_into_player_id IS NULL ' +
     'AND NOT EXISTS (SELECT 1 FROM user_roles ur ' +
-    'WHERE ur.user_id = u.id AND ur.role_id = r.id);'
+    'WHERE ur.user_id = a.id AND ur.role_id = r.id);'
 
   const result = spawnSync(
     'docker',
