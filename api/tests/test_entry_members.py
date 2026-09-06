@@ -865,6 +865,36 @@ async def test_a_match_can_belong_to_only_one_fixture(db_session):
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
 
+async def test_lineup_cannot_be_recorded_before_its_start(db_session):
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    with pytest.raises(IntegrityError, match="ck_match_lineups_chronology"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
+                {"id": match.id},
+            )
+            lineup = await db_session.scalar(
+                text(
+                    "INSERT INTO match_lineups (match_id, started_at, recorded_at) "
+                    "VALUES (:match, clock_timestamp() + interval '1 day', "
+                    "clock_timestamp()) "
+                    "RETURNING id"
+                ),
+                {"match": match.id},
+            )
+            await db_session.execute(
+                text(
+                    "INSERT INTO match_lineup_players "
+                    "(lineup_id, side_number, entry_member_id, player_id) "
+                    "SELECT :lineup, CASE WHEN entry_id = :a THEN 1 ELSE 2 END, "
+                    "id, player_id FROM tournament_entry_members "
+                    "WHERE entry_id IN (:a, :b) AND left_at IS NULL"
+                ),
+                {"lineup": lineup, "a": entries[0].id, "b": entries[1].id},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
 async def test_pending_match_cannot_record_a_complete_played_lineup(db_session):
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
     with pytest.raises(IntegrityError, match="lineup requires a started match"):
@@ -1182,6 +1212,124 @@ async def test_recorded_match_cannot_lose_its_fixture(db_session, action, eviden
                 },
             )
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("evidence", ["match_games", "match_results"])
+@pytest.mark.parametrize("into_tournament", [False, True])
+async def test_evidence_cannot_be_reassigned_to_another_match(
+    db_session, evidence, into_tournament
+):
+    from app.models import MatchGame, MatchResult
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    other = Match(
+        league_id=match.league_id,
+        created_by_user_id=match.created_by_user_id,
+        status=MatchStatus.pending,
+        match_settings=MatchSettings(team_size=2, best_of=5, affects_rating=False),
+    )
+    db_session.add(other)
+    await db_session.commit()
+    original, destination = (
+        (other.id, match.id) if into_tournament else (match.id, other.id)
+    )
+    record = (
+        MatchGame(match_id=original, game_number=1)
+        if evidence == "match_games"
+        else MatchResult(
+            match_id=original, submitted_by_user_id=players[0].id, games=[]
+        )
+    )
+    db_session.add(record)
+    await db_session.commit()
+    with pytest.raises(
+        IntegrityError,
+        match=(
+            "recorded evidence match is immutable|"
+            "proposal snapshot and links are immutable"
+        ),
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(f"UPDATE {evidence} SET match_id = :match WHERE id = :id"),
+                {"match": destination, "id": record.id},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("evidence", ["game", "result", "status"])
+@pytest.mark.parametrize("target", ["event", "tournament"])
+async def test_evidence_write_aborts_when_deletion_commits_first(
+    db_session, engine, evidence, target
+):
+    from sqlalchemy.exc import DBAPIError
+
+    from app.models import MatchGame, MatchResult, User
+    from app.tournament_events import delete_event
+    from app.tournament_lifecycle import delete_tournament
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as deletion, sessions() as writer:
+        delete_pid = await deletion.scalar(text("SELECT pg_backend_pid()"))
+        writer_pid = await writer.scalar(text("SELECT pg_backend_pid()"))
+        actor = await deletion.get(User, match.created_by_user_id)
+        await deletion.execute(
+            text("SELECT id FROM tournaments WHERE id = :id FOR UPDATE"),
+            {"id": event.tournament_id},
+        )
+        await deletion.execute(
+            text("SELECT id FROM tournament_events WHERE id = :id FOR UPDATE"),
+            {"id": event.id},
+        )
+
+        async def write_evidence():
+            if evidence == "game":
+                writer.add(MatchGame(match_id=match.id, game_number=1))
+            elif evidence == "result":
+                writer.add(
+                    MatchResult(
+                        match_id=match.id, submitted_by_user_id=players[0].id, games=[]
+                    )
+                )
+            else:
+                await writer.execute(
+                    text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
+                    {"id": match.id},
+                )
+            await writer.commit()
+
+        write_task = asyncio.create_task(write_evidence())
+        try:
+
+            async def wait_for_block():
+                while delete_pid not in await db_session.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": writer_pid}
+                ):
+                    assert not write_task.done()
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_block(), timeout=5)
+            if target == "event":
+                await delete_event(
+                    deletion,
+                    tournament_id=event.tournament_id,
+                    event_id=event.id,
+                    actor=actor,
+                )
+            else:
+                await delete_tournament(
+                    deletion, tournament_id=event.tournament_id, actor=actor
+                )
+            with pytest.raises(
+                DBAPIError, match="tournament association was deleted"
+            ) as exc:
+                await asyncio.wait_for(write_task, timeout=5)
+            assert exc.value.orig.sqlstate == "40001"
+        finally:
+            if not write_task.done():
+                write_task.cancel()
+            await asyncio.gather(write_task, return_exceptions=True)
 
 
 @pytest.mark.parametrize("parent", ["tournaments", "tournament_events"])

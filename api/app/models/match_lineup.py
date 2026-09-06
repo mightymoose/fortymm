@@ -30,6 +30,9 @@ class MatchLineup(Base):
         UniqueConstraint("match_id", "revision", name="uq_match_lineups_revision"),
         CheckConstraint("revision > 0", name="ck_match_lineups_revision"),
         CheckConstraint(
+            "started_at <= recorded_at", name="ck_match_lineups_chronology"
+        ),
+        CheckConstraint(
             "(revision = 1 AND correction_reason IS NULL) OR "
             "(revision > 1 AND recorded_by_account_id IS NOT NULL "
             "AND correction_reason IS NOT NULL AND length(trim(correction_reason)) "

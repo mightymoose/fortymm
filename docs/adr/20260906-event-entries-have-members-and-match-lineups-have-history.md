@@ -99,6 +99,9 @@ the recorded-play refusal rather than leaking a foreign-key error. The event-fir
 lock order also prevents roster changes from invalidating that check.
 Game and result rows also prevent deletion when a pending match has no lineup yet;
 their insertion serializes with the deletion guard on the event.
+If deletion wins that race, a writer that had resolved the tournament association
+must abort with retryable SQLSTATE `40001` when its event lock finds no surviving
+row. Existing game and result records cannot be reassigned to another match.
 
 The snapshot references the original entry membership and Player. Later roster
 changes and sign-in reconciliation cannot rewrite it. Before starting a match,
@@ -135,6 +138,7 @@ Each revision stores its full creating transaction ID. Participants can be added
 only within that transaction, including its savepoints; committed revisions remain
 immutable even after PostgreSQL discards old transaction-status information,
 except for the explicitly provisional, untouched-call cancellation above.
+Every revision's start time must be at or before its recorded time.
 
 The database can record `matches.ending = walkover` without an actual lineup, or
 `stopped_during_play` with one. Both are terminal outcomes; the fixture can retain

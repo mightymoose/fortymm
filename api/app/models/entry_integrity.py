@@ -408,6 +408,12 @@ ENTRY_INTEGRITY_DDL = (
     LANGUAGE plpgsql AS $$
     DECLARE event_uuid uuid;
     BEGIN
+        IF TG_TABLE_NAME IN ('match_games', 'match_results') AND TG_OP = 'UPDATE' THEN
+            IF NEW.match_id IS DISTINCT FROM OLD.match_id THEN
+                RAISE EXCEPTION 'recorded evidence match is immutable'
+                    USING ERRCODE = '23514';
+            END IF;
+        END IF;
         IF TG_TABLE_NAME = 'tournament_entries' THEN
             IF TG_OP = 'INSERT' THEN
                 NEW.created_transaction_id := txid_current();
@@ -458,6 +464,12 @@ ENTRY_INTEGRITY_DDL = (
             WHERE e.id = event_uuid FOR SHARE OF t;
         END IF;
         UPDATE tournament_events SET id = id WHERE id = event_uuid;
+        IF event_uuid IS NOT NULL AND NOT FOUND AND TG_TABLE_NAME IN (
+            'matches', 'match_lineups', 'match_games', 'match_results'
+        ) THEN
+            RAISE EXCEPTION 'tournament association was deleted; retry transaction'
+                USING ERRCODE = '40001';
+        END IF;
         RETURN COALESCE(NEW, OLD);
     END $$
     """,
@@ -604,11 +616,12 @@ ENTRY_INTEGRITY_DDL = (
     ON tournament_fixtures FOR EACH ROW EXECUTE FUNCTION lock_fixture_link()
     """,
     """
-    CREATE TRIGGER lock_game_event BEFORE INSERT ON match_games
+    CREATE TRIGGER lock_game_event BEFORE INSERT OR UPDATE OF match_id ON match_games
     FOR EACH ROW EXECUTE FUNCTION lock_entry_event()
     """,
     """
-    CREATE TRIGGER lock_result_event BEFORE INSERT ON match_results
+    CREATE TRIGGER lock_result_event BEFORE INSERT OR UPDATE OF match_id
+    ON match_results
     FOR EACH ROW EXECUTE FUNCTION lock_entry_event()
     """,
     """
