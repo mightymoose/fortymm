@@ -7,8 +7,11 @@ finalizes solo/unrated matches, leaves a rated two-human match standing, honours
 the counter chain, and raises the domain exceptions (never ``HTTPException``)
 the adapters map."""
 
+import asyncio
+
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.match_creation import create_match
 from app.models import MatchStatus
@@ -16,6 +19,7 @@ from app.result_acceptance import (
     MatchClosedError,
     NegotiationConflictError,
     UndecidedBoardError,
+    accept_result,
 )
 from app.result_chain import accepted_result, head_result, standing_result
 from app.result_proposal import propose_result
@@ -28,6 +32,67 @@ def _decisive_board(winner_side: int = 1) -> list[MatchResultsGameWrite]:
     if winner_side == 1:
         return [MatchResultsGameWrite(game_number=1, side_1_points=11, side_2_points=4)]
     return [MatchResultsGameWrite(game_number=1, side_1_points=4, side_2_points=11)]
+
+
+@pytest.mark.parametrize("parent", ["tournaments", "tournament_events"])
+async def test_tournament_acceptance_waits_for_parent_writer(
+    db_session, engine, parent
+):
+    match, director = await directed_tournament_match(
+        db_session, tag="accept-parent-lock", best_of=1
+    )
+    sides = sorted(match.sides, key=lambda side: side.side_number)
+    outcome = await propose_result(
+        db_session,
+        match.id,
+        sides[0].players[0].user_id,
+        games=_decisive_board(),
+        supersedes_result_id=None,
+    )
+    proposal = standing_result(outcome.match)
+    assert proposal is not None
+    event = (
+        await db_session.execute(
+            text(
+                "SELECT e.id, e.tournament_id FROM tournament_events e "
+                "JOIN tournament_event_stages s ON s.event_id = e.id "
+                "JOIN tournament_fixtures f ON f.stage_id = s.id "
+                "WHERE f.match_id = :match"
+            ),
+            {"match": match.id},
+        )
+    ).one()
+    await db_session.commit()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as scheduling, sessions() as accepting:
+        scheduler_pid = await scheduling.scalar(text("SELECT pg_backend_pid()"))
+        accept_pid = await accepting.scalar(text("SELECT pg_backend_pid()"))
+        await scheduling.execute(
+            text(f"SELECT id FROM {parent} WHERE id = :id FOR UPDATE"),
+            {"id": event.tournament_id if parent == "tournaments" else event.id},
+        )
+        task = asyncio.create_task(
+            accept_result(
+                accepting, match.id, sides[1].players[0].user_id, result_id=proposal.id
+            )
+        )
+        try:
+
+            async def wait_for_parent():
+                while scheduler_pid not in await db_session.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": accept_pid}
+                ):
+                    if task.done():
+                        await task
+                        pytest.fail("acceptance bypassed the parent lock")
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_parent(), timeout=5)
+        finally:
+            await scheduling.rollback()
+            if not task.done():
+                await asyncio.wait_for(task, timeout=5)
+        assert (await task).status is MatchStatus.completed
 
 
 async def test_first_proposal_on_solo_match_self_accepts_and_finalizes(

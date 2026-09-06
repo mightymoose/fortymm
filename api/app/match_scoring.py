@@ -30,7 +30,7 @@ import uuid
 from collections.abc import Awaitable
 from typing import Any, Protocol, assert_never, cast
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, select, text, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.base import ExecutableOption
@@ -107,6 +107,29 @@ async def _lock_match_row(
     *legitimate* acceptor that must wait, re-read, and proceed."""
     stmt = select(Match.id).where(Match.id == match_id).with_for_update(nowait=nowait)
     try:
+        # Tournament completion guards require parents before the match. Take
+        # these locks before loading/mutating it, so ordinary acceptance waits
+        # safely for scheduling instead of leaking a retryable SQL error.
+        suffix = " NOWAIT" if nowait else ""
+        await db.execute(
+            text(
+                "SELECT t.id FROM tournaments t "
+                "JOIN tournament_events e ON e.tournament_id = t.id "
+                "JOIN tournament_event_stages s ON s.event_id = e.id "
+                "JOIN tournament_fixtures f ON f.stage_id = s.id "
+                "WHERE f.match_id = :match FOR SHARE OF t" + suffix
+            ),
+            {"match": match_id},
+        )
+        await db.execute(
+            text(
+                "SELECT e.id FROM tournament_events e "
+                "JOIN tournament_event_stages s ON s.event_id = e.id "
+                "JOIN tournament_fixtures f ON f.stage_id = s.id "
+                "WHERE f.match_id = :match FOR UPDATE OF e" + suffix
+            ),
+            {"match": match_id},
+        )
         await db.execute(stmt)
     except DBAPIError as exc:
         if nowait and getattr(exc.orig, "sqlstate", None) == _LOCK_NOT_AVAILABLE:

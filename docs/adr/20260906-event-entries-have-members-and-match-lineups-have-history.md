@@ -136,6 +136,9 @@ Match status writers use non-waiting tournament/event locks after the match tupl
 is locked, returning `40001` on contention. Direct writers can acquire parents
 first to wait safely before the status write; fixture capture cannot deadlock
 against a status writer holding the match while waiting for its event.
+The existing scoring/negotiation loader acquires tournament and event locks before
+the match lock. Acceptance therefore waits for scheduling before completing the
+match; non-waiting proposal writes retain their existing conflict response.
 
 The snapshot references the original entry membership and Player. Later roster
 changes and sign-in reconciliation cannot rewrite it. Before starting a match,
