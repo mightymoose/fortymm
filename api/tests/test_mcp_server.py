@@ -5229,3 +5229,29 @@ async def test_place_fixture_played_out_fixture_raises_tool_error(
     ).scalar_one()
     assert row.table_id is None
     assert row.pinned_at is None
+
+
+async def test_mcp_match_views_follow_an_independently_managed_player(db_session):
+    from app.models import AccountPlayer, Player
+
+    account = await make_user(db_session, "mcp-manager-login")
+    account.player_grants.clear()
+    await db_session.flush()
+    player = Player(username="mcp-managed-player", last_seen_at=datetime.now(UTC))
+    account.player_grants.append(AccountPlayer(player=player, is_primary=True))
+    await db_session.commit()
+    token = await _mint(db_session, account)
+    async with _mcp_client(token) as client, client:
+        created = await client.call_tool_mcp(
+            "create_match", {"rated": False, "best_of": 3}
+        )
+        assert created.isError is False
+        assert any(
+            side["is_current_user_side"] for side in created.structuredContent["sides"]
+        )
+        history = await client.call_tool_mcp("list_my_matches", {})
+        assert history.structuredContent["total"] == 1
+        found = await client.call_tool_mcp(
+            "search_players", {"query": "mcp-managed-player"}
+        )
+        assert found.structuredContent["result"] == []

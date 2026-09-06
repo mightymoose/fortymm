@@ -95,7 +95,7 @@ async def _record_match(
     )
     for side_number, player in enumerate(players, start=1):
         side = MatchSide(match=match, side_number=side_number)
-        side.players.append(MatchSidePlayer(match=match, user=player))
+        side.players.append(MatchSidePlayer(match=match, user=player.primary_player))
     db.add(match)
     await db.commit()
     await db.refresh(match)
@@ -143,7 +143,7 @@ async def _record_solo_match(db: AsyncSession, creator: User) -> Match:
         status=MatchStatus.in_progress,
     )
     side_one = MatchSide(match=match, side_number=1)
-    side_one.players.append(MatchSidePlayer(match=match, user=creator))
+    side_one.players.append(MatchSidePlayer(match=match, user=creator.primary_player))
     MatchSide(match=match, side_number=2)  # sentinel: no players
     db.add(match)
     await db.commit()
@@ -164,6 +164,7 @@ async def _record_result(
     result is still standing (unaccepted)."""
     result = MatchResult(
         match_id=match.id,
+        submitted_for_player_id=submitted_by.id,
         submitted_by_user_id=submitted_by.id,
         games=[],
         accepted_by_user_id=accepted_by.id if accepted_by is not None else None,
@@ -178,7 +179,7 @@ async def _record_result(
 # ----- happy path ---------------------------------------------------------
 
 
-async def test_merge_repoints_match_side_players_and_creator(
+async def test_merge_repoints_players_and_preserves_creator(
     db_session: AsyncSession,
 ):
     ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
@@ -211,7 +212,7 @@ async def test_merge_repoints_match_side_players_and_creator(
             select(Match.created_by_user_id).where(Match.id == match.id)
         )
     ).scalar_one()
-    assert creator_id == verified.id
+    assert creator_id == ephemeral.id
 
 
 async def test_merge_tombstones_ephemeral_user_keeping_session_token(
@@ -444,7 +445,8 @@ async def test_merge_repoints_tournament_ownership(db_session: AsyncSession):
     await db_session.commit()
 
     await db_session.refresh(tournament)
-    assert tournament.created_by_user_id == verified.id
+    assert tournament.created_by_user_id == ephemeral.id
+    assert tournament.owner_account_id == verified.id
 
     # The cascade-owned event survives the merge with its tournament.
     events = (
@@ -589,19 +591,10 @@ async def test_merge_repoints_tournament_entry_onto_survivor(
     assert not [e for e in entries if e.user_id == ephemeral.id]
 
 
-async def test_merge_repoints_the_entry_adder_onto_survivor(
+async def test_merge_preserves_original_entry_adder(
     db_session: AsyncSession,
 ):
-    """The *second* users FK on ``tournament_entries``: ``added_by_user_id``, who
-    put this player in the event (ADR-0784).
-
-    A guest DIRECTOR entered somebody, then signed in. The entry itself is not in
-    question — a real player is really entered, and their ``user_id`` is not the
-    guest's to move. What must not survive is the *pointer*: the guest is about to
-    become a tombstone, and an unhandled FK would leave the entry saying "added by
-    <ghost>" — a user that no listing, search or auth query will ever return. The
-    adder and the survivor are the same human, so the adder follows the merge.
-    """
+    """The historical acting Account survives a sporting-identity merge."""
     director_guest = await _make_ephemeral(db_session, "drifting-grouse")
     director = await _make_verified(db_session, "rita@example.com")
     player = await _make_verified(db_session, "pete@example.com")
@@ -613,32 +606,20 @@ async def test_merge_repoints_the_entry_adder_onto_survivor(
     await db_session.commit()
 
     await db_session.refresh(entry)
-    assert entry.added_by_user_id == director.id, (
-        "the adder must point at the LIVE survivor, not the tombstoned guest"
-    )
+    assert entry.added_by_user_id == director_guest.id
     # The entrant is a third party and is untouched: this merge is about who
     # *added* them, not about who they are.
     assert entry.user_id == player.id
     assert entry.status is TournamentEntryStatus.entered
 
     entries = await _entries_for(db_session, event)
-    assert not [e for e in entries if e.added_by_user_id == director_guest.id]
+    assert [e for e in entries if e.added_by_user_id == director_guest.id]
 
 
-async def test_merge_nulls_the_adder_when_the_director_turns_out_to_be_the_entrant(
+async def test_merge_preserves_adder_when_director_is_the_entrant(
     db_session: AsyncSession,
 ):
-    """The degenerate case of the re-point, and the reason it is a ``CASE`` rather
-    than a flat ``SET added_by_user_id = :to_id``.
-
-    I run a tournament as a guest and add "Rita" (an existing account) from the
-    player search. Then I sign in — and I *am* Rita. Post-merge, one person both
-    added the entry and is the entry. That is self-registration, and
-    self-registration is spelled ``NULL`` (ADR-0784). A flat re-point would instead
-    write ``added_by_user_id == user_id``, a second, contradictory encoding of "she
-    entered herself" that the entrants list would render as "added by the
-    director" — a director who is the player.
-    """
+    """The historical acting Account survives a sporting-identity merge."""
     director_guest = await _make_ephemeral(db_session, "drifting-grouse")
     rita = await _make_verified(db_session, "rita@example.com")
     event = await _make_event(db_session, director_guest)
@@ -650,9 +631,7 @@ async def test_merge_nulls_the_adder_when_the_director_turns_out_to_be_the_entra
 
     await db_session.refresh(entry)
     assert entry.user_id == rita.id
-    assert entry.added_by_user_id is None, (
-        "one person adding themselves IS self-registration — collapse it to NULL"
-    )
+    assert entry.added_by_user_id == director_guest.id
 
 
 async def test_merge_leaves_the_adder_alone_when_the_ENTRANT_is_the_one_merged(
@@ -681,37 +660,7 @@ async def test_merge_leaves_the_adder_alone_when_the_ENTRANT_is_the_one_merged(
 async def test_merge_collapses_a_guest_who_both_added_and_is_the_entry(
     db_session: AsyncSession,
 ):
-    """**The statement ORDER inside ``merge_user`` is load-bearing, and this is the only
-    test that pins it.**
-
-    ``merge_user`` re-points ``tournament_entries.user_id`` onto the survivor, and only
-    *then* runs the ``CASE`` over ``added_by_user_id`` — a CASE whose condition
-    (``user_id = :to_id``) reads the **post-merge** ``user_id``. Swap the two statements
-    and every other test in this file still passes, because in all of them the entry's
-    ``user_id`` is either already the survivor's or is never the adder's.
-
-    The shape that tells the two orders apart is the one where the guest is **both** the
-    entrant and the adder — ``user_id == added_by == from_id``:
-
-    * **Correct order.** ``user_id`` becomes ``to_id``; the CASE then sees
-      ``user_id = to_id`` and writes **NULL** — one person adding themselves *is*
-      self-registration, and self-registration is spelled NULL (ADR-0784).
-    * **Reversed.** The CASE runs while ``user_id`` is still the guest's, so it does not
-      match ``to_id`` and writes ``added_by = to_id``; the re-point then sets
-      ``user_id = to_id`` as well. The merge has *manufactured* ``added_by == user_id``
-      — the second, contradictory encoding of "they entered themselves" that the CASE
-      exists to prevent, rendered by the entrants list as "added by the director" on an
-      entry whose director is the player.
-
-    The row is written **directly**, and deliberately so: the entry route refuses to
-    mint this shape (an owner naming their own ``user_id`` is self-registration, stored
-    NULL — ``test_the_owner_entering_themselves_by_user_id_records_no_adder``), and
-    there is no CHECK constraint standing behind it either, because the entry route maps
-    ``IntegrityError`` to a ``already_entered`` 409 and a constraint violation would
-    surface to a player as a false "you have already entered this event". Normalising in
-    the handler is what keeps the column clean; *this* is what keeps the merge from
-    quietly undoing that.
-    """
+    """The historical acting Account survives a sporting-identity merge."""
     guest = await _make_ephemeral(db_session, "drifting-grouse")
     verified = await _make_verified(db_session, "rita@example.com")
     event = await _make_event(db_session, guest)
@@ -724,41 +673,13 @@ async def test_merge_collapses_a_guest_who_both_added_and_is_the_entry(
 
     await db_session.refresh(entry)
     assert entry.user_id == verified.id
-    assert entry.added_by_user_id is None, (
-        "the CASE must read the POST-merge user_id: run it before the user_id re-point "
-        "and it writes added_by = user_id, the very encoding it exists to collapse"
-    )
-    assert entry.added_by_user_id != entry.user_id
+    assert entry.added_by_user_id == guest.id
 
 
-async def test_merge_collapses_the_adder_when_the_ENTRANT_merges_into_the_director(
+async def test_merge_preserves_adder_when_entrant_merges_into_director(
     db_session: AsyncSession,
 ):
-    """The **mirror** of the case above, and the one the merge could *manufacture*.
-
-    There, the guest was both the entrant and the adder before the merge. Here neither
-    id is contradictory to begin with — the merge makes it so:
-
-    * Director **D** (a real account) enters **guest player P** through
-      ``POST …/entries`` (ADR-0784), so the row is ``user_id = P``, ``added_by = D``.
-      Both perfectly ordinary; this is the shape the director's arm of the entry route
-      writes every time it is used.
-    * P signs in — and turns out to BE D (the director had a guest session of their own
-      on the club laptop). ``merge_user(from=P, to=D)``.
-    * The ``user_id`` re-point rewrites ``user_id`` to D. ``added_by`` is *already* D.
-
-    One person is now both the entrant and the adder, so — exactly as in the case above
-    — this is self-registration and must be spelled ``NULL``. A CASE guarded by
-    ``WHERE added_by_user_id = :from_id`` alone never even looks at this row (its adder
-    is the *survivor*, not the guest), and leaves ``added_by == user_id``: the second,
-    contradictory encoding of "she entered herself", written by the merge itself.
-    ``WHERE added_by_user_id IN (:from_id, :to_id)`` is what closes it.
-
-    Note what this is NOT: the entrant merging into a *bystander* director must leave
-    the adder alone (``test_merge_leaves_the_adder_alone_when_the_ENTRANT_is_the_one_
-    merged``). The difference is whether the director and the survivor are the same
-    person — which is the only thing that makes "added by the director" a lie.
-    """
+    """The historical acting Account survives a sporting-identity merge."""
     player_guest = await _make_ephemeral(db_session, "drifting-grouse")
     director = await _make_verified(db_session, "rita@example.com")
     event = await _make_event(db_session, director)
@@ -773,11 +694,7 @@ async def test_merge_collapses_the_adder_when_the_ENTRANT_merges_into_the_direct
 
     await db_session.refresh(entry)
     assert entry.user_id == director.id
-    assert entry.added_by_user_id is None, (
-        "the merge just made the adder and the entrant one person — that is "
-        "self-registration, and it is spelled NULL, never added_by == user_id"
-    )
-    assert entry.added_by_user_id != entry.user_id
+    assert entry.added_by_user_id == director.id
 
 
 async def test_merge_dedups_entry_when_both_users_entered_same_event(
@@ -1530,7 +1447,7 @@ async def test_merge_survives_a_dead_scheduling_queue(
     assert withdrawn[0].user_id == verified.id
 
 
-async def test_merge_repoints_rating_history_created_by(
+async def test_merge_preserves_rating_history_created_by(
     db_session: AsyncSession,
     rating_strategies: dict,
 ):
@@ -1557,10 +1474,10 @@ async def test_merge_repoints_rating_history_created_by(
     await db_session.commit()
 
     await db_session.refresh(row)
-    assert row.created_by_user_id == verified.id
+    assert row.created_by_user_id == ephemeral.id
 
 
-async def test_merge_repoints_match_result_submitted_by(db_session: AsyncSession):
+async def test_merge_preserves_match_result_submitted_by(db_session: AsyncSession):
     """``match_results.submitted_by_user_id`` is RESTRICT and the result is match
     history we keep — so the merge re-points it onto the survivor, otherwise the
     posted result would keep crediting the tombstoned ghost."""
@@ -1575,7 +1492,7 @@ async def test_merge_repoints_match_result_submitted_by(db_session: AsyncSession
     await db_session.commit()
 
     await db_session.refresh(result)
-    assert result.submitted_by_user_id == verified.id
+    assert result.submitted_by_user_id == ephemeral.id
 
 
 # ----- roles --------------------------------------------------------------
@@ -1782,7 +1699,7 @@ async def test_merge_self_merge_raises(db_session: AsyncSession):
     # A self-merge would no-op every UPDATE and then tombstone-delete the only
     # remaining account. merge_user refuses it rather than losing the user.
     user = await _make_verified(db_session, "self@example.com")
-    with pytest.raises(ValueError, match="must not equal"):
+    with pytest.raises(ValueError, match="into itself"):
         await merge_user(db_session, from_user_id=user.id, to_user_id=user.id)
 
 
@@ -1831,7 +1748,7 @@ async def test_merge_with_user_league_rating_collision_drops_ephemeral(
     assert [r.user_id for r in rows] == [verified.id]
 
 
-async def test_merge_repoints_match_result_accepted_by(db_session: AsyncSession):
+async def test_merge_preserves_match_result_accepted_by(db_session: AsyncSession):
     """``match_results.accepted_by_user_id`` is a nullable RESTRICT FK to users,
     so the merge must re-point an accepted result from the ephemeral acceptor
     onto the verified survivor — otherwise the final ephemeral-user delete would
@@ -1849,7 +1766,7 @@ async def test_merge_repoints_match_result_accepted_by(db_session: AsyncSession)
     await db_session.commit()
 
     await db_session.refresh(result)
-    assert result.accepted_by_user_id == verified.id
+    assert result.accepted_by_user_id == ephemeral.id
     # The ephemeral user is tombstoned, not dropped — the RESTRICT FK on
     # accepted_by_user_id was satisfied by the re-point above.
     ephemeral_row = (

@@ -102,6 +102,7 @@ from app.match_serialization import (
 from app.models import Match, Tournament, TournamentEvent, TournamentStatus, User
 from app.notifications.dependencies import get_push_sender
 from app.notifications.service import NotificationService
+from app.player_accounts import primary_player_id
 from app.player_matches import paginated_player_matches
 from app.player_search import SEARCH_DEFAULT_LIMIT, search_players_by_username
 from app.rate_limiting import RedisRateLimiter
@@ -475,7 +476,7 @@ mcp: FastMCP[None] = FastMCP("FortyMM", auth=_build_mcp_auth())
 
 
 def _authenticated_user_id() -> uuid.UUID:
-    """The resolved caller's ``users.id`` from the FastMCP auth context.
+    """The resolved caller's ``accounts.id`` from the FastMCP auth context.
 
     The transport already authenticated the request
     (``FortymmAuth0TokenVerifier``); that minted an :class:`AccessToken` carrying
@@ -586,7 +587,10 @@ async def get_match(match_id: uuid.UUID) -> MatchDetails:
         # Gate the history/rivalry/rating payload on participation, exactly as the
         # HTTP GET does — a non-participant (spectator) still sees the scorecard,
         # but with empty extras (#515).
-        viewer_is_participant = is_participant(match, user_id)
+        player_id = await primary_player_id(db, user_id)
+        viewer_is_participant = player_id is not None and is_participant(
+            match, player_id
+        )
         extras = (
             await view_extras(service, match)
             if viewer_is_participant
@@ -600,7 +604,7 @@ async def get_match(match_id: uuid.UUID) -> MatchDetails:
         viewer_is_director = await resolve_viewer_is_director(db, match, user_id)
         return serialize_details(
             match,
-            user_id,
+            player_id,
             extras,
             domain_match,
             viewer_is_director=viewer_is_director,
@@ -655,7 +659,7 @@ async def create_match(
                 "A rated match needs a registered opponent. Pass an "
                 "opponent_user_id, or set rated=False for a solo match."
             ) from err
-        return serialize_details(created, creator.id)
+        return serialize_details(created, creator.player_id)
 
 
 # The per-game score-write domain family the ``match_scoring`` entry points
@@ -730,11 +734,16 @@ async def _serialize_written_match(
     tools (the three score verbs, ``propose_result``, ``accept_result``) come
     through here, so the decision is made once."""
     service = MatchService(MatchRepository(db), MatchDetailsRepository(db))
-    extras = await view_extras_if_participant(service, match, user_id)
+    player_id = await primary_player_id(db, user_id)
+    extras = (
+        await view_extras_if_participant(service, match, player_id)
+        if player_id is not None
+        else empty_extras()
+    )
     viewer_is_director = await resolve_viewer_is_director(db, match, user_id)
     return serialize_details(
         match,
-        user_id,
+        player_id,
         extras,
         viewer_is_director=viewer_is_director,
         tournament=await tournament_context(db, match, user_id),
@@ -1003,7 +1012,7 @@ async def list_my_tournaments() -> list[TournamentDetailRead]:
         # ``tournament.view``.
         return await list_tournament_details(
             db,
-            where=Tournament.created_by_user_id == user_id,
+            where=Tournament.owner_account_id == user_id,
             current_user_id=user_id,
         )
 
@@ -2362,7 +2371,10 @@ async def search_players(
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
         return await search_players_by_username(
-            db, query=query, current_user_id=user_id, limit=limit
+            db,
+            query=query,
+            current_user_id=await primary_player_id(db, user_id),
+            limit=limit,
         )
 
 
@@ -2388,7 +2400,10 @@ async def list_my_matches(
     """
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
-        return await paginated_player_matches(db, user_id, page, page_size)
+        player_id = await primary_player_id(db, user_id)
+        if player_id is None:
+            raise ToolError("Account has no primary player.")
+        return await paginated_player_matches(db, player_id, page, page_size)
 
 
 @mcp.tool
@@ -2456,7 +2471,9 @@ async def _fire_result_notification(
     session plus the process-wide push-sender singleton)."""
     notifications = NotificationService(db, get_push_sender())
     try:
-        await notify_result_posted(notifications, match, poster_id)
+        player_id = await primary_player_id(db, poster_id)
+        if player_id is not None:
+            await notify_result_posted(notifications, match, player_id)
     except Exception:
         await db.rollback()
         log.exception(

@@ -64,6 +64,7 @@ from app import tournament_registration
 from app.config import get_settings
 from app.models import (
     EventFormat,
+    Player,
     ScheduleSolveTrigger,
     Tournament,
     TournamentEntry,
@@ -72,6 +73,7 @@ from app.models import (
     TournamentFixture,
     User,
 )
+from app.player_accounts import PlayerAccessDenied, require_player
 from app.rate_limiting import RedisRateLimiter
 from app.schedule_solves import request_solve
 from app.schemas.tournament import TournamentEntrantRead
@@ -134,7 +136,7 @@ async def _enforce_entry_rate_limit(client_ip: str) -> None:
         raise EntryRateLimitedError()
 
 
-async def _load_entrant(db: AsyncSession, user_id: uuid.UUID) -> User:
+async def _load_entrant(db: AsyncSession, user_id: uuid.UUID) -> Player:
     """The player a director named — the one they are entering (ADR-0784), or raise
     :class:`PlayerNotFoundError`.
 
@@ -148,9 +150,9 @@ async def _load_entrant(db: AsyncSession, user_id: uuid.UUID) -> User:
     """
     user = (
         await db.execute(
-            select(User).where(
-                User.id == user_id,
-                User.merged_into_user_id.is_(None),
+            select(Player).where(
+                Player.id == user_id,
+                Player.merged_into_player_id.is_(None),
             )
         )
     ).scalar_one_or_none()
@@ -186,7 +188,7 @@ async def _enforce_rating_eligible(
     db: AsyncSession,
     tournament: Tournament,
     event: TournamentEvent,
-    user: User,
+    user: Player,
 ) -> float | None:
     """Raise the ``rating_ineligible`` refusal unless the player satisfies the event's
     rating rules (ADR-0783) — and hand back the rating it judged them on, ``None`` if
@@ -331,8 +333,12 @@ async def enter_event(
     # player entered themselves" is spelled ``added_by_user_id = NULL``, and writing
     # ``added_by == user_id`` would be a second, contradictory encoding of the same
     # fact.
-    entrant_id = actor.id if user_id is None else user_id
-    self_registration = entrant_id == actor.id
+    actor_player = actor.primary_player
+    actor_player_id = actor_player.id if actor_player is not None else None
+    entrant_id = actor_player_id if user_id is None else user_id
+    if entrant_id is None:
+        raise PlayerAccessDenied
+    self_registration = entrant_id == actor_player_id
     if self_registration:
         # Asked here, at the top, exactly where the router handler asked the old
         # permission gate — the dependency's position, kept (ADR-0784: the fork is
@@ -356,12 +362,13 @@ async def enter_event(
 
     if self_registration:
         # The caller is the entrant, and nobody added them — that is what NULL means.
-        entrant, added_by_user_id = actor, None
+        entrant = await require_player(db, actor.id, entrant_id)
+        added_by_user_id = None
     else:
         # The director's arm. Ownership is the gate (403 for anyone else naming somebody
         # else's id), judged after the 404s above so a stranger's refusal never leaks
         # whether the tournament or event exists.
-        if tournament.created_by_user_id != actor.id:
+        if tournament.owner_account_id != actor.id:
             raise NotTournamentOwnerError()
         entrant, added_by_user_id = await _load_entrant(db, entrant_id), actor.id
 
@@ -576,7 +583,9 @@ async def withdraw_from_event(
     # this is the caller's own entry, or it is somebody's the owner is removing
     # (ADR-0784). Two authorizations, disjoint, and neither could be a router dependency
     # — which entry it is cannot be known until the row is loaded.
-    if entry.user_id != actor.id and tournament.created_by_user_id != actor.id:
+    actor_player = actor.primary_player
+    actor_player_id = actor_player.id if actor_player is not None else None
+    if entry.user_id != actor_player_id and tournament.owner_account_id != actor.id:
         # Neither the entry's owner nor the tournament's owner — the only two
         # arms the fork has. A permanent 403, answered before the transient
         # status 409 below, so withdrawing someone else's entry from a live

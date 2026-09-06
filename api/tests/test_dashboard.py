@@ -737,7 +737,8 @@ async def test_league_percentile_ranks_against_rated_members(
     )
     ghost = await make_user(db_session, "merged.ghost")
     await _rate_member(db_session, ghost, default_league, 1800.0)
-    ghost.merged_into_user_id = me.id
+    ghost.primary_player.merged_into_player_id = me.player_id
+    ghost.primary_player.merged_at = datetime.now(UTC)
     await db_session.commit()
 
     assert await league_percentile(db_session, default_league.id, 1500.0) == 60

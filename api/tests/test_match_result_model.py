@@ -24,7 +24,7 @@ async def _make_match(db: AsyncSession, creator: User) -> Match:
         status=MatchStatus.in_progress,
     )
     side = MatchSide(match=match, side_number=1)
-    side.players.append(MatchSidePlayer(match=match, user=creator))
+    side.players.append(MatchSidePlayer(match=match, user=creator.primary_player))
     db.add(match)
     await db.commit()
     await db.refresh(match)
@@ -44,6 +44,7 @@ async def test_supersedes_result_id_is_unique(db_session: AsyncSession):
 
     base = MatchResult(
         match_id=match.id,
+        submitted_for_player_id=creator.id,
         submitted_by_user_id=creator.id,
         games=[],
     )
@@ -54,6 +55,7 @@ async def test_supersedes_result_id_is_unique(db_session: AsyncSession):
     db_session.add(
         MatchResult(
             match_id=match.id,
+            submitted_for_player_id=creator.id,
             submitted_by_user_id=creator.id,
             games=[],
             supersedes_result_id=base.id,
@@ -62,6 +64,7 @@ async def test_supersedes_result_id_is_unique(db_session: AsyncSession):
     db_session.add(
         MatchResult(
             match_id=match.id,
+            submitted_for_player_id=creator.id,
             submitted_by_user_id=creator.id,
             games=[],
             supersedes_result_id=base.id,

@@ -25,6 +25,7 @@ requests carry the double-submit CSRF token via the client fixtures' event hooks
 import asyncio
 import uuid
 from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -42,6 +43,7 @@ from app.models import (
     EventFormat,
     League,
     LeagueVisibility,
+    Player,
     Tournament,
     TournamentEntry,
     TournamentEntryStatus,
@@ -385,7 +387,7 @@ async def test_deleting_an_event_cascades_its_entries_away(
     assert remaining == []
 
 
-async def test_deleting_a_user_with_an_entry_is_restricted(
+async def test_deleting_a_player_with_an_entry_is_restricted(
     db_session: AsyncSession, event: TournamentEvent, player: User
 ) -> None:
     """``ON DELETE RESTRICT`` on the user FK: an entrant cannot be deleted out
@@ -394,7 +396,7 @@ async def test_deleting_a_user_with_an_entry_is_restricted(
     await db_session.commit()
 
     with pytest.raises(IntegrityError):
-        await db_session.execute(delete(User).where(User.id == player.id))
+        await db_session.execute(delete(Player).where(Player.id == player.player_id))
         await db_session.commit()
     await db_session.rollback()
 
@@ -2261,7 +2263,8 @@ async def test_a_tombstoned_user_cannot_be_entered(
     endpoint is concerned, nobody is who they name."""
     client, owner = director_client
     survivor = await make_user(db_session, f"survivor-{uuid.uuid4().hex[:8]}")
-    player.merged_into_user_id = survivor.id
+    player.primary_player.merged_into_player_id = survivor.player_id
+    player.primary_player.merged_at = datetime.now(UTC)
     await db_session.commit()
     event = await _make_event(db_session, owner=owner)
     event_id, ghost_id = event.id, player.id

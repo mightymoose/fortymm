@@ -554,6 +554,12 @@ class NotificationService:
 
     # ----- enqueueing background delivery ----------------------------------
 
+    async def managing_account_ids(self, player_id: uuid.UUID) -> list[uuid.UUID]:
+        """Accounts currently authorized to receive this player's sporting notices."""
+        from app.player_accounts import managing_account_ids
+
+        return await managing_account_ids(self._db, [player_id])
+
     def enqueue_notification(self, job: NotificationJob) -> bool:
         """Hand one notification to the worker, which resolves the recipient's
         preferences and delivers (see ``app.notifications.jobs``). Fire-and-

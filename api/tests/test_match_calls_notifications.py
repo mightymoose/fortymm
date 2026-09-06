@@ -61,7 +61,7 @@ async def test_migration_seed_matches_the_conftest_labels():
         Path(__file__).parent.parent
         / "migrations"
         / "versions"
-        / "20260607_0001_0009_create_notification_tables.py"
+        / "20260905_0000_0001_pre_beta_baseline.py"
     )
     spec = importlib.util.spec_from_file_location("migration_0009", path)
     assert spec is not None and spec.loader is not None

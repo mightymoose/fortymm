@@ -1,19 +1,8 @@
-"""Re-point ownership from an ephemeral user to a verified user, then
-*tombstone* (soft-delete) the ephemeral user. Called from sign-in
-(``/v1/login/consume``) and email confirmation (``/v1/me/email/confirm``) when
-the browser arrived with a different ephemeral session than the target account.
+"""Combine same-person Players, transfer authority and tombstone the source Account.
 
-The ephemeral row is kept (``merged_into_user_id`` set) rather than dropped so
-its session token still resolves and the auth layer can tell the holder their
-session was merged instead of silently minting a fresh guest. Because we no
-longer rely on ``ON DELETE CASCADE``, the ephemeral user's owned rows are handled
-explicitly here: grants worth keeping (roles) are re-pointed onto the survivor,
-and the rest (leftover league rows, rating history, non-session tokens) are
-cleaned up.
-
-Leaves the verified user's ``user_league_ratings`` and ``rating_history``
-stale relative to the freshly-moved matches — the caller enqueues the
-``app.ratings.jobs.recompute_after_merge`` background job to reconcile.
+Historical actors retain their Account references. Sporting collisions use the
+existing reconciliation rules; callers enqueue rating recomputation after commit.
+Session tokens remain on the Account tombstone for session-ended detection.
 """
 
 import uuid
@@ -26,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.match_voiding import void_match
 from app.models import (
+    AccountPlayer,
     DeviceToken,
     LeagueMembership,
     Match,
@@ -35,6 +25,7 @@ from app.models import (
     Notification,
     NotificationChannelSetting,
     NotificationPreference,
+    Player,
     RatingHistory,
     ScheduleSolveTrigger,
     Tournament,
@@ -105,27 +96,78 @@ async def merge_user(
     from_user_id: uuid.UUID,
     to_user_id: uuid.UUID,
 ) -> MergeSummary:
-    """Re-point ``from_user_id``'s data onto ``to_user_id`` and tombstone the
-    ephemeral row (``merged_into_user_id`` set; row kept). Runs inside the
-    caller's transaction — does not commit.
+    """Confirm two primary players are the same person and transfer authority.
 
-    Caller invariants:
-      * ``from_user_id`` is ephemeral (``confirmed_at IS NULL``).
-      * ``to_user_id`` already exists.
-      * ``from_user_id != to_user_id``.
+    Account tombstones retain original authorship. Sporting histories combine only
+    through this explicit operation. Existing public flows merge an unconfirmed
+    guest into a live destination; multi-manager reconciliation is not enabled.
+    Runs in the caller's transaction.
     """
     if from_user_id == to_user_id:
-        # A self-merge would no-op every UPDATE and then the final tombstone
-        # DELETE would destroy the surviving account. Refuse loudly rather
-        # than silently lose the user.
-        raise ValueError("merge_user: from_user_id must not equal to_user_id")
+        raise ValueError("Cannot merge an account into itself")
+    accounts = (
+        await db.scalars(
+            select(User)
+            .where(User.id.in_([from_user_id, to_user_id]))
+            .order_by(User.id)
+            .with_for_update()
+        )
+    ).all()
+    by_id = {account.id: account for account in accounts}
+    source, target = by_id.get(from_user_id), by_id.get(to_user_id)
+    if source is None or target is None:
+        raise ValueError("Both accounts must exist")
+    if source.merged_into_user_id is not None or target.merged_into_user_id is not None:
+        raise ValueError("Cannot merge a tombstoned account")
+    source_player, target_player = source.primary_player, target.primary_player
+    if len(source.player_grants) > 1:
+        raise ValueError("Merging accounts that manage multiple players is not enabled")
+    summary = MergeSummary(matches_moved=0, matches_voided=0)
+    if (
+        source_player is not None
+        and target_player is not None
+        and source_player.id != target_player.id
+    ):
+        other_manager = await db.scalar(
+            select(AccountPlayer.account_id)
+            .where(
+                AccountPlayer.player_id == source_player.id,
+                AccountPlayer.account_id != source.id,
+            )
+            .limit(1)
+        )
+        if other_manager is not None:
+            raise ValueError("Merging a player with other managers is not enabled")
+        summary = await _merge_players(
+            db, from_user_id=source_player.id, to_user_id=target_player.id
+        )
+    elif source_player is not None and target_player is None:
+        target.player_grants.append(
+            AccountPlayer(player=source_player, is_primary=True)
+        )
+    source.player_grants.clear()
+    await db.flush()
+    await db.execute(
+        update(Tournament)
+        .where(Tournament.owner_account_id == from_user_id)
+        .values(owner_account_id=to_user_id)
+    )
+    await _transfer_account(db, from_user_id=from_user_id, to_user_id=to_user_id)
+    return summary
 
-    # A *self-play collision* is a rated match on which the guest and the
-    # verified user sat on OPPOSITE sides — the merge is the moment we learn it
-    # was always one person playing themselves (ADR-0013). Detect it up front,
-    # before any re-point/delete has disturbed the side rows. The remedy (void
-    # the match, keep the emptied side player-less) diverges from the ordinary
-    # prune below; see there.
+
+async def _merge_players(
+    db: AsyncSession,
+    *,
+    from_user_id: uuid.UUID,
+    to_user_id: uuid.UUID,
+) -> MergeSummary:
+    """Combine sporting records under the existing collision and rating rules."""
+    await db.execute(
+        update(MatchResult)
+        .where(MatchResult.submitted_for_player_id == from_user_id)
+        .values(submitted_for_player_id=to_user_id)
+    )
     collision = await _self_play_collision(
         db, from_user_id=from_user_id, to_user_id=to_user_id
     )
@@ -134,49 +176,6 @@ async def merge_user(
         db, from_user_id=from_user_id, to_user_id=to_user_id
     )
 
-    await db.execute(
-        update(Match)
-        .where(Match.created_by_user_id == from_user_id)
-        .values(created_by_user_id=to_user_id)
-    )
-
-    # Re-point posted-result authorship: ``match_results.submitted_by_user_id``
-    # is RESTRICT, and the row is match history we keep — so move it to the
-    # survivor rather than dropping it. No uniqueness to dodge.
-    await db.execute(
-        update(MatchResult)
-        .where(MatchResult.submitted_by_user_id == from_user_id)
-        .values(submitted_by_user_id=to_user_id)
-    )
-
-    # Re-point result acceptance: ``match_results.accepted_by_user_id`` is
-    # nullable RESTRICT with no uniqueness — move it to the survivor like the
-    # submitter above so the FK doesn't block the final tombstone delete.
-    await db.execute(
-        update(MatchResult)
-        .where(MatchResult.accepted_by_user_id == from_user_id)
-        .values(accepted_by_user_id=to_user_id)
-    )
-
-    # Preserve tournament ownership across a guest→verified merge — re-point
-    # rather than letting the RESTRICT FK block the final tombstone delete.
-    await db.execute(
-        update(Tournament)
-        .where(Tournament.created_by_user_id == from_user_id)
-        .values(created_by_user_id=to_user_id)
-    )
-
-    # Carry the guest's tournament entries onto the survivor. An entry is a
-    # registration in a real event (a draw gets seeded from it), and the FK is
-    # RESTRICT — but we TOMBSTONE the guest rather than deleting it, so ON DELETE
-    # never fires and an unhandled entry would simply stay registered to a ghost.
-    #
-    # Dedup, then re-point. The uniqueness guard on ``tournament_entries`` is
-    # PARTIAL — ``UNIQUE (event_id, user_id) WHERE status = 'entered'``
-    # (ADR-0016) — so the ONLY rows that can collide are a guest ACTIVE entry in
-    # an event the survivor is ALSO actively entered in. Resolving that collision
-    # (drop the guest's losing row, carry its registration order, un-cut the draw
-    # it invalidated) is the whole of ``_resolve_entry_collisions``.
     await _resolve_entry_collisions(
         db, from_user_id=from_user_id, to_user_id=to_user_id
     )
@@ -192,63 +191,6 @@ async def merge_user(
             """
         ),
         {"from_id": from_user_id, "to_id": to_user_id},
-    )
-
-    # Now the *other* users FK on the same table: ``added_by_user_id`` — who put
-    # this player in the event (ADR-0784). The guest may have been a DIRECTOR who
-    # entered other people; the entries they created are still perfectly valid
-    # registrations of real players, so there is nothing here to delete. What must
-    # not survive is the pointer: the guest is about to become a tombstone, and an
-    # entry left saying "added by <ghost>" would render as an adder who no longer
-    # exists. The adder and the survivor are the same human — so the adder FOLLOWS
-    # the merge, exactly as tournament *ownership* does above.
-    #
-    # Must run AFTER the ``user_id`` re-point, because it reads the post-merge
-    # ``user_id`` — which is what the CASE is for. If the guest director is merged
-    # into the very player they entered (I create a tournament as a guest, add
-    # "Rita" from search, then sign in and turn out to BE Rita), then after the
-    # merge one person both added and is the entry: that is self-registration, and
-    # self-registration is spelled NULL. Writing ``added_by = user_id`` instead
-    # would leave two different encodings of "entered themselves" in the column and
-    # let "added by the director" appear on a director-less entry. Collapse it.
-    # (``test_merge_collapses_a_guest_who_both_added_and_is_the_entry`` is what pins
-    # that ordering: reorder these two statements and both direction tests go red.)
-    #
-    # The WHERE catches **both** ids, and the second one is not decoration — it is
-    # the mirror of the case above, and it is the merge's own doing. Take a director
-    # D with a real account who enters a GUEST player P (``user_id = P``,
-    # ``added_by = D``); P then signs in and turns out to BE D. The re-point above
-    # rewrites ``user_id`` to D — and a WHERE that only looked for ``:from_id``
-    # would not match this row at all, leaving ``added_by == user_id == D``: the very
-    # contradictory encoding this CASE exists to prevent, *manufactured by the merge*
-    # rather than merely passed through it. Matching ``:to_id`` as well lets the same
-    # CASE collapse it to NULL. The extra rows that predicate sweeps in — an entry
-    # already added by the survivor, whose entrant is somebody else — are re-pointed
-    # from ``to_id`` to ``to_id``, which is a no-op by construction.
-    #
-    # So the invariant is: after this statement, no row whose ``user_id`` or
-    # ``added_by_user_id`` was touched by this merge can say ``added_by == user_id``.
-    #
-    # Note this deliberately does NOT re-point rows whose *entry* was dropped by
-    # the dedup DELETE above — they no longer exist, so there is nothing to point.
-    await db.execute(
-        text(
-            """
-            UPDATE tournament_entries
-            SET added_by_user_id =
-                CASE WHEN user_id = :to_id THEN NULL ELSE :to_id END
-            WHERE added_by_user_id IN (:from_id, :to_id)
-            """
-        ),
-        {"from_id": from_user_id, "to_id": to_user_id},
-    )
-
-    # Preserve the audit trail by re-pointing rather than letting the FK's
-    # ON DELETE SET NULL null it out when the ephemeral user is deleted.
-    await db.execute(
-        update(RatingHistory)
-        .where(RatingHistory.created_by_user_id == from_user_id)
-        .values(created_by_user_id=to_user_id)
     )
 
     # user_league_ratings / league_memberships both have UNIQUE(league_id,
@@ -281,25 +223,6 @@ async def merge_user(
                 SELECT 1 FROM league_memberships other
                 WHERE other.user_id = :to_id
                   AND other.league_id = lm.league_id
-              )
-            """
-        ),
-        {"from_id": from_user_id, "to_id": to_user_id},
-    )
-
-    # device_tokens.token is UNIQUE, so re-point only the guest's tokens the
-    # survivor doesn't already hold; the rare collision (same physical device
-    # registered under both users) is dropped with the rest below.
-    await db.execute(
-        text(
-            """
-            UPDATE device_tokens AS dt
-            SET user_id = :to_id
-            WHERE dt.user_id = :from_id
-              AND NOT EXISTS (
-                SELECT 1 FROM device_tokens other
-                WHERE other.user_id = :to_id
-                  AND other.token = dt.token
               )
             """
         ),
@@ -375,6 +298,56 @@ async def merge_user(
         )
         for match in collided_matches:
             await void_match(db, match)
+    await db.execute(delete(RatingHistory).where(RatingHistory.user_id == from_user_id))
+    await db.execute(
+        delete(UserLeagueRating).where(UserLeagueRating.user_id == from_user_id)
+    )
+    await db.execute(
+        delete(LeagueMembership).where(LeagueMembership.user_id == from_user_id)
+    )
+    await db.execute(
+        update(Player)
+        .where(Player.id == from_user_id)
+        .values(merged_into_player_id=to_user_id, merged_at=datetime.now(UTC))
+    )
+    # A voided rated collision was dropped by the belt-and-braces delete above
+    # (its guest MatchSidePlayer was never re-pointed), so it got added into
+    # `matches_moved`. But we just voided it — it no longer counts. Subtract the
+    # voided collisions so `matches_moved` reflects only matches that carried
+    # over and still count. Every collided match's guest side is dropped by that
+    # delete exactly once (UNIQUE(match_id, user_id)), so `len(match_ids)` is the
+    # exact overcount.
+    matches_voided = len(collision.match_ids)
+    matches_moved -= matches_voided
+
+    return MergeSummary(matches_moved=matches_moved, matches_voided=matches_voided)
+
+
+async def _transfer_account(
+    db: AsyncSession,
+    *,
+    from_user_id: uuid.UUID,
+    to_user_id: uuid.UUID,
+) -> None:
+    # device_tokens.token is UNIQUE, so re-point only the guest's tokens the
+    # survivor doesn't already hold; the rare collision (same physical device
+    # registered under both users) is dropped with the rest below.
+    await db.execute(
+        text(
+            """
+            UPDATE device_tokens AS dt
+            SET user_id = :to_id
+            WHERE dt.user_id = :from_id
+              AND NOT EXISTS (
+                SELECT 1 FROM device_tokens other
+                WHERE other.user_id = :to_id
+                  AND other.token = dt.token
+              )
+            """
+        ),
+        {"from_id": from_user_id, "to_id": to_user_id},
+    )
+
     # Carry the guest's granted roles onto the survivor rather than dropping
     # them: a role a moderator handed the ephemeral session (or that the guest
     # earned) is a real grant we must not silently lose when the guest signs in.
@@ -419,13 +392,6 @@ async def merge_user(
             NotificationPreference.user_id == from_user_id
         )
     )
-    await db.execute(delete(RatingHistory).where(RatingHistory.user_id == from_user_id))
-    await db.execute(
-        delete(UserLeagueRating).where(UserLeagueRating.user_id == from_user_id)
-    )
-    await db.execute(
-        delete(LeagueMembership).where(LeagueMembership.user_id == from_user_id)
-    )
     await db.execute(
         delete(UserToken).where(
             UserToken.user_id == from_user_id,
@@ -433,29 +399,9 @@ async def merge_user(
         )
     )
 
-    # The unique Auth0 binding (``users.auth0_sub``, ADR "the MCP server is an
-    # OAuth Resource Server trusting Auth0"). Unlike every re-point above this is
-    # a plain UNIQUE column, NOT a foreign key to ``users.id`` — so there is no FK
-    # to re-point, it is *move-or-null*. But the same principle the CLAUDE.md rule
-    # states for FKs applies: don't strand data on the tombstone, don't break the
-    # survivor. The value is a live-looking, one-to-one identity binding; a
-    # tombstoned ghost left holding it would occupy the ``sub`` on the unique index
-    # so the real human could never re-link it, and would surface the ghost as that
-    # identity's owner. So the tombstone must end with ``auth0_sub = NULL``.
-    #
-    # A guest never links (linking requires being signed in), so the ephemeral's
-    # ``auth0_sub`` is virtually always NULL and this whole block is a no-op — the
-    # common case, handled cleanly by the ``is not None`` guard. In the rare case
-    # it is set: if the survivor has none, the binding is the same human's and
-    # follows the merge onto the survivor exactly as ownership does; if the
-    # survivor already holds one, the survivor's link stands and the ephemeral's is
-    # simply dropped. The ephemeral is nulled FIRST (freeing the value from the
-    # unique index) so the survivor UPDATE can adopt it without the two rows
-    # momentarily colliding — the constraint is checked per statement, not deferred.
-    #
-    # Two agent-access columns ride alongside the binding and move under their own
-    # rules; see the two blocks below (ADR "disconnecting an agent is a user-held
-    # revocation checked at the MCP transport", ## Consequences).
+    # Auth0's namespaced LoginIdentity follows the existing move-or-clear policy:
+    # retain the destination binding when present, otherwise transfer the source's.
+    # Account.auth0_sub projects the configured issuer's identity relation.
     ephemeral_agent_access = (
         (
             await db.execute(
@@ -494,16 +440,16 @@ async def merge_user(
         # reading ``connected`` with no date. When the survivor already holds its
         # own binding the guard fails and both columns stay its own, which is right
         # — its stamp describes the link it kept.
-        await db.execute(
-            update(User)
-            .where(User.id == from_user_id)
-            .values(auth0_sub=None, agent_access_linked_at=None)
-        )
-        await db.execute(
-            update(User)
-            .where(User.id == to_user_id, User.auth0_sub.is_(None))
-            .values(auth0_sub=freed, agent_access_linked_at=freed_linked_at)
-        )
+        source = await db.get(User, from_user_id)
+        target = await db.get(User, to_user_id)
+        if source is None or target is None:
+            raise ValueError("Merge accounts disappeared")
+        source.auth0_sub = None
+        source.agent_access_linked_at = None
+        await db.flush()
+        if target.auth0_sub is None:
+            target.auth0_sub = freed
+            target.agent_access_linked_at = freed_linked_at
 
     # ``agent_access_revoked_at`` — the player's own "I switched agent access off"
     # — is NOT a fact about the binding, and deliberately does not ride the block
@@ -551,18 +497,6 @@ async def merge_user(
         .values(merged_into_user_id=to_user_id, merged_at=datetime.now(UTC))
     )
     await db.flush()
-
-    # A voided rated collision was dropped by the belt-and-braces delete above
-    # (its guest MatchSidePlayer was never re-pointed), so it got added into
-    # `matches_moved`. But we just voided it — it no longer counts. Subtract the
-    # voided collisions so `matches_moved` reflects only matches that carried
-    # over and still count. Every collided match's guest side is dropped by that
-    # delete exactly once (UNIQUE(match_id, user_id)), so `len(match_ids)` is the
-    # exact overcount.
-    matches_voided = len(collision.match_ids)
-    matches_moved -= matches_voided
-
-    return MergeSummary(matches_moved=matches_moved, matches_voided=matches_voided)
 
 
 async def _resolve_entry_collisions(

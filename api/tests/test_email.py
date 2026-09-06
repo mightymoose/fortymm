@@ -107,7 +107,7 @@ async def _record_match(
     )
     for side_number, player in enumerate(players, start=1):
         side = MatchSide(match=match, side_number=side_number)
-        side.players.append(MatchSidePlayer(match=match, user=player))
+        side.players.append(MatchSidePlayer(match=match, user=player.primary_player))
     db.add(match)
     await db.commit()
     await db.refresh(match)

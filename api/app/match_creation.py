@@ -37,11 +37,13 @@ from app.models import (
     MatchSide,
     MatchSidePlayer,
     MatchStatus,
+    Player,
     User,
 )
+from app.player_accounts import PlayerAccessDenied, primary_player_id, require_player
 
 
-def _add_side(match: Match, side_number: int, player: User | None) -> None:
+def _add_side(match: Match, side_number: int, player: Player | None) -> None:
     """Attach a side to ``match``. ``player=None`` creates the sentinel
     "no opponent" side — a real second side carrying no player — so an
     opponent-less match still has two sides and is therefore scorable. It reads
@@ -106,15 +108,19 @@ async def create_match(
     user, and :class:`RatedNeedsRegisteredOpponentError` when a rated match is
     requested with no registered opponent. It never raises ``HTTPException`` —
     it has no HTTP context; the caller adapts these to its transport."""
-    opponent: User | None = None
+    participant_id = await primary_player_id(db, creator.id)
+    if participant_id is None:
+        raise PlayerAccessDenied
+    participant = await require_player(db, creator.id, participant_id)
+    opponent: Player | None = None
     if opponent_user_id is not None:
-        if opponent_user_id == creator.id:
+        if opponent_user_id == participant.id:
             raise SelfMatchError
         opponent = (
             await db.execute(
-                select(User).where(
-                    User.id == opponent_user_id,
-                    User.merged_into_user_id.is_(None),
+                select(Player).where(
+                    Player.id == opponent_user_id,
+                    Player.merged_into_player_id.is_(None),
                 )
             )
         ).scalar_one_or_none()
@@ -142,7 +148,7 @@ async def create_match(
         created_by_user_id=creator.id,
         status=MatchStatus.in_progress,
     )
-    _add_side(match, 1, creator)
+    _add_side(match, 1, participant)
     # Always create side 2. With no opponent it's a player-less sentinel side,
     # which keeps the match scorable (two sides) while reading as "No opponent".
     _add_side(match, 2, opponent)
@@ -161,7 +167,7 @@ async def create_match(
     # happened (``app.realtime.outbox``). Creation is the *first* thing that puts
     # a row in the opponent's "needs your attention" panel, so it owes both
     # participants a hint exactly as the later writes on this match do.
-    stage_match_participant_hints(db, match)
+    await stage_match_participant_hints(db, match)
     await db.commit()
 
     return await _load_created_match(db, match.id)

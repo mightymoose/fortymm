@@ -12150,3 +12150,29 @@ async def test_the_version_check_runs_after_the_404_403_404_identity_gates(
     unchanged = await client.get(f"/v1/tournaments/{tournament_id}")
     (unchanged_event,) = unchanged.json()["events"]
     assert unchanged_event["lock_version"] == 1
+
+
+async def test_tournament_eligibility_reads_primary_player_rating(
+    authed_client, db_session, default_league
+):
+    from app.models import AccountPlayer, Player
+    from tests._helpers import rate_player
+    from tests.test_tournaments import (
+        CAP_UNDER_1500,
+        _event_payload,
+        _events_of,
+        _tournament_with_events,
+    )
+
+    client, account = authed_client
+    account.player_grants.clear()
+    await db_session.flush()
+    player = Player(username="rated-managed-player")
+    account.player_grants.append(AccountPlayer(player=player, is_primary=True))
+    await db_session.commit()
+    await rate_player(db_session, player, default_league, 1875.0)
+    tournament_id, _ = await _tournament_with_events(
+        client, _event_payload(predicates=[CAP_UNDER_1500])
+    )
+    (event,) = await _events_of(client, tournament_id)
+    assert event["entry_state"] == _ineligible("pr-cap", 1875.0)

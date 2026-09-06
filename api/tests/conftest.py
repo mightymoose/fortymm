@@ -331,7 +331,7 @@ def _migration_draw_type_seed() -> dict[DrawType, DrawTypeSeedCopy]:
         Path(__file__).parent.parent
         / "migrations"
         / "versions"
-        / "20260617_0000_0010_create_tournaments_table.py"
+        / "20260905_0000_0001_pre_beta_baseline.py"
     )
     spec = importlib.util.spec_from_file_location("migration_0010", path)
     assert spec is not None and spec.loader is not None

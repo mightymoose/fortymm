@@ -5,8 +5,8 @@ from alembic import context
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from app.db import Base, get_database_url
 import app.models  # noqa: F401  -- ensures models register on Base.metadata
+from app.db import Base, get_database_url
 
 config = context.config
 if config.config_file_name is not None:

@@ -124,6 +124,7 @@ from app import db as db_module
 from app import queue as queue_module
 from app.draws import group_label, seats_both_sides_at_cut
 from app.models import (
+    AccountPlayer,
     Match,
     MatchGame,
     MatchResult,
@@ -479,21 +480,18 @@ async def call_due_fixtures(
     claimed_users: set[uuid.UUID] = set(held.users)
     free: list[TournamentFixture] = []
     for fixture in sorted(due, key=lambda f: (f.scheduled_start, f.id)):
-        user_ids = {
-            user.id
-            for user in (
-                ingredients.user_for_entry(fixture.entry_a_id),
-                ingredients.user_for_entry(fixture.entry_b_id),
-            )
-            if user is not None
+        player_ids = {
+            player_id
+            for entry_id in (fixture.entry_a_id, fixture.entry_b_id)
+            if (player_id := ingredients.player_id_for_entry(entry_id)) is not None
         }
         if fixture.table_id is not None and fixture.table_id in claimed_tables:
             continue
-        if user_ids & claimed_users:
+        if player_ids & claimed_users:
             continue
         if fixture.table_id is not None:
             claimed_tables.add(fixture.table_id)
-        claimed_users |= user_ids
+        claimed_users |= player_ids
         free.append(fixture)
     due = free
     if not due:
@@ -999,11 +997,14 @@ class CopyIngredients:
     #: so a call for a bracket fixture is not labelled with a group.
     stage_draw_types: dict[uuid.UUID, StageDrawType]
 
+    def player_id_for_entry(self, entry_id: uuid.UUID | None) -> uuid.UUID | None:
+        """Sporting occupancy stays with the Player across Account transfers."""
+        return self.entry_user.get(entry_id) if entry_id is not None else None
+
     def user_for_entry(self, entry_id: uuid.UUID | None) -> User | None:
-        if entry_id is None:
-            return None
-        user_id = self.entry_user.get(entry_id)
-        return self.users.get(user_id) if user_id is not None else None
+        """The managing Account used for notification delivery."""
+        player_id = self.player_id_for_entry(entry_id)
+        return self.users.get(player_id) if player_id is not None else None
 
     def context_for(
         self,
@@ -1063,14 +1064,19 @@ async def load_copy_ingredients(
             )
         ).all()
     }
-    users: dict[uuid.UUID, User] = {
-        user.id: user
-        for user in (
-            await db.execute(select(User).where(User.id.in_(set(entry_user.values()))))
+    users: dict[uuid.UUID, User] = {}
+    account_rows = await db.execute(
+        select(AccountPlayer.player_id, User)
+        .join(User, User.id == AccountPlayer.account_id)
+        .where(
+            AccountPlayer.player_id.in_(set(entry_user.values())),
+            AccountPlayer.is_primary,
+            User.merged_into_user_id.is_(None),
         )
-        .scalars()
-        .all()
-    }
+        .order_by(User.id)
+    )
+    for player_id, account in account_rows:
+        users.setdefault(player_id, account)
     events: dict[uuid.UUID, TournamentEvent] = {
         event.id: event
         for event in (

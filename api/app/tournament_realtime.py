@@ -41,6 +41,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import TournamentEvent
+from app.player_accounts import managing_account_ids
 from app.realtime import EventKind, stage_event
 from app.tournament_queries import active_entrants_by_event
 
@@ -58,9 +59,11 @@ async def stage_event_entrant_hints(
     if not event_ids:
         return
     entrants = await active_entrants_by_event(db, event_ids)
-    for event_entrants in entrants.values():
-        for entrant in event_entrants:
-            stage_event(db, entrant.user_id, EventKind.dashboard_changed)
+    player_ids = [
+        entrant.user_id for entries in entrants.values() for entrant in entries
+    ]
+    for account_id in await managing_account_ids(db, player_ids):
+        stage_event(db, account_id, EventKind.dashboard_changed)
 
 
 async def stage_tournament_entrant_hints(

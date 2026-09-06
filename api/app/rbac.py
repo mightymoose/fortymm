@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.leagues import add_user_to_default_league
-from app.models import Permission, Role, RolePermission, User, UserRole
+from app.models import Permission, Player, Role, RolePermission, User, UserRole
 from app.roles import DEFAULT_ROLE_NAME, get_default_role, grant_default_role
 from app.schemas.rbac import (
     PermissionCreate,
@@ -462,7 +462,7 @@ async def create_user(
     payload: RbacUserCreate,
     db: AsyncSession = Depends(get_session),
 ) -> RbacUserRead:
-    if await name_taken(db, User.id, User.username, payload.username):
+    if await name_taken(db, Player.id, Player.username, payload.username):
         raise HTTPException(status_code=409, detail="Username already exists.")
     user = User(username=payload.username)
     db.add(user)

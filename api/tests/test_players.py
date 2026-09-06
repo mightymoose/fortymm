@@ -63,7 +63,7 @@ async def _record_match(
     )
     for side_number, player in enumerate(players, start=1):
         side = MatchSide(match=match, side_number=side_number)
-        side.players.append(MatchSidePlayer(match=match, user=player))
+        side.players.append(MatchSidePlayer(match=match, user=player.primary_player))
     db_session.add(match)
     await db_session.commit()
     return match
@@ -195,7 +195,8 @@ async def test_recent_opponents_excludes_merged_ghost_opponents(
     await _record_match(db_session, me, ghost, created_at=BASE_TIME)
 
     # ``ghost`` was folded into another account: a tombstone, not a real user.
-    ghost.merged_into_user_id = survivor.id
+    ghost.primary_player.merged_into_player_id = survivor.player_id
+    ghost.primary_player.merged_at = datetime.now(UTC)
     await db_session.commit()
 
     response = await api_client.get("/v1/players/recent")
@@ -439,9 +440,9 @@ async def _record_match_with_winner(
         completed_at=created_at if completed else None,
     )
     side1 = MatchSide(match=match, side_number=1, won=True if completed else None)
-    side1.players.append(MatchSidePlayer(match=match, user=winner))
+    side1.players.append(MatchSidePlayer(match=match, user=winner.primary_player))
     side2 = MatchSide(match=match, side_number=2, won=False if completed else None)
-    side2.players.append(MatchSidePlayer(match=match, user=loser))
+    side2.players.append(MatchSidePlayer(match=match, user=loser.primary_player))
     for game_number, (winner_points, loser_points) in enumerate(games or [], start=1):
         game = MatchGame(match=match, game_number=game_number)
         game.score = MatchGameScore(
@@ -449,7 +450,11 @@ async def _record_match_with_winner(
         )
         match.games.append(game)
     if signed_by is not None:
-        result = MatchResult(submitted_by_user_id=signed_by.id, games=[])
+        result = MatchResult(
+            submitted_for_player_id=signed_by.id,
+            submitted_by_user_id=signed_by.id,
+            games=[],
+        )
         match.results.append(result)
     db_session.add(match)
     await db_session.commit()
@@ -588,9 +593,9 @@ async def _record_results(
             completed_at=at,
         )
         mine = MatchSide(match=match, side_number=1, won=target_won)
-        mine.players.append(MatchSidePlayer(match=match, user=target))
+        mine.players.append(MatchSidePlayer(match=match, user=target.primary_player))
         theirs = MatchSide(match=match, side_number=2, won=not target_won)
-        theirs.players.append(MatchSidePlayer(match=match, user=rival))
+        theirs.players.append(MatchSidePlayer(match=match, user=rival.primary_player))
         db_session.add(match)
     await db_session.commit()
 
@@ -745,7 +750,8 @@ async def test_list_players_rank_ignores_merged_ghost(
     await _earn_rating(db_session, real_top, 2000.0)
     await _earn_rating(db_session, real_second, 1500.0)
 
-    ghost.merged_into_user_id = survivor.id
+    ghost.primary_player.merged_into_player_id = survivor.player_id
+    ghost.primary_player.merged_at = datetime.now(UTC)
     await db_session.commit()
 
     response = await api_client.get("/v1/players", params={"page_size": 100})
@@ -1520,7 +1526,8 @@ async def test_get_player_rank_of_is_the_size_of_the_rated_ladder(
     await _rate(db_session, ratingless, None)
     # Outrates everyone, but it's a tombstone: not a player, not a rank.
     await _earn_rating(db_session, ghost, 3000.0)
-    ghost.merged_into_user_id = top.id
+    ghost.primary_player.merged_into_player_id = top.player_id
+    ghost.primary_player.merged_at = datetime.now(UTC)
     await db_session.commit()
 
     body = (await api_client.get(f"/v1/players/{target.id}")).json()
@@ -2757,7 +2764,7 @@ async def _record_solo_match(
         completed_at=created_at,
     )
     mine = MatchSide(match=match, side_number=1, won=True)
-    mine.players.append(MatchSidePlayer(match=match, user=player))
+    mine.players.append(MatchSidePlayer(match=match, user=player.primary_player))
     # The sentinel. No players, on purpose — do not "fix" this.
     MatchSide(match=match, side_number=2, won=False)
     db_session.add(match)

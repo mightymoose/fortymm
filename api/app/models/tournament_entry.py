@@ -62,8 +62,6 @@ class TournamentEntry(Base):
         ),
         Index("ix_tournament_entries_event_id", "event_id"),
         Index("ix_tournament_entries_user_id", "user_id"),
-        # ``merge_user`` re-points this column by ``WHERE added_by_user_id = :from``
-        # on every guest sign-in, so it is a lookup key and not merely an FK.
         Index("ix_tournament_entries_added_by_user_id", "added_by_user_id"),
     )
 
@@ -79,7 +77,7 @@ class TournamentEntry(Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="RESTRICT"),
+        ForeignKey("players.id", ondelete="RESTRICT"),
         nullable=False,
     )
     #: Who put this player in the event. ``NULL`` is not "unknown" — it is the
@@ -91,10 +89,10 @@ class TournamentEntry(Base):
     #: would not lose a fact, it would *rewrite* one — a director-added entry would
     #: silently start claiming the player registered themselves. Account merge
     #: tombstones rather than deletes, so ``ON DELETE`` never fires on the path that
-    #: actually happens; ``merge_user`` re-points this column explicitly.
+    #: actually happens; the original acting Account remains recorded.
     added_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="RESTRICT"),
+        ForeignKey("accounts.id", ondelete="RESTRICT"),
         nullable=True,
     )
     seed: Mapped[int | None] = mapped_column(Integer, nullable=True)

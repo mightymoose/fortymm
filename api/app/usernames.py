@@ -1,7 +1,7 @@
 """Username-slug generation, router-free so any provisioning path can import it.
 
 Deliberately free of FastAPI imports (just SQLAlchemy ``AsyncSession`` +
-``coolname`` + the ``User`` model) so both the cookie-session mint in
+``coolname`` + the ``Player`` model) so both the cookie-session mint in
 ``app.sessions`` and the Auth0-provisioning path can share one generator without
 dragging in the heavy session router or risking an import cycle.
 """
@@ -10,7 +10,7 @@ from coolname import generate_slug
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import User
+from app.models import Player
 
 
 async def generate_username(db: AsyncSession) -> str:
@@ -21,7 +21,7 @@ async def generate_username(db: AsyncSession) -> str:
     """
     base = generate_slug(2)
     result = await db.execute(
-        select(User.username).where(User.username.ilike(f"{base}%", escape="\\"))
+        select(Player.username).where(Player.username.ilike(f"{base}%", escape="\\"))
     )
     taken = {u.lower() for u in result.scalars().all()}
     if base not in taken:

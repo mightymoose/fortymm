@@ -205,6 +205,7 @@ from app.match_calls import _wall_now
 from app.models import (
     Match,
     MatchStatus,
+    Player,
     ScheduleSolve,
     ScheduleSolveStatus,
     ScheduleSolveTrigger,
@@ -216,7 +217,6 @@ from app.models import (
     TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
-    User,
 )
 from app.rq_async import run_async_db_job
 from app.scheduling import (
@@ -1074,8 +1074,8 @@ async def _load_solver_inputs(
             user_id: username
             for user_id, username in (
                 await db.execute(
-                    select(User.id, User.username).where(
-                        User.id.in_(set(entry_user.values()))
+                    select(Player.id, Player.username).where(
+                        Player.id.in_(set(entry_user.values()))
                     )
                 )
             ).all()

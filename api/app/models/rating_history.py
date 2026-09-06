@@ -19,10 +19,11 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db import Base
 
 if TYPE_CHECKING:
+    from app.models.account import Account
     from app.models.league import League
     from app.models.match import Match
+    from app.models.player import Player
     from app.models.rating_strategy import RatingStrategy
-    from app.models.user import User
 
 
 class RatingHistorySource(enum.Enum):
@@ -71,7 +72,7 @@ class RatingHistory(Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("players.id", ondelete="RESTRICT"),
         nullable=False,
     )
     match_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -98,7 +99,7 @@ class RatingHistory(Base):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="SET NULL"),
+        ForeignKey("accounts.id", ondelete="RESTRICT"),
         nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -106,7 +107,9 @@ class RatingHistory(Base):
     )
 
     league: Mapped["League"] = relationship()
-    user: Mapped["User"] = relationship(foreign_keys=[user_id])
+    user: Mapped["Player"] = relationship(foreign_keys=[user_id])
     match: Mapped["Match | None"] = relationship()
     rating_strategy: Mapped["RatingStrategy"] = relationship()
-    created_by: Mapped["User | None"] = relationship(foreign_keys=[created_by_user_id])
+    created_by: Mapped["Account | None"] = relationship(
+        foreign_keys=[created_by_user_id]
+    )

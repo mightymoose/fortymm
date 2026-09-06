@@ -247,10 +247,10 @@ async def _enforce_no_live_call_clash(
         )
 
     for entry_id in (fixture.entry_a_id, fixture.entry_b_id):
-        user = ingredients.user_for_entry(entry_id)
-        if user is None:
+        player_id = ingredients.player_id_for_entry(entry_id)
+        if player_id is None:
             continue
-        player_holder = held.users.get(user.id)
+        player_holder = held.users.get(player_id)
         if player_holder is None:
             continue
         holder_table_label = (
@@ -259,8 +259,10 @@ async def _enforce_no_live_call_clash(
             else "another table"
         )
         a_name, b_name = _holder_names(ingredients, player_holder)
+        user = ingredients.user_for_entry(entry_id)
+        player_name = user.username if user is not None else "This player"
         raise PlacementClashError(
-            f"{user.username} is already called to {holder_table_label} for "
+            f"{player_name} is already called to {holder_table_label} for "
             f"{a_name} vs {b_name}. Finish or clear that match first."
         )
 

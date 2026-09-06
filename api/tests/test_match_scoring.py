@@ -424,7 +424,11 @@ async def test_ensure_scorable_posted_result_is_409(
     # via propose/accept. Appended in memory — the truthiness of ``results`` is
     # the whole gate.
     match.results.append(
-        MatchResult(submitted_by_user_id=match.created_by_user_id, games=[])
+        MatchResult(
+            submitted_for_player_id=match.created_by_user_id,
+            submitted_by_user_id=match.created_by_user_id,
+            games=[],
+        )
     )
     with pytest.raises(MatchNotScorableError) as excinfo:
         ensure_scorable(match)

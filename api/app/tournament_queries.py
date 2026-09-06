@@ -30,6 +30,7 @@ from app.models import (
     MatchGame,
     MatchGameScore,
     MatchStatus,
+    Player,
     Tournament,
     TournamentEntry,
     TournamentEntryStatus,
@@ -41,7 +42,6 @@ from app.models import (
     TournamentEventStageGroup,
     TournamentFixture,
     TournamentStatus,
-    User,
     UserLeagueRating,
 )
 from app.ratings.rated import is_rated_member
@@ -102,7 +102,7 @@ def visible_to(user_id: uuid.UUID) -> ColumnElement[bool]:
     """
     return or_(
         Tournament.status.in_(ANNOUNCED_STATUSES),
-        Tournament.created_by_user_id == user_id,
+        Tournament.owner_account_id == user_id,
     )
 
 
@@ -234,11 +234,11 @@ async def active_entrants_by_event(
                 TournamentEntry.id,
                 TournamentEntry.event_id,
                 TournamentEntry.user_id,
-                User.username,
+                Player.username,
                 TournamentEntry.seed,
                 UserLeagueRating.rating_value,
             )
-            .join(User, User.id == TournamentEntry.user_id)
+            .join(Player, Player.id == TournamentEntry.user_id)
             # The two hops that answer "rated against WHAT?": the entry's event, and
             # that event's tournament, which is the thing that names the ladder.
             .join(TournamentEvent, TournamentEvent.id == TournamentEntry.event_id)
@@ -811,7 +811,7 @@ async def active_entry_count(db: AsyncSession, event_id: uuid.UUID) -> int:
 
 
 async def entrant_rating(
-    db: AsyncSession, league_id: uuid.UUID, user_id: uuid.UUID
+    db: AsyncSession, league_id: uuid.UUID, user_id: uuid.UUID | ScalarSelect[uuid.UUID]
 ) -> float | None:
     """A player's rating **on the tournament's ladder** — the number every eligibility
     rule is decided against (ADR-0783) — or ``None`` when they hold none.
@@ -858,7 +858,9 @@ async def entrant_rating(
 
 
 async def entrant_ratings_by_league(
-    db: AsyncSession, league_ids: Sequence[uuid.UUID], user_id: uuid.UUID
+    db: AsyncSession,
+    league_ids: Sequence[uuid.UUID],
+    user_id: uuid.UUID | ScalarSelect[uuid.UUID],
 ) -> dict[uuid.UUID, float | None]:
     """One player's rating on each of ``league_ids``, keyed by league id — ``None``
     wherever they hold none (which is most players, on most ladders).

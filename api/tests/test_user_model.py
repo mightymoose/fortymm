@@ -4,7 +4,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import User
+from app.models import Player, User
 
 
 async def test_create_user_assigns_uuid_and_timestamps(db_session: AsyncSession):
@@ -25,8 +25,8 @@ async def test_username_is_unique(db_session: AsyncSession):
         await db_session.commit()
 
 
-async def test_username_is_required(db_session: AsyncSession):
-    db_session.add(User(username=None))  # type: ignore[arg-type]
+async def test_player_username_is_required(db_session: AsyncSession):
+    db_session.add(Player(username=None))  # type: ignore[arg-type]
     with pytest.raises(IntegrityError):
         await db_session.commit()
 

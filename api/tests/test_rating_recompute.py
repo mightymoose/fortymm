@@ -87,9 +87,9 @@ async def _build_completed_match(
         **match_kwargs,
     )
     side1 = MatchSide(match=match, side_number=1, won=True, score=1)
-    side1.players.append(MatchSidePlayer(match=match, user=winner))
+    side1.players.append(MatchSidePlayer(match=match, user=winner.primary_player))
     side2 = MatchSide(match=match, side_number=2, won=False, score=0)
-    side2.players.append(MatchSidePlayer(match=match, user=loser))
+    side2.players.append(MatchSidePlayer(match=match, user=loser.primary_player))
     game = MatchGame(match=match, game_number=1)
     game.score = MatchGameScore(side_1_points=11, side_2_points=4)
     db.add(match)
@@ -766,9 +766,9 @@ async def test_recompute_skips_matches_without_a_decided_outcome(
         status=MatchStatus.completed,
     )
     side1 = MatchSide(match=undecided, side_number=1, won=None, score=0)
-    side1.players.append(MatchSidePlayer(match=undecided, user=me))
+    side1.players.append(MatchSidePlayer(match=undecided, user=me.primary_player))
     side2 = MatchSide(match=undecided, side_number=2, won=None, score=0)
-    side2.players.append(MatchSidePlayer(match=undecided, user=opp))
+    side2.players.append(MatchSidePlayer(match=undecided, user=opp.primary_player))
     db_session.add(undecided)
     await db_session.commit()
     await db_session.refresh(undecided)
@@ -828,7 +828,7 @@ async def test_recompute_skips_decided_match_with_a_player_less_side(
         status=MatchStatus.completed,
     )
     side1 = MatchSide(match=player_less, side_number=1, won=True, score=1)
-    side1.players.append(MatchSidePlayer(match=player_less, user=me))
+    side1.players.append(MatchSidePlayer(match=player_less, user=me.primary_player))
     # The losing side is decided (won=False) but carries no players.
     MatchSide(match=player_less, side_number=2, won=False, score=0)
     db_session.add(player_less)

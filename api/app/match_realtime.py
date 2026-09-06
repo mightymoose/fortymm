@@ -28,10 +28,11 @@ ties each hint to the transaction's fate instead.
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Match
+from app.player_accounts import managing_account_ids
 from app.realtime import EventKind, stage_event
 
 
-def stage_match_participant_hints(db: AsyncSession, match: Match) -> None:
+async def stage_match_participant_hints(db: AsyncSession, match: Match) -> None:
     """Stage a ``dashboard.changed`` hint for each player on ``match``.
 
     The affected set is exactly the participants: a match write clears (or
@@ -46,6 +47,6 @@ def stage_match_participant_hints(db: AsyncSession, match: Match) -> None:
     Iterates the players rather than indexing ``players[0]``: a solo match's
     sentinel side legitimately has none, and it simply contributes no hint.
     """
-    for side in match.sides:
-        for player in side.players:
-            stage_event(db, player.user_id, EventKind.dashboard_changed)
+    player_ids = [player.user_id for side in match.sides for player in side.players]
+    for account_id in await managing_account_ids(db, player_ids):
+        stage_event(db, account_id, EventKind.dashboard_changed)

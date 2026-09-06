@@ -39,7 +39,7 @@ declines to present that prior as an achievement.
 from sqlalchemy import ColumnElement, and_, select
 from sqlalchemy.orm import aliased
 
-from app.models import RatingHistory, RatingHistorySource, User, UserLeagueRating
+from app.models import Player, RatingHistory, RatingHistorySource, UserLeagueRating
 
 
 def is_rating_change(row: type[RatingHistory] = RatingHistory) -> ColumnElement[bool]:
@@ -138,7 +138,7 @@ def is_rated_member() -> ColumnElement[bool]:
       awaiting its import. No rating, whatever its history says.
     * NOT TOMBSTONED — a merged-away ghost is not a player, so it may not inflate a
       real player's rank or pad a percentile's denominator. Folded in HERE rather
-      than restated by each caller as a ``User`` join, because the one function that
+      than restated by each caller as a ``Player`` join, because the one function that
       forgot to restate it (``league_percentile``, #944) drew "Top 8%" from a
       different population than the "#3 of 42" printed beside it.
     * A NON-``initial`` RATING-HISTORY ROW — something has actually MOVED this
@@ -157,7 +157,7 @@ def is_rated_member() -> ColumnElement[bool]:
     disagree about who is on it.
 
     Both subqueries ``correlate(UserLeagueRating)`` EXPLICITLY — they correlate to
-    the rating row and to nothing else. Left to auto-correlation, the ``User``
+    the rating row and to nothing else. Left to auto-correlation, the ``Player``
     subquery evaporates the moment this is used in a query that already selects
     from ``users`` (the roster does: ``SELECT users ... LEFT JOIN
     user_league_ratings ON ... is_rated_member()``), taking its own FROM clause with
@@ -166,10 +166,10 @@ def is_rated_member() -> ColumnElement[bool]:
     """
     return and_(
         UserLeagueRating.rating_value.is_not(None),
-        select(User.id)
+        select(Player.id)
         .where(
-            User.id == UserLeagueRating.user_id,
-            User.merged_into_user_id.is_(None),
+            Player.id == UserLeagueRating.user_id,
+            Player.merged_into_player_id.is_(None),
         )
         .correlate(UserLeagueRating)
         .exists(),

@@ -275,7 +275,7 @@ def _gate_owned_pre_live(tournament: Tournament | None, actor: User) -> Tourname
       :class:`TournamentNotPreLiveError` (carrying the status)."""
     if tournament is None:
         raise TournamentNotFoundError()
-    if tournament.created_by_user_id != actor.id:
+    if tournament.owner_account_id != actor.id:
         raise NotTournamentOwnerError()
     if tournament.status not in _PRE_LIVE_STATUSES:
         raise TournamentNotPreLiveError(tournament.status.value)

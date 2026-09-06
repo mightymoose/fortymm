@@ -1,5 +1,10 @@
 # 784. Director entry is the same endpoint, gated by ownership
 
+Amended by [Accounts authorize durable Players](20260905-accounts-authorize-durable-players.md): sporting identity belongs
+to Player; authentication and preserved historical authorship belong to Account.
+The linked decision supersedes conflicting identity and merge-ownership clauses.
+
+
 Date: 2026-07-12
 
 ## Status

@@ -143,17 +143,18 @@ async def notify_result_accepted(
         return
     title, body = copy
     for player in poster_side.players:
-        notifications.enqueue_notification(
-            NotificationJob(
-                user_id=player.user_id,
-                category=NotificationCategory.RESULT_CONFIRM,
-                title=title,
-                body=body,
-                link=f"/matches/{match.id}",
-                action_label="View result",
-                collapse_id=f"result-accepted:{match.id}",
+        for account_id in await notifications.managing_account_ids(player.user_id):
+            notifications.enqueue_notification(
+                NotificationJob(
+                    user_id=account_id,
+                    category=NotificationCategory.RESULT_CONFIRM,
+                    title=title,
+                    body=body,
+                    link=f"/matches/{match.id}",
+                    action_label="View result",
+                    collapse_id=f"result-accepted:{match.id}",
+                )
             )
-        )
 
 
 def _result_recorded_copy(
@@ -227,7 +228,7 @@ async def notify_result_recorded(
     sides_with_players = [side for side in match.sides if side.players]
     if len(sides_with_players) < 2:
         return
-    poster_side = my_side(match, poster.id)
+    poster_side = my_side(match, poster.player_id)
     recipient_sides = (
         sides_with_players
         if poster_side is None
@@ -245,17 +246,18 @@ async def notify_result_recorded(
     title, body = copy
     for side in recipient_sides:
         for player in side.players:
-            notifications.enqueue_notification(
-                NotificationJob(
-                    user_id=player.user_id,
-                    category=NotificationCategory.RESULT_CONFIRM,
-                    title=title,
-                    body=body,
-                    link=f"/matches/{match.id}",
-                    action_label="View result",
-                    collapse_id=f"result-recorded:{match.id}",
+            for account_id in await notifications.managing_account_ids(player.user_id):
+                notifications.enqueue_notification(
+                    NotificationJob(
+                        user_id=account_id,
+                        category=NotificationCategory.RESULT_CONFIRM,
+                        title=title,
+                        body=body,
+                        link=f"/matches/{match.id}",
+                        action_label="View result",
+                        collapse_id=f"result-recorded:{match.id}",
+                    )
                 )
-            )
 
 
 async def notify_result_posted(
@@ -301,17 +303,18 @@ async def notify_result_posted(
     title, body = copy
     push_data = {"match_id": str(match.id), "result_id": str(result.id)}
     for player in recipient_side.players:
-        notifications.enqueue_notification(
-            NotificationJob(
-                user_id=player.user_id,
-                category=NotificationCategory.RESULT_CONFIRM,
-                title=title,
-                body=body,
-                link=f"/matches/{match.id}",
-                action_label="Review",
-                push_category=MATCH_RESULT_CONFIRMATION_CATEGORY,
-                push_data=push_data,
-                collapse_id=f"result-confirm:{match.id}",
-                result_id=result.id,
+        for account_id in await notifications.managing_account_ids(player.user_id):
+            notifications.enqueue_notification(
+                NotificationJob(
+                    user_id=account_id,
+                    category=NotificationCategory.RESULT_CONFIRM,
+                    title=title,
+                    body=body,
+                    link=f"/matches/{match.id}",
+                    action_label="Review",
+                    push_category=MATCH_RESULT_CONFIRMATION_CATEGORY,
+                    push_data=push_data,
+                    collapse_id=f"result-confirm:{match.id}",
+                    result_id=result.id,
+                )
             )
-        )

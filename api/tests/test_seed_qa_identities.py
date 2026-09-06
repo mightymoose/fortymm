@@ -7,6 +7,7 @@ for every test here. `Administrator` / `Beta tester` still need `seed_rbac`.
 """
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select
@@ -151,6 +152,7 @@ async def test_seed_excludes_a_tombstoned_identity(db_session: AsyncSession):
     # Tombstone qa-admin the way account_merge.merge_user would, without
     # calling the real merge function.
     admin.merged_into_user_id = other_user.id
+    admin.merged_at = datetime.now(UTC)
     await db_session.commit()
 
     counts = await seed_qa_identities.upsert_qa_identities(db_session)

@@ -782,8 +782,10 @@ class TestResourceFreedomGate:
         assert await _call_notifications(db_session) == []
         assert fake_notifications_queue.jobs == []
 
+    @pytest.mark.parametrize("transferred", [False, True])
     async def test_a_due_fixture_whose_player_is_live_in_another_event_is_not_called(
         self,
+        transferred: bool,
         db_session: AsyncSession,
         fake_notifications_queue: Queue,
         monkeypatch: pytest.MonkeyPatch,
@@ -811,6 +813,20 @@ class TestResourceFreedomGate:
             held_user=shared_user,
             table_id=await _table(db_session, event_id, "t2"),
         )
+        if transferred:
+            from app.account_merge import merge_user
+            from app.models import Account
+
+            destination = Account(email="call-transfer@example.com")
+            db_session.add(destination)
+            await db_session.commit()
+            await merge_user(
+                db_session, from_user_id=shared_user, to_user_id=destination.id
+            )
+            await db_session.commit()
+            assert destination.player_id == shared_user
+            assert destination.id != shared_user
+
         _freeze_clocks(monkeypatch, BASE)
 
         run_pin_tick(str(tournament_id))
@@ -2087,6 +2103,7 @@ class TestClearRevertsMatchToPending:
         db_session.add(
             MatchResult(
                 match_id=match_id,
+                submitted_for_player_id=tournament.created_by_user_id,
                 submitted_by_user_id=tournament.created_by_user_id,
                 games=[{"game_number": 1, "side_1_points": 11, "side_2_points": 7}],
             )

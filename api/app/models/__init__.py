@@ -1,3 +1,4 @@
+from app.models.account import Account, AccountPlayer, LoginIdentity
 from app.models.device_token import DeviceToken
 from app.models.draw_type import DrawTypeOption
 from app.models.league import League, LeagueVisibility
@@ -17,6 +18,7 @@ from app.models.notification import (
 from app.models.notification_channel import NotificationChannel
 from app.models.notification_type import NotificationType
 from app.models.permission import Permission
+from app.models.player import Player
 from app.models.rating_history import RatingHistory, RatingHistorySource
 from app.models.rating_strategy import RatingStrategy
 from app.models.role import Role
@@ -53,6 +55,10 @@ from app.models.user_role import UserRole
 from app.models.user_token import UserToken
 
 __all__ = [
+    "Account",
+    "LoginIdentity",
+    "AccountPlayer",
+    "Player",
     "DeviceToken",
     "DrawType",
     "DrawTypeOption",
