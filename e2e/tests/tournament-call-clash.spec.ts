@@ -152,6 +152,18 @@ test.describe('Tournament — a call that clashes is refused, not delivered', ()
     expect(noticesTitled(feedC, CALLED)).toHaveLength(0)
     expect(noticesTitled(feedC, MOVED)).toHaveLength(0)
 
+    // Isolate the refused write from the initial background solve. Otherwise
+    // its completion can move this fixture from Awaiting placement to a table
+    // during the refusal's refetch, remounting the row for an unrelated reason.
+    await expect
+      .poll(
+        async () =>
+          (await getScheduleDetail(director, tournamentId)).latest_schedule_solve
+            ?.status ?? null,
+        { timeout: 120_000, intervals: [2_000] },
+      )
+      .toBe('succeeded')
+
     // ----- the director is the one who is warned: the Schedule tab ---------------
     // Move A vs C onto Table 1 from the board itself and confirm the call. The
     // refusal must reach the director as a message, and the editor must survive it.
