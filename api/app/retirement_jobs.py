@@ -15,10 +15,8 @@ re-implements accept logic.
 
 It's a leaf: it depends only on the models and the already-extracted domain
 leaves (``result_chain``, ``retirement``, ``result_acceptance``), never on the
-``app.matches`` router. The blocking row lock and eager load are reproduced here
-(a narrow ``SELECT ... FOR UPDATE`` and the same selectinload chain) rather than
-imported from the router, per api/CLAUDE.md ("don't import another router's
-internals").
+``app.matches`` router. Lock ordering is shared with manual scoring through
+``match_scoring.lock_match_for_transition``; the worker retains its own eager load.
 
 RQ workers are sync processes, so the entry point ``run_retirement_sweep`` is a
 thin ``asyncio.run`` wrapper that opens its own ``async_sessionmaker`` from
@@ -129,7 +127,9 @@ async def _lock_match_row(db: AsyncSession, match_id: uuid.UUID) -> None:
     block, re-read the post-image, and our standing-result guard returns a clean
     ``superseded`` — the rating change is applied exactly once (mirrors the
     router's ``_lock_match_row`` for issue #365)."""
-    await db.execute(select(Match.id).where(Match.id == match_id).with_for_update())
+    from app.match_scoring import lock_match_for_transition
+
+    await lock_match_for_transition(db, match_id)
 
 
 async def _load_match(db: AsyncSession, match_id: uuid.UUID) -> Match | None:

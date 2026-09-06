@@ -8,6 +8,7 @@ the counter chain, and raises the domain exceptions (never ``HTTPException``)
 the adapters map."""
 
 import asyncio
+from datetime import timedelta
 
 import pytest
 from sqlalchemy import text
@@ -34,8 +35,10 @@ def _decisive_board(winner_side: int = 1) -> list[MatchResultsGameWrite]:
     return [MatchResultsGameWrite(game_number=1, side_1_points=4, side_2_points=11)]
 
 
-@pytest.mark.parametrize("parent", ["tournaments", "tournament_events"])
-@pytest.mark.parametrize("operation", ["acceptance", "proposal"])
+@pytest.mark.parametrize(
+    "parent", ["tournaments", "tournament_events", "actor", "submitter"]
+)
+@pytest.mark.parametrize("operation", ["acceptance", "proposal", "retirement"])
 async def test_tournament_result_write_waits_for_parent_writer(
     db_session, engine, parent, operation
 ):
@@ -44,7 +47,7 @@ async def test_tournament_result_write_waits_for_parent_writer(
     )
     sides = sorted(match.sides, key=lambda side: side.side_number)
     proposal = None
-    if operation == "acceptance":
+    if operation != "proposal":
         outcome = await propose_result(
             db_session,
             match.id,
@@ -54,6 +57,8 @@ async def test_tournament_result_write_waits_for_parent_writer(
         )
         proposal = standing_result(outcome.match)
         assert proposal is not None
+        if operation == "retirement":
+            match.match_settings.retirement_window = timedelta(microseconds=1)
     event = (
         await db_session.execute(
             text(
@@ -70,12 +75,34 @@ async def test_tournament_result_write_waits_for_parent_writer(
     async with sessions() as scheduling, sessions() as accepting:
         scheduler_pid = await scheduling.scalar(text("SELECT pg_backend_pid()"))
         accept_pid = await accepting.scalar(text("SELECT pg_backend_pid()"))
+        table = "accounts" if parent in ("actor", "submitter") else parent
         await scheduling.execute(
-            text(f"SELECT id FROM {parent} WHERE id = :id FOR UPDATE"),
-            {"id": event.tournament_id if parent == "tournaments" else event.id},
+            text(f"SELECT id FROM {table} WHERE id = :id FOR UPDATE"),
+            {
+                "id": (
+                    sides[1 if operation != "proposal" and parent == "actor" else 0]
+                    .players[0]
+                    .user_id
+                )
+                if parent in ("actor", "submitter")
+                else event.tournament_id
+                if parent == "tournaments"
+                else event.id
+            },
         )
+        from app.notifications.service import NotificationService
+        from app.retirement_jobs import RetirementOutcome, retire_if_lapsed
+        from tests._helpers import FakeSender
+
         task = asyncio.create_task(
-            accept_result(
+            retire_if_lapsed(
+                accepting,
+                match.id,
+                proposal.id,
+                NotificationService(accepting, FakeSender()),
+            )
+            if operation == "retirement" and proposal is not None
+            else accept_result(
                 accepting, match.id, sides[1].players[0].user_id, result_id=proposal.id
             )
             if proposal is not None
@@ -106,6 +133,8 @@ async def test_tournament_result_write_waits_for_parent_writer(
         result = await task
         if operation == "acceptance":
             assert result.status is MatchStatus.completed
+        elif operation == "retirement":
+            assert result is RetirementOutcome.retired
         else:
             assert result.awaiting_acceptance is True
 

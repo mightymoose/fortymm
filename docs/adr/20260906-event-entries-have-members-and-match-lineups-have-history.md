@@ -140,6 +140,10 @@ against a status writer holding the match while waiting for its event.
 The existing scoring/negotiation loader acquires tournament and event locks before
 the match lock. Acceptance therefore waits for scheduling before completing the
 match; non-waiting proposal writes retain their existing conflict response.
+The shared transition lock first acquires ordered Account key-share locks for the
+acting Account, recorded result actors, and scheduled players' managing Accounts.
+Retirement and reminder workers use that same ordering, preventing account merges
+or manual counters from crossing their parent and match locks.
 Match writes reserve a transaction-scoped advisory lock before waiting for these
 parents. Proposals try that reservation without waiting, so only a competing write
 to the same match produces the existing busy response; scheduling another match
