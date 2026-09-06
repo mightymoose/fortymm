@@ -966,6 +966,7 @@ def upgrade() -> None:
         sa.CheckConstraint("side_number IN (1, 2)", name="ck_match_sides_side_number"),
         sa.ForeignKeyConstraint(["match_id"], ["matches.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("id", "match_id", name="uq_match_sides_id_match_id"),
         sa.UniqueConstraint(
             "match_id", "side_number", name="uq_match_sides_match_id_side_number"
         ),
@@ -1266,7 +1267,10 @@ def upgrade() -> None:
         sa.Column("user_id", sa.UUID(), nullable=False),
         sa.ForeignKeyConstraint(["match_id"], ["matches.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(
-            ["match_side_id"], ["match_sides.id"], ondelete="CASCADE"
+            ["match_side_id", "match_id"],
+            ["match_sides.id", "match_sides.match_id"],
+            name="fk_match_side_players_side_match",
+            ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(["user_id"], ["players.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),

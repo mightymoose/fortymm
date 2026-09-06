@@ -1,7 +1,7 @@
 import uuid
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, Index, UniqueConstraint, text
+from sqlalchemy import ForeignKey, ForeignKeyConstraint, Index, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -14,14 +14,20 @@ if TYPE_CHECKING:
 
 
 class MatchSidePlayer(Base):
-    """Join row placing a user on a side of a match.
+    """Join row placing a Player on a side of a match.
 
     One row per side for singles, two for doubles. ``match_id`` is denormalized
-    so a user can be constrained to a single side of a given match.
+    so a Player can be constrained to a single side of a given match.
     """
 
     __tablename__ = "match_side_players"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["match_side_id", "match_id"],
+            ["match_sides.id", "match_sides.match_id"],
+            name="fk_match_side_players_side_match",
+            ondelete="CASCADE",
+        ),
         UniqueConstraint(
             "match_side_id",
             "user_id",
@@ -41,7 +47,6 @@ class MatchSidePlayer(Base):
     )
     match_side_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("match_sides.id", ondelete="CASCADE"),
         nullable=False,
     )
     match_id: Mapped[uuid.UUID] = mapped_column(
@@ -55,6 +60,10 @@ class MatchSidePlayer(Base):
         nullable=False,
     )
 
-    match_side: Mapped["MatchSide"] = relationship(back_populates="players")
+    # The side writes only its ID; match writes match_id independently so
+    # contradictory assignments reach the database and fail instead of healing.
+    match_side: Mapped["MatchSide"] = relationship(
+        back_populates="players", foreign_keys=[match_side_id]
+    )
     match: Mapped["Match"] = relationship(back_populates="side_players")
     user: Mapped["Player"] = relationship("Player")
