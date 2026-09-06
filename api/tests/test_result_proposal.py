@@ -35,22 +35,25 @@ def _decisive_board(winner_side: int = 1) -> list[MatchResultsGameWrite]:
 
 
 @pytest.mark.parametrize("parent", ["tournaments", "tournament_events"])
-async def test_tournament_acceptance_waits_for_parent_writer(
-    db_session, engine, parent
+@pytest.mark.parametrize("operation", ["acceptance", "proposal"])
+async def test_tournament_result_write_waits_for_parent_writer(
+    db_session, engine, parent, operation
 ):
     match, director = await directed_tournament_match(
         db_session, tag="accept-parent-lock", best_of=1
     )
     sides = sorted(match.sides, key=lambda side: side.side_number)
-    outcome = await propose_result(
-        db_session,
-        match.id,
-        sides[0].players[0].user_id,
-        games=_decisive_board(),
-        supersedes_result_id=None,
-    )
-    proposal = standing_result(outcome.match)
-    assert proposal is not None
+    proposal = None
+    if operation == "acceptance":
+        outcome = await propose_result(
+            db_session,
+            match.id,
+            sides[0].players[0].user_id,
+            games=_decisive_board(),
+            supersedes_result_id=None,
+        )
+        proposal = standing_result(outcome.match)
+        assert proposal is not None
     event = (
         await db_session.execute(
             text(
@@ -75,6 +78,14 @@ async def test_tournament_acceptance_waits_for_parent_writer(
             accept_result(
                 accepting, match.id, sides[1].players[0].user_id, result_id=proposal.id
             )
+            if proposal is not None
+            else propose_result(
+                accepting,
+                match.id,
+                sides[0].players[0].user_id,
+                games=_decisive_board(),
+                supersedes_result_id=None,
+            )
         )
         try:
 
@@ -92,7 +103,36 @@ async def test_tournament_acceptance_waits_for_parent_writer(
             await scheduling.rollback()
             if not task.done():
                 await asyncio.wait_for(task, timeout=5)
-        assert (await task).status is MatchStatus.completed
+        result = await task
+        if operation == "acceptance":
+            assert result.status is MatchStatus.completed
+        else:
+            assert result.awaiting_acceptance is True
+
+
+async def test_tournament_proposal_still_refuses_an_active_match_writer(
+    db_session, engine
+):
+    from app.match_scoring import MatchLockUnavailable, load_match_for_write
+
+    match, director = await directed_tournament_match(
+        db_session, tag="proposal-busy-match", best_of=1
+    )
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as first, sessions() as second:
+        await load_match_for_write(first, match.id, director.id, lock=True)
+        with pytest.raises(MatchLockUnavailable):
+            await asyncio.wait_for(
+                propose_result(
+                    second,
+                    match.id,
+                    director.id,
+                    games=_decisive_board(),
+                    supersedes_result_id=None,
+                ),
+                timeout=1,
+            )
+        await first.rollback()
 
 
 async def test_first_proposal_on_solo_match_self_accepts_and_finalizes(

@@ -139,6 +139,10 @@ against a status writer holding the match while waiting for its event.
 The existing scoring/negotiation loader acquires tournament and event locks before
 the match lock. Acceptance therefore waits for scheduling before completing the
 match; non-waiting proposal writes retain their existing conflict response.
+Match writes reserve a transaction-scoped advisory lock before waiting for these
+parents. Proposals try that reservation without waiting, so only a competing write
+to the same match produces the existing busy response; scheduling another match
+can finish without causing a false proposal conflict. Row locks remain authoritative.
 
 The snapshot references the original entry membership and Player. Later roster
 changes and sign-in reconciliation cannot rewrite it. Before starting a match,
