@@ -19,7 +19,7 @@ dependencies = [
     "httpx[http2]>=0.27.0",
     "fastapi-limiter>=0.1.6,<0.3",
     "pyjwt[crypto]>=2.9",
-    "fastmcp>=3.4,<4",
+    "fastmcp>=3.4,<5",
 ]
 
 [project.optional-dependencies]
