@@ -1401,6 +1401,46 @@ async def test_entry_update_refuses_inverted_parent_lock_order(
         await writer.commit()
 
 
+async def test_direct_player_merge_refuses_inverted_tournament_lock_order(
+    db_session, engine
+):
+    from sqlalchemy.exc import DBAPIError
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as lifecycle, sessions() as merging:
+        await lifecycle.execute(
+            text("SELECT id FROM tournaments WHERE id = :id FOR UPDATE"),
+            {"id": event.tournament_id},
+        )
+        await merging.execute(text("SET LOCAL lock_timeout = '200ms'"))
+        with pytest.raises(
+            DBAPIError, match="player merge requires parent locks"
+        ) as exc:
+            await merging.execute(
+                text(
+                    "UPDATE players SET merged_into_player_id = :target, "
+                    "merged_at = clock_timestamp() WHERE id = :id"
+                ),
+                {"id": players[0].player_id, "target": players[4].player_id},
+            )
+        assert exc.value.orig.sqlstate == "40001"
+        await merging.rollback()
+        await lifecycle.rollback()
+        await merging.execute(
+            text("SELECT id FROM tournaments WHERE id = :id FOR SHARE"),
+            {"id": event.tournament_id},
+        )
+        await merging.execute(
+            text(
+                "UPDATE players SET merged_into_player_id = :target, "
+                "merged_at = clock_timestamp() WHERE id = :id"
+            ),
+            {"id": players[0].player_id, "target": players[4].player_id},
+        )
+        await merging.commit()
+
+
 @pytest.mark.parametrize("parent", ["tournaments", "tournament_events"])
 async def test_roster_update_refuses_inverted_parent_lock_order(
     db_session, engine, parent

@@ -194,6 +194,10 @@ Before reconciling match sides, a merge locks the tournaments containing either
 identity's memberships in stable order, even when their entries do not collide.
 Go-live therefore finishes materialization before reconciliation or waits for it,
 instead of crossing the merge's event locks with its own tournament lock.
+Direct Player identity updates also acquire affected tournaments in stable order
+before their event locks. Since the Player tuple is already locked, contested
+tournament locks produce retryable SQLSTATE `40001`; retry with the parent locks
+first. Discovery remains scoped to the source Player and its earlier aliases.
 
 ## Migration and verification
 

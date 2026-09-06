@@ -431,7 +431,7 @@ ENTRY_INTEGRITY_DDL = (
     """
     CREATE OR REPLACE FUNCTION lock_entry_event() RETURNS trigger
     LANGUAGE plpgsql AS $$
-    DECLARE event_uuid uuid; fixture_uuid uuid; match_uuid uuid;
+    DECLARE event_uuid uuid; fixture_uuid uuid; match_uuid uuid; player_events uuid[];
     BEGIN
         IF TG_TABLE_NAME IN ('match_games', 'match_results') AND TG_OP = 'UPDATE' THEN
             IF NEW.match_id IS DISTINCT FROM OLD.match_id THEN
@@ -459,16 +459,29 @@ ENTRY_INTEGRITY_DDL = (
             END IF;
         END IF;
         IF TG_TABLE_NAME = 'players' THEN
+            WITH RECURSIVE affected_players(id) AS (
+                SELECT OLD.id
+                UNION
+                SELECT p.id FROM players p
+                JOIN affected_players a ON p.merged_into_player_id = a.id
+            )
+            SELECT array_agg(DISTINCT e.event_id ORDER BY e.event_id)
+            INTO player_events FROM affected_players a
+            JOIN tournament_entry_members m ON m.player_id = a.id
+            JOIN tournament_entries e ON e.id = m.entry_id;
+            BEGIN
+                PERFORM t.id FROM tournaments t
+                WHERE t.id IN (
+                    SELECT tournament_id FROM tournament_events
+                    WHERE id = ANY(player_events)
+                ) ORDER BY t.id FOR SHARE OF t NOWAIT;
+            EXCEPTION WHEN lock_not_available THEN
+                RAISE EXCEPTION 'player merge requires parent locks; retry'
+                    USING ERRCODE = '40001';
+            END;
             FOR event_uuid IN
-                WITH RECURSIVE affected_players(id) AS (
-                    SELECT OLD.id
-                    UNION
-                    SELECT p.id FROM players p
-                    JOIN affected_players a ON p.merged_into_player_id = a.id
-                )
-                SELECT DISTINCT e.event_id FROM affected_players a
-                JOIN tournament_entry_members m ON m.player_id = a.id
-                JOIN tournament_entries e ON e.id = m.entry_id ORDER BY e.event_id
+                SELECT id FROM tournament_events
+                WHERE id = ANY(player_events) ORDER BY id
             LOOP
                 UPDATE tournament_events SET id = id WHERE id = event_uuid;
             END LOOP;
