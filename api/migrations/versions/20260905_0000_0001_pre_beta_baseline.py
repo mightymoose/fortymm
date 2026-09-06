@@ -24,7 +24,11 @@ ENTRY_INTEGRITY_DDL = (
         IF NOT FOUND OR row_match.ending IS NULL THEN RETURN NULL; END IF;
         has_play := EXISTS (SELECT 1 FROM match_lineups WHERE match_id = row_match.id);
         IF row_match.status NOT IN ('completed', 'voided')
-            OR (row_match.ending = 'walkover' AND has_play)
+            OR (row_match.ending = 'walkover' AND (
+                has_play
+                OR EXISTS (SELECT 1 FROM match_games WHERE match_id = row_match.id)
+                OR EXISTS (SELECT 1 FROM match_results WHERE match_id = row_match.id)
+            ))
             OR (row_match.ending = 'stopped_during_play' AND NOT has_play)
         THEN
             RAISE EXCEPTION 'match ending contradicts recorded play'
@@ -40,6 +44,17 @@ ENTRY_INTEGRITY_DDL = (
     """,
     """
     CREATE CONSTRAINT TRIGGER check_lineup_ending AFTER INSERT ON match_lineups
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION check_match_ending()
+    """,
+    """
+    CREATE CONSTRAINT TRIGGER check_game_ending AFTER INSERT OR UPDATE ON match_games
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION check_match_ending()
+    """,
+    """
+    CREATE CONSTRAINT TRIGGER check_result_ending AFTER INSERT OR UPDATE
+    ON match_results
     DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION check_match_ending()
     """,
@@ -420,6 +435,10 @@ ENTRY_INTEGRITY_DDL = (
                 UPDATE tournament_events SET id = id WHERE id = event_uuid;
             END LOOP;
             RETURN NEW;
+        ELSIF TG_TABLE_NAME = 'matches' THEN
+            SELECT s.event_id INTO event_uuid FROM tournament_fixtures f
+            JOIN tournament_event_stages s ON s.id = f.stage_id
+            WHERE f.match_id = NEW.id;
         ELSIF TG_TABLE_NAME IN ('match_lineups', 'match_games', 'match_results') THEN
             SELECT s.event_id INTO event_uuid FROM tournament_fixtures f
             JOIN tournament_event_stages s ON s.id = f.stage_id
@@ -432,7 +451,7 @@ ENTRY_INTEGRITY_DDL = (
             SELECT event_id INTO event_uuid FROM tournament_entries
             WHERE id = COALESCE(NEW.entry_id, OLD.entry_id);
         END IF;
-        IF TG_TABLE_NAME = 'tournament_entries' THEN
+        IF TG_TABLE_NAME IN ('tournament_entries', 'matches') THEN
             PERFORM t.id FROM tournaments t
             JOIN tournament_events e ON e.tournament_id = t.id
             WHERE e.id = event_uuid FOR SHARE OF t;
@@ -446,6 +465,21 @@ ENTRY_INTEGRITY_DDL = (
     LANGUAGE plpgsql AS $$
     DECLARE event_uuid uuid; affected_events uuid[];
     BEGIN
+        -- Membership writers already serialize on the event. Check the final
+        -- timeline so an atomic departure/return can share its boundary instant.
+        IF TG_TABLE_NAME = 'tournament_entry_members' THEN
+          IF EXISTS (
+            SELECT 1 FROM tournament_entry_members a
+            JOIN tournament_entry_members b ON b.entry_id = a.entry_id
+                AND b.player_id = a.player_id AND b.id > a.id
+            WHERE a.entry_id = COALESCE(NEW.entry_id, OLD.entry_id)
+                AND tstzrange(a.joined_at, a.left_at, '[)')
+                    && tstzrange(b.joined_at, b.left_at, '[)')
+        ) THEN
+            RAISE EXCEPTION 'overlapping membership intervals'
+                USING ERRCODE = '23514', CONSTRAINT = 'ck_entry_members_no_overlap';
+          END IF;
+        END IF;
         IF TG_TABLE_NAME = 'players' THEN
             -- Only source identities change their canonical projection. Include
             -- aliases already merged into the source, without resolving every
@@ -519,6 +553,10 @@ ENTRY_INTEGRITY_DDL = (
     """,
     """
     CREATE TRIGGER lock_lineup_event BEFORE INSERT ON match_lineups
+    FOR EACH ROW EXECUTE FUNCTION lock_entry_event()
+    """,
+    """
+    CREATE TRIGGER lock_match_status_event BEFORE UPDATE OF status, ending ON matches
     FOR EACH ROW EXECUTE FUNCTION lock_entry_event()
     """,
     """

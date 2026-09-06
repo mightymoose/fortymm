@@ -629,6 +629,52 @@ async def test_active_entry_requires_format_member_count(db_session, format, cou
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
 
+@pytest.mark.parametrize("overlap_day", [2, 6])
+async def test_membership_history_rejects_overlapping_intervals(
+    db_session, overlap_day
+):
+    event = await _make_event(db_session)
+    player = await make_user(db_session, "returning-member")
+    entry = TournamentEntry(
+        event_id=event.id,
+        members=[
+            TournamentEntryMember(
+                player_id=player.player_id,
+                joined_at=datetime(2026, 1, 1, tzinfo=UTC),
+                left_at=datetime(2026, 1, 3, tzinfo=UTC),
+            ),
+            TournamentEntryMember(
+                player_id=player.player_id,
+                joined_at=datetime(2026, 1, 5, tzinfo=UTC),
+            ),
+        ],
+    )
+    db_session.add(entry)
+    await db_session.commit()
+    # An adjacent intervening interval is valid: departures are exclusive.
+    db_session.add(
+        TournamentEntryMember(
+            entry_id=entry.id,
+            player_id=player.player_id,
+            joined_at=datetime(2026, 1, 3, tzinfo=UTC),
+            left_at=datetime(2026, 1, 5, tzinfo=UTC),
+        )
+    )
+    await db_session.commit()
+    with pytest.raises(IntegrityError, match="overlapping membership intervals"):
+        async with db_session.begin_nested():
+            db_session.add(
+                TournamentEntryMember(
+                    entry_id=entry.id,
+                    player_id=player.player_id,
+                    joined_at=datetime(2026, 1, overlap_day, tzinfo=UTC),
+                    left_at=datetime(2026, 1, overlap_day + 1, tzinfo=UTC),
+                )
+            )
+            await db_session.flush()
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
 async def seed_doubles_match(db_session):
     event = await make_drawn_event(db_session)
     event.format = EventFormat.doubles
@@ -701,12 +747,12 @@ async def test_first_lineup_waits_for_roster_replacement(
         # Validate the replacement before capture is visible, but retain its
         # locks. Neither transaction may commit based on the other's old state.
         await roster.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
-        await capture.execute(
-            text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
-            {"id": match.id},
-        )
 
         async def record_lineup():
+            await capture.execute(
+                text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
+                {"id": match.id},
+            )
             if manual_lineup:
                 lineup_id = await capture.scalar(
                     text(
@@ -965,7 +1011,9 @@ async def test_cancelling_a_call_with_play_keeps_its_lineup(db_session, evidence
 
 
 @pytest.mark.parametrize("target", ["event", "tournament"])
-@pytest.mark.parametrize("capture_kind", ["status", "lineup", "game", "result"])
+@pytest.mark.parametrize(
+    "capture_kind", ["status", "deferred_status", "lineup", "game", "result"]
+)
 async def test_deletion_racing_first_lineup_reports_recorded_play(
     db_session, engine, target, capture_kind
 ):
@@ -982,7 +1030,7 @@ async def test_deletion_racing_first_lineup_reports_recorded_play(
         actor = await deletion.get(User, match.created_by_user_id)
         # First capture holds the membership FK locks but is not yet visible to
         # deletion. This is the commit-time DB path of a pending rated proposal.
-        if capture_kind in ("status", "lineup"):
+        if capture_kind in ("status", "deferred_status", "lineup"):
             await capture.execute(
                 text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
                 {"id": match.id},
@@ -1006,6 +1054,8 @@ async def test_deletion_racing_first_lineup_reports_recorded_play(
             await capture.execute(
                 text("SET CONSTRAINTS capture_match_lineup IMMEDIATE")
             )
+        elif capture_kind == "deferred_status":
+            pass  # Normal SQL writers leave capture deferred until COMMIT.
         elif capture_kind == "game":
             capture.add(MatchGame(match_id=match.id, game_number=1))
             await capture.flush()
@@ -1723,6 +1773,57 @@ async def test_correction_is_a_complete_eligible_lineup_revision(db_session, inv
                     "new_player": players[4].player_id,
                 },
             )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("evidence", ["game", "result"])
+async def test_walkover_rejects_existing_score_evidence(db_session, evidence):
+    from app.models import MatchGame, MatchResult
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    if evidence == "game":
+        db_session.add(MatchGame(match_id=match.id, game_number=1))
+    else:
+        db_session.add(
+            MatchResult(match_id=match.id, submitted_by_user_id=players[0].id, games=[])
+        )
+    await db_session.commit()
+    with pytest.raises(IntegrityError, match="ending contradicts recorded play"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE matches SET status = 'completed', ending = 'walkover' "
+                    "WHERE id = :id"
+                ),
+                {"id": match.id},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("evidence", ["game", "result"])
+async def test_walkover_rejects_later_score_evidence(db_session, evidence):
+    from app.models import MatchGame, MatchResult
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    await db_session.execute(
+        text(
+            "UPDATE matches SET status = 'completed', ending = 'walkover' "
+            "WHERE id = :id"
+        ),
+        {"id": match.id},
+    )
+    await db_session.commit()
+    with pytest.raises(IntegrityError, match="ending contradicts recorded play"):
+        async with db_session.begin_nested():
+            if evidence == "game":
+                db_session.add(MatchGame(match_id=match.id, game_number=1))
+            else:
+                db_session.add(
+                    MatchResult(
+                        match_id=match.id, submitted_by_user_id=players[0].id, games=[]
+                    )
+                )
+            await db_session.flush()
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
 
