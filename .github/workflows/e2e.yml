@@ -36,8 +36,8 @@ jobs:
         env:
           E2E_KEEP_STACK: '1'
 
-      - name: Dump docker compose logs on failure
-        if: ${{ failure() }}
+      - name: Dump docker compose logs including retried failures
+        if: ${{ !cancelled() }}
         run: docker compose -f docker-compose.dev.yml -f docker-compose.e2e.yml logs --no-color
 
       - name: Clean up e2e stack
