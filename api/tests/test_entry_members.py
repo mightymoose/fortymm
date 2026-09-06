@@ -565,6 +565,29 @@ async def test_membership_join_time_is_when_the_member_is_inserted(db_session):
     assert entry.members[0].joined_at >= boundary
 
 
+async def test_membership_cannot_start_in_the_future(db_session):
+    event = await _make_event(db_session)
+    player = await make_user(db_session, "future-member")
+    with pytest.raises(IntegrityError, match="membership cannot start in the future"):
+        async with db_session.begin_nested():
+            entry_id = await db_session.scalar(
+                text(
+                    "INSERT INTO tournament_entries (event_id) VALUES (:event) "
+                    "RETURNING id"
+                ),
+                {"event": event.id},
+            )
+            await db_session.execute(
+                text(
+                    "INSERT INTO tournament_entry_members (entry_id, player_id, "
+                    "joined_at) VALUES (:entry, :player, "
+                    "clock_timestamp() + interval '1 day')"
+                ),
+                {"entry": entry_id, "player": player.player_id},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
 async def test_partner_replacement_keeps_membership_history_and_entry(db_session):
     event = await _make_event(db_session, format=EventFormat.doubles)
     players = [await make_user(db_session, f"partner-{n}") for n in range(3)]

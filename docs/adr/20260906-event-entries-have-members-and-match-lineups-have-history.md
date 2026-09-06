@@ -42,6 +42,8 @@ checks allowing a replacement to be completed within one transaction.
 Format edits lock that event before validating the roster, so a racing member edit
 produces the existing format conflict rather than a commit-time server error.
 
+Membership starts cannot be future-dated: an open interval is current and must be
+eligible for immediate lineup capture. Historical starts remain supported.
 Every closed membership interval records a departure Account alongside its end
 time; both fields must be absent for a current member and present for a departed
 member, including before go-live.

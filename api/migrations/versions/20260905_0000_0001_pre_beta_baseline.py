@@ -88,6 +88,10 @@ ENTRY_INTEGRITY_DDL = (
     LANGUAGE plpgsql AS $$
     DECLARE owner_uuid uuid; actor_uuid uuid;
     BEGIN
+        IF NEW.joined_at > clock_timestamp() THEN
+            RAISE EXCEPTION 'membership cannot start in the future'
+                USING ERRCODE = '23514';
+        END IF;
         BEGIN
             PERFORM id FROM accounts
             WHERE id IN (NEW.joined_by_account_id, NEW.left_by_account_id)
