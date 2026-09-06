@@ -64,15 +64,18 @@ An explicit walkover remains lineup-free.
 Assigning an already-started match to a fixture also runs capture and eligibility
 validation, recording its participants when it first becomes tournament play.
 A match belongs to at most one fixture; unmaterialized fixtures may share a null
-match reference. Match status writes lock the parent tournament before the event,
-before deferred capture, so deletion cannot remove the fixture in between.
+match reference. A fixture's two non-null seats must name distinct entries: a
+competing unit cannot play itself. Match status writes lock the parent tournament
+before the event, before deferred capture, so deletion cannot remove the fixture
+in between.
 Direct fixture-link writers must use tournament-before-event-before-fixture lock
 order. The row trigger takes available parent locks without waiting; if another
 transaction already holds one, it raises retryable SQLSTATE `40001` rather than
 waiting backwards after the fixture row lock. Retry the transaction with a shared
 tournament lock and an exclusive event lock acquired before updating the fixture.
 A fixture with a lineup, game, or result cannot be unlinked, linked to another
-match, or deleted; the recorded association remains available to deletion guards.
+match, reseated, moved to another stage, or deleted; the recorded association remains
+available to deletion guards. Unplayed fixtures can still advance or be reseated.
 Direct database writes cannot create an initial played lineup for a pending match;
 the match must be in progress or have a played terminal outcome.
 Automatic capture and direct lineup validation acquire the roster's event lock

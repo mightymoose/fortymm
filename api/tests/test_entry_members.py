@@ -828,6 +828,20 @@ async def test_fixture_attaching_an_already_played_match_captures_history(
     ) == {player.player_id for player in players[:4]}
 
 
+async def test_fixture_cannot_seat_the_same_entry_twice(db_session):
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    with pytest.raises(IntegrityError, match="ck_tournament_fixtures_distinct_entries"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE tournament_fixtures SET entry_b_id = entry_a_id "
+                    "WHERE id = :id"
+                ),
+                {"id": fixture.id},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
 async def test_a_match_can_belong_to_only_one_fixture(db_session):
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
     second = TournamentFixture(
@@ -1118,7 +1132,9 @@ async def test_deletion_racing_first_lineup_reports_recorded_play(
             await asyncio.gather(delete_task, return_exceptions=True)
 
 
-@pytest.mark.parametrize("action", ["unlink", "replace", "delete"])
+@pytest.mark.parametrize(
+    "action", ["unlink", "replace", "delete", "seat_a", "seat_b", "stage"]
+)
 @pytest.mark.parametrize("evidence", ["game", "result", "lineup"])
 async def test_recorded_match_cannot_lose_its_fixture(db_session, action, evidence):
     from app.models import MatchGame, MatchResult
@@ -1140,17 +1156,30 @@ async def test_recorded_match_cannot_lose_its_fixture(db_session, action, eviden
     )
     db_session.add(replacement)
     await db_session.commit()
+    other_event = await make_drawn_event(db_session) if action == "stage" else event
     statement = {
         "unlink": "UPDATE tournament_fixtures SET match_id = NULL WHERE id = :id",
         "replace": (
             "UPDATE tournament_fixtures SET match_id = :replacement WHERE id = :id"
         ),
         "delete": "DELETE FROM tournament_fixtures WHERE id = :id",
+        "seat_a": "UPDATE tournament_fixtures SET entry_a_id = NULL WHERE id = :id",
+        "seat_b": "UPDATE tournament_fixtures SET entry_b_id = NULL WHERE id = :id",
+        "stage": (
+            "UPDATE tournament_fixtures SET stage_id = :stage, group_id = :group "
+            "WHERE id = :id"
+        ),
     }[action]
     with pytest.raises(IntegrityError, match="recorded match fixture must be retained"):
         async with db_session.begin_nested():
             await db_session.execute(
-                text(statement), {"id": fixture.id, "replacement": replacement.id}
+                text(statement),
+                {
+                    "id": fixture.id,
+                    "replacement": replacement.id,
+                    "stage": other_event.stages[0].id,
+                    "group": other_event.groups[0].id,
+                },
             )
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 

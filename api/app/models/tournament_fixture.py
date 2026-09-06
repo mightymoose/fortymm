@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -87,6 +88,10 @@ class TournamentFixture(Base):
 
     __tablename__ = "tournament_fixtures"
     __table_args__ = (
+        CheckConstraint(
+            "entry_a_id <> entry_b_id",
+            name="ck_tournament_fixtures_distinct_entries",
+        ),
         # "My group is my own stage's group", as one line of DDL (ADR 20260801,
         # parented on the stage by ADR 20260815). The referenced ``(stage_id, id)`` is a
         # unique constraint on ``tournament_event_stage_groups`` that exists for no
