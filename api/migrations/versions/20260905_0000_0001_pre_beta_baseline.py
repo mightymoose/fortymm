@@ -380,7 +380,8 @@ ENTRY_INTEGRITY_DDL = (
     END $$
     """,
     """
-    CREATE CONSTRAINT TRIGGER capture_match_lineup AFTER INSERT OR UPDATE OF status
+    CREATE CONSTRAINT TRIGGER capture_match_lineup
+    AFTER INSERT OR UPDATE OF status, ending
     ON matches DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION capture_match_lineup()
     """,
@@ -438,6 +439,12 @@ ENTRY_INTEGRITY_DDL = (
             END IF;
         END IF;
         IF TG_TABLE_NAME = 'tournament_entries' THEN
+            IF TG_OP = 'DELETE' AND EXISTS (
+                SELECT 1 FROM tournament_events WHERE id = OLD.event_id
+            ) THEN
+                RAISE EXCEPTION 'entry history must be retained; withdraw the entry'
+                    USING ERRCODE = '23514';
+            END IF;
             IF TG_OP = 'INSERT' THEN
                 NEW.created_transaction_id := txid_current();
             ELSIF TG_OP = 'UPDATE' AND
@@ -486,6 +493,18 @@ ENTRY_INTEGRITY_DDL = (
             WHERE id = COALESCE(NEW.entry_id, OLD.entry_id);
         END IF;
         IF TG_TABLE_NAME IN ('tournament_entries', 'matches') THEN
+            IF TG_TABLE_NAME = 'tournament_entries' AND TG_OP = 'UPDATE' THEN
+                BEGIN
+                    PERFORM t.id FROM tournaments t
+                    JOIN tournament_events e ON e.tournament_id = t.id
+                    WHERE e.id = event_uuid FOR SHARE OF t NOWAIT;
+                    PERFORM id FROM tournament_events
+                    WHERE id = event_uuid FOR UPDATE NOWAIT;
+                EXCEPTION WHEN lock_not_available THEN
+                    RAISE EXCEPTION 'entry update requires parent locks; retry'
+                        USING ERRCODE = '40001';
+                END;
+            END IF;
             PERFORM t.id FROM tournaments t
             JOIN tournament_events e ON e.tournament_id = t.id
             WHERE e.id = event_uuid FOR SHARE OF t;

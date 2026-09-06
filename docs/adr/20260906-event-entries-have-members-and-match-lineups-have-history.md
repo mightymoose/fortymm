@@ -109,10 +109,14 @@ fixture association. A concurrent unlink, replacement, or move to another event
 requires a retry rather than committing against a stale association.
 
 Direct membership updates follow the same parent-first locking contract as fixture
-updates. Since a row trigger already holds the member tuple, it refuses contested
+updates, as do entry status updates. Since a row trigger already holds the child
+tuple, it refuses contested
 tournament or event locks with SQLSTATE `40001`; the writer retries with tournament
-and event locks acquired before the membership update. This avoids deadlocking
+and event locks acquired before the child update. This avoids deadlocking
 against deletion, which locks parents before membership rows.
+Standalone entry deletion is forbidden while its event remains: withdraw the entry
+instead, retaining all membership intervals and fixture references. An unplayed
+event or tournament deletion may still cascade through its entries.
 
 The snapshot references the original entry membership and Player. Later roster
 changes and sign-in reconciliation cannot rewrite it. Before starting a match,
@@ -159,6 +163,8 @@ unanswered standing result. This does not expose special-result submission or
 implement new rating, standings or advancement policies for those outcomes.
 Walkovers cannot contain game or result records either; validation covers both
 evidence written before the ending and evidence added afterward.
+Clearing a completed walkover's ending to ordinary completion captures its lineup
+even when the status itself is unchanged.
 
 ## Identity reconciliation and compatibility
 

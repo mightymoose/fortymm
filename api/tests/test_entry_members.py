@@ -1361,6 +1361,47 @@ async def test_evidence_write_aborts_when_deletion_commits_first(
 
 
 @pytest.mark.parametrize("parent", ["tournaments", "tournament_events"])
+async def test_entry_update_refuses_inverted_parent_lock_order(
+    db_session, engine, parent
+):
+    from sqlalchemy.exc import DBAPIError
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as deletion, sessions() as writer:
+        await deletion.execute(
+            text(f"SELECT id FROM {parent} WHERE id = :id FOR UPDATE"),
+            {"id": event.tournament_id if parent == "tournaments" else event.id},
+        )
+        await writer.execute(text("SET LOCAL lock_timeout = '200ms'"))
+        with pytest.raises(
+            DBAPIError, match="entry update requires parent locks"
+        ) as exc:
+            await writer.execute(
+                text(
+                    "UPDATE tournament_entries SET status = 'withdrawn' WHERE id = :id"
+                ),
+                {"id": entries[0].id},
+            )
+        assert exc.value.orig.sqlstate == "40001"
+        await writer.rollback()
+        await deletion.rollback()
+        await writer.execute(
+            text("SELECT id FROM tournaments WHERE id = :id FOR SHARE"),
+            {"id": event.tournament_id},
+        )
+        await writer.execute(
+            text("SELECT id FROM tournament_events WHERE id = :id FOR UPDATE"),
+            {"id": event.id},
+        )
+        await writer.execute(
+            text("UPDATE tournament_entries SET status = 'withdrawn' WHERE id = :id"),
+            {"id": entries[0].id},
+        )
+        await writer.commit()
+
+
+@pytest.mark.parametrize("parent", ["tournaments", "tournament_events"])
 async def test_roster_update_refuses_inverted_parent_lock_order(
     db_session, engine, parent
 ):
@@ -1748,7 +1789,12 @@ async def test_deleting_a_parent_cannot_cascade_away_recorded_membership(
         "event": ("DELETE FROM tournament_events WHERE id = :id", event.id),
         "tournament": ("DELETE FROM tournaments WHERE id = :id", event.tournament_id),
     }[parent]
-    with pytest.raises(IntegrityError, match="recorded match fixture must be retained"):
+    refusal = (
+        "entry history must be retained"
+        if parent == "entry"
+        else "recorded match fixture must be retained"
+    )
+    with pytest.raises(IntegrityError, match=refusal):
         async with db_session.begin_nested():
             await db_session.execute(text(statement), {"id": parent_id})
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
@@ -1824,6 +1870,43 @@ async def test_concurrent_sql_entries_serialize_and_only_one_claims_the_player(
             results = await asyncio.wait_for(asyncio.gather(*contenders), 5)
     assert sorted(results) == [False, True]
     assert await db_session.scalar(text("SELECT count(*) FROM tournament_entries")) == 1
+
+
+@pytest.mark.parametrize("withdrawn", [False, True])
+async def test_direct_entry_deletion_cannot_erase_membership_history(
+    db_session, withdrawn
+):
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    entries[0].members[0].left_at = datetime.now(UTC)
+    entries[0].members.append(TournamentEntryMember(player_id=players[4].player_id))
+    await db_session.commit()
+    if withdrawn:
+        await db_session.execute(
+            text("UPDATE tournament_entries SET status = 'withdrawn' WHERE id = :id"),
+            {"id": entries[0].id},
+        )
+        await db_session.commit()
+    original_members = set(
+        await db_session.scalars(text("SELECT id FROM tournament_entry_members"))
+    )
+    with pytest.raises(IntegrityError, match="entry history must be retained"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("DELETE FROM tournament_entries WHERE id = :id"),
+                {"id": entries[0].id},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    assert (
+        set(await db_session.scalars(text("SELECT id FROM tournament_entry_members")))
+        == original_members
+    )
+    assert (
+        await db_session.scalar(
+            text("SELECT count(*) FROM tournament_fixtures WHERE id = :id"),
+            {"id": fixture.id},
+        )
+        == 1
+    )
 
 
 async def test_membership_end_cannot_erase_eligibility_for_recorded_play(db_session):
@@ -2281,6 +2364,35 @@ async def test_correction_is_a_complete_eligible_lineup_revision(db_session, inv
                 },
             )
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("evidence", [None, "game", "result"])
+async def test_clearing_completed_walkover_captures_actual_lineup(db_session, evidence):
+    from app.models import MatchGame, MatchResult
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    await db_session.execute(
+        text(
+            "UPDATE matches SET status = 'completed', ending = 'walkover' "
+            "WHERE id = :id"
+        ),
+        {"id": match.id},
+    )
+    await db_session.commit()
+    assert await db_session.scalar(text("SELECT count(*) FROM match_lineups")) == 0
+    await db_session.execute(
+        text("UPDATE matches SET ending = NULL WHERE id = :id"), {"id": match.id}
+    )
+    if evidence == "game":
+        db_session.add(MatchGame(match_id=match.id, game_number=1))
+    elif evidence == "result":
+        db_session.add(
+            MatchResult(match_id=match.id, submitted_by_user_id=players[0].id, games=[])
+        )
+    await db_session.commit()
+    assert set(
+        await db_session.scalars(text("SELECT player_id FROM match_lineup_players"))
+    ) == {player.player_id for player in players[:4]}
 
 
 @pytest.mark.parametrize("evidence", ["game", "result"])
