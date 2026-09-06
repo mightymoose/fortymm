@@ -126,6 +126,11 @@ Roster actors acquire ordered Account key-share locks before tournament locks,
 with retryable refusal on contention, matching Account merge's actor-first order.
 Result inserts likewise acquire their submitter and acceptor Account locks before
 the event lock, with retryable refusal if those actors are being merged.
+Entry adders and lineup correction actors follow the same Account-first contract.
+Match status writers use non-waiting tournament/event locks after the match tuple
+is locked, returning `40001` on contention. Direct writers can acquire parents
+first to wait safely before the status write; fixture capture cannot deadlock
+against a status writer holding the match while waiting for its event.
 
 The snapshot references the original entry membership and Player. Later roster
 changes and sign-in reconciliation cannot rewrite it. Before starting a match,

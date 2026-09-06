@@ -755,6 +755,14 @@ async def test_first_lineup_waits_for_roster_replacement(
 
         async def record_lineup():
             await capture.execute(
+                text("SELECT id FROM tournaments WHERE id = :id FOR SHARE"),
+                {"id": event.tournament_id},
+            )
+            await capture.execute(
+                text("SELECT id FROM tournament_events WHERE id = :id FOR UPDATE"),
+                {"id": event.id},
+            )
+            await capture.execute(
                 text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
                 {"id": match.id},
             )
@@ -1395,7 +1403,15 @@ async def test_evidence_write_aborts_when_deletion_commits_first(
                     assert not write_task.done()
                     await asyncio.sleep(0.01)
 
-            await asyncio.wait_for(wait_for_block(), timeout=5)
+            if evidence == "status":
+                with pytest.raises(
+                    DBAPIError, match="match update requires parent locks"
+                ) as exc:
+                    await asyncio.wait_for(write_task, timeout=5)
+                assert exc.value.orig.sqlstate == "40001"
+                await writer.rollback()
+            else:
+                await asyncio.wait_for(wait_for_block(), timeout=5)
             if target == "event":
                 await delete_event(
                     deletion,
@@ -1407,11 +1423,20 @@ async def test_evidence_write_aborts_when_deletion_commits_first(
                 await delete_tournament(
                     deletion, tournament_id=event.tournament_id, actor=actor
                 )
-            with pytest.raises(
-                DBAPIError, match="tournament association was deleted"
-            ) as exc:
-                await asyncio.wait_for(write_task, timeout=5)
-            assert exc.value.orig.sqlstate == "40001"
+            if evidence != "status":
+                with pytest.raises(
+                    DBAPIError, match="tournament association was deleted"
+                ) as exc:
+                    await asyncio.wait_for(write_task, timeout=5)
+                assert exc.value.orig.sqlstate == "40001"
+            else:
+                assert (
+                    await db_session.scalar(
+                        text("SELECT status FROM matches WHERE id = :id"),
+                        {"id": match.id},
+                    )
+                    == "pending"
+                )
         finally:
             if not write_task.done():
                 write_task.cancel()
@@ -1497,6 +1522,38 @@ async def test_direct_player_merge_refuses_inverted_tournament_lock_order(
             {"id": players[0].player_id, "target": players[4].player_id},
         )
         await merging.commit()
+
+
+@pytest.mark.parametrize("parent", ["tournaments", "tournament_events"])
+async def test_match_status_refuses_inverted_parent_locks(db_session, engine, parent):
+    from sqlalchemy.exc import DBAPIError
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    statement = text("UPDATE matches SET status = 'in_progress' WHERE id = :id")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as linking, sessions() as starting:
+        await linking.execute(
+            text(f"SELECT id FROM {parent} WHERE id = :id FOR UPDATE"),
+            {"id": event.tournament_id if parent == "tournaments" else event.id},
+        )
+        await starting.execute(text("SET LOCAL lock_timeout = '200ms'"))
+        with pytest.raises(
+            DBAPIError, match="match update requires parent locks"
+        ) as exc:
+            await starting.execute(statement, {"id": match.id})
+        assert exc.value.orig.sqlstate == "40001"
+        await starting.rollback()
+        await linking.rollback()
+        await starting.execute(
+            text("SELECT id FROM tournaments WHERE id = :id FOR SHARE"),
+            {"id": event.tournament_id},
+        )
+        await starting.execute(
+            text("SELECT id FROM tournament_events WHERE id = :id FOR UPDATE"),
+            {"id": event.id},
+        )
+        await starting.execute(statement, {"id": match.id})
+        await starting.commit()
 
 
 async def test_crossed_ownership_and_participation_merges_serialize(db_session, engine):
@@ -1713,6 +1770,75 @@ async def test_result_actor_lock_precedes_event_lock(db_session, engine, actor):
         await proposal.commit()
 
 
+async def test_entry_adder_lock_precedes_parent_locks(db_session, engine):
+    from sqlalchemy.exc import DBAPIError
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    statement = text(
+        "INSERT INTO tournament_entries (event_id, added_by_user_id, status) "
+        "VALUES (:event, :actor, 'withdrawn')"
+    )
+    params = {"event": event.id, "actor": match.created_by_user_id}
+    async with sessions() as merging, sessions() as registering:
+        await merging.execute(
+            text("SELECT id FROM accounts WHERE id = :id FOR UPDATE"),
+            {"id": match.created_by_user_id},
+        )
+        await registering.execute(text("SET LOCAL lock_timeout = '200ms'"))
+        with pytest.raises(
+            DBAPIError, match="entry actor requires account locks"
+        ) as exc:
+            await registering.execute(statement, params)
+        assert exc.value.orig.sqlstate == "40001"
+        await registering.rollback()
+        await merging.rollback()
+        await registering.execute(statement, params)
+        await registering.commit()
+
+
+async def test_lineup_correction_actor_lock_precedes_event_lock(db_session, engine):
+    from sqlalchemy.exc import DBAPIError
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    match.status = MatchStatus.in_progress
+    await db_session.commit()
+    statement = text(
+        "INSERT INTO match_lineups (match_id, revision, started_at, "
+        "recorded_by_account_id, correction_reason) "
+        "SELECT match_id, 2, started_at, :actor, 'Corrected account' "
+        "FROM match_lineups WHERE match_id = :match RETURNING id"
+    )
+    params = {"match": match.id, "actor": match.created_by_user_id}
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as merging, sessions() as correcting:
+        await merging.execute(
+            text("SELECT id FROM accounts WHERE id = :id FOR UPDATE"),
+            {"id": match.created_by_user_id},
+        )
+        await correcting.execute(text("SET LOCAL lock_timeout = '200ms'"))
+        with pytest.raises(
+            DBAPIError, match="lineup actor requires account locks"
+        ) as exc:
+            await correcting.execute(statement, params)
+        assert exc.value.orig.sqlstate == "40001"
+        await correcting.rollback()
+        await merging.rollback()
+        lineup = await correcting.scalar(statement, params)
+        await correcting.execute(
+            text(
+                "INSERT INTO match_lineup_players "
+                "(lineup_id, side_number, entry_member_id, player_id) "
+                "SELECT :lineup, p.side_number, p.entry_member_id, p.player_id "
+                "FROM match_lineup_players p "
+                "JOIN match_lineups l ON l.id = p.lineup_id "
+                "WHERE l.match_id = :match AND l.revision = 1"
+            ),
+            {"lineup": lineup, "match": match.id},
+        )
+        await correcting.commit()
+
+
 @pytest.mark.parametrize("evidence", ["game", "result", "status"])
 @pytest.mark.parametrize("action", ["unlink", "replace"])
 async def test_evidence_write_aborts_when_fixture_link_changes_first(
@@ -1769,13 +1895,30 @@ async def test_evidence_write_aborts_when_fixture_link_changes_first(
                     assert not write_task.done()
                     await asyncio.sleep(0.01)
 
-            await asyncio.wait_for(wait_for_block(), timeout=5)
+            if evidence == "status":
+                with pytest.raises(
+                    DBAPIError, match="match update requires parent locks"
+                ) as exc:
+                    await asyncio.wait_for(write_task, timeout=5)
+                assert exc.value.orig.sqlstate == "40001"
+                await writer.rollback()
+            else:
+                await asyncio.wait_for(wait_for_block(), timeout=5)
             await linking.commit()
-            with pytest.raises(
-                DBAPIError, match="tournament association changed"
-            ) as exc:
-                await asyncio.wait_for(write_task, timeout=5)
-            assert exc.value.orig.sqlstate == "40001"
+            if evidence != "status":
+                with pytest.raises(
+                    DBAPIError, match="tournament association changed"
+                ) as exc:
+                    await asyncio.wait_for(write_task, timeout=5)
+                assert exc.value.orig.sqlstate == "40001"
+            else:
+                assert (
+                    await db_session.scalar(
+                        text("SELECT status FROM matches WHERE id = :id"),
+                        {"id": match.id},
+                    )
+                    == "pending"
+                )
         finally:
             if not write_task.done():
                 write_task.cancel()

@@ -485,6 +485,15 @@ ENTRY_INTEGRITY_DDL = (
                     USING ERRCODE = '40001';
             END;
         END IF;
+        IF TG_TABLE_NAME = 'match_lineups' THEN
+            BEGIN
+                PERFORM id FROM accounts WHERE id = NEW.recorded_by_account_id
+                FOR KEY SHARE NOWAIT;
+            EXCEPTION WHEN lock_not_available THEN
+                RAISE EXCEPTION 'lineup actor requires account locks; retry'
+                    USING ERRCODE = '40001';
+            END;
+        END IF;
         IF TG_TABLE_NAME = 'tournament_entry_members' AND TG_OP = 'DELETE' THEN
             IF EXISTS (SELECT 1 FROM tournament_entries WHERE id = OLD.entry_id) THEN
                 RAISE EXCEPTION 'membership history must be retained'
@@ -498,6 +507,15 @@ ENTRY_INTEGRITY_DDL = (
             END IF;
         END IF;
         IF TG_TABLE_NAME = 'tournament_entries' THEN
+            IF TG_OP <> 'DELETE' THEN
+                BEGIN
+                    PERFORM id FROM accounts WHERE id = NEW.added_by_user_id
+                    FOR KEY SHARE NOWAIT;
+                EXCEPTION WHEN lock_not_available THEN
+                    RAISE EXCEPTION 'entry actor requires account locks; retry'
+                        USING ERRCODE = '40001';
+                END;
+            END IF;
             IF TG_OP = 'DELETE' AND EXISTS (
                 SELECT 1 FROM tournament_events WHERE id = OLD.event_id
             ) THEN
@@ -565,7 +583,7 @@ ENTRY_INTEGRITY_DDL = (
             WHERE id = COALESCE(NEW.entry_id, OLD.entry_id);
         END IF;
         IF TG_TABLE_NAME IN ('tournament_entries', 'matches') THEN
-            IF TG_TABLE_NAME = 'tournament_entries' AND TG_OP = 'UPDATE' THEN
+            IF TG_OP = 'UPDATE' THEN
                 BEGIN
                     PERFORM t.id FROM tournaments t
                     JOIN tournament_events e ON e.tournament_id = t.id
@@ -573,7 +591,9 @@ ENTRY_INTEGRITY_DDL = (
                     PERFORM id FROM tournament_events
                     WHERE id = event_uuid FOR UPDATE NOWAIT;
                 EXCEPTION WHEN lock_not_available THEN
-                    RAISE EXCEPTION 'entry update requires parent locks; retry'
+                    RAISE EXCEPTION '% update requires parent locks; retry',
+                        CASE WHEN TG_TABLE_NAME = 'matches' THEN 'match'
+                            ELSE 'entry' END
                         USING ERRCODE = '40001';
                 END;
             END IF;
