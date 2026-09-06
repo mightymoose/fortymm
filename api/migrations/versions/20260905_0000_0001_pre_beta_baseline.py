@@ -123,6 +123,11 @@ ENTRY_INTEGRITY_DDL = (
             RAISE EXCEPTION 'lineup requires a started match'
                 USING ERRCODE = '23514';
         END IF;
+        -- Direct snapshots and correction revisions share capture's roster lock.
+        PERFORM e.id FROM tournament_fixtures f
+        JOIN tournament_event_stages s ON s.id = f.stage_id
+        JOIN tournament_events e ON e.id = s.event_id
+        WHERE f.match_id = lineup.match_id FOR UPDATE OF e;
         SELECT t.owner_account_id INTO owner_uuid
         FROM tournament_fixtures f
         JOIN tournament_event_stages s ON s.id = f.stage_id
@@ -267,6 +272,11 @@ ENTRY_INTEGRITY_DDL = (
         ) THEN RETURN NULL; END IF;
         SELECT * INTO fixture FROM tournament_fixtures WHERE match_id = NEW.id;
         IF NOT FOUND THEN RETURN NULL; END IF;
+        -- Serialize the snapshot with roster edits before reading eligibility.
+        -- A member FK's KEY SHARE lock alone permits concurrent interval closure.
+        PERFORM e.id FROM tournament_events e
+        JOIN tournament_event_stages s ON s.event_id = e.id
+        WHERE s.id = fixture.stage_id FOR UPDATE OF e;
         IF EXISTS (
             SELECT 1 FROM match_sides s
             JOIN match_side_players p ON p.match_side_id = s.id

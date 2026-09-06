@@ -530,6 +530,75 @@ async def seed_doubles_match(db_session):
     return event, players, entries, match, fixture
 
 
+@pytest.mark.parametrize("manual_lineup", [False, True])
+async def test_first_lineup_waits_for_roster_replacement(
+    db_session, engine, manual_lineup
+):
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as roster, sessions() as capture:
+        roster_pid = await roster.scalar(text("SELECT pg_backend_pid()"))
+        capture_pid = await capture.scalar(text("SELECT pg_backend_pid()"))
+        await roster.execute(
+            text(
+                "UPDATE tournament_entry_members SET left_at = clock_timestamp() "
+                "WHERE id = :id"
+            ),
+            {"id": entries[0].members[0].id},
+        )
+        await roster.execute(
+            text(
+                "INSERT INTO tournament_entry_members (entry_id, player_id) "
+                "VALUES (:entry, :player)"
+            ),
+            {"entry": entries[0].id, "player": players[4].player_id},
+        )
+        # Validate the replacement before capture is visible, but retain its
+        # locks. Neither transaction may commit based on the other's old state.
+        await roster.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        await capture.execute(
+            text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
+            {"id": match.id},
+        )
+        if manual_lineup:
+            lineup_id = await capture.scalar(
+                text("INSERT INTO match_lineups (match_id) VALUES (:id) RETURNING id"),
+                {"id": match.id},
+            )
+            await capture.execute(
+                text(
+                    "INSERT INTO match_lineup_players "
+                    "(lineup_id, side_number, entry_member_id, player_id) "
+                    "SELECT :lineup, CASE WHEN entry_id = :a THEN 1 ELSE 2 END, "
+                    "id, player_id FROM tournament_entry_members "
+                    "WHERE entry_id IN (:a, :b) AND left_at IS NULL"
+                ),
+                {"lineup": lineup_id, "a": entries[0].id, "b": entries[1].id},
+            )
+        capture_task = asyncio.create_task(capture.commit())
+        try:
+
+            async def wait_for_block():
+                while roster_pid not in await db_session.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": capture_pid}
+                ):
+                    assert not capture_task.done(), "capture bypassed the roster edit"
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_block(), timeout=5)
+            await roster.commit()
+            # The scheduled side still names the departed member. Refuse the
+            # stale start rather than recording an ineligible played lineup.
+            with pytest.raises(
+                IntegrityError, match="current entry member|at match start"
+            ):
+                await capture_task
+        finally:
+            if not capture_task.done():
+                capture_task.cancel()
+            await asyncio.gather(capture_task, return_exceptions=True)
+
+
 async def test_pending_match_cannot_record_a_complete_played_lineup(db_session):
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
     with pytest.raises(IntegrityError, match="lineup requires a started match"):

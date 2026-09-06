@@ -54,6 +54,9 @@ completion, the first recorded evidence of play when no start signal was saved.
 An explicit walkover remains lineup-free.
 Direct database writes cannot create an initial played lineup for a pending match;
 the match must be in progress or have a played terminal outcome.
+Automatic capture and direct lineup validation acquire the roster's event lock
+before checking member eligibility, so a concurrent replacement cannot leave a
+committed lineup outside its member's recorded interval.
 Every participant must be a current member of the entry seated on their side.
 Team rosters may be larger than the actual lineup; `MatchSettings.team_size`
 determines the number playing on each side.
