@@ -62,6 +62,11 @@ HTTP delete actions return a 409 refusal and MCP delete tools report the same
 reason. Owner/not-found checks still run first. Unplayed events remain deletable;
 this adds no deletion UI or alternative deletion workflow.
 
+Deletion locks the event and membership rows before checking history. A concurrent
+first lineup holds membership foreign-key locks, so deletion waits and then reports
+the recorded-play refusal rather than leaking a foreign-key error. The event-first
+lock order also prevents roster changes from invalidating that check.
+
 The snapshot references the original entry membership and Player. Later roster
 changes and sign-in reconciliation cannot rewrite it. Before starting a match,
 a database writer can amend its scheduled participants to reflect an eligible

@@ -13,7 +13,7 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.account_merge import merge_user
 from app.db import Base
@@ -530,6 +530,64 @@ async def test_cancelling_a_call_with_play_keeps_its_lineup(db_session, evidence
     with pytest.raises(IntegrityError, match="lineup history"):
         async with db_session.begin_nested():
             await db_session.execute(text("DELETE FROM match_lineups"))
+
+
+@pytest.mark.parametrize("target", ["event", "tournament"])
+async def test_deletion_racing_first_lineup_reports_recorded_play(
+    db_session, engine, target
+):
+    from app.models import User
+    from app.tournament_errors import RecordedPlayDeletionError
+    from app.tournament_events import delete_event
+    from app.tournament_lifecycle import delete_tournament
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as capture, sessions() as deletion:
+        capture_pid = await capture.scalar(text("SELECT pg_backend_pid()"))
+        delete_pid = await deletion.scalar(text("SELECT pg_backend_pid()"))
+        actor = await deletion.get(User, match.created_by_user_id)
+        # First capture holds the membership FK locks but is not yet visible to
+        # deletion. This is the commit-time DB path of a pending rated proposal.
+        await capture.execute(
+            text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
+            {"id": match.id},
+        )
+        await capture.execute(text("SET CONSTRAINTS capture_match_lineup IMMEDIATE"))
+        if target == "event":
+            delete_task = asyncio.create_task(
+                delete_event(
+                    deletion,
+                    tournament_id=event.tournament_id,
+                    event_id=event.id,
+                    actor=actor,
+                )
+            )
+        else:
+            delete_task = asyncio.create_task(
+                delete_tournament(
+                    deletion,
+                    tournament_id=event.tournament_id,
+                    actor=actor,
+                )
+            )
+        try:
+
+            async def wait_for_block():
+                while capture_pid not in await db_session.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": delete_pid}
+                ):
+                    assert not delete_task.done()
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_block(), timeout=5)
+            await capture.commit()
+            with pytest.raises(RecordedPlayDeletionError):
+                await delete_task
+        finally:
+            if not delete_task.done():
+                delete_task.cancel()
+            await asyncio.gather(delete_task, return_exceptions=True)
 
 
 async def test_direct_result_completion_preserves_actual_lineup(db_session):
