@@ -1971,6 +1971,90 @@ async def test_entry_withdrawal_does_not_relock_unchanged_adder(db_session, engi
         await merging.rollback()
 
 
+@pytest.mark.parametrize("evidence", ["game", "result"])
+async def test_waiting_evidence_cannot_overtake_uncall(db_session, engine, evidence):
+    from sqlalchemy.exc import DBAPIError
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    match.status = MatchStatus.in_progress
+    await db_session.commit()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as cancelling, sessions() as writer:
+        cancel_pid = await cancelling.scalar(text("SELECT pg_backend_pid()"))
+        writer_pid = await writer.scalar(text("SELECT pg_backend_pid()"))
+        await cancelling.execute(
+            text("UPDATE matches SET status = 'pending' WHERE id = :id"),
+            {"id": match.id},
+        )
+
+        async def record():
+            await writer.execute(
+                text(
+                    "INSERT INTO match_games (match_id, game_number) VALUES (:match, 1)"
+                    if evidence == "game"
+                    else "INSERT INTO match_results "
+                    "(match_id, submitted_by_user_id, games) "
+                    "VALUES (:match, :actor, '[]')"
+                ),
+                {"match": match.id, "actor": players[0].id},
+            )
+            await writer.commit()
+
+        task = asyncio.create_task(record())
+        try:
+
+            async def wait_for_event():
+                while cancel_pid not in await db_session.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": writer_pid}
+                ):
+                    assert not task.done()
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_event(), timeout=5)
+            await cancelling.commit()
+            with pytest.raises(DBAPIError, match="match state changed") as exc:
+                await asyncio.wait_for(task, timeout=5)
+            assert exc.value.orig.sqlstate == "40001"
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("evidence", ["game", "result"])
+async def test_pending_evidence_preserves_seated_membership(db_session, evidence):
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    await db_session.execute(
+        text(
+            "INSERT INTO match_games (match_id, game_number) VALUES (:match, 1)"
+            if evidence == "game"
+            else "INSERT INTO match_results (match_id, submitted_by_user_id, games) "
+            "VALUES (:match, :actor, '[]')"
+        ),
+        {"match": match.id, "actor": players[0].id},
+    )
+    await db_session.commit()
+    with pytest.raises(
+        IntegrityError, match="pending evidence must preserve membership"
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE tournament_entry_members SET left_at = clock_timestamp() "
+                    "WHERE entry_id = :entry AND player_id = :player"
+                ),
+                {"entry": entries[0].id, "player": players[0].player_id},
+            )
+            await db_session.execute(
+                text(
+                    "INSERT INTO tournament_entry_members (entry_id, player_id) "
+                    "VALUES (:entry, :player)"
+                ),
+                {"entry": entries[0].id, "player": players[4].player_id},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
 async def test_lineup_correction_actor_lock_precedes_event_lock(db_session, engine):
     from sqlalchemy.exc import DBAPIError
 
@@ -2014,7 +2098,7 @@ async def test_lineup_correction_actor_lock_precedes_event_lock(db_session, engi
 
 
 @pytest.mark.parametrize("evidence", ["game", "result", "status"])
-@pytest.mark.parametrize("action", ["unlink", "replace"])
+@pytest.mark.parametrize("action", ["unlink", "replace", "reseat", "restage"])
 async def test_evidence_write_aborts_when_fixture_link_changes_first(
     db_session, engine, evidence, action
 ):
@@ -2030,16 +2114,43 @@ async def test_evidence_write_aborts_when_fixture_link_changes_first(
         match_settings=MatchSettings(team_size=2, best_of=5, affects_rating=False),
     )
     db_session.add(replacement)
+    stage = await db_session.scalar(
+        text(
+            "INSERT INTO tournament_event_stages (event_id, position, draw_type_id) "
+            "SELECT event_id, 100, draw_type_id FROM tournament_event_stages "
+            "WHERE id = :id RETURNING id"
+        ),
+        {"id": fixture.stage_id},
+    )
+    group = await db_session.scalar(
+        text(
+            "INSERT INTO tournament_event_stage_groups (stage_id, position) "
+            "VALUES (:stage, 0) RETURNING id"
+        ),
+        {"stage": stage},
+    )
     await db_session.commit()
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with sessions() as linking, sessions() as writer:
         link_pid = await linking.scalar(text("SELECT pg_backend_pid()"))
         writer_pid = await writer.scalar(text("SELECT pg_backend_pid()"))
         await linking.execute(
-            text("UPDATE tournament_fixtures SET match_id = :match WHERE id = :id"),
+            text(
+                {
+                    "reseat": "UPDATE tournament_fixtures SET entry_a_id = entry_b_id, "
+                    "entry_b_id = entry_a_id WHERE id = :id",
+                    "restage": "UPDATE tournament_fixtures SET stage_id = :stage, "
+                    "group_id = :group WHERE id = :id",
+                }.get(
+                    action,
+                    "UPDATE tournament_fixtures SET match_id = :match WHERE id = :id",
+                )
+            ),
             {
                 "id": fixture.id,
                 "match": replacement.id if action == "replace" else None,
+                "stage": stage,
+                "group": group,
             },
         )
 

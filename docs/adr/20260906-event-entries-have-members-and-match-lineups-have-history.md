@@ -109,8 +109,13 @@ If deletion wins that race, a writer that had resolved the tournament associatio
 must abort with retryable SQLSTATE `40001` when its event lock finds no surviving
 row. Existing game and result records cannot be reassigned to another match.
 After obtaining the event lock, evidence and status writers recheck the original
-fixture association. A concurrent unlink, replacement, or move to another event
+fixture association, including its seats and stage. A concurrent reseating, stage
+change, unlink, replacement, or move to another event
 requires a retry rather than committing against a stale association.
+Game and result writers also recheck the match status and latest lineup after
+waiting, so an un-call cannot clear the lineup beneath an already waiting writer.
+If a pending match already has game or result evidence but no lineup, its seated
+entries retain their current membership until a lineup records the participants.
 
 Direct membership updates follow the same parent-first locking contract as fixture
 updates, as do entry status updates. Since a row trigger already holds the child
