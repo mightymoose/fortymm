@@ -54,6 +54,7 @@ async def _build_standing_match(
     *,
     submitted_ago: timedelta,
     window: timedelta | None = timedelta(days=7),
+    actor_id: uuid.UUID | None = None,
 ) -> tuple[Match, MatchResult, User, User]:
     """Persist an in-progress, rated singles match with a decisive 11-4 game and
     a single **standing** (unaccepted) result at the head of the chain.
@@ -84,7 +85,7 @@ async def _build_standing_match(
     result = MatchResult(
         match=match,
         submitted_for_player_id=poster.id,
-        submitted_by_user_id=poster.id,
+        submitted_by_user_id=actor_id if actor_id is not None else poster.id,
         games=[],
         submitted_at=datetime.now(UTC) - submitted_ago,
     )
@@ -334,22 +335,19 @@ async def test_owing_side_without_players_is_a_noop(
 async def test_owing_side_follows_player_when_actor_is_a_bystander(
     db_session: AsyncSession, default_league: League
 ) -> None:
-    """Changing actor provenance does not change which sporting side owes acceptance."""
+    """The represented Player, rather than the actor, determines the owing side."""
+    bystander = await _uniq_user(db_session, "bystander")
     match, result, poster, opponent = await _build_standing_match(
-        db_session, default_league, submitted_ago=timedelta(days=8)
+        db_session,
+        default_league,
+        submitted_ago=timedelta(days=8),
+        actor_id=bystander.id,
     )
     # Capture ids before ``expire_all()`` below — an expired ``poster.id``
     # access mid-assertion would trigger a synchronous lazy load (the
     # sibling tests in this module follow the same pattern for ``match``/
     # ``result``).
     match_id, result_id, opponent_id = match.id, result.id, opponent.id
-    bystander = await _uniq_user(db_session, "bystander")
-    # Re-point the standing result's submitter to someone on NEITHER side —
-    # the state ``_requires_confirmation`` now prevents ``propose_result``
-    # from ever producing.
-    result.submitted_by_user_id = bystander.id
-    await db_session.commit()
-
     db_session.expire_all()
     outcome = await retire_if_lapsed(
         db_session, match_id, result_id, _notifications(db_session)

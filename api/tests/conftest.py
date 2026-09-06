@@ -11,6 +11,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from rq import Queue
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -40,6 +41,7 @@ from app.notifications.taxonomy import NotificationChannel as ChannelEnum
 from app.roles import DEFAULT_ROLE_DESCRIPTION, DEFAULT_ROLE_NAME
 from app.stream import SessionFactory, get_stream_session_factory
 from tests._helpers import CSRF_EVENT_HOOKS
+from tests._migration_database import migrated_database
 
 
 @pytest.fixture(autouse=True)
@@ -206,7 +208,7 @@ async def realtime_broker(realtime_redis_server):
 
 
 @pytest.fixture(scope="session")
-def postgres_url() -> Iterator[str]:
+def postgres_server_url() -> Iterator[str]:
     override = os.environ.get("TEST_DATABASE_URL")
     if override:
         yield override
@@ -219,10 +221,21 @@ def postgres_url() -> Iterator[str]:
 
 
 @pytest_asyncio.fixture(scope="session")
+async def postgres_url(postgres_server_url: str) -> AsyncIterator[str]:
+    # Always create a fresh named test database, including when a developer
+    # supplies TEST_DATABASE_URL. Backend regressions exercise real triggers.
+    async with migrated_database(postgres_server_url) as migrated:
+        async with migrated.begin() as conn:
+            tables = ", ".join(
+                f'"{table.name}"' for table in Base.metadata.sorted_tables
+            )
+            await conn.execute(text(f"TRUNCATE {tables} CASCADE"))
+        yield migrated.url.render_as_string(hide_password=False)
+
+
+@pytest_asyncio.fixture(scope="session")
 async def engine(postgres_url: str) -> AsyncIterator[AsyncEngine]:
     eng = create_async_engine(postgres_url)
-    async with eng.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
     yield eng
     await eng.dispose()
 
@@ -236,8 +249,10 @@ async def db_session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
         finally:
             await session.rollback()
     async with engine.begin() as conn:
-        for table in reversed(Base.metadata.sorted_tables):
-            await conn.execute(table.delete())
+        # Explicit reset of the disposable test database, including retained
+        # proposal history that normal SQL DELETE must never erase.
+        tables = ", ".join(f'"{table.name}"' for table in Base.metadata.sorted_tables)
+        await conn.execute(text(f"TRUNCATE {tables} CASCADE"))
 
 
 GLICKO2_STATE_SCHEMA = {
@@ -261,8 +276,8 @@ MANUAL_STATE_SCHEMA = {
 @pytest_asyncio.fixture(autouse=True)
 async def rating_strategies(db_session: AsyncSession) -> dict[str, RatingStrategy]:
     """Seed the canonical rating strategies. Migration 0005 inserts these in
-    real deployments; tests build via ``Base.metadata.create_all`` so we
-    re-seed here for every test."""
+    real deployments; the disposable test database is reset between tests,
+    so we re-seed here for every test."""
     glicko2 = RatingStrategy(
         key="glicko2",
         name="Glicko-2",
@@ -297,7 +312,7 @@ class DrawTypeSeedCopy(NamedTuple):
     own id: the autouse fixture below sources it from here, not from
     ``app.models.draw_type.DRAW_TYPE_IDS``, so any drift between that app-side
     map and this migration's own ids FK-violates every settings-row write in the
-    ``create_all`` suite immediately, rather than being caught only by the
+    backend suite immediately, rather than being caught only by the
     Postgres-backed migration test.
     """
 
@@ -359,15 +374,15 @@ async def draw_types(db_session: AsyncSession) -> list[DrawTypeOption]:
     test sees are the rows a migrated database has. Autouse because the FK on
     the event's ``draw_type_id`` requires the parent rows to exist whenever a
     test builds a tournament event, which is most of the suite. Migration 0010
-    inserts these in real deployments; tests build via
-    ``Base.metadata.create_all`` so we re-seed here.
+    inserts these in real deployments; test resets remove the catalogue rows,
+    so we re-seed here.
 
     ``id`` is set explicitly from :data:`DRAW_TYPE_SEED` — sourced from the
     migration, not from ``app.models.draw_type.DRAW_TYPE_IDS`` — not left to the
     column's ``gen_random_uuid()`` default. The model's ``draw_type`` setter
     writes a settings row's ``draw_type_id`` from that app-side fixed map (see
     its docstring for why), so if the two maps ever disagree, every
-    settings-row write in the whole ``create_all`` suite FK-violates against a
+    settings-row write in the whole backend suite FK-violates against a
     row seeded with the migration's id rather than the app's — the drift guard
     is the entire suite, not one dedicated test.
     """
@@ -389,7 +404,7 @@ async def draw_types(db_session: AsyncSession) -> list[DrawTypeOption]:
 # Display labels mirror the migration seeds — 0009 for the original five
 # categories (and the former client-side CATEGORY_META / CHANNEL_META), 0015
 # for match_calls. The migrations insert these in real deployments; tests
-# build via ``Base.metadata.create_all`` so we re-seed here.
+# reset their disposable database between cases, so we re-seed here.
 NOTIFICATION_TYPE_LABELS: dict[NotificationCategory, tuple[str, str]] = {
     NotificationCategory.MATCH_REMINDER: ("Match reminders", "Match"),
     NotificationCategory.RATING_CHANGE: ("Rating changes", "Rating"),
@@ -476,8 +491,8 @@ async def default_role(db_session: AsyncSession) -> Role:
     Autouse because both user-minting paths (`GET /v1/session` and
     `POST /v1/users`) now grant it and **raise** when it's absent — a missing
     role row is a broken deployment, not a soft-skip. `scripts/seed_rbac.py`
-    inserts it in real deployments; tests build via ``Base.metadata.create_all``
-    so we re-seed here, exactly as ``default_league`` does.
+    inserts it in real deployments; test resets remove it, so we re-seed here,
+    exactly as ``default_league`` does.
 
     Tests that want the "role is missing" branch can ``await
     db_session.delete(...)`` this row before triggering the path under test.
