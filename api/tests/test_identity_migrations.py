@@ -100,6 +100,18 @@ async def test_fresh_alembic_install_has_schema_parity(postgres_url):
                 )
                 is None
             )
+        reinstall = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            cwd=Path(__file__).parents[1],
+            env={
+                **os.environ,
+                "DATABASE_URL": migration_url.render_as_string(hide_password=False),
+            },
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert reinstall.returncode == 0, reinstall.stderr
     finally:
         await migrated.dispose()
         async with admin.connect() as connection:

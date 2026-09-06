@@ -536,6 +536,10 @@ async def _resolve_entry_collisions(
                      AND survivor.status = :active
                     WHERE entry_single_player(guest.id) = :from_id
                       AND guest.status = :active
+                      AND guest.event_id IN (
+                        SELECT id FROM tournament_events
+                        WHERE NOT allow_multiple_entries_per_player
+                      )
                     """
                 ),
                 params,
@@ -662,6 +666,10 @@ async def _resolve_entry_collisions(
               AND entry_single_player(guest.id) = :from_id
               AND guest.status = :active
               AND guest.event_id = survivor.event_id
+              AND guest.event_id IN (
+                SELECT id FROM tournament_events
+                WHERE NOT allow_multiple_entries_per_player
+              )
             """
         ),
         params,
@@ -694,6 +702,10 @@ async def _resolve_entry_collisions(
             UPDATE tournament_entries AS te SET status = 'withdrawn'
             WHERE entry_single_player(te.id) = :from_id
               AND te.status = :active
+              AND te.event_id IN (
+                SELECT id FROM tournament_events
+                WHERE NOT allow_multiple_entries_per_player
+              )
               AND EXISTS (
                 SELECT 1 FROM tournament_entries other
                 WHERE entry_single_player(other.id) = :to_id

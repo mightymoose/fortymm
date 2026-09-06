@@ -165,6 +165,57 @@ async def test_team_event_can_explicitly_allow_multiple_entries(db_session):
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
 
+async def test_permissive_team_still_rejects_merged_duplicates_within_one_entry(
+    db_session,
+):
+    event = await _make_event(db_session, format=EventFormat.teams)
+    event.allow_multiple_entries_per_player = True
+    players = [await make_user(db_session, f"same-team-{n}") for n in range(2)]
+    db_session.add(
+        TournamentEntry(
+            event_id=event.id,
+            members=[TournamentEntryMember(player_id=p.player_id) for p in players],
+        )
+    )
+    await db_session.commit()
+    with pytest.raises(IntegrityError, match="duplicate.*member"):
+        async with db_session.begin_nested():
+            await merge_user(
+                db_session, from_user_id=players[0].id, to_user_id=players[1].id
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("exclusive_collision", [False, True])
+async def test_merge_preserves_distinct_entries_in_a_permissive_team_event(
+    db_session, exclusive_collision
+):
+    event = await _make_event(db_session, format=EventFormat.teams)
+    event.allow_multiple_entries_per_player = True
+    players = [await make_user(db_session, f"cross-team-{n}") for n in range(2)]
+    entries = [TournamentEntry(event_id=event.id, user_id=p.player_id) for p in players]
+    db_session.add_all(entries)
+    await db_session.commit()
+    if exclusive_collision:
+        singles = await _make_event(db_session)
+        db_session.add_all(
+            [TournamentEntry(event_id=singles.id, user_id=p.player_id) for p in players]
+        )
+        await db_session.commit()
+    await merge_user(db_session, from_user_id=players[0].id, to_user_id=players[1].id)
+    await db_session.commit()
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT count(*) FROM tournament_entries WHERE status = 'entered' "
+                "AND event_id = :event"
+            ),
+            {"event": event.id},
+        )
+        == 2
+    )
+
+
 async def test_director_correction_adds_a_revision_without_rewriting_original(
     db_session,
 ):
@@ -178,6 +229,7 @@ async def test_director_correction_adds_a_revision_without_rewriting_original(
     original_id = await db_session.scalar(
         text("SELECT id FROM match_lineups WHERE match_id = :id"), {"id": match.id}
     )
+    correction_savepoint = await db_session.begin_nested()
     corrected_id = await db_session.scalar(
         text(
             "INSERT INTO match_lineups (match_id, revision, started_at, "
@@ -204,6 +256,7 @@ async def test_director_correction_adds_a_revision_without_rewriting_original(
             "member": alternate.id,
         },
     )
+    await correction_savepoint.commit()
     await db_session.commit()
     recorded = (
         await db_session.execute(
@@ -463,6 +516,59 @@ async def test_recorded_lineup_header_cannot_be_erased_or_changed(db_session, mu
         async with db_session.begin_nested():
             await db_session.execute(text(mutation), {"id": match.id})
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_old_lineup_rejects_appends_when_transaction_status_is_unavailable(
+    db_session,
+):
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    event.format = EventFormat.teams
+    alternates = [entry.members[1] for entry in entries]
+    match.match_settings.team_size = 1
+    await db_session.execute(
+        text("DELETE FROM match_side_players WHERE user_id IN (:first, :second)"),
+        {"first": players[1].player_id, "second": players[3].player_id},
+    )
+    await db_session.commit()
+    match.status = MatchStatus.in_progress
+    await db_session.commit()
+    lineup = await db_session.scalar(text("SELECT id FROM match_lineups"))
+    # Increase side size so cardinality alone cannot mask a history-guard failure.
+    match.match_settings.team_size = 2
+    sandbox = await db_session.begin_nested()
+    try:
+        # Mock the external transaction-status retention boundary in this test DB,
+        # without replacing PostgreSQL's builtin or touching another database.
+        await db_session.execute(
+            text(
+                "CREATE FUNCTION public.pg_xact_status(xid8) RETURNS text "
+                "LANGUAGE sql AS 'SELECT NULL::text'"
+            )
+        )
+        await db_session.execute(text("SET LOCAL search_path = public, pg_catalog"))
+        assert (
+            await db_session.scalar(text("SELECT pg_xact_status(pg_current_xact_id())"))
+            is None
+        )
+        with pytest.raises(IntegrityError, match="lineup history"):
+            async with db_session.begin_nested():
+                await db_session.execute(
+                    text(
+                        "INSERT INTO match_lineup_players "
+                        "(lineup_id, side_number, entry_member_id, player_id) "
+                        "SELECT :lineup, CASE WHEN id = :first THEN 1 ELSE 2 END, "
+                        "id, player_id FROM tournament_entry_members "
+                        "WHERE id IN (:first, :second)"
+                    ),
+                    {
+                        "lineup": lineup,
+                        "first": alternates[0].id,
+                        "second": alternates[1].id,
+                    },
+                )
+                await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    finally:
+        await sandbox.rollback()
 
 
 async def test_entry_cannot_be_reparented_to_another_event(db_session):

@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -51,6 +52,11 @@ class MatchLineup(Base):
     )
     recorded_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.clock_timestamp(), nullable=False
+    )
+    # Keep the full, top-level transaction ID: xmin can be a subtransaction ID,
+    # and PostgreSQL eventually discards historical transaction status.
+    recorded_transaction_id: Mapped[int] = mapped_column(
+        BigInteger, server_default=text("txid_current()"), nullable=False
     )
     recorded_by_account_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("accounts.id", ondelete="RESTRICT")

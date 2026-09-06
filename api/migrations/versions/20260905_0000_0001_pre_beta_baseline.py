@@ -109,6 +109,10 @@ ENTRY_INTEGRITY_DDL = (
             SELECT * INTO lineup FROM match_lineups WHERE id = NEW.lineup_id;
         END IF;
         IF NOT FOUND THEN RETURN NULL; END IF;
+        IF lineup.recorded_transaction_id <> txid_current() THEN
+            RAISE EXCEPTION 'lineup history requires a new correction revision'
+                USING ERRCODE = '23514';
+        END IF;
         SELECT t.owner_account_id INTO owner_uuid
         FROM tournament_fixtures f
         JOIN tournament_event_stages s ON s.id = f.stage_id
@@ -189,7 +193,7 @@ ENTRY_INTEGRITY_DDL = (
         THEN RETURN NULL; END IF;
         IF TG_OP <> 'INSERT' OR EXISTS (
             SELECT 1 FROM match_lineups WHERE id = lineup_uuid
-                AND pg_xact_status(xmin::text::xid8) = 'committed'
+                AND recorded_transaction_id <> txid_current()
         ) THEN
             RAISE EXCEPTION 'lineup history requires a new correction revision'
                 USING ERRCODE = '23514';
@@ -333,6 +337,17 @@ ENTRY_INTEGRITY_DDL = (
         ELSE
             SELECT event_id INTO event_uuid FROM tournament_entries
             WHERE id = COALESCE(NEW.entry_id, OLD.entry_id);
+        END IF;
+        IF EXISTS (
+            SELECT m.entry_id FROM tournament_entry_members m
+            JOIN tournament_entries e ON e.id = m.entry_id
+            WHERE (event_uuid IS NULL OR e.event_id = event_uuid)
+                AND e.status = 'entered' AND m.left_at IS NULL
+            GROUP BY m.entry_id, entry_canonical_player(m.player_id)
+            HAVING count(*) > 1
+        ) THEN
+            RAISE EXCEPTION 'duplicate canonical entry member'
+                USING ERRCODE = '23505';
         END IF;
         IF EXISTS (
             SELECT entry_canonical_player(m.player_id) FROM tournament_entry_members m
@@ -2388,6 +2403,12 @@ def upgrade() -> None:
             server_default=sa.text("clock_timestamp()"),
             nullable=False,
         ),
+        sa.Column(
+            "recorded_transaction_id",
+            sa.BigInteger(),
+            server_default=sa.text("txid_current()"),
+            nullable=False,
+        ),
         sa.Column("recorded_by_account_id", sa.UUID(), nullable=True),
         sa.Column("correction_reason", sa.Text(), nullable=True),
         sa.CheckConstraint(
@@ -2621,6 +2642,7 @@ def downgrade() -> None:
     postgresql.ENUM(name="league_visibility").drop(op.get_bind(), checkfirst=True)
 
     postgresql.ENUM(name="match_status").drop(op.get_bind(), checkfirst=True)
+    postgresql.ENUM(name="match_ending").drop(op.get_bind(), checkfirst=True)
 
     postgresql.ENUM(name="rating_history_source").drop(op.get_bind(), checkfirst=True)
 

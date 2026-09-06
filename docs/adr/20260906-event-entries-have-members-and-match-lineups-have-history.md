@@ -21,7 +21,9 @@ the active entry count is derived from entries, not from the number of members.
 At transaction completion an active singles entry has one current member, a
 doubles entry has two, and a team entry has at least one. Replacing a doubles
 partner closes one interval and adds another atomically. The database rejects
-duplicate current members within an entry. Scoped participation rules are:
+duplicate current members within an entry, including identities joined by a Player
+merge. The team exception never permits duplicate members within one entry.
+Scoped participation rules are:
 
 | Event format | Active participation per Player in this event |
 | --- | --- |
@@ -81,6 +83,10 @@ new history can select the highest revision for the corrected account and retain
 earlier revisions for audit. Existing UI/read contracts are not switched to a new
 correction feature by this change.
 
+Each revision stores its full creating transaction ID. Participants can be added
+only within that transaction, including its savepoints; committed revisions remain
+immutable even after PostgreSQL discards old transaction-status information.
+
 The database can record `matches.ending = walkover` without an actual lineup, or
 `stopped_during_play` with one. Both are terminal outcomes; the fixture can retain
 the advancing entry. `NULL` preserves ordinary result negotiation. The latter name
@@ -102,6 +108,8 @@ Historical lineup participants remain the originally recorded identities. If two
 active singles entries collide, the losing entry is withdrawn, not erased. Existing
 seed/order reconciliation and uncut/re-solve rules continue. An Account transfer
 alone changes neither membership nor actual participants.
+Distinct entries in a team event that explicitly allows multiple entries per
+Player are not collisions and remain entered through an identity merge.
 
 ## Migration and verification
 
@@ -112,6 +120,7 @@ After #1670 freezes the baseline, changes require forward, preserving migrations
 SQL constraint definitions are registered with ORM DDL and frozen independently in
 the self-contained baseline. The new integrity scenarios run against both schema
 paths, and the migration parity test compares an actual fresh install to metadata.
+The baseline also supports an upgrade/downgrade/upgrade round trip.
 Existing singles entry, draw, match, sign-in and read regressions remain required.
 
 ## Superseded clauses
