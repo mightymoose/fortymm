@@ -581,6 +581,8 @@ ENTRY_INTEGRITY_DDL = (
                     SELECT tournament_id FROM tournament_events
                     WHERE id = ANY(player_events)
                 ) ORDER BY t.id FOR SHARE OF t NOWAIT;
+                PERFORM id FROM tournament_events
+                WHERE id = ANY(player_events) ORDER BY id FOR UPDATE NOWAIT;
             EXCEPTION WHEN lock_not_available THEN
                 RAISE EXCEPTION 'player merge requires parent locks; retry'
                     USING ERRCODE = '40001';

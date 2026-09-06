@@ -580,6 +580,8 @@ ENTRY_INTEGRITY_DDL = (
                     SELECT tournament_id FROM tournament_events
                     WHERE id = ANY(player_events)
                 ) ORDER BY t.id FOR SHARE OF t NOWAIT;
+                PERFORM id FROM tournament_events
+                WHERE id = ANY(player_events) ORDER BY id FOR UPDATE NOWAIT;
             EXCEPTION WHEN lock_not_available THEN
                 RAISE EXCEPTION 'player merge requires parent locks; retry'
                     USING ERRCODE = '40001';
@@ -2957,6 +2959,10 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "left_at IS NULL OR left_at >= joined_at",
             name="ck_tournament_entry_members_interval",
+        ),
+        sa.CheckConstraint(
+            "(left_at IS NULL) = (left_by_account_id IS NULL)",
+            name="ck_tournament_entry_members_departure_attribution",
         ),
         sa.ForeignKeyConstraint(
             ["entry_id"], ["tournament_entries.id"], ondelete="CASCADE"

@@ -580,6 +580,7 @@ async def test_partner_replacement_keeps_membership_history_and_entry(db_session
     db_session.add(entry)
     await db_session.commit()
     original.left_at = datetime.now(UTC)
+    original.left_by_account_id = players[0].id
     entry.members.append(TournamentEntryMember(player_id=players[2].player_id))
     await db_session.commit()
     assert entry.seed == 3
@@ -649,6 +650,7 @@ async def test_membership_history_rejects_overlapping_intervals(
                 player_id=player.player_id,
                 joined_at=datetime(2026, 1, 1, tzinfo=UTC),
                 left_at=datetime(2026, 1, 3, tzinfo=UTC),
+                left_by_account_id=player.id,
             ),
             TournamentEntryMember(
                 player_id=player.player_id,
@@ -665,6 +667,7 @@ async def test_membership_history_rejects_overlapping_intervals(
             player_id=player.player_id,
             joined_at=datetime(2026, 1, 3, tzinfo=UTC),
             left_at=datetime(2026, 1, 5, tzinfo=UTC),
+            left_by_account_id=player.id,
         )
     )
     await db_session.commit()
@@ -676,6 +679,7 @@ async def test_membership_history_rejects_overlapping_intervals(
                     player_id=player.player_id,
                     joined_at=datetime(2026, 1, overlap_day, tzinfo=UTC),
                     left_at=datetime(2026, 1, overlap_day + 1, tzinfo=UTC),
+                    left_by_account_id=player.id,
                 )
             )
             await db_session.flush()
@@ -739,10 +743,11 @@ async def test_first_lineup_waits_for_roster_replacement(
         capture_pid = await capture.scalar(text("SELECT pg_backend_pid()"))
         await roster.execute(
             text(
-                "UPDATE tournament_entry_members SET left_at = clock_timestamp() "
+                "UPDATE tournament_entry_members SET left_at = clock_timestamp(), "
+                "left_by_account_id = :actor "
                 "WHERE id = :id"
             ),
-            {"id": entries[0].members[0].id},
+            {"id": entries[0].members[0].id, "actor": players[0].id},
         )
         await roster.execute(
             text(
@@ -1103,6 +1108,7 @@ async def test_recalling_an_untouched_match_captures_the_replacement(
     if commit_cancellation:
         await db_session.commit()
     entries[0].members[0].left_at = datetime.now(UTC)
+    entries[0].members[0].left_by_account_id = players[0].id
     entries[0].members.append(TournamentEntryMember(player_id=players[4].player_id))
     await db_session.execute(
         text(
@@ -1555,8 +1561,9 @@ async def test_pending_match_starts_after_direct_player_merge(db_session):
     )
 
 
-async def test_direct_player_merge_refuses_inverted_tournament_lock_order(
-    db_session, engine
+@pytest.mark.parametrize("parent", ["tournaments", "tournament_events"])
+async def test_direct_player_merge_refuses_inverted_parent_lock_order(
+    db_session, engine, parent
 ):
     from sqlalchemy.exc import DBAPIError
 
@@ -1564,8 +1571,8 @@ async def test_direct_player_merge_refuses_inverted_tournament_lock_order(
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with sessions() as lifecycle, sessions() as merging:
         await lifecycle.execute(
-            text("SELECT id FROM tournaments WHERE id = :id FOR UPDATE"),
-            {"id": event.tournament_id},
+            text(f"SELECT id FROM {parent} WHERE id = :id FOR UPDATE"),
+            {"id": event.tournament_id if parent == "tournaments" else event.id},
         )
         await merging.execute(text("SET LOCAL lock_timeout = '200ms'"))
         with pytest.raises(
@@ -1768,10 +1775,11 @@ async def test_roster_update_refuses_inverted_parent_lock_order(
         )
         await roster.execute(
             text(
-                "UPDATE tournament_entry_members SET left_at = clock_timestamp() "
+                "UPDATE tournament_entry_members SET left_at = clock_timestamp(), "
+                "left_by_account_id = :actor "
                 "WHERE id = :id"
             ),
-            {"id": entries[0].members[0].id},
+            {"id": entries[0].members[0].id, "actor": players[0].id},
         )
         await roster.execute(
             text(
@@ -2040,10 +2048,15 @@ async def test_pending_evidence_preserves_seated_membership(db_session, evidence
         async with db_session.begin_nested():
             await db_session.execute(
                 text(
-                    "UPDATE tournament_entry_members SET left_at = clock_timestamp() "
+                    "UPDATE tournament_entry_members SET left_at = clock_timestamp(), "
+                    "left_by_account_id = :actor "
                     "WHERE entry_id = :entry AND player_id = :player"
                 ),
-                {"entry": entries[0].id, "player": players[0].player_id},
+                {
+                    "entry": entries[0].id,
+                    "player": players[0].player_id,
+                    "actor": players[0].id,
+                },
             )
             await db_session.execute(
                 text(
@@ -2327,6 +2340,7 @@ async def test_start_captures_actual_doubles_lineup_independent_of_roster(db_ses
     ).all()
     assert set(before) == {(n // 2 + 1, p.player_id) for n, p in enumerate(players[:4])}
     entries[0].members[0].left_at = datetime.now(UTC)
+    entries[0].members[0].left_by_account_id = players[0].id
     entries[0].members.append(TournamentEntryMember(player_id=players[4].player_id))
     await db_session.commit()
     after = (
@@ -2566,6 +2580,7 @@ async def test_direct_entry_deletion_cannot_erase_membership_history(
 ):
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
     entries[0].members[0].left_at = datetime.now(UTC)
+    entries[0].members[0].left_by_account_id = players[0].id
     entries[0].members.append(TournamentEntryMember(player_id=players[4].player_id))
     await db_session.commit()
     if withdrawn:
@@ -2606,10 +2621,11 @@ async def test_membership_end_cannot_erase_eligibility_for_recorded_play(db_sess
         async with db_session.begin_nested():
             await db_session.execute(
                 text(
-                    "UPDATE tournament_entry_members SET left_at = joined_at "
+                    "UPDATE tournament_entry_members SET left_at = joined_at, "
+                    "left_by_account_id = :actor "
                     "WHERE id = :id"
                 ),
-                {"id": original.id},
+                {"id": original.id, "actor": players[0].id},
             )
             db_session.add(
                 TournamentEntryMember(
@@ -2832,10 +2848,11 @@ async def test_go_live_waits_for_roster_replacement(db_session, engine, default_
         actor = await lifecycle.get(User, owner.id)
         await roster.execute(
             text(
-                "UPDATE tournament_entry_members SET left_at = clock_timestamp() "
+                "UPDATE tournament_entry_members SET left_at = clock_timestamp(), "
+                "left_by_account_id = :actor "
                 "WHERE id = :id"
             ),
-            {"id": original.id},
+            {"id": original.id, "actor": owner.id},
         )
         await roster.execute(
             text(
@@ -2937,6 +2954,23 @@ async def test_roster_rechecks_director_when_go_live_commits_first(db_session, e
             if not roster_task.done():
                 roster_task.cancel()
             await asyncio.gather(roster_task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("departure", ["missing_actor", "missing_time"])
+async def test_departure_requires_both_time_and_actor(db_session, departure):
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    member_id = entries[0].members[0].id
+    statement = (
+        "UPDATE tournament_entry_members SET left_at = clock_timestamp() WHERE id = :id"
+        if departure == "missing_actor"
+        else "UPDATE tournament_entry_members SET left_by_account_id = :actor "
+        "WHERE id = :id"
+    )
+    with pytest.raises(IntegrityError, match="departure_attribution"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(statement), {"id": member_id, "actor": players[0].id}
+            )
 
 
 async def test_closed_membership_insert_requires_departure_director(db_session):

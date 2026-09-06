@@ -42,6 +42,9 @@ checks allowing a replacement to be completed within one transaction.
 Format edits lock that event before validating the roster, so a racing member edit
 produces the existing format conflict rather than a commit-time server error.
 
+Every closed membership interval records a departure Account alongside its end
+time; both fields must be absent for a current member and present for a departed
+member, including before go-live.
 After the tournament goes live, changes to existing entry membership must record
 the current director's Account as the joining/leaving actor. Initial entry/member
 construction in one transaction remains possible for seeds and model construction.
@@ -236,7 +239,7 @@ Go-live therefore finishes materialization before reconciliation or waits for it
 instead of crossing the merge's event locks with its own tournament lock.
 Direct Player identity updates also acquire affected tournaments in stable order
 before their event locks. Since the Player tuple is already locked, contested
-tournament locks produce retryable SQLSTATE `40001`; retry with the parent locks
+tournament or event locks produce retryable SQLSTATE `40001`; retry with the parent locks
 first. Discovery remains scoped to the source Player and its earlier aliases.
 
 ## Migration and verification

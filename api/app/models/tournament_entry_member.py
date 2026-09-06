@@ -18,6 +18,10 @@ class TournamentEntryMember(Base):
     __tablename__ = "tournament_entry_members"
     __table_args__ = (
         CheckConstraint(
+            "(left_at IS NULL) = (left_by_account_id IS NULL)",
+            name="ck_tournament_entry_members_departure_attribution",
+        ),
+        CheckConstraint(
             "left_at IS NULL OR left_at >= joined_at",
             name="ck_tournament_entry_members_interval",
         ),
