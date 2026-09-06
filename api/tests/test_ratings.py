@@ -159,9 +159,9 @@ async def test_doubles_match_rating_update_raises_not_implemented(
         status=MatchStatus.completed,
     )
     side1 = MatchSide(match=match, side_number=1, won=True, score=1)
-    side1.players.append(MatchSidePlayer(match=match, user=winner))
+    side1.players.append(MatchSidePlayer(match=match, user=winner.primary_player))
     side2 = MatchSide(match=match, side_number=2, won=False, score=0)
-    side2.players.append(MatchSidePlayer(match=match, user=loser))
+    side2.players.append(MatchSidePlayer(match=match, user=loser.primary_player))
     db_session.add(match)
     await db_session.commit()
 
@@ -226,9 +226,9 @@ async def _build_completed_singles_match(
         status=MatchStatus.completed,
     )
     side1 = MatchSide(match=match, side_number=1, won=True, score=1)
-    side1.players.append(MatchSidePlayer(match=match, user=winner))
+    side1.players.append(MatchSidePlayer(match=match, user=winner.primary_player))
     side2 = MatchSide(match=match, side_number=2, won=False, score=0)
-    side2.players.append(MatchSidePlayer(match=match, user=loser))
+    side2.players.append(MatchSidePlayer(match=match, user=loser.primary_player))
     db_session.add(match)
     await db_session.commit()
     return match

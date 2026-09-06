@@ -300,7 +300,13 @@ async def propose_result(
     # scratchpad is frozen, so ``match_games`` stays == the standing snapshot.
     await _commit_canonical_games(db, match, compacted)
 
+    from app.player_accounts import primary_player_id
+
+    player_id = await primary_player_id(db, user_id)
+    if player_id is not None and not is_participant(match, player_id):
+        player_id = None
     result = MatchResult(
+        submitted_for_player_id=player_id,
         submitted_by_user_id=user_id,
         games=_result_games_snapshot(compacted),
         supersedes_result_id=supersedes_result_id,
@@ -310,7 +316,9 @@ async def propose_result(
     # Only a rated two-human match, proposed by one of its own participants,
     # leaves the other side owing an acceptance (#1523: a director's proposal
     # never does, regardless of rated/solo — see ``_requires_confirmation``).
-    awaiting_acceptance = _requires_confirmation(match, user_id)
+    awaiting_acceptance = player_id is not None and _requires_confirmation(
+        match, player_id
+    )
     if not awaiting_acceptance:
         # Solo / unrated / director path: no second acceptance needed — the
         # proposer self-accepts and the match finalizes immediately (stamping
@@ -339,7 +347,7 @@ async def propose_result(
     #
     # No query: ``match.sides`` → ``players`` come loaded on
     # ``match_rating_eager_options()``.
-    stage_match_participant_hints(db, match)
+    await stage_match_participant_hints(db, match)
 
     try:
         await db.commit()

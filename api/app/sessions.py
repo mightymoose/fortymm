@@ -33,6 +33,7 @@ from app.leagues import add_user_to_default_league
 from app.models import (
     MatchSidePlayer,
     Permission,
+    Player,
     Role,
     RolePermission,
     User,
@@ -562,7 +563,7 @@ async def _sign_in_after_merge(
     # void-aware condition is available at this layer. The recompute is a
     # deterministic rewrite — enqueuing it on a true no-op merge is harmless.
     if merged is not None:
-        _enqueue_rating_recompute_after_merge(user.id)
+        _enqueue_rating_recompute_after_merge(user.player_id)
     _set_session_cookie(response, raw_session)
     return await _build_session_response(db, user, merged=merged)
 
@@ -807,7 +808,7 @@ async def _build_session_response(
     return SessionResponse(
         data=SessionData(
             user=SessionUser(
-                id=user.id,
+                id=user.player_id if user.primary_player is not None else user.id,
                 username=user.username,
                 permissions=permissions,
                 email=user.email,
@@ -853,7 +854,7 @@ async def _create_session(db: AsyncSession) -> tuple[User, str]:
     db.add(user)
     await db.flush()
 
-    await add_user_to_default_league(db, user.id)
+    await add_user_to_default_league(db, user.player_id)
     # Guest-mint is where "everyone" is decided: there is no signup, so this is
     # the moment a person joins the site. Raises (→ 500) if the role is missing;
     # see app/roles.py and ADR-0016.
@@ -988,6 +989,8 @@ async def _stamp_last_seen(db: AsyncSession, user: User) -> None:
     ):
         return
     user.last_seen_at = now
+    if user.primary_player is not None:
+        user.primary_player.last_seen_at = now
     await db.commit()
 
 
@@ -1098,15 +1101,20 @@ async def update_current_user(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> SessionResponse:
+    if current_user.primary_player is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="A primary player is required to change your username.",
+        )
     # Skip the uniqueness probe on a no-op submit so the user's own row
     # doesn't trip a 409 against itself.
     if payload.username != current_user.username:
         if await name_taken(
             db,
-            User.id,
-            User.username,
+            Player.id,
+            Player.username,
             payload.username,
-            exclude_id=current_user.id,
+            exclude_id=current_user.player_id,
         ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1693,7 +1701,7 @@ async def confirm_email(
     # reset both need a recompute at matches_moved == 0), and why this is the only
     # gate expressible without drifting the response schema.
     if merged is not None:
-        _enqueue_rating_recompute_after_merge(user.id)
+        _enqueue_rating_recompute_after_merge(user.player_id)
     _set_session_cookie(response, raw_session)
     return await _build_session_response(db, user, merged=merged)
 
@@ -1909,7 +1917,7 @@ async def _mint_pending_user(db: AsyncSession) -> User:
     user = User(username=await generate_username(db))
     db.add(user)
     await db.flush()
-    await add_user_to_default_league(db, user.id)
+    await add_user_to_default_league(db, user.player_id)
     await grant_default_role(db, user.id)
     return user
 
@@ -2142,9 +2150,10 @@ async def consume_login_token(
             merged = None
         elif recorded_guest_id is not None:
             guest = await db.get(User, recorded_guest_id)
+            guest_player = guest.primary_player if guest is not None else None
             merged = await _merge_guest_into(db, guest=guest, target=user)
-            if merged is not None and first_sign_in and guest is not None:
-                await _adopt_guest_username(db, guest=guest, target=user)
+            if merged is not None and first_sign_in and guest_player is not None:
+                await _adopt_guest_username(db, guest=guest_player, target=user)
         else:
             merged = await _maybe_merge_prior_session(db, session_cookie, user)
         return await _sign_in_after_merge(db, response, user, merged)
@@ -2157,7 +2166,9 @@ async def consume_login_token(
         raise _invalid_or_expired_exception() from None
 
 
-async def _adopt_guest_username(db: AsyncSession, *, guest: User, target: User) -> None:
+async def _adopt_guest_username(
+    db: AsyncSession, *, guest: Player, target: User
+) -> None:
     """Move the merged guest's username onto the brand-new account it was folded
     into, so a first-time signer keeps the name they have been playing under.
 

@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.match_queries import is_tournament_director
 from app.models import Match, User
 from app.notifications.taxonomy import NotificationCategory
+from app.player_accounts import managing_account_ids
 from app.schemas.notification import NotificationJob
 
 
@@ -41,7 +42,7 @@ async def director_score_notices(
     body += ". View your match for the current score."
     return [
         NotificationJob(
-            user_id=player.user_id,
+            user_id=account_id,
             category=NotificationCategory.RESULT_CONFIRM,
             title=f"Your game score was {action}",
             body=body,
@@ -50,5 +51,6 @@ async def director_score_notices(
         )
         for side in match.sides
         for player in side.players
-        if player.user_id != actor_id
+        for account_id in await managing_account_ids(db, [player.user_id])
+        if account_id != actor_id
     ]

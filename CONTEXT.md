@@ -344,15 +344,32 @@ _Avoid_: duplicate player, self match (a **solo match** is a different thing).
 
 ## Session and identity
 
+**Account**:
+The identity that signs in and acts. It holds login credentials and access rights;
+it can exist without a Player. Historical actions belong to the acting Account.
+
+**Player**:
+A durable sporting identity with a username, matches, tournament entries and
+ratings. A Player can exist without a login and can be managed by multiple Accounts.
+
+**Management grant**:
+Explicit authority for an Account to act for a Player in sporting workflows.
+It does not confer authority to change other Accounts or their access.
+
+**Primary Player**:
+The Player an Account acts for in today's interface. An Account has at most one;
+removing that choice does not automatically select another managed Player.
+
 **Guest**:
 An ephemeral, email-less account minted automatically on first contact so
 anyone can start playing without signing up. Identified only by the browser's
-session cookie; disposable, and folded into a claimed account when the holder
-later signs in (a merge).
+session cookie. Its Player is durable. On a same-person sign-in merge, the guest
+Account is tombstoned and its Player is transferred or combined into the
+destination primary Player.
 _Avoid_: anonymous user, ephemeral user (use "guest" in product language).
 
 **Claimed account**:
-A user who has attached a confirmed email, giving them a durable identity that
+An Account with a confirmed email, giving it a login identity that
 outlives any one browser session and can be signed back into on another device.
 The opposite pole from a guest.
 _Avoid_: registered user, real account.

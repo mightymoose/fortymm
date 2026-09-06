@@ -10,7 +10,7 @@ from app.db import Base
 if TYPE_CHECKING:
     from app.models.match import Match
     from app.models.match_side import MatchSide
-    from app.models.user import User
+    from app.models.player import Player
 
 
 class MatchSidePlayer(Base):
@@ -51,10 +51,10 @@ class MatchSidePlayer(Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="RESTRICT"),
+        ForeignKey("players.id", ondelete="RESTRICT"),
         nullable=False,
     )
 
     match_side: Mapped["MatchSide"] = relationship(back_populates="players")
     match: Mapped["Match"] = relationship(back_populates="side_players")
-    user: Mapped["User"] = relationship("User")
+    user: Mapped["Player"] = relationship("Player")

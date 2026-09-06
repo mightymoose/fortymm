@@ -27,6 +27,7 @@ from sqlalchemy import ColumnElement, Float, and_, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Tournament, TournamentEvent, User
+from app.player_accounts import primary_player_reference
 from app.schedule_solves import latest_solve
 from app.schemas.tournament import TournamentDetailRead
 from app.tournament_queries import (
@@ -249,7 +250,9 @@ async def list_tournament_details(
     # every tournament on the default league shares the one number, and because the
     # ladders a page happens to list is not a reason to ask the same question twice.
     ratings = await entrant_ratings_by_league(
-        db, list({tournament.league_id for tournament, _ in rows}), current_user_id
+        db,
+        list({tournament.league_id for tournament, _ in rows}),
+        primary_player_reference(current_user_id),
     )
     return [
         serialize_detail(
@@ -332,7 +335,9 @@ async def tournament_detail(
     entrants_by_event = await active_entrants_by_event(db, event_ids)
     event_fixtures = await fixtures_by_event(db, event_ids)
     game_counts = await game_counts_by_match(db, completed_match_ids(event_fixtures))
-    rating = await entrant_rating(db, tournament.league_id, current_user_id)
+    rating = await entrant_rating(
+        db, tournament.league_id, primary_player_reference(current_user_id)
+    )
     latest_schedule_solve = await latest_solve(db, tournament.id)
     catalogue = await draw_type_catalogue(db)
     return serialize_detail(

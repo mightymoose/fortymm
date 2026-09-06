@@ -187,7 +187,7 @@ async def _provision_user(db: AsyncSession, sub: str, email: str) -> User | None
     db.add(user)
     try:
         await db.flush()
-        await add_user_to_default_league(db, user.id)
+        await add_user_to_default_league(db, user.player_id)
         await grant_default_role(db, user.id)
         await db.commit()
     except IntegrityError:

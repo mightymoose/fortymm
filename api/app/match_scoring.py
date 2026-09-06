@@ -158,7 +158,10 @@ async def load_match_for_write(
     match = result.scalar_one_or_none()
     if match is None:
         raise MatchNotFoundError()
-    if is_participant(match, user_id):
+    from app.player_accounts import primary_player_id
+
+    player_id = await primary_player_id(db, user_id)
+    if player_id is not None and is_participant(match, player_id):
         return match
     if await is_tournament_director(db, match_id, user_id):
         return match
@@ -416,7 +419,7 @@ async def _enter_game_score_locked(
     # No query: ``match.sides`` → ``players`` come loaded on the read chain
     # ``load_match_for_write`` uses (``match_eager_options``), which is also how
     # its ``is_participant`` check runs synchronously.
-    stage_match_participant_hints(db, match)
+    await stage_match_participant_hints(db, match)
 
     try:
         await db.commit()
@@ -491,7 +494,7 @@ async def _update_game_score_locked(
     # Both participants' scoreboards changed — see ``_enter_game_score_locked``.
     # Staged only past the optimistic-concurrency guard: the branch above never
     # wrote a row, so it has nothing to hint about.
-    stage_match_participant_hints(db, match)
+    await stage_match_participant_hints(db, match)
 
     await db.commit()
 
@@ -524,7 +527,7 @@ async def _delete_game_score_locked(
     game.score = None
     # Clearing a score changes the board both participants are watching just as
     # much as writing one — see ``_enter_game_score_locked``.
-    stage_match_participant_hints(db, match)
+    await stage_match_participant_hints(db, match)
     await db.commit()
 
     return await _reload_match(db, match.id)

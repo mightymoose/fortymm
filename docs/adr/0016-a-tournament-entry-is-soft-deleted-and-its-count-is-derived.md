@@ -1,5 +1,10 @@
 # 16. A tournament entry is soft-deleted, and an event's entry count is derived
 
+Amended by [Accounts authorize durable Players](20260905-accounts-authorize-durable-players.md): sporting identity belongs
+to Player; authentication and preserved historical authorship belong to Account.
+The linked decision supersedes conflicting identity and merge-ownership clauses.
+
+
 Date: 2026-07-11
 
 ## Status

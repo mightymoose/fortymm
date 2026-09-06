@@ -76,13 +76,14 @@ async def _build_standing_match(
         status=MatchStatus.in_progress,
     )
     side1 = MatchSide(match=match, side_number=1)
-    side1.players.append(MatchSidePlayer(match=match, user=poster))
+    side1.players.append(MatchSidePlayer(match=match, user=poster.primary_player))
     side2 = MatchSide(match=match, side_number=2)
-    side2.players.append(MatchSidePlayer(match=match, user=opponent))
+    side2.players.append(MatchSidePlayer(match=match, user=opponent.primary_player))
     game = MatchGame(match=match, game_number=1)
     game.score = MatchGameScore(side_1_points=11, side_2_points=4)
     result = MatchResult(
         match=match,
+        submitted_for_player_id=poster.id,
         submitted_by_user_id=poster.id,
         games=[],
         submitted_at=datetime.now(UTC) - submitted_ago,
@@ -147,6 +148,7 @@ async def test_retire_with_superseded_result_id_is_a_noop(
     # Opponent counters: a new head supersedes ``base`` (both past the deadline).
     counter = MatchResult(
         match_id=match_id,
+        submitted_for_player_id=opponent.id,
         submitted_by_user_id=opponent.id,
         games=[],
         supersedes_result_id=base_id,
@@ -329,35 +331,18 @@ async def test_owing_side_without_players_is_a_noop(
 # ----- #1523 constraint 1: submitter on neither side (director bypass) -----
 
 
-async def test_owing_side_resolves_arbitrarily_when_submitter_is_a_bystander(
+async def test_owing_side_follows_player_when_actor_is_a_bystander(
     db_session: AsyncSession, default_league: League
 ) -> None:
-    """Pins the documented (not fixed) gap #1523 names at
-    ``app.retirement_jobs._owing_side``: line 140 of the ticket.
-
-    This standing result cannot arise through the real write path — a
-    director-submitted proposal never leaves a result standing at all
-    (``_requires_confirmation``'s submitter-is-a-participant conjunct,
-    ``app.result_proposal``), so this test constructs one directly (bypassing
-    ``propose_result`` entirely) to exercise ``_owing_side`` the one way it
-    could ever see a submitter on neither side: a future bug, or a race, that
-    lets such a row exist despite that invariant.
-
-    When that happens, ``_owing_side`` resolves side 1 "owing" regardless of
-    who actually played — not ``None`` — because a bystander submitter matches
-    neither side's player-exclusion check. This is a known, accepted gap (see
-    the function's docstring): there is no correct non-arbitrary side to
-    choose for a submitter who isn't a participant, so the fix belongs
-    upstream (which is exactly what the ``_requires_confirmation`` conjunct
-    does), not in this arbitrary-pick fallback."""
-    match, result, poster, _opponent = await _build_standing_match(
+    """Changing actor provenance does not change which sporting side owes acceptance."""
+    match, result, poster, opponent = await _build_standing_match(
         db_session, default_league, submitted_ago=timedelta(days=8)
     )
     # Capture ids before ``expire_all()`` below — an expired ``poster.id``
     # access mid-assertion would trigger a synchronous lazy load (the
     # sibling tests in this module follow the same pattern for ``match``/
     # ``result``).
-    match_id, result_id, poster_id = match.id, result.id, poster.id
+    match_id, result_id, opponent_id = match.id, result.id, opponent.id
     bystander = await _uniq_user(db_session, "bystander")
     # Re-point the standing result's submitter to someone on NEITHER side —
     # the state ``_requires_confirmation`` now prevents ``propose_result``
@@ -370,12 +355,10 @@ async def test_owing_side_resolves_arbitrarily_when_submitter_is_a_bystander(
         db_session, match_id, result_id, _notifications(db_session)
     )
 
-    # Retires — but against side 1 (the poster), arbitrarily, not because side
-    # 1 actually owed anything: the poster's own proposal was accepted on
-    # their own behalf.
+    # The represented Player still determines the owing side.
     assert outcome is RetirementOutcome.retired
     await db_session.refresh(result)
-    assert result.accepted_by_user_id == poster_id
+    assert result.accepted_by_user_id == opponent_id
 
 
 # ----- notifications: retired-on-lapse notice -----------------------------

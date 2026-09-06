@@ -706,7 +706,9 @@ async def test_live_call_onto_a_held_table_is_refused(
     assert row.pinned_at is None
 
 
+@pytest.mark.parametrize("transferred", [False, True])
 async def test_live_call_onto_a_held_player_is_refused(
+    transferred: bool,
     db_session: AsyncSession,
     default_league: League,
 ) -> None:
@@ -730,6 +732,20 @@ async def test_live_call_onto_a_held_player_is_refused(
     challenger = fixtures["clash-a vs clash-c"]
     challenger_id = challenger.id
     table2 = _table(tournament, 2)
+
+    if transferred:
+        from app.account_merge import merge_user
+        from app.models import Account
+
+        source = await db_session.scalar(
+            select(Account).where(Account.username == "clash-a")
+        )
+        destination = Account(email="placement-transfer@example.com")
+        db_session.add(destination)
+        await db_session.commit()
+        await merge_user(db_session, from_user_id=source.id, to_user_id=destination.id)
+        await db_session.commit()
+        assert destination.player_id != destination.id
 
     with pytest.raises(PlacementClashError) as exc_info:
         await place_fixture(

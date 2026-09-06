@@ -31,11 +31,11 @@ from app.models import (
     MatchSide,
     MatchSidePlayer,
     MatchStatus,
+    Player,
     Tournament,
     TournamentEvent,
     TournamentEventStage,
     TournamentFixture,
-    User,
 )
 from app.result_acceptance import _games_to_win, side_win_counts
 from app.sql import escape_like
@@ -149,7 +149,7 @@ def my_standing_proposal_exists(current_user_id: uuid.UUID) -> Any:
         .where(
             MatchResult.match_id == Match.id,
             MatchResult.accepted_by_user_id.is_(None),
-            MatchResult.submitted_by_user_id == current_user_id,
+            MatchResult.submitted_for_player_id == current_user_id,
             ~select(superseding.id)
             .where(superseding.supersedes_result_id == MatchResult.id)
             .exists(),
@@ -168,10 +168,10 @@ def _player_username_filter[SelectT: Select[Any]](query: SelectT, q: str) -> Sel
     pattern = f"%{escape_like(q.strip())}%"
     has_matching_player = (
         select(MatchSidePlayer.id)
-        .join(User, User.id == MatchSidePlayer.user_id)
+        .join(Player, Player.id == MatchSidePlayer.user_id)
         .where(
             MatchSidePlayer.match_id == Match.id,
-            User.username.ilike(pattern, escape="\\"),
+            Player.username.ilike(pattern, escape="\\"),
         )
         .exists()
     )
@@ -239,7 +239,7 @@ async def is_tournament_director(
             TournamentEventStage.id == TournamentFixture.stage_id,
             TournamentEvent.id == TournamentEventStage.event_id,
             Tournament.id == TournamentEvent.tournament_id,
-            Tournament.created_by_user_id == user_id,
+            Tournament.owner_account_id == user_id,
         )
     )
     return bool((await db.execute(stmt)).scalar())

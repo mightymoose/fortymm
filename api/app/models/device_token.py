@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
-from app.models.user import User
+from app.models.account import Account
 
 
 class DeviceToken(Base):
@@ -42,7 +42,7 @@ class DeviceToken(Base):
     environment: Mapped[str] = mapped_column(String(16), nullable=False)
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("accounts.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -56,4 +56,4 @@ class DeviceToken(Base):
         nullable=False,
     )
 
-    user: Mapped[User] = relationship(User)
+    user: Mapped[Account] = relationship(Account)

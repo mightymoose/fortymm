@@ -11,12 +11,12 @@ from app.db import Base
 from app.models.match_settings import MatchSettings
 
 if TYPE_CHECKING:
+    from app.models.account import Account
     from app.models.league import League
     from app.models.match_game import MatchGame
     from app.models.match_result import MatchResult
     from app.models.match_side import MatchSide
     from app.models.match_side_player import MatchSidePlayer
-    from app.models.user import User
 
 
 class MatchStatus(enum.Enum):
@@ -76,7 +76,7 @@ class Match(Base):
     )
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="RESTRICT"),
+        ForeignKey("accounts.id", ondelete="RESTRICT"),
         nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -108,7 +108,7 @@ class Match(Base):
 
     match_settings: Mapped[MatchSettings] = relationship(back_populates="matches")
     league: Mapped["League"] = relationship(back_populates="matches")
-    created_by: Mapped["User"] = relationship("User")
+    created_by: Mapped["Account"] = relationship("Account")
     sides: Mapped[list["MatchSide"]] = relationship(
         back_populates="match",
         cascade="all, delete-orphan",

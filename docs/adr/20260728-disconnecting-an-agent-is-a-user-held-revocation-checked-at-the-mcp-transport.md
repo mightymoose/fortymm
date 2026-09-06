@@ -1,5 +1,10 @@
 # Disconnecting an agent is a user-held revocation checked at the MCP transport
 
+Amended by [Accounts authorize durable Players](20260905-accounts-authorize-durable-players.md): sporting identity belongs
+to Player; authentication and preserved historical authorship belong to Account.
+The linked decision supersedes conflicting identity and merge-ownership clauses.
+
+
 Date: 2026-07-28 (date-numbered — sequential numbers collide across concurrent
 worktrees; see the note in
 `20260718-the-match-flow-is-shared-services-behind-http-and-mcp-adapters.md`)

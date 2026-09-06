@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
-from app.models.user import User
+from app.models.account import Account
 
 
 class Notification(Base):
@@ -55,7 +55,7 @@ class Notification(Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("accounts.id", ondelete="CASCADE"),
         nullable=False,
     )
     category: Mapped[str] = mapped_column(
@@ -83,7 +83,7 @@ class Notification(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    user: Mapped[User] = relationship(User)
+    user: Mapped[Account] = relationship(Account)
 
 
 class NotificationChannelSetting(Base):
@@ -113,7 +113,7 @@ class NotificationChannelSetting(Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("accounts.id", ondelete="CASCADE"),
         nullable=False,
     )
     channel: Mapped[str] = mapped_column(
@@ -132,7 +132,7 @@ class NotificationChannelSetting(Base):
         nullable=False,
     )
 
-    user: Mapped[User] = relationship(User)
+    user: Mapped[Account] = relationship(Account)
 
 
 class NotificationPreference(Base):
@@ -162,7 +162,7 @@ class NotificationPreference(Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("accounts.id", ondelete="CASCADE"),
         nullable=False,
     )
     category: Mapped[str] = mapped_column(
@@ -186,4 +186,4 @@ class NotificationPreference(Base):
         nullable=False,
     )
 
-    user: Mapped[User] = relationship(User)
+    user: Mapped[Account] = relationship(Account)

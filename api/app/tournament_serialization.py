@@ -36,6 +36,7 @@ from app.models import (
     TournamentEvent,
 )
 from app.models.draw_type import StageDrawType
+from app.player_accounts import primary_player_reference
 from app.results import (
     BracketFinishes,
     BracketFixture,
@@ -146,7 +147,7 @@ def _tournament_fields(
         "league_id": t.league_id,
         "created_by_user_id": t.created_by_user_id,
         "created_by_username": created_by_username,
-        "can_edit": t.created_by_user_id == current_user_id,
+        "can_edit": t.owner_account_id == current_user_id,
         "created_at": t.created_at,
         "updated_at": t.updated_at,
     }
@@ -982,7 +983,7 @@ async def shape_created_event_read(
     (``lazy="selectin"``) collection before this is ever called, so
     ``serialize_event`` reads real rows off ``event.stages`` with no query of its own
     here."""
-    rating = await entrant_rating(db, league_id, viewer_id)
+    rating = await entrant_rating(db, league_id, primary_player_reference(viewer_id))
     return serialize_event(
         event, entrants=[], fixtures=[], rating=rating, game_counts={}
     )
@@ -1011,7 +1012,7 @@ async def shape_event_read(
     event_fixtures = await fixtures_by_event(db, [event.id])
     fixtures = event_fixtures[event.id]
     game_counts = await game_counts_by_match(db, completed_match_ids(event_fixtures))
-    rating = await entrant_rating(db, league_id, viewer_id)
+    rating = await entrant_rating(db, league_id, primary_player_reference(viewer_id))
     # Its stages ride along for free, same as ``shape_created_event_read`` above:
     # ``update_event``'s own ``db.refresh(event)`` repopulates the ``lazy="selectin"``
     # collection, so ``serialize_event`` reads real rows off ``event.stages`` — and

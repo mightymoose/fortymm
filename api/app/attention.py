@@ -71,7 +71,7 @@ def list_attention_kind(
                     for side in match.sides
                     if any(p.user_id == current_user_id for p in side.players)
                 )
-                # NOTE (#1523): if ``head.submitted_by_user_id`` were a
+                # NOTE (#1523): if ``head.submitted_for_player_id`` were a
                 # tournament director (not on either side), this would be
                 # False for BOTH participants — both would see "review"
                 # simultaneously instead of one "waiting"/one "review", since
@@ -85,7 +85,7 @@ def list_attention_kind(
                 # match.status`` above routes to ``None`` before reaching
                 # here) by the time anything reads this branch.
                 submitted_on_my_side = any(
-                    p.user_id == head.submitted_by_user_id for p in my_side.players
+                    p.user_id == head.submitted_for_player_id for p in my_side.players
                 )
                 return "waiting_opponent" if submitted_on_my_side else "review"
             return "score"

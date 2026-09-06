@@ -1,4 +1,9 @@
 ---
+
+Amended by [Accounts authorize durable Players](20260905-accounts-authorize-durable-players.md): sporting identity belongs
+to Player; authentication and preserved historical authorship belong to Account.
+The linked decision supersedes conflicting identity and merge-ownership clauses.
+
 status: accepted
 ---
 

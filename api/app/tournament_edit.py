@@ -91,7 +91,7 @@ async def _load_owned_tournament_for_update(
     fifth opinion about what "the owner's locked tournament" means.
     """
     tournament = await _load_tournament_for_update(db, tournament_id)
-    if tournament.created_by_user_id != actor.id:
+    if tournament.owner_account_id != actor.id:
         raise NotTournamentOwnerError()
     return tournament
 
@@ -263,7 +263,7 @@ async def edit_tournament(
         version = await db.scalar(
             select(Tournament.details_version).where(
                 Tournament.id == tournament_id,
-                Tournament.created_by_user_id == actor.id,
+                Tournament.owner_account_id == actor.id,
             )
         )
         if version is not None and updates.details_version != version:

@@ -146,6 +146,7 @@ async def start_session(api_client: AsyncClient, db_session: AsyncSession) -> Us
     ).scalar_one()
     if user.last_seen_at is None:
         user.last_seen_at = datetime.now(UTC)
+        user.primary_player.last_seen_at = user.last_seen_at
         await db_session.commit()
     return user
 

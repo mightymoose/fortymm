@@ -178,6 +178,7 @@ async def test_a_counter_that_loses_the_negotiation_race_publishes_nothing(
             rival.add(
                 MatchResult(
                     match_id=match_id,
+                    submitted_for_player_id=cast.creator_id,
                     submitted_by_user_id=cast.creator_id,
                     games=[{"game_number": 1, "side_1_points": 11, "side_2_points": 7}],
                     supersedes_result_id=standing.id,

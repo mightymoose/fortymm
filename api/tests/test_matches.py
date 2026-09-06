@@ -297,7 +297,8 @@ async def test_merged_away_opponent_is_rejected(
     await start_session(api_client, db_session)
     ghost = await make_user(db_session, "ghost")
     survivor = await make_user(db_session, "survivor")
-    ghost.merged_into_user_id = survivor.id
+    ghost.primary_player.merged_into_player_id = survivor.player_id
+    ghost.primary_player.merged_at = datetime.now(UTC)
     await db_session.commit()
 
     response = await api_client.post(
@@ -5354,7 +5355,9 @@ async def test_director_game_writes_notify_both_players_only_after_success(
             assert notice.link == f"/matches/{created['id']}"
 
 
+@pytest.mark.parametrize("playerless", [False, True])
 async def test_director_result_notifies_both_players_not_the_director(
+    playerless: bool,
     api_client: AsyncClient,
     db_session: AsyncSession,
     fake_notifications_queue: Queue,
@@ -5379,6 +5382,10 @@ async def test_director_result_notifies_both_players_not_the_director(
             p2=p2,
             best_of=1,
         )
+
+        if playerless:
+            director.player_grants.clear()
+            await db_session.commit()
 
         response = await director_client.post(
             f"/v1/matches/{created['id']}/results",
@@ -5539,9 +5546,9 @@ async def _completed_rated_match(
         completed_at=datetime(2026, 5, 1, tzinfo=UTC),
     )
     side1 = MatchSide(match=match, side_number=1, won=True, score=1)
-    side1.players.append(MatchSidePlayer(match=match, user=winner))
+    side1.players.append(MatchSidePlayer(match=match, user=winner.primary_player))
     side2 = MatchSide(match=match, side_number=2, won=False, score=0)
-    side2.players.append(MatchSidePlayer(match=match, user=loser))
+    side2.players.append(MatchSidePlayer(match=match, user=loser.primary_player))
     game = MatchGame(match=match, game_number=1)
     game.score = MatchGameScore(side_1_points=11, side_2_points=4)
     db.add(match)

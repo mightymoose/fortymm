@@ -10,8 +10,8 @@ from app.db import Base
 
 if TYPE_CHECKING:
     from app.models.league import League
+    from app.models.player import Player
     from app.models.rating_strategy import RatingStrategy
-    from app.models.user import User
 
 
 class UserLeagueRating(Base):
@@ -42,7 +42,7 @@ class UserLeagueRating(Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("players.id", ondelete="RESTRICT"),
         nullable=False,
     )
     rating_strategy_id: Mapped[uuid.UUID] = mapped_column(
@@ -63,7 +63,7 @@ class UserLeagueRating(Base):
     )
 
     league: Mapped["League"] = relationship()
-    user: Mapped["User"] = relationship()
+    user: Mapped["Player"] = relationship()
     rating_strategy: Mapped["RatingStrategy"] = relationship()
 
     @classmethod

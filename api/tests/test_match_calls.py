@@ -214,7 +214,8 @@ def test_a_call_names_a_group_only_for_a_group_stage(
     group_id = uuid.uuid4()
     ingredients = CopyIngredients(
         entry_user={},
-        users={},
+        players={},
+        accounts_by_player={},
         events={event.id: event},
         table_labels={},
         group_labels={event.id: {group_id: "Group A"}},
@@ -782,8 +783,10 @@ class TestResourceFreedomGate:
         assert await _call_notifications(db_session) == []
         assert fake_notifications_queue.jobs == []
 
+    @pytest.mark.parametrize("transferred", [False, True])
     async def test_a_due_fixture_whose_player_is_live_in_another_event_is_not_called(
         self,
+        transferred: bool,
         db_session: AsyncSession,
         fake_notifications_queue: Queue,
         monkeypatch: pytest.MonkeyPatch,
@@ -811,6 +814,20 @@ class TestResourceFreedomGate:
             held_user=shared_user,
             table_id=await _table(db_session, event_id, "t2"),
         )
+        if transferred:
+            from app.account_merge import merge_user
+            from app.models import Account
+
+            destination = Account(email="call-transfer@example.com")
+            db_session.add(destination)
+            await db_session.commit()
+            await merge_user(
+                db_session, from_user_id=shared_user, to_user_id=destination.id
+            )
+            await db_session.commit()
+            assert destination.player_id == shared_user
+            assert destination.id != shared_user
+
         _freeze_clocks(monkeypatch, BASE)
 
         run_pin_tick(str(tournament_id))
@@ -2087,6 +2104,7 @@ class TestClearRevertsMatchToPending:
         db_session.add(
             MatchResult(
                 match_id=match_id,
+                submitted_for_player_id=tournament.created_by_user_id,
                 submitted_by_user_id=tournament.created_by_user_id,
                 games=[{"game_number": 1, "side_1_points": 11, "side_2_points": 7}],
             )
@@ -2214,3 +2232,37 @@ class TestTickEnqueueSelection:
         assert enqueued == [live_id]
         assert [job.func_name for job in solver_queue.jobs] == [RUN_PIN_TICK_JOB]
         assert solver_queue.jobs[0].args == (str(live_id),)
+
+
+@pytest.mark.parametrize("recipient_case", ["unclaimed", "secondary_manager"])
+async def test_match_calls_reach_every_available_manager(
+    db_session, fake_notifications_queue, monkeypatch, recipient_case
+):
+    from app.models import Account, AccountPlayer
+
+    tournament_id, event_id = await _make_tournament(db_session)
+    await _place_fixture(
+        db_session, event_id, table_id="t1", start=BASE + timedelta(minutes=5)
+    )
+    entrants = await _entrant_user_ids(db_session, event_id)
+    first_id = sorted(entrants)[0]
+    first = await db_session.get(Account, first_id)
+    expected = set(entrants)
+    if recipient_case == "unclaimed":
+        first.player_grants.clear()
+        expected.remove(first.id)
+    else:
+        manager = Account(player_grants=[AccountPlayer(player=first.primary_player)])
+        db_session.add(manager)
+        await db_session.flush()
+        expected.add(manager.id)
+    await db_session.commit()
+    _freeze_clocks(monkeypatch, BASE)
+    run_pin_tick(str(tournament_id))
+    db_session.expire_all()
+    fixture = await _the_fixture(db_session, event_id)
+    assert fixture.pinned_at == BASE
+    assert fixture.call_notified_count == 1
+    rows = await _call_notifications(db_session)
+    assert {row.user_id for row in rows} == expected
+    assert len(rows) == len(expected)

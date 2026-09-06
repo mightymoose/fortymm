@@ -10,7 +10,7 @@ from app.db import Base
 
 if TYPE_CHECKING:
     from app.models.league import League
-    from app.models.user import User
+    from app.models.player import Player
 
 
 class LeagueMembership(Base):
@@ -36,7 +36,7 @@ class LeagueMembership(Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("players.id", ondelete="RESTRICT"),
         nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
@@ -50,4 +50,4 @@ class LeagueMembership(Base):
     )
 
     league: Mapped["League"] = relationship(back_populates="memberships")
-    user: Mapped["User"] = relationship("User")
+    user: Mapped["Player"] = relationship("Player")

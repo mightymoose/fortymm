@@ -34,6 +34,7 @@ def _match(
 def _standing_result(*, submitted_at: datetime = SUBMITTED_AT) -> MatchResult:
     return MatchResult(
         id=uuid.uuid4(),
+        submitted_for_player_id=uuid.uuid4(),
         submitted_by_user_id=uuid.uuid4(),
         games=[],
         submitted_at=submitted_at,
@@ -43,6 +44,7 @@ def _standing_result(*, submitted_at: datetime = SUBMITTED_AT) -> MatchResult:
 def _accepted_result() -> MatchResult:
     return MatchResult(
         id=uuid.uuid4(),
+        submitted_for_player_id=uuid.uuid4(),
         submitted_by_user_id=uuid.uuid4(),
         games=[],
         submitted_at=SUBMITTED_AT,
@@ -84,6 +86,7 @@ def test_correction_moves_deadline_to_new_standing_submitted_at() -> None:
     correction_submitted = SUBMITTED_AT + timedelta(days=2)
     correction = MatchResult(
         id=uuid.uuid4(),
+        submitted_for_player_id=uuid.uuid4(),
         submitted_by_user_id=uuid.uuid4(),
         games=[],
         submitted_at=correction_submitted,

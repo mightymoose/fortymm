@@ -88,6 +88,7 @@ from app.models import (
 )
 from app.notifications.dependencies import get_notification_service
 from app.notifications.service import NotificationService
+from app.player_accounts import PlayerAccessDenied, primary_player_id
 from app.rate_limiting import RedisRateLimiter
 from app.result_acceptance import (
     accept_result,
@@ -200,6 +201,10 @@ async def create_match(
             best_of=payload.best_of,
             rated=payload.rated,
         )
+    except PlayerAccessDenied as err:
+        raise HTTPException(
+            status_code=409, detail="This account has no active primary player."
+        ) from err
     except SelfMatchError as err:
         raise HTTPException(
             status_code=422,
@@ -217,7 +222,7 @@ async def create_match(
     # `TournamentFixture` links to a match only through the draw-materialization
     # path (`tournament_materialization.py`), never through this handler — so a
     # match this call just created cannot yet be referenced by any fixture.
-    return serialize_details(created, current_user.id, tournament=None)
+    return serialize_details(created, current_user.player_id, tournament=None)
 
 
 def _apply_list_filter[SelectT: Select[Any]](
@@ -281,6 +286,8 @@ async def export_matches_csv(
 ) -> Response:
     """CSV export of the whole filtered match set (every match, not paginated),
     served as an attachment so the browser downloads it directly."""
+    player = current_user.primary_player
+    player_id = player.id if player is not None else None
     matches = (
         (
             await db.execute(
@@ -292,7 +299,7 @@ async def export_matches_csv(
         .scalars()
         .all()
     )
-    csv_text = _matches_to_csv([_list_row(match, current_user.id) for match in matches])
+    csv_text = _matches_to_csv([_list_row(match, player_id) for match in matches])
     filename = f"fortymm-matches-{datetime.now(UTC).strftime('%Y-%m-%d')}.csv"
     return Response(
         content=csv_text,
@@ -318,6 +325,8 @@ async def list_matches(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> MatchListResponse:
+    player = current_user.primary_player
+    player_id = player.id if player is not None else None
     # status_counts honors `q` but ignores the status/attention filter, so it's
     # built from its own aggregate and powers the All/Live/Awaiting/Up-next/Final
     # badges (and the browsing `total`) for either filter mode. The
@@ -343,7 +352,10 @@ async def list_matches(
 
     # The list is open to every signed-in user. Writes still gate on
     # `is_participant` downstream.
-    if attention:
+    if attention and player_id is None:
+        total = attention_count = 0
+        items = []
+    elif attention and player_id is not None:
         # The Attention set is bounded by the caller's *actionable* open matches
         # (issue #729) — a handful even for an active player — so we load them
         # all, rank by attention priority in Python (no SQL ordering captures the
@@ -352,7 +364,7 @@ async def list_matches(
         actionable_matches = (
             (
                 await db.execute(
-                    _attention_matches_query(q, current_user.id).options(
+                    _attention_matches_query(q, player_id).options(
                         *match_eager_options()
                     )
                 )
@@ -361,13 +373,13 @@ async def list_matches(
             .all()
         )
         ranked = sorted(
-            actionable_matches, key=lambda m: _attention_sort_key(m, current_user.id)
+            actionable_matches,
+            key=lambda m: _attention_sort_key(m, player_id),
         )
         total = attention_count = len(ranked)
         start = (page - 1) * page_size
         items = [
-            _list_row(match, current_user.id)
-            for match in ranked[start : start + page_size]
+            _list_row(match, player_id) for match in ranked[start : start + page_size]
         ]
     else:
         matches = (
@@ -383,7 +395,7 @@ async def list_matches(
             .scalars()
             .all()
         )
-        items = [_list_row(match, current_user.id) for match in matches]
+        items = [_list_row(match, player_id) for match in matches]
         if status_ is None:
             total = sum(status_counts.values()) + awaiting_count
         elif status_ is MatchListFilter.awaiting_acceptance:
@@ -392,7 +404,9 @@ async def list_matches(
             total = status_counts[MatchStatus(status_.value)]
         # The Attention badge must read its own count even while another tab is
         # active, so it's a dedicated participant-scoped aggregate (honoring `q`).
-        attention_count = await _attention_count(db, q, current_user.id)
+        attention_count = (
+            await _attention_count(db, q, player_id) if player_id is not None else 0
+        )
 
     return MatchListResponse(
         items=items,
@@ -420,11 +434,13 @@ async def _attention_count(
     return int((await db.execute(query)).scalar_one())
 
 
-def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
+def _list_row(match: Match, current_user_id: uuid.UUID | None) -> MatchListRow:
     side_wins = side_win_counts(match)
     sides_sorted = sorted(match.sides, key=lambda s: s.side_number)
     next_number = current_game_number(match)
-    viewer_is_participant = is_participant(match, current_user_id)
+    viewer_is_participant = current_user_id is not None and is_participant(
+        match, current_user_id
+    )
     # Editability follows the no-result scratchpad rule (``is_scorable``),
     # not whether a next game exists — so a decided-but-unposted row still reads
     # as scorable. ``current_game_number`` stays the next-playable-game
@@ -443,7 +459,11 @@ def _list_row(match: Match, current_user_id: uuid.UUID) -> MatchListRow:
         current_game_number=next_number if viewer_is_participant else None,
         can_score=can_score,
         negotiation=negotiation(match, current_user_id),
-        attention=list_attention_kind(match, current_user_id),
+        attention=(
+            list_attention_kind(match, current_user_id)
+            if current_user_id is not None
+            else None
+        ),
     )
 
 
@@ -554,29 +574,34 @@ async def get_match(
     # Gate the history/rivalry/rating payload on participation. Anonymous and
     # spectator callers never see another player's form or rating trajectory —
     # they get the scorecard with empty extras (see #515).
-    viewer_is_participant = current_user is not None and is_participant(
-        match, current_user.id
+    viewer_is_participant = (
+        current_user is not None
+        and current_user.primary_player is not None
+        and is_participant(match, current_user.player_id)
     )
     extras = (
         await view_extras(match_service, match)
         if viewer_is_participant
         else empty_extras()
     )
-    viewer_id = current_user.id if current_user else None
+    viewer_id = (
+        current_user.player_id if current_user and current_user.primary_player else None
+    )
+    actor_id = current_user.id if current_user else None
     # The director read flags are a second, independent widening from the write
     # gate (#1523 constraint 10) — a signed-in, non-participant viewer may still
     # be the tournament's director. ``resolve_viewer_is_director`` owns the
     # decision and its short-circuits (anonymous, participant, or a match where
     # the flag changes nothing), shared with every other handler that returns a
     # whole ``MatchDetails`` so no two responses about this match can disagree.
-    viewer_is_director = await resolve_viewer_is_director(db, match, viewer_id)
+    viewer_is_director = await resolve_viewer_is_director(db, match, actor_id)
     return serialize_details(
         match,
         viewer_id,
         extras,
         domain_match,
         viewer_is_director=viewer_is_director,
-        tournament=await tournament_context(db, match, viewer_id),
+        tournament=await tournament_context(db, match, actor_id),
     )
 
 
@@ -639,11 +664,16 @@ async def _serialize_written_match(
     The mirror of ``mcp_server._serialize_written_match``. Both exist because
     each surface holds its own service/session handles; the decision they share
     lives in ``resolve_viewer_is_director``, not in either copy."""
-    extras = await view_extras_if_participant(match_service, match, current_user_id)
+    player_id = await primary_player_id(db, current_user_id)
+    extras = (
+        await view_extras_if_participant(match_service, match, player_id)
+        if player_id is not None
+        else empty_extras()
+    )
     viewer_is_director = await resolve_viewer_is_director(db, match, current_user_id)
     return serialize_details(
         match,
-        current_user_id,
+        player_id,
         extras,
         viewer_is_director=viewer_is_director,
         tournament=await tournament_context(db, match, current_user_id),
@@ -792,7 +822,9 @@ async def delete_game_score(
     return await _serialize_written_match(db, match_service, reloaded, current_user.id)
 
 
-def _negotiation_conflict(match: Match, current_user_id: uuid.UUID) -> HTTPException:
+def _negotiation_conflict(
+    match: Match, current_user_id: uuid.UUID | None
+) -> HTTPException:
     """A 409 whose body carries the viewer-relative negotiation state, so a
     client that lost a propose/accept race can re-render from the conflict
     response without an extra round-trip. The standing proposal has moved on
@@ -880,7 +912,10 @@ async def post_match_result(
         # The propose lost the negotiation race (a result already exists, the
         # counter targeted a stale standing id, or the unique constraint tripped).
         # The 409 carries the viewer-relative moved-on state from the loaded match.
-        raise _negotiation_conflict(exc.match, current_user.id) from exc
+        raise _negotiation_conflict(
+            exc.match,
+            current_user.primary_player.id if current_user.primary_player else None,
+        ) from exc
     except MatchNotFoundError as exc:
         # The concurrent-counter reload found the match gone — today's 404.
         raise HTTPException(status_code=404, detail="Match not found.") from exc
@@ -898,7 +933,7 @@ async def post_match_result(
     # clean even when the failure was the in-app persist commit.
     if outcome.awaiting_acceptance:
         try:
-            await notify_result_posted(notifications, reloaded, current_user.id)
+            await notify_result_posted(notifications, reloaded, current_user.player_id)
         except Exception:
             await db.rollback()
             log.exception(
@@ -977,7 +1012,10 @@ async def accept_match_result(
         # The targeted result is no longer the live standing proposal (superseded,
         # already accepted, or none standing). The 409 carries the viewer-relative
         # moved-on state from the loaded match.
-        raise _negotiation_conflict(exc.match, current_user.id) from exc
+        raise _negotiation_conflict(
+            exc.match,
+            current_user.primary_player.id if current_user.primary_player else None,
+        ) from exc
     except PostedGamesNotDecisiveError as exc:
         raise HTTPException(
             status_code=409, detail="The posted games no longer decide this match."
@@ -999,7 +1037,7 @@ async def accept_match_result(
     # attributes outside the greenlet (``MissingGreenlet`` → the very 500 this
     # guard exists to prevent).
     poster_id = next(
-        (r.submitted_by_user_id for r in reloaded.results if r.id == result_id),
+        (r.submitted_for_player_id for r in reloaded.results if r.id == result_id),
         None,
     )
     if poster_id is not None:

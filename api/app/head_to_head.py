@@ -38,7 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.listed import is_listed_player
-from app.models import Match, MatchSide, MatchSidePlayer, MatchStatus, User
+from app.models import Match, MatchSide, MatchSidePlayer, MatchStatus, Player
 from app.schemas.player import (
     HeadToHeadOpponent,
     HeadToHeadRecord,
@@ -119,7 +119,7 @@ def _meetings_of(subject_id: uuid.UUID) -> Select[Any]:
 
 
 async def _versus(
-    db: AsyncSession, viewer_id: uuid.UUID, player: User
+    db: AsyncSession, viewer_id: uuid.UUID, player: Player
 ) -> ViewerHeadToHead:
     """The CALLER's record against ``player`` — "you are 1-4 against them".
 
@@ -167,13 +167,13 @@ async def _frequent_opponents(
     rows = (
         await db.execute(
             select(
-                User.id,
-                User.username,
+                Player.id,
+                Player.username,
                 func.count().filter(meetings.c.subject_won.is_(True)),
                 func.count().filter(meetings.c.subject_won.is_(False)),
             )
             .select_from(meetings)
-            .join(User, User.id == meetings.c.opponent_id)
+            .join(Player, Player.id == meetings.c.opponent_id)
             # Tombstoned (merged-away) users hold no side rows once the merge
             # has re-pointed them, so this excludes nothing in practice — it is
             # here so a ghost can never surface as somebody's rival. The
@@ -182,14 +182,14 @@ async def _frequent_opponents(
             # both filters ride along so no listing carries a different rule
             # (#1438, see ``app.listed.is_listed_player``).
             .where(
-                User.merged_into_user_id.is_(None),
+                Player.merged_into_player_id.is_(None),
                 is_listed_player(),
             )
-            .group_by(User.id, User.username)
+            .group_by(Player.id, Player.username)
             .order_by(
                 total.desc(),
                 func.max(meetings.c.completed_at).desc(),
-                User.username,
+                Player.username,
             )
             .limit(limit)
         )
@@ -205,22 +205,24 @@ async def _frequent_opponents(
 
 
 async def player_head_to_head(
-    db: AsyncSession, player: User, viewer_id: uuid.UUID
+    db: AsyncSession, player: Player, viewer_id: uuid.UUID | None
 ) -> PlayerHeadToHead:
     """The profile's head-to-head block, VIEWER-AWARE (ADR-0915).
 
     Two round trips on someone else's profile, one on your own — never one per
     opponent.
 
-    ``versus_viewer`` is ``None`` in exactly one case: the caller IS the player.
-    There is no "you versus yourself", and the card falls back to being just
-    their frequent opponents. Every other caller gets a record — an empty one if
+    ``versus_viewer`` is ``None`` when the caller has no Player or IS the player.
+    The card then shows just their frequent opponents. Every other caller gets
+    a record — an empty one if
     they have never met, which is not the same thing and must not collapse into
     it.
     """
     return PlayerHeadToHead(
         versus_viewer=(
-            None if viewer_id == player.id else await _versus(db, viewer_id, player)
+            None
+            if viewer_id is None or viewer_id == player.id
+            else await _versus(db, viewer_id, player)
         ),
         frequent_opponents=await _frequent_opponents(db, player.id),
     )

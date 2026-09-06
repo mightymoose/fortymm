@@ -172,6 +172,7 @@ async def test_director_first_proposal_on_rated_match_self_finalizes(
     assert sides[0].won is True
     assert sides[1].won is False
     posted = outcome.match.results[0]
+    assert posted.submitted_for_player_id is None
     assert posted.submitted_by_user_id == director.id
     assert posted.accepted_by_user_id == director.id
 

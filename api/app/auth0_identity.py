@@ -27,7 +27,7 @@ async def resolve_linked_user(db: AsyncSession, sub: str) -> User | None:
     NULL`` — so a subject linked to a folded-in guest simply doesn't resolve,
     the same way the auth-layer session queries keep ghosts from surfacing.
 
-    The one-to-one link invariant (``users.auth0_sub`` is unique) means at most
+    The namespaced LoginIdentity uniqueness constraint means at most
     one row can match, so this returns exactly the one live user that linked
     ``sub`` and nobody otherwise.
     """

@@ -418,7 +418,7 @@ async def finalize_match(db: AsyncSession, match: Match, decided_side: int) -> N
     _set_side_won(match, decided_side)
     await _apply_rating_update(db, match)
     await on_match_completed(db, match)
-    stage_match_participant_hints(db, match)
+    await stage_match_participant_hints(db, match)
 
 
 async def _reload_accepted_match(db: AsyncSession, match_id: uuid.UUID) -> Match:
@@ -515,13 +515,20 @@ async def accept_result(
     # mints a standing ``MatchResult`` without going through ``propose_result``
     # would silently reopen the hole. So check the submitter's identity too:
     # nobody accepts their own proposal, side or no side.
+    from app.player_accounts import primary_player_id
+
+    player_id = await primary_player_id(db, user_id)
     standing = standing_result(match)
     if standing is not None and standing.id == result_id:
         if standing.submitted_by_user_id == user_id:
             raise CannotAcceptOwnProposalError
-        submitter_side = my_side(match, standing.submitted_by_user_id)
+        submitter_side = (
+            my_side(match, standing.submitted_for_player_id)
+            if standing.submitted_for_player_id
+            else None
+        )
         if submitter_side is not None and any(
-            p.user_id == user_id for p in submitter_side.players
+            p.user_id == player_id for p in submitter_side.players
         ):
             raise CannotAcceptOwnProposalError
 

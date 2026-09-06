@@ -67,7 +67,8 @@ async def test_excludes_tombstoned_users(db_session: AsyncSession):
     caller = await make_user(db_session, "caller")
     survivor = await make_user(db_session, "match.survivor")
     ghost = await make_user(db_session, "match.ghost")
-    ghost.merged_into_user_id = survivor.id
+    ghost.primary_player.merged_into_player_id = survivor.player_id
+    ghost.primary_player.merged_at = datetime.now(UTC)
     await db_session.commit()
 
     results = await search_players_by_username(

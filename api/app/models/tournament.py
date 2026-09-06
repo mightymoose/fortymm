@@ -151,9 +151,20 @@ class Tournament(Base):
         ForeignKey("leagues.id", ondelete="RESTRICT"),
         nullable=False,
     )
+    owner_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+
+    def __init__(self, **kwargs: Any) -> None:
+        kwargs.setdefault("owner_account_id", kwargs.get("created_by_user_id"))
+        super().__init__(**kwargs)
+
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="RESTRICT"),
+        ForeignKey("accounts.id", ondelete="RESTRICT"),
         nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(

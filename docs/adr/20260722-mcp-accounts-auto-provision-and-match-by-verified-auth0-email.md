@@ -1,5 +1,10 @@
 # MCP accounts auto-provision and match by verified Auth0 email
 
+Amended by [Accounts authorize durable Players](20260905-accounts-authorize-durable-players.md): sporting identity belongs
+to Player; authentication and preserved historical authorship belong to Account.
+The linked decision supersedes conflicting identity and merge-ownership clauses.
+
+
 Date: 2026-07-22 (date-numbered — sequential numbers collide across concurrent
 worktrees; see the note in
 `20260718-the-match-flow-is-shared-services-behind-http-and-mcp-adapters.md`)

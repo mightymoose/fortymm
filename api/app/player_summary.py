@@ -27,7 +27,7 @@ from app.models import (
     MatchSide,
     MatchSidePlayer,
     MatchStatus,
-    User,
+    Player,
     UserLeagueRating,
 )
 from app.ratings.rated import is_rated_member
@@ -101,7 +101,7 @@ async def _load_player_ranks(
 
     ``is_rated_member()`` is the WHOLE population filter — it carries the tombstone
     exclusion (a merged-away ghost is not a rung, so it cannot inflate a real rank)
-    as well as the rated one, which is why there is no ``User`` join left here. It
+    as well as the rated one, which is why there is no ``Player`` join left here. It
     is the same predicate ``load_player_ratings``, ``league_rated_population`` and
     ``league_percentile`` ask, so rank, rating, the "of N" behind it and the "Top
     N%" beside it are read off ONE ladder by construction — not by four WHERE
@@ -219,9 +219,9 @@ async def _load_form(
 
 
 async def summarize_players(
-    db: AsyncSession, users: list[User], league_id: uuid.UUID
+    db: AsyncSession, users: list[Player], league_id: uuid.UUID
 ) -> list[PlayerSummary]:
-    """Hydrate a list of ``User``s into the ``PlayerSummary`` shape the
+    """Hydrate a list of ``Player``s into the ``PlayerSummary`` shape the
     `/players` list + profile-page hero render. Four round trips total
     (ratings, W-L, form, ranks) regardless of page size.
 
@@ -253,7 +253,7 @@ async def summarize_players(
 
 
 async def summarize_one_player(
-    db: AsyncSession, user: User, league_id: uuid.UUID
+    db: AsyncSession, user: Player, league_id: uuid.UUID
 ) -> PlayerSummary:
     """The profile hero's summary — the same hydration the roster runs, for one
     player, so the two surfaces cannot report different W-L for the same user."""

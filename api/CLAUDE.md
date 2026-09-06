@@ -27,8 +27,8 @@ problem (`app/solver.py:solve_hello_world`). With no worker running, health
 fails. Tests sidestep this by replacing the queue with `fakeredis` +
 synchronous RQ in `tests/conftest.py` (`fake_solver_queue` autouse fixture).
 
-**Ephemeral, cookie-based sessions.** `GET /v1/session` creates a `User` +
-`UserToken` (sha256-hashed) on first hit and sets an HTTP-only `session`
+**Ephemeral, cookie-based sessions.** `GET /v1/session` creates an Account, primary Player and grant, plus
+a `UserToken` (sha256-hashed) on first hit and sets an HTTP-only `session`
 cookie; subsequent hits resolve the user from that cookie. Tokens are
 namespaced by `context` so a single user table can back multiple credential
 types later. `SESSION_COOKIE_SECURE` defaults true; set to `false` for local
@@ -66,20 +66,19 @@ the `db_session` fixture, which truncates all tables after each test.
   codebase already uses: `ix_`, `uq_`, `ck_`, `fk_`. So
   `ix_user_tokens_user_id`, not `ix_users_tokens_user_id`.
 
-## New `users.id` foreign keys must update the account-merge service
+## Classify identity foreign keys
 
-When you add a model (or column) with a foreign key to `users.id`, also update
-the ephemeral→verified account-merge logic to handle the new FK — re-point it
-to the surviving user, or delete the ephemeral's rows explicitly. Grep for
-`merge_user` to find it.
+Sporting participation, entries, membership and ratings reference `players.id`.
+Authentication and historical actors reference `accounts.id`. Never repoint a
+historical creator, submitter, acceptor or entry-adder during an Account merge.
+Current tournament ownership has its own `owner_account_id`. `User` remains a
+compatibility alias for Account; a legacy `user_id` name does not identify its domain.
 
-`merge_user` **tombstones** (soft-deletes) the ephemeral user — sets
-`merged_into_user_id` and keeps the row so its session token still resolves —
-rather than `DELETE`ing it. So `ON DELETE CASCADE` does **not** fire on a merge:
-every owned table is cleaned up by an explicit statement in `merge_user`. A new
-FK you don't handle there will silently leave the merged user's rows pointing at
-a tombstoned ghost. (Auth-layer queries must also exclude tombstoned users —
-`merged_into_user_id IS NOT NULL` — so ghosts don't surface in listings/search.)
+Authorize sporting actions through explicit AccountPlayer grants and live identities.
+The primary grant is optional and unique; never infer it from equal IDs or pick an
+arbitrary secondary Player. See [the identity ADR](../docs/adr/20260905-accounts-authorize-durable-players.md)
+for the complete FK classification and merge rules. New owned state must specify its
+Account-transfer or Player-merge policy; historical actors must remain preserved.
 
 ## Pre-deploy: edit migrations in place
 
@@ -87,20 +86,11 @@ Until the first production deploy, fix schema mistakes by editing the
 existing migration file rather than adding an "alter" migration. Obliterate
 and re-run alembic against a fresh database to test.
 
-- **Revision ids (`0001`, `0002`, ...) and `down_revision` chains stay
-  frozen.** Filenames carry the revision id as a prefix — keep the prefix,
-  only change the descriptive suffix when a migration is renamed.
-- Renaming a table touches: the model's `__tablename__`, the migration's
-  create/drop/FK/index/constraint names, the migration filename and
-  docstring, and any hardcoded references in app or test code.
-- **An alter migration that slips in gets rolled up.** If a change lands as its
-  own `add_column`/`alter_column` revision, fold it back into the migration that
-  creates the table and delete the revision — with one limit: **fold only when the
-  target table is already created by an *earlier* revision, and never reorder table
-  creation to make a fold possible.** That limit is why `0005`'s `add_column` of
-  `matches.league_id` stays where it is: `league_id` is an FK to `leagues`, which
-  `0005` itself creates, so folding it into `0004` would reference a table that does
-  not exist yet.
+- Until #1670 freezes the beta baseline, rewriting or consolidating migrations is
+  permitted. #1671 replaces the old chain with `0001_pre_beta_baseline`.
+- Keep the baseline self-contained and in dependency order, with catalogue seeds.
+  Do not build legacy backfills for disposable pre-beta data.
+- After #1670, use forward, data-preserving migrations; routine resets stop.
 - **Deleting a revision invalidates every database that applied it.** Alembic
   refuses outright — `Can't locate revision identified by '00NN'` — it does not
   degrade. So a roll-up means wiping UAT, local dev databases, and any live QA stack
@@ -132,18 +122,11 @@ against code the push doesn't carry.
 
 ## Testing gotchas
 
-**`pytest` never runs the migrations.** The `engine` fixture in `tests/conftest.py`
-builds the schema with `Base.metadata.create_all`; Alembic is never invoked. Models
-and migrations are two independent descriptions of the schema and only the models are
-under test — the whole suite goes green against a migration that is broken, missing a
-column, or would fail outright on a real database. That matters most here because of
-the edit-in-place rule above, which leaves every rewritten migration unverified. **Any
-change touching a migration must run `alembic upgrade head` against a fresh empty
-Postgres** and inspect the result (`\d+ <table>`, `information_schema`) for the
-column, its nullability and its FK. A green `pytest` is not evidence. (`alembic check`
-reports pre-existing drift on `users` / `roles` / `permissions` — the models say
-`unique=True, index=True` where the migrations create a `UniqueConstraint`. That noise
-is background, not a finding.)
+**Most fixtures build tables with `Base.metadata.create_all`.** That alone does
+not verify Alembic. `tests/test_identity_migrations.py` additionally creates an
+isolated database, runs the actual `alembic upgrade head`, checks catalogue seeds
+and requires an empty metadata diff. Run it for every schema or migration change.
+Never reset a shared database as a side effect of running tests.
 
 **A race test written the obvious way passes against a broken implementation.**
 `asyncio.Barrier` + `asyncio.gather` over two sessions both hitting the endpoint only
@@ -167,7 +150,7 @@ confirm the test reds *for the stated reason*, put it back. See
 `.claude/rules/verify-the-artifact-under-test.md`.
 
 **Some display strings are DB seed data, not app code.** Notification category and
-channel display names are seed rows: migration `0009` inserts them,
+channel display names are seed rows: the pre-beta baseline inserts them,
 `tests/conftest.py` re-seeds them by hand
 (`NOTIFICATION_TYPE_LABELS` / `NOTIFICATION_CHANNEL_LABELS`, because `create_all`
 skips the migration), and `web-client/src/test/factories.ts` mirrors them for MSW.

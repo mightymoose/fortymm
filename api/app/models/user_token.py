@@ -6,7 +6,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
-from app.models.user import User
+from app.models.account import Account
 
 
 class UserToken(Base):
@@ -52,7 +52,7 @@ class UserToken(Base):
     sent_to: Mapped[str | None] = mapped_column(String(255), nullable=True)
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("accounts.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -70,4 +70,4 @@ class UserToken(Base):
         DateTime(timezone=True), nullable=True
     )
 
-    user: Mapped[User] = relationship(User)
+    user: Mapped[Account] = relationship(Account)

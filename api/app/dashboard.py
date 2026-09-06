@@ -79,6 +79,18 @@ async def get_dashboard(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> DashboardResponse:
+    player = current_user.primary_player
+    if player is None:
+        return DashboardResponse(
+            attention=[],
+            attention_total_count=0,
+            waiting_count=0,
+            recent_results=[],
+            completed_match_count=0,
+            tournaments=[],
+            rating=_non_rated_card(DashboardRatingState.NOT_RATED_LEAGUE, None),
+        )
+    player_id = player.id
     # EVERY actionable open match the user participates in is pulled in full
     # (results + sides are needed to classify each into an attention bucket and
     # to deep-link a "score" row); completed matches feed the recent-results
@@ -98,12 +110,12 @@ async def get_dashboard(
     # every actionable match — either no result yet ("score") or a standing
     # result the *other* side proposed ("review"). The Python classifier
     # (``list_attention_kind``) refines which per row.
-    my_standing_proposal = my_standing_proposal_exists(current_user.id)
-    actionable_q = _attention_matches_query(None, current_user.id).options(
+    my_standing_proposal = my_standing_proposal_exists(player_id)
+    actionable_q = _attention_matches_query(None, player_id).options(
         *match_eager_options()
     )
     completed_q = (
-        participant_filter(select(Match), current_user.id)
+        participant_filter(select(Match), player_id)
         .where(Match.status == MatchStatus.completed)
         .options(*match_eager_options())
         # Recent-first by the stable completion time, not the mutable
@@ -134,7 +146,7 @@ async def get_dashboard(
                 )
             ),
         ),
-        current_user.id,
+        player_id,
     ).where(Match.status.in_(_OPEN_STATUSES))
 
     actionable = (await db.execute(actionable_q)).scalars().all()
@@ -148,30 +160,30 @@ async def get_dashboard(
         completed_match_count = len(completed)
     else:
         completed_count_q = participant_filter(
-            select(func.count(Match.id)), current_user.id
+            select(func.count(Match.id)), player_id
         ).where(Match.status == MatchStatus.completed)
         completed_match_count = int((await db.execute(completed_count_q)).scalar_one())
 
     rating_changes = await _load_my_rating_changes(
-        db, current_user.id, [m.id for m in completed]
+        db, player_id, [m.id for m in completed]
     )
 
     # Rank the *full* actionable set, then cap for display: the total is the
     # ranked list's length (the list tab's "its length IS the count" trick) and
     # the panel shows the top ATTENTION_BANNERS_LIMIT (#838, ADR 0011).
-    ranked_attention = _build_attention(actionable, current_user.id)
+    ranked_attention = _build_attention(actionable, player_id)
     attention_total_count = len(ranked_attention)
     attention = ranked_attention[:ATTENTION_BANNERS_LIMIT]
     recent_results = [
-        _build_recent_result(match, current_user.id, rating_changes.get(match.id))
+        _build_recent_result(match, player_id, rating_changes.get(match.id))
         for match in completed
     ]
-    rating = await _build_rating(db, current_user.id)
+    rating = await _build_rating(db, player_id)
     # The tournament panel that sits above everything else while the user is playing
     # in a live tournament — ``[]`` (and no panel) the rest of the time, which is
     # almost always. It rides on this endpoint rather than one of its own because it
     # loads with the page, not on a click (the BFF rule, root CLAUDE.md).
-    tournaments = await build_tournament_panels(db, current_user.id)
+    tournaments = await build_tournament_panels(db, player_id)
 
     return DashboardResponse(
         attention=attention,

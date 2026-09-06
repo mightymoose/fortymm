@@ -19,9 +19,15 @@ async def test_accepting_superseded_result_id_signals_conflict(
     context. It signals before touching ``db``, so this needs no committed rows.
     """
     submitter = uuid.uuid4()
-    base = MatchResult(id=uuid.uuid4(), submitted_by_user_id=submitter, games=[])
+    base = MatchResult(
+        id=uuid.uuid4(),
+        submitted_for_player_id=submitter,
+        submitted_by_user_id=submitter,
+        games=[],
+    )
     counter = MatchResult(
         id=uuid.uuid4(),
+        submitted_for_player_id=submitter,
         submitted_by_user_id=submitter,
         games=[],
         supersedes_result_id=base.id,

@@ -13,7 +13,7 @@ class UserRole(Base):
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+        ForeignKey("accounts.id", ondelete="CASCADE"),
         primary_key=True,
     )
     role_id: Mapped[uuid.UUID] = mapped_column(

@@ -124,11 +124,13 @@ from app import db as db_module
 from app import queue as queue_module
 from app.draws import group_label, seats_both_sides_at_cut
 from app.models import (
+    AccountPlayer,
     Match,
     MatchGame,
     MatchResult,
     MatchStatus,
     Notification,
+    Player,
     Tournament,
     TournamentEntry,
     TournamentEvent,
@@ -479,21 +481,18 @@ async def call_due_fixtures(
     claimed_users: set[uuid.UUID] = set(held.users)
     free: list[TournamentFixture] = []
     for fixture in sorted(due, key=lambda f: (f.scheduled_start, f.id)):
-        user_ids = {
-            user.id
-            for user in (
-                ingredients.user_for_entry(fixture.entry_a_id),
-                ingredients.user_for_entry(fixture.entry_b_id),
-            )
-            if user is not None
+        player_ids = {
+            player_id
+            for entry_id in (fixture.entry_a_id, fixture.entry_b_id)
+            if (player_id := ingredients.player_id_for_entry(entry_id)) is not None
         }
         if fixture.table_id is not None and fixture.table_id in claimed_tables:
             continue
-        if user_ids & claimed_users:
+        if player_ids & claimed_users:
             continue
         if fixture.table_id is not None:
             claimed_tables.add(fixture.table_id)
-        claimed_users |= user_ids
+        claimed_users |= player_ids
         free.append(fixture)
     due = free
     if not due:
@@ -501,7 +500,7 @@ async def call_due_fixtures(
 
     # First pass resolves each due fixture's people, so the whole batch's
     # in-app preferences resolve in one round (the locks are already held).
-    calls: list[tuple[TournamentFixture, User, User, _OpponentCopy]] = []
+    calls: list[tuple[TournamentFixture, Player, Player, _OpponentCopy]] = []
     for fixture in due:
         # Re-assured by _due_for_call above; narrow for the type checker.
         if (
@@ -512,8 +511,8 @@ async def call_due_fixtures(
         ):
             continue
         event = ingredients.events.get(fixture.event_id)
-        user_a = ingredients.user_for_entry(fixture.entry_a_id)
-        user_b = ingredients.user_for_entry(fixture.entry_b_id)
+        user_a = ingredients.player_for_entry(fixture.entry_a_id)
+        user_b = ingredients.player_for_entry(fixture.entry_b_id)
         if event is None or user_a is None or user_b is None:
             # A dangling ref (entry/event deleted under a stale placement) is
             # broken-pin territory — don't promise a match that can't run.
@@ -531,7 +530,13 @@ async def call_due_fixtures(
         calls.append((fixture, user_a, user_b, build))
 
     in_app_ids = await _in_app_allowed(
-        db, [user for _, user_a, user_b, _ in calls for user in (user_a, user_b)]
+        db,
+        [
+            account
+            for _, user_a, user_b, _ in calls
+            for player in (user_a, user_b)
+            for account in ingredients.accounts_for_player(player)
+        ],
     )
 
     fanout: list[NotificationJob] = []
@@ -549,6 +554,7 @@ async def call_due_fixtures(
             build=build,
             tournament_id=tournament.id,
             in_app_ids=in_app_ids,
+            accounts_by_player=ingredients.accounts_by_player,
             increment_always=True,
             fanout=fanout,
         )
@@ -646,29 +652,32 @@ async def notify_pin_repairs(
 
     # Cancellations go to the REMAINING entrant only (docstring above).
     cancellations: list[
-        tuple[TournamentFixture, MatchCallContext, list[tuple[User, User]]]
+        tuple[TournamentFixture, MatchCallContext, list[tuple[User, Player]]]
     ] = []
     for fixture in cancelled:
         event = ingredients.events.get(fixture.event_id)
         if event is None:
             continue
         context = ingredients.context_for(tournament, event, fixture)
-        recipients: list[tuple[User, User]] = []
+        recipients: list[tuple[User, Player]] = []
         for entry_id, opponent_entry_id in (
             (fixture.entry_a_id, fixture.entry_b_id),
             (fixture.entry_b_id, fixture.entry_a_id),
         ):
             if entry_id is None or entry_id in withdrawn_entry_ids:
                 continue  # the withdrawn player asked to leave — no correction
-            remaining = ingredients.user_for_entry(entry_id)
-            withdrew = ingredients.user_for_entry(opponent_entry_id)
+            remaining = ingredients.player_for_entry(entry_id)
+            withdrew = ingredients.player_for_entry(opponent_entry_id)
             if (
                 remaining is None
                 or withdrew is None
-                or remaining.merged_into_user_id is not None
+                or remaining.merged_into_player_id is not None
             ):
                 continue
-            recipients.append((remaining, withdrew))
+            recipients.extend(
+                (account, withdrew)
+                for account in ingredients.accounts_for_player(remaining)
+            )
         cancellations.append((fixture, context, recipients))
 
     in_app_ids = await _in_app_allowed(
@@ -683,7 +692,7 @@ async def notify_pin_repairs(
     fanout: list[NotificationJob] = []
     for fixture, context, recipients in cancellations:
         told = False
-        for remaining, withdrew in recipients:
+        for recipient, withdrew in recipients:
             message = match_call_cancelled_message(
                 reason=MatchCallCancellationReason.OPPONENT_WITHDREW,
                 opponent_name=withdrew.username,
@@ -692,11 +701,11 @@ async def notify_pin_repairs(
             fanout.append(
                 _record_message(
                     db,
-                    remaining,
+                    recipient,
                     message,
                     tournament_id=tournament.id,
                     fixture_id=fixture.id,
-                    in_app=remaining.id in in_app_ids,
+                    in_app=recipient.id in in_app_ids,
                 )
             )
             told = True
@@ -825,13 +834,13 @@ async def apply_manual_placement(
 #: copy. A closure per transition kind keeps :func:`_tell_both_entrants`'s
 #: recipient loop (tombstone skip, count increment) written once.
 _ManualMessageBuilder = Callable[
-    [User, MatchCallContext, dict[str, str]], MatchCallMessage
+    [Player, MatchCallContext, dict[str, str]], MatchCallMessage
 ]
 
 
 def _called_to(table_id: str, scheduled_start: datetime) -> _ManualMessageBuilder:
     def build(
-        opponent: User, context: MatchCallContext, table_labels: dict[str, str]
+        opponent: Player, context: MatchCallContext, table_labels: dict[str, str]
     ) -> MatchCallMessage:
         return match_called_message(
             table_label=table_labels.get(table_id, table_id),
@@ -845,7 +854,7 @@ def _called_to(table_id: str, scheduled_start: datetime) -> _ManualMessageBuilde
 
 def _moved_to(table_id: str, scheduled_start: datetime) -> _ManualMessageBuilder:
     def build(
-        opponent: User, context: MatchCallContext, table_labels: dict[str, str]
+        opponent: Player, context: MatchCallContext, table_labels: dict[str, str]
     ) -> MatchCallMessage:
         return match_call_moved_message(
             new_table_label=table_labels.get(table_id, table_id),
@@ -858,7 +867,7 @@ def _moved_to(table_id: str, scheduled_start: datetime) -> _ManualMessageBuilder
 
 
 def _cancelled_by_schedule_change(
-    opponent: User,
+    opponent: Player,
     context: MatchCallContext,
     table_labels: dict[str, str],  # noqa: ARG001 -- uniform builder shape; a cancellation names no table
 ) -> MatchCallMessage:
@@ -883,12 +892,19 @@ async def _tell_both_entrants(
     detection owns that territory."""
     ingredients = await load_copy_ingredients(db, tournament, [fixture])
     event = ingredients.events.get(fixture.event_id)
-    user_a = ingredients.user_for_entry(fixture.entry_a_id)
-    user_b = ingredients.user_for_entry(fixture.entry_b_id)
+    user_a = ingredients.player_for_entry(fixture.entry_a_id)
+    user_b = ingredients.player_for_entry(fixture.entry_b_id)
     if event is None or user_a is None or user_b is None:
         return []
     context = ingredients.context_for(tournament, event, fixture)
-    in_app_ids = await _in_app_allowed(db, (user_a, user_b))
+    in_app_ids = await _in_app_allowed(
+        db,
+        [
+            account
+            for player in (user_a, user_b)
+            for account in ingredients.accounts_for_player(player)
+        ],
+    )
     fanout: list[NotificationJob] = []
     _tell_pair(
         db,
@@ -898,6 +914,7 @@ async def _tell_both_entrants(
         build=lambda opponent: build(opponent, context, ingredients.table_labels),
         tournament_id=tournament.id,
         in_app_ids=in_app_ids,
+        accounts_by_player=ingredients.accounts_by_player,
         increment_always=False,
         fanout=fanout,
     )
@@ -909,7 +926,7 @@ async def _tell_both_entrants(
 
 #: A message with everything but the opponent bound: how each two-entrant
 #: sender hands :func:`_tell_pair` its copy.
-_OpponentCopy = Callable[[User], MatchCallMessage]
+_OpponentCopy = Callable[[Player], MatchCallMessage]
 
 
 def _called_copy(
@@ -917,7 +934,7 @@ def _called_copy(
 ) -> _OpponentCopy:
     """Bind a *match_called* message to everything but the opponent."""
 
-    def build(opponent: User) -> MatchCallMessage:
+    def build(opponent: Player) -> MatchCallMessage:
         return match_called_message(
             table_label=table_label,
             estimated_start=estimated_start,
@@ -931,12 +948,13 @@ def _called_copy(
 def _tell_pair(
     db: AsyncSession,
     fixture: TournamentFixture,
-    user_a: User,
-    user_b: User,
+    user_a: Player,
+    user_b: Player,
     *,
     build: _OpponentCopy,
     tournament_id: uuid.UUID,
     in_app_ids: AbstractSet[uuid.UUID],
+    accounts_by_player: dict[uuid.UUID, list[User]],
     increment_always: bool,
     fanout: list[NotificationJob],
 ) -> None:
@@ -953,20 +971,21 @@ def _tell_pair(
     were told" and a correction that reached nobody told nobody.
     """
     told = False
-    for recipient, opponent in ((user_a, user_b), (user_b, user_a)):
-        if recipient.merged_into_user_id is not None:
-            continue  # tombstoned ghost — same skip the worker's notify does
-        fanout.append(
-            _record_message(
-                db,
-                recipient,
-                build(opponent),
-                tournament_id=tournament_id,
-                fixture_id=fixture.id,
-                in_app=recipient.id in in_app_ids,
+    for player, opponent in ((user_a, user_b), (user_b, user_a)):
+        for recipient in accounts_by_player.get(player.id, []):
+            if recipient.merged_into_user_id is not None:
+                continue
+            fanout.append(
+                _record_message(
+                    db,
+                    recipient,
+                    build(opponent),
+                    tournament_id=tournament_id,
+                    fixture_id=fixture.id,
+                    in_app=recipient.id in in_app_ids,
+                )
             )
-        )
-        told = True
+            told = True
     if increment_always or told:
         fixture.call_notified_count += 1
 
@@ -983,7 +1002,8 @@ class CopyIngredients:
     validated them with (parse, don't validate)."""
 
     entry_user: dict[uuid.UUID, uuid.UUID]
-    users: dict[uuid.UUID, User]
+    players: dict[uuid.UUID, Player]
+    accounts_by_player: dict[uuid.UUID, list[User]]
     events: dict[uuid.UUID, TournamentEvent]
     table_labels: dict[str, str]
     #: Per event, its groups' id → display label — ``group_label(position)``, derived,
@@ -999,11 +1019,16 @@ class CopyIngredients:
     #: so a call for a bracket fixture is not labelled with a group.
     stage_draw_types: dict[uuid.UUID, StageDrawType]
 
-    def user_for_entry(self, entry_id: uuid.UUID | None) -> User | None:
-        if entry_id is None:
-            return None
-        user_id = self.entry_user.get(entry_id)
-        return self.users.get(user_id) if user_id is not None else None
+    def player_id_for_entry(self, entry_id: uuid.UUID | None) -> uuid.UUID | None:
+        """Sporting occupancy stays with the Player across Account transfers."""
+        return self.entry_user.get(entry_id) if entry_id is not None else None
+
+    def player_for_entry(self, entry_id: uuid.UUID | None) -> Player | None:
+        player_id = self.player_id_for_entry(entry_id)
+        return self.players.get(player_id) if player_id is not None else None
+
+    def accounts_for_player(self, player: Player) -> list[User]:
+        return self.accounts_by_player.get(player.id, [])
 
     def context_for(
         self,
@@ -1063,14 +1088,26 @@ async def load_copy_ingredients(
             )
         ).all()
     }
-    users: dict[uuid.UUID, User] = {
-        user.id: user
-        for user in (
-            await db.execute(select(User).where(User.id.in_(set(entry_user.values()))))
+    players = {
+        player.id: player
+        for player in await db.scalars(
+            select(Player).where(Player.id.in_(set(entry_user.values())))
         )
-        .scalars()
-        .all()
     }
+    accounts_by_player: dict[uuid.UUID, list[User]] = {}
+    account_rows = await db.execute(
+        select(AccountPlayer.player_id, User)
+        .join(User, User.id == AccountPlayer.account_id)
+        .join(Player, Player.id == AccountPlayer.player_id)
+        .where(
+            AccountPlayer.player_id.in_(players),
+            User.merged_into_user_id.is_(None),
+            Player.merged_into_player_id.is_(None),
+        )
+        .order_by(User.id)
+    )
+    for player_id, account in account_rows:
+        accounts_by_player.setdefault(player_id, []).append(account)
     events: dict[uuid.UUID, TournamentEvent] = {
         event.id: event
         for event in (
@@ -1104,7 +1141,8 @@ async def load_copy_ingredients(
     }
     return CopyIngredients(
         entry_user=entry_user,
-        users=users,
+        players=players,
+        accounts_by_player=accounts_by_player,
         events=events,
         table_labels=table_labels,
         group_labels=group_labels,

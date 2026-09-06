@@ -175,7 +175,7 @@ def _negotiation_result(result: MatchResult) -> NegotiationResult:
             _negotiation_game(g)
             for g in sorted(result.games, key=lambda g: g["game_number"])
         ],
-        submitted_by=result.submitted_by_user_id,
+        submitted_by=(result.submitted_for_player_id or result.submitted_by_user_id),
         submitted_at=result.submitted_at,
     )
 
@@ -223,7 +223,10 @@ def _negotiation_diff(
 
 def _submitted_on_side(match: Match, result: MatchResult, side: MatchSide) -> bool:
     """True iff the result's submitter is a player on ``side``."""
-    return any(p.user_id == result.submitted_by_user_id for p in side.players)
+    return any(
+        p.user_id == (result.submitted_for_player_id or result.submitted_by_user_id)
+        for p in side.players
+    )
 
 
 def negotiation(
@@ -857,7 +860,7 @@ async def tournament_context(
     event = fixture.stage.event
     tournament = event.tournament
     is_owner = (
-        current_user_id is not None and tournament.created_by_user_id == current_user_id
+        current_user_id is not None and tournament.owner_account_id == current_user_id
     )
     if tournament.status not in ANNOUNCED_STATUSES and not is_owner:
         return None

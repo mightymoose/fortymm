@@ -483,7 +483,7 @@ async def _record_singles_match(
     )
     for side_number, player in enumerate(players, start=1):
         side = MatchSide(match=match, side_number=side_number)
-        side.players.append(MatchSidePlayer(match=match, user=player))
+        side.players.append(MatchSidePlayer(match=match, user=player.primary_player))
     db_session.add(match)
     await db_session.commit()
     return match
@@ -525,7 +525,7 @@ async def test_consume_merges_ephemeral_matches_into_verified_account(
             select(Match.created_by_user_id).where(Match.id == match.id)
         )
     ).scalar_one()
-    assert creator_id == rita.id
+    assert creator_id == guest.id
 
     # The guest is tombstoned (soft-delete), not dropped.
     tombstoned = (
@@ -1268,15 +1268,19 @@ async def test_accepted_first_sign_in_merge_takes_the_guest_username(
         )
     ).scalar_one()
     assert signed_in.username == guest_name
-    # The tombstone gave the name up rather than holding the unique index.
+    # The Account retains its historical actor name; Player owns uniqueness.
     await db_session.refresh(guest)
-    assert guest.username != guest_name
+    assert guest.username == guest_name
     assert guest.merged_into_user_id == signed_in.id
     # The dead name is still a name the product would accept. The dashed uuid
     # form is 43 characters and breaks USERNAME_MAX_LENGTH silently, because no
     # response model constrains `username`.
-    assert len(guest.username) <= USERNAME_MAX_LENGTH
-    assert re.fullmatch(USERNAME_PATTERN, guest.username)
+    from app.models import Player
+
+    retired_player = await db_session.get(Player, guest.id)
+    assert retired_player.username != guest_name
+    assert len(retired_player.username) <= USERNAME_MAX_LENGTH
+    assert re.fullmatch(USERNAME_PATTERN, retired_player.username)
 
 
 async def test_declined_first_sign_in_merge_leaves_the_generated_username(

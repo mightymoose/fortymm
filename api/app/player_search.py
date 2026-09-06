@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.leagues import resolve_league
 from app.listed import is_listed_player
-from app.models import User
+from app.models import Player
 from app.player_summary import load_player_ratings
 from app.schemas.player import PlayerRead
 from app.sql import escape_like
@@ -28,7 +28,7 @@ async def search_players_by_username(
     db: AsyncSession,
     *,
     query: str,
-    current_user_id: uuid.UUID,
+    current_user_id: uuid.UUID | None,
     league_id: uuid.UUID | None = None,
     limit: int = SEARCH_DEFAULT_LIMIT,
 ) -> list[PlayerRead]:
@@ -47,20 +47,20 @@ async def search_players_by_username(
 
     pattern = f"%{escape_like(term)}%"
     result = await db.execute(
-        select(User)
+        select(Player)
         .where(
-            User.id != current_user_id,
+            Player.id != current_user_id,
             # Exclude tombstoned (merged-away) guests so ghosts never surface.
-            User.merged_into_user_id.is_(None),
+            Player.merged_into_player_id.is_(None),
             # Never-active rows stay out of opponent search (#1438) — see
             # ``app.listed.is_listed_player``.
             is_listed_player(),
-            User.username.ilike(pattern, escape="\\"),
+            Player.username.ilike(pattern, escape="\\"),
         )
-        .order_by(User.username)
+        .order_by(Player.username)
         .limit(limit)
     )
-    users: Sequence[User] = result.scalars().all()
+    users: Sequence[Player] = result.scalars().all()
     league = await resolve_league(db, league_id)
     ratings = await load_player_ratings(db, league.id, (user.id for user in users))
     return [

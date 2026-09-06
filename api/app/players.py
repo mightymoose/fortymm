@@ -13,9 +13,10 @@ from app.head_to_head import player_head_to_head
 from app.leagues import player_leagues, resolve_league, resolve_league_or_default
 from app.listed import is_listed_player
 from app.models import (
+    Account,
     Match,
     MatchSidePlayer,
-    User,
+    Player,
     UserLeagueRating,
 )
 from app.player_matches import paginated_player_matches
@@ -63,7 +64,7 @@ PROFILE_RECENT_MATCHES = 6
 
 
 def _serialize(
-    users: Iterable[User],
+    users: Iterable[Player],
     ratings: Mapping[uuid.UUID, float | None] | None = None,
 ) -> list[PlayerRead]:
     ratings = ratings or {}
@@ -77,7 +78,7 @@ def _serialize(
 async def list_recent_opponents(
     limit: int = Query(RECENT_DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
     league_id: uuid.UUID | None = Query(default=None),
-    current_user: User = Depends(get_current_user),
+    current_user: Account = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> list[PlayerRead]:
     """Opponents the caller has actually played, for the new-match picker.
@@ -87,27 +88,30 @@ async def list_recent_opponents(
     match history gets an empty list, so the picker never presents strangers as
     "recent opponents" (#167).
     """
+    player = current_user.primary_player
+    if player is None:
+        return []
     # Join the caller's side and the opponent's side of each shared match so
-    # the database returns hydrated User rows already ordered by recency —
+    # the database returns hydrated Player rows already ordered by recency —
     # one round trip, no Python re-sort.
     opp = aliased(MatchSidePlayer)
     mine = aliased(MatchSidePlayer)
     opponents = (
         (
             await db.execute(
-                select(User)
-                .join(opp, opp.user_id == User.id)
+                select(Player)
+                .join(opp, opp.user_id == Player.id)
                 .join(Match, Match.id == opp.match_id)
                 .join(
                     mine,
                     and_(
                         mine.match_id == opp.match_id,
-                        mine.user_id == current_user.id,
+                        mine.user_id == player.id,
                     ),
                 )
                 .where(
-                    User.id != current_user.id,
-                    User.merged_into_user_id.is_(None),
+                    Player.id != player.id,
+                    Player.merged_into_player_id.is_(None),
                     # Both conjuncts are the listing rule; see
                     # ``app.listed.is_listed_player`` (#1438). Joins through
                     # match sides already exclude a never-active row, so this
@@ -115,10 +119,10 @@ async def list_recent_opponents(
                     # carries a different rule.
                     is_listed_player(),
                 )
-                .group_by(User.id)
+                .group_by(Player.id)
                 # Stable tiebreaker so ties on created_at (seed data, tests,
                 # concurrent creates) don't reorder across requests.
-                .order_by(func.max(Match.created_at).desc(), User.username)
+                .order_by(func.max(Match.created_at).desc(), Player.username)
                 .limit(limit)
             )
         )
@@ -136,7 +140,7 @@ async def search_players(
     q: str = Query(..., description="Username substring to match against."),
     limit: int = Query(SEARCH_DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
     league_id: uuid.UUID | None = Query(default=None),
-    current_user: User = Depends(get_current_user),
+    current_user: Account = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> list[PlayerRead]:
     """Username substring search backing the opponent typeahead.
@@ -148,7 +152,9 @@ async def search_players(
     return await search_players_by_username(
         db,
         query=q,
-        current_user_id=current_user.id,
+        current_user_id=(
+            current_user.primary_player.id if current_user.primary_player else None
+        ),
         league_id=league_id,
         limit=limit,
     )
@@ -170,12 +176,12 @@ async def search_players(
 
 
 def _username_substring_filter[SelectT: Select[Any]](query: SelectT, q: str) -> SelectT:
-    """Restrict a User-rooted query to rows whose ``username`` matches the
+    """Restrict a Player-rooted query to rows whose ``username`` matches the
     substring ``q`` (case-insensitive, LIKE-escaped). Generic over the
-    select shape so the same helper works for the page query (returns User)
+    select shape so the same helper works for the page query (returns Player)
     and the count query (returns int)."""
     pattern = f"%{escape_like(q.strip())}%"
-    return query.where(User.username.ilike(pattern, escape="\\"))
+    return query.where(Player.username.ilike(pattern, escape="\\"))
 
 
 @router.get("/players", response_model=PlayerListResponse)
@@ -184,7 +190,7 @@ async def list_players(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=LIST_DEFAULT_PAGE_SIZE, ge=1, le=LIST_MAX_PAGE_SIZE),
     league_id: uuid.UUID | None = Query(default=None),
-    _current_user: User = Depends(get_current_user),
+    _current_user: Account = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> PlayerListResponse:
     """Paginated roster backing the `/players` list page.
@@ -197,9 +203,9 @@ async def list_players(
     league = await resolve_league(db, league_id)
 
     base = (
-        select(User)
+        select(Player)
         .where(
-            User.merged_into_user_id.is_(None),
+            Player.merged_into_player_id.is_(None),
             # Never-active rows stay off the roster (#1438) — see
             # ``app.listed.is_listed_player``. The count below MUST answer with
             # this same population, or the total alone answers the enumeration
@@ -209,7 +215,7 @@ async def list_players(
         .outerjoin(
             UserLeagueRating,
             and_(
-                UserLeagueRating.user_id == User.id,
+                UserLeagueRating.user_id == Player.id,
                 UserLeagueRating.league_id == league.id,
                 # The SORT KEY must be the rating the row is going to RENDER
                 # (`summarize_players` reads it through the same gate), or the
@@ -223,7 +229,7 @@ async def list_players(
         )
         .order_by(
             UserLeagueRating.rating_value.desc().nulls_last(),
-            User.username,
+            Player.username,
         )
     )
     if q and q.strip():
@@ -234,9 +240,9 @@ async def list_players(
     # would mislead users searching for a niche substring.
     count_query: Select[tuple[int]] = (
         select(func.count())
-        .select_from(User)
+        .select_from(Player)
         .where(
-            User.merged_into_user_id.is_(None),
+            Player.merged_into_player_id.is_(None),
             # Same population as the body — see the roster query above (#1438).
             is_listed_player(),
         )
@@ -255,12 +261,12 @@ async def list_players(
     return PlayerListResponse(items=items, page=page, page_size=page_size, total=total)
 
 
-async def _load_player_by_id(db: AsyncSession, player_id: uuid.UUID) -> User | None:
+async def _load_player_by_id(db: AsyncSession, player_id: uuid.UUID) -> Player | None:
     return (
         await db.execute(
-            select(User).where(
-                User.id == player_id,
-                User.merged_into_user_id.is_(None),
+            select(Player).where(
+                Player.id == player_id,
+                Player.merged_into_player_id.is_(None),
             )
         )
     ).scalar_one_or_none()
@@ -268,9 +274,9 @@ async def _load_player_by_id(db: AsyncSession, player_id: uuid.UUID) -> User | N
 
 async def _player_detail(
     db: AsyncSession,
-    user: User,
+    user: Player,
     league_id: uuid.UUID,
-    viewer_id: uuid.UUID,
+    viewer_id: uuid.UUID | None,
     window: RatingWindow,
 ) -> PlayerDetail:
     """Body for `/v1/players/{id}` — bundles the hero summary with the player's
@@ -338,7 +344,7 @@ async def get_player(
     player_id: uuid.UUID,
     league_id: uuid.UUID | None = Query(default=None),
     window: RatingWindow = Query(default=DEFAULT_RATING_WINDOW, alias="range"),
-    current_user: User = Depends(get_current_user),
+    current_user: Account = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> PlayerDetail:
     """Authed profile bundle for `/players/$userId` — the overview in one
@@ -402,7 +408,10 @@ async def get_player(
             status_code=status.HTTP_404_NOT_FOUND, detail="Player not found."
         )
     league = await resolve_league_or_default(db, league_id)
-    return await _player_detail(db, user, league.id, current_user.id, window)
+    viewer = current_user.primary_player
+    return await _player_detail(
+        db, user, league.id, viewer.id if viewer is not None else None, window
+    )
 
 
 @router.get("/players/{player_id}/rating-history", response_model=RatingHistoryWindow)
@@ -410,7 +419,7 @@ async def get_player_rating_history(
     player_id: uuid.UUID,
     league_id: uuid.UUID | None = Query(default=None),
     window: RatingWindow = Query(default=DEFAULT_RATING_WINDOW, alias="range"),
-    _current_user: User = Depends(get_current_user),
+    _current_user: Account = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> RatingHistoryWindow:
     """The player's rating over a CALENDAR window — the profile's rating chart
@@ -461,7 +470,7 @@ async def list_player_matches(
     player_id: uuid.UUID,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=LIST_DEFAULT_PAGE_SIZE, ge=1, le=LIST_MAX_PAGE_SIZE),
-    _current_user: User = Depends(get_current_user),
+    _current_user: Account = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> PlayerMatchListResponse:
     """Paginated per-player match history backing the full-history route

@@ -17,8 +17,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db import Base
 
 if TYPE_CHECKING:
+    from app.models.account import Account
     from app.models.match import Match
-    from app.models.user import User
 
 
 class MatchResult(Base):
@@ -66,13 +66,14 @@ class MatchResult(Base):
         ForeignKey("matches.id", ondelete="CASCADE"),
         nullable=False,
     )
-    # RESTRICT (not CASCADE) so an ephemeral-user delete during account merge
-    # can't silently drop a result row; the merge service repoints it. See
-    # app/account_merge.py.
+    # Preserve the original acting Account, including after a same-person merge.
     submitted_by_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="RESTRICT"),
+        ForeignKey("accounts.id", ondelete="RESTRICT"),
         nullable=False,
+    )
+    submitted_for_player_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("players.id", ondelete="RESTRICT"), nullable=True
     )
     submitted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -88,10 +89,10 @@ class MatchResult(Base):
     )
     # The opposing-side participant who accepted this proposal. NULL while the
     # proposal is still standing. RESTRICT mirrors ``submitted_by_user_id`` so an
-    # account merge repoints rather than drops. See app/account_merge.py.
+    # account merge preserves the original actor.
     accepted_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="RESTRICT"),
+        ForeignKey("accounts.id", ondelete="RESTRICT"),
         nullable=True,
     )
     accepted_at: Mapped[datetime | None] = mapped_column(
@@ -117,9 +118,9 @@ class MatchResult(Base):
     # Two FKs point at ``users`` (submitted_by_user_id, accepted_by_user_id), so
     # both relationships MUST pin foreign_keys explicitly or SQLAlchemy raises
     # AmbiguousForeignKeysError.
-    submitted_by: Mapped["User"] = relationship(
-        "User", foreign_keys=[submitted_by_user_id]
+    submitted_by: Mapped["Account"] = relationship(
+        "Account", foreign_keys=[submitted_by_user_id]
     )
-    accepted_by: Mapped["User | None"] = relationship(
-        "User", foreign_keys=[accepted_by_user_id]
+    accepted_by: Mapped["Account | None"] = relationship(
+        "Account", foreign_keys=[accepted_by_user_id]
     )

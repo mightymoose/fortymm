@@ -139,7 +139,7 @@ async def _load_match(db: AsyncSession, match_id: uuid.UUID) -> Match | None:
     return result.scalar_one_or_none()
 
 
-def _owing_side(match: Match, submitter_id: uuid.UUID) -> MatchSide | None:
+def _owing_side(match: Match, submitter_id: uuid.UUID | None) -> MatchSide | None:
     """The side that owes acceptance: the one whose players do **not** include
     the standing result's submitter. Returns ``None`` if no such side has a
     player (defensive against a solo / player-less sentinel side).
@@ -159,6 +159,8 @@ def _owing_side(match: Match, submitter_id: uuid.UUID) -> MatchSide | None:
     who is a director — the fix belongs upstream, at the source that would
     otherwise create such a standing result, which is exactly what
     ``_requires_confirmation``'s conjunct does."""
+    if submitter_id is None:
+        return None
     for side in match.sides:
         if not side.players:
             continue
@@ -168,7 +170,7 @@ def _owing_side(match: Match, submitter_id: uuid.UUID) -> MatchSide | None:
     return None
 
 
-def _notify_owing(
+async def _notify_owing(
     notifications: NotificationService,
     match_id: uuid.UUID,
     owing_user_ids: list[uuid.UUID],
@@ -191,18 +193,19 @@ def _notify_owing(
     "Match finalized" is a closed-loop FYI (the match is already done) and
     passes ``None`` so it's never hidden."""
     for user_id in owing_user_ids:
-        notifications.enqueue_notification(
-            NotificationJob(
-                user_id=user_id,
-                category=NotificationCategory.RESULT_CONFIRM,
-                title=title,
-                body=body,
-                link=f"/matches/{match_id}",
-                action_label=action_label,
-                collapse_id=f"result-confirm:{match_id}",
-                result_id=result_id,
+        for account_id in await notifications.managing_account_ids(user_id):
+            notifications.enqueue_notification(
+                NotificationJob(
+                    user_id=account_id,
+                    category=NotificationCategory.RESULT_CONFIRM,
+                    title=title,
+                    body=body,
+                    link=f"/matches/{match_id}",
+                    action_label=action_label,
+                    collapse_id=f"result-confirm:{match_id}",
+                    result_id=result_id,
+                )
             )
-        )
 
 
 async def retire_if_lapsed(
@@ -240,7 +243,7 @@ async def retire_if_lapsed(
         await db.rollback()
         return RetirementOutcome.not_yet_due
 
-    owing = _owing_side(match, standing.submitted_by_user_id)
+    owing = _owing_side(match, standing.submitted_for_player_id)
     if owing is None:
         await db.rollback()
         return RetirementOutcome.no_owing_side
@@ -248,17 +251,23 @@ async def retire_if_lapsed(
     # Capture the recipients before the commit so the fire-and-forget enqueue
     # below can't trip an async lazy-load on an expired collection.
     owing_user_ids = [player.user_id for player in owing.players]
+    from app.player_accounts import managing_account_ids
+
+    accounts = await managing_account_ids(db, owing_user_ids)
+    if not accounts:
+        await db.rollback()
+        return RetirementOutcome.no_owing_side
 
     await accept_standing_result(
         db,
         match,
         result_id=result_id,
-        accepted_by_user_id=owing.players[0].user_id,
+        accepted_by_user_id=accounts[0],
     )
     await db.commit()
     # Only the owing party is told the match was finalized on their non-response;
     # the proposer already learns of completion through the normal result flow.
-    _notify_owing(
+    await _notify_owing(
         notifications,
         match_id,
         owing_user_ids,
@@ -388,7 +397,7 @@ async def remind_if_due(
         await db.rollback()
         return False
 
-    owing = _owing_side(match, standing.submitted_by_user_id)
+    owing = _owing_side(match, standing.submitted_for_player_id)
     if owing is None:
         await db.rollback()
         return False
@@ -398,7 +407,7 @@ async def remind_if_due(
     standing_result_id = standing.id
     standing.reminder_sent_at = now
     await db.commit()
-    _notify_owing(
+    await _notify_owing(
         notifications,
         match_id,
         owing_user_ids,
