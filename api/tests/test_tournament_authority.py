@@ -988,3 +988,76 @@ async def test_sql_transfer_insert_applies_exactly_one_owner_revision(
                 ),
             )
     assert len((await authority_history(db_session, tournament.id)).transfers) == 1
+
+
+@pytest.mark.parametrize("action", ["revoke", "merge_recipient"])
+async def test_former_grantor_merge_does_not_block_current_grant_changes(
+    db_session, engine, default_league, action
+):
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.account_merge import merge_user
+    from app.tournament_authority import (
+        authority_history,
+        grant_director,
+        revoke_director,
+        transfer_ownership,
+    )
+
+    former = await make_user(db_session, "former-grantor")
+    former_target = await make_user(db_session, "former-grantor-survivor")
+    owner = await make_user(db_session, "current-grant-owner")
+    recipient = await make_user(db_session, "current-grant-recipient")
+    recipient_target = await make_user(db_session, "current-recipient-survivor")
+    tournament = Tournament(
+        name="Grant provenance",
+        league_id=default_league.id,
+        created_by_user_id=former.id,
+    )
+    db_session.add(tournament)
+    await db_session.commit()
+    grant = await grant_director(
+        db_session, tournament.id, actor_id=former.id, account_id=recipient.id
+    )
+    await transfer_ownership(
+        db_session, tournament.id, actor_id=former.id, account_id=owner.id
+    )
+    await db_session.commit()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as historical_merge, sessions() as current_change:
+        # The former owner has no current tournament authority. Its uncommitted
+        # merge holds that Account, but no lock on this tournament.
+        await merge_user(
+            historical_merge, from_user_id=former.id, to_user_id=former_target.id
+        )
+        if action == "revoke":
+            await asyncio.wait_for(
+                revoke_director(
+                    current_change, tournament.id, actor_id=owner.id, grant_id=grant.id
+                ),
+                5,
+            )
+        else:
+            await asyncio.wait_for(
+                merge_user(
+                    current_change,
+                    from_user_id=recipient.id,
+                    to_user_id=recipient_target.id,
+                ),
+                5,
+            )
+        await current_change.commit()
+        await historical_merge.commit()
+    history = await authority_history(db_session, tournament.id)
+    await db_session.refresh(grant)
+    assert grant.granted_by_account_id == former.id
+    assert grant.account_id == recipient.id
+    assert grant.revoked_at is not None
+    if action == "merge_recipient":
+        inherited = next(
+            g for g in history.grants if g.inherited_from_grant_id == grant.id
+        )
+        assert inherited.account_id == recipient_target.id
+        assert inherited.granted_by_account_id is None

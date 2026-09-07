@@ -44,6 +44,10 @@ source Account or grant identify the inherited authority. This is authority
 history, not a general audit log of tournament edits.
 Existing privileged actions keep their original actor attribution.
 
+New tournament matches are attributed to the current owner when the system
+materializes them. Ownership transfers never rewrite the creator of an existing
+match. Explicit result actions continue to name their actual acting Account.
+
 An ownership change is applied by inserting its immutable transfer record. The
 database advances a tournament-local ownership revision and changes the owner
 atomically; direct owner updates without the corresponding new transfer are

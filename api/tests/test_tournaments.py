@@ -10167,9 +10167,11 @@ def _se_payload(**overrides: Any) -> dict[str, Any]:
     )
 
 
+@pytest.mark.parametrize("ownership_changes", [False, True])
 async def test_a_single_elim_event_plays_through_to_a_champion(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
+    ownership_changes: bool,
 ) -> None:
     """A 4-entrant single-elim bracket, driven from go-live to a champion through the
     real routes, proving the completion seam seats each winner forward and materializes
@@ -10186,9 +10188,13 @@ async def test_a_single_elim_event_plays_through_to_a_champion(
       the result, seated into no fresh match — and re-running the advance materializes
       nothing (idempotence).
 
-    Standard seeding puts seed 1 v 4 in SF1 and seed 2 v 3 in SF2; the owner is seed 1
-    and wins throughout, so the final is 1 v 2 and seed 1 is champion.
+    Standard seeding puts seed 1 v 4 in SF1 and seed 2 v 3 in SF2; the creator is seed 1
+    and wins throughout, so the final is 1 v 2 and seed 1 is champion. With ownership
+    changes, each new match records the owner when materialized; existing match
+    attribution survives the next transfer.
     """
+    from app.tournament_authority import transfer_ownership
+
     client, owner = authed_client
     async with (
         opponent_session(db_session, "se-seed2") as (c2, u2),
@@ -10215,7 +10221,16 @@ async def test_a_single_elim_event_plays_through_to_a_champion(
         )
         await _cut_the_draw(client, tournament_id, event["id"])
         await _set_status(db_session, tournament_id, TournamentStatus.published)
-        assert (await _go_live(client, tournament_id)).status_code == 201
+        if ownership_changes:
+            await transfer_ownership(
+                db_session,
+                uuid.UUID(tournament_id),
+                actor_id=owner.id,
+                account_id=u2.id,
+            )
+            await db_session.commit()
+        live_client = c2 if ownership_changes else client
+        assert (await _go_live(live_client, tournament_id)).status_code == 201
 
         clients = {e1.id: client, e2.id: c2, e3.id: c3, e4.id: c4}
 
@@ -10238,6 +10253,17 @@ async def test_a_single_elim_event_plays_through_to_a_champion(
         )
         assert final.match_id is None
         assert await _match_count(db_session) == 2, "only the two semifinals so far"
+
+        semifinal_creator = u2.id if ownership_changes else owner.id
+        for fixture in (sf1, sf2):
+            assert fixture.match_id is not None
+            match = await _load_match(db_session, fixture.match_id)
+            assert match.created_by_user_id == semifinal_creator
+        if ownership_changes:
+            await transfer_ownership(
+                db_session, uuid.UUID(tournament_id), actor_id=u2.id, account_id=u3.id
+            )
+            await db_session.commit()
 
         # Born pending (scheduled) — call them to a table before they can be scored.
         await _call_fixtures(db_session, tournament_id, [sf1, sf2])
@@ -10280,6 +10306,13 @@ async def test_a_single_elim_event_plays_through_to_a_champion(
 
         # Side 1 ← entry_a (seed 1), side 2 ← entry_b (seed 2) — the fixed convention.
         final_match = await _load_match(db_session, final_row.match_id)
+        assert final_match.created_by_user_id == (
+            u3.id if ownership_changes else owner.id
+        )
+        for fixture in (sf1, sf2):
+            assert fixture.match_id is not None
+            match = await _load_match(db_session, fixture.match_id)
+            assert match.created_by_user_id == semifinal_creator
         by_number = {side.side_number: side for side in final_match.sides}
         assert [p.user_id for p in by_number[1].players] == [owner.id], (
             "side 1 seats SF1's winner"

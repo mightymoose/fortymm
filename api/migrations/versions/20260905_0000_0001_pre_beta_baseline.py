@@ -31,8 +31,10 @@ AUTHORITY_INTEGRITY_DDL = (
     BEGIN
         BEGIN
             PERFORM id FROM accounts
-            WHERE id IN (NEW.account_id, NEW.granted_by_account_id,
-                NEW.revoked_by_account_id)
+            -- The original grantor is immutable history on UPDATE. Only INSERT
+            -- creates that FK; later authority changes must not lock its Account.
+            WHERE id IN (NEW.account_id, NEW.revoked_by_account_id,
+                CASE WHEN TG_OP = 'INSERT' THEN NEW.granted_by_account_id END)
             ORDER BY id FOR KEY SHARE NOWAIT;
             PERFORM id FROM tournaments WHERE id = NEW.tournament_id FOR UPDATE NOWAIT;
         EXCEPTION WHEN lock_not_available THEN
