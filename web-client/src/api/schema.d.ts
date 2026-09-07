@@ -123,7 +123,7 @@ export interface paths {
          *     rotates the caller's session cookie to the token's owner so the
          *     confirming browser ends up signed in as the right user.
          *
-         *     A *merge* token (``merge:<uuid>``) is handled separately: instead of
+         *     An account-merge credential is handled separately: instead of
          *     stamping an address onto the guest that requested it, the guest is folded
          *     into the account that owns the address and the caller is signed in as that
          *     account. See ``_confirm_account_merge``.
@@ -229,7 +229,7 @@ export interface paths {
          *     rotates the caller's session cookie to the token's owner regardless of
          *     which guest session (if any) the browser arrived with.
          *
-         *     On a *first sign-in* token (``login:first...``) the owner is a user
+         *     On a first-sign-in credential the owner is a user
          *     ``request_login_email`` minted for an address that had no account, so its
          *     ``email`` is still NULL. This endpoint stamps ``email`` + ``confirmed_at``
          *     on it, which makes it the third writer of that pair alongside
