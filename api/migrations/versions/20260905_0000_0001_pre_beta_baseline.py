@@ -2682,7 +2682,8 @@ def upgrade() -> None:
     op.create_table(
         "tournament_fixtures",
         sa.CheckConstraint(
-            "winner_entry_id IS NULL OR (entry_a_id IS NOT NULL AND entry_b_id IS NOT NULL "
+            "winner_entry_id IS NULL OR (entry_a_id IS NOT NULL "
+            "AND entry_b_id IS NOT NULL "
             "AND winner_entry_id IN (entry_a_id, entry_b_id))",
             name="ck_fixture_valid_winner",
         ),
