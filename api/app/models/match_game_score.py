@@ -34,6 +34,7 @@ class MatchGameScore(Base):
         CheckConstraint(
             "side_2_points >= 0", name="ck_match_game_scores_side_2_points"
         ),
+        CheckConstraint("version >= 1", name="ck_match_game_scores_version"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

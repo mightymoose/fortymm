@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from sqlalchemy import DateTime, Integer, String, Text, func, text
+from sqlalchemy import CheckConstraint, DateTime, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -99,6 +99,9 @@ class DrawTypeOption(Base):
     """
 
     __tablename__ = "draw_types"
+    __table_args__ = (
+        CheckConstraint("display_order >= 0", name="ck_draw_types_display_order"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

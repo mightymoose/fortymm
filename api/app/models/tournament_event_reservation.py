@@ -3,6 +3,7 @@ from datetime import date, datetime, time
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -88,6 +89,12 @@ class TournamentEventReservation(Base):
 
     __tablename__ = "tournament_event_reservations"
     __table_args__ = (
+        CheckConstraint(
+            "position >= 0", name="ck_tournament_event_reservations_position"
+        ),
+        CheckConstraint(
+            "slot_start < slot_end", name="ck_tournament_event_reservations_ordered"
+        ),
         # Named explicitly rather than left to Postgres' ``<table>_pkey`` default, so
         # the model and the migration describe the SAME constraint. They are two
         # independent descriptions of one schema and only the models are under test

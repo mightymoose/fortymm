@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Integer,
@@ -74,6 +75,9 @@ class TournamentEventStageGroup(Base):
 
     __tablename__ = "tournament_event_stage_groups"
     __table_args__ = (
+        CheckConstraint(
+            "position >= 0", name="ck_tournament_event_stage_groups_position"
+        ),
         # Named explicitly rather than left to Postgres' ``<table>_pkey`` default, so
         # the model and the migration describe the SAME constraint. They are two
         # independent descriptions of one schema and only the models are under test

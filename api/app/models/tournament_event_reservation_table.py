@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKeyConstraint,
     Index,
@@ -73,6 +74,10 @@ class TournamentEventReservationTable(Base):
 
     __tablename__ = "tournament_event_reservation_tables"
     __table_args__ = (
+        CheckConstraint(
+            "position >= 0",
+            name="ck_tournament_event_reservation_tables_position",
+        ),
         # A reservation holds a table at most once. ``event_id`` leads for the reason it
         # leads on ``tournament_event_reservations``: every read is "the tables of this
         # reservation", and the key's own index answers that shape, the reservation

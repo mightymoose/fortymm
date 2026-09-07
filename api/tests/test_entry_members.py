@@ -924,8 +924,12 @@ async def test_fixture_attaching_an_already_played_match_captures_history(
     fixture.match_id = None
     await db_session.commit()
     await db_session.execute(
-        text("UPDATE matches SET status = :status WHERE id = :id"),
-        {"id": match.id, "status": status},
+        text(
+            "UPDATE matches SET status = :status, completed_at = "
+            "CASE WHEN :is_completed THEN clock_timestamp() ELSE NULL END "
+            "WHERE id = :id"
+        ),
+        {"id": match.id, "status": status, "is_completed": status == "completed"},
     )
     await db_session.commit()
     assert await db_session.scalar(text("SELECT count(*) FROM match_lineups")) == 0
@@ -3204,7 +3208,8 @@ async def test_clearing_completed_walkover_captures_actual_lineup(db_session, ev
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
     await db_session.execute(
         text(
-            "UPDATE matches SET status = 'completed', ending = 'walkover' "
+            "UPDATE matches SET status = 'completed', ending = 'walkover', "
+            "completed_at = clock_timestamp() "
             "WHERE id = :id"
         ),
         {"id": match.id},
@@ -3242,7 +3247,8 @@ async def test_walkover_rejects_existing_score_evidence(db_session, evidence):
         async with db_session.begin_nested():
             await db_session.execute(
                 text(
-                    "UPDATE matches SET status = 'completed', ending = 'walkover' "
+                    "UPDATE matches SET status = 'completed', ending = 'walkover', "
+                    "completed_at = clock_timestamp() "
                     "WHERE id = :id"
                 ),
                 {"id": match.id},
@@ -3257,7 +3263,8 @@ async def test_walkover_rejects_later_score_evidence(db_session, evidence):
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
     await db_session.execute(
         text(
-            "UPDATE matches SET status = 'completed', ending = 'walkover' "
+            "UPDATE matches SET status = 'completed', ending = 'walkover', "
+            "completed_at = clock_timestamp() "
             "WHERE id = :id"
         ),
         {"id": match.id},

@@ -44,6 +44,9 @@ class MatchResult(Base):
     __tablename__ = "match_results"
     __table_args__ = (
         CheckConstraint("supersedes_result_id <> id", name="ck_match_results_not_self"),
+        CheckConstraint(
+            "jsonb_typeof(games) = 'array'", name="ck_match_results_games_array"
+        ),
         UniqueConstraint("id", "match_id", name="uq_match_results_id_match"),
         ForeignKeyConstraint(
             ["supersedes_result_id", "match_id"],

@@ -1,9 +1,18 @@
 import enum
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, func, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    event,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -36,6 +45,12 @@ class Match(Base):
 
     __tablename__ = "matches"
     __table_args__ = (
+        CheckConstraint(
+            "status = 'voided' OR "
+            "(status = 'completed' AND completed_at IS NOT NULL) OR "
+            "(status IN ('pending', 'in_progress') AND completed_at IS NULL)",
+            name="ck_matches_completed_at",
+        ),
         Index(
             "ix_matches_created_by_user_id_created_at",
             "created_by_user_id",
@@ -143,3 +158,23 @@ class Match(Base):
         passive_deletes="all",
         order_by="MatchResult.submitted_at",
     )
+
+
+def _normalize_match_completion(target: Match) -> None:
+    """Keep legacy ORM writes compatible with the database state invariant."""
+    status = target.status.value
+    if status == MatchStatus.completed.value:
+        if target.completed_at is None:
+            target.completed_at = datetime.now(UTC)
+    elif status in (MatchStatus.pending.value, MatchStatus.in_progress.value):
+        target.completed_at = None
+
+
+@event.listens_for(Match, "before_insert")
+def _stamp_inserted_match(mapper: object, connection: object, target: Match) -> None:
+    _normalize_match_completion(target)
+
+
+@event.listens_for(Match, "before_update")
+def _stamp_updated_match(mapper: object, connection: object, target: Match) -> None:
+    _normalize_match_completion(target)
