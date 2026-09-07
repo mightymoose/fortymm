@@ -751,9 +751,7 @@ def serialize_event(
     # also owns the group → round → position ordering, so the serializer never sorts
     # and no two call sites can order a bracket differently.
     #
-    # The draw configuration is parsed ONCE, here, off the settings row that rides along
-    # with the event (``lazy="joined"``): both wire fields below come off this one arm,
-    # so the type and the count cannot be read from two different places and disagree.
+    # Parse the inline configuration once; all wire settings come from this arm.
     draw_settings = draw_settings_of(e.draw_settings)
     # The eager (``lazy="selectin"``) stages collection, validated once: served on
     # the wire below AND the source of the stage → draw-type map ``event_results``
@@ -767,11 +765,7 @@ def serialize_event(
             "tournament_id": e.tournament_id,
             "name": e.name,
             "format": e.format,
-            # The wire field is unchanged — only where it is read from moved. The
-            # value comes off the event's ``draw_settings`` row (ADR "an event's draw
-            # configuration is a row, not a column"), which is joined onto every query
-            # that loads an event (``lazy="joined"``), so the list endpoint's
-            # per-event serialization still issues no query of its own.
+            # The owned value is loaded with the event; no settings query is needed.
             "draw_type": draw_settings.draw_type,
             # The other half of the same fact, off the same parsed arm: **K**, which
             # only the ``rr-then-ko`` arm carries as a field. ``None`` for the two draw

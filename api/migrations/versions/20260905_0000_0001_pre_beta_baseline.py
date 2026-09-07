@@ -1509,39 +1509,6 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("role_id", "permission_id"),
     )
     op.create_table(
-        "tournament_event_draw_settings",
-        sa.Column(
-            "id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False
-        ),
-        sa.Column("draw_type_id", sa.UUID(), nullable=False),
-        sa.Column(
-            "settings",
-            postgresql.JSONB(astext_type=sa.Text()),
-            server_default=sa.text("'{}'::jsonb"),
-            nullable=False,
-        ),
-        sa.Column(
-            "created_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
-            nullable=False,
-        ),
-        sa.Column(
-            "updated_at",
-            sa.DateTime(timezone=True),
-            server_default=sa.text("now()"),
-            nullable=False,
-        ),
-        sa.CheckConstraint(
-            "jsonb_typeof(settings) = 'object'",
-            name="ck_tournament_event_draw_settings_settings_object",
-        ),
-        sa.ForeignKeyConstraint(
-            ["draw_type_id"], ["draw_types.id"], ondelete="RESTRICT"
-        ),
-        sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_table(
         "user_roles",
         sa.Column("user_id", sa.UUID(), nullable=False),
         sa.Column("role_id", sa.UUID(), nullable=False),
@@ -2199,7 +2166,17 @@ def upgrade() -> None:
             "NOT allow_multiple_entries_per_player OR format = 'teams'",
             name="ck_tournament_events_multiple_entries_teams_only",
         ),
-        sa.Column("draw_settings_id", sa.UUID(), nullable=False),
+        sa.Column("draw_type_id", sa.UUID(), nullable=False),
+        sa.Column(
+            "draw_settings",
+            postgresql.JSONB(astext_type=sa.Text()),
+            server_default=sa.text("'{}'::jsonb"),
+            nullable=False,
+        ),
+        sa.CheckConstraint(
+            "jsonb_typeof(draw_settings) = 'object'",
+            name="ck_tournament_events_draw_settings_object",
+        ),
         sa.Column("max_players", sa.Integer(), nullable=True),
         sa.Column("entry_fee", sa.Numeric(precision=8, scale=2), nullable=False),
         sa.Column("timezone", sa.String(length=64), nullable=False),
@@ -2235,8 +2212,8 @@ def upgrade() -> None:
             "max_players > 0", name="ck_tournament_events_max_players_positive"
         ),
         sa.ForeignKeyConstraint(
-            ["draw_settings_id"],
-            ["tournament_event_draw_settings.id"],
+            ["draw_type_id"],
+            ["draw_types.id"],
             ondelete="RESTRICT",
         ),
         sa.ForeignKeyConstraint(
@@ -2246,12 +2223,6 @@ def upgrade() -> None:
         sa.UniqueConstraint(
             "tournament_id", "id", name="uq_tournament_events_tournament_id_id"
         ),
-    )
-    op.create_index(
-        op.f("ix_tournament_events_draw_settings_id"),
-        "tournament_events",
-        ["draw_settings_id"],
-        unique=False,
     )
     op.create_index(
         "ix_tournament_events_tournament_id_created_at",
@@ -3270,9 +3241,6 @@ def downgrade() -> None:
     op.drop_index(
         "ix_tournament_events_tournament_id_created_at", table_name="tournament_events"
     )
-    op.drop_index(
-        op.f("ix_tournament_events_draw_settings_id"), table_name="tournament_events"
-    )
     op.drop_table("tournament_events")
     op.drop_index(
         "ix_schedule_solves_tournament_id_requested_at", table_name="schedule_solves"
@@ -3321,7 +3289,6 @@ def downgrade() -> None:
     )
     op.drop_table("user_tokens")
     op.drop_table("user_roles")
-    op.drop_table("tournament_event_draw_settings")
     op.drop_table("role_permissions")
     op.drop_table("notification_preferences")
     op.drop_table("notification_channel_settings")

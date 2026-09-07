@@ -939,27 +939,10 @@ async def test_panel_statement_count_does_not_grow_with_events(
     engine: AsyncEngine,
     event_count: int,
 ) -> None:
-    """The panel's round and stage wording is draw-type-dependent, and since #1086 the
-    draw type lives on the event's ``draw_settings`` row rather than on a column of the
-    event — so reading it is exactly the shape an N+1 takes: one SELECT per event, on
-    the endpoint every signed-in player loads. It must cost none, and that is what the
-    relationship's ``lazy="joined"`` buys: the settings row rides along in the query
-    that already loads the event.
+    """Draw-dependent wording must not add queries as the event count grows.
 
-    The two ``event_count`` cases are what makes this discriminating. A per-event
-    settings load emits one statement per event, so it would measure 13 at one event and
-    15 at three — failing the pin at three even if it slipped past at one. The events
-    alternate round-robin and single-elim, so both branches of the wording are exercised
-    by the same payload, and the assertions below read the label off each.
-
-    The second assertion names the failure directly rather than only counting: every
-    statement that touches ``tournament_event_draw_settings`` must also name
-    ``tournament_events``, i.e. be the join — a standalone lazy load of the settings
-    table is the specific regression, and a future statement added elsewhere must not be
-    able to absorb it under an unchanged total.
-
-    Counted around the builder rather than the HTTP request, and on a fresh session, for
-    the reasons ``counted_statements`` documents.
+    Draw configuration is inline on the event. Count around the builder on a
+    fresh session, then verify that both draw types produced their own wording.
     """
     client, owner = authed_client
     user_id = owner.id  # read outside the counted block; see counted_statements
@@ -1002,11 +985,6 @@ async def test_panel_statement_count_does_not_grow_with_events(
         print(f"[{n}] {' '.join(statement.split())}")
 
     assert len(statements) == EXPECTED_DASHBOARD_PANEL_STATEMENTS, statements
-    assert not [
-        s
-        for s in statements
-        if "tournament_event_draw_settings" in s and "tournament_events" not in s
-    ], "a settings row was loaded on its own — the draw type became an N+1"
 
     # And the block it counted really did the work: every event is on the panel, and
     # each one's wording is its own draw type's.

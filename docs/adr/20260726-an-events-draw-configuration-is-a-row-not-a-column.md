@@ -5,6 +5,10 @@ worktrees; see `scripts/check-adr-numbering.sh`)
 
 ## Status
 
+Superseded for settings ownership and storage by
+[Event draw settings are owned inline values](20260906-event-draw-settings-are-owned-inline-values.md)
+(#1678). The remaining domain decisions are unchanged.
+
 Accepted — decided before implementation, alongside "A draw type is a seeded row,
 and the enum holds only what runs" (same date), which this ADR assumes. Scopes
 work across three tickets: #1086 lands the settings table, a follow-on ticket

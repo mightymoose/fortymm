@@ -56,7 +56,7 @@ from app.scheduling import ScheduleSnapshot, SolveResult
 from app.schemas.notification import NotificationJob
 from app.schemas.tournament import draw_settings_from_storage
 from app.sessions import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_SAFE_METHODS
-from app.tournament_draw_settings import draw_settings_row
+from app.tournament_draw_settings import draw_settings_value
 from app.tournament_event_stages import stage_template
 from app.tournament_reservations import materialise_groups
 
@@ -364,7 +364,7 @@ def event_draw_settings(
         settings["qualifiers_per_group"] = qualifiers_per_group
     if rounds is not None:
         settings["rounds"] = rounds
-    return draw_settings_row(draw_settings_from_storage(draw_type, settings))
+    return draw_settings_value(draw_settings_from_storage(draw_type, settings))
 
 
 def event_groups(
