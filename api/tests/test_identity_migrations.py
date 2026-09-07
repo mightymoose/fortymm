@@ -62,6 +62,13 @@ async def test_fresh_alembic_install_has_schema_parity(postgres_url):
 async def test_disposable_baseline_can_be_downgraded_and_reinstalled(postgres_url):
     async with migrated_database(postgres_url) as migrated:
         run_alembic(migrated.url, "downgrade", "base")
+        async with migrated.connect() as connection:
+            assert (
+                await connection.scalar(
+                    text("SELECT to_regprocedure('check_match_lineup()')")
+                )
+                is None
+            )
         run_alembic(migrated.url, "upgrade", "head")
         async with migrated.connect() as connection:
             assert (

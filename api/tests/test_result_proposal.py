@@ -7,8 +7,12 @@ finalizes solo/unrated matches, leaves a rated two-human match standing, honours
 the counter chain, and raises the domain exceptions (never ``HTTPException``)
 the adapters map."""
 
+import asyncio
+from datetime import timedelta
+
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.match_creation import create_match
 from app.models import MatchStatus
@@ -16,6 +20,7 @@ from app.result_acceptance import (
     MatchClosedError,
     NegotiationConflictError,
     UndecidedBoardError,
+    accept_result,
 )
 from app.result_chain import accepted_result, head_result, standing_result
 from app.result_proposal import propose_result
@@ -28,6 +33,135 @@ def _decisive_board(winner_side: int = 1) -> list[MatchResultsGameWrite]:
     if winner_side == 1:
         return [MatchResultsGameWrite(game_number=1, side_1_points=11, side_2_points=4)]
     return [MatchResultsGameWrite(game_number=1, side_1_points=4, side_2_points=11)]
+
+
+@pytest.mark.parametrize(
+    "parent", ["tournaments", "tournament_events", "actor", "submitter"]
+)
+@pytest.mark.parametrize("operation", ["acceptance", "proposal", "retirement"])
+async def test_tournament_result_write_waits_for_parent_writer(
+    db_session, engine, parent, operation
+):
+    match, director = await directed_tournament_match(
+        db_session, tag="accept-parent-lock", best_of=1
+    )
+    sides = sorted(match.sides, key=lambda side: side.side_number)
+    proposal = None
+    if operation != "proposal":
+        outcome = await propose_result(
+            db_session,
+            match.id,
+            sides[0].players[0].user_id,
+            games=_decisive_board(),
+            supersedes_result_id=None,
+        )
+        proposal = standing_result(outcome.match)
+        assert proposal is not None
+        if operation == "retirement":
+            match.match_settings.retirement_window = timedelta(microseconds=1)
+    event = (
+        await db_session.execute(
+            text(
+                "SELECT e.id, e.tournament_id FROM tournament_events e "
+                "JOIN tournament_event_stages s ON s.event_id = e.id "
+                "JOIN tournament_fixtures f ON f.stage_id = s.id "
+                "WHERE f.match_id = :match"
+            ),
+            {"match": match.id},
+        )
+    ).one()
+    await db_session.commit()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as scheduling, sessions() as accepting:
+        scheduler_pid = await scheduling.scalar(text("SELECT pg_backend_pid()"))
+        accept_pid = await accepting.scalar(text("SELECT pg_backend_pid()"))
+        table = "accounts" if parent in ("actor", "submitter") else parent
+        await scheduling.execute(
+            text(f"SELECT id FROM {table} WHERE id = :id FOR UPDATE"),
+            {
+                "id": (
+                    sides[1 if operation != "proposal" and parent == "actor" else 0]
+                    .players[0]
+                    .user_id
+                )
+                if parent in ("actor", "submitter")
+                else event.tournament_id
+                if parent == "tournaments"
+                else event.id
+            },
+        )
+        from app.notifications.service import NotificationService
+        from app.retirement_jobs import RetirementOutcome, retire_if_lapsed
+        from tests._helpers import FakeSender
+
+        task = asyncio.create_task(
+            retire_if_lapsed(
+                accepting,
+                match.id,
+                proposal.id,
+                NotificationService(accepting, FakeSender()),
+            )
+            if operation == "retirement" and proposal is not None
+            else accept_result(
+                accepting, match.id, sides[1].players[0].user_id, result_id=proposal.id
+            )
+            if proposal is not None
+            else propose_result(
+                accepting,
+                match.id,
+                sides[0].players[0].user_id,
+                games=_decisive_board(),
+                supersedes_result_id=None,
+            )
+        )
+        try:
+
+            async def wait_for_parent():
+                while scheduler_pid not in await db_session.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": accept_pid}
+                ):
+                    if task.done():
+                        await task
+                        pytest.fail("acceptance bypassed the parent lock")
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_parent(), timeout=5)
+        finally:
+            await scheduling.rollback()
+            if not task.done():
+                await asyncio.wait_for(task, timeout=5)
+        result = await task
+        if operation == "acceptance":
+            assert result.status is MatchStatus.completed
+        elif operation == "retirement":
+            assert result is RetirementOutcome.retired
+        else:
+            assert result.awaiting_acceptance is True
+
+
+async def test_tournament_proposal_still_refuses_an_active_match_writer(
+    db_session, engine
+):
+    from app.match_scoring import MatchLockUnavailable, load_match_for_write
+
+    match, director = await directed_tournament_match(
+        db_session, tag="proposal-busy-match", best_of=1
+    )
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as first, sessions() as second:
+        await load_match_for_write(first, match.id, director.id, lock=True)
+        with pytest.raises(MatchLockUnavailable):
+            await asyncio.wait_for(
+                propose_result(
+                    second,
+                    match.id,
+                    director.id,
+                    games=_decisive_board(),
+                    supersedes_result_id=None,
+                ),
+                timeout=1,
+            )
+        await first.rollback()
 
 
 async def test_first_proposal_on_solo_match_self_accepts_and_finalizes(

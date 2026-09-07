@@ -1,21 +1,25 @@
 import enum
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
+    BigInteger,
     DateTime,
     Enum,
     ForeignKey,
     Index,
     Integer,
+    String,
     func,
+    select,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 
 from app.db import Base
+from app.models.tournament_entry_member import TournamentEntryMember
 
 if TYPE_CHECKING:
     from app.models.tournament import TournamentEvent
@@ -27,15 +31,14 @@ class TournamentEntryStatus(enum.Enum):
 
 
 class TournamentEntry(Base):
-    """One player's registration in a tournament event.
+    """The competing unit in one event, with separately recorded Player members.
 
     **Withdrawal is a soft-delete**: withdrawing flips ``status`` to
     ``withdrawn`` and keeps the row, so an event's entry history survives. That
-    is why the uniqueness guard below is a *partial* unique index rather than a
-    plain one — a plain unique index on ``(event_id, user_id)`` would let the
-    withdrawn row permanently block the same player from ever re-entering. The
-    invariant we actually want is "at most one **active** entry per player per
-    event", with any number of historical withdrawn rows alongside it.
+    frees its players to enter again. Deferred database checks enforce current
+    membership cardinality and per-event participation, with an explicit team
+    exception. Membership intervals and actual match lineups retain history;
+    see ``entry_integrity`` and the entry-members ADR.
 
     An event's ``entered`` count is derived from a live count of active entries;
     it is not a stored column.
@@ -48,20 +51,7 @@ class TournamentEntry(Base):
 
     __tablename__ = "tournament_entries"
     __table_args__ = (
-        # At most one *active* entry per player per event. Partial on
-        # ``status = 'entered'`` so withdrawing frees the (event, user) pair for
-        # re-entry while the withdrawn row stays on the books. A duplicate
-        # active entry raises IntegrityError, which the route turns into a 409 —
-        # race-free, because the database (not a read-then-write check) decides.
-        Index(
-            "uq_tournament_entries_event_id_user_id_active",
-            "event_id",
-            "user_id",
-            unique=True,
-            postgresql_where=text("status = 'entered'"),
-        ),
         Index("ix_tournament_entries_event_id", "event_id"),
-        Index("ix_tournament_entries_user_id", "user_id"),
         Index("ix_tournament_entries_added_by_user_id", "added_by_user_id"),
     )
 
@@ -75,16 +65,28 @@ class TournamentEntry(Base):
         ForeignKey("tournament_events.id", ondelete="CASCADE"),
         nullable=False,
     )
-    user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("players.id", ondelete="RESTRICT"),
-        nullable=False,
+    # Existing singles readers keep their interface, with no second stored identity.
+    # More than one current member has no singles projection.
+    user_id: Mapped[uuid.UUID] = column_property(
+        select(
+            func.entry_canonical_player(
+                func.min(TournamentEntryMember.player_id.cast(String)).cast(UUID)
+            )
+        )
+        .where(
+            TournamentEntryMember.entry_id == id,
+            TournamentEntryMember.left_at.is_(None),
+        )
+        .having(func.count() == 1)
+        .correlate_except(TournamentEntryMember)
+        .scalar_subquery(),
+        expire_on_flush=False,
     )
     #: Who put this player in the event. ``NULL`` is not "unknown" — it is the
     #: encoding of *self-registration*: the player entered themselves. A non-null
     #: id is the director who entered them (ADR-0784).
     #:
-    #: ``RESTRICT``, like ``user_id`` above and ``match_results.accepted_by_user_id``:
+    #: ``RESTRICT``, like ``match_results.accepted_by_user_id``:
     #: deliberately NOT ``SET NULL``, because nulling this column on a user delete
     #: would not lose a fact, it would *rewrite* one — a director-added entry would
     #: silently start claiming the player registered themselves. Account merge
@@ -108,5 +110,19 @@ class TournamentEntry(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    created_transaction_id: Mapped[int] = mapped_column(
+        BigInteger, server_default=text("txid_current()"), nullable=False
+    )
 
     event: Mapped["TournamentEvent"] = relationship(back_populates="entries")
+    members: Mapped[list[TournamentEntryMember]] = relationship(
+        back_populates="entry", cascade="all, delete-orphan", passive_deletes=True
+    )
+
+    def __init__(self, **kwargs: Any) -> None:
+        player_id = kwargs.pop("user_id", None)
+        if player_id is not None:
+            kwargs["members"] = [TournamentEntryMember(player_id=player_id)]
+        super().__init__(**kwargs)
+        if player_id is not None:
+            self.user_id = player_id

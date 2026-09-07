@@ -26,6 +26,11 @@ class MatchStatus(enum.Enum):
     voided = "voided"
 
 
+class MatchEnding(enum.Enum):
+    walkover = "walkover"
+    stopped_during_play = "stopped_during_play"
+
+
 class Match(Base):
     """Top-level match record. Thin by design; most data lives in related tables."""
 
@@ -73,6 +78,11 @@ class Match(Base):
         Enum(MatchStatus, name="match_status"),
         nullable=False,
         server_default=MatchStatus.pending.value,
+    )
+    # Database-only special endings. NULL retains ordinary result negotiation.
+    # "Retirement" already means automatic result acceptance in this codebase.
+    ending: Mapped[MatchEnding | None] = mapped_column(
+        Enum(MatchEnding, name="match_ending"), nullable=True
     )
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

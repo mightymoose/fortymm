@@ -33,10 +33,16 @@ jobs:
       - name: Run Playwright tests
         run: npx playwright test
         working-directory: e2e
+        env:
+          E2E_KEEP_STACK: '1'
 
-      - name: Dump docker compose logs on failure
-        if: ${{ failure() }}
+      - name: Dump docker compose logs including retried failures
+        if: ${{ !cancelled() }}
         run: docker compose -f docker-compose.dev.yml -f docker-compose.e2e.yml logs --no-color
+
+      - name: Clean up e2e stack
+        if: ${{ always() }}
+        run: docker compose -f docker-compose.dev.yml -f docker-compose.e2e.yml down -v
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}

@@ -1,11 +1,13 @@
+from app.models import entry_integrity as entry_integrity
 from app.models.account import Account, AccountPlayer, LoginIdentity
 from app.models.device_token import DeviceToken
 from app.models.draw_type import DrawTypeOption
 from app.models.league import League, LeagueVisibility
 from app.models.league_membership import LeagueMembership
-from app.models.match import Match, MatchStatus
+from app.models.match import Match, MatchEnding, MatchStatus
 from app.models.match_game import MatchGame
 from app.models.match_game_score import MatchGameScore
+from app.models.match_lineup import MatchLineup, MatchLineupPlayer
 from app.models.match_result import MatchResult
 from app.models.match_settings import MatchSettings, VerificationPolicy
 from app.models.match_side import MatchSide
@@ -37,6 +39,7 @@ from app.models.tournament import (
     TournamentStatus,
 )
 from app.models.tournament_entry import TournamentEntry, TournamentEntryStatus
+from app.models.tournament_entry_member import TournamentEntryMember
 from app.models.tournament_event_draw_settings import TournamentEventDrawSettings
 from app.models.tournament_event_group_reservation import (
     TournamentEventGroupReservation,
@@ -67,8 +70,11 @@ __all__ = [
     "LeagueMembership",
     "LeagueVisibility",
     "Match",
+    "MatchEnding",
     "MatchGame",
     "MatchGameScore",
+    "MatchLineup",
+    "MatchLineupPlayer",
     "MatchResult",
     "MatchSettings",
     "MatchSide",
@@ -91,6 +97,7 @@ __all__ = [
     "SolverVerdict",
     "Tournament",
     "TournamentEntry",
+    "TournamentEntryMember",
     "TournamentEntryStatus",
     "TournamentEvent",
     "TournamentEventDrawSettings",

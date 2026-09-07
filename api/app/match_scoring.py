@@ -30,7 +30,7 @@ import uuid
 from collections.abc import Awaitable
 from typing import Any, Protocol, assert_never, cast
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, select, text, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.base import ExecutableOption
@@ -74,8 +74,12 @@ class MatchLockUnavailable(Exception):
 _LOCK_NOT_AVAILABLE = "55P03"
 
 
-async def _lock_match_row(
-    db: AsyncSession, match_id: uuid.UUID, *, nowait: bool = False
+async def lock_match_for_transition(
+    db: AsyncSession,
+    match_id: uuid.UUID,
+    *,
+    nowait: bool = False,
+    actor_id: uuid.UUID | None = None,
 ) -> None:
     """Take a transaction-scoped row lock on the ``matches`` row so the
     negotiation transitions (``/results`` propose, ``/results/{id}/acceptance``)
@@ -107,6 +111,57 @@ async def _lock_match_row(
     *legitimate* acceptor that must wait, re-read, and proceed."""
     stmt = select(Match.id).where(Match.id == match_id).with_for_update(nowait=nowait)
     try:
+        await db.execute(
+            text(
+                "SELECT id FROM accounts WHERE id IN ("
+                "SELECT CAST(:actor AS uuid) UNION "
+                "SELECT submitted_by_user_id FROM match_results "
+                "WHERE match_id = :match "
+                "UNION SELECT accepted_by_user_id FROM match_results "
+                "WHERE match_id = :match "
+                "UNION SELECT ap.account_id FROM account_players ap "
+                "JOIN match_side_players p ON p.user_id = ap.player_id "
+                "WHERE p.match_id = :match"
+                ") ORDER BY id FOR KEY SHARE"
+            ),
+            {"actor": actor_id, "match": match_id},
+        )
+        # Reserve this match's write flow before waiting for shared tournament
+        # parents. A second proposal must still fail fast for the SAME match,
+        # not mistake unrelated scheduling work for a competing proposal.
+        key = "hashtextextended('match-write:' || CAST(:match AS text), 0)"
+        if nowait:
+            if not await db.scalar(
+                text(f"SELECT pg_try_advisory_xact_lock({key})"),
+                {"match": str(match_id)},
+            ):
+                raise MatchLockUnavailable
+        else:
+            await db.execute(
+                text(f"SELECT pg_advisory_xact_lock({key})"), {"match": str(match_id)}
+            )
+        # Tournament completion guards require parents before the match. Take
+        # these locks before loading/mutating it, so ordinary acceptance waits
+        # safely for scheduling instead of leaking a retryable SQL error.
+        await db.execute(
+            text(
+                "SELECT t.id FROM tournaments t "
+                "JOIN tournament_events e ON e.tournament_id = t.id "
+                "JOIN tournament_event_stages s ON s.event_id = e.id "
+                "JOIN tournament_fixtures f ON f.stage_id = s.id "
+                "WHERE f.match_id = :match FOR SHARE OF t"
+            ),
+            {"match": match_id},
+        )
+        await db.execute(
+            text(
+                "SELECT e.id FROM tournament_events e "
+                "JOIN tournament_event_stages s ON s.event_id = e.id "
+                "JOIN tournament_fixtures f ON f.stage_id = s.id "
+                "WHERE f.match_id = :match FOR UPDATE OF e"
+            ),
+            {"match": match_id},
+        )
         await db.execute(stmt)
     except DBAPIError as exc:
         if nowait and getattr(exc.orig, "sqlstate", None) == _LOCK_NOT_AVAILABLE:
@@ -149,7 +204,7 @@ async def load_match_for_write(
     fast, participant path — director authority is never even consulted for a
     match the director plays in."""
     if lock:
-        await _lock_match_row(db, match_id, nowait=nowait)
+        await lock_match_for_transition(db, match_id, nowait=nowait, actor_id=user_id)
     result = await db.execute(
         select(Match)
         .where(Match.id == match_id)

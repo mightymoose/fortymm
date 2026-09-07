@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     ForeignKeyConstraint,
@@ -87,6 +88,10 @@ class TournamentFixture(Base):
 
     __tablename__ = "tournament_fixtures"
     __table_args__ = (
+        CheckConstraint(
+            "entry_a_id <> entry_b_id",
+            name="ck_tournament_fixtures_distinct_entries",
+        ),
         # "My group is my own stage's group", as one line of DDL (ADR 20260801,
         # parented on the stage by ADR 20260815). The referenced ``(stage_id, id)`` is a
         # unique constraint on ``tournament_event_stage_groups`` that exists for no
@@ -132,7 +137,9 @@ class TournamentFixture(Base):
         Index("ix_tournament_fixtures_stage_id", "stage_id"),
         # A completed match is the trigger to write ``winner_entry_id`` back and re-run
         # ``advance()``, and that path arrives holding a match id, not a fixture id.
-        Index("ix_tournament_fixtures_match_id", "match_id"),
+        # One match materializes exactly one fixture; unmaterialized fixtures
+        # may all retain NULL without competing for this unique key.
+        Index("ix_tournament_fixtures_match_id", "match_id", unique=True),
         # The index Postgres does NOT create for a REFERENCING column, and under
         # ``ON DELETE RESTRICT`` it is the one that pays for itself: every delete of a
         # ``tournament_tables`` row must prove no fixture references it, which unindexed

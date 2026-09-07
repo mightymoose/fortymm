@@ -7,11 +7,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from httpx import AsyncClient
 from redis.exceptions import RedisError
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app import account_merge
 from app import queue as queue_module
 from app.account_merge import merge_user
 from app.leagues import add_user_to_default_league, get_default_league
@@ -719,11 +718,14 @@ async def test_merge_dedups_entry_when_both_users_entered_same_event(
     await db_session.commit()
 
     entries = await _entries_for(db_session, event)
-    assert [e.id for e in entries] == [survivor_entry.id], (
-        "the survivor's entry stands and the guest's duplicate is dropped"
+    assert {e.id for e in entries} == {survivor_entry.id, guest_entry.id}
+    assert [e.id for e in entries if e.status is TournamentEntryStatus.entered] == [
+        survivor_entry.id
+    ]
+    assert (
+        next(e for e in entries if e.id == guest_entry.id).status
+        is TournamentEntryStatus.withdrawn
     )
-    assert entries[0].user_id == verified.id
-    assert entries[0].status is TournamentEntryStatus.entered
 
 
 async def test_merge_keeps_withdrawn_entry_when_survivor_is_actively_entered(
@@ -779,47 +781,34 @@ async def test_merge_carries_both_users_withdrawn_entries_for_one_event(
     assert all(e.status is TournamentEntryStatus.withdrawn for e in entries)
 
 
-async def test_entry_dedup_status_is_bound_from_the_enum_not_a_sql_literal(
-    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+async def test_merge_preserves_original_membership_player_ids(
+    db_session: AsyncSession,
 ):
-    """Drift guard for the dedup's status predicate.
-
-    Which status counts as *active* must come from ``TournamentEntryStatus``, not
-    from an ``'entered'`` spelled into the raw SQL. A literal there passes every
-    other test in this file today and rots silently the day the enum's value is
-    renamed: the model, the routes and the partial unique index all follow the
-    enum, the SQL doesn't, so the dedup's EXISTS matches nothing, deletes nothing,
-    and the unconditional re-point that follows collides with the index — every
-    merge where both users actively entered the same event dies on IntegrityError.
-
-    Nothing static catches that, so pin it behaviourally: repoint the single seam
-    (``_ACTIVE_ENTRY_STATUS``) at ``withdrawn`` and assert the SQL *follows*. Under
-    the correct implementation the pair of withdrawn rows is now the colliding
-    pair, so the guest's is deduped away and one survives. Under a hardcoded
-    ``'entered'`` the seam is ignored, nothing is deduped, and both rows survive
-    (i.e. the test that would have caught the drift goes red).
-    """
-    monkeypatch.setattr(
-        account_merge, "_ACTIVE_ENTRY_STATUS", TournamentEntryStatus.withdrawn.value
-    )
+    """Identity reconciliation leaves the original membership facts intact."""
     ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
     verified = await _make_verified(db_session, "rita@example.com")
     event = await _make_event(db_session, verified)
-
-    await _enter(db_session, event, ephemeral, status=TournamentEntryStatus.withdrawn)
-    survivor_withdrawn = await _enter(
-        db_session, event, verified, status=TournamentEntryStatus.withdrawn
-    )
+    guest = await _enter(db_session, event, ephemeral)
+    survivor = await _enter(db_session, event, verified)
+    original_players = {guest.id: ephemeral.player_id, survivor.id: verified.player_id}
 
     await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
     await db_session.commit()
 
-    entries = await _entries_for(db_session, event)
-    assert [e.id for e in entries] == [survivor_withdrawn.id], (
-        "the dedup must treat whatever the enum says is active as active — "
-        "with the seam pointed at 'withdrawn', the withdrawn duplicate is the "
-        "one it drops; a hardcoded 'entered' in the SQL would drop nothing"
+    recorded = dict(
+        (
+            await db_session.execute(
+                text("SELECT entry_id, player_id FROM tournament_entry_members")
+            )
+        ).all()
     )
+    assert recorded == original_players
+    projected = (
+        await db_session.scalars(
+            select(TournamentEntry.user_id).where(TournamentEntry.event_id == event.id)
+        )
+    ).all()
+    assert projected == [verified.player_id, verified.player_id]
 
 
 async def test_merge_repoints_active_entry_over_survivors_withdrawn_row(
@@ -1076,12 +1065,13 @@ async def test_merge_carries_the_earlier_registration_onto_the_surviving_entry(
     await db_session.commit()
 
     entries = await _entries_for(db_session, event)
-    assert [e.id for e in entries] == [survivor_entry.id]
-    assert entries[0].created_at == earlier, (
+    active = [e for e in entries if e.status is TournamentEntryStatus.entered]
+    assert [e.id for e in active] == [survivor_entry.id]
+    assert active[0].created_at == earlier, (
         "the surviving entry must carry the EARLIER of the two registrations — "
         "keeping the survivor's own timestamp demotes them in the next draw"
     )
-    assert entries[0].seed == 3, (
+    assert active[0].seed == 3, (
         "an unseeded survivor adopts the guest's seed; the seeding is a fact about "
         "the player, not about which of their two sessions holds the row"
     )
@@ -1112,9 +1102,10 @@ async def test_merge_keeps_the_survivors_seed_when_both_entries_carry_one(
     await db_session.commit()
 
     entries = await _entries_for(db_session, event)
-    assert [e.id for e in entries] == [survivor_entry.id]
-    assert entries[0].seed == 2, "the survivor's own seed stands"
-    assert entries[0].created_at == earlier
+    active = [e for e in entries if e.status is TournamentEntryStatus.entered]
+    assert [e.id for e in active] == [survivor_entry.id]
+    assert active[0].seed == 2, "the survivor's own seed stands"
+    assert active[0].created_at == earlier
 
 
 async def test_a_merge_without_a_collision_leaves_a_cut_draw_completely_intact(

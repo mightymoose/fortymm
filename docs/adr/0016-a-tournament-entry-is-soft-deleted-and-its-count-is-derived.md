@@ -1,5 +1,8 @@
 # 16. A tournament entry is soft-deleted, and an event's entry count is derived
 
+The stored single-user representation, uniqueness mechanism and deletion of merge
+duplicates are superseded by [Entry members and lineup history](20260906-event-entries-have-members-and-match-lineups-have-history.md).
+
 Amended by [Accounts authorize durable Players](20260905-accounts-authorize-durable-players.md): sporting identity belongs
 to Player; authentication and preserved historical authorship belong to Account.
 The linked decision supersedes conflicting identity and merge-ownership clauses.

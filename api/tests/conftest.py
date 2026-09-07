@@ -249,10 +249,14 @@ async def db_session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
         finally:
             await session.rollback()
     async with engine.begin() as conn:
-        # Explicit reset of the disposable test database, including retained
-        # proposal history that normal SQL DELETE must never erase.
-        tables = ", ".join(f'"{table.name}"' for table in Base.metadata.sorted_tables)
-        await conn.execute(text(f"TRUNCATE {tables} CASCADE"))
+        # Reset this disposable test database, not through domain DELETE verbs:
+        # immutable history now rejects row deletion immediately. Name every
+        # metadata table explicitly; no CASCADE into unrelated tables/schemas.
+        tables = ", ".join(
+            conn.dialect.identifier_preparer.format_table(table)
+            for table in Base.metadata.sorted_tables
+        )
+        await conn.execute(text(f"TRUNCATE TABLE {tables}"))
 
 
 GLICKO2_STATE_SCHEMA = {

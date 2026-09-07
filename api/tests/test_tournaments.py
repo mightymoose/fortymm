@@ -91,6 +91,7 @@ from app.tournaments import (
     uncut_event_draw,
     update_event,
 )
+from tests._entry_seeds import entry_with_members, seed_fixture_match_sides
 from tests._helpers import (
     accept_standing_result,
     assert_tournament_address_is_sql_null,
@@ -2686,8 +2687,10 @@ async def _enter(
     ids in a *known* order (see the unseeded-registration-order draw test, which mints
     them backwards) is what makes the two rules distinguishable.
     """
-    entry = TournamentEntry(
-        event_id=uuid.UUID(event_id), user_id=user.id, status=status, seed=seed
+    event = await db_session.get(TournamentEvent, uuid.UUID(event_id))
+    assert event is not None
+    entry = entry_with_members(
+        db_session, event, user.player_id, status=status, seed=seed
     )
     if entry_id is not None:
         entry.id = entry_id
@@ -10992,6 +10995,7 @@ async def test_a_decided_matchs_placement_flags_neither_axis(
 
     match = await _make_match(db_session, owner, default_league)
     match.status = frozen_status
+    await seed_fixture_match_sides(db_session, fixture, match)
     fixture.match_id = match.id
     await db_session.commit()
 
@@ -11223,6 +11227,7 @@ async def test_a_played_out_fixture_refuses_a_placement_move(
 
     match = await _make_match(db_session, owner, default_league)
     match.status = frozen_status
+    await seed_fixture_match_sides(db_session, fixture, match)
     fixture.match_id = match.id
     await db_session.commit()
 
@@ -11252,6 +11257,7 @@ async def test_an_in_progress_fixture_is_freely_placeable(
     table_1, _table_2 = await _catalogue_table_ids(client, tournament_id)
     match = await _make_match(db_session, owner, default_league)
     match.status = MatchStatus.in_progress
+    await seed_fixture_match_sides(db_session, fixture, match)
     fixture.match_id = match.id
     await db_session.commit()
 
@@ -11565,6 +11571,7 @@ async def _call_fixture_directly(
     )
     db_session.add(match)
     await db_session.flush()
+    await seed_fixture_match_sides(db_session, fixture, match)
     fixture.match_id = match.id
     fixture.table_id = table_id
     fixture.scheduled_start = start

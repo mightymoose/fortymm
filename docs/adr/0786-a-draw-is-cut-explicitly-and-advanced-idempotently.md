@@ -5,6 +5,10 @@ concurrent worktrees, as the duplicate 0008s in this directory attest)
 
 ## Status
 
+Amended by [entry membership and lineup history](20260906-event-entries-have-members-and-match-lineups-have-history.md):
+identity reconciliation withdraws the duplicate entry instead of deleting it.
+The unplayed-draw invalidation and seed/order reconciliation rules remain.
+
 Accepted — design for slices B/C of epic #780 (#785, #786, #788, #789), decided
 before implementation.
 

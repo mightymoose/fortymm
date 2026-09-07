@@ -121,6 +121,7 @@ from app.tournament_draws import cut_draw
 from app.tournament_event_stages import mint_stages
 from app.tournament_materialization import materialize_event
 from app.tournament_queries import stage_ids_for_events
+from tests._entry_seeds import seed_fixture_match_sides
 from tests._helpers import (
     event_draw_settings,
     event_groups,
@@ -501,6 +502,7 @@ async def _link_match(
     )
     db.add(match)
     await db.flush()
+    await seed_fixture_match_sides(db, fixture, match)
     fixture.match_id = match.id
 
 

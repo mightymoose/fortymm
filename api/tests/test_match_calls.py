@@ -69,6 +69,7 @@ from app.schemas.notification import NotificationJob
 from app.tournament_draws import cut_draw
 from app.tournament_event_stages import mint_stages
 from app.tournament_queries import stage_ids_for_events, stage_ids_for_tournament
+from tests._entry_seeds import seed_fixture_match_sides
 from tests._helpers import (
     event_groups,
     hijack_solve,
@@ -1058,6 +1059,7 @@ async def _hold_user_in_second_event(
         match_id=match.id,
     )
     db.add(fixture)
+    await seed_fixture_match_sides(db, fixture, match)
     await db.commit()
     return fixture.id
 
@@ -1564,6 +1566,7 @@ async def _link_match(
     )
     db.add(match)
     await db.flush()
+    await seed_fixture_match_sides(db, fixture, match)
     fixture.match_id = match.id
     await db.commit()
     return match.id

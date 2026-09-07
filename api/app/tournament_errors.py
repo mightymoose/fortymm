@@ -473,6 +473,25 @@ class EventVersionConflictError(Exception):
         self.current_version = current_version
 
 
+class EventFormatMembershipError(Exception):
+    """The requested format cannot represent the event's existing active entries."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "The requested format is incompatible with existing entry membership."
+        )
+
+
+class RecordedPlayDeletionError(Exception):
+    """A deletion would discard membership referenced by actual recorded play."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Recorded play must be preserved. "
+            "This event or tournament cannot be deleted."
+        )
+
+
 class DrawUnderWayError(Exception):
     """Raised by the draw verbs when an event's draw shows **evidence of play** — a
     fixture with a recorded winner or a linked match — the single gate on both

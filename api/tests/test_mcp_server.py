@@ -66,6 +66,8 @@ from app.models import (
     League,
     Match,
     MatchSettings,
+    MatchSide,
+    MatchSidePlayer,
     MatchStatus,
     Permission,
     Role,
@@ -93,6 +95,7 @@ from app.tournament_draws import cut_draw
 from app.tournament_event_stages import mint_stages
 from app.tournament_queries import stage_ids_for_events
 from app.tournaments import TOURNAMENT_CREATE
+from tests._entry_seeds import entry_with_members, seed_fixture_match_sides
 from tests._helpers import (
     attach_match_to_director_tournament,
     enqueued_notification_jobs,
@@ -839,13 +842,26 @@ async def _wire_fixture_to_match(
     db_session.add(event)
     await db_session.flush()
 
+    participants = (
+        await db_session.execute(
+            select(MatchSide.side_number, MatchSidePlayer.user_id)
+            .join(MatchSidePlayer, MatchSidePlayer.match_side_id == MatchSide.id)
+            .where(MatchSide.match_id == uuid.UUID(match_id))
+        )
+    ).all()
+    entries = {
+        number: TournamentEntry(event_id=event.id, user_id=player_id)
+        for number, player_id in participants
+    }
+    db_session.add_all(entries.values())
+    await db_session.flush()
     fixture = TournamentFixture(
         stage_id=stages[0].id,
         group_id=stages[0].groups[0].id,
         round=1,
         position=1,
-        entry_a_id=None,
-        entry_b_id=None,
+        entry_a_id=entries[1].id,
+        entry_b_id=entries[2].id,
         match_id=uuid.UUID(match_id),
         table_id=None,
     )
@@ -2876,9 +2892,10 @@ async def _seed_drawable_tournament(
     await db_session.refresh(event, attribute_names=["groups"])
     db_session.add_all(
         [
-            TournamentEntry(
-                event_id=event.id,
-                user_id=(await make_user(db_session, "draw-e-" + uuid.uuid4().hex)).id,
+            entry_with_members(
+                db_session,
+                event,
+                (await make_user(db_session, "draw-e-" + uuid.uuid4().hex)).player_id,
                 status=TournamentEntryStatus.entered,
                 seed=n,
             )
@@ -3816,6 +3833,24 @@ async def test_create_tournament_naming_end_date_raises_tool_error(
 
 
 # ----- delete_tournament tool ----------------------------------------------
+
+
+@pytest.mark.parametrize("parent", ["event", "tournament"])
+async def test_delete_tool_refuses_recorded_play(db_session, parent):
+    from tests.test_entry_members import seed_doubles_match
+
+    event, players, entries, match, fixture = await seed_doubles_match(db_session)
+    owner = await db_session.get(User, match.created_by_user_id)
+    raw = await _mint(db_session, owner)
+    match.status = MatchStatus.in_progress
+    await db_session.commit()
+    arguments = {"tournament_id": str(event.tournament_id)}
+    if parent == "event":
+        arguments["event_id"] = str(event.id)
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="Recorded play must be preserved"):
+            await client.call_tool(f"delete_{parent}", arguments)
+    assert await db_session.get(Tournament, event.tournament_id) is not None
 
 
 async def test_delete_tournament_is_registered(db_session: AsyncSession) -> None:
@@ -5204,6 +5239,7 @@ async def test_place_fixture_played_out_fixture_raises_tool_error(
     match.status = MatchStatus.completed
     db_session.add(match)
     await db_session.commit()
+    await seed_fixture_match_sides(db_session, fixture, match)
     fixture.match_id = match.id
     await db_session.commit()
 

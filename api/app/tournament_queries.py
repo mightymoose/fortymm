@@ -239,6 +239,7 @@ async def active_entrants_by_event(
                 TournamentEntry.seed,
                 UserLeagueRating.rating_value,
             )
+            .select_from(TournamentEntry)
             .join(Player, Player.id == TournamentEntry.user_id)
             # The two hops that answer "rated against WHAT?": the entry's event, and
             # that event's tournament, which is the thing that names the ladder.

@@ -83,12 +83,13 @@ async def test_match_participation_uses_players_and_creation_uses_account(db_ses
 async def test_sporting_foreign_keys_reference_players(db_session):
     from sqlalchemy import text
 
-    for table in (
-        "match_side_players",
-        "tournament_entries",
-        "league_memberships",
-        "user_league_ratings",
-        "rating_history",
+    for table, column in (
+        ("match_side_players", "user_id"),
+        ("tournament_entry_members", "player_id"),
+        ("match_lineup_players", "player_id"),
+        ("league_memberships", "user_id"),
+        ("user_league_ratings", "user_id"),
+        ("rating_history", "user_id"),
     ):
         target = await db_session.scalar(
             text("""
@@ -98,9 +99,9 @@ async def test_sporting_foreign_keys_reference_players(db_session):
             JOIN information_schema.constraint_column_usage ccu
               USING (constraint_catalog, constraint_schema, constraint_name)
             WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_name = :table
-              AND kcu.column_name = 'user_id'
+              AND kcu.column_name = :column
         """),
-            {"table": table},
+            {"table": table, "column": column},
         )
         assert target == "players", table
 

@@ -1,5 +1,9 @@
 # 788. Tournament matches materialize at go-live; an event's results are a per-draw-type strategy
 
+The database's absent partner model is superseded by [Entry members and lineup history](20260906-event-entries-have-members-and-match-lineups-have-history.md).
+Public doubles/team flows remain deferred; actual participants have preserved
+snapshots while results continue to be derived from current outcomes.
+
 Date: 2026-07-13 (numbered by issue #788 — sequential numbers collide across
 concurrent worktrees; see ADR-0786's note and the duplicate 0008s in this directory)
 
