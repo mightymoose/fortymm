@@ -130,6 +130,12 @@ class TournamentFixture(Base):
         CheckConstraint(
             "entry_a_id <> entry_b_id", name="ck_tournament_fixtures_distinct_entries"
         ),
+        CheckConstraint("round >= 1", name="ck_tournament_fixtures_round"),
+        CheckConstraint("position >= 1", name="ck_tournament_fixtures_position"),
+        CheckConstraint(
+            "call_notified_count >= 0",
+            name="ck_tournament_fixtures_call_notified_count",
+        ),
         CheckConstraint(
             "winner_entry_id IS NULL OR (entry_a_id IS NOT NULL AND "
             "entry_b_id IS NOT NULL "

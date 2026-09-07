@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -42,6 +43,7 @@ class VenueTable(Base):
 
     __tablename__ = "tournament_tables"
     __table_args__ = (
+        CheckConstraint("position >= 0", name="ck_tournament_tables_position"),
         # The catalogue's order is the director's order, so it is read (and deleted
         # against) by this index. It doubles as the index Postgres does NOT create for
         # a REFERENCING column: ``tournament_id`` is on the tournament-delete cascade

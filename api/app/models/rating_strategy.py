@@ -2,7 +2,16 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Boolean, DateTime, Float, String, Text, func, text
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -18,6 +27,17 @@ class RatingStrategy(Base):
     whether match completion triggers an automatic recompute."""
 
     __tablename__ = "rating_strategies"
+    __table_args__ = (
+        CheckConstraint(
+            "jsonb_typeof(state_schema) = 'object'",
+            name="ck_rating_strategies_state_schema_object",
+        ),
+        CheckConstraint(
+            "initial_state IS NULL OR "
+            "jsonb_typeof(initial_state) IN ('object', 'null')",
+            name="ck_rating_strategies_initial_state_object",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

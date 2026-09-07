@@ -86,6 +86,11 @@ class Tournament(Base):
 
     __tablename__ = "tournaments"
     __table_args__ = (
+        CheckConstraint("details_version >= 1", name="ck_tournaments_details_version"),
+        CheckConstraint(
+            "address IS NULL OR jsonb_typeof(address) = 'object'",
+            name="ck_tournaments_address_object",
+        ),
         Index(
             "ix_tournaments_created_by_user_id_created_at",
             "created_by_user_id",
@@ -240,6 +245,19 @@ class TournamentEvent(Base):
             "jsonb_typeof(draw_settings) = 'object'",
             name="ck_tournament_events_draw_settings_object",
         ),
+        CheckConstraint(
+            "jsonb_typeof(slot) = 'object'",
+            name="ck_tournament_events_slot_object",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(match_settings) = 'object'",
+            name="ck_tournament_events_match_settings_object",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(predicates) = 'array'",
+            name="ck_tournament_events_predicates_array",
+        ),
+        CheckConstraint("lock_version >= 1", name="ck_tournament_events_lock_version"),
         Index(
             "ix_tournament_events_tournament_id_created_at",
             "tournament_id",

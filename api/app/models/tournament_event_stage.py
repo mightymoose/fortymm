@@ -2,7 +2,15 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
-from sqlalchemy import DateTime, ForeignKey, Integer, UniqueConstraint, func, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -38,6 +46,7 @@ class TournamentEventStage(Base):
 
     __tablename__ = "tournament_event_stages"
     __table_args__ = (
+        CheckConstraint("position >= 0", name="ck_tournament_event_stages_position"),
         # The target of a later composite FK — "things attached to a stage" (groups,
         # eventually) will foreign-key ``(event_id, id)``, exactly as
         # ``tournament_event_stage_groups`` does for the stage itself. Redundant against

@@ -1067,6 +1067,7 @@ def upgrade() -> None:
         sa.Column(
             "display_order", sa.Integer(), server_default=sa.text("0"), nullable=False
         ),
+        sa.CheckConstraint("display_order >= 0", name="ck_draw_types_display_order"),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -1146,6 +1147,9 @@ def upgrade() -> None:
         sa.Column(
             "display_order", sa.Integer(), server_default=sa.text("0"), nullable=False
         ),
+        sa.CheckConstraint(
+            "display_order >= 0", name="ck_notification_channels_display_order"
+        ),
         sa.Column(
             "is_active", sa.Boolean(), server_default=sa.text("true"), nullable=False
         ),
@@ -1183,6 +1187,9 @@ def upgrade() -> None:
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column(
             "display_order", sa.Integer(), server_default=sa.text("0"), nullable=False
+        ),
+        sa.CheckConstraint(
+            "display_order >= 0", name="ck_notification_types_display_order"
         ),
         sa.Column(
             "is_active", sa.Boolean(), server_default=sa.text("true"), nullable=False
@@ -1269,6 +1276,15 @@ def upgrade() -> None:
         ),
         sa.Column(
             "initial_state", postgresql.JSONB(astext_type=sa.Text()), nullable=True
+        ),
+        sa.CheckConstraint(
+            "jsonb_typeof(state_schema) = 'object'",
+            name="ck_rating_strategies_state_schema_object",
+        ),
+        sa.CheckConstraint(
+            "initial_state IS NULL OR "
+            "jsonb_typeof(initial_state) IN ('object', 'null')",
+            name="ck_rating_strategies_initial_state_object",
         ),
         sa.Column("initial_rating_value", sa.Float(), nullable=True),
         sa.Column(
@@ -1750,6 +1766,12 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
+        sa.CheckConstraint(
+            "status = 'voided' OR "
+            "(status = 'completed' AND completed_at IS NOT NULL) OR "
+            "(status IN ('pending', 'in_progress') AND completed_at IS NULL)",
+            name="ck_matches_completed_at",
+        ),
         sa.ForeignKeyConstraint(
             ["created_by_user_id"], ["accounts.id"], ondelete="RESTRICT"
         ),
@@ -1792,6 +1814,9 @@ def upgrade() -> None:
         sa.Column(
             "details_version", sa.Integer(), server_default=sa.text("1"), nullable=False
         ),
+        sa.CheckConstraint(
+            "details_version >= 1", name="ck_tournaments_details_version"
+        ),
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column(
@@ -1804,6 +1829,10 @@ def upgrade() -> None:
             "address",
             postgresql.JSONB(none_as_null=True, astext_type=sa.Text()),
             nullable=True,
+        ),
+        sa.CheckConstraint(
+            "address IS NULL OR jsonb_typeof(address) = 'object'",
+            name="ck_tournaments_address_object",
         ),
         sa.Column("league_id", sa.UUID(), nullable=False),
         sa.Column("owner_account_id", sa.UUID(), nullable=False),
@@ -1852,6 +1881,10 @@ def upgrade() -> None:
         sa.Column("rating_value", sa.Float(), nullable=True),
         sa.Column(
             "rating_state", postgresql.JSONB(astext_type=sa.Text()), nullable=True
+        ),
+        sa.CheckConstraint(
+            "rating_state IS NULL OR jsonb_typeof(rating_state) IN ('object', 'null')",
+            name="ck_user_league_ratings_rating_state_object",
         ),
         sa.Column(
             "created_at",
@@ -1929,6 +1962,9 @@ def upgrade() -> None:
         sa.Column("accepted_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("reminder_sent_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("games", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.CheckConstraint(
+            "jsonb_typeof(games) = 'array'", name="ck_match_results_games_array"
+        ),
         sa.CheckConstraint(
             "(accepted_by_user_id IS NULL) = (accepted_at IS NULL)",
             name="ck_match_results_accepted_pair",
@@ -2244,6 +2280,18 @@ def upgrade() -> None:
         sa.Column("wall_time_ms", sa.Integer(), nullable=True),
         sa.Column("fixtures_placed", sa.Integer(), nullable=True),
         sa.Column("fixtures_pinned", sa.Integer(), nullable=True),
+        sa.CheckConstraint(
+            "wall_time_ms IS NULL OR wall_time_ms >= 0",
+            name="ck_schedule_solves_wall_time_ms",
+        ),
+        sa.CheckConstraint(
+            "fixtures_placed IS NULL OR fixtures_placed >= 0",
+            name="ck_schedule_solves_fixtures_placed",
+        ),
+        sa.CheckConstraint(
+            "fixtures_pinned IS NULL OR fixtures_pinned >= 0",
+            name="ck_schedule_solves_fixtures_pinned",
+        ),
         sa.Column(
             "overrunning", sa.Boolean(), server_default=sa.text("false"), nullable=False
         ),
@@ -2254,10 +2302,20 @@ def upgrade() -> None:
             postgresql.JSONB(astext_type=sa.Text()),
             nullable=True,
         ),
+        sa.CheckConstraint(
+            "infeasibility_reasons IS NULL OR "
+            "jsonb_typeof(infeasibility_reasons) IN ('array', 'null')",
+            name="ck_schedule_solves_infeasibility_reasons_array",
+        ),
         sa.Column(
             "placement_conflicts",
             postgresql.JSONB(astext_type=sa.Text()),
             nullable=True,
+        ),
+        sa.CheckConstraint(
+            "placement_conflicts IS NULL OR "
+            "jsonb_typeof(placement_conflicts) IN ('array', 'null')",
+            name="ck_schedule_solves_placement_conflicts_array",
         ),
         sa.Column(
             "rerun_requested",
@@ -2313,8 +2371,15 @@ def upgrade() -> None:
         sa.Column("entry_fee", sa.Numeric(precision=8, scale=2), nullable=False),
         sa.Column("timezone", sa.String(length=64), nullable=False),
         sa.Column("slot", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.CheckConstraint(
+            "jsonb_typeof(slot) = 'object'", name="ck_tournament_events_slot_object"
+        ),
         sa.Column(
             "match_settings", postgresql.JSONB(astext_type=sa.Text()), nullable=False
+        ),
+        sa.CheckConstraint(
+            "jsonb_typeof(match_settings) = 'object'",
+            name="ck_tournament_events_match_settings_object",
         ),
         sa.Column(
             "predicates",
@@ -2322,8 +2387,15 @@ def upgrade() -> None:
             server_default=sa.text("'[]'::jsonb"),
             nullable=False,
         ),
+        sa.CheckConstraint(
+            "jsonb_typeof(predicates) = 'array'",
+            name="ck_tournament_events_predicates_array",
+        ),
         sa.Column(
             "lock_version", sa.Integer(), server_default=sa.text("1"), nullable=False
+        ),
+        sa.CheckConstraint(
+            "lock_version >= 1", name="ck_tournament_events_lock_version"
         ),
         sa.Column(
             "created_at",
@@ -2371,6 +2443,7 @@ def upgrade() -> None:
         sa.Column("label", sa.String(length=255), nullable=False),
         sa.Column("court", sa.String(length=255), nullable=False),
         sa.Column("position", sa.Integer(), nullable=False),
+        sa.CheckConstraint("position >= 0", name="ck_tournament_tables_position"),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -2413,6 +2486,7 @@ def upgrade() -> None:
         sa.Column("side_1_points", sa.SmallInteger(), nullable=False),
         sa.Column("side_2_points", sa.SmallInteger(), nullable=False),
         sa.Column("version", sa.Integer(), server_default=sa.text("1"), nullable=False),
+        sa.CheckConstraint("version >= 1", name="ck_match_game_scores_version"),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -2565,6 +2639,12 @@ def upgrade() -> None:
         sa.Column("slot_date", sa.Date(), nullable=False),
         sa.Column("slot_start", sa.Time(), nullable=False),
         sa.Column("slot_end", sa.Time(), nullable=False),
+        sa.CheckConstraint(
+            "position >= 0", name="ck_tournament_event_reservations_position"
+        ),
+        sa.CheckConstraint(
+            "slot_start < slot_end", name="ck_tournament_event_reservations_ordered"
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -2600,6 +2680,7 @@ def upgrade() -> None:
         sa.Column("event_id", sa.UUID(), nullable=False),
         sa.Column("position", sa.Integer(), nullable=False),
         sa.Column("draw_type_id", sa.UUID(), nullable=False),
+        sa.CheckConstraint("position >= 0", name="ck_tournament_event_stages_position"),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -2633,6 +2714,10 @@ def upgrade() -> None:
         sa.Column("reservation_id", sa.UUID(), nullable=False),
         sa.Column("table_id", sa.UUID(as_uuid=False), nullable=False),
         sa.Column("position", sa.Integer(), nullable=False),
+        sa.CheckConstraint(
+            "position >= 0",
+            name="ck_tournament_event_reservation_tables_position",
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -2694,6 +2779,9 @@ def upgrade() -> None:
         ),
         sa.Column("stage_id", sa.UUID(), nullable=False),
         sa.Column("position", sa.Integer(), nullable=False),
+        sa.CheckConstraint(
+            "position >= 0", name="ck_tournament_event_stage_groups_position"
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -2799,6 +2887,8 @@ def upgrade() -> None:
         sa.Column("group_id", sa.UUID(), nullable=False),
         sa.Column("round", sa.Integer(), nullable=False),
         sa.Column("position", sa.Integer(), nullable=False),
+        sa.CheckConstraint("round >= 1", name="ck_tournament_fixtures_round"),
+        sa.CheckConstraint("position >= 1", name="ck_tournament_fixtures_position"),
         sa.Column("entry_a_id", sa.UUID(), nullable=True),
         sa.Column("entry_b_id", sa.UUID(), nullable=True),
         sa.Column("winner_entry_id", sa.UUID(), nullable=True),
@@ -2811,6 +2901,10 @@ def upgrade() -> None:
             sa.Integer(),
             server_default=sa.text("0"),
             nullable=False,
+        ),
+        sa.CheckConstraint(
+            "call_notified_count >= 0",
+            name="ck_tournament_fixtures_call_notified_count",
         ),
         sa.Column(
             "created_at",

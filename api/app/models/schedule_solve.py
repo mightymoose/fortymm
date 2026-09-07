@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -78,6 +79,28 @@ class ScheduleSolve(Base):
 
     __tablename__ = "schedule_solves"
     __table_args__ = (
+        CheckConstraint(
+            "infeasibility_reasons IS NULL OR "
+            "jsonb_typeof(infeasibility_reasons) IN ('array', 'null')",
+            name="ck_schedule_solves_infeasibility_reasons_array",
+        ),
+        CheckConstraint(
+            "placement_conflicts IS NULL OR "
+            "jsonb_typeof(placement_conflicts) IN ('array', 'null')",
+            name="ck_schedule_solves_placement_conflicts_array",
+        ),
+        CheckConstraint(
+            "wall_time_ms IS NULL OR wall_time_ms >= 0",
+            name="ck_schedule_solves_wall_time_ms",
+        ),
+        CheckConstraint(
+            "fixtures_placed IS NULL OR fixtures_placed >= 0",
+            name="ck_schedule_solves_fixtures_placed",
+        ),
+        CheckConstraint(
+            "fixtures_pinned IS NULL OR fixtures_pinned >= 0",
+            name="ck_schedule_solves_fixtures_pinned",
+        ),
         # The admin page's one read: "this tournament's solves, newest first".
         Index(
             "ix_schedule_solves_tournament_id_requested_at",
