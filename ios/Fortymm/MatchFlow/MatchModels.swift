@@ -116,6 +116,10 @@ struct ScoredGame: Hashable {
     var points: Game
     var sync: SyncState
 
+    /// A failed create may have committed before its response was lost. Only a
+    /// never-submitted draft is known to have no server score to remove.
+    var requiresServerClear: Bool { sync != .localOnly }
+
     /// Adopt a save's version and return whether a newer local edit needs writing.
     mutating func completeSave(sent: Game, version: Int, clearing: Bool) -> Bool {
         // Clearing supersedes the follow-up write, but a failed DELETE must

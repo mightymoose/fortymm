@@ -5,6 +5,7 @@ import Combine
 @MainActor
 final class ScoreClearStore: ObservableObject {
     @Published private(set) var failedGameNumber: Int?
+    @Published private(set) var failureMessage: String?
     @Published private(set) var pendingGameNumber: Int?
     private var saveContinuation: CheckedContinuation<Void, Never>?
 
@@ -15,6 +16,7 @@ final class ScoreClearStore: ObservableObject {
         guard pendingGameNumber == nil else { return }
         pendingGameNumber = gameNumber
         failedGameNumber = nil
+        failureMessage = nil
         if waitingForSave {
             await withCheckedContinuation { saveContinuation = $0 }
         }
@@ -26,6 +28,7 @@ final class ScoreClearStore: ObservableObject {
         } catch {
             pendingGameNumber = nil
             failedGameNumber = gameNumber
+            failureMessage = error.fmMessage
             didFail()
         }
     }
@@ -38,6 +41,9 @@ final class ScoreClearStore: ObservableObject {
     }
 
     func dismissFailure(gameNumber: Int) {
-        if failedGameNumber == gameNumber { failedGameNumber = nil }
+        if failedGameNumber == gameNumber {
+            failedGameNumber = nil
+            failureMessage = nil
+        }
     }
 }

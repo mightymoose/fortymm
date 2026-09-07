@@ -496,22 +496,15 @@ struct ScoreEntryView: View {
     /// have) a server-committed row — `.saved`, `.conflict`, an in-flight `.saving`,
     /// or a `.failed` that had committed before failing — lives on the shared
     /// scratchpad, so clearing it must confirm and DELETE via the clear dialog. A
-    /// game that never reached the server (`.localOnly`, or a `.failed` first
-    /// create) wipes purely locally with no dialog and no network. Correction
+    /// never-submitted game (`.localOnly`) wipes purely locally with no dialog
+    /// and no network. A failed create may still have committed on the server. Correction
     /// boards seed every slot `.localOnly`, so they always take the local branch
     /// (no DELETE against a frozen scratchpad).
     private func clearEdit() {
         guard games.indices.contains(active) else { return }
-        switch games[active].sync {
-        case .saved, .conflict, .saving:
-            // A committed row exists, or a write is in flight that may leave one —
-            // confirm, then DELETE (or defer the DELETE for an in-flight create).
+        if games[active].requiresServerClear {
             clearing = active
-        case .failed(let committedVersion):
-            // A committed row exists only if a prior write succeeded before the
-            // failure; otherwise the failed create left nothing to delete.
-            if committedVersion != nil { clearing = active } else { clearLocally(active) }
-        case .localOnly:
+        } else {
             clearLocally(active)
         }
     }
@@ -540,7 +533,10 @@ struct ScoreEntryView: View {
                 .padding(.top, 12)
         } else if let gameNumber = scoreClear.failedGameNumber {
             HStack {
-                Text("Couldn’t clear game \(gameNumber). Your score is still here.")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Couldn’t clear game \(gameNumber). Your score is still here.")
+                    if let message = scoreClear.failureMessage { Text(message) }
+                }
                 Button("Retry") { confirmClear(gameNumber - 1) }
             }
             .font(.footnote)

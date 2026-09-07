@@ -128,5 +128,20 @@ struct ScoreClearTests {
         await clearingConflict.value
         precondition(conflictDecisionNeeded, "A failed clear must restore the deferred conflict decision")
         print("PASS: failed deferred clear restores the conflict decision")
+
+        let clearOrderMessage = "Clear game 2 first, or edit game 1 instead."
+        await store.clear(gameNumber: 1, delete: {
+            throw APIError.http(status: 422, detail: clearOrderMessage)
+        }, didClear: { preconditionFailure("A rejected clear must preserve the score") })
+        precondition(store.failureMessage == clearOrderMessage,
+                     "Show the server's actionable clear-order message")
+        print("PASS: clear failures preserve actionable API messages")
+
+        let uncertainCreate = ScoredGame(points: Game(a: 11, b: 7), sync: .failed(committedVersion: nil))
+        precondition(uncertainCreate.requiresServerClear,
+                     "A lost create response must not permit a local-only clear")
+        precondition(!ScoredGame(points: Game(a: 11, b: 7), sync: .localOnly).requiresServerClear,
+                     "Never-submitted drafts and correction boards still clear locally")
+        print("PASS: uncertain creates require server clearing; local drafts do not")
     }
 }
