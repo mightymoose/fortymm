@@ -59,7 +59,6 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
-    TournamentEventDrawSettings,
     TournamentEventStage,
     TournamentFixture,
 )
@@ -260,8 +259,7 @@ def _ordered_groups(event: TournamentEvent) -> list[GroupRead]:
 
 
 #: The one spelling of "no stage was resolved" :func:`fixture_state`'s ``stages``
-#: parameter accepts — a real, empty mapping rather than ``None``, exactly as
-#: ``app.models.tournament_event_draw_settings.NO_SETTINGS`` is for the same reason: a
+#: parameter accepts — a real, empty mapping rather than ``None``. A
 #: ``.get()`` against an empty dict and a ``.get()`` guarded by ``is not None`` return
 #: the identical ``None``, so carrying both spellings bought nothing but a branch to
 #: keep in sync. ``MappingProxyType`` so the shared default cannot be mutated by
@@ -450,20 +448,7 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
 
 
 def strategy_for_event(event: TournamentEvent) -> DrawStrategy:
-    """The strategy that cuts and advances **this event's** draw — the one production
-    door onto :func:`app.draws.strategy_for`.
-
-    ``strategy_for`` takes the **parsed settings arm**, so somebody has to decode it off
-    the event's settings row; this is that somebody, and it is one function rather than
-    three call sites each parsing the same blob. Which matters because the draw type and
-    the settings beside it are one fact and live on one row precisely so they are read
-    together (ADR "an event's draw configuration is a row, not a column").
-
-    The settings row rides along with the event (``lazy="joined"``), so the read is
-    attribute access, not a lazy load in async context; the parse it feeds is
-    :func:`app.tournament_draw_settings.draw_settings_of`, the single read boundary onto
-    that column.
-    """
+    """Parse this event's owned configuration and select its draw strategy."""
     return strategy_for(draw_settings_of(event.draw_settings))
 
 
@@ -719,14 +704,8 @@ async def draw_currency_by_event(
             entry_id for entry_id in (entry_a_id, entry_b_id) if entry_id is not None
         )
 
-    # The third statement: the draw type of each CUT event, which decides how many of
-    # its entrants its fixtures may legitimately leave unseated. Read as the FK id and
-    # mapped here via ``app.models.draw_type.DRAW_TYPES_BY_ID`` — the same map the
-    # settings row's own ``draw_type`` property reads, and the FK plus the seed-vs-enum
-    # migration test are what make an unmappable id unreachable. A plain dict lookup,
-    # not a join onto ``draw_types`` (ADR 20260815 retired that join) — this is a
-    # targeted column-only ``select``, not a whole-entity ORM load, so no eager
-    # relationship on the settings row could apply here regardless.
+    # The draw type of each cut event determines how many entrants may remain
+    # unseated. Read the event FK directly; the seed/enum tests pin its mapping.
     draw_types: dict[uuid.UUID, DrawType] = {}
     if cut:
         draw_types = {
@@ -735,16 +714,8 @@ async def draw_currency_by_event(
                 await db.execute(
                     select(
                         TournamentEvent.id,
-                        TournamentEventDrawSettings.draw_type_id,
-                    )
-                    .join(
-                        TournamentEventDrawSettings,
-                        TournamentEvent.draw_settings_id
-                        == TournamentEventDrawSettings.id,
-                    )
-                    # ``in_`` over the cut ids, so this scales with the events that
-                    # reach the allowance and not with the batch or the table.
-                    .where(TournamentEvent.id.in_(cut))
+                        TournamentEvent.draw_type_id,
+                    ).where(TournamentEvent.id.in_(cut))
                 )
             ).all()
         }

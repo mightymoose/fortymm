@@ -223,7 +223,7 @@ async def test_every_seeded_draw_type_carries_picker_copy(
 async def _draw_settings_column(
     url: str, column_name: str
 ) -> sa.Row[tuple[str, str, str | None]] | None:
-    """One column of ``tournament_event_draw_settings`` as the **migrated** database
+    """One column of ``tournament_events`` as the **migrated** database
     describes it, or ``None`` when the migration did not create it."""
     engine = create_async_engine(url)
     try:
@@ -233,7 +233,7 @@ async def _draw_settings_column(
                     sa.text(
                         "SELECT data_type, is_nullable, column_default"
                         " FROM information_schema.columns"
-                        " WHERE table_name = 'tournament_event_draw_settings'"
+                        " WHERE table_name = 'tournament_events'"
                         "   AND column_name = :column_name"
                     ),
                     {"column_name": column_name},
@@ -246,26 +246,11 @@ async def _draw_settings_column(
 async def test_migration_creates_the_settings_column(
     migrated_database_url: str,
 ) -> None:
-    """The settings object exists, as a NOT NULL ``jsonb`` defaulting to ``{}``, on a
-    database built by Alembic — not by ``create_all``.
-
-    Worth its own test precisely because ``create_all`` is what the rest of the
-    suite runs on: a column added to the model and forgotten in the migration is
-    invisible to every other test in this repo and fails on the first real
-    deployment (api/CLAUDE.md, "pytest never runs the migrations").
-
-    All three facts are asserted, not just presence, because each is load-bearing (ADR
-    "a draw type's settings are one NOT NULL JSON object"): ``jsonb`` because the
-    ``jsonb_typeof`` check and every read depend on it, NOT NULL because ``NULL`` and
-    ``{}`` would be two spellings of "no configuration", and the default because it is
-    what makes the NOT NULL survivable for a writer that omits the column.
-    """
-    column = await _draw_settings_column(migrated_database_url, "settings")
+    """The inline settings object is mandatory JSONB, defaulting to {}."""
+    column = await _draw_settings_column(migrated_database_url, "draw_settings")
 
     assert column is not None, (
-        "migrated database has no tournament_event_draw_settings.settings column —"
-        " the model has it and create_all builds it, so the whole suite is green"
-        " without the migration"
+        "migrated database has no tournament_events.draw_settings column"
     )
     assert column.data_type == "jsonb", column
     assert column.is_nullable == "NO", column
@@ -276,18 +261,12 @@ async def test_migration_creates_the_settings_column(
 async def test_migration_no_longer_creates_the_qualifiers_per_group_column(
     migrated_database_url: str,
 ) -> None:
-    """The column the settings object replaced is **gone** from a migrated database.
-
-    The half of an edit-in-place that is easy to leave half-done: adding ``settings``
-    to migration 0010 and forgetting to delete ``qualifiers_per_group`` beside it leaves
-    a database with two homes for one fact, and every other test in this repo — built
-    by ``create_all`` from the model, which has only one — stays green over it.
-    """
+    """The qualifier count has only one home: the event's settings JSON."""
     assert (
         await _draw_settings_column(migrated_database_url, "qualifiers_per_group")
         is None
     ), (
-        "migrated database still has tournament_event_draw_settings."
+        "migrated database still has tournament_events."
         "qualifiers_per_group — migration 0010 replaced it with the settings object,"
         " so the column is a second, stale home for the qualifier count"
     )
@@ -295,7 +274,7 @@ async def test_migration_no_longer_creates_the_qualifiers_per_group_column(
 
 async def _draw_type_id_fk(url: str) -> sa.Row[tuple[str, str, str]] | None:
     """The foreign key on the migrated database's
-    ``tournament_event_draw_settings.draw_type_id`` column — the table and column
+    ``tournament_events.draw_type_id`` column — the table and column
     it targets, and its delete rule — or ``None`` if there is no such FK at all.
 
     A column can exist with the right name and type and still not be the FK
@@ -322,7 +301,7 @@ async def _draw_type_id_fk(url: str) -> sa.Row[tuple[str, str, str]] | None:
                         " JOIN information_schema.referential_constraints rc"
                         "   ON tc.constraint_name = rc.constraint_name"
                         "  AND tc.table_schema = rc.constraint_schema"
-                        " WHERE tc.table_name = 'tournament_event_draw_settings'"
+                        " WHERE tc.table_name = 'tournament_events'"
                         "   AND tc.constraint_type = 'FOREIGN KEY'"
                         "   AND kcu.column_name = 'draw_type_id'"
                     )
@@ -332,34 +311,20 @@ async def _draw_type_id_fk(url: str) -> sa.Row[tuple[str, str, str]] | None:
         await engine.dispose()
 
 
-async def test_migration_moves_the_draw_type_fk_from_key_to_id(
+async def test_migration_gives_events_a_mandatory_draw_type_reference(
     migrated_database_url: str,
 ) -> None:
-    """``draw_type_id`` — a NOT NULL uuid, FK'd to ``draw_types.id`` ``ON DELETE
-    RESTRICT`` — is what replaced ``draw_type_key`` (ADR 20260815, "draw_types
-    gains a surrogate id primary key").
-
-    The column alone is the same shape as the ``qualifiers_per_group`` test above,
-    but api/CLAUDE.md asks more of a migration test that touches a foreign key:
-    the constraint itself, not merely the column it sits on, has to be inspected
-    on a database Alembic actually built — a ``create_all`` schema gets its FK
-    from the model regardless of what this migration's DDL says, so only this
-    test can catch a migration that renamed the column but wrote the wrong
-    target or delete rule (or none at all).
-    """
+    """Inspect the event's NOT NULL UUID FK and its restrictive delete rule."""
     new_column = await _draw_settings_column(migrated_database_url, "draw_type_id")
     assert new_column is not None, (
-        "migrated database has no tournament_event_draw_settings.draw_type_id"
-        " column — the model has it and create_all builds it, so the whole"
-        " suite is green without the migration"
+        "migrated database has no tournament_events.draw_type_id column"
     )
     assert new_column.data_type == "uuid", new_column
     assert new_column.is_nullable == "NO", new_column
 
     fk = await _draw_type_id_fk(migrated_database_url)
     assert fk is not None, (
-        "migrated database has no foreign key at all on"
-        " tournament_event_draw_settings.draw_type_id"
+        "migrated database has no foreign key at all on tournament_events.draw_type_id"
     )
     assert fk.table_name == "draw_types", fk
     assert fk.column_name == "id", fk
@@ -406,29 +371,7 @@ SETTINGS_VALUE_CASES: list[tuple[str, bool]] = [
 async def test_migration_lets_the_settings_column_hold_objects_and_nothing_else(
     migrated_database_url: str,
 ) -> None:
-    """What the CHECK **does** on a migrated database, not what its text says.
-
-    An earlier version of this test asserted only that a constraint's text appeared in
-    ``pg_get_constraintdef``. That caught a *missing* constraint but not a *wrong* one,
-    and a wrong constraint is the likelier mistake the next time someone edits
-    migration 0010, since the edit-in-place convention means the expression gets
-    rewritten rather than replaced.
-
-    So every case in :data:`SETTINGS_VALUE_CASES` is actually attempted, and it is the
-    accept/reject outcome that is asserted. That also makes the test immune to Postgres
-    re-rendering the expression.
-
-    The model's copy of this rule is exercised by
-    ``test_tournament_event_draw_settings.py`` against a ``create_all`` schema.
-    This is the same questions asked of the schema **Alembic** built — which is
-    the only way the two descriptions can be shown to agree.
-
-    The slug the cases name is a row the migration itself inserted, so the settings
-    rows below FK against the real seed rather than a test-local stand-in. Everything
-    runs inside one transaction that is **rolled back**, so the session-scoped migrated
-    database is left exactly as Alembic made it and the seed assertions in this file
-    cannot be affected by test ordering.
-    """
+    """Exercise the object/NOT NULL constraints on a fresh, seeded Alembic install."""
     engine = create_async_engine(migrated_database_url)
     outcomes: dict[str, bool] = {}
     try:
@@ -436,6 +379,27 @@ async def test_migration_lets_the_settings_column_hold_objects_and_nothing_else(
         try:
             transaction = await conn.begin()
             try:
+                owner_id = await conn.scalar(
+                    sa.text(
+                        "INSERT INTO accounts (id) "
+                        "VALUES (gen_random_uuid()) RETURNING id"
+                    )
+                )
+                league_id = await conn.scalar(
+                    sa.text(
+                        "INSERT INTO leagues (name, rating_strategy_id) "
+                        "SELECT 'Draw settings league', id FROM rating_strategies "
+                        "ORDER BY id LIMIT 1 RETURNING id"
+                    )
+                )
+                tournament_id = await conn.scalar(
+                    sa.text(
+                        "INSERT INTO tournaments "
+                        "(name, league_id, owner_account_id, created_by_user_id) "
+                        "VALUES ('Settings Cup', :league, :owner, :owner) RETURNING id"
+                    ),
+                    {"league": league_id, "owner": owner_id},
+                )
                 for value, _ in SETTINGS_VALUE_CASES:
                     # The slug resolves to its id via a sub-select rather than a bound
                     # uuid literal, so this case list keeps naming the draw type by its
@@ -443,9 +407,12 @@ async def test_migration_lets_the_settings_column_hold_objects_and_nothing_else(
                     # bind on (ADR 20260815 moved the FK's COLUMN to ``draw_type_id``,
                     # not what the test asks by).
                     statement = sa.text(
-                        "INSERT INTO tournament_event_draw_settings"
-                        " (draw_type_id, settings)"
-                        " VALUES ((SELECT id FROM draw_types WHERE key = :slug),"
+                        "INSERT INTO tournament_events"
+                        " (tournament_id, name, format, entry_fee, timezone, slot,"
+                        " match_settings, draw_type_id, draw_settings)"
+                        " VALUES (:tournament, 'Singles', 'singles', 0, 'UTC',"
+                        " '{}'::jsonb, '{}'::jsonb,"
+                        " (SELECT id FROM draw_types WHERE key = :slug),"
                         f" {value})"
                     )
                     try:
@@ -454,7 +421,10 @@ async def test_migration_lets_the_settings_column_hold_objects_and_nothing_else(
                         # rejection would abort every case after it and the
                         # outcome table would be a lie.
                         async with conn.begin_nested():
-                            await conn.execute(statement, {"slug": "rr-then-ko"})
+                            await conn.execute(
+                                statement,
+                                {"slug": "rr-then-ko", "tournament": tournament_id},
+                            )
                     except IntegrityError:
                         outcomes[value] = False
                     else:
@@ -474,7 +444,7 @@ async def test_migration_lets_the_settings_column_hold_objects_and_nothing_else(
         if outcomes[value] != want
     }
     assert not disagreed, (
-        "migration 0010's tournament_event_draw_settings.settings column does not "
+        "the baseline's tournament_events.draw_settings column does not "
         "behave like the model's copy on a migrated database: "
         f"{disagreed}"
     )

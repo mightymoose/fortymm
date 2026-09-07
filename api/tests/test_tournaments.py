@@ -9119,21 +9119,14 @@ async def test_removing_a_catalogue_table_only_a_reservation_reserves_succeeds_s
 
 
 async def _draw_type_of(db_session: AsyncSession, event_id: str) -> DrawType:
-    """The event's draw type, read straight from the ``tournament_event_draw_settings``
-    row it points at — the one place that fact is stored (ADR "an event's draw
-    configuration is a row, not a column"). Never from a response body, and never from
-    an ORM instance the test session may be holding stale."""
+    """Read the event's stored type without relying on the session's identity map."""
     key = (
         await db_session.execute(
             select(DrawTypeOption.key)
             .select_from(TournamentEvent)
             .join(
-                TournamentEventDrawSettings,
-                TournamentEvent.draw_settings_id == TournamentEventDrawSettings.id,
-            )
-            .join(
                 DrawTypeOption,
-                DrawTypeOption.id == TournamentEventDrawSettings.draw_type_id,
+                DrawTypeOption.id == TournamentEvent.draw_type_id,
             )
             .where(TournamentEvent.id == uuid.UUID(event_id))
         )

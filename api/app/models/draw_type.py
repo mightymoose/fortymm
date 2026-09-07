@@ -28,7 +28,7 @@ where defense-in-depth still earns its keep.
 
 # Fixed ids, one per seeded slug — NOT ``gen_random_uuid()`` for these four rows,
 # even though the column's own default (below) is. ``TournamentEventDrawSettings
-# .draw_type``'s SETTER writes ``draw_type_id`` from a ``DrawType`` member as a
+# .for_draw_type`` builds ``draw_type_id`` from a ``DrawType`` member as a
 # plain, synchronous property assignment reached from dozens of call sites with no
 # database session in scope — most of them test fixtures that build a whole
 # ``TournamentEvent`` in one expression, and none of them can afford to become an
@@ -58,7 +58,7 @@ DRAW_TYPES_BY_ID: dict[uuid.UUID, DrawType] = {
 ``TournamentEventDrawSettings.draw_type``'s GETTER reads.
 
 A plain dict lookup on ``draw_type_id``, not a join through ``DrawTypeOption``: the
-FK to ``draw_types.id`` is what already makes a settings row's ``draw_type_id``
+FK to ``draw_types.id`` is what already makes an event's ``draw_type_id``
 trustworthy — no OTHER id is representable there — so a join back onto ``draw_types``
 would only be re-proving what the schema already guarantees. Total on a transient,
 pending or freshly flushed row alike, since it reads a plain column and never a
@@ -80,11 +80,11 @@ class DrawTypeOption(Base):
 
     ``id`` is a surrogate uuid primary key (ADR 20260815 "draw_types gains a
     surrogate id primary key"), and it — not ``key`` — is the FK target for
-    ``tournament_event_draw_settings.draw_type_id``. This supersedes the
+    ``tournament_events.draw_type_id``. This supersedes the
     slug-as-PK stance of the ADR that originally seeded this table: ``key``
     stays a UNIQUE NOT NULL slug, and code still resolves strategies and the
     ``DrawType`` enum by it — through :data:`DRAW_TYPES_BY_ID` on the settings
-    row's ``draw_type`` getter, or a join elsewhere (e.g. the director-facing
+    value's ``draw_type`` getter, or a join elsewhere (e.g. the director-facing
     picker in ``app.tournament_queries``), never by ``id`` alone. Renaming a
     slug is therefore still a migration (both here and in :data:`DRAW_TYPE_IDS`),
     even though it is no longer a primary-key change.

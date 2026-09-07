@@ -44,10 +44,6 @@ from app.models import (
 )
 from app.schedule_solves import request_solve
 from app.schemas.tournament import TournamentCreate, named_list
-from app.tournament_draw_settings import (
-    draw_settings_ids_for_tournament,
-    reap_draw_settings,
-)
 from app.tournament_draws import (
     DrawCurrency,
     active_draw_entrants_by_event,
@@ -210,21 +206,6 @@ async def delete_tournament(
     Issues the ``DELETE`` and commits it. Never raises ``HTTPException`` — the caller
     adapts each domain exception to its transport.
 
-    The delete also reaps the events' draw-settings rows, which nothing else would.
-    ``tournament_events.tournament_id`` is ``ON DELETE CASCADE``, so the events go
-    with the tournament in one statement — but a *database* cascade does not run the
-    ORM's ``TournamentEvent.draw_settings`` ``delete-orphan``, and the settings rows
-    have no ``tournament_id`` of their own to cascade along. So their ids are read
-    off the events **before** the delete (afterwards nothing names them), and only
-    then are the now-unreferenced rows removed — in that order, because the event's
-    FK is ``ON DELETE RESTRICT`` and would refuse the reverse.
-
-    The explicit ``flush`` is belt-and-braces, not the mechanism: ``reap_draw_settings``
-    issues an ORM-enabled ``delete()``, so ``Session.execute`` would autoflush the
-    pending tournament delete ahead of it anyway. It is spelled out so the ordering
-    survives a session with autoflush disabled — and, measured, removing it alone
-    leaves the suite green, so nothing here would catch its loss.
-
     It also **unplaces every fixture first**, and that one IS the mechanism. A
     fixture's ``table_id`` is a foreign key with ``ON DELETE RESTRICT`` (ADR 20260801),
     ``Tournament.tables`` is loaded, so SQLAlchemy issues the child ``DELETE`` of
@@ -241,7 +222,6 @@ async def delete_tournament(
     """
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
     await require_no_recorded_play(db, tournament_id=tournament.id)
-    settings_ids = await draw_settings_ids_for_tournament(db, tournament.id)
     # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5); the event
     # is reachable through the stage.
     await db.execute(
@@ -251,7 +231,6 @@ async def delete_tournament(
     )
     await db.delete(tournament)
     await db.flush()
-    await reap_draw_settings(db, settings_ids)
     await db.commit()
 
 

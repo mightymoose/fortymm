@@ -60,7 +60,7 @@ from app.schemas.tournament import (
 )
 from app.tournament_draw_settings import (
     draw_settings_of,
-    draw_settings_row,
+    draw_settings_value,
     store_draw_settings,
 )
 from app.tournament_draws import (
@@ -175,10 +175,9 @@ async def create_event(
         #
         # Written from the parsed union arm, never from the two loose payload fields:
         # the boundary has already refused a qualifier count that does not belong to
-        # the draw type beside it (ADR 20260727), and ``draw_settings_row`` serializes
-        # that arm onto the row's ``draw_type_id`` + ``settings`` pair in the one place
-        # that knows how (ADR "a draw type's settings are one NOT NULL JSON object").
-        draw_settings=draw_settings_row(payload.draw_settings),
+        # the draw type beside it (ADR 20260727). Encode the parsed arm as an
+        # owned value; assigning it stores both event columns together.
+        draw_settings=draw_settings_value(payload.draw_settings),
         max_players=payload.max_players,
         entry_fee=payload.entry_fee,
         timezone=payload.timezone,
@@ -267,13 +266,8 @@ async def delete_event(
     regardless of publication or draw state. Never raises ``HTTPException`` — the
     caller adapts each domain exception to its transport.
 
-    The event's ``draw_settings`` row goes with it. That is the ORM's
-    ``delete-orphan`` on :attr:`TournamentEvent.draw_settings`, not a database
-    cascade — the FK points the other way, so Postgres cannot reap it — and it
-    needs the event to be an ORM object, which is why this deletes the loaded
-    ``event`` rather than issuing a ``DELETE ... WHERE id =``. The two statements
-    are ordered by the unit of work: the event holds the ``ON DELETE RESTRICT`` FK,
-    so its row goes first and the settings row it named goes second.
+    Draw settings are inline event values and disappear with this row, including
+    when the event is deleted by a database cascade.
     """
     await _load_owned_tournament_for_update(db, tournament_id, actor)
     event = await _load_event(db, tournament_id, event_id)
@@ -619,9 +613,8 @@ async def _enforce_draw_settings_frozen(
     the freeze exists to permit. Asked **before** anything is written, under the
     tournament's row lock the verb holds.
 
-    What the event *currently* has is read off its ``draw_settings`` row — the one home
-    of that fact (ADR "an event's draw configuration is a row, not a column") — and read
-    once, before the caller's ``setattr`` loop, so what is compared is the stored
+    Read the event's owned ``draw_settings`` value once, before the caller's
+    ``setattr`` loop, so what is compared is the stored
     configuration and not the one the payload is asking for. Both sides of the
     comparison are the **parsed arm**, so "did the configuration move" is one equality
     over the whole union rather than a field-by-field walk that a new setting could fall
@@ -1001,7 +994,7 @@ async def update_event(
     effects — the first new, the other two preserved exactly from the router:
 
     * a **draw-configuration** edit (the draw type and, for ``rr-then-ko``, its
-      qualifier count) is applied to the event's ``draw_settings`` row, the only place
+      qualifier count) is applied to the event's ``draw_settings`` value, the only place
       an event's draw configuration is stored. Both are deliberately taken out of the
       ``setattr`` loop: there is no ``draw_type`` attribute on the mapped event, so
       the loop would bind an unmapped Python attribute and drop the edit;
@@ -1084,21 +1077,11 @@ async def update_event(
     # recover it.
     old_timezone = event.timezone
     changes = updates.model_dump(exclude_unset=True)
-    # Neither half of the draw configuration is a column on the event — the draw type is
-    # the ``draw_type_id`` FK on the settings row the event points at, and the
-    # qualifier count is a key inside that row's ``settings`` JSON object — so both are
-    # routed OUT of
-    # the generic setattr loop rather than through it. This is not decoration:
-    # SQLAlchemy's declarative instances accept any attribute, so
-    # ``setattr(event, "draw_type", ...)`` would bind a plain Python attribute the
-    # mapper
-    # never persists — the edit would be silently accepted and silently dropped. Popping
-    # them leaves the loop below touching mapped columns only.
+    # Wire fields are parsed into one settings arm and written together below.
+    # They do not map directly to the event's draw_type_id and JSON columns.
     changes.pop("draw_type", None)
     changes.pop("qualifiers_per_group", None)
-    # The swiss round count is the same kind of key for the same reason: it lives in the
-    # settings row's JSON object, not on the event, so the loop would bind an unmapped
-    # attribute and drop the edit silently.
+    # Swiss rounds are another key inside that same JSON object.
     changes.pop("rounds", None)
     # Reservations (and their mapped groups) are rows, so they are taken OUT of the
     # generic setattr loop entirely and applied as a diff
@@ -1137,8 +1120,7 @@ async def update_event(
     # The parsed union arm, not the loose keys: it is ``None`` exactly when the patch
     # does not touch the draw configuration, and when it is not, the pair it carries is
     # one the write union accepted at the request boundary (ADR 20260727). That union is
-    # the only thing that checks the pairing now — the settings table's ``CASE``
-    # ``CHECK`` was dropped with the column it named.
+    # the only thing that checks the pairing; SQL checks the object shape only.
     draw_settings = updates.draw_settings
     for key, value in changes.items():
         setattr(event, key, value)
@@ -1147,7 +1129,7 @@ async def update_event(
     # cost of a true no-op save invalidating another open editor; the editor always
     # sends the whole editable surface, so a genuine no-op is rare, and the alternative
     # (bump only on a real change) means deciding what "changed" means across scalars,
-    # JSONB value-objects, a settings row and a child-row diff — four answers that can
+    # JSONB values and child-row diffs — answers that can
     # disagree, on the one number every refusal depends on.
     #
     # Assigned explicitly rather than left to a SQLAlchemy ``version_id_col``, so this
@@ -1162,17 +1144,8 @@ async def update_event(
         # needs to know whether the TYPE actually moved, and the setter is the only
         # place ``event.draw_settings.draw_type`` changes.
         old_draw_type = event.draw_settings.draw_type
-        # The one place an event's draw configuration moves after create (the freeze
-        # above has already refused this on a cut draw). Assigned through
-        # ``store_draw_settings``, not through the row's columns, so serializing the arm
-        # onto ``draw_type_id`` + ``settings`` stays in the single place that owns it —
-        # the same door ``draw_settings_row`` goes through at create. That matters most
-        # on THIS path: a draw type patched from ``rr-then-ko`` back to ``round-robin``
-        # has to drop the qualifier count with it, and writing the pair together is what
-        # makes that automatic. The settings row is loaded with the event
-        # (``lazy="joined"``), so this is a plain attribute write, not a lazy load in
-        # async context.
-        store_draw_settings(event.draw_settings, draw_settings)
+        # Replace the whole configuration, dropping the previous type's settings.
+        store_draw_settings(event, draw_settings)
         # Re-apply the stage template IN PLACE (ADR 20260815 decision 3) — but only when
         # the draw TYPE itself moved. The stage template ``stage_template`` mints
         # depends only on ``draw_type`` (never on the settings beside it, e.g.

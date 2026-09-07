@@ -1,5 +1,6 @@
 import enum
 import uuid
+from copy import deepcopy
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -61,7 +62,7 @@ class DrawType(enum.Enum):
     #
     # Member names use underscores; the *values* keep the hyphenated wire strings
     # from the front-end prototype. They are no longer a Postgres enum: a draw type
-    # is persisted as a FK to ``draw_types.id`` on an event's settings row, and
+    # is persisted as a FK to ``draw_types.id`` on the event, and
     # these values are that table's ``key`` column — UNIQUE, not the primary key,
     # since ADR 20260815 gave the table a surrogate id (a migration test asserts
     # the seeded ``key`` set and this enum agree) — as well as the JSON the
@@ -235,6 +236,10 @@ class TournamentEvent(Base):
             "NOT allow_multiple_entries_per_player OR format = 'teams'",
             name="ck_tournament_events_multiple_entries_teams_only",
         ),
+        CheckConstraint(
+            "jsonb_typeof(draw_settings) = 'object'",
+            name="ck_tournament_events_draw_settings_object",
+        ),
         Index(
             "ix_tournament_events_tournament_id_created_at",
             "tournament_id",
@@ -284,32 +289,14 @@ class TournamentEvent(Base):
     allow_multiple_entries_per_player: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
-    # The event's draw configuration, as a row (ADR "an event's draw configuration
-    # is a row, not a column"). NOT NULL, and the FK lives HERE on the parent —
-    # the ``matches.match_settings_id`` shape — because that is the only way SQL
-    # can say "every event has exactly one settings row". ``RESTRICT`` so a
-    # settings row cannot be deleted out from under the event that points at it.
-    #
-    # There is deliberately NO ``draw_type`` column beside it. The settings row is
-    # the only home for that fact, so an event whose draw type disagrees with its
-    # settings is not a state anyone can construct.
-    #
-    # ``index=True`` because Postgres does not index a REFERENCING column, and this
-    # one is on a routine DELETE path: every ``tournament_event_draw_settings`` row
-    # we delete (the delete-orphan on event delete, and ``reap_draw_settings`` on
-    # tournament delete) makes the RESTRICT trigger run
-    # ``SELECT 1 FROM tournament_events WHERE draw_settings_id = $1 FOR KEY SHARE``.
-    # Unindexed that is a sequential scan of EVERY event on the platform per
-    # settings row deleted, not per event in the tournament (measured on 50k
-    # events: 7.9ms → 0.08ms), and ``reap_draw_settings``' ``NOT EXISTS`` anti-join
-    # has nothing to probe either. The sibling ``matches.match_settings_id`` is
-    # deliberately left unindexed and that asymmetry is intentional: match settings
-    # rows are never deleted, so its RI check never runs.
-    draw_settings_id: Mapped[uuid.UUID] = mapped_column(
+    # Mandatory owned values: there is no settings identity to share or orphan.
+    draw_type_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("tournament_event_draw_settings.id", ondelete="RESTRICT"),
+        ForeignKey("draw_types.id", ondelete="RESTRICT"),
         nullable=False,
-        index=True,
+    )
+    draw_settings_json: Mapped[dict[str, Any]] = mapped_column(
+        "draw_settings", JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
     # NULL means "no cap" (ADR-0935). A present cap is positive by CHECK.
     max_players: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -373,41 +360,20 @@ class TournamentEvent(Base):
 
     tournament: Mapped["Tournament"] = relationship(back_populates="events")
 
-    # Eager by default, and eager as a JOIN. Async SQLAlchemy raises rather than
-    # emitting a lazy load, so a reader that reaches ``event.draw_settings`` on an
-    # event some other loader fetched would blow up unless every one of those ~13
-    # loaders remembered an option — declaring the strategy once on the
-    # relationship is what makes that impossible to get wrong.
-    #
-    # ``joined`` rather than ``selectin`` because this is a NOT NULL many-to-one
-    # onto a one-row-per-event table: it rides along in the query that loads the
-    # event instead of costing a second round trip, so it moves NO statement count
-    # anywhere (the ``EXPECTED_TOURNAMENT_*_STATEMENTS`` pins in
-    # ``test_tournaments.py`` are unchanged by it), and a many-to-one join cannot
-    # multiply rows, so it is safe under the LIMIT/OFFSET the list queries use.
-    # ``innerjoin=True`` because the FK is NOT NULL — an outer join would be
-    # asking about an absence the schema has ruled out.
-    #
-    # ``delete-orphan`` (with ``single_parent=True``, which SQLAlchemy requires to
-    # cascade a delete *up* a many-to-one) because a settings row exists only to
-    # configure the event pointing at it: deleting the event through the ORM must
-    # take its settings row with it, or every event delete leaks a row nothing
-    # will ever reference again. The unit of work orders the two DELETEs for us —
-    # ``tournament_events`` holds the FK, so it goes first and the ``RESTRICT`` is
-    # never tripped.
-    #
-    # This does NOT cover the tournament-delete path: ``Tournament.events`` is
-    # ``passive_deletes=True``, so events are removed by Postgres' ``ON DELETE
-    # CASCADE`` without the ORM ever seeing them, and a database cascade does not
-    # run Python-side cascades. ``app.tournament_draw_settings.reap_draw_settings``
-    # is what closes that path.
-    draw_settings: Mapped["TournamentEventDrawSettings"] = relationship(
-        back_populates="events",
-        lazy="joined",
-        innerjoin=True,
-        cascade="all, delete-orphan",
-        single_parent=True,
-    )
+    @property
+    def draw_settings(self) -> "TournamentEventDrawSettings":
+        from app.models.tournament_event_draw_settings import (
+            TournamentEventDrawSettings,
+        )
+
+        return TournamentEventDrawSettings(
+            self.draw_type_id, deepcopy(self.draw_settings_json)
+        )
+
+    @draw_settings.setter
+    def draw_settings(self, value: "TournamentEventDrawSettings") -> None:
+        self.draw_type_id = value.draw_type_id
+        self.draw_settings_json = deepcopy(dict(value.settings))
 
     entries: Mapped[list["TournamentEntry"]] = relationship(
         back_populates="event",
