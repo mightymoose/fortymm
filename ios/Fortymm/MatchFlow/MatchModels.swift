@@ -115,6 +115,14 @@ enum SyncState: Hashable {
 struct ScoredGame: Hashable {
     var points: Game
     var sync: SyncState
+
+    /// Adopt a save's version and return whether a newer local edit needs writing.
+    mutating func completeSave(sent: Game, version: Int, clearing: Bool) -> Bool {
+        // Clearing supersedes the follow-up write, but a failed DELETE must
+        // leave the newer local points visibly unsaved and retryable.
+        sync = points != sent && clearing ? .failed(committedVersion: version) : .saved(version: version)
+        return points != sent && !clearing
+    }
 }
 
 /// The write a game's current sync state implies against the shared scratchpad:

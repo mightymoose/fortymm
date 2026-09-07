@@ -571,6 +571,10 @@ struct ScoreEntryView: View {
                 try await service.deleteGameScore(matchId: matchId, gameNumber: i + 1)
             }, didClear: {
                 clearLocally(i)
+            }, didFail: {
+                // The save may have conflicted while its clear was waiting.
+                // Restore the decision we deferred instead of allowing a blind save.
+                if i == active, case .conflict = games[i].sync { resolving = i }
             })
         }
     }
@@ -678,8 +682,7 @@ struct ScoreEntryView: View {
 
         switch outcome {
         case .completed(.success(let version)):
-            games[index].sync = .saved(version: version)
-            if games[index].points != sent && !clearingThisGame {
+            if games[index].completeSave(sent: sent, version: version, clearing: clearingThisGame) {
                 // The user edited this game while the write was in flight, so the
                 // server now holds `sent`, not what's on screen. Re-fire: with the
                 // slot at `.saved(version)`, `fireWrite` derives an update at the

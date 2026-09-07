@@ -10,20 +10,23 @@ final class ScoreClearStore: ObservableObject {
 
     func clear(gameNumber: Int, waitingForSave: Bool = false,
                delete: @escaping () async throws -> Void,
-               didClear: @escaping () -> Void) async {
+               didClear: @escaping () -> Void,
+               didFail: @escaping () -> Void = {}) async {
         guard pendingGameNumber == nil else { return }
         pendingGameNumber = gameNumber
         failedGameNumber = nil
-        defer { pendingGameNumber = nil }
         if waitingForSave {
             await withCheckedContinuation { saveContinuation = $0 }
         }
         do {
             try await delete()
+            pendingGameNumber = nil
             didClear()
             failedGameNumber = nil
         } catch {
+            pendingGameNumber = nil
             failedGameNumber = gameNumber
+            didFail()
         }
     }
 

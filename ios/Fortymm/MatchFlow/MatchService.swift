@@ -139,9 +139,14 @@ struct MatchService {
     /// returns the refreshed board, deliberately ignored — clearing a scratch
     /// entry has no version to carry forward.
     func deleteGameScore(matchId: UUID, gameNumber: Int) async throws {
-        let _: MatchDetailsDTO = try await client.delete(
-            "/v1/matches/\(matchId.uuidString)/games/\(gameNumber)/scores"
-        )
+        do {
+            let _: MatchDetailsDTO = try await client.delete(
+                "/v1/matches/\(matchId.uuidString)/games/\(gameNumber)/scores"
+            )
+        } catch APIError.http(status: 404, detail: "Score not found.") {
+            // A failed create or another participant's clear can leave no row.
+            // Only this response confirms absence; other 404s remain failures.
+        }
     }
 
     /// On success, pull the freshly written game's `version` out of the returned
