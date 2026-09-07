@@ -7,6 +7,10 @@ duplicate entries are withdrawn without erasing their membership history.
 
 Status: Accepted. Implements #1671; the pre-beta baseline freezes at #1670.
 
+The shared `user_tokens` representation below is superseded by
+[Email action intent outlives its credentials](20260907-email-action-intent-outlives-its-credentials.md).
+Account ownership and the session-retention policy on merge remain in force.
+
 ## Decision
 
 An Account authenticates and acts. A Player is the durable sporting identity: a

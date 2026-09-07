@@ -1,5 +1,9 @@
 # Session eviction requires explicit identity recovery
 
+The statement below that no new session table is introduced is superseded by
+[Email action intent outlives its credentials](20260907-email-action-intent-outlives-its-credentials.md).
+The recovery, approval and session revocation policies remain in force.
+
 Issue [#1641](https://github.com/mightymoose/fortymm/issues/1641) replaces the
 passive-reload exception in [ADR 0004](0004-session-invalid-401-carries-a-code.md).
 A claimed account silently becoming an empty guest can make a player record

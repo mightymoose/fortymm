@@ -16,22 +16,22 @@ from app.db import get_session
 from app.leagues import get_default_league
 from app.main import app
 from app.models import (
+    EmailPurpose,
+    EmailToken,
     LeagueMembership,
     Match,
     MatchSettings,
     MatchSide,
     MatchSidePlayer,
     MatchStatus,
+    SessionToken,
     User,
     UserRole,
-    UserToken,
 )
 from app.ratings.jobs import RECOMPUTE_AFTER_MERGE_JOB
 from app.schemas.session import USERNAME_MAX_LENGTH, USERNAME_PATTERN
 from app.sessions import (
-    LOGIN_TOKEN_CONTEXT,
     SESSION_COOKIE_NAME,
-    SESSION_TOKEN_CONTEXT,
 )
 from tests._helpers import (
     CSRF_EVENT_HOOKS,
@@ -92,7 +92,7 @@ async def test_request_enqueues_email_and_persists_token(
     tokens = (
         (
             await db_session.execute(
-                select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.login)
             )
         )
         .scalars()
@@ -119,7 +119,7 @@ async def test_request_normalizes_email_to_lowercase(
     tokens = (
         (
             await db_session.execute(
-                select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.login)
             )
         )
         .scalars()
@@ -146,7 +146,7 @@ async def test_request_for_emailed_account_always_issues_login_link(
     login_tokens = (
         (
             await db_session.execute(
-                select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.login)
             )
         )
         .scalars()
@@ -158,7 +158,7 @@ async def test_request_for_emailed_account_always_issues_login_link(
     change_tokens = (
         (
             await db_session.execute(
-                select(UserToken).where(UserToken.context.startswith("change:"))
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
             )
         )
         .scalars()
@@ -191,9 +191,9 @@ async def test_request_replaces_prior_login_token_for_same_user(
     tokens = (
         (
             await db_session.execute(
-                select(UserToken)
-                .where(UserToken.context == LOGIN_TOKEN_CONTEXT)
-                .order_by(UserToken.created_at)
+                select(EmailToken)
+                .where(EmailToken.purpose == EmailPurpose.login)
+                .order_by(EmailToken.created_at)
             )
         )
         .scalars()
@@ -218,7 +218,7 @@ async def test_request_honeypot_silently_succeeds(
     tokens = (
         (
             await db_session.execute(
-                select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.login)
             )
         )
         .scalars()
@@ -289,10 +289,10 @@ async def test_request_rejects_oversize_local_part(
 
 async def _issue_login_token(
     db_session: AsyncSession, user: User, raw_token: str
-) -> UserToken:
-    token = UserToken(
+) -> EmailToken:
+    token = EmailToken(
         user_id=user.id,
-        context=LOGIN_TOKEN_CONTEXT,
+        purpose=EmailPurpose.login,
         token=hashlib.sha256(raw_token.encode("utf-8")).digest(),
         sent_to=user.email,
     )
@@ -325,9 +325,8 @@ async def test_consume_rotates_cookie_and_returns_session(
     sessions = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.context == SESSION_TOKEN_CONTEXT,
-                    UserToken.user_id == user.id,
+                select(SessionToken).where(
+                    SessionToken.user_id == user.id,
                 )
             )
         )
@@ -357,7 +356,7 @@ async def test_consume_deletes_token_so_it_cannot_be_reused(
     leftover = (
         (
             await db_session.execute(
-                select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.login)
             )
         )
         .scalars()
@@ -382,7 +381,7 @@ async def test_consume_rejects_expired_token(
     leftover = (
         (
             await db_session.execute(
-                select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.login)
             )
         )
         .scalars()
@@ -426,9 +425,10 @@ async def test_consume_does_not_accept_email_change_token(
     # Mint a change token rather than a login token.
     raw = "raw-change-token"
     db_session.add(
-        UserToken(
+        EmailToken(
             user_id=user.id,
-            context="change:",
+            purpose=EmailPurpose.change,
+            prior_email=None,
             token=hashlib.sha256(raw.encode("utf-8")).digest(),
             sent_to=user.email,
         )
@@ -458,7 +458,7 @@ async def test_consume_rejects_link_after_user_changed_email(
     leftover = (
         (
             await db_session.execute(
-                select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.login)
             )
         )
         .scalars()
@@ -728,12 +728,14 @@ def _login_email_tokens(fake_email_queue) -> list[str]:
     return [j.args[1] for j in jobs]
 
 
-async def _login_token_for(db_session: AsyncSession, user: User) -> UserToken:
+async def _login_token_for(db_session: AsyncSession, user: User) -> EmailToken:
     return (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.user_id == user.id,
-                UserToken.context.startswith(LOGIN_TOKEN_CONTEXT),
+            select(EmailToken).where(
+                EmailToken.user_id == user.id,
+                EmailToken.purpose.in_(
+                    [EmailPurpose.login, EmailPurpose.first_sign_in]
+                ),
             )
         )
     ).scalar_one()
@@ -743,7 +745,7 @@ async def test_request_records_requesting_guest_on_login_token(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
     """A guest who requests a sign-in link for their existing email has their
-    id stamped on the token context, so the merge is token-bound."""
+    id stored in the token's guest account field, so the merge is token-bound."""
     rita = await _make_confirmed_user(db_session, "rita@example.com")
     guest = await start_session(api_client, db_session)
 
@@ -751,7 +753,7 @@ async def test_request_records_requesting_guest_on_login_token(
     assert response.status_code == 202
 
     token = await _login_token_for(db_session, rita)
-    assert token.context == f"{LOGIN_TOKEN_CONTEXT}:{guest.id}"
+    assert token.guest_account_id == guest.id
 
 
 async def test_token_bound_login_merges_cross_device(
@@ -815,7 +817,9 @@ async def test_merge_preview_bare_login_is_not_a_merge(
 ):
     rita = await _make_confirmed_user(db_session, "rita@example.com")
     raw = "raw-bare-login-preview"
-    await _issue_login_token(db_session, rita, raw)  # bare "login" context
+    await _issue_login_token(
+        db_session, rita, raw
+    )  # ordinary login without a recorded guest
 
     response = await api_client.post("/v1/merge/preview", json={"token": raw})
     assert response.status_code == 200
@@ -837,6 +841,8 @@ async def test_merge_preview_excludes_a_replaced_login_token(
     rita = await _make_confirmed_user(db_session, "rita@example.com")
     raw = "raw-login-token-replaced-preview"
     token = await _issue_login_token(db_session, rita, raw)
+    token.sent_to = None
+    token.guest_account_id = None
     token.replaced_at = datetime.now(UTC)
     await db_session.commit()
 
@@ -978,13 +984,13 @@ async def test_request_for_unknown_email_mints_a_user_and_a_real_login_link(
 
     token = (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.token == hashlib.sha256(raw_token.encode("utf-8")).digest()
+            select(EmailToken).where(
+                EmailToken.token == hashlib.sha256(raw_token.encode("utf-8")).digest()
             )
         )
     ).scalar_one()
     assert token.sent_to == "brand.new.quinn@example.com"
-    assert sessions._is_first_sign_in_context(token.context)
+    assert token.purpose == EmailPurpose.first_sign_in
 
     minted = (
         await db_session.execute(select(User).where(User.id == token.user_id))
@@ -1086,8 +1092,8 @@ async def test_minted_user_joins_the_default_league_and_holds_the_default_role(
     raw = _login_email_tokens(fake_email_queue)[-1]
     token = (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.token == hashlib.sha256(raw.encode("utf-8")).digest()
+            select(EmailToken).where(
+                EmailToken.token == hashlib.sha256(raw.encode("utf-8")).digest()
             )
         )
     ).scalar_one()
@@ -1126,8 +1132,8 @@ async def test_first_sign_in_link_uses_the_ordinary_15_minute_lifetime(
     raw = _login_email_tokens(fake_email_queue)[-1]
     token = (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.token == hashlib.sha256(raw.encode("utf-8")).digest()
+            select(EmailToken).where(
+                EmailToken.token == hashlib.sha256(raw.encode("utf-8")).digest()
             )
         )
     ).scalar_one()
@@ -1153,9 +1159,9 @@ async def test_repeat_request_for_the_same_unknown_email_reuses_the_pending_user
     tokens = (
         (
             await db_session.execute(
-                select(UserToken)
-                .where(UserToken.sent_to == "brand.new.quinn@example.com")
-                .order_by(UserToken.created_at)
+                select(EmailToken)
+                .where(EmailToken.purpose == EmailPurpose.first_sign_in)
+                .order_by(EmailToken.created_at)
             )
         )
         .scalars()
@@ -1203,8 +1209,8 @@ async def test_first_sign_in_rejected_when_the_address_was_claimed_meanwhile(
 
     burned = (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.token == hashlib.sha256(raw.encode("utf-8")).digest()
+            select(EmailToken).where(
+                EmailToken.token == hashlib.sha256(raw.encode("utf-8")).digest()
             )
         )
     ).scalar_one_or_none()
@@ -1427,10 +1433,9 @@ async def test_confirming_a_mailed_link_revokes_the_requesting_browsers_session(
     surviving = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.user_id == rita.id,
-                    UserToken.context == SESSION_TOKEN_CONTEXT,
-                    UserToken.token
+                select(SessionToken).where(
+                    SessionToken.user_id == rita.id,
+                    SessionToken.token
                     == hashlib.sha256(held_cookie.encode("utf-8")).digest(),
                 )
             )
@@ -1476,9 +1481,9 @@ async def test_confirming_an_email_change_revokes_the_users_other_sessions(
 
     token_row = (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.user_id == guest.id,
-                UserToken.context.startswith(sessions.EMAIL_CHANGE_CONTEXT_PREFIX),
+            select(EmailToken).where(
+                EmailToken.user_id == guest.id,
+                EmailToken.purpose == EmailPurpose.change,
             )
         )
     ).scalar_one()
@@ -1492,10 +1497,9 @@ async def test_confirming_an_email_change_revokes_the_users_other_sessions(
     surviving = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.user_id == guest.id,
-                    UserToken.context == SESSION_TOKEN_CONTEXT,
-                    UserToken.token
+                select(SessionToken).where(
+                    SessionToken.user_id == guest.id,
+                    SessionToken.token
                     == hashlib.sha256(held_cookie.encode("utf-8")).digest(),
                 )
             )
@@ -1626,6 +1630,8 @@ async def test_consume_reports_expired_not_replaced_when_a_link_is_both(
     user = await _make_confirmed_user(db_session, "rita@example.com")
     raw = "raw-login-token-replaced-and-expired"
     token = await _issue_login_token(db_session, user, raw)
+    token.sent_to = None
+    token.guest_account_id = None
     token.replaced_at = datetime.now(UTC)
     token.created_at = (
         datetime.now(UTC) - sessions.LOGIN_TOKEN_LIFETIME - timedelta(seconds=1)
@@ -1654,7 +1660,7 @@ async def test_sweep_does_not_delete_a_replaced_row_still_within_its_lifetime(
     tokens = (
         (
             await db_session.execute(
-                select(UserToken).where(UserToken.context == LOGIN_TOKEN_CONTEXT)
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.login)
             )
         )
         .scalars()
@@ -1684,7 +1690,7 @@ async def test_sweep_deletes_a_login_row_once_it_genuinely_expires(
     await api_client.post("/v1/login/request", json=REQUEST_BODY)
 
     leftover = (
-        await db_session.execute(select(UserToken).where(UserToken.id == token.id))
+        await db_session.execute(select(EmailToken).where(EmailToken.id == token.id))
     ).scalar_one_or_none()
     assert leftover is None
 
@@ -1783,12 +1789,14 @@ async def test_claimed_account_switch_requires_approval_without_consuming_link(
             else bob
         )
         db_session.add(
-            UserToken(
+            EmailToken(
                 user_id=guest.id,
                 token=hashlib.sha256(b"bob-sign-in").digest(),
-                context=f"merge:{bob.id}"
+                purpose=EmailPurpose.merge
                 if link_kind == "merge"
-                else "change:bob@example.com",
+                else EmailPurpose.change,
+                target_account_id=bob.id if link_kind == "merge" else None,
+                prior_email=None if link_kind == "merge" else "bob@example.com",
                 sent_to="bob@example.com"
                 if link_kind == "merge"
                 else "bob-new@example.com",
@@ -1834,9 +1842,10 @@ async def test_email_change_confirmation_can_leave_previewed_guest_matches_behin
     await _record_singles_match(db_session, guest, opponent)
     raw = "email-change-declined-merge"
     db_session.add(
-        UserToken(
+        EmailToken(
             user_id=owner.id,
-            context="change:owner@example.com",
+            purpose=EmailPurpose.change,
+            prior_email="owner@example.com",
             token=sessions.hash_token(raw),
             sent_to="owner-new@example.com",
         )
@@ -1898,10 +1907,11 @@ async def test_email_change_preview_rejects_destination_claimed_after_issuance(
     browsing.confirmed_at = datetime.now(UTC)
     raw = "email-change-claimed-destination"
     db_session.add(
-        UserToken(
+        EmailToken(
             user_id=owner.id,
             token=hashlib.sha256(raw.encode()).digest(),
-            context="change:owner-preview@example.com",
+            purpose=EmailPurpose.change,
+            prior_email="owner-preview@example.com",
             sent_to="claimed-preview@example.com",
         )
     )
@@ -1925,9 +1935,8 @@ async def test_competing_approved_switches_consume_source_session_once(
     source = await _make_confirmed_user(db_session, "source-switch@example.com")
     source_cookie = "shared-source-session"
     db_session.add(
-        UserToken(
+        SessionToken(
             user_id=source.id,
-            context=SESSION_TOKEN_CONTEXT,
             token=sessions.hash_token(source_cookie),
         )
     )
@@ -1943,12 +1952,14 @@ async def test_competing_approved_switches_consume_source_session_once(
                 else target
             )
             db_session.add(
-                UserToken(
+                EmailToken(
                     user_id=owner.id,
                     token=sessions.hash_token(raw),
-                    context=f"merge:{target.id}"
+                    purpose=EmailPurpose.merge
                     if link_kind == "merge"
-                    else f"change:{target.email}",
+                    else EmailPurpose.change,
+                    target_account_id=target.id if link_kind == "merge" else None,
+                    prior_email=None if link_kind == "merge" else target.email,
                     sent_to=target.email
                     if link_kind == "merge"
                     else f"changed-{index}@example.com",
@@ -1997,9 +2008,8 @@ async def test_opposing_approved_switches_do_not_deadlock(
     for index, user in enumerate(users):
         await _issue_login_token(db_session, user, f"opposing-link-{index}")
         db_session.add(
-            UserToken(
+            SessionToken(
                 user_id=user.id,
-                context=SESSION_TOKEN_CONTEXT,
                 token=sessions.hash_token(f"opposing-session-{index}"),
             )
         )
@@ -2032,3 +2042,203 @@ async def test_opposing_approved_switches_do_not_deadlock(
             ]
         )
     assert sorted(response.status_code for response in responses) == [200, 409]
+
+
+async def test_first_sign_in_reuses_account_after_expired_link_was_opened(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    await api_client.post("/v1/login/request", json=UNKNOWN_BODY)
+    raw = _login_email_tokens(fake_email_queue)[-1]
+    before = await api_client.post("/v1/merge/preview", json={"token": raw})
+    token = (
+        await db_session.execute(
+            select(EmailToken).where(EmailToken.token == sessions.hash_token(raw))
+        )
+    ).scalar_one()
+    token.created_at = (
+        datetime.now(UTC) - sessions.LOGIN_TOKEN_LIFETIME - timedelta(seconds=1)
+    )
+    await db_session.commit()
+    expired = await api_client.post("/v1/login/consume", json={"token": raw})
+    assert expired.status_code == 400
+    await api_client.post("/v1/login/request", json=UNKNOWN_BODY)
+    after = await api_client.post(
+        "/v1/merge/preview", json={"token": _login_email_tokens(fake_email_queue)[-1]}
+    )
+    assert after.json()["owner_username"] == before.json()["owner_username"]
+
+
+async def test_concurrent_first_sign_in_requests_wait_and_reuse_one_account(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    fake_email_queue,
+):
+    from sqlalchemy import text
+
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def independent_session():
+        async with factory() as transaction:
+            yield transaction
+
+    app.dependency_overrides[get_session] = independent_session
+    async with factory() as gate, make_client() as first, make_client() as second:
+        await gate.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended(:email, 1679))"),
+            {"email": UNKNOWN_BODY["email"]},
+        )
+        tasks = [
+            asyncio.create_task(client.post("/v1/login/request", json=UNKNOWN_BODY))
+            for client in (first, second)
+        ]
+        try:
+            done, _ = await asyncio.wait(tasks, timeout=0.25)
+            assert not done, (
+                "First-sign-in issuance must wait before looking up or minting "
+                "the pending account"
+            )
+        finally:
+            await gate.rollback()
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        assert all(
+            not isinstance(result, BaseException) and result.status_code == 202
+            for result in results
+        )
+    jobs = _login_email_jobs(fake_email_queue)
+    assert len(jobs) == 2
+    assert jobs[0].args[2] == jobs[1].args[2]
+    async with make_client() as clicker:
+        old = await clicker.post("/v1/login/consume", json={"token": jobs[0].args[1]})
+        assert old.json()["detail"]["code"] == "replaced"
+        newest = await clicker.post(
+            "/v1/login/consume", json={"token": jobs[1].args[1]}
+        )
+        assert newest.status_code == 200
+
+
+async def test_old_login_link_does_not_claim_replaced_when_new_link_is_stale(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    user = await _make_confirmed_user(db_session, REQUEST_BODY["email"])
+    await api_client.post("/v1/login/request", json=REQUEST_BODY)
+    old = _login_email_tokens(fake_email_queue)[-1]
+    await api_client.post("/v1/login/request", json=REQUEST_BODY)
+    user.email = "moved@example.com"
+    await db_session.commit()
+    response = await api_client.post("/v1/login/consume", json={"token": old})
+    assert response.json()["detail"]["code"] == "invalid_or_expired"
+
+
+async def test_first_sign_in_completion_discards_intent_and_replacement_metadata(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    from app.models import FirstSignInIntent
+
+    await api_client.post("/v1/login/request", json=UNKNOWN_BODY)
+    await api_client.post("/v1/login/request", json=UNKNOWN_BODY)
+    raw = _login_email_tokens(fake_email_queue)[-1]
+    response = await api_client.post("/v1/login/consume", json={"token": raw})
+    assert response.status_code == 200
+    assert await db_session.get(FirstSignInIntent, UNKNOWN_BODY["email"]) is None
+    assert (await db_session.execute(select(EmailToken))).scalars().all() == []
+
+
+async def test_stale_first_sign_in_discards_its_intent_and_credentials(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    from app.models import FirstSignInIntent
+
+    await api_client.post("/v1/login/request", json=UNKNOWN_BODY)
+    raw = _login_email_tokens(fake_email_queue)[-1]
+    await _make_confirmed_user(db_session, UNKNOWN_BODY["email"])
+    response = await api_client.post("/v1/login/consume", json={"token": raw})
+    assert response.status_code == 400
+    assert await db_session.get(FirstSignInIntent, UNKNOWN_BODY["email"]) is None
+    assert (await db_session.execute(select(EmailToken))).scalars().all() == []
+
+
+async def test_request_rechecks_address_after_waiting_for_account_change(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    fake_email_queue,
+):
+    user = await _make_confirmed_user(db_session, REQUEST_BODY["email"])
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def independent_session():
+        async with factory() as transaction:
+            yield transaction
+
+    app.dependency_overrides[get_session] = independent_session
+    async with factory() as gate, make_client() as requester:
+        locked = (
+            await gate.execute(select(User).where(User.id == user.id).with_for_update())
+        ).scalar_one()
+        locked.email = "changed-while-waiting@example.com"
+        await gate.flush()
+        task = asyncio.create_task(
+            requester.post("/v1/login/request", json=REQUEST_BODY)
+        )
+        try:
+            done, _ = await asyncio.wait([task], timeout=0.25)
+            assert not done
+        finally:
+            await gate.commit()
+        assert (await task).status_code == 202
+        result = await requester.post(
+            "/v1/login/consume",
+            json={"token": _login_email_tokens(fake_email_queue)[-1]},
+        )
+        assert result.status_code == 200
+        assert result.json()["data"]["user"]["email"] == REQUEST_BODY["email"]
+
+
+async def test_each_first_sign_in_request_binds_its_own_guest(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    async with (
+        make_client() as first,
+        make_client() as second,
+        make_client() as clicker,
+    ):
+        first_guest = await start_session(first, db_session)
+        second_guest = await start_session(second, db_session)
+        first_name, second_name = first_guest.username, second_guest.username
+        await first.post("/v1/login/request", json=UNKNOWN_BODY)
+        await second.post("/v1/login/request", json=UNKNOWN_BODY)
+        raw = _login_email_tokens(fake_email_queue)[-1]
+        preview = await clicker.post("/v1/merge/preview", json={"token": raw})
+        assert preview.json()["guest_username"] == second_name
+        consumed = await clicker.post("/v1/login/consume", json={"token": raw})
+        assert consumed.status_code == 200
+        assert consumed.json()["data"]["user"]["username"] == second_name
+        untouched = await first.get("/v1/session")
+        assert untouched.json()["data"]["user"]["username"] == first_name
+        merged = await second.get("/v1/session")
+        assert merged.status_code == 401
+        assert merged.json()["detail"]["code"] == "session_merged"
+
+
+async def test_expired_latest_link_discards_markers_but_preserves_first_sign_in_intent(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    from app.models import FirstSignInIntent
+
+    await api_client.post("/v1/login/request", json=UNKNOWN_BODY)
+    await api_client.post("/v1/login/request", json=UNKNOWN_BODY)
+    raw = _login_email_tokens(fake_email_queue)[-1]
+    token = (
+        await db_session.execute(
+            select(EmailToken).where(EmailToken.token == sessions.hash_token(raw))
+        )
+    ).scalar_one()
+    token.created_at = (
+        datetime.now(UTC) - sessions.LOGIN_TOKEN_LIFETIME - timedelta(seconds=1)
+    )
+    await db_session.commit()
+    expired = await api_client.post("/v1/login/consume", json={"token": raw})
+    assert expired.status_code == 400
+    assert await db_session.get(FirstSignInIntent, UNKNOWN_BODY["email"]) is not None
+    assert (await db_session.execute(select(EmailToken))).scalars().all() == []

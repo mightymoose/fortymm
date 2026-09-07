@@ -2,7 +2,6 @@ import hashlib
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 import pytest
 import pytest_asyncio
@@ -13,38 +12,22 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.db import get_session
-from app.email_token_sweep import (
-    EMAIL_CHANGE_CONTEXT_PREFIX as SWEEP_EMAIL_CHANGE_CONTEXT_PREFIX,
-)
-from app.email_token_sweep import (
-    EMAIL_CONFIRM_TOKEN_LIFETIME as SWEEP_EMAIL_CONFIRM_TOKEN_LIFETIME,
-)
-from app.email_token_sweep import (
-    EMAIL_MERGE_CONTEXT_PREFIX as SWEEP_EMAIL_MERGE_CONTEXT_PREFIX,
-)
-from app.email_token_sweep import (
-    _pending_email_token_clause as _sweep_pending_email_token_clause,
-)
-from app.email_token_sweep import (
-    _run_email_token_sweep,
-    sweep_expired_email_tokens,
-)
+from app.email_token_sweep import _run_email_token_sweep, sweep_expired_email_tokens
 from app.leagues import get_default_league
 from app.main import app
 from app.models import (
+    EmailPurpose,
+    EmailToken,
     Match,
     MatchSettings,
     MatchSide,
     MatchSidePlayer,
     MatchStatus,
     User,
-    UserToken,
 )
 from app.ratings.jobs import RECOMPUTE_AFTER_MERGE_JOB
 from app.sessions import (
-    EMAIL_CHANGE_CONTEXT_PREFIX,
     EMAIL_CONFIRM_TOKEN_LIFETIME,
-    EMAIL_MERGE_CONTEXT_PREFIX,
     _pending_email_token_clause,
 )
 from app.token_hashing import hash_token
@@ -149,9 +132,7 @@ async def test_set_email_is_pending_only(
     tokens = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-                )
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
             )
         )
         .scalars()
@@ -167,37 +148,13 @@ async def test_set_email_is_pending_only(
     assert finished.count == 1
 
 
-async def test_pending_email_reflects_most_recent_token(
+async def test_pending_email_reflects_most_recent_request(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """Defensive determinism (issue #277): ``set_email`` rotates change tokens
-    so only one is ever pending, but if more than one is present the session's
-    ``pending_email`` must reflect the *most recent* by ``created_at`` — not an
-    arbitrary row, since ``UserToken.id`` is a random UUID, not a sequence."""
-    user = await start_session(api_client, db_session)
-    older = datetime(2026, 1, 1, tzinfo=UTC)
-    db_session.add_all(
-        [
-            UserToken(
-                user_id=user.id,
-                context=EMAIL_CHANGE_CONTEXT_PREFIX,
-                token=b"older-token",
-                sent_to="older@example.com",
-                created_at=older,
-            ),
-            UserToken(
-                user_id=user.id,
-                context=EMAIL_CHANGE_CONTEXT_PREFIX,
-                token=b"newer-token",
-                sent_to="newer@example.com",
-                created_at=older + timedelta(hours=1),
-            ),
-        ]
-    )
-    await db_session.commit()
-
+    await start_session(api_client, db_session)
+    await _set_email(api_client, email="older@example.com")
+    await _set_email(api_client, email="newer@example.com")
     response = await api_client.get("/v1/session")
-    assert response.status_code == 200
     assert response.json()["data"]["user"]["pending_email"] == "newer@example.com"
 
 
@@ -214,9 +171,7 @@ async def test_set_email_normalizes_to_lowercase(
     assert response.status_code == 202
     token = (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-            )
+            select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
         )
     ).scalar_one()
     assert token.sent_to == "mixedcase@example.com"
@@ -243,9 +198,7 @@ async def test_set_email_honeypot_silently_succeeds(
     tokens = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-                )
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
             )
         )
         .scalars()
@@ -299,13 +252,13 @@ async def test_set_email_taken_address_starts_merge_for_guest(
 
     token = (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX),
-                UserToken.user_id == me.id,
+            select(EmailToken).where(
+                EmailToken.purpose == EmailPurpose.merge,
+                EmailToken.user_id == me.id,
             )
         )
     ).scalar_one()
-    assert token.context == f"{EMAIL_MERGE_CONTEXT_PREFIX}{owner.id}"
+    assert token.target_account_id == owner.id
     assert token.sent_to == "taken@example.com"
 
     # The owner got the "sign in to your account" email, addressed to them.
@@ -342,9 +295,9 @@ async def test_set_email_taken_address_is_noop_for_verified_caller(
     tokens = (
         (
             await db_session.execute(
-                select(UserToken).where(
+                select(EmailToken).where(
                     _pending_email_token_clause(),
-                    UserToken.user_id == me.id,
+                    EmailToken.user_id == me.id,
                 )
             )
         )
@@ -355,12 +308,12 @@ async def test_set_email_taken_address_is_noop_for_verified_caller(
     assert fake_email_queue.finished_job_registry.count == 0
 
 
-async def test_token_context_records_confirmed_prior_email(
+async def test_token_records_confirmed_prior_email(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """Tokens carry the user's *confirmed* prior address in their context
-    so we have an audit trail of what each token was changing FROM.
-    Unconfirmed re-submits keep context=``change:`` because nothing was
+    """Tokens carry the user's *confirmed* prior address in a typed field
+    to reject a link if the account changed after issuance.
+    Unconfirmed re-submits keep a NULL prior-email snapshot because nothing was
     ever verified to change FROM."""
     user = await start_session(api_client, db_session)
 
@@ -368,12 +321,10 @@ async def test_token_context_records_confirmed_prior_email(
     await _set_email(api_client, email="first@example.com")
     token = (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-            )
+            select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
         )
     ).scalar_one()
-    assert token.context == "change:"
+    assert token.prior_email is None
     assert token.sent_to == "first@example.com"
 
     # Re-submit before confirming — the first address was never confirmed
@@ -381,7 +332,7 @@ async def test_token_context_records_confirmed_prior_email(
     # as a replaced row (#1616); the live one is the second.
     await _set_email(api_client, email="second@example.com")
     token = await _live_change_token(db_session)
-    assert token.context == "change:"
+    assert token.prior_email is None
     assert token.sent_to == "second@example.com"
 
     # Simulate confirmation, then change again — now the context picks up
@@ -391,14 +342,14 @@ async def test_token_context_records_confirmed_prior_email(
     await db_session.commit()
     await _set_email(api_client, email="third@example.com")
     token = await _live_change_token(db_session)
-    assert token.context == "change:second@example.com"
+    assert token.prior_email == "second@example.com"
     assert token.sent_to == "third@example.com"
 
 
-async def test_resend_preserves_original_change_context(
+async def test_resend_preserves_original_prior_email(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """Resend should keep the original 'change:OLD' context so the audit
+    """Resend should keep the original prior-email snapshot so the audit
     trail still reflects what the user was changing away from."""
     user = await start_session(api_client, db_session)
     # Establish a confirmed prior email so the next set has something to
@@ -410,23 +361,21 @@ async def test_resend_preserves_original_change_context(
     await _set_email(api_client, email="next@example.com")
     first = (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-            )
+            select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
         )
     ).scalar_one()
-    assert first.context == "change:prior@example.com"
+    assert first.prior_email == "prior@example.com"
 
     await api_client.post(
         "/v1/me/email/resend",
         json={"captcha_token": "x", "fmm_hp_token": ""},
     )
     # Resend stamps the prior row replaced rather than deleting it (#1616);
-    # the live row keeps the original context.
+    # the live row keeps the original snapshot.
     await db_session.refresh(first)
     assert first.replaced_at is not None
     after = await _live_change_token(db_session)
-    assert after.context == "change:prior@example.com"
+    assert after.prior_email == "prior@example.com"
     assert after.sent_to == "next@example.com"
     # Token rotated.
     assert after.token != first.token
@@ -445,9 +394,7 @@ async def test_set_email_stamps_replaced_at_on_the_prior_token(
     tokens = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-                )
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
             )
         )
         .scalars()
@@ -458,7 +405,7 @@ async def test_set_email_stamps_replaced_at_on_the_prior_token(
     live = [t for t in tokens if t.replaced_at is None]
     assert len(replaced) == 1
     assert len(live) == 1
-    assert replaced[0].sent_to == "rita@example.com"
+    assert replaced[0].sent_to is None
     assert live[0].sent_to == "rita2@example.com"
 
 
@@ -489,9 +436,7 @@ async def test_resubmitting_same_email_when_verified_is_a_noop(
     tokens = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-                )
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
             )
         )
         .scalars()
@@ -523,12 +468,10 @@ async def test_changing_email_preserves_prior_verification(
     assert user.confirmed_at is not None
     token = (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-            )
+            select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
         )
     ).scalar_one()
-    assert token.context == "change:prior@example.com"
+    assert token.prior_email == "prior@example.com"
     assert token.sent_to == "changed@example.com"
 
 
@@ -541,16 +484,16 @@ def _all_send_tokens(fake_email_queue) -> list[str]:
     return [j.args[1] for j in _finished_send_jobs(fake_email_queue)]
 
 
-async def _live_change_token(db_session: AsyncSession) -> UserToken:
+async def _live_change_token(db_session: AsyncSession) -> EmailToken:
     """The one live (unreplaced) change token — the row a resend re-issues
     against. Replaced rows survive their supersession (#1616), so tests that
     re-issue a token must select the live one, not `scalar_one()` over every
     change-context row."""
     return (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
-                UserToken.replaced_at.is_(None),
+            select(EmailToken).where(
+                EmailToken.purpose == EmailPurpose.change,
+                EmailToken.replaced_at.is_(None),
             )
         )
     ).scalar_one()
@@ -587,9 +530,7 @@ async def test_confirm_email_sets_confirmed_at_and_invalidates_token(
     tokens = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-                )
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
             )
         )
         .scalars()
@@ -623,9 +564,7 @@ async def test_confirm_email_rejects_an_expired_token(
     # Age the token past its 24h lifetime.
     token_row = (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-            )
+            select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
         )
     ).scalar_one()
     token_row.created_at = datetime.now(UTC) - timedelta(hours=25)
@@ -643,9 +582,7 @@ async def test_confirm_email_rejects_an_expired_token(
     remaining = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-                )
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
             )
         )
         .scalars()
@@ -741,9 +678,9 @@ async def test_confirm_reports_expired_not_replaced_when_a_link_is_both(
 
     token_row = (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
-                UserToken.replaced_at.is_not(None),
+            select(EmailToken).where(
+                EmailToken.purpose == EmailPurpose.change,
+                EmailToken.replaced_at.is_not(None),
             )
         )
     ).scalar_one()
@@ -809,9 +746,7 @@ async def test_confirming_the_live_merge_link_sweeps_replaced_merge_rows(
     remaining = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX)
-                )
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.merge)
             )
         )
         .scalars()
@@ -852,9 +787,7 @@ async def test_confirm_burning_the_live_change_token_sweeps_replaced_rows(
     remaining = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-                )
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
             )
         )
         .scalars()
@@ -895,9 +828,7 @@ async def test_confirm_burning_the_live_merge_token_sweeps_replaced_rows(
     remaining = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX)
-                )
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.merge)
             )
         )
         .scalars()
@@ -939,9 +870,7 @@ async def test_confirm_burning_the_live_token_on_a_collision_sweeps_replaced_row
     remaining = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-                )
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
             )
         )
         .scalars()
@@ -976,9 +905,7 @@ async def test_confirm_burning_an_expired_live_token_sweeps_replaced_rows(
     remaining = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-                )
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
             )
         )
         .scalars()
@@ -1010,7 +937,7 @@ async def test_confirm_burning_a_replaced_expired_token_keeps_its_reportable_sib
     # raw token — not ``sent_to`` — is what identifies link 1's row.
     token_row = (
         await db_session.execute(
-            select(UserToken).where(UserToken.token == hash_token(raw_1))
+            select(EmailToken).where(EmailToken.token == hash_token(raw_1))
         )
     ).scalar_one()
     token_row.created_at = (
@@ -1027,9 +954,9 @@ async def test_confirm_burning_a_replaced_expired_token_keeps_its_reportable_sib
     siblings = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
-                    UserToken.replaced_at.is_not(None),
+                select(EmailToken).where(
+                    EmailToken.purpose == EmailPurpose.change,
+                    EmailToken.replaced_at.is_not(None),
                 )
             )
         )
@@ -1152,9 +1079,7 @@ async def test_resend_sweep_keeps_a_replaced_row_within_its_lifetime(
     tokens = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-                )
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
             )
         )
         .scalars()
@@ -1178,9 +1103,7 @@ async def test_resend_sweep_deletes_a_row_once_it_genuinely_expires(
     raw_1 = _all_send_tokens(fake_email_queue)[0]
     token_row = (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-            )
+            select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
         )
     ).scalar_one()
     token_row.created_at = (
@@ -1193,9 +1116,7 @@ async def test_resend_sweep_deletes_a_row_once_it_genuinely_expires(
     remaining = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-                )
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
             )
         )
         .scalars()
@@ -1207,111 +1128,44 @@ async def test_resend_sweep_deletes_a_row_once_it_genuinely_expires(
     assert response.status_code == 400
 
 
-def test_sweep_reproduction_matches_the_router_predicates():
-    """The scheduled sweep reproduces the pending-email clause and the token
-    lifetime rather than importing them from the sessions router (see
-    app.email_token_sweep's docstring for why). This pin is what makes that
-    reproduction safe: a change to either side reds here instead of silently
-    mis-scoping the sweep."""
-    sweep_clause = _sweep_pending_email_token_clause().compile()
-    router_clause = _pending_email_token_clause().compile()
-    assert str(sweep_clause) == str(router_clause)
-    # The compiled SQL binds both prefixes as parameters, so the strings above
-    # stay equal through a one-sided *value* drift ("change:" renamed on one
-    # side only compiles to the identical `context LIKE :context_1 || '%'`).
-    # Compare the bound values too, or the pin guards the shape and nothing
-    # else — and a mis-scoped sweep deletes nothing while every test is green.
-    assert sweep_clause.params == router_clause.params
-    assert SWEEP_EMAIL_CONFIRM_TOKEN_LIFETIME == EMAIL_CONFIRM_TOKEN_LIFETIME
-
-
-async def test_scheduled_sweep_deletes_only_expired_replaced_pending_email_tokens(
+async def test_scheduled_sweep_discards_expired_credentials_and_unusable_markers(
     db_session: AsyncSession,
 ):
-    """Scope of the scheduled sweep (#1616): an expired *replaced* row is dead
-    weight holding a ``sent_to`` address — ``confirm_email`` already reports
-    plain "invalid or expired" for it, whether the row is present or not — so
-    the sweep deletes it across all users. A still-young replaced row stays
-    reportable; an expired *unreplaced* row stays the resend target
-    (``_pending_change_token`` does not filter by age); and a replaced
-    login-context row is a different token domain the sweep must not touch."""
     user = User(username="swept")
     db_session.add(user)
     await db_session.commit()
-
-    expired = EMAIL_CONFIRM_TOKEN_LIFETIME + timedelta(seconds=1)
-    young = timedelta(hours=1)
     now = datetime.now(UTC)
-
-    def _row(context: str, *, replaced: bool, age: timedelta) -> UserToken:
-        return UserToken(
+    expired = EMAIL_CONFIRM_TOKEN_LIFETIME + timedelta(seconds=1)
+    rows = [
+        EmailToken(
             user_id=user.id,
-            context=context,
-            token=hash_token(f"raw:{context}:{age}"),
-            sent_to="someone@example.com",
+            purpose=purpose,
+            token=hash_token(str(uuid.uuid4())),
+            sent_to=None if replaced else "someone@example.com",
             created_at=now - age,
             replaced_at=now - age if replaced else None,
         )
-
-    gone_change = _row(
-        EMAIL_CHANGE_CONTEXT_PREFIX + "old@example.com", replaced=True, age=expired
-    )
-    kept_young = _row(
-        EMAIL_CHANGE_CONTEXT_PREFIX + "young@example.com", replaced=True, age=young
-    )
-    kept_live = _row(
-        EMAIL_CHANGE_CONTEXT_PREFIX + "live@example.com", replaced=False, age=expired
-    )
-    gone_merge = _row(
-        EMAIL_MERGE_CONTEXT_PREFIX + str(uuid.uuid4()), replaced=True, age=expired
-    )
-    kept_login = _row("login", replaced=True, age=expired)
-    db_session.add_all([gone_change, kept_young, kept_live, gone_merge, kept_login])
-    await db_session.commit()
-
-    deleted = await sweep_expired_email_tokens(db_session)
-
-    assert deleted == 2
-    remaining = (await db_session.execute(select(UserToken.context))).scalars().all()
-    assert sorted(remaining) == sorted(
-        [kept_young.context, kept_live.context, kept_login.context]
-    )
-
-
-async def test_scheduled_sweep_is_served_by_a_partial_index(
-    engine: AsyncEngine,
-):
-    """The scheduled sweep is the one ALL-users statement on ``user_tokens``:
-    its context / replaced_at / created_at predicate matches no other index,
-    so without the partial index every hourly run seq-scans a table dominated
-    by session tokens the sweep must never delete. ``create_all`` builds the
-    schema under tests, so this pins the model's declaration (the migrated
-    copy is verified by running ``alembic upgrade head`` against a fresh
-    database, per api/CLAUDE.md)."""
-
-    def _user_token_indexes(sync_conn: Connection) -> list[dict[str, Any]]:
-        return [
-            index
-            for index in sa_inspect(sync_conn).get_indexes("user_tokens")
-            if index["name"] == "ix_user_tokens_replaced_pending_email"
+        for purpose, replaced, age in [
+            (EmailPurpose.change, True, expired),
+            (EmailPurpose.change, True, timedelta(hours=1)),
+            (EmailPurpose.change, False, expired),
+            (EmailPurpose.merge, True, expired),
+            (EmailPurpose.login, True, expired),
         ]
+    ]
+    db_session.add_all(rows)
+    await db_session.commit()
+    assert await sweep_expired_email_tokens(db_session) == 5
+    assert (await db_session.execute(select(EmailToken))).scalars().all() == []
 
-    async with engine.connect() as conn:
-        indexes = await conn.run_sync(_user_token_indexes)
 
-    assert len(indexes) == 1
-    assert indexes[0]["column_names"] == ["created_at"]
-    # The reflected predicate comes back dialect-compiled (LIKE → ~~), so
-    # assert on the parts that carry the selectivity contract: replaced
-    # rows only, and both pending-email context prefixes. The prefixes are
-    # derived from the sweep's own constants rather than written out here:
-    # hardcoded literals would stay green through the coordinated rename the
-    # index comment warns about, leaving the predicate stale and every run
-    # back on a seq scan.
-    where = str(indexes[0]["dialect_options"]["postgresql_where"])
-    assert "replaced_at IS NOT NULL" in where
-    assert f"'{SWEEP_EMAIL_CHANGE_CONTEXT_PREFIX}%'" in where
-    assert f"'{SWEEP_EMAIL_MERGE_CONTEXT_PREFIX}%'" in where
+async def test_scheduled_sweep_is_served_by_an_expiry_index(engine: AsyncEngine):
+    def indexes(connection: Connection):
+        return sa_inspect(connection).get_indexes("account_email_tokens")
+
+    async with engine.connect() as connection:
+        found = await connection.run_sync(indexes)
+    assert any(index["column_names"] == ["created_at"] for index in found)
 
 
 async def test_confirm_after_the_scheduled_sweep_reports_the_same_plain_expired(
@@ -1330,9 +1184,9 @@ async def test_confirm_after_the_scheduled_sweep_reports_the_same_plain_expired(
 
     replaced_row = (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
-                UserToken.replaced_at.is_not(None),
+            select(EmailToken).where(
+                EmailToken.purpose == EmailPurpose.change,
+                EmailToken.replaced_at.is_not(None),
             )
         )
     ).scalar_one()
@@ -1363,11 +1217,12 @@ async def test_sweep_entry_point_owns_its_session_and_commits(
     expired = EMAIL_CONFIRM_TOKEN_LIFETIME + timedelta(seconds=1)
     now = datetime.now(UTC)
     db_session.add(
-        UserToken(
+        EmailToken(
             user_id=user.id,
-            context=EMAIL_CHANGE_CONTEXT_PREFIX + "old@example.com",
+            purpose=EmailPurpose.change,
+            prior_email=None,
             token=hash_token("raw-entry"),
-            sent_to="old@example.com",
+            sent_to=None,
             created_at=now - expired,
             replaced_at=now - expired,
         )
@@ -1379,7 +1234,7 @@ async def test_sweep_entry_point_owns_its_session_and_commits(
     remaining = (
         (
             await db_session.execute(
-                select(UserToken).where(UserToken.user_id == user.id)
+                select(EmailToken).where(EmailToken.user_id == user.id)
             )
         )
         .scalars()
@@ -1412,9 +1267,9 @@ async def test_pending_email_ignores_a_replaced_token(
     replaced_rows = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX),
-                    UserToken.replaced_at.is_not(None),
+                select(EmailToken).where(
+                    EmailToken.purpose == EmailPurpose.change,
+                    EmailToken.replaced_at.is_not(None),
                 )
             )
         )
@@ -1536,10 +1391,10 @@ async def test_confirm_email_works_from_a_different_browser(
     assert user_a.confirmed_at is not None
 
 
-async def test_confirm_email_rejects_when_user_email_no_longer_matches_token_context(
+async def test_confirm_email_rejects_when_user_email_no_longer_matches_prior_email(
     api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
 ):
-    """The token's context records the user's confirmed prior address at
+    """The token's snapshot records the user's confirmed prior address at
     issue time. If the user's current ``email`` no longer matches that
     (admin reset, stale token, etc.), the token is no longer trustworthy —
     confirm must burn it and return the opaque "invalid or expired"."""
@@ -1563,9 +1418,7 @@ async def test_confirm_email_rejects_when_user_email_no_longer_matches_token_con
     tokens = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-                )
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
             )
         )
         .scalars()
@@ -1606,8 +1459,8 @@ async def test_confirm_email_handles_address_race(
     # resend loop where every click hits the same IntegrityError.
     remaining = (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.user_id == me.id,
+            select(EmailToken).where(
+                EmailToken.user_id == me.id,
                 _pending_email_token_clause(),
             )
         )
@@ -1630,9 +1483,7 @@ async def test_token_is_stored_hashed_not_plaintext(
 
     token_row = (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.context.startswith(EMAIL_CHANGE_CONTEXT_PREFIX)
-            )
+            select(EmailToken).where(EmailToken.purpose == EmailPurpose.change)
         )
     ).scalar_one()
     assert token_row.token == hashlib.sha256(raw_token.encode("utf-8")).digest()
@@ -1838,9 +1689,7 @@ async def test_confirm_merge_rejected_when_owner_changed_email(
     tokens = (
         (
             await db_session.execute(
-                select(UserToken).where(
-                    UserToken.context.startswith(EMAIL_MERGE_CONTEXT_PREFIX)
-                )
+                select(EmailToken).where(EmailToken.purpose == EmailPurpose.merge)
             )
         )
         .scalars()
@@ -2204,3 +2053,280 @@ def test_send_notification_email_omits_the_link_when_absent(monkeypatch):
     body = captured["msg"].get_content()  # type: ignore[attr-defined]
     assert "Heads up" in body
     assert "https://" not in body
+
+
+async def test_change_from_maximum_length_email_can_be_confirmed(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    user = await start_session(api_client, db_session)
+    old_email = "a" * 64 + "@" + "b" * 63 + "." + "c" * 63 + "." + "d" * 57 + ".com"
+    assert len(old_email) == 254
+    user.email = old_email
+    user.confirmed_at = datetime.now(UTC)
+    await db_session.commit()
+    response = await _set_email(api_client, email="new@example.com")
+    assert response.status_code == 202
+    raw_token = _all_send_tokens(fake_email_queue)[-1]
+    confirmed = await api_client.post("/v1/me/email/confirm", json={"token": raw_token})
+    assert confirmed.status_code == 200
+    assert confirmed.json()["data"]["user"]["email"] == "new@example.com"
+
+
+async def test_expired_link_click_preserves_pending_address_for_resend(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    await start_session(api_client, db_session)
+    raw = await _capture_raw_token(api_client, db_session, fake_email_queue)
+    token = await _live_change_token(db_session)
+    token.created_at = (
+        datetime.now(UTC) - EMAIL_CONFIRM_TOKEN_LIFETIME - timedelta(seconds=1)
+    )
+    await db_session.commit()
+    expired = await api_client.post("/v1/me/email/confirm", json={"token": raw})
+    assert expired.status_code == 400
+    session = await api_client.get("/v1/session")
+    assert session.json()["data"]["user"]["pending_email"] == VALID_BODY["email"]
+    resent = await api_client.post(
+        "/v1/me/email/resend", json={"captcha_token": "x", "fmm_hp_token": ""}
+    )
+    assert resent.status_code == 202
+    confirmed = await api_client.post(
+        "/v1/me/email/confirm", json={"token": _all_send_tokens(fake_email_queue)[-1]}
+    )
+    assert confirmed.status_code == 200
+
+
+async def test_resend_clears_change_when_another_account_claims_requested_email(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    await start_session(api_client, db_session)
+    await _set_email(api_client)
+    db_session.add(
+        User(
+            username="claimed-address",
+            email=VALID_BODY["email"],
+            confirmed_at=datetime.now(UTC),
+        )
+    )
+    await db_session.commit()
+    before = len(_all_send_tokens(fake_email_queue))
+    resent = await api_client.post(
+        "/v1/me/email/resend", json={"captcha_token": "x", "fmm_hp_token": ""}
+    )
+    assert resent.status_code == 400
+    assert len(_all_send_tokens(fake_email_queue)) == before
+    session = await api_client.get("/v1/session")
+    assert session.json()["data"]["user"]["pending_email"] is None
+
+
+async def test_resend_and_confirmation_serialize_without_reviving_intent(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    fake_email_queue,
+):
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    user = await start_session(api_client, db_session)
+    raw = await _capture_raw_token(api_client, db_session, fake_email_queue)
+    cookie = api_client.cookies.get("session")
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def independent_session():
+        async with factory() as transaction:
+            yield transaction
+
+    app.dependency_overrides[get_session] = independent_session
+    async with factory() as gate, make_client() as resend, make_client() as confirm:
+        resend.cookies.set("session", cookie)
+        resend.cookies.set("csrf_token", "test-csrf")
+        await gate.execute(select(User.id).where(User.id == user.id).with_for_update())
+        tasks = [
+            asyncio.create_task(
+                resend.post(
+                    "/v1/me/email/resend",
+                    json={"captcha_token": "x", "fmm_hp_token": ""},
+                )
+            ),
+            asyncio.create_task(
+                confirm.post("/v1/me/email/confirm", json={"token": raw})
+            ),
+        ]
+        try:
+            done, _ = await asyncio.wait(tasks, timeout=0.25)
+            assert not done, (
+                "Both operations must lock before inspecting or replacing "
+                "the pending action"
+            )
+        finally:
+            await gate.rollback()
+            results = await asyncio.gather(*tasks)
+        assert (results[0].status_code, results[1].status_code) in [
+            (400, 200),
+            (202, 400),
+        ]
+        if results[0].status_code == 202:
+            latest = await confirm.post(
+                "/v1/me/email/confirm",
+                json={"token": _all_send_tokens(fake_email_queue)[-1]},
+            )
+            assert latest.status_code == 200
+        again = await confirm.post(
+            "/v1/me/email/resend", json={"captcha_token": "x", "fmm_hp_token": ""}
+        )
+        assert again.status_code == 400
+
+
+async def test_sweep_removes_expired_credentials_but_preserves_both_intents_and_session(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    from app.models import FirstSignInIntent
+    from app.sessions import LOGIN_TOKEN_LIFETIME
+
+    await start_session(api_client, db_session)
+    await _set_email(api_client)
+    await api_client.post(
+        "/v1/login/request", json={**VALID_BODY, "email": "first-sweep@example.com"}
+    )
+    tokens = (await db_session.execute(select(EmailToken))).scalars().all()
+    for token in tokens:
+        lifetime = (
+            LOGIN_TOKEN_LIFETIME
+            if token.purpose == EmailPurpose.first_sign_in
+            else EMAIL_CONFIRM_TOKEN_LIFETIME
+        )
+        token.created_at = datetime.now(UTC) - lifetime - timedelta(seconds=1)
+    await db_session.commit()
+    assert await sweep_expired_email_tokens(db_session) == 2
+    assert (await db_session.execute(select(EmailToken))).scalars().all() == []
+    assert (
+        await db_session.get(FirstSignInIntent, "first-sweep@example.com") is not None
+    )
+    session = await api_client.get("/v1/session")
+    assert session.status_code == 200
+    assert session.json()["data"]["user"]["pending_email"] == VALID_BODY["email"]
+
+
+async def test_merge_resend_waits_for_destination_change_then_clears_stale_intent(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    fake_email_queue,
+):
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    target = User(
+        username="merge-lock-owner",
+        email="merge-lock@example.com",
+        confirmed_at=datetime.now(UTC),
+    )
+    db_session.add(target)
+    await db_session.commit()
+    await start_session(api_client, db_session)
+    await _set_email(api_client, email=target.email)
+    cookie = api_client.cookies.get("session")
+    before = len(_all_send_tokens(fake_email_queue))
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def independent_session():
+        async with factory() as transaction:
+            yield transaction
+
+    app.dependency_overrides[get_session] = independent_session
+    async with factory() as gate, make_client() as requester:
+        requester.cookies.set("session", cookie)
+        requester.cookies.set("csrf_token", "test-csrf")
+        locked = (
+            await gate.execute(
+                select(User).where(User.id == target.id).with_for_update()
+            )
+        ).scalar_one()
+        locked.email = "destination-moved@example.com"
+        await gate.flush()
+        task = asyncio.create_task(
+            requester.post(
+                "/v1/me/email/resend", json={"captcha_token": "x", "fmm_hp_token": ""}
+            )
+        )
+        try:
+            done, _ = await asyncio.wait([task], timeout=0.25)
+            assert not done, (
+                "Resend must wait for the destination account before validating intent"
+            )
+        finally:
+            await gate.commit()
+            result = await task
+        assert result.status_code == 400
+        assert len(_all_send_tokens(fake_email_queue)) == before
+        session = await requester.get("/v1/session")
+        assert session.json()["data"]["user"]["pending_email"] is None
+
+
+async def test_set_email_rechecks_live_owner_after_waiting_for_merge(
+    api_client: AsyncClient, db_session: AsyncSession, engine: AsyncEngine
+):
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    target = User(
+        username="merged-live-owner",
+        email="merged-live@example.com",
+        confirmed_at=datetime.now(UTC),
+    )
+    db_session.add(target)
+    await db_session.commit()
+    user = await start_session(api_client, db_session)
+    cookie = api_client.cookies.get("session")
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def independent_session():
+        async with factory() as transaction:
+            yield transaction
+
+    app.dependency_overrides[get_session] = independent_session
+    async with factory() as gate, make_client() as requester:
+        requester.cookies.set("session", cookie)
+        requester.cookies.set("csrf_token", "test-csrf")
+        locked = (
+            await gate.execute(select(User).where(User.id == user.id).with_for_update())
+        ).scalar_one()
+        locked.merged_into_user_id = target.id
+        locked.merged_at = datetime.now(UTC)
+        await gate.flush()
+        task = asyncio.create_task(requester.post("/v1/me/email", json=VALID_BODY))
+        try:
+            done, _ = await asyncio.wait([task], timeout=0.25)
+            assert not done
+        finally:
+            await gate.commit()
+            result = await task
+        assert result.status_code == 401
+        assert result.json()["detail"]["code"] == "session_merged"
+
+
+async def test_confirmation_rejects_and_clears_intent_for_merged_owner(
+    api_client: AsyncClient, db_session: AsyncSession, fake_email_queue
+):
+    from app.models import EmailIntent
+
+    user = await start_session(api_client, db_session)
+    raw = await _capture_raw_token(api_client, db_session, fake_email_queue)
+    target = User(
+        username="confirmation-survivor",
+        email="survivor@example.com",
+        confirmed_at=datetime.now(UTC),
+    )
+    db_session.add(target)
+    await db_session.flush()
+    user.merged_into_user_id = target.id
+    user.merged_at = datetime.now(UTC)
+    await db_session.commit()
+    async with make_client() as clicker:
+        response = await clicker.post("/v1/me/email/confirm", json={"token": raw})
+    assert response.status_code == 400
+    assert await db_session.get(EmailIntent, user.id) is None
