@@ -63,12 +63,14 @@ async def test_disposable_baseline_can_be_downgraded_and_reinstalled(postgres_ur
     async with migrated_database(postgres_url) as migrated:
         run_alembic(migrated.url, "downgrade", "base")
         async with migrated.connect() as connection:
-            assert (
-                await connection.scalar(
-                    text("SELECT to_regprocedure('check_match_lineup()')")
+            for function in ("check_match_lineup()", "fixture_scope()"):
+                assert (
+                    await connection.scalar(
+                        text("SELECT to_regprocedure(:function)"),
+                        {"function": function},
+                    )
+                    is None
                 )
-                is None
-            )
         run_alembic(migrated.url, "upgrade", "head")
         async with migrated.connect() as connection:
             assert (

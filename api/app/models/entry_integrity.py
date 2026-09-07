@@ -798,6 +798,12 @@ ENTRY_INTEGRITY_DDL = (
                 AND NEW.stage_id IS NOT DISTINCT FROM OLD.stage_id
                 AND NEW.entry_a_id IS NOT DISTINCT FROM OLD.entry_a_id
                 AND NEW.entry_b_id IS NOT DISTINCT FROM OLD.entry_b_id
+                AND NEW.id IS NOT DISTINCT FROM OLD.id
+                AND NEW.group_id IS NOT DISTINCT FROM OLD.group_id
+                AND NEW.round IS NOT DISTINCT FROM OLD.round
+                AND NEW.position IS NOT DISTINCT FROM OLD.position
+                AND NEW.scope_event_id IS NOT DISTINCT FROM OLD.scope_event_id
+                AND NEW.scope_tournament_id IS NOT DISTINCT FROM OLD.scope_tournament_id
             THEN RETURN NEW; END IF;
         END IF;
         PERFORM t.id FROM tournaments t
@@ -828,7 +834,8 @@ ENTRY_INTEGRITY_DDL = (
     """,
     """
     CREATE TRIGGER lock_fixture_link BEFORE INSERT OR DELETE
-    OR UPDATE OF match_id, entry_a_id, entry_b_id, stage_id
+    OR UPDATE OF id, match_id, entry_a_id, entry_b_id, stage_id, group_id,
+        round, position, scope_event_id, scope_tournament_id
     ON tournament_fixtures FOR EACH ROW EXECUTE FUNCTION lock_fixture_link()
     """,
     """
