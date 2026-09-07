@@ -27,12 +27,16 @@ problem (`app/solver.py:solve_hello_world`). With no worker running, health
 fails. Tests sidestep this by replacing the queue with `fakeredis` +
 synchronous RQ in `tests/conftest.py` (`fake_solver_queue` autouse fixture).
 
-**Ephemeral, cookie-based sessions.** `GET /v1/session` creates an Account, primary Player and grant, plus
-a `UserToken` (sha256-hashed) on first hit and sets an HTTP-only `session`
-cookie; subsequent hits resolve the user from that cookie. Tokens are
-namespaced by `context` so a single user table can back multiple credential
-types later. `SESSION_COOKIE_SECURE` defaults true; set to `false` for local
-non-HTTPS dev (compose already does this).
+**Ephemeral, cookie-based sessions.** `GET /v1/session` creates an Account,
+primary Player and grant plus a sha256-hashed `SessionToken` on first hit and
+sets an HTTP-only `session` cookie. Email credentials use `EmailToken` with
+constrained `EmailPurpose` and typed account references. `EmailIntent` and
+`FirstSignInIntent` survive credential expiry; the shared lifecycle module is
+`app.email_credentials`. Acquire Account locks in sorted order before credential
+locks. First-sign-in requests also serialize on normalized email before looking
+up pending state. See the [email-intent ADR](../docs/adr/20260907-email-action-intent-outlives-its-credentials.md).
+`SESSION_COOKIE_SECURE` defaults true; set to `false` for local non-HTTPS dev.
+
 
 **Alembic discovers models via `app.models` import.** `migrations/env.py` and
 `tests/conftest.py` both import `app.models` for the side effect of

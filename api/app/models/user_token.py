@@ -1,7 +1,20 @@
+"""Session credentials and purpose-constrained email credentials."""
+
 import uuid
 from datetime import datetime
+from enum import StrEnum
 
-from sqlalchemy import DateTime, ForeignKey, Index, LargeBinary, String, func, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    LargeBinary,
+    String,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -9,47 +22,19 @@ from app.db import Base
 from app.models.account import Account
 
 
-class UserToken(Base):
-    __tablename__ = "user_tokens"
-    __table_args__ = (
-        # Serves the one ALL-users statement on this table — the hourly sweep
-        # in ``app.email_token_sweep`` — whose context / replaced_at /
-        # created_at predicate nothing else indexes. Without it every run
-        # seq-scans the whole table even when there is nothing to delete, and
-        # the table is dominated by session tokens the sweep must never
-        # touch. The partial predicate mirrors that sweep's WHERE clause
-        # exactly, so the index holds only the tiny replaced pending-email
-        # population; both prefixes must stay in step with the sweep's
-        # EMAIL_*_CONTEXT_PREFIX constants (tests/test_email.py pins this
-        # predicate against those constants and those constants against the
-        # router's, and the migration carries the same declaration for
-        # databases built from the migrations).
-        #
-        # "Mirrors exactly" is about the predicate, not the literal SQL: the
-        # sweep binds its prefixes, so Postgres only proves the partial
-        # predicate once it folds those parameters, which it does under a
-        # custom plan. One statement per ``python -m app.email_token_sweep``
-        # process always gets one. A caller that ran the sweep repeatedly on
-        # one connection would cross into a generic plan and silently return
-        # to the seq scan.
-        Index(
-            "ix_user_tokens_replaced_pending_email",
-            "created_at",
-            postgresql_where=text(
-                "replaced_at IS NOT NULL "
-                "AND (context LIKE 'change:%' OR context LIKE 'merge:%')"
-            ),
-        ),
-    )
+class EmailPurpose(StrEnum):
+    login = "login"
+    first_sign_in = "first_sign_in"
+    change = "change"
+    merge = "merge"
 
+
+class SessionToken(Base):
+    __tablename__ = "account_session_tokens"
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        primary_key=True,
-        default=uuid.uuid4,
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    token: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, index=True)
-    context: Mapped[str] = mapped_column(String(255), nullable=False)
-    sent_to: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    token: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, unique=True)
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("accounts.id", ondelete="CASCADE"),
@@ -59,15 +44,85 @@ class UserToken(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
-    # Set when a newer request supersedes this row: a new sign-in request
-    # (``_issue_and_send_login_email``) or a new confirmation token
-    # (``_issue_confirmation_token`` — change and merge flavours alike).
-    # Lets ``consume_login_token`` and ``confirm_email`` tell "a newer link
-    # was requested" apart from every other invalid/expired cause, without
-    # stacking a second bit onto the already-overloaded ``context`` string.
-    # NULL means live, or a token flavour that never gets replaced.
+    user: Mapped[Account] = relationship(Account)
+
+
+class EmailToken(Base):
+    __tablename__ = "account_email_tokens"
+    __table_args__ = (
+        CheckConstraint(
+            "target_account_id <> user_id AND guest_account_id <> user_id",
+            name="ck_account_email_tokens_distinct_accounts",
+        ),
+        CheckConstraint(
+            "(replaced_at IS NULL AND sent_to IS NOT NULL) OR (replaced_at "
+            "IS NOT NULL AND sent_to IS NULL AND prior_email IS NULL AND "
+            "target_account_id IS NULL AND guest_account_id IS NULL)",
+            name="ck_account_email_tokens_live_payload",
+        ),
+        CheckConstraint(
+            "purpose = 'change' OR prior_email IS NULL",
+            name="ck_account_email_tokens_prior_email",
+        ),
+        CheckConstraint(
+            "(purpose = 'merge' AND (replaced_at IS NOT NULL OR "
+            "target_account_id IS NOT NULL)) OR (purpose <> 'merge' AND "
+            "target_account_id IS NULL)",
+            name="ck_account_email_tokens_merge_target",
+        ),
+        CheckConstraint(
+            "purpose IN ('login', 'first_sign_in') OR guest_account_id IS NULL",
+            name="ck_account_email_tokens_guest_source",
+        ),
+        Index("ix_account_email_tokens_created_at", "created_at"),
+        Index(
+            "uq_account_email_tokens_active_login",
+            "user_id",
+            unique=True,
+            postgresql_where=text(
+                "replaced_at IS NULL AND purpose IN ('login', 'first_sign_in')"
+            ),
+        ),
+        Index(
+            "uq_account_email_tokens_active_confirmation",
+            "user_id",
+            unique=True,
+            postgresql_where=text(
+                "replaced_at IS NULL AND purpose IN ('change', 'merge')"
+            ),
+        ),
+    )
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    token: Mapped[bytes] = mapped_column(LargeBinary, nullable=False, unique=True)
+    purpose: Mapped[EmailPurpose] = mapped_column(
+        Enum(
+            EmailPurpose,
+            native_enum=False,
+            create_constraint=True,
+            name="ck_account_email_tokens_purpose",
+        ),
+        nullable=False,
+    )
+    sent_to: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    prior_email: Mapped[str | None] = mapped_column(String(254), nullable=True)
+    target_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=True
+    )
+    guest_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("accounts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
     replaced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-
-    user: Mapped[Account] = relationship(Account)
+    user: Mapped[Account] = relationship(Account, foreign_keys=[user_id])

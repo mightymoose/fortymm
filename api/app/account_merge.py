@@ -17,6 +17,9 @@ from app.match_voiding import void_match
 from app.models import (
     AccountPlayer,
     DeviceToken,
+    EmailIntent,
+    EmailToken,
+    FirstSignInIntent,
     LeagueMembership,
     Match,
     MatchSide,
@@ -36,16 +39,10 @@ from app.models import (
     User,
     UserLeagueRating,
     UserRole,
-    UserToken,
 )
 from app.schedule_solves import request_solve, tournament_has_drawn_event
 from app.tournament_authority import lock_merge_tournaments, merge_authority
 from app.tournament_draws import draw_has_play, uncut_draw
-
-# Must match ``app.sessions.SESSION_TOKEN_CONTEXT``. Hardcoded to avoid a
-# circular import (sessions imports this module). Session tokens are KEPT on the
-# tombstoned guest so its cookie still resolves; every other token is dropped.
-_SESSION_TOKEN_CONTEXT = "session"
 
 # Bind the active state from the enum in reconciliation queries. The database
 # independently enforces scoped participation through entry membership.
@@ -426,10 +423,14 @@ async def _transfer_account(
         )
     )
     await db.execute(
-        delete(UserToken).where(
-            UserToken.user_id == from_user_id,
-            UserToken.context != _SESSION_TOKEN_CONTEXT,
+        delete(EmailToken).where(
+            EmailToken.user_id == from_user_id,
         )
+    )
+
+    await db.execute(delete(EmailIntent).where(EmailIntent.user_id == from_user_id))
+    await db.execute(
+        delete(FirstSignInIntent).where(FirstSignInIntent.user_id == from_user_id)
     )
 
     # Auth0's namespaced LoginIdentity follows the existing move-or-clear policy:

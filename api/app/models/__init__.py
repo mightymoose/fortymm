@@ -4,6 +4,7 @@ from app.models import tournament_authority_integrity as tournament_authority_in
 from app.models.account import Account, AccountPlayer, LoginIdentity
 from app.models.device_token import DeviceToken
 from app.models.draw_type import DrawTypeOption
+from app.models.email_intent import EmailIntent, FirstSignInIntent
 from app.models.league import League, LeagueVisibility
 from app.models.league_membership import LeagueMembership
 from app.models.match import Match, MatchEnding, MatchStatus
@@ -63,7 +64,7 @@ from app.models.tournament_table import VenueTable
 from app.models.user import User
 from app.models.user_league_rating import UserLeagueRating
 from app.models.user_role import UserRole
-from app.models.user_token import UserToken
+from app.models.user_token import EmailPurpose, EmailToken, SessionToken
 
 __all__ = [
     "TournamentOwnershipTransfer",
@@ -123,7 +124,11 @@ __all__ = [
     "User",
     "UserLeagueRating",
     "UserRole",
-    "UserToken",
+    "EmailPurpose",
+    "EmailToken",
+    "SessionToken",
+    "EmailIntent",
+    "FirstSignInIntent",
     "VenueTable",
     "VerificationPolicy",
 ]

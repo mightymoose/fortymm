@@ -11,13 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.main import app
-from app.models import Permission, Role, RolePermission, User, UserRole, UserToken
+from app.models import Permission, Role, RolePermission, SessionToken, User, UserRole
 from app.roles import DEFAULT_ROLE_NAME
 from app.sessions import (
     CSRF_COOKIE_NAME,
     CSRF_HEADER_NAME,
     SESSION_COOKIE_NAME,
-    SESSION_TOKEN_CONTEXT,
     _maybe_merge_prior_session,
     _resolve_current_user,
 )
@@ -66,13 +65,13 @@ async def test_creates_session_when_no_cookie(
 
     token = (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.token == hashlib.sha256(raw_token.encode("utf-8")).digest()
+            select(SessionToken).where(
+                SessionToken.token == hashlib.sha256(raw_token.encode("utf-8")).digest()
             )
         )
     ).scalar_one()
     assert token.user_id == user.id
-    assert token.context == SESSION_TOKEN_CONTEXT
+    assert isinstance(token, SessionToken)
 
 
 async def test_minted_guest_holds_the_default_role_and_nothing_else(
@@ -133,7 +132,7 @@ async def test_returns_existing_session_when_cookie_valid(
     users = (await db_session.execute(select(User))).scalars().all()
     assert len(users) == 1
 
-    tokens = (await db_session.execute(select(UserToken))).scalars().all()
+    tokens = (await db_session.execute(select(SessionToken))).scalars().all()
     assert len(tokens) == 1
     assert tokens[0].token == hashlib.sha256(first_token.encode("utf-8")).digest()
 
@@ -179,7 +178,7 @@ async def test_delete_session_revokes_token_and_clears_cookie(
     assert response.status_code == 204
     _assert_session_cookie_cleared(response)
 
-    tokens = (await db_session.execute(select(UserToken))).scalars().all()
+    tokens = (await db_session.execute(select(SessionToken))).scalars().all()
     assert tokens == []
 
 
@@ -210,7 +209,7 @@ async def test_token_is_stored_hashed_not_plaintext(
     response = await api_client.get("/v1/session")
     raw_token = response.cookies.get(SESSION_COOKIE_NAME)
 
-    tokens = (await db_session.execute(select(UserToken))).scalars().all()
+    tokens = (await db_session.execute(select(SessionToken))).scalars().all()
     assert len(tokens) == 1
     assert tokens[0].token != raw_token.encode("utf-8")
     assert tokens[0].token == hashlib.sha256(raw_token.encode("utf-8")).digest()
@@ -291,8 +290,8 @@ async def _user_id_behind_cookie(db_session: AsyncSession, raw_token: str) -> uu
     other user's id launder itself past the assertion."""
     token = (
         await db_session.execute(
-            select(UserToken).where(
-                UserToken.token == hashlib.sha256(raw_token.encode("utf-8")).digest()
+            select(SessionToken).where(
+                SessionToken.token == hashlib.sha256(raw_token.encode("utf-8")).digest()
             )
         )
     ).scalar_one()

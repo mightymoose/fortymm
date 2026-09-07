@@ -17,6 +17,8 @@ from app.leagues import add_user_to_default_league, get_default_league
 from app.match_voiding import void_match
 from app.models import (
     DrawType,
+    EmailPurpose,
+    EmailToken,
     EventFormat,
     LeagueMembership,
     Match,
@@ -31,6 +33,7 @@ from app.models import (
     ScheduleSolve,
     ScheduleSolveStatus,
     ScheduleSolveTrigger,
+    SessionToken,
     Tournament,
     TournamentEntry,
     TournamentEntryStatus,
@@ -40,10 +43,8 @@ from app.models import (
     User,
     UserLeagueRating,
     UserRole,
-    UserToken,
 )
 from app.roles import grant_default_role
-from app.sessions import SESSION_TOKEN_CONTEXT
 from app.tournament_draws import cut_draw
 from app.tournament_event_stages import mint_stages
 from app.tournament_queries import stage_ids_for_events
@@ -224,16 +225,16 @@ async def test_merge_tombstones_ephemeral_user_keeping_session_token(
     verified = await _make_verified(db_session, "rita@example.com")
 
     db_session.add(
-        UserToken(
+        SessionToken(
             user_id=ephemeral.id,
-            context=SESSION_TOKEN_CONTEXT,
             token=hashlib.sha256(b"raw").digest(),
         )
     )
     db_session.add(
-        UserToken(
+        EmailToken(
             user_id=ephemeral.id,
-            context="login",
+            purpose=EmailPurpose.login,
+            sent_to="test@example.com",
             token=hashlib.sha256(b"login-raw").digest(),
         )
     )
@@ -252,14 +253,26 @@ async def test_merge_tombstones_ephemeral_user_keeping_session_token(
     leftover = (
         (
             await db_session.execute(
-                select(UserToken).where(UserToken.user_id == ephemeral.id)
+                select(EmailToken).where(EmailToken.user_id == ephemeral.id)
             )
         )
         .scalars()
         .all()
     )
     # Session token kept (tombstone key); the login token dropped.
-    assert [t.context for t in leftover] == [SESSION_TOKEN_CONTEXT]
+    assert leftover == []
+    assert (
+        len(
+            (
+                await db_session.execute(
+                    select(SessionToken).where(SessionToken.user_id == ephemeral.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        == 1
+    )
 
 
 # ----- atomicity ----------------------------------------------------------

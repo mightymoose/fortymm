@@ -11,6 +11,10 @@ Tournament authority transfer and merge provenance are extended by
 [Tournament creator, owner and director authority are separate](20260907-tournament-creator-owner-and-director-authority-are-separate.md),
 including retained director grants. Historical Account actors remain unchanged.
 
+The shared `user_tokens` representation below is superseded by
+[Email action intent outlives its credentials](20260907-email-action-intent-outlives-its-credentials.md).
+Account ownership and the session-retention policy on merge remain in force.
+
 ## Decision
 
 An Account authenticates and acts. A Player is the durable sporting identity: a
