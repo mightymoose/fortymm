@@ -44,6 +44,7 @@ from app.models import (
 )
 from app.schedule_solves import request_solve
 from app.schemas.tournament import TournamentCreate, named_list
+from app.tournament_authority import require_owner
 from app.tournament_draws import (
     DrawCurrency,
     active_draw_entrants_by_event,
@@ -221,6 +222,7 @@ async def delete_tournament(
     from under a fixture that survives it.
     """
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
+    await require_owner(db, tournament, actor.id)
     await require_no_recorded_play(db, tournament_id=tournament.id)
     # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5); the event
     # is reachable through the stage.

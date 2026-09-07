@@ -77,6 +77,7 @@ from app.player_accounts import PlayerAccessDenied, require_player
 from app.rate_limiting import RedisRateLimiter
 from app.schedule_solves import request_solve
 from app.schemas.tournament import TournamentEntrantRead
+from app.tournament_authority import can_direct
 from app.tournament_edit import _load_tournament_for_update
 from app.tournament_eligibility import (
     Eligible,
@@ -377,7 +378,7 @@ async def enter_event(
         # The director's arm. Ownership is the gate (403 for anyone else naming somebody
         # else's id), judged after the 404s above so a stranger's refusal never leaks
         # whether the tournament or event exists.
-        if tournament.owner_account_id != actor.id:
+        if not await can_direct(db, tournament, actor.id):
             raise NotTournamentOwnerError()
         entrant, added_by_user_id = await _load_entrant(db, entrant_id), actor.id
 
@@ -594,7 +595,9 @@ async def withdraw_from_event(
     # — which entry it is cannot be known until the row is loaded.
     actor_player = actor.primary_player
     actor_player_id = actor_player.id if actor_player is not None else None
-    if entry.user_id != actor_player_id and tournament.owner_account_id != actor.id:
+    if entry.user_id != actor_player_id and not await can_direct(
+        db, tournament, actor.id
+    ):
         # Neither the entry's owner nor the tournament's owner — the only two
         # arms the fork has. A permanent 403, answered before the transient
         # status 409 below, so withdrawing someone else's entry from a live

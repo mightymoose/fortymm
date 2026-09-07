@@ -39,6 +39,7 @@ from app.models import (
     UserToken,
 )
 from app.schedule_solves import request_solve, tournament_has_drawn_event
+from app.tournament_authority import lock_merge_tournaments, merge_authority
 from app.tournament_draws import draw_has_play, uncut_draw
 
 # Must match ``app.sessions.SESSION_TOKEN_CONTEXT``. Hardcoded to avoid a
@@ -108,6 +109,7 @@ async def merge_user(
             .where(User.id.in_([from_user_id, to_user_id]))
             .order_by(User.id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
     ).all()
     by_id = {account.id: account for account in accounts}
@@ -120,6 +122,7 @@ async def merge_user(
     source_display_name = source.username
     if len(source.player_grants) > 1:
         raise ValueError("Merging accounts that manage multiple players is not enabled")
+    await lock_merge_tournaments(db, source_id=from_user_id, target_id=to_user_id)
     summary = MergeSummary(matches_moved=0, matches_voided=0)
     if (
         source_player is not None
@@ -144,7 +147,6 @@ async def merge_user(
                         db,
                         from_user_id=source_player_id,
                         to_user_id=target_player_id,
-                        transferring_account_id=from_user_id,
                     )
                     # Registration may commit after collision discovery but before
                     # the Player update takes its event locks. Validate here while
@@ -192,14 +194,10 @@ async def merge_user(
             target.player_grants.append(
                 AccountPlayer(player=source_player, is_primary=True)
             )
+    await merge_authority(db, source_id=from_user_id, target_id=to_user_id)
     source.display_name = source_display_name
     source.player_grants.clear()
     await db.flush()
-    await db.execute(
-        update(Tournament)
-        .where(Tournament.owner_account_id == from_user_id)
-        .values(owner_account_id=to_user_id)
-    )
     await _transfer_account(db, from_user_id=from_user_id, to_user_id=to_user_id)
     return summary
 
@@ -209,38 +207,9 @@ async def _merge_players(
     *,
     from_user_id: uuid.UUID,
     to_user_id: uuid.UUID,
-    transferring_account_id: uuid.UUID,
 ) -> MergeSummary:
     """Combine sporting records under the existing collision and rating rules."""
-    # Go-live materializes participants under the tournament lock. Take every
-    # affected parent before reading/repointing sides, even without an entry
-    # collision, and before the Player trigger later locks individual events.
-    await db.execute(
-        text(
-            """
-            WITH RECURSIVE identities(id) AS (
-                SELECT CAST(:source AS uuid)
-                UNION SELECT CAST(:target AS uuid)
-                UNION SELECT p.id FROM players p
-                    JOIN identities i ON p.merged_into_player_id = i.id
-            ), affected AS (
-                SELECT DISTINCT e.tournament_id FROM identities i
-                JOIN tournament_entry_members m ON m.player_id = i.id
-                JOIN tournament_entries en ON en.id = m.entry_id
-                JOIN tournament_events e ON e.id = en.event_id
-                UNION
-                SELECT id FROM tournaments WHERE owner_account_id = :account
-            )
-            SELECT t.id FROM tournaments t JOIN affected a ON a.tournament_id = t.id
-            ORDER BY t.id FOR UPDATE OF t
-            """
-        ),
-        {
-            "source": from_user_id,
-            "target": to_user_id,
-            "account": transferring_account_id,
-        },
-    )
+    # The caller holds the sorted union of sporting and authority tournaments.
     collision = await _self_play_collision(
         db, from_user_id=from_user_id, to_user_id=to_user_id
     )

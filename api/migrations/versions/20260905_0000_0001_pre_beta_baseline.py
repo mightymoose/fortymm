@@ -10,6 +10,128 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
+AUTHORITY_INTEGRITY_DDL = (
+    """
+    CREATE FUNCTION tournament_can_direct(tournament_uuid uuid, account_uuid uuid)
+    RETURNS boolean LANGUAGE sql STABLE AS $$
+        SELECT EXISTS (
+            SELECT 1 FROM tournaments t JOIN accounts a ON a.id = account_uuid
+            WHERE t.id = tournament_uuid AND a.merged_at IS NULL
+                AND (t.owner_account_id = account_uuid OR EXISTS (
+                    SELECT 1 FROM tournament_account_grants g
+                    WHERE g.tournament_id = t.id AND g.account_id = account_uuid
+                        AND g.role = 'director' AND g.revoked_at IS NULL
+                ))
+        )
+    $$
+    """,
+    """
+    CREATE FUNCTION check_tournament_grant_origin() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        BEGIN
+            PERFORM id FROM accounts
+            WHERE id IN (NEW.account_id, NEW.granted_by_account_id,
+                NEW.revoked_by_account_id)
+            ORDER BY id FOR KEY SHARE NOWAIT;
+            PERFORM id FROM tournaments WHERE id = NEW.tournament_id FOR UPDATE NOWAIT;
+        EXCEPTION WHEN lock_not_available THEN
+            RAISE EXCEPTION 'authority changes require parent locks; retry'
+                USING ERRCODE = '40001';
+        END;
+        IF TG_OP = 'INSERT' AND NOT EXISTS (
+            SELECT 1 FROM accounts WHERE id = NEW.account_id AND merged_at IS NULL
+        ) THEN
+            RAISE EXCEPTION 'authority recipient must be active'
+                USING ERRCODE = '23514';
+        END IF;
+        IF NEW.inherited_from_grant_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM tournament_account_grants g
+            WHERE g.id = NEW.inherited_from_grant_id
+                AND g.tournament_id = NEW.tournament_id
+                AND g.role = NEW.role AND g.account_id <> NEW.account_id
+                AND g.revocation_reason = 'account_merge' AND g.revoked_at IS NOT NULL
+        ) THEN
+            RAISE EXCEPTION 'inherited grant requires matching revoked source authority'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER check_tournament_grant_origin BEFORE INSERT OR UPDATE
+    ON tournament_account_grants
+    FOR EACH ROW EXECUTE FUNCTION check_tournament_grant_origin()
+    """,
+    """
+    CREATE FUNCTION preserve_tournament_creator() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        IF TG_OP = 'INSERT' THEN
+            NEW.owner_account_id := COALESCE(
+                NEW.owner_account_id, NEW.created_by_user_id);
+        ELSIF NEW.created_by_user_id IS DISTINCT FROM OLD.created_by_user_id THEN
+            RAISE EXCEPTION 'tournament creator is immutable' USING ERRCODE = '23514';
+        END IF;
+        IF TG_OP = 'INSERT'
+            OR NEW.owner_account_id IS DISTINCT FROM OLD.owner_account_id THEN
+            BEGIN
+                PERFORM id FROM accounts WHERE id = NEW.owner_account_id
+                    FOR KEY SHARE NOWAIT;
+            EXCEPTION WHEN lock_not_available THEN
+                RAISE EXCEPTION 'ownership changes require account locks; retry'
+                    USING ERRCODE = '40001';
+            END;
+            IF NOT EXISTS (SELECT 1 FROM accounts
+                WHERE id = NEW.owner_account_id AND merged_at IS NULL) THEN
+                RAISE EXCEPTION 'owner must be active' USING ERRCODE = '23514';
+            END IF;
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER preserve_tournament_creator BEFORE INSERT OR UPDATE ON tournaments
+    FOR EACH ROW EXECUTE FUNCTION preserve_tournament_creator()
+    """,
+    """
+    CREATE FUNCTION preserve_tournament_authority() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        IF TG_OP = 'DELETE' THEN
+            IF EXISTS (SELECT 1 FROM tournaments WHERE id = OLD.tournament_id) THEN
+                RAISE EXCEPTION 'authority history is retained with its tournament'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN OLD;
+        END IF;
+        IF TG_TABLE_NAME = 'tournament_ownership_transfers' THEN
+            RAISE EXCEPTION 'ownership transfer history is immutable'
+                USING ERRCODE = '23514';
+        END IF;
+        IF (to_jsonb(NEW) - ARRAY[
+            'revoked_at', 'revoked_by_account_id', 'revocation_reason'])
+            IS DISTINCT FROM
+            (to_jsonb(OLD) - ARRAY[
+                'revoked_at', 'revoked_by_account_id', 'revocation_reason'])
+            OR (OLD.revoked_at IS NOT NULL AND NEW IS DISTINCT FROM OLD) THEN
+            RAISE EXCEPTION 'grant attribution and completed revocations are immutable'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER preserve_tournament_grant BEFORE UPDATE OR DELETE
+    ON tournament_account_grants
+    FOR EACH ROW EXECUTE FUNCTION preserve_tournament_authority()
+    """,
+    """
+    CREATE TRIGGER preserve_tournament_transfer BEFORE UPDATE OR DELETE
+    ON tournament_ownership_transfers
+    FOR EACH ROW EXECUTE FUNCTION preserve_tournament_authority()
+    """,
+)
+
 FIXTURE_INTEGRITY_DDL = (
     """
     CREATE OR REPLACE FUNCTION fixture_scope() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -115,7 +237,7 @@ ENTRY_INTEGRITY_DDL = (
     """
     CREATE OR REPLACE FUNCTION authorize_entry_membership() RETURNS trigger
     LANGUAGE plpgsql AS $$
-    DECLARE owner_uuid uuid; actor_uuid uuid;
+    DECLARE tournament_uuid uuid; actor_uuid uuid;
     BEGIN
         IF NEW.joined_at > clock_timestamp() THEN
             RAISE EXCEPTION 'membership cannot start in the future'
@@ -154,7 +276,7 @@ ENTRY_INTEGRITY_DDL = (
         JOIN tournament_events e ON e.id = en.event_id
         JOIN tournaments t ON t.id = e.tournament_id
         WHERE en.id = NEW.entry_id FOR SHARE OF t;
-        SELECT t.owner_account_id INTO owner_uuid FROM tournament_entries en
+        SELECT t.id INTO tournament_uuid FROM tournament_entries en
         JOIN tournament_events e ON e.id = en.event_id
         JOIN tournaments t ON t.id = e.tournament_id
         WHERE en.id = NEW.entry_id AND t.status IN ('live', 'archived')
@@ -164,12 +286,10 @@ ENTRY_INTEGRITY_DDL = (
         ELSIF NEW.left_at IS DISTINCT FROM OLD.left_at THEN actor_uuid :=
         NEW.left_by_account_id;
         ELSE RETURN NEW; END IF;
-        IF actor_uuid IS DISTINCT FROM owner_uuid
+        IF NOT tournament_can_direct(tournament_uuid, actor_uuid)
             OR (TG_OP = 'INSERT' AND NEW.left_at IS NOT NULL
-                AND NEW.left_by_account_id IS DISTINCT FROM owner_uuid)
-            OR NOT EXISTS (
-            SELECT 1 FROM accounts WHERE id = actor_uuid AND merged_at IS NULL
-        ) THEN
+                AND NOT tournament_can_direct(tournament_uuid, NEW.left_by_account_id))
+        THEN
             RAISE EXCEPTION 'roster change after start requires the tournament director'
                 USING ERRCODE = '23514';
         END IF;
@@ -219,7 +339,7 @@ ENTRY_INTEGRITY_DDL = (
     """
     CREATE OR REPLACE FUNCTION check_match_lineup() RETURNS trigger
     LANGUAGE plpgsql AS $$
-    DECLARE lineup match_lineups; owner_uuid uuid; fixture tournament_fixtures;
+    DECLARE lineup match_lineups; tournament_uuid uuid; fixture tournament_fixtures;
         side_size integer; previous match_lineups;
     BEGIN
         IF TG_TABLE_NAME = 'match_lineups' THEN
@@ -247,16 +367,14 @@ ENTRY_INTEGRITY_DDL = (
         JOIN tournament_event_stages s ON s.id = f.stage_id
         JOIN tournament_events e ON e.id = s.event_id
         WHERE f.match_id = lineup.match_id FOR UPDATE OF e;
-        SELECT t.owner_account_id INTO owner_uuid
+        SELECT t.id INTO tournament_uuid
         FROM tournament_fixtures f
         JOIN tournament_event_stages s ON s.id = f.stage_id
         JOIN tournament_events e ON e.id = s.event_id
         JOIN tournaments t ON t.id = e.tournament_id
         WHERE f.match_id = lineup.match_id;
-        IF lineup.revision > 1 AND (lineup.recorded_by_account_id IS DISTINCT FROM
-        owner_uuid
-            OR NOT EXISTS (SELECT 1 FROM accounts WHERE id = owner_uuid AND
-        merged_at IS NULL))
+        IF lineup.revision > 1 AND NOT tournament_can_direct(
+            tournament_uuid, lineup.recorded_by_account_id)
         THEN
             RAISE EXCEPTION 'lineup correction requires the tournament director'
                 USING ERRCODE = '23514';
@@ -907,8 +1025,6 @@ ENTRY_INTEGRITY_DDL = (
     FOR EACH ROW EXECUTE FUNCTION check_entry_event()
     """,
 )
-
-
 revision = "0001"
 down_revision = None
 branch_labels = None
@@ -3262,6 +3378,127 @@ def upgrade() -> None:
         ["player_id"],
         unique=False,
     )
+    op.create_table(
+        "tournament_account_grants",
+        sa.Column("id", sa.UUID(), nullable=False, primary_key=True),
+        sa.Column(
+            "tournament_id",
+            sa.UUID(),
+            sa.ForeignKey("tournaments.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "account_id",
+            sa.UUID(),
+            sa.ForeignKey("accounts.id", ondelete="RESTRICT"),
+            nullable=False,
+        ),
+        sa.Column(
+            "role", sa.Enum("director", name="tournament_account_role"), nullable=False
+        ),
+        sa.Column(
+            "granted_by_account_id",
+            sa.UUID(),
+            sa.ForeignKey("accounts.id", ondelete="RESTRICT"),
+            nullable=True,
+        ),
+        sa.Column(
+            "granted_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "reason",
+            sa.Enum("explicit", "account_merge", name="authority_change_reason"),
+            nullable=False,
+        ),
+        sa.Column(
+            "revocation_reason",
+            sa.Enum("explicit", "account_merge", name="authority_change_reason"),
+            nullable=True,
+        ),
+        sa.Column(
+            "inherited_from_grant_id",
+            sa.UUID(),
+            sa.ForeignKey("tournament_account_grants.id", ondelete="RESTRICT"),
+            nullable=True,
+        ),
+        sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column(
+            "revoked_by_account_id",
+            sa.UUID(),
+            sa.ForeignKey("accounts.id", ondelete="RESTRICT"),
+            nullable=True,
+        ),
+        sa.CheckConstraint(
+            "(revoked_at IS NULL) = (revocation_reason IS NULL) AND (revoked_at IS NOT NULL OR revoked_by_account_id IS NULL) AND (revocation_reason IS DISTINCT FROM 'explicit' OR revoked_by_account_id IS NOT NULL) AND (revocation_reason IS DISTINCT FROM 'account_merge' OR revoked_by_account_id IS NULL)",
+            name="ck_tournament_account_grants_revocation_pair",
+        ),
+        sa.CheckConstraint(
+            "(reason = 'explicit' AND granted_by_account_id IS NOT NULL AND inherited_from_grant_id IS NULL) OR (reason = 'account_merge' AND granted_by_account_id IS NULL AND inherited_from_grant_id IS NOT NULL)",
+            name="ck_tournament_account_grants_provenance",
+        ),
+        sa.CheckConstraint(
+            "revoked_at >= granted_at", name="ck_tournament_account_grants_chronology"
+        ),
+    )
+    op.create_index(
+        "uq_tournament_account_grants_active",
+        "tournament_account_grants",
+        ["tournament_id", "account_id", "role"],
+        unique=True,
+        postgresql_where=sa.text("revoked_at IS NULL"),
+    )
+    op.create_table(
+        "tournament_ownership_transfers",
+        sa.Column("id", sa.UUID(), nullable=False, primary_key=True),
+        sa.Column(
+            "tournament_id",
+            sa.UUID(),
+            sa.ForeignKey("tournaments.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        sa.Column(
+            "previous_owner_account_id",
+            sa.UUID(),
+            sa.ForeignKey("accounts.id", ondelete="RESTRICT"),
+            nullable=False,
+        ),
+        sa.Column(
+            "new_owner_account_id",
+            sa.UUID(),
+            sa.ForeignKey("accounts.id", ondelete="RESTRICT"),
+            nullable=False,
+        ),
+        sa.Column(
+            "actor_account_id",
+            sa.UUID(),
+            sa.ForeignKey("accounts.id", ondelete="RESTRICT"),
+            nullable=True,
+        ),
+        sa.Column(
+            "transferred_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column(
+            "reason",
+            sa.Enum("explicit", "account_merge", name="authority_change_reason"),
+            nullable=False,
+        ),
+        sa.CheckConstraint(
+            "(reason = 'explicit' AND actor_account_id IS NOT NULL) OR (reason = 'account_merge' AND actor_account_id IS NULL)",
+            name="ck_tournament_ownership_transfers_actor",
+        ),
+        sa.CheckConstraint(
+            "previous_owner_account_id <> new_owner_account_id",
+            name="ck_tournament_ownership_transfers_distinct",
+        ),
+    )
+    for statement in AUTHORITY_INTEGRITY_DDL:
+        op.execute(statement)
     for statement in FIXTURE_INTEGRITY_DDL:
         op.execute(statement)
     for statement in ENTRY_INTEGRITY_DDL:
@@ -3269,6 +3506,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("DROP FUNCTION tournament_can_direct(uuid, uuid) CASCADE")
+    op.execute("DROP FUNCTION check_tournament_grant_origin() CASCADE")
+    op.execute("DROP FUNCTION preserve_tournament_creator() CASCADE")
+    op.execute("DROP FUNCTION preserve_tournament_authority() CASCADE")
+    op.drop_table("tournament_ownership_transfers")
+    op.drop_table("tournament_account_grants")
+    sa.Enum(name="authority_change_reason").drop(op.get_bind())
+    sa.Enum(name="tournament_account_role").drop(op.get_bind())
     # These functions and their dependent triggers belong to this baseline.
     # Remove them before the table row types referenced by their bodies.
     for signature in (

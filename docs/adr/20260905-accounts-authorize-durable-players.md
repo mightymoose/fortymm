@@ -7,6 +7,10 @@ duplicate entries are withdrawn without erasing their membership history.
 
 Status: Accepted. Implements #1671; the pre-beta baseline freezes at #1670.
 
+Tournament authority transfer and merge provenance are extended by
+[Tournament creator, owner and director authority are separate](20260907-tournament-creator-owner-and-director-authority-are-separate.md),
+including retained director grants. Historical Account actors remain unchanged.
+
 ## Decision
 
 An Account authenticates and acts. A Player is the durable sporting identity: a

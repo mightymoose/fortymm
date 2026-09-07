@@ -87,7 +87,7 @@ ENTRY_INTEGRITY_DDL = (
     """
     CREATE OR REPLACE FUNCTION authorize_entry_membership() RETURNS trigger
     LANGUAGE plpgsql AS $$
-    DECLARE owner_uuid uuid; actor_uuid uuid;
+    DECLARE tournament_uuid uuid; actor_uuid uuid;
     BEGIN
         IF NEW.joined_at > clock_timestamp() THEN
             RAISE EXCEPTION 'membership cannot start in the future'
@@ -126,7 +126,7 @@ ENTRY_INTEGRITY_DDL = (
         JOIN tournament_events e ON e.id = en.event_id
         JOIN tournaments t ON t.id = e.tournament_id
         WHERE en.id = NEW.entry_id FOR SHARE OF t;
-        SELECT t.owner_account_id INTO owner_uuid FROM tournament_entries en
+        SELECT t.id INTO tournament_uuid FROM tournament_entries en
         JOIN tournament_events e ON e.id = en.event_id
         JOIN tournaments t ON t.id = e.tournament_id
         WHERE en.id = NEW.entry_id AND t.status IN ('live', 'archived')
@@ -136,12 +136,10 @@ ENTRY_INTEGRITY_DDL = (
         ELSIF NEW.left_at IS DISTINCT FROM OLD.left_at THEN actor_uuid :=
         NEW.left_by_account_id;
         ELSE RETURN NEW; END IF;
-        IF actor_uuid IS DISTINCT FROM owner_uuid
+        IF NOT tournament_can_direct(tournament_uuid, actor_uuid)
             OR (TG_OP = 'INSERT' AND NEW.left_at IS NOT NULL
-                AND NEW.left_by_account_id IS DISTINCT FROM owner_uuid)
-            OR NOT EXISTS (
-            SELECT 1 FROM accounts WHERE id = actor_uuid AND merged_at IS NULL
-        ) THEN
+                AND NOT tournament_can_direct(tournament_uuid, NEW.left_by_account_id))
+        THEN
             RAISE EXCEPTION 'roster change after start requires the tournament director'
                 USING ERRCODE = '23514';
         END IF;
@@ -191,7 +189,7 @@ ENTRY_INTEGRITY_DDL = (
     """
     CREATE OR REPLACE FUNCTION check_match_lineup() RETURNS trigger
     LANGUAGE plpgsql AS $$
-    DECLARE lineup match_lineups; owner_uuid uuid; fixture tournament_fixtures;
+    DECLARE lineup match_lineups; tournament_uuid uuid; fixture tournament_fixtures;
         side_size integer; previous match_lineups;
     BEGIN
         IF TG_TABLE_NAME = 'match_lineups' THEN
@@ -219,16 +217,14 @@ ENTRY_INTEGRITY_DDL = (
         JOIN tournament_event_stages s ON s.id = f.stage_id
         JOIN tournament_events e ON e.id = s.event_id
         WHERE f.match_id = lineup.match_id FOR UPDATE OF e;
-        SELECT t.owner_account_id INTO owner_uuid
+        SELECT t.id INTO tournament_uuid
         FROM tournament_fixtures f
         JOIN tournament_event_stages s ON s.id = f.stage_id
         JOIN tournament_events e ON e.id = s.event_id
         JOIN tournaments t ON t.id = e.tournament_id
         WHERE f.match_id = lineup.match_id;
-        IF lineup.revision > 1 AND (lineup.recorded_by_account_id IS DISTINCT FROM
-        owner_uuid
-            OR NOT EXISTS (SELECT 1 FROM accounts WHERE id = owner_uuid AND
-        merged_at IS NULL))
+        IF lineup.revision > 1 AND NOT tournament_can_direct(
+            tournament_uuid, lineup.recorded_by_account_id)
         THEN
             RAISE EXCEPTION 'lineup correction requires the tournament director'
                 USING ERRCODE = '23514';

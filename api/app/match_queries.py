@@ -219,27 +219,20 @@ def _attention_matches_query(
 async def is_tournament_director(
     db: AsyncSession, match_id: uuid.UUID, user_id: uuid.UUID
 ) -> bool:
-    """Whether ``user_id`` is the director of the tournament that materialized
-    ``match_id`` — i.e. ``tournaments.created_by_user_id`` for the tournament
-    reached by walking ``tournament_fixtures.match_id`` up through its stage and
-    event (#1523, ADR-0784 "director entry is the same endpoint, gated by
-    ownership").
+    """Resolve current tournament authority for a fixture's match.
 
-    ``Match`` carries no tournament id of its own (#1523 constraint 4), so this
-    is a real query, not an in-memory check — one indexed ``EXISTS`` over the
-    join chain, run only for a caller who has already failed the query-free
-    ``is_participant`` check (the common case). A casual match (no
-    ``tournament_fixtures`` row references it) and a match belonging to a
-    tournament ``user_id`` did not create both resolve ``False`` here, so both
-    collapse into the caller's ordinary "not authorized" handling — this
-    function draws no distinction between them."""
+    Casual matches have no tournament authority. Match writers hold the parent
+    tournament SHARE lock before consulting this same predicate used by readers.
+    """
+    from app.tournament_authority import director_scope
+
     stmt = select(
         exists().where(
             TournamentFixture.match_id == match_id,
             TournamentEventStage.id == TournamentFixture.stage_id,
             TournamentEvent.id == TournamentEventStage.event_id,
             Tournament.id == TournamentEvent.tournament_id,
-            Tournament.owner_account_id == user_id,
+            director_scope(user_id),
         )
     )
     return bool((await db.execute(stmt)).scalar())

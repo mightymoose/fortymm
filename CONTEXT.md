@@ -214,11 +214,11 @@ game or result resets it, and a later call captures a fresh lineup. Once play is
 recorded, cancelling a call cannot erase the lineup.
 
 **Director entry**:
-The tournament **owner** adding a player to an event on their behalf — a phone
+The tournament **owner** or a delegated **director** adding a player to an event on their behalf — a phone
 entry, or someone without an account yet. It runs through the *same* endpoint, the
 same eligibility evaluator, the same capacity lock and the same **refusal codes** as
 a player's own (ADR-0784): absent an override, a director's mistake is caught by
-exactly the rules that catch a stranger's. An owner naming their *own* id is not a
+exactly the rules that catch a stranger's. A caller entering their *own* Player is not a
 director entry — that is self-registration, and it is spelled `NULL`.
 _Avoid_: admin add, force add (there is no override yet — see #985).
 
@@ -434,6 +434,27 @@ be *styled* with tournament "seed" flavor, but the underlying concept is a
 rating rank, never the player's index on the current page).
 
 ## Tournaments
+
+**Tournament creator**:
+The Account that originally created a tournament. Attribution stays with that
+Account after transfers and merges; it does not itself confer authority.
+
+**Tournament owner**:
+The single Account responsible for a tournament, initially its creator. The owner
+can operate the tournament, transfer ownership, manage director grants and delete
+an otherwise deletable tournament. An active guest can be an owner.
+
+**Director**:
+An Account authorized to operate a tournament, either as its owner or through an
+active tournament-scoped director grant. Delegation covers operations and results,
+but does not confer ownership transfer, grant management or tournament deletion.
+An active guest can be a director; authority does not require a Player.
+
+**Director grant**:
+A recorded delegation of tournament-wide operational authority to an Account.
+Revocation ends authority without erasing who granted or revoked it. Ownership
+transfer preserves existing grants; an account merge carries active authority to
+the surviving Account while preserving its history.
 
 **Draw**:
 The complete set of **fixtures** an event's draw type prescribes for its
