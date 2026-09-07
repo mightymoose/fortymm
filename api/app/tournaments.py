@@ -74,6 +74,7 @@ from app.tournament_errors import (
     FixturePlacementFrozenError,
     GroupSetFrozenError,
     IllegalTournamentTransitionError,
+    InactiveTournamentActorError,
     LeagueNotEditableError,
     LeagueNotFoundError,
     NoDefaultLeagueError,
@@ -362,6 +363,8 @@ async def create_tournament(
         tournament = await create_tournament_core(
             db, actor=current_user, payload=payload, geocoder=geocoder
         )
+    except InactiveTournamentActorError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except LeagueNotFoundError as exc:
         # The STRICT resolution: a ``league_id`` that names no league is a 404,
         # never a silent fall back to the default (ADR-0783).

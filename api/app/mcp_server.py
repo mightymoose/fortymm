@@ -165,6 +165,7 @@ from app.tournament_errors import (
     FixturePlacementFrozenError,
     GroupSetFrozenError,
     IllegalTournamentTransitionError,
+    InactiveTournamentActorError,
     LeagueNotEditableError,
     LeagueNotFoundError,
     NoDefaultLeagueError,
@@ -1256,6 +1257,8 @@ async def create_tournament(payload: TournamentCreate) -> TournamentRead:
             tournament = await create_tournament_core(
                 db, actor=actor, payload=payload, geocoder=geocoder
             )
+        except InactiveTournamentActorError as exc:
+            raise ToolError(str(exc)) from exc
         except LeagueNotFoundError as exc:
             raise ToolError("No league found with that id.") from exc
         except AddressNotGeocodableError as exc:

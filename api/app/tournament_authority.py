@@ -6,9 +6,9 @@ management. Ownership and creator attribution are independent of delegated roles
 
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 
-from sqlalchemy import ColumnElement, and_, or_, select, text
+from sqlalchemy import ColumnElement, DateTime, and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Account, Tournament
@@ -120,7 +120,7 @@ async def revoke_director(
     if grant is None:
         raise ValueError("Grant does not belong to this tournament")
     if grant.revoked_at is None:
-        grant.revoked_at = datetime.now(UTC)
+        grant.revoked_at = await _database_instant(db)
         grant.revoked_by_account_id = actor_id
         grant.revocation_reason = AuthorityChangeReason.explicit
         await db.flush()
@@ -143,9 +143,7 @@ async def authority_history(
     transfers = await db.scalars(
         select(TournamentOwnershipTransfer)
         .where(TournamentOwnershipTransfer.tournament_id == tournament_id)
-        .order_by(
-            TournamentOwnershipTransfer.transferred_at, TournamentOwnershipTransfer.id
-        )
+        .order_by(TournamentOwnershipTransfer.revision)
     )
     return AuthorityHistory(grants=tuple(grants), transfers=tuple(transfers))
 
@@ -180,8 +178,10 @@ async def transfer_ownership(
             reason=AuthorityChangeReason.explicit,
         )
     )
-    tournament.owner_account_id = account_id
     await db.flush()
+    await db.refresh(
+        tournament, attribute_names=["owner_account_id", "ownership_revision"]
+    )
 
 
 async def _lock_accounts(
@@ -239,7 +239,10 @@ async def merge_authority(
                     reason=AuthorityChangeReason.account_merge,
                 )
             )
-            tournament.owner_account_id = target_id
+            await db.flush()
+            await db.refresh(
+                tournament, attribute_names=["owner_account_id", "ownership_revision"]
+            )
         grants = list(
             await db.scalars(
                 select(TournamentAccountGrant).where(
@@ -250,7 +253,8 @@ async def merge_authority(
             )
         )
         for grant in grants:
-            grant.revoked_at = datetime.now(UTC)
+            instant = await _database_instant(db)
+            grant.revoked_at = instant
             grant.revocation_reason = AuthorityChangeReason.account_merge
             existing = await db.scalar(
                 select(TournamentAccountGrant.id).where(
@@ -269,6 +273,7 @@ async def merge_authority(
                         granted_by_account_id=None,
                         reason=AuthorityChangeReason.account_merge,
                         inherited_from_grant_id=grant.id,
+                        granted_at=instant,
                     )
                 )
     await db.flush()
@@ -303,3 +308,9 @@ async def lock_merge_tournaments(
     """),
         {"source": source_id, "target": target_id},
     )
+
+
+async def _database_instant(db: AsyncSession) -> datetime:
+    return (
+        await db.execute(select(func.clock_timestamp(type_=DateTime(timezone=True))))
+    ).scalar_one()

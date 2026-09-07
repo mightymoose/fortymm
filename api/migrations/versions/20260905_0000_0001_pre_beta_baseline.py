@@ -64,13 +64,79 @@ AUTHORITY_INTEGRITY_DDL = (
     FOR EACH ROW EXECUTE FUNCTION check_tournament_grant_origin()
     """,
     """
+    CREATE FUNCTION prepare_tournament_transfer() RETURNS trigger LANGUAGE plpgsql AS $$
+    DECLARE parent tournaments;
+    BEGIN
+        BEGIN
+            PERFORM id FROM accounts
+            WHERE id IN (NEW.previous_owner_account_id, NEW.new_owner_account_id,
+                NEW.actor_account_id) ORDER BY id FOR KEY SHARE NOWAIT;
+            SELECT * INTO parent FROM tournaments WHERE id = NEW.tournament_id
+                FOR UPDATE NOWAIT;
+        EXCEPTION WHEN lock_not_available THEN
+            RAISE EXCEPTION 'ownership transfer requires parent locks; retry'
+                USING ERRCODE = '40001';
+        END;
+        IF parent.id IS NULL
+            OR parent.owner_account_id IS DISTINCT FROM NEW.previous_owner_account_id
+            OR (NEW.revision IS NOT NULL
+                AND NEW.revision <> parent.ownership_revision + 1) THEN
+            RAISE EXCEPTION 'transfer must follow current ownership'
+                USING ERRCODE = '23514';
+        END IF;
+        NEW.revision := parent.ownership_revision + 1;
+        NEW.transferred_at := clock_timestamp();
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER prepare_tournament_transfer BEFORE INSERT
+    ON tournament_ownership_transfers
+    FOR EACH ROW EXECUTE FUNCTION prepare_tournament_transfer()
+    """,
+    """
+    CREATE FUNCTION apply_tournament_transfer() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        UPDATE tournaments SET owner_account_id = NEW.new_owner_account_id,
+            ownership_revision = NEW.revision WHERE id = NEW.tournament_id;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER apply_tournament_transfer AFTER INSERT
+    ON tournament_ownership_transfers
+    FOR EACH ROW EXECUTE FUNCTION apply_tournament_transfer()
+    """,
+    """
     CREATE FUNCTION preserve_tournament_creator() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN
         IF TG_OP = 'INSERT' THEN
+            IF NEW.ownership_revision <> 0 THEN
+                RAISE EXCEPTION 'initial ownership revision must be zero'
+                    USING ERRCODE = '23514';
+            END IF;
             NEW.owner_account_id := COALESCE(
                 NEW.owner_account_id, NEW.created_by_user_id);
         ELSIF NEW.created_by_user_id IS DISTINCT FROM OLD.created_by_user_id THEN
             RAISE EXCEPTION 'tournament creator is immutable' USING ERRCODE = '23514';
+        END IF;
+        IF TG_OP = 'UPDATE' THEN
+            IF NEW.owner_account_id IS DISTINCT FROM OLD.owner_account_id THEN
+                IF NEW.ownership_revision <> OLD.ownership_revision + 1
+                    OR NOT EXISTS (
+                        SELECT 1 FROM tournament_ownership_transfers h
+                        WHERE h.tournament_id = OLD.id
+                            AND h.revision = NEW.ownership_revision
+                            AND h.previous_owner_account_id = OLD.owner_account_id
+                            AND h.new_owner_account_id = NEW.owner_account_id
+                    ) THEN
+                    RAISE EXCEPTION 'owner changes require a fresh transfer'
+                        USING ERRCODE = '23514';
+                END IF;
+            ELSIF NEW.ownership_revision IS DISTINCT FROM OLD.ownership_revision THEN
+                RAISE EXCEPTION 'ownership revision changes require a new owner'
+                    USING ERRCODE = '23514';
+            END IF;
         END IF;
         IF TG_OP = 'INSERT'
             OR NEW.owner_account_id IS DISTINCT FROM OLD.owner_account_id THEN
@@ -1933,6 +1999,15 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "details_version >= 1", name="ck_tournaments_details_version"
         ),
+        sa.Column(
+            "ownership_revision",
+            sa.Integer(),
+            server_default=sa.text("0"),
+            nullable=False,
+        ),
+        sa.CheckConstraint(
+            "ownership_revision >= 0", name="ck_tournaments_ownership_revision"
+        ),
         sa.Column("name", sa.String(length=255), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column(
@@ -3537,7 +3612,7 @@ def upgrade() -> None:
         sa.Column(
             "granted_at",
             sa.DateTime(timezone=True),
-            server_default=sa.func.now(),
+            server_default=sa.func.clock_timestamp(),
             nullable=False,
         ),
         sa.Column(
@@ -3576,6 +3651,12 @@ def upgrade() -> None:
         ),
     )
     op.create_index(
+        "ix_tournament_account_grants_account_active",
+        "tournament_account_grants",
+        ["account_id", "tournament_id"],
+        postgresql_where=sa.text("revoked_at IS NULL"),
+    )
+    op.create_index(
         "uq_tournament_account_grants_active",
         "tournament_account_grants",
         ["tournament_id", "account_id", "role"],
@@ -3584,6 +3665,15 @@ def upgrade() -> None:
     )
     op.create_table(
         "tournament_ownership_transfers",
+        sa.Column("revision", sa.Integer(), nullable=False),
+        sa.UniqueConstraint(
+            "tournament_id",
+            "revision",
+            name="uq_tournament_ownership_transfers_revision",
+        ),
+        sa.CheckConstraint(
+            "revision >= 1", name="ck_tournament_ownership_transfers_revision"
+        ),
         sa.Column("id", sa.UUID(), nullable=False, primary_key=True),
         sa.Column(
             "tournament_id",
@@ -3612,7 +3702,7 @@ def upgrade() -> None:
         sa.Column(
             "transferred_at",
             sa.DateTime(timezone=True),
-            server_default=sa.func.now(),
+            server_default=sa.func.clock_timestamp(),
             nullable=False,
         ),
         sa.Column(
@@ -3638,6 +3728,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("DROP FUNCTION prepare_tournament_transfer() CASCADE")
+    op.execute("DROP FUNCTION apply_tournament_transfer() CASCADE")
     op.execute("DROP FUNCTION tournament_can_direct(uuid, uuid) CASCADE")
     op.execute("DROP FUNCTION check_tournament_grant_origin() CASCADE")
     op.execute("DROP FUNCTION preserve_tournament_creator() CASCADE")

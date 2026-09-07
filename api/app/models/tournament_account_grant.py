@@ -4,7 +4,18 @@ import enum
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, Enum, ForeignKey, Index, func, text
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    Enum,
+    FetchedValue,
+    ForeignKey,
+    Index,
+    Integer,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -29,6 +40,12 @@ class TournamentAccountGrant(Base):
             " granted_by_account_id IS NULL AND inherited_from_grant_id IS NOT"
             " NULL)",
             name="ck_tournament_account_grants_provenance",
+        ),
+        Index(
+            "ix_tournament_account_grants_account_active",
+            "account_id",
+            "tournament_id",
+            postgresql_where=text("revoked_at IS NULL"),
         ),
         Index(
             "uq_tournament_account_grants_active",
@@ -69,7 +86,7 @@ class TournamentAccountGrant(Base):
         ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=True
     )
     granted_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.clock_timestamp()
     )
     reason: Mapped[AuthorityChangeReason] = mapped_column(
         Enum(AuthorityChangeReason, name="authority_change_reason"),
@@ -93,6 +110,14 @@ class TournamentAccountGrant(Base):
 class TournamentOwnershipTransfer(Base):
     __tablename__ = "tournament_ownership_transfers"
     __table_args__ = (
+        UniqueConstraint(
+            "tournament_id",
+            "revision",
+            name="uq_tournament_ownership_transfers_revision",
+        ),
+        CheckConstraint(
+            "revision >= 1", name="ck_tournament_ownership_transfers_revision"
+        ),
         CheckConstraint(
             "(reason = 'explicit' AND actor_account_id IS NOT NULL) OR (reason"
             " = 'account_merge' AND actor_account_id IS NULL)",
@@ -110,6 +135,9 @@ class TournamentOwnershipTransfer(Base):
     tournament_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("tournaments.id", ondelete="CASCADE"), nullable=False
     )
+    revision: Mapped[int] = mapped_column(
+        Integer, server_default=FetchedValue(), nullable=False
+    )
     previous_owner_account_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=False
     )
@@ -120,7 +148,7 @@ class TournamentOwnershipTransfer(Base):
         ForeignKey("accounts.id", ondelete="RESTRICT"), nullable=True
     )
     transferred_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now()
+        DateTime(timezone=True), nullable=False, server_default=func.clock_timestamp()
     )
     reason: Mapped[AuthorityChangeReason] = mapped_column(
         Enum(AuthorityChangeReason, name="authority_change_reason"), nullable=False

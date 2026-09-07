@@ -44,11 +44,20 @@ source Account or grant identify the inherited authority. This is authority
 history, not a general audit log of tournament edits.
 Existing privileged actions keep their original actor attribution.
 
+An ownership change is applied by inserting its immutable transfer record. The
+database advances a tournament-local ownership revision and changes the owner
+atomically; direct owner updates without the corresponding new transfer are
+rejected. Earlier transfers cannot be replayed to authorize another change.
+
 The existing same-person account merge carries ownership and active director
 authority to the surviving Account. It ends source grants, preserves their history,
 and consolidates overlapping authority into one active grant. A merge must not
 pretend that the tournament owner newly delegated authority or rewrite historical
 creators, grantors, revokers or action actors.
+
+An inherited grant starts at the same database instant its source grant ends.
+Authority timestamps come from the database clock after acquiring the relevant
+locks, rather than combining application time with transaction-start defaults.
 
 Authority changes and privileged writes have a definite transactional order. An
 action completed before revocation or transfer stands. An action ordered after an

@@ -429,6 +429,7 @@ async def _wait_until_blocked(observer, task, blocker_pid):
                 pytest.fail(
                     "privileged operation completed before authority lock was released"
                 )
+            await observer.execute(text("SELECT pg_stat_clear_snapshot()"))
             if await observer.scalar(
                 text(
                     "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE :pid = "
@@ -793,3 +794,197 @@ async def test_waiting_merge_refreshes_a_preloaded_account_tombstone(
             if not task.done():
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_create_waits_for_account_merge_and_refuses_tombstoned_actor(
+    db_session, engine
+):
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.account_merge import merge_user
+    from app.schemas.tournament import TournamentCreate
+    from app.tournament_errors import InactiveTournamentActorError
+    from app.tournament_lifecycle import create_tournament
+
+    source = await make_user(db_session, "create-race-source")
+    target = await make_user(db_session, "create-race-target")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as merging, sessions() as creating:
+        await merge_user(merging, from_user_id=source.id, to_user_id=target.id)
+        pid = await merging.scalar(text("SELECT pg_backend_pid()"))
+        task = asyncio.create_task(
+            create_tournament(
+                creating,
+                actor=source,
+                payload=TournamentCreate(name="Racing creation"),
+                geocoder=FakeGeocoder(),
+            )
+        )
+        try:
+            await _wait_until_blocked(db_session, task, pid)
+            await merging.commit()
+            with pytest.raises(InactiveTournamentActorError):
+                await asyncio.wait_for(task, 5)
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_merge_grant_handoff_uses_one_database_instant(
+    db_session, default_league
+):
+    from app.account_merge import merge_user
+    from app.tournament_authority import authority_history, grant_director
+
+    owner = await make_user(db_session, "clock-owner")
+    source = await make_user(db_session, "clock-source")
+    target = await make_user(db_session, "clock-target")
+    tournament = Tournament(
+        name="Clock", league_id=default_league.id, created_by_user_id=owner.id
+    )
+    db_session.add(tournament)
+    await db_session.commit()
+    await grant_director(
+        db_session, tournament.id, actor_id=owner.id, account_id=source.id
+    )
+    await db_session.commit()
+    await merge_user(db_session, from_user_id=source.id, to_user_id=target.id)
+    grants = (await authority_history(db_session, tournament.id)).grants
+    original = next(g for g in grants if g.account_id == source.id)
+    inherited = next(g for g in grants if g.account_id == target.id)
+    assert original.revoked_at == inherited.granted_at
+
+
+async def test_sql_cannot_change_owner_without_a_fresh_transfer(
+    db_session, default_league
+):
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    from app.tournament_authority import authority_history, transfer_ownership
+
+    owner = await make_user(db_session, "sequence-owner")
+    other = await make_user(db_session, "sequence-other")
+    tournament = Tournament(
+        name="Sequence", league_id=default_league.id, created_by_user_id=owner.id
+    )
+    db_session.add(tournament)
+    await db_session.commit()
+    with pytest.raises(IntegrityError):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("UPDATE tournaments SET owner_account_id = :other WHERE id = :id"),
+                dict(other=other.id, id=tournament.id),
+            )
+    await transfer_ownership(
+        db_session, tournament.id, actor_id=owner.id, account_id=other.id
+    )
+    await transfer_ownership(
+        db_session, tournament.id, actor_id=other.id, account_id=owner.id
+    )
+    # Both matching transitions already exist in this transaction. Neither can
+    # authorize another owner mutation, even when a raw writer supplies a revision.
+    for revision in (0, 1, 3):
+        with pytest.raises(IntegrityError):
+            async with db_session.begin_nested():
+                await db_session.execute(
+                    text(
+                        "UPDATE tournaments SET owner_account_id = :other, "
+                        "ownership_revision = :revision WHERE id = :id"
+                    ),
+                    dict(other=other.id, revision=revision, id=tournament.id),
+                )
+    assert [
+        t.revision
+        for t in (await authority_history(db_session, tournament.id)).transfers
+    ] == [1, 2]
+
+
+async def test_active_account_grants_have_an_account_leading_index(db_session):
+    from sqlalchemy import text
+
+    definition = await db_session.scalar(
+        text(
+            "SELECT indexdef FROM pg_indexes WHERE tablename = "
+            "'tournament_account_grants' AND indexname = "
+            "'ix_tournament_account_grants_account_active'"
+        )
+    )
+    assert definition is not None
+    assert "(account_id, tournament_id)" in definition
+    assert "WHERE (revoked_at IS NULL)" in definition
+
+
+async def test_sql_transfer_insert_applies_exactly_one_owner_revision(
+    db_session, default_league
+):
+    import uuid
+
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    from app.tournament_authority import authority_history, can_direct
+
+    owner = await make_user(db_session, "raw-transfer-owner")
+    recipient = await make_user(db_session, "raw-transfer-recipient")
+    tournament = Tournament(
+        name="Raw", league_id=default_league.id, created_by_user_id=owner.id
+    )
+    db_session.add(tournament)
+    await db_session.commit()
+    with pytest.raises(IntegrityError):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "INSERT INTO tournaments (name, league_id, created_by_user_id, "
+                    "ownership_revision) VALUES ('Invalid', :league, :owner, 1)"
+                ),
+                dict(league=default_league.id, owner=owner.id),
+            )
+    with pytest.raises(IntegrityError):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("UPDATE tournaments SET ownership_revision = 1 WHERE id = :id"),
+                dict(id=tournament.id),
+            )
+    await db_session.execute(
+        text(
+            "UPDATE tournaments SET owner_account_id = owner_account_id WHERE id = :id"
+        ),
+        dict(id=tournament.id),
+    )
+    assert not (await authority_history(db_session, tournament.id)).transfers
+    insertion = text(
+        "INSERT INTO tournament_ownership_transfers (id, tournament_id, "
+        "previous_owner_account_id, new_owner_account_id, actor_account_id, "
+        "reason) VALUES (:id, :tournament, :owner, :recipient, :owner, "
+        "'explicit') RETURNING revision"
+    )
+    revision = await db_session.scalar(
+        insertion,
+        dict(
+            id=uuid.uuid4(),
+            tournament=tournament.id,
+            owner=owner.id,
+            recipient=recipient.id,
+        ),
+    )
+    assert revision == 1
+    assert await can_direct(db_session, tournament, recipient.id)
+    assert not await can_direct(db_session, tournament, owner.id)
+    with pytest.raises(IntegrityError):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                insertion,
+                dict(
+                    id=uuid.uuid4(),
+                    tournament=tournament.id,
+                    owner=owner.id,
+                    recipient=recipient.id,
+                ),
+            )
+    assert len((await authority_history(db_session, tournament.id)).transfers) == 1

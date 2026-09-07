@@ -60,13 +60,79 @@ AUTHORITY_INTEGRITY_DDL = (
     FOR EACH ROW EXECUTE FUNCTION check_tournament_grant_origin()
     """,
     """
+    CREATE FUNCTION prepare_tournament_transfer() RETURNS trigger LANGUAGE plpgsql AS $$
+    DECLARE parent tournaments;
+    BEGIN
+        BEGIN
+            PERFORM id FROM accounts
+            WHERE id IN (NEW.previous_owner_account_id, NEW.new_owner_account_id,
+                NEW.actor_account_id) ORDER BY id FOR KEY SHARE NOWAIT;
+            SELECT * INTO parent FROM tournaments WHERE id = NEW.tournament_id
+                FOR UPDATE NOWAIT;
+        EXCEPTION WHEN lock_not_available THEN
+            RAISE EXCEPTION 'ownership transfer requires parent locks; retry'
+                USING ERRCODE = '40001';
+        END;
+        IF parent.id IS NULL
+            OR parent.owner_account_id IS DISTINCT FROM NEW.previous_owner_account_id
+            OR (NEW.revision IS NOT NULL
+                AND NEW.revision <> parent.ownership_revision + 1) THEN
+            RAISE EXCEPTION 'transfer must follow current ownership'
+                USING ERRCODE = '23514';
+        END IF;
+        NEW.revision := parent.ownership_revision + 1;
+        NEW.transferred_at := clock_timestamp();
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER prepare_tournament_transfer BEFORE INSERT
+    ON tournament_ownership_transfers
+    FOR EACH ROW EXECUTE FUNCTION prepare_tournament_transfer()
+    """,
+    """
+    CREATE FUNCTION apply_tournament_transfer() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        UPDATE tournaments SET owner_account_id = NEW.new_owner_account_id,
+            ownership_revision = NEW.revision WHERE id = NEW.tournament_id;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER apply_tournament_transfer AFTER INSERT
+    ON tournament_ownership_transfers
+    FOR EACH ROW EXECUTE FUNCTION apply_tournament_transfer()
+    """,
+    """
     CREATE FUNCTION preserve_tournament_creator() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN
         IF TG_OP = 'INSERT' THEN
+            IF NEW.ownership_revision <> 0 THEN
+                RAISE EXCEPTION 'initial ownership revision must be zero'
+                    USING ERRCODE = '23514';
+            END IF;
             NEW.owner_account_id := COALESCE(
                 NEW.owner_account_id, NEW.created_by_user_id);
         ELSIF NEW.created_by_user_id IS DISTINCT FROM OLD.created_by_user_id THEN
             RAISE EXCEPTION 'tournament creator is immutable' USING ERRCODE = '23514';
+        END IF;
+        IF TG_OP = 'UPDATE' THEN
+            IF NEW.owner_account_id IS DISTINCT FROM OLD.owner_account_id THEN
+                IF NEW.ownership_revision <> OLD.ownership_revision + 1
+                    OR NOT EXISTS (
+                        SELECT 1 FROM tournament_ownership_transfers h
+                        WHERE h.tournament_id = OLD.id
+                            AND h.revision = NEW.ownership_revision
+                            AND h.previous_owner_account_id = OLD.owner_account_id
+                            AND h.new_owner_account_id = NEW.owner_account_id
+                    ) THEN
+                    RAISE EXCEPTION 'owner changes require a fresh transfer'
+                        USING ERRCODE = '23514';
+                END IF;
+            ELSIF NEW.ownership_revision IS DISTINCT FROM OLD.ownership_revision THEN
+                RAISE EXCEPTION 'ownership revision changes require a new owner'
+                    USING ERRCODE = '23514';
+            END IF;
         END IF;
         IF TG_OP = 'INSERT'
             OR NEW.owner_account_id IS DISTINCT FROM OLD.owner_account_id THEN

@@ -760,3 +760,10 @@ class TournamentDetailsVersionConflictError(Exception):
             "Tournament details changed elsewhere. "
             "Load the latest details before saving."
         )
+
+
+class InactiveTournamentActorError(Exception):
+    """A creation actor ceased to be active while waiting for its Account lock."""
+
+    def __init__(self) -> None:
+        super().__init__("This account is no longer active. Refresh your session.")
