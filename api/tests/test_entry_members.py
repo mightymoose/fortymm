@@ -675,7 +675,7 @@ async def test_partner_replacement_keeps_membership_history_and_entry(db_session
     )
     db_session.add(entry)
     await db_session.commit()
-    original.left_at = datetime.now(UTC)
+    original.left_at = await db_session.scalar(text("SELECT clock_timestamp()"))
     original.left_by_account_id = players[0].id
     entry.members.append(TournamentEntryMember(player_id=players[2].player_id))
     await db_session.commit()
@@ -943,7 +943,8 @@ async def test_lineup_cannot_use_entries_from_another_event(db_session):
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
     other_event = await make_drawn_event(db_session)
     with pytest.raises(
-        IntegrityError, match="fixture entries must belong to its event"
+        IntegrityError,
+        match="fixture entries must belong to its event|fk_fixture_event_entry_",
     ):
         async with db_session.begin_nested():
             await db_session.execute(
@@ -1209,7 +1210,9 @@ async def test_recalling_an_untouched_match_captures_the_replacement(
     )
     if commit_cancellation:
         await db_session.commit()
-    entries[0].members[0].left_at = datetime.now(UTC)
+    entries[0].members[0].left_at = await db_session.scalar(
+        text("SELECT clock_timestamp()")
+    )
     entries[0].members[0].left_by_account_id = players[0].id
     entries[0].members.append(TournamentEntryMember(player_id=players[4].player_id))
     await db_session.execute(
@@ -2441,7 +2444,9 @@ async def test_start_captures_actual_doubles_lineup_independent_of_roster(db_ses
         )
     ).all()
     assert set(before) == {(n // 2 + 1, p.player_id) for n, p in enumerate(players[:4])}
-    entries[0].members[0].left_at = datetime.now(UTC)
+    entries[0].members[0].left_at = await db_session.scalar(
+        text("SELECT clock_timestamp()")
+    )
     entries[0].members[0].left_by_account_id = players[0].id
     entries[0].members.append(TournamentEntryMember(player_id=players[4].player_id))
     await db_session.commit()
@@ -2681,7 +2686,9 @@ async def test_direct_entry_deletion_cannot_erase_membership_history(
     db_session, withdrawn
 ):
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
-    entries[0].members[0].left_at = datetime.now(UTC)
+    entries[0].members[0].left_at = await db_session.scalar(
+        text("SELECT clock_timestamp()")
+    )
     entries[0].members[0].left_by_account_id = players[0].id
     entries[0].members.append(TournamentEntryMember(player_id=players[4].player_id))
     await db_session.commit()
