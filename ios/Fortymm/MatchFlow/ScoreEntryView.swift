@@ -51,11 +51,7 @@ struct ScoreEntryView: View {
     // a game that HAS a server-committed score; cleared on decision. A never-
     // committed game clears locally without ever setting this.
     @State private var clearing: Int?
-    // Game numbers cleared while a *create* was still in flight, so the DELETE is
-    // deferred until that write resolves (we don't yet know if a row landed).
-    // `applyWriteResult` fires the DELETE and consumes the entry. Avoids both an
-    // orphaned committed row and a DELETE that races ahead of the create.
-    @State private var pendingClearDeletes: Set<Int> = []
+    @StateObject private var scoreClear = ScoreClearStore()
     // Raw text backing the two score fields for the *active* game. Kept verbatim
     // so a malformed entry (extra characters, too many digits) is shown back to
     // the user and flagged inline rather than silently stripped/truncated into a
@@ -90,11 +86,15 @@ struct ScoreEntryView: View {
         VStack(spacing: 0) {
             header
             scoreboard
+                .disabled(scoreClear.pendingGameNumber != nil)
             scoreError
             Spacer().frame(height: 12)
             scoreline
+                .disabled(scoreClear.pendingGameNumber != nil)
             overrunHint
+            clearStatus
             actionRow
+                .disabled(scoreClear.pendingGameNumber != nil)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
             Spacer(minLength: 0)
@@ -496,22 +496,15 @@ struct ScoreEntryView: View {
     /// have) a server-committed row — `.saved`, `.conflict`, an in-flight `.saving`,
     /// or a `.failed` that had committed before failing — lives on the shared
     /// scratchpad, so clearing it must confirm and DELETE via the clear dialog. A
-    /// game that never reached the server (`.localOnly`, or a `.failed` first
-    /// create) wipes purely locally with no dialog and no network. Correction
+    /// never-submitted game (`.localOnly`) wipes purely locally with no dialog
+    /// and no network. A failed create may still have committed on the server. Correction
     /// boards seed every slot `.localOnly`, so they always take the local branch
     /// (no DELETE against a frozen scratchpad).
     private func clearEdit() {
         guard games.indices.contains(active) else { return }
-        switch games[active].sync {
-        case .saved, .conflict, .saving:
-            // A committed row exists, or a write is in flight that may leave one —
-            // confirm, then DELETE (or defer the DELETE for an in-flight create).
+        if games[active].requiresServerClear {
             clearing = active
-        case .failed(let committedVersion):
-            // A committed row exists only if a prior write succeeded before the
-            // failure; otherwise the failed create left nothing to delete.
-            if committedVersion != nil { clearing = active } else { clearLocally(active) }
-        case .localOnly:
+        } else {
             clearLocally(active)
         }
     }
@@ -522,6 +515,7 @@ struct ScoreEntryView: View {
     /// game, as the old `clearEdit` did.
     private func clearLocally(_ i: Int) {
         guard games.indices.contains(i) else { return }
+        scoreClear.dismissFailure(gameNumber: i + 1)
         games[i].points = Game()
         games[i].sync = .localOnly
         if i == active {
@@ -530,30 +524,55 @@ struct ScoreEntryView: View {
         }
     }
 
-    /// Confirmed clear of a committed (or in-flight) game: remove its scratchpad
-    /// row and reset the slot locally.
-    ///
-    /// - An in-flight *create* (`.saving(nil)`) hasn't told us whether a row
-    ///   landed, so the DELETE is *deferred* (`pendingClearDeletes`) until the
-    ///   write resolves — firing it now could race ahead of the create and leave
-    ///   an orphan.
-    /// - Otherwise a row exists (or an in-flight update is over one — the DELETE
-    ///   and that PUT converge on "no row" in either order), so DELETE now,
-    ///   fire-and-forget. A thrown DELETE still leaves the slot cleared; a later
-    ///   post's divergence guard reconciles the server.
-    ///
-    /// A nil `matchId` (shouldn't happen once live scoring is reached) still clears
-    /// locally.
-    private func confirmClear(_ i: Int) {
-        guard games.indices.contains(i) else { return }
-        let gameNumber = i + 1
-        if case .saving(nil) = games[i].sync {
-            pendingClearDeletes.insert(gameNumber)
-        } else if let matchId {
-            Task { try? await service.deleteGameScore(matchId: matchId, gameNumber: gameNumber) }
+    @ViewBuilder
+    private var clearStatus: some View {
+        if let gameNumber = scoreClear.pendingGameNumber {
+            ProgressView("Clearing game \(gameNumber)…")
+                .tint(FMColor.fg2)
+                .foregroundStyle(FMColor.fg2)
+                .padding(.top, 12)
+        } else if let gameNumber = scoreClear.failedGameNumber {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Couldn’t clear game \(gameNumber). Your score is still here.")
+                    if let message = scoreClear.failureMessage { Text(message) }
+                }
+                Button("Retry") { confirmClear(gameNumber - 1) }
+            }
+            .font(.footnote)
+            .foregroundStyle(FMColor.warn)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .accessibilityIdentifier("score-clear-error")
         }
-        clearLocally(i)
+    }
+
+    /// Keep the board intact until DELETE succeeds, including clears requested
+    /// during a save. A failure leaves the score available to edit or retry.
+    private func confirmClear(_ i: Int) {
+        guard games.indices.contains(i), scoreClear.pendingGameNumber == nil else { return }
         clearing = nil
+        guard let matchId else {
+            clearLocally(i)
+            return
+        }
+        focus = nil
+        Task { @MainActor in
+            // Read sync when the task starts: the save may have finished since
+            // confirmation, in which case there is nothing left to wait for.
+            let waitingForSave: Bool
+            if case .saving = games[i].sync { waitingForSave = true }
+            else { waitingForSave = false }
+            await scoreClear.clear(gameNumber: i + 1, waitingForSave: waitingForSave, delete: {
+                try await service.deleteGameScore(matchId: matchId, gameNumber: i + 1)
+            }, didClear: {
+                clearLocally(i)
+            }, didFail: {
+                // The save may have conflicted while its clear was waiting.
+                // Restore the decision we deferred instead of allowing a blind save.
+                if i == active, case .conflict = games[i].sync { resolving = i }
+            })
+        }
     }
 
     // MARK: Per-game scratchpad writes (fire-and-forget)
@@ -634,13 +653,9 @@ struct ScoreEntryView: View {
     /// Reduce one write's result into the addressed slot, keyed by GAME NUMBER
     /// (not a captured array index) since the user may have moved on.
     ///
-    /// - A slot cleared while this write was in flight resolves the deferred
-    ///   DELETE here (see `pendingClearDeletes`): now that the write settled, a
-    ///   row may exist, so fire the DELETE and drop the result.
-    /// - Otherwise the transition applies only while the slot is still the
-    ///   `.saving` we set for THIS write (a clear that moved it off `.saving`
-    ///   already handled the server). Only one write is ever in flight per slot
-    ///   (`.saving` maps to a nil intent), so a live `.saving` is always ours.
+    /// A pending clear takes precedence over resaving an edit or opening a
+    /// conflict dialog. Reduce the save first so a failed DELETE retains the
+    /// correct sync state, then release the waiting clear.
     ///
     /// Transitions:
     /// - success(version): `.saved(version:)`. If the user *edited* the game while
@@ -654,28 +669,16 @@ struct ScoreEntryView: View {
     ///   re-fires the correct verb.
     @MainActor
     private func applyWriteResult(gameNumber: Int, sent: Game, outcome: WriteOutcome) {
-        // Deferred clear: the slot was cleared while this create was in flight.
-        // The write has now settled, so fire the DELETE (best-effort — a 404 means
-        // the write never landed) and consume the entry without touching the slot,
-        // which the user already reset locally. (Edge: if the create 409'd because
-        // another participant scored this game, the DELETE removes their score —
-        // permitted under the shared-board model, and only reachable via a
-        // clear-during-a-concurrent-create race.)
-        if pendingClearDeletes.remove(gameNumber) != nil {
-            if let matchId {
-                Task { try? await service.deleteGameScore(matchId: matchId, gameNumber: gameNumber) }
-            }
-            return
-        }
-
         let index = gameNumber - 1
         guard games.indices.contains(index) else { return }
         guard case .saving(let committedVersion) = games[index].sync else { return }
 
+        let clearingThisGame = scoreClear.pendingGameNumber == gameNumber
+        defer { scoreClear.saveFinished(gameNumber: gameNumber) }
+
         switch outcome {
         case .completed(.success(let version)):
-            games[index].sync = .saved(version: version)
-            if games[index].points != sent {
+            if games[index].completeSave(sent: sent, version: version, clearing: clearingThisGame) {
                 // The user edited this game while the write was in flight, so the
                 // server now holds `sent`, not what's on screen. Re-fire: with the
                 // slot at `.saved(version)`, `fireWrite` derives an update at the
@@ -692,7 +695,7 @@ struct ScoreEntryView: View {
                 // If the conflict landed on the game the user is still looking at,
                 // prompt the decision immediately; otherwise the chip's warn
                 // triangle flags it and tapping it opens the same dialog.
-                if index == active { resolving = index }
+                if index == active && !clearingThisGame { resolving = index }
             } else {
                 games[index].sync = .failed(committedVersion: committedVersion)
             }
