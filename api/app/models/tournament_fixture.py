@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
+    FetchedValue,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -66,9 +67,11 @@ class TournamentFixture(Base):
     single group. There is no longer a draw shape this column needs ``NULL`` to
     describe.
 
-    A fixture names its **stage**, not its event (ADR 20260815 decision 5) —
-    ``event_id`` is dropped from this table entirely. The event is reachable through
-    ``stage.event``, which is what the :attr:`event_id` property below reads; it is a
+    A fixture's domain parent remains its **stage**. The September 6 fixture
+    ownership ADR amends ADR 20260815 decision 5: ``scope_event_id`` and
+    ``scope_tournament_id`` now carry checked composite foreign keys, filled by the
+    database for existing callers. The event is still reached through ``stage.event``
+    by the :attr:`event_id` property below; it is a
     plain Python property, not a SQL-queryable column, so any code that needs
     ``TournamentFixture.event_id`` inside a ``select``/``where``/``join`` has to join
     ``tournament_event_stages`` explicitly instead (mypy catches every such site, since
@@ -88,9 +91,50 @@ class TournamentFixture(Base):
 
     __tablename__ = "tournament_fixtures"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["scope_tournament_id", "scope_event_id"],
+            ["tournament_events.tournament_id", "tournament_events.id"],
+            name="fk_fixture_tournament_event",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        ForeignKeyConstraint(
+            ["scope_tournament_id", "table_id"],
+            ["tournament_tables.tournament_id", "tournament_tables.id"],
+            name="fk_fixture_tournament_table",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        ForeignKeyConstraint(
+            ["scope_event_id", "stage_id"],
+            ["tournament_event_stages.event_id", "tournament_event_stages.id"],
+            name="fk_fixture_event_stage",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        ForeignKeyConstraint(
+            ["scope_event_id", "entry_a_id"],
+            ["tournament_entries.event_id", "tournament_entries.id"],
+            name="fk_fixture_event_entry_a",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        ForeignKeyConstraint(
+            ["scope_event_id", "entry_b_id"],
+            ["tournament_entries.event_id", "tournament_entries.id"],
+            name="fk_fixture_event_entry_b",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         CheckConstraint(
-            "entry_a_id <> entry_b_id",
-            name="ck_tournament_fixtures_distinct_entries",
+            "entry_a_id <> entry_b_id", name="ck_tournament_fixtures_distinct_entries"
+        ),
+        CheckConstraint(
+            "winner_entry_id IS NULL OR (entry_a_id IS NOT NULL AND "
+            "entry_b_id IS NOT NULL "
+            "AND winner_entry_id IN (entry_a_id, entry_b_id))",
+            name="ck_fixture_valid_winner",
         ),
         # "My group is my own stage's group", as one line of DDL (ADR 20260801,
         # parented on the stage by ADR 20260815). The referenced ``(stage_id, id)`` is a
@@ -135,10 +179,9 @@ class TournamentFixture(Base):
         # Every read of a draw is "the fixtures of this stage" — ``advance()`` loads
         # the whole set, and the detail BFF loads it per event (through its stages).
         Index("ix_tournament_fixtures_stage_id", "stage_id"),
-        # A completed match is the trigger to write ``winner_entry_id`` back and re-run
-        # ``advance()``, and that path arrives holding a match id, not a fixture id.
-        # One match materializes exactly one fixture; unmaterialized fixtures
-        # may all retain NULL without competing for this unique key.
+        # One match belongs to at most one fixture in this topology (#1677).
+        # NULL allows any number of unmaterialized fixtures. Completion also uses
+        # this index to find the owning fixture and advance its draw.
         Index("ix_tournament_fixtures_match_id", "match_id", unique=True),
         # The index Postgres does NOT create for a REFERENCING column, and under
         # ``ON DELETE RESTRICT`` it is the one that pays for itself: every delete of a
@@ -158,8 +201,15 @@ class TournamentFixture(Base):
     #: (``app.tournament_draws.cut_draw``).
     stage_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("tournament_event_stages.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    # Stored only to enforce scoped foreign keys. SQL writers may omit it;
+    # fixture_scope fills it from the stage and the composite FK checks it.
+    scope_event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, server_default=FetchedValue()
+    )
+    scope_tournament_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False, server_default=FetchedValue()
     )
     #: Names a **group** of this fixture's own stage — half of the composite foreign key
     #: declared above. ``NOT NULL`` since #1484: every stage now holds groups, so every

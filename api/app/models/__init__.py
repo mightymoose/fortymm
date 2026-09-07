@@ -1,4 +1,5 @@
 from app.models import entry_integrity as entry_integrity
+from app.models import fixture_integrity as fixture_integrity
 from app.models.account import Account, AccountPlayer, LoginIdentity
 from app.models.device_token import DeviceToken
 from app.models.draw_type import DrawTypeOption

@@ -11,6 +11,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    UniqueConstraint,
     func,
     select,
     text,
@@ -51,6 +52,7 @@ class TournamentEntry(Base):
 
     __tablename__ = "tournament_entries"
     __table_args__ = (
+        UniqueConstraint("event_id", "id", name="uq_tournament_entries_event_id_id"),
         Index("ix_tournament_entries_event_id", "event_id"),
         Index("ix_tournament_entries_added_by_user_id", "added_by_user_id"),
     )

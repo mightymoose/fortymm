@@ -10,6 +10,35 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
+FIXTURE_INTEGRITY_DDL = (
+    """
+    CREATE OR REPLACE FUNCTION fixture_scope() RETURNS trigger LANGUAGE plpgsql AS $$
+    DECLARE event_uuid uuid; tournament_uuid uuid;
+    BEGIN
+        SELECT event_id INTO event_uuid FROM tournament_event_stages
+        WHERE id = NEW.stage_id;
+        IF NEW.scope_event_id IS NULL OR (TG_OP = 'UPDATE'
+            AND NEW.stage_id IS DISTINCT FROM OLD.stage_id
+            AND NEW.scope_event_id IS NOT DISTINCT FROM OLD.scope_event_id) THEN
+            NEW.scope_event_id := event_uuid;
+        END IF;
+        SELECT tournament_id INTO tournament_uuid FROM tournament_events
+        WHERE id = NEW.scope_event_id;
+        IF NEW.scope_tournament_id IS NULL OR (TG_OP = 'UPDATE'
+            AND NEW.scope_event_id IS DISTINCT FROM OLD.scope_event_id
+            AND NEW.scope_tournament_id IS NOT DISTINCT FROM OLD.scope_tournament_id)
+        THEN
+            NEW.scope_tournament_id := tournament_uuid;
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER fixture_scope BEFORE INSERT OR UPDATE ON tournament_fixtures
+    FOR EACH ROW EXECUTE FUNCTION fixture_scope()
+    """,
+)
+
 ENTRY_INTEGRITY_DDL = (
     """
     CREATE OR REPLACE FUNCTION check_match_ending() RETURNS trigger
@@ -797,6 +826,12 @@ ENTRY_INTEGRITY_DDL = (
                 AND NEW.stage_id IS NOT DISTINCT FROM OLD.stage_id
                 AND NEW.entry_a_id IS NOT DISTINCT FROM OLD.entry_a_id
                 AND NEW.entry_b_id IS NOT DISTINCT FROM OLD.entry_b_id
+                AND NEW.id IS NOT DISTINCT FROM OLD.id
+                AND NEW.group_id IS NOT DISTINCT FROM OLD.group_id
+                AND NEW.round IS NOT DISTINCT FROM OLD.round
+                AND NEW.position IS NOT DISTINCT FROM OLD.position
+                AND NEW.scope_event_id IS NOT DISTINCT FROM OLD.scope_event_id
+                AND NEW.scope_tournament_id IS NOT DISTINCT FROM OLD.scope_tournament_id
             THEN RETURN NEW; END IF;
         END IF;
         PERFORM t.id FROM tournaments t
@@ -827,7 +862,8 @@ ENTRY_INTEGRITY_DDL = (
     """,
     """
     CREATE TRIGGER lock_fixture_link BEFORE INSERT OR DELETE
-    OR UPDATE OF match_id, entry_a_id, entry_b_id, stage_id
+    OR UPDATE OF id, match_id, entry_a_id, entry_b_id, stage_id, group_id,
+        round, position, scope_event_id, scope_tournament_id
     ON tournament_fixtures FOR EACH ROW EXECUTE FUNCTION lock_fixture_link()
     """,
     """
@@ -2640,11 +2676,22 @@ def upgrade() -> None:
         ["event_id", "stage_id"],
         unique=False,
     )
+    op.create_unique_constraint(
+        "uq_tournament_entries_event_id_id", "tournament_entries", ["event_id", "id"]
+    )
     op.create_table(
         "tournament_fixtures",
+        sa.CheckConstraint(
+            "winner_entry_id IS NULL OR (entry_a_id IS NOT NULL "
+            "AND entry_b_id IS NOT NULL "
+            "AND winner_entry_id IN (entry_a_id, entry_b_id))",
+            name="ck_fixture_valid_winner",
+        ),
         sa.Column(
             "id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False
         ),
+        sa.Column("scope_tournament_id", sa.UUID(), nullable=False),
+        sa.Column("scope_event_id", sa.UUID(), nullable=False),
         sa.Column("stage_id", sa.UUID(), nullable=False),
         sa.Column("group_id", sa.UUID(), nullable=False),
         sa.Column("round", sa.Integer(), nullable=False),
@@ -2692,13 +2739,46 @@ def upgrade() -> None:
             deferrable=True,
         ),
         sa.ForeignKeyConstraint(
-            ["stage_id"], ["tournament_event_stages.id"], ondelete="CASCADE"
-        ),
-        sa.ForeignKeyConstraint(
             ["table_id"], ["tournament_tables.id"], ondelete="RESTRICT"
         ),
         sa.ForeignKeyConstraint(
             ["winner_entry_id"], ["tournament_entries.id"], ondelete="CASCADE"
+        ),
+        sa.ForeignKeyConstraint(
+            ["scope_event_id", "stage_id"],
+            ["tournament_event_stages.event_id", "tournament_event_stages.id"],
+            name="fk_fixture_event_stage",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        sa.ForeignKeyConstraint(
+            ["scope_event_id", "entry_a_id"],
+            ["tournament_entries.event_id", "tournament_entries.id"],
+            name="fk_fixture_event_entry_a",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        sa.ForeignKeyConstraint(
+            ["scope_event_id", "entry_b_id"],
+            ["tournament_entries.event_id", "tournament_entries.id"],
+            name="fk_fixture_event_entry_b",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        sa.ForeignKeyConstraint(
+            ["scope_tournament_id", "scope_event_id"],
+            ["tournament_events.tournament_id", "tournament_events.id"],
+            name="fk_fixture_tournament_event",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        sa.ForeignKeyConstraint(
+            ["scope_tournament_id", "table_id"],
+            ["tournament_tables.tournament_id", "tournament_tables.id"],
+            name="fk_fixture_tournament_table",
+            deferrable=True,
+            initially="DEFERRED",
         ),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
@@ -3117,6 +3197,8 @@ def upgrade() -> None:
         ["player_id"],
         unique=False,
     )
+    for statement in FIXTURE_INTEGRITY_DDL:
+        op.execute(statement)
     for statement in ENTRY_INTEGRITY_DDL:
         op.execute(statement)
 
@@ -3125,6 +3207,7 @@ def downgrade() -> None:
     # These functions and their dependent triggers belong to this baseline.
     # Remove them before the table row types referenced by their bodies.
     for signature in (
+        "fixture_scope()",
         "check_match_ending()",
         "authorize_entry_membership()",
         "check_match_lineup()",
