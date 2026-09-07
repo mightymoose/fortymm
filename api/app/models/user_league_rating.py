@@ -30,7 +30,7 @@ class UserLeagueRating(Base):
     __tablename__ = "user_league_ratings"
     __table_args__ = (
         CheckConstraint(
-            "rating_state IS NULL OR jsonb_typeof(rating_state) = 'object'",
+            "rating_state IS NULL OR jsonb_typeof(rating_state) IN ('object', 'null')",
             name="ck_user_league_ratings_rating_state_object",
         ),
         # The unique index already provides a btree on (league_id, user_id),

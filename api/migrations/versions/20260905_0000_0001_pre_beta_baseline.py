@@ -1751,7 +1751,7 @@ def upgrade() -> None:
             "rating_state", postgresql.JSONB(astext_type=sa.Text()), nullable=True
         ),
         sa.CheckConstraint(
-            "rating_state IS NULL OR jsonb_typeof(rating_state) = 'object'",
+            "rating_state IS NULL OR jsonb_typeof(rating_state) IN ('object', 'null')",
             name="ck_user_league_ratings_rating_state_object",
         ),
         sa.Column(

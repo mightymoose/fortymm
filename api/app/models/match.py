@@ -162,6 +162,8 @@ class Match(Base):
 
 def _normalize_match_completion(target: Match) -> None:
     """Keep legacy ORM writes compatible with the database state invariant."""
+    if target.status is None:
+        return
     status = target.status.value
     if status == MatchStatus.completed.value:
         if target.completed_at is None:
