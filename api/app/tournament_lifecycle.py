@@ -44,6 +44,7 @@ from app.models import (
 )
 from app.schedule_solves import request_solve
 from app.schemas.tournament import TournamentCreate, named_list
+from app.tournament_authority import require_owner
 from app.tournament_draws import (
     DrawCurrency,
     active_draw_entrants_by_event,
@@ -54,6 +55,7 @@ from app.tournament_draws import (
 from app.tournament_edit import _load_owned_tournament_for_update
 from app.tournament_errors import (
     IllegalTournamentTransitionError,
+    InactiveTournamentActorError,
     LeagueNotFoundError,
     NoDefaultLeagueError,
     TournamentAlreadyInStatusError,
@@ -155,6 +157,15 @@ async def create_tournament(
     caller adapts each domain exception (league misses, an unresolvable address) to its
     transport.
     """
+    live_actor = await db.scalar(
+        select(User)
+        .where(User.id == actor.id)
+        .with_for_update(read=True, key_share=True)
+        .execution_options(populate_existing=True)
+    )
+    if live_actor is None or live_actor.merged_at is not None:
+        raise InactiveTournamentActorError()
+    actor = live_actor
     league = await _resolve_league_strict(db, payload.league_id)
     # Geocode before constructing the row, so an unresolvable address fails at the edge
     # and never reaches ``db.add``/``commit`` — the write is atomic (writes nothing).
@@ -221,6 +232,7 @@ async def delete_tournament(
     from under a fixture that survives it.
     """
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
+    await require_owner(db, tournament, actor.id)
     await require_no_recorded_play(db, tournament_id=tournament.id)
     # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5); the event
     # is reachable through the stage.

@@ -249,21 +249,24 @@ async def _load_owned_pre_live_tournament(
       :class:`TournamentNotPreLiveError` (carrying the status): a preview only
       answers a pre-registration question.
 
-    Unlocked, unlike the real solve verb's ``FOR UPDATE`` load: a preview persists
-    nothing, so there is no coalescing state or judged-then-written invariant a row
-    lock would protect — it is a pure read plus an enqueue of an ephemeral job."""
+    Hold a tournament SHARE lock through preview enqueue so revocation or transfer
+    cannot complete between authorization and the privileged queue operation."""
     tournament = (
         await db.execute(
             select(Tournament)
             .where(Tournament.id == tournament_id)
             .options(selectinload(Tournament.events))
+            .with_for_update(read=True)
+            .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
-    return _gate_owned_pre_live(tournament, actor)
+    return await _gate_owned_pre_live(db, tournament, actor)
 
 
-def _gate_owned_pre_live(tournament: Tournament | None, actor: User) -> Tournament:
-    """The single owner + pre-live gate every preview surface shares — applied to an
+async def _gate_owned_pre_live(
+    db: AsyncSession, tournament: Tournament | None, actor: User
+) -> Tournament:
+    """The single director + pre-live gate every preview surface shares — applied to an
     already-loaded row (or ``None``) so the enqueue verb (which loads with events)
     and the token-addressed poll/cancel reads (which don't need them) run the *same*
     check off the one :data:`_PRE_LIVE_STATUSES` set:
@@ -275,7 +278,9 @@ def _gate_owned_pre_live(tournament: Tournament | None, actor: User) -> Tourname
       :class:`TournamentNotPreLiveError` (carrying the status)."""
     if tournament is None:
         raise TournamentNotFoundError()
-    if tournament.owner_account_id != actor.id:
+    from app.tournament_authority import can_direct
+
+    if not await can_direct(db, tournament, actor.id):
         raise NotTournamentOwnerError()
     if tournament.status not in _PRE_LIVE_STATUSES:
         raise TournamentNotPreLiveError(tournament.status.value)
@@ -285,7 +290,7 @@ def _gate_owned_pre_live(tournament: Tournament | None, actor: User) -> Tourname
 async def ensure_preview_access(
     db: AsyncSession, tournament_id: uuid.UUID, actor: User
 ) -> None:
-    """Owner + pre-live gate for the token-addressed preview reads (poll/cancel),
+    """Director + pre-live gate for the token-addressed preview reads (poll/cancel),
     running the *same* :func:`_gate_owned_pre_live` check the enqueue verb does. The
     ephemeral job is not scoped to a tournament in Redis, so the gate is re-applied
     against the tournament in the path before the token is touched — a preview is the
@@ -293,9 +298,14 @@ async def ensure_preview_access(
     raises the same tournament-write / pre-live domain exceptions the enqueue does,
     which the caller adapts to HTTP (404 → 403 → 409)."""
     tournament = (
-        await db.execute(select(Tournament).where(Tournament.id == tournament_id))
+        await db.execute(
+            select(Tournament)
+            .where(Tournament.id == tournament_id)
+            .with_for_update(read=True)
+            .execution_options(populate_existing=True)
+        )
     ).scalar_one_or_none()
-    _gate_owned_pre_live(tournament, actor)
+    await _gate_owned_pre_live(db, tournament, actor)
 
 
 def _reservation_resolutions(

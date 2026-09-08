@@ -86,6 +86,9 @@ class Tournament(Base):
 
     __tablename__ = "tournaments"
     __table_args__ = (
+        CheckConstraint(
+            "ownership_revision >= 0", name="ck_tournaments_ownership_revision"
+        ),
         CheckConstraint("details_version >= 1", name="ck_tournaments_details_version"),
         CheckConstraint(
             "address IS NULL OR jsonb_typeof(address) = 'object'",
@@ -105,6 +108,9 @@ class Tournament(Base):
     )
     details_version: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("1")
+    )
+    ownership_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -397,7 +397,7 @@ def _build_match(
             affects_rating=settings.rated,
         ),
         league_id=tournament.league_id,
-        created_by_user_id=tournament.created_by_user_id,
+        created_by_user_id=tournament.owner_account_id,
         status=MatchStatus.pending,
     )
     _add_side(match, side_number=1, user_id=side_1_user_id)

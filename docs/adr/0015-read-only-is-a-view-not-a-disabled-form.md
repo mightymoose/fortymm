@@ -6,6 +6,11 @@ Date: 2026-07-11
 
 Accepted
 
+The owner-only backend authorization assumption is superseded by
+[Tournament creator, owner and director authority are separate](20260907-tournament-creator-owner-and-director-authority-are-separate.md).
+Presentation rules and the existing owner-only tournament UI remain in force;
+delegated operations are exercised through backend interfaces for now.
+
 ## Context
 
 Several tournament surfaces are editable by the tournament's creator and merely

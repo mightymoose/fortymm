@@ -30,6 +30,7 @@ from app.models import (
     TournamentFixture,
     TournamentStatus,
 )
+from app.tournament_authority import transfer_ownership
 from tests._helpers import make_user, start_session
 from tests.test_tournament_entries import _entries_url, _make_event
 from tests.test_tournament_fixtures import _make_event as make_drawn_event
@@ -134,7 +135,12 @@ async def test_format_edit_refuses_incompatible_existing_members(
     event = await _make_event(db_session)
     event.stages = mint_stages(DrawType.single_elim)
     tournament = await db_session.get(Tournament, event.tournament_id)
-    tournament.owner_account_id = actor.id
+    await transfer_ownership(
+        db_session,
+        tournament.id,
+        actor_id=tournament.owner_account_id,
+        account_id=actor.id,
+    )
     await db_session.commit()
     assert (await api_client.post(_entries_url(event))).status_code == 201
     response = await api_client.patch(
@@ -1784,7 +1790,12 @@ async def test_crossed_ownership_and_participation_merges_serialize(db_session, 
     targets = [await make_user(db_session, f"cross-target-{i}") for i in range(2)]
     for i, event in enumerate(events):
         tournament = await db_session.get(Tournament, event.tournament_id)
-        tournament.owner_account_id = sources[1 - i].id
+        await transfer_ownership(
+            db_session,
+            tournament.id,
+            actor_id=tournament.owner_account_id,
+            account_id=sources[1 - i].id,
+        )
         db_session.add(TournamentEntry(event_id=event.id, user_id=sources[i].player_id))
     await db_session.commit()
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -2621,7 +2632,12 @@ async def test_delete_api_refuses_recorded_play(api_client, db_session, parent):
     actor = await start_session(api_client, db_session)
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
     tournament = await db_session.get(Tournament, event.tournament_id)
-    tournament.owner_account_id = actor.id
+    await transfer_ownership(
+        db_session,
+        tournament.id,
+        actor_id=tournament.owner_account_id,
+        account_id=actor.id,
+    )
     match.status = MatchStatus.in_progress
     await db_session.commit()
     url = f"/v1/tournaments/{tournament.id}"

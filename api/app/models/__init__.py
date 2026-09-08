@@ -1,5 +1,6 @@
 from app.models import entry_integrity as entry_integrity
 from app.models import fixture_integrity as fixture_integrity
+from app.models import tournament_authority_integrity as tournament_authority_integrity
 from app.models.account import Account, AccountPlayer, LoginIdentity
 from app.models.device_token import DeviceToken
 from app.models.draw_type import DrawTypeOption
@@ -40,6 +41,12 @@ from app.models.tournament import (
     TournamentEvent,
     TournamentStatus,
 )
+from app.models.tournament_account_grant import (
+    AuthorityChangeReason,
+    TournamentAccountGrant,
+    TournamentAccountRole,
+    TournamentOwnershipTransfer,
+)
 from app.models.tournament_entry import TournamentEntry, TournamentEntryStatus
 from app.models.tournament_entry_member import TournamentEntryMember
 from app.models.tournament_event_draw_settings import TournamentEventDrawSettings
@@ -60,6 +67,10 @@ from app.models.user_role import UserRole
 from app.models.user_token import EmailPurpose, EmailToken, SessionToken
 
 __all__ = [
+    "TournamentOwnershipTransfer",
+    "AuthorityChangeReason",
+    "TournamentAccountGrant",
+    "TournamentAccountRole",
     "Account",
     "LoginIdentity",
     "AccountPlayer",
