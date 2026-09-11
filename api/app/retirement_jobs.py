@@ -253,13 +253,6 @@ async def retire_if_lapsed(
     # Capture the recipients before the commit so the fire-and-forget enqueue
     # below can't trip an async lazy-load on an expired collection.
     owing_user_ids = [player.user_id for player in owing.players]
-    from app.player_accounts import managing_account_ids
-
-    accounts = await managing_account_ids(db, owing_user_ids)
-    if not accounts:
-        await db.rollback()
-        return RetirementOutcome.no_owing_side
-
     from app.official_results import record_initial_result
     from app.result_acceptance import _posted_decided_side, finalize_match
 

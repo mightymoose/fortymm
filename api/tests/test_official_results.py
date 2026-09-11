@@ -963,3 +963,50 @@ async def test_timeout_uses_database_clock_when_application_clock_is_ahead(
         == RetirementOutcome.not_yet_due
     )
     assert await official_history(db_session, match_id) == []
+
+
+async def test_timeout_finalizes_when_owing_player_has_no_managing_account(db_session):
+    from datetime import timedelta
+
+    from sqlalchemy import delete
+
+    from app.models import AccountPlayer, MatchStatus
+    from app.notifications.service import NotificationService
+    from app.official_results import official_history
+    from app.retirement_jobs import RetirementOutcome, retire_if_lapsed
+    from tests._helpers import FakeSender, directed_tournament_match
+
+    match, _ = await directed_tournament_match(
+        db_session, tag="timeout-unmanaged", best_of=1
+    )
+    match.match_settings.retirement_window = timedelta(microseconds=1)
+    await db_session.commit()
+    sides = sorted(match.sides, key=lambda side: side.side_number)
+    outcome = await propose_result(
+        db_session,
+        match.id,
+        sides[0].players[0].user_id,
+        games=board(),
+        supersedes_result_id=None,
+    )
+    match_id, proposal_id = match.id, outcome.match.results[0].id
+    await db_session.execute(
+        delete(AccountPlayer).where(
+            AccountPlayer.player_id == sides[1].players[0].user_id
+        )
+    )
+    await db_session.commit()
+    assert (
+        await retire_if_lapsed(
+            db_session,
+            match_id,
+            proposal_id,
+            NotificationService(db_session, FakeSender()),
+        )
+        == RetirementOutcome.retired
+    )
+    (revision,) = await official_history(db_session, match_id)
+    assert revision.resolution_method == "timeout"
+    assert revision.actor_account_id is None
+    await db_session.refresh(match)
+    assert match.status == MatchStatus.completed
