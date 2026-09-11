@@ -208,6 +208,7 @@ async def load_match_for_write(
     result = await db.execute(
         select(Match)
         .where(Match.id == match_id)
+        .execution_options(populate_existing=True)
         .options(*(options if options is not None else match_eager_options()))
     )
     match = result.scalar_one_or_none()

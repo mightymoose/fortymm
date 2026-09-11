@@ -8,7 +8,7 @@ models — so both the router (``app.matches``) and the attention classifier
 they lived on the router (``matches`` imports ``attention``).
 """
 
-from app.models import Match, MatchResult
+from app.models import Match, MatchResult, MatchStatus
 
 
 def head_result(match: Match) -> MatchResult | None:
@@ -29,6 +29,11 @@ def standing_result(match: Match) -> MatchResult | None:
     This is the result currently up for acceptance: the head when it has not
     been accepted. Once accepted, the head is the final/agreed result and there
     is no standing proposal."""
+    if match.current_official_result_id is not None or match.status in (
+        MatchStatus.completed,
+        MatchStatus.voided,
+    ):
+        return None
     head = head_result(match)
     if head is not None and head.accepted_by_user_id is None:
         return head

@@ -1,5 +1,8 @@
 # A result finalized without a player's acceptance is announced
 
+> Amended by [Official results have immutable revisions](20260911-official-results-have-immutable-revisions.md).
+> Finalization provenance is separate from recorded participant acceptance.
+
 Date: 2026-09-02
 Status: accepted
 

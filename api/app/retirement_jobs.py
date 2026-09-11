@@ -9,9 +9,8 @@ module is the background worker that performs that auto-acceptance.
 Approach (ADR 0007 / task O8): a periodic **sweep**, not a per-deadline
 ``enqueue_at``. ``sweep_lapsed_retirements`` scans for candidate matches whose
 standing head has lapsed and calls ``retire_if_lapsed`` for each, every one
-under its own row lock. The acceptance itself reuses the extracted
-``app.result_acceptance.accept_standing_result`` core — this module never
-re-implements accept logic.
+under its own row lock. Finalization records a timeout official revision, then
+uses the shared first-completion routine. It never stamps a participant acceptance.
 
 It's a leaf: it depends only on the models and the already-extracted domain
 leaves (``result_chain``, ``retirement``, ``result_acceptance``), never on the
@@ -30,7 +29,7 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 from sqlalchemy.sql.base import ExecutableOption
@@ -48,7 +47,6 @@ from app.models import (
 from app.notifications.apns import push_sender_from_env
 from app.notifications.service import NotificationService
 from app.notifications.taxonomy import NotificationCategory
-from app.result_acceptance import accept_standing_result
 from app.result_chain import standing_result
 from app.retirement import retirement_deadline
 from app.schemas.notification import NotificationJob
@@ -113,6 +111,7 @@ def _eager_options() -> tuple[ExecutableOption, ...]:
         selectinload(Match.match_settings),
         selectinload(Match.league).selectinload(League.rating_strategy),
         selectinload(Match.results),
+        selectinload(Match.current_official_result),
         selectinload(Match.sides).selectinload(MatchSide.players),
         selectinload(Match.games).selectinload(MatchGame.score),
     )
@@ -224,12 +223,12 @@ async def retire_if_lapsed(
     standing head is no longer ``result_id`` — a counter superseded it, it was
     accepted meanwhile, or none stands — this is a no-op (``superseded``). If the
     deadline is unset or still in the future, no-op (``not_yet_due``). Otherwise
-    it resolves an acceptor on the owing side (never the submitter's side, never
-    a blind ``players[0]``) and delegates to ``accept_standing_result``.
+    it resolves notification recipients on the owing side and records a timeout
+    revision before first completion. No participant is recorded as accepting.
     """
     await _lock_match_row(db, match_id)
     match = await _load_match(db, match_id)
-    if match is None:
+    if match is None or match.status in (MatchStatus.completed, MatchStatus.voided):
         await db.rollback()
         return RetirementOutcome.superseded
 
@@ -239,7 +238,10 @@ async def retire_if_lapsed(
         return RetirementOutcome.superseded
 
     deadline = retirement_deadline(match)
-    if deadline is None or deadline > datetime.now(UTC):
+    # The official revision is timestamped and authorized by PostgreSQL too.
+    # One clock prevents host skew from turning a not-yet-due job into an error.
+    database_now = (await db.execute(select(func.clock_timestamp()))).scalar_one()
+    if deadline is None or deadline > database_now:
         await db.rollback()
         return RetirementOutcome.not_yet_due
 
@@ -251,19 +253,19 @@ async def retire_if_lapsed(
     # Capture the recipients before the commit so the fire-and-forget enqueue
     # below can't trip an async lazy-load on an expired collection.
     owing_user_ids = [player.user_id for player in owing.players]
-    from app.player_accounts import managing_account_ids
+    from app.official_results import record_initial_result
+    from app.result_acceptance import _posted_decided_side, finalize_match
 
-    accounts = await managing_account_ids(db, owing_user_ids)
-    if not accounts:
-        await db.rollback()
-        return RetirementOutcome.no_owing_side
-
-    await accept_standing_result(
+    await record_initial_result(
         db,
         match,
-        result_id=result_id,
-        accepted_by_user_id=accounts[0],
+        standing,
+        method="timeout",
+        actor_account_id=None,
+        timeout_deadline=deadline,
+        timeout_policy="retirement_window_v1",
     )
+    await finalize_match(db, match, _posted_decided_side(match))
     await db.commit()
     # Only the owing party is told the match was finalized on their non-response;
     # the proposer already learns of completion through the normal result flow.
@@ -309,6 +311,7 @@ async def sweep_lapsed_retirements(
         .all()
     )
 
+    database_now = (await db.execute(select(func.clock_timestamp()))).scalar_one()
     to_retire: list[tuple[uuid.UUID, uuid.UUID]] = []
     for match_id in candidate_ids:
         match = await _load_match(db, match_id)
@@ -318,7 +321,7 @@ async def sweep_lapsed_retirements(
         if standing is None:
             continue
         deadline = retirement_deadline(match)
-        if deadline is None or deadline > datetime.now(UTC):
+        if deadline is None or deadline > database_now:
             continue
         to_retire.append((match_id, standing.id))
 
@@ -382,7 +385,7 @@ async def remind_if_due(
     ``FOR UPDATE`` lock is released immediately (mirrors ``retire_if_lapsed``)."""
     await _lock_match_row(db, match_id)
     match = await _load_match(db, match_id)
-    if match is None:
+    if match is None or match.status in (MatchStatus.completed, MatchStatus.voided):
         await db.rollback()
         return False
 

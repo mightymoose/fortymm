@@ -14,8 +14,7 @@ socket, and how "zero" is made an assertion instead of a hopeful sleep).
 """
 
 import uuid
-from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
+from datetime import timedelta
 
 from httpx import AsyncClient
 from sqlalchemy import select
@@ -153,21 +152,19 @@ async def test_finalize_by_the_retirement_sweep_hints_both_participants(
                 await db_session.execute(select(Match).where(Match.id == match_id))
             ).scalar_one()
             standing = await _standing_result(db_session, match_id)
-            # Advance the worker clock instead of rewriting the proposal time.
-            match.match_settings.retirement_window = RETIREMENT_WINDOW
+            # Make the deadline lapse on both application and database clocks.
+            match.match_settings.retirement_window = timedelta(microseconds=1)
             await db_session.commit()
 
             async with watch_hints(
                 realtime_broker, poster.id, no_show.id, bystander.id
             ) as watch:
-                with patch("app.retirement_jobs.datetime", wraps=datetime) as clock:
-                    clock.now.return_value = datetime.now(UTC) + RETIREMENT_WINDOW * 2
-                    outcome = await retire_if_lapsed(
-                        db_session,
-                        match_id,
-                        standing.id,
-                        NotificationService(db_session, FakeSender()),
-                    )
+                outcome = await retire_if_lapsed(
+                    db_session,
+                    match_id,
+                    standing.id,
+                    NotificationService(db_session, FakeSender()),
+                )
                 hints = await watch.collect()
         finally:
             await bystander_client.aclose()

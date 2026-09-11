@@ -22,7 +22,7 @@ from app.result_acceptance import (
     UndecidedBoardError,
     accept_result,
 )
-from app.result_chain import accepted_result, head_result, standing_result
+from app.result_chain import head_result, standing_result
 from app.result_proposal import propose_result
 from app.schemas.match import MatchResultsGameWrite
 from tests._helpers import directed_tournament_match, make_user
@@ -192,12 +192,17 @@ async def test_first_proposal_on_solo_match_self_accepts_and_finalizes(
     sides = sorted(outcome.match.sides, key=lambda s: s.side_number)
     assert sides[0].won is True
     assert sides[1].won is False
-    # A finalized result is accepted (not "standing"): the proposer self-accepts.
+    # Finalization records the actor without inventing a second acceptance.
     assert standing_result(outcome.match) is None
-    result = accepted_result(outcome.match)
+    result = head_result(outcome.match)
     assert result is not None
-    assert result.accepted_by_user_id == creator.id
-    assert result.accepted_at is not None
+    assert result.accepted_by_user_id is None
+    assert result.accepted_at is None
+    assert (
+        outcome.match.current_official_result.resolution_method
+        == "immediate_finalization"
+    )
+    assert outcome.match.current_official_result.actor_account_id == creator.id
 
 
 async def test_first_proposal_on_rated_match_stays_standing(
@@ -308,7 +313,8 @@ async def test_director_first_proposal_on_rated_match_self_finalizes(
     posted = outcome.match.results[0]
     assert posted.submitted_for_player_id is None
     assert posted.submitted_by_user_id == director.id
-    assert posted.accepted_by_user_id == director.id
+    assert posted.accepted_by_user_id is None
+    assert outcome.match.current_official_result.actor_account_id == director.id
 
 
 async def test_director_supersedes_a_players_standing_proposal_and_self_finalizes(
@@ -349,13 +355,13 @@ async def test_director_supersedes_a_players_standing_proposal_and_self_finalize
     completed_sides = sorted(countered.match.sides, key=lambda s: s.side_number)
     assert completed_sides[0].won is False
     assert completed_sides[1].won is True
-    # The director's counter is the new head, and it's accepted (not standing)
-    # — self-finalized at once, never left for anyone to accept.
+    # The director's counter is official, never left standing for acceptance.
     assert standing_result(countered.match) is None
     new_head = head_result(countered.match)
     assert new_head is not None
     assert new_head.submitted_by_user_id == director.id
-    assert new_head.accepted_by_user_id == director.id
+    assert new_head.accepted_by_user_id is None
+    assert countered.match.current_official_result.actor_account_id == director.id
 
 
 async def test_director_first_proposal_on_unrated_match_self_finalizes_as_before(

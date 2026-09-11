@@ -59,6 +59,7 @@ from app.models import (
     MatchSide,
     MatchSidePlayer,
     MatchStatus,
+    OfficialResult,
     RatingHistory,
     RatingHistorySource,
     RatingStrategy,
@@ -89,7 +90,9 @@ def _league_lock_key(league_id: uuid.UUID) -> int:
     return int(hi) ^ int(lo)
 
 
-def _decided_sides(match: Match) -> tuple[MatchSide, MatchSide] | None:
+def _decided_sides(
+    match: Match, original_winner: int | None = None
+) -> tuple[MatchSide, MatchSide] | None:
     """Return ``(winning_side, losing_side)`` for a decided binary result, or
     ``None`` when the match has no clear winner/loser — a forfeit/void/partial
     write leaves ``MatchSide.won`` as ``None``. Such a match never produced a
@@ -100,8 +103,16 @@ def _decided_sides(match: Match) -> tuple[MatchSide, MatchSide] | None:
     live rating path guards this explicitly (``app/matches.py``) and writes no
     ``RatingHistory``, so the callers' ``players[0]`` lookups below would
     otherwise ``IndexError`` on a match that never contributed a delta."""
-    winning_side = next((s for s in match.sides if s.won is True), None)
-    losing_side = next((s for s in match.sides if s.won is False), None)
+    if original_winner is None:
+        winning_side = next((s for s in match.sides if s.won is True), None)
+        losing_side = next((s for s in match.sides if s.won is False), None)
+    else:
+        winning_side = next(
+            (s for s in match.sides if s.side_number == original_winner), None
+        )
+        losing_side = next(
+            (s for s in match.sides if s.side_number == 3 - original_winner), None
+        )
     if winning_side is None or losing_side is None:
         return None
     if not winning_side.players or not losing_side.players:
@@ -212,6 +223,22 @@ async def recompute_league_ratings(
         .all()
     )
 
+    # Until #1683 reconciles rating provenance explicitly, replay the initial
+    # official outcome. A correction changes sporting results, not rating input.
+    original_winners: dict[uuid.UUID, int] = {}
+    for root in await db.scalars(
+        select(OfficialResult).where(
+            OfficialResult.match_id.in_([match.id for match in matches]),
+            OfficialResult.revision == 1,
+        )
+    ):
+        side_one_wins = sum(
+            game["side_1_points"] > game["side_2_points"] for game in root.games
+        )
+        original_winners[root.match_id] = (
+            1 if side_one_wins > len(root.games) - side_one_wins else 2
+        )
+
     affected_users: set[uuid.UUID] = set(seed_user_ids)
     affected_matches: list[Match] = []
     # The FIRST affected match each user joins the cascade through, keyed as the
@@ -233,7 +260,7 @@ async def recompute_league_ratings(
     # the replay ordering exactly.
     cutoffs: dict[uuid.UUID, tuple[datetime, uuid.UUID]] = {}
     for match in matches:
-        decided = _decided_sides(match)
+        decided = _decided_sides(match, original_winners.get(match.id))
         if decided is None:
             continue
         winning_side, losing_side = decided
@@ -315,7 +342,7 @@ async def recompute_league_ratings(
             ulr.rating_value = value
 
     for match in affected_matches:
-        decided = _decided_sides(match)
+        decided = _decided_sides(match, original_winners.get(match.id))
         if decided is None:
             continue
         winning_side, losing_side = decided

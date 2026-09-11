@@ -377,7 +377,8 @@ async def accept_standing_result(
 
     ``accepted_by_user_id`` is the accepting user; it is never inferred from the
     match, so doubles (any participant on the opposing side) works at the call
-    site.
+    site. A non-playing director instead records an administrator ruling,
+    without writing participant acceptance.
 
     Raises :class:`StandingResultConflictError` if ``result_id`` is no longer the
     live standing proposal (superseded, already accepted, or none standing), and
@@ -387,8 +388,23 @@ async def accept_standing_result(
     if standing is None or standing.id != result_id:
         raise StandingResultConflictError
 
-    standing.accepted_by_user_id = accepted_by_user_id
-    standing.accepted_at = datetime.now(UTC)
+    from app.match_serialization import is_participant
+    from app.player_accounts import primary_player_id
+
+    player = await primary_player_id(db, accepted_by_user_id)
+    participant = player is not None and is_participant(match, player)
+    if participant:
+        standing.accepted_by_user_id = accepted_by_user_id
+        standing.accepted_at = datetime.now(UTC)
+    from app.official_results import record_initial_result
+
+    await record_initial_result(
+        db,
+        match,
+        standing,
+        method="opponent_acceptance" if participant else "administrator_ruling",
+        actor_account_id=accepted_by_user_id,
+    )
     await finalize_match(db, match, _posted_decided_side(match))
 
 
@@ -396,12 +412,11 @@ async def finalize_match(db: AsyncSession, match: Match, decided_side: int) -> N
     """Complete a match: stamp it done, record the W/L, run the rating update, and
     advance any tournament draw it belongs to (ADR-0788).
 
-    **The one place a match becomes ``completed``.** Both completion sites funnel
-    through here — the rated accept/retire path (:func:`accept_standing_result`) and the
-    unrated immediate-self-accept path (``app.result_proposal``'s ``propose_result``,
-    which calls ``finalize_match``) — so the four things a
-    completion must do happen together and in one order, and a future third completion
-    path cannot do three of them and forget the fourth. ``decided_side`` is the winning
+    **The one place first completion effects run.** Participant acceptance,
+    timeout retirement, and immediate/director proposal finalization funnel through
+    here after recording their official revision. The four effects happen together
+    and in one order. Later administrator corrections deliberately do not replay
+    this routine. ``decided_side`` is the winning
     side number, computed by the caller from the agreed board (``_posted_decided_side``
     on accept, the finalize validator's ``decided_side`` on the unrated post).
 

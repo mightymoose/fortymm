@@ -25,7 +25,9 @@ from sqlalchemy.orm import aliased
 from app import queue as queue_module
 from app.models import (
     DeviceToken,
+    Match,
     MatchResult,
+    MatchStatus,
     Notification,
     NotificationChannelSetting,
     NotificationPreference,
@@ -319,10 +321,9 @@ def _visible_notifications_clause() -> ColumnElement[bool]:
     it's the un-superseded head of its chain and unaccepted); the two must stay
     in sync, since this predicate is how a stale "Accept your match result" /
     "A result is waiting for you" prompt disappears from the feed and unread
-    count once its match resolves — accept, counter, self-correction, or the
-    retirement sweep's auto-accept all flip ``accepted_by_user_id`` or insert a
-    superseding row, so one predicate covers every path with no write-path
-    bookkeeping (issue #1583).
+    count once its match resolves. Official finalization and voiding close the
+    prompt even when no human acceptance was recorded; a superseding proposal
+    also closes it. No notification write-path bookkeeping is needed (#1583).
 
     ``result_id IS NULL`` covers every other notification (including the two
     ``result_confirm`` FYI notices that must never hide) — those always pass.
@@ -337,8 +338,11 @@ def _visible_notifications_clause() -> ColumnElement[bool]:
     superseding = aliased(MatchResult)
     result_is_live = (
         select(MatchResult.id)
+        .join(Match, Match.id == MatchResult.match_id)
         .where(
             MatchResult.id == Notification.result_id,
+            Match.current_official_result_id.is_(None),
+            Match.status.not_in((MatchStatus.completed, MatchStatus.voided)),
             MatchResult.accepted_by_user_id.is_(None),
             ~select(superseding.id)
             .where(superseding.supersedes_result_id == MatchResult.id)

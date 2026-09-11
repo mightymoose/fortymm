@@ -22,6 +22,7 @@ from app.models.notification import (
 )
 from app.models.notification_channel import NotificationChannel
 from app.models.notification_type import NotificationType
+from app.models.official_result import MatchVoidAction, OfficialResult
 from app.models.permission import Permission
 from app.models.player import Player
 from app.models.rating_history import RatingHistory, RatingHistorySource
@@ -67,6 +68,8 @@ from app.models.user_role import UserRole
 from app.models.user_token import EmailPurpose, EmailToken, SessionToken
 
 __all__ = [
+    "OfficialResult",
+    "MatchVoidAction",
     "TournamentOwnershipTransfer",
     "AuthorityChangeReason",
     "TournamentAccountGrant",

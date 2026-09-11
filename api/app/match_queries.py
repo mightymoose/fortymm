@@ -59,6 +59,7 @@ def match_eager_options() -> tuple[ExecutableOption, ...]:
         selectinload(Match.match_settings),
         selectinload(Match.league),
         selectinload(Match.results),
+        selectinload(Match.current_official_result),
         *match_history_options(),
     )
 
