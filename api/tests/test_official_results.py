@@ -965,7 +965,9 @@ async def test_timeout_uses_database_clock_when_application_clock_is_ahead(
     assert await official_history(db_session, match_id) == []
 
 
-async def test_timeout_finalizes_when_owing_player_has_no_managing_account(db_session):
+async def test_timeout_finalizes_after_both_participants_lose_managing_accounts(
+    db_session,
+):
     from datetime import timedelta
 
     from sqlalchemy import delete
@@ -990,9 +992,10 @@ async def test_timeout_finalizes_when_owing_player_has_no_managing_account(db_se
         supersedes_result_id=None,
     )
     match_id, proposal_id = match.id, outcome.match.results[0].id
+    assert outcome.match.results[0].participant_authorized
     await db_session.execute(
         delete(AccountPlayer).where(
-            AccountPlayer.player_id == sides[1].players[0].user_id
+            AccountPlayer.player_id.in_([side.players[0].user_id for side in sides])
         )
     )
     await db_session.commit()
@@ -1232,3 +1235,122 @@ async def test_rated_casual_match_rejects_unclaimed_opponent(db_session):
             best_of=1,
             rated=True,
         )
+
+
+async def test_sql_timeout_requires_participant_authority_at_submission(db_session):
+    from datetime import UTC, datetime, timedelta
+
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models import MatchResult
+    from app.models.official_result import OfficialResult
+    from tests._helpers import directed_tournament_match
+
+    match, _ = await directed_tournament_match(
+        db_session, tag="forged-timeout", best_of=1
+    )
+    outsider = await make_user(db_session, "forged-timeout-outsider")
+    participant = min(match.sides, key=lambda s: s.side_number).players[0].user_id
+    for represented in (participant, outsider.id):
+        with pytest.raises(IntegrityError, match="participant authority"):
+            async with db_session.begin_nested():
+                proposal = MatchResult(
+                    match_id=match.id,
+                    submitted_by_user_id=outsider.id,
+                    submitted_for_player_id=represented,
+                    participant_authorized=True,
+                    submitted_at=datetime.now(UTC) - timedelta(days=8),
+                    games=[g.model_dump() for g in board()],
+                )
+                db_session.add(proposal)
+                await db_session.flush()
+                db_session.add(
+                    OfficialResult(
+                        match_id=match.id,
+                        revision=1,
+                        proposal_id=proposal.id,
+                        resolution_method="timeout",
+                        actor_account_id=None,
+                        timeout_deadline=proposal.submitted_at
+                        + match.match_settings.retirement_window,
+                        timeout_policy="retirement_window_v1",
+                        games=proposal.games,
+                    )
+                )
+                await db_session.flush()
+
+
+async def test_rated_casual_opponent_requires_primary_manager(db_session):
+    import pytest
+    from sqlalchemy import update
+
+    from app.match_errors import OpponentNotFoundError
+    from app.models import AccountPlayer
+
+    creator = await make_user(db_session, "primary-manager-creator")
+    opponent = await make_user(db_session, "secondary-only-opponent")
+    await db_session.execute(
+        update(AccountPlayer)
+        .where(AccountPlayer.player_id == opponent.id)
+        .values(is_primary=False)
+    )
+    await db_session.commit()
+    with pytest.raises(OpponentNotFoundError):
+        await create_match(
+            db_session,
+            creator=creator,
+            opponent_user_id=opponent.id,
+            league_id=None,
+            best_of=1,
+            rated=True,
+        )
+
+
+async def test_sql_consent_requires_the_acceptors_primary_player(db_session):
+    import uuid
+
+    import pytest
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models import AccountPlayer
+    from tests._helpers import directed_tournament_match
+
+    match, _ = await directed_tournament_match(
+        db_session, tag="secondary-consent", best_of=1
+    )
+    sides = sorted(match.sides, key=lambda s: s.side_number)
+    other = await make_user(db_session, "secondary-consent-manager")
+    db_session.add(
+        AccountPlayer(account_id=other.id, player_id=sides[1].players[0].user_id)
+    )
+    await db_session.commit()
+    outcome = await propose_result(
+        db_session,
+        match.id,
+        sides[0].players[0].user_id,
+        games=board(),
+        supersedes_result_id=None,
+    )
+    proposal_id = outcome.match.results[0].id
+    with pytest.raises(IntegrityError, match="opposing consent"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE match_results SET accepted_by_user_id = :actor, "
+                    "accepted_at = clock_timestamp() WHERE id = :id"
+                ),
+                {"actor": other.id, "id": proposal_id},
+            )
+            await db_session.execute(
+                text("""
+                INSERT INTO match_official_results
+                (id, match_id, revision, proposal_id, resolution_method,
+                 actor_account_id, games)
+                SELECT :new, match_id, 1, id, 'opponent_acceptance',
+                       accepted_by_user_id, games
+                FROM match_results WHERE id = :id
+            """),
+                {"new": uuid.uuid4(), "id": proposal_id},
+            )

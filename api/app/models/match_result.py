@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -95,6 +96,10 @@ class MatchResult(Base):
     )
     submitted_for_player_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("players.id", ondelete="RESTRICT"), nullable=True
+    )
+    # Database-derived evidence at submission, retained across grant/account changes.
+    participant_authorized: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
     )
     submitted_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

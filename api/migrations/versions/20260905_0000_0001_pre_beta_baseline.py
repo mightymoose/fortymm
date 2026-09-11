@@ -2145,6 +2145,12 @@ def upgrade() -> None:
         sa.Column("submitted_by_user_id", sa.UUID(), nullable=False),
         sa.Column("submitted_for_player_id", sa.UUID(), nullable=True),
         sa.Column(
+            "participant_authorized",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text("false"),
+        ),
+        sa.Column(
             "submitted_at",
             sa.DateTime(timezone=True),
             server_default=sa.text("now()"),
@@ -2207,7 +2213,7 @@ def upgrade() -> None:
             UPDATE matches SET id = id WHERE id = NEW.match_id;
             IF EXISTS (
                 SELECT 1 FROM matches WHERE id = NEW.match_id
-                AND (current_official_result_id IS NOT NULL OR status IN ('completed', 'voided'))
+                AND (current_official_result_id IS NOT NULL OR status = 'voided')
             ) THEN
                 RAISE EXCEPTION 'closed matches cannot receive proposals'
                     USING ERRCODE = '23514';
@@ -2224,6 +2230,24 @@ def upgrade() -> None:
                         USING ERRCODE = '23514';
                 END IF;
             END IF;
+            -- Derive immutable origin evidence; caller-supplied booleans cannot
+            -- turn an unauthorized proposal into an official timeout later.
+            BEGIN
+                PERFORM ap.account_id FROM account_players ap
+                JOIN accounts a ON a.id = ap.account_id
+                WHERE ap.account_id = NEW.submitted_by_user_id
+                  AND ap.player_id = NEW.submitted_for_player_id
+                FOR SHARE OF ap, a NOWAIT;
+            EXCEPTION WHEN lock_not_available THEN
+                RAISE EXCEPTION 'proposal authority changed; retry' USING ERRCODE = '40001';
+            END;
+            NEW.participant_authorized := EXISTS (
+                SELECT 1 FROM account_players ap JOIN accounts a ON a.id = ap.account_id
+                JOIN match_side_players p ON p.user_id = ap.player_id
+                WHERE ap.account_id = NEW.submitted_by_user_id
+                  AND ap.player_id = NEW.submitted_for_player_id AND ap.is_primary
+                  AND a.merged_at IS NULL AND p.match_id = NEW.match_id
+            );
             -- A non-deferrable FK alone checks at statement end, permitting
             -- circular multi-row INSERTs. Require an already inserted parent.
             IF NEW.supersedes_result_id IS NOT NULL AND NOT EXISTS (
@@ -2247,10 +2271,10 @@ def upgrade() -> None:
         LANGUAGE plpgsql AS $$
         BEGIN
             IF ROW(NEW.id, NEW.match_id, NEW.supersedes_result_id, NEW.games,
-                   NEW.submitted_by_user_id, NEW.submitted_at)
+                   NEW.submitted_by_user_id, NEW.submitted_at, NEW.participant_authorized)
                 IS DISTINCT FROM
                ROW(OLD.id, OLD.match_id, OLD.supersedes_result_id, OLD.games,
-                   OLD.submitted_by_user_id, OLD.submitted_at) THEN
+                   OLD.submitted_by_user_id, OLD.submitted_at, OLD.participant_authorized) THEN
                 RAISE EXCEPTION 'proposal snapshot and links are immutable'
                     USING ERRCODE = '23514';
             END IF;
@@ -2282,7 +2306,7 @@ def upgrade() -> None:
                 UPDATE matches SET id = id WHERE id = OLD.match_id;
                 IF EXISTS (
                     SELECT 1 FROM matches WHERE id = OLD.match_id
-                    AND (current_official_result_id IS NOT NULL OR status IN ('completed', 'voided'))
+                    AND (current_official_result_id IS NOT NULL OR status = 'voided')
                 ) THEN
                     RAISE EXCEPTION 'closed matches cannot receive participant consent'
                         USING ERRCODE = '23514';
@@ -3891,6 +3915,10 @@ def upgrade() -> None:
                 RAISE EXCEPTION 'restoration must copy an existing same-match score' USING ERRCODE = '23514';
             END IF;
             IF NEW.resolution_method <> 'administrator_ruling' THEN
+                IF NOT proposal.participant_authorized THEN
+                    RAISE EXCEPTION 'official result requires participant authority at submission'
+                        USING ERRCODE = '23514';
+                END IF;
                 IF EXISTS (SELECT 1 FROM match_results WHERE supersedes_result_id = NEW.proposal_id) THEN
                     RAISE EXCEPTION 'only the proposal head may finalize' USING ERRCODE = '23514';
                 END IF;
@@ -3900,7 +3928,8 @@ def upgrade() -> None:
                     OR proposal.accepted_at IS NULL OR NOT EXISTS (
                         SELECT 1 FROM account_players ap JOIN match_side_players p ON p.user_id = ap.player_id
                         JOIN match_side_players submitter ON submitter.match_id = p.match_id
-                        WHERE ap.account_id = NEW.actor_account_id AND p.match_id = NEW.match_id
+                        WHERE ap.account_id = NEW.actor_account_id AND ap.is_primary
+                          AND p.match_id = NEW.match_id
                           AND submitter.user_id = proposal.submitted_for_player_id
                           AND p.match_side_id <> submitter.match_side_id
                     )
@@ -3928,6 +3957,8 @@ def upgrade() -> None:
                     RAISE EXCEPTION 'immediate finalization requires the existing solo or unrated rule' USING ERRCODE = '23514';
                 END IF;
                 IF NEW.resolution_method = 'timeout' AND (
+                    NOT settings.affects_rating OR
+                    (SELECT count(DISTINCT match_side_id) FROM match_side_players WHERE match_id = NEW.match_id) < 2 OR
                     settings.retirement_window IS NULL OR
                     NEW.timeout_deadline IS DISTINCT FROM proposal.submitted_at + settings.retirement_window
                 ) THEN

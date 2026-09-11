@@ -6,11 +6,12 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from rq import Queue
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.retirement_jobs as retirement_jobs
 from app.models import (
+    AccountPlayer,
     League,
     Match,
     MatchGame,
@@ -82,6 +83,17 @@ async def _build_standing_match(
     side2.players.append(MatchSidePlayer(match=match, user=opponent.primary_player))
     game = MatchGame(match=match, game_number=1)
     game.score = MatchGameScore(side_1_points=11, side_2_points=4)
+    db.add(match)
+    await db.flush()
+    if actor_id is not None:
+        # The acting Account explicitly manages this Player as its primary.
+        await db.execute(
+            update(AccountPlayer)
+            .where(AccountPlayer.account_id == actor_id)
+            .values(is_primary=False)
+        )
+        db.add(AccountPlayer(account_id=actor_id, player_id=poster.id, is_primary=True))
+        await db.flush()
     result = MatchResult(
         match=match,
         submitted_for_player_id=poster.id,
@@ -89,7 +101,7 @@ async def _build_standing_match(
         games=[{"game_number": 1, "side_1_points": 11, "side_2_points": 4}],
         submitted_at=datetime.now(UTC) - submitted_ago,
     )
-    db.add(match)
+    db.add(result)
     await db.commit()
     if window is None:
         # Passing ``None`` to the constructor lets the column's 7-day

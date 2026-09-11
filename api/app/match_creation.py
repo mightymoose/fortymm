@@ -32,6 +32,8 @@ from app.match_errors import (
 from app.match_queries import match_eager_options
 from app.match_realtime import stage_match_participant_hints
 from app.models import (
+    Account,
+    AccountPlayer,
     Match,
     MatchSettings,
     MatchSide,
@@ -42,7 +44,6 @@ from app.models import (
 )
 from app.player_accounts import (
     PlayerAccessDenied,
-    managing_account_ids,
     primary_player_id,
     require_player,
 )
@@ -131,8 +132,17 @@ async def create_match(
         ).scalar_one_or_none()
         # Rated casual opponents must be able to contest a proposed result.
         # Tournament fixtures have their own administrator-controlled creation.
-        if opponent is None or (
-            rated and not await managing_account_ids(db, [opponent.id])
+        if opponent is None:
+            raise OpponentNotFoundError
+        if rated and not await db.scalar(
+            select(AccountPlayer.account_id)
+            .join(Account, Account.id == AccountPlayer.account_id)
+            .where(
+                AccountPlayer.player_id == opponent.id,
+                AccountPlayer.is_primary.is_(True),
+                Account.merged_into_user_id.is_(None),
+            )
+            .limit(1)
         ):
             raise OpponentNotFoundError
 

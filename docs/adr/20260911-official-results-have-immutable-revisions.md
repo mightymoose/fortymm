@@ -103,14 +103,20 @@ Correction appends synchronize the canonical games and winner inside the databas
 transaction, including for direct SQL writers. Retirement eligibility uses the
 same database clock that records timeout revisions, including sweep selection.
 A deferred constraint requires first official results to complete their match by
-commit; every official append synchronizes the canonical score. Closed matches
-reject new proposals and late consent. Opponent consent cannot name the proposing
+commit; every official append synchronizes the canonical score. Matches with official results and voided matches
+reject new proposals and late consent. Existing completed-walkover evidence
+handling remains available before an official result exists. Opponent consent cannot name the proposing
 Account, and immediate finalization requires a managed participant.
 
-Rated casual match creation requires the opponent to have a managing Account, so
+Rated casual match creation requires the opponent to have an active primary
+Account grant (the grant the current action interfaces use), so
 unclaimed tournament entrants cannot be targeted for uncontestable rating claims.
 Existing unrated play remains supported. Once a contestable match has been created,
 a later loss of the owing Player's account grant does not prevent system timeout.
+Participant authority is derived by PostgreSQL at proposal insertion and retained
+as immutable evidence across later account/grant changes. Non-administrator
+resolutions require that evidence; timeout also requires the rated confirmation
+rule. Supplying the evidence flag directly cannot forge it.
 
 Verify metadata parity and downgrade/reinstall. Seed representative
 accepted/corrected histories through real backend operations, with honest actors

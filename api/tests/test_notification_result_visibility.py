@@ -107,6 +107,7 @@ async def _standing_doubles_match(
         league=league,
         created_by_user_id=side1[0].id,
         status=MatchStatus.in_progress,
+        results=[],
     )
     match_side1 = MatchSide(match=match, side_number=1)
     for user in side1:
@@ -120,13 +121,15 @@ async def _standing_doubles_match(
         )
     game = MatchGame(match=match, game_number=1)
     game.score = MatchGameScore(side_1_points=11, side_2_points=4)
+    db.add(match)
+    await db.flush()
     result = MatchResult(
         match=match,
         submitted_for_player_id=side1[0].id,
         submitted_by_user_id=side1[0].id,
         games=[{"game_number": 1, "side_1_points": 11, "side_2_points": 4}],
     )
-    db.add(match)
+    db.add(result)
     await db.commit()
     return match, result, side1, side2
 
