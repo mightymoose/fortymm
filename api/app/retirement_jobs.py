@@ -311,6 +311,7 @@ async def sweep_lapsed_retirements(
         .all()
     )
 
+    database_now = (await db.execute(select(func.clock_timestamp()))).scalar_one()
     to_retire: list[tuple[uuid.UUID, uuid.UUID]] = []
     for match_id in candidate_ids:
         match = await _load_match(db, match_id)
@@ -320,7 +321,7 @@ async def sweep_lapsed_retirements(
         if standing is None:
             continue
         deadline = retirement_deadline(match)
-        if deadline is None or deadline > datetime.now(UTC):
+        if deadline is None or deadline > database_now:
             continue
         to_retire.append((match_id, standing.id))
 

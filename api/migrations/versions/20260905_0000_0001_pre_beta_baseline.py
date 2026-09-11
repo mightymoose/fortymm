@@ -2205,6 +2205,13 @@ def upgrade() -> None:
             -- A real row version (not just FOR UPDATE) also makes stale
             -- REPEATABLE READ / SERIALIZABLE writers fail with 40001.
             UPDATE matches SET id = id WHERE id = NEW.match_id;
+            IF EXISTS (
+                SELECT 1 FROM matches WHERE id = NEW.match_id
+                AND (current_official_result_id IS NOT NULL OR status IN ('completed', 'voided'))
+            ) THEN
+                RAISE EXCEPTION 'closed matches cannot receive proposals'
+                    USING ERRCODE = '23514';
+            END IF;
             IF NEW.submitted_for_player_id IS NOT NULL THEN
                 -- Bump the Player version as well as locking it: a merge
                 -- using an older Repeatable Read snapshot must retry rather
@@ -2273,6 +2280,13 @@ def upgrade() -> None:
             IF OLD.accepted_by_user_id IS NULL AND
                NEW.accepted_by_user_id IS NOT NULL THEN
                 UPDATE matches SET id = id WHERE id = OLD.match_id;
+                IF EXISTS (
+                    SELECT 1 FROM matches WHERE id = OLD.match_id
+                    AND (current_official_result_id IS NOT NULL OR status IN ('completed', 'voided'))
+                ) THEN
+                    RAISE EXCEPTION 'closed matches cannot receive participant consent'
+                        USING ERRCODE = '23514';
+                END IF;
                 IF EXISTS (
                     SELECT 1 FROM match_results WHERE supersedes_result_id = OLD.id
                 ) THEN
@@ -3881,7 +3895,8 @@ def upgrade() -> None:
                     RAISE EXCEPTION 'only the proposal head may finalize' USING ERRCODE = '23514';
                 END IF;
                 IF NEW.resolution_method = 'opponent_acceptance' AND (
-                    proposal.accepted_by_user_id IS DISTINCT FROM NEW.actor_account_id
+                    NEW.actor_account_id = proposal.submitted_by_user_id
+                    OR proposal.accepted_by_user_id IS DISTINCT FROM NEW.actor_account_id
                     OR proposal.accepted_at IS NULL OR NOT EXISTS (
                         SELECT 1 FROM account_players ap JOIN match_side_players p ON p.user_id = ap.player_id
                         JOIN match_side_players submitter ON submitter.match_id = p.match_id
@@ -3894,6 +3909,16 @@ def upgrade() -> None:
                 END IF;
                 IF NEW.resolution_method IN ('timeout', 'immediate_finalization') AND proposal.accepted_at IS NOT NULL THEN
                     RAISE EXCEPTION 'automatic finalization cannot record human acceptance' USING ERRCODE = '23514';
+                END IF;
+                IF NEW.resolution_method = 'immediate_finalization' AND NOT EXISTS (
+                    SELECT 1 FROM account_players ap
+                    JOIN match_side_players p ON p.user_id = ap.player_id
+                    WHERE ap.account_id = NEW.actor_account_id
+                      AND ap.player_id = proposal.submitted_for_player_id
+                      AND p.match_id = NEW.match_id
+                ) THEN
+                    RAISE EXCEPTION 'immediate finalization requires a managed participant'
+                        USING ERRCODE = '23514';
                 END IF;
                 IF NEW.resolution_method = 'immediate_finalization' AND (
                     NEW.actor_account_id IS DISTINCT FROM proposal.submitted_by_user_id
@@ -3967,34 +3992,34 @@ def upgrade() -> None:
         CREATE FUNCTION advance_official_result() RETURNS trigger LANGUAGE plpgsql AS $$
         DECLARE game jsonb; game_id uuid; wins_a integer := 0; wins_b integer := 0;
         BEGIN
-            -- Corrections must change every public score representation in this
+            -- Official appends change every public score representation in this
             -- same statement, including when the caller bypasses the service.
-            IF NEW.predecessor_id IS NOT NULL THEN
-                DELETE FROM match_games WHERE match_id = NEW.match_id
-                    AND game_number > jsonb_array_length(NEW.games);
-                FOR game IN SELECT value FROM jsonb_array_elements(NEW.games) LOOP
-                    INSERT INTO match_games (match_id, game_number)
-                    VALUES (NEW.match_id, (game->>'game_number')::integer)
-                    ON CONFLICT (match_id, game_number) DO UPDATE SET updated_at = clock_timestamp()
-                    RETURNING id INTO game_id;
-                    INSERT INTO match_game_scores (match_game_id, side_1_points, side_2_points)
-                    VALUES (game_id, (game->>'side_1_points')::integer, (game->>'side_2_points')::integer)
-                    ON CONFLICT (match_game_id) DO UPDATE SET
-                        side_1_points = EXCLUDED.side_1_points,
-                        side_2_points = EXCLUDED.side_2_points,
-                        version = match_game_scores.version + 1,
-                        updated_at = clock_timestamp();
-                    IF (game->>'side_1_points')::integer > (game->>'side_2_points')::integer THEN
-                        wins_a := wins_a + 1;
-                    ELSE
-                        wins_b := wins_b + 1;
-                    END IF;
-                END LOOP;
-                UPDATE match_sides SET
-                    score = CASE WHEN side_number = 1 THEN wins_a ELSE wins_b END,
-                    won = CASE WHEN side_number = 1 THEN wins_a > wins_b ELSE wins_b > wins_a END
-                    WHERE match_id = NEW.match_id;
-            END IF;
+            DELETE FROM match_games WHERE match_id = NEW.match_id
+                AND game_number > jsonb_array_length(NEW.games);
+            FOR game IN SELECT value FROM jsonb_array_elements(NEW.games) LOOP
+                INSERT INTO match_games (match_id, game_number)
+                VALUES (NEW.match_id, (game->>'game_number')::integer)
+                ON CONFLICT (match_id, game_number) DO UPDATE SET updated_at = clock_timestamp()
+                RETURNING id INTO game_id;
+                INSERT INTO match_game_scores (match_game_id, side_1_points, side_2_points)
+                VALUES (game_id, (game->>'side_1_points')::integer, (game->>'side_2_points')::integer)
+                ON CONFLICT (match_game_id) DO UPDATE SET
+                    side_1_points = EXCLUDED.side_1_points,
+                    side_2_points = EXCLUDED.side_2_points,
+                    version = match_game_scores.version + 1,
+                    updated_at = clock_timestamp()
+                WHERE (match_game_scores.side_1_points, match_game_scores.side_2_points)
+                    IS DISTINCT FROM (EXCLUDED.side_1_points, EXCLUDED.side_2_points);
+                IF (game->>'side_1_points')::integer > (game->>'side_2_points')::integer THEN
+                    wins_a := wins_a + 1;
+                ELSE
+                    wins_b := wins_b + 1;
+                END IF;
+            END LOOP;
+            UPDATE match_sides SET
+                score = CASE WHEN side_number = 1 THEN wins_a ELSE wins_b END,
+                won = CASE WHEN side_number = 1 THEN wins_a > wins_b ELSE wins_b > wins_a END
+                WHERE match_id = NEW.match_id;
             UPDATE matches SET current_official_result_id = NEW.id WHERE id = NEW.match_id;
             RETURN NEW;
         END; $$
@@ -4002,6 +4027,33 @@ def upgrade() -> None:
     op.execute("""
         CREATE TRIGGER advance_official_result AFTER INSERT ON match_official_results
         FOR EACH ROW EXECUTE FUNCTION advance_official_result()
+    """)
+
+    op.execute("""
+        CREATE FUNCTION require_official_completion() RETURNS trigger LANGUAGE plpgsql AS $$
+        DECLARE target_id uuid; parent matches;
+        BEGIN
+            IF TG_TABLE_NAME = 'matches' THEN target_id := NEW.id;
+            ELSE target_id := NEW.match_id;
+            END IF;
+            SELECT * INTO parent FROM matches WHERE id = target_id;
+            IF parent.current_official_result_id IS NOT NULL AND
+                (parent.status NOT IN ('completed', 'voided') OR parent.completed_at IS NULL) THEN
+                RAISE EXCEPTION 'official result requires a completed match by commit'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NULL;
+        END; $$
+    """)
+    op.execute("""
+        CREATE CONSTRAINT TRIGGER require_official_completion
+        AFTER INSERT ON match_official_results DEFERRABLE INITIALLY DEFERRED
+        FOR EACH ROW EXECUTE FUNCTION require_official_completion()
+    """)
+    op.execute("""
+        CREATE CONSTRAINT TRIGGER preserve_official_completion
+        AFTER UPDATE ON matches DEFERRABLE INITIALLY DEFERRED
+        FOR EACH ROW EXECUTE FUNCTION require_official_completion()
     """)
 
     op.execute("""
@@ -4092,6 +4144,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("DROP FUNCTION require_official_completion() CASCADE")
     op.execute("DROP FUNCTION guard_administrator_void() CASCADE")
     op.execute("DROP FUNCTION apply_administrator_void() CASCADE")
     op.drop_table("match_void_actions")

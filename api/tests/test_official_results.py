@@ -1010,3 +1010,225 @@ async def test_timeout_finalizes_when_owing_player_has_no_managing_account(db_se
     assert revision.actor_account_id is None
     await db_session.refresh(match)
     assert match.status == MatchStatus.completed
+
+
+async def test_sweep_uses_database_clock_when_application_clock_is_behind(
+    db_session, monkeypatch
+):
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import Mock
+
+    from app.notifications.service import NotificationService
+    from app.official_results import official_history
+    from app.retirement_jobs import RetirementOutcome, sweep_lapsed_retirements
+    from tests._helpers import FakeSender, directed_tournament_match
+
+    match, _ = await directed_tournament_match(db_session, tag="sweep-clock", best_of=1)
+    match.match_settings.retirement_window = timedelta(microseconds=1)
+    await db_session.commit()
+    player = min(match.sides, key=lambda s: s.side_number).players[0].user_id
+    await propose_result(
+        db_session, match.id, player, games=board(), supersedes_result_id=None
+    )
+    clock = Mock(wraps=datetime)
+    clock.now.return_value = datetime.now(UTC) - timedelta(days=2)
+    monkeypatch.setattr("app.retirement_jobs.datetime", clock)
+    assert await sweep_lapsed_retirements(
+        db_session, NotificationService(db_session, FakeSender())
+    ) == [RetirementOutcome.retired]
+    assert len(await official_history(db_session, match.id)) == 1
+
+
+async def test_sql_opponent_acceptance_rejects_same_account_managing_both_sides(
+    db_session,
+):
+    import uuid
+
+    import pytest
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models import AccountPlayer
+    from tests._helpers import directed_tournament_match
+
+    match, _ = await directed_tournament_match(
+        db_session, tag="self-consent", best_of=1
+    )
+    sides = sorted(match.sides, key=lambda s: s.side_number)
+    actor, opponent = (s.players[0].user_id for s in sides)
+    db_session.add(AccountPlayer(account_id=actor, player_id=opponent))
+    await db_session.commit()
+    outcome = await propose_result(
+        db_session, match.id, actor, games=board(), supersedes_result_id=None
+    )
+    proposal_id = outcome.match.results[0].id
+    with pytest.raises(IntegrityError, match="opposing consent"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE match_results SET accepted_by_user_id = :actor, "
+                    "accepted_at = clock_timestamp() WHERE id = :id"
+                ),
+                {"actor": actor, "id": proposal_id},
+            )
+            await db_session.execute(
+                text("""
+                INSERT INTO match_official_results
+                (id, match_id, revision, proposal_id, resolution_method,
+                 actor_account_id, games)
+                SELECT :new, match_id, 1, id, 'opponent_acceptance',
+                       accepted_by_user_id, games
+                FROM match_results WHERE id = :id
+            """),
+                {"new": uuid.uuid4(), "id": proposal_id},
+            )
+
+
+async def test_sql_immediate_finalization_requires_managed_match_participant(
+    db_session,
+):
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models import MatchResult
+    from app.models.official_result import OfficialResult
+
+    owner = await make_user(db_session, "immediate-owner")
+    outsider = await make_user(db_session, "immediate-outsider")
+    match = await create_match(
+        db_session,
+        creator=owner,
+        opponent_user_id=None,
+        league_id=None,
+        best_of=1,
+        rated=False,
+    )
+    for represented in (owner.id, outsider.id):
+        with pytest.raises(IntegrityError, match="participant"):
+            async with db_session.begin_nested():
+                proposal = MatchResult(
+                    match_id=match.id,
+                    submitted_by_user_id=outsider.id,
+                    submitted_for_player_id=represented,
+                    games=[g.model_dump() for g in board()],
+                )
+                db_session.add(proposal)
+                await db_session.flush()
+                db_session.add(
+                    OfficialResult(
+                        match_id=match.id,
+                        revision=1,
+                        proposal_id=proposal.id,
+                        resolution_method="immediate_finalization",
+                        actor_account_id=outsider.id,
+                        games=proposal.games,
+                    )
+                )
+                await db_session.flush()
+
+
+async def test_sql_cannot_add_participant_consent_after_official_finalization(
+    db_session,
+):
+    import pytest
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    player = await make_user(db_session, "late-consent")
+    match = await create_match(
+        db_session,
+        creator=player,
+        opponent_user_id=None,
+        league_id=None,
+        best_of=1,
+        rated=False,
+    )
+    outcome = await propose_result(
+        db_session, match.id, player.id, games=board(), supersedes_result_id=None
+    )
+    with pytest.raises(IntegrityError, match="closed"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("""
+                UPDATE match_results
+                SET accepted_by_user_id = :actor, accepted_at = clock_timestamp()
+                WHERE id = :id
+            """),
+                {"actor": player.id, "id": outcome.match.results[0].id},
+            )
+
+    with pytest.raises(IntegrityError, match="closed"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("""
+                INSERT INTO match_results
+                (id, match_id, submitted_by_user_id, submitted_for_player_id,
+                 supersedes_result_id, accepted_by_user_id, accepted_at, games)
+                SELECT gen_random_uuid(), match_id, submitted_by_user_id,
+                       submitted_for_player_id, id, :actor, clock_timestamp(), games
+                FROM match_results WHERE id = :id
+            """),
+                {"actor": player.id, "id": outcome.match.results[0].id},
+            )
+
+
+async def test_sql_root_revision_cannot_commit_without_match_completion(db_session):
+    import pytest
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models import MatchResult
+    from app.models.official_result import OfficialResult
+
+    player = await make_user(db_session, "unfinished-official")
+    match = await create_match(
+        db_session,
+        creator=player,
+        opponent_user_id=None,
+        league_id=None,
+        best_of=1,
+        rated=False,
+    )
+    with pytest.raises(IntegrityError, match="completed"):
+        async with db_session.begin_nested():
+            proposal = MatchResult(
+                match_id=match.id,
+                submitted_by_user_id=player.id,
+                submitted_for_player_id=player.id,
+                games=[g.model_dump() for g in board()],
+            )
+            db_session.add(proposal)
+            await db_session.flush()
+            db_session.add(
+                OfficialResult(
+                    match_id=match.id,
+                    revision=1,
+                    proposal_id=proposal.id,
+                    resolution_method="immediate_finalization",
+                    actor_account_id=player.id,
+                    games=proposal.games,
+                )
+            )
+            await db_session.flush()
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_rated_casual_match_rejects_unclaimed_opponent(db_session):
+    import pytest
+
+    from app.match_errors import OpponentNotFoundError
+    from app.models import Player
+
+    creator = await make_user(db_session, "casual-claim-attacker")
+    unclaimed = Player(username="director-entered-unclaimed")
+    db_session.add(unclaimed)
+    await db_session.commit()
+    with pytest.raises(OpponentNotFoundError):
+        await create_match(
+            db_session,
+            creator=creator,
+            opponent_user_id=unclaimed.id,
+            league_id=None,
+            best_of=1,
+            rated=True,
+        )

@@ -40,7 +40,12 @@ from app.models import (
     Player,
     User,
 )
-from app.player_accounts import PlayerAccessDenied, primary_player_id, require_player
+from app.player_accounts import (
+    PlayerAccessDenied,
+    managing_account_ids,
+    primary_player_id,
+    require_player,
+)
 
 
 def _add_side(match: Match, side_number: int, player: Player | None) -> None:
@@ -124,7 +129,11 @@ async def create_match(
                 )
             )
         ).scalar_one_or_none()
-        if opponent is None:
+        # Rated casual opponents must be able to contest a proposed result.
+        # Tournament fixtures have their own administrator-controlled creation.
+        if opponent is None or (
+            rated and not await managing_account_ids(db, [opponent.id])
+        ):
             raise OpponentNotFoundError
 
     if rated and opponent is None:
