@@ -28,7 +28,6 @@ from app.models import (
     MatchSidePlayer,
     MatchStatus,
     RatingHistory,
-    RatingHistorySource,
     Role,
     ScheduleSolve,
     ScheduleSolveStatus,
@@ -103,7 +102,12 @@ async def _record_match(
 
 
 async def _record_rated_match(db: AsyncSession, creator: User, *players: User) -> Match:
-    return await _record_match(db, creator, *players, affects_rating=True)
+    from tests.test_rating_recompute import _build_completed_match
+
+    league = await get_default_league(db)
+    return await _build_completed_match(
+        db, league, players[0], players[1], datetime.now(UTC)
+    )
 
 
 async def _seed_match_rating_row(
@@ -113,22 +117,18 @@ async def _seed_match_rating_row(
     user: User,
     rating_strategy_id: uuid.UUID,
 ) -> None:
-    """Append a match-sourced ``RatingHistory`` row for ``user`` on ``match`` —
-    the kind of row a completed rated match produces, and the one a self-play
-    collision must delete (the survivor's, which otherwise strands an inflated
-    rating)."""
-    db.add(
-        RatingHistory(
-            league_id=match.league_id,
-            user_id=user.id,
-            match_id=match.id,
-            rating_strategy_id=rating_strategy_id,
-            rating_value=1500.0,
-            rating_state={"rating": 1500.0, "rd": 350.0, "volatility": 0.06},
-            source=RatingHistorySource.match,
+    """Rebuild legitimate projections after a participant merge."""
+    from app.ratings.recompute import recompute_league_ratings
+
+    await recompute_league_ratings(db, match.league_id, {user.id})
+    await db.commit()
+    row = await db.scalar(
+        select(RatingHistory).where(
+            RatingHistory.match_id == match.id, RatingHistory.user_id == user.id
         )
     )
-    await db.commit()
+    assert row is not None
+    assert row.rating_strategy_id == rating_strategy_id
 
 
 async def _record_solo_match(db: AsyncSession, creator: User) -> Match:
@@ -1451,34 +1451,33 @@ async def test_merge_survives_a_dead_scheduling_queue(
     assert withdrawn[0].user_id == verified.id
 
 
-async def test_merge_preserves_rating_history_created_by(
-    db_session: AsyncSession,
-    rating_strategies: dict,
-):
-    """`rating_history.created_by_user_id` is SET NULL on delete; the merge
-    re-points it so the audit trail still records who acted."""
+async def test_merge_preserves_rating_history_created_by(db_session, rating_strategies):
+    """A retained original input credits its original Account after a merge."""
+    from app.ratings.inputs import rating_inputs, record_rating_input
+
     ephemeral = await _make_ephemeral(db_session, "drifting-grouse")
     verified = await _make_verified(db_session, "rita@example.com")
     league = await get_default_league(db_session)
-
-    row = RatingHistory(
-        league_id=league.id,
-        user_id=verified.id,
-        rating_strategy_id=rating_strategies["glicko2"].id,
-        rating_value=1500.0,
-        rating_state={"rating": 1500.0, "rd": 350.0, "volatility": 0.06},
-        source=RatingHistorySource.manual,
-        created_by_user_id=ephemeral.id,
+    original = await record_rating_input(
+        db_session,
+        league.id,
+        verified.id,
+        actor_account_id=ephemeral.id,
+        rating=1500,
+        source="manual",
+        effective_at=datetime.now(UTC),
         note="moderator override",
     )
-    db_session.add(row)
     await db_session.commit()
-
     await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
     await db_session.commit()
-
-    await db_session.refresh(row)
-    assert row.created_by_user_id == ephemeral.id
+    inputs = await rating_inputs(db_session, league.id, verified.id)
+    assert [row.id for row in inputs] == [original.id]
+    assert inputs[0].actor_account_id == ephemeral.id
+    projection = await db_session.scalar(
+        select(RatingHistory).where(RatingHistory.rating_input_id == original.id)
+    )
+    assert projection.created_by_user_id == ephemeral.id
 
 
 async def test_merge_preserves_match_result_submitted_by(db_session: AsyncSession):
@@ -1855,10 +1854,29 @@ async def test_merge_rated_self_play_collision_voids_match(
     row survives, permanently inflating their rating. This test FAILS on the
     pre-chore code (side count 1, status completed, orphaned rating row).
     """
+    from app.ratings.inputs import rating_inputs, record_rating_input
+    from app.ratings.recompute import recompute_league_ratings
+
     # Same real person on two guest devices, later signing into one account.
     guest_a = await _make_ephemeral(db_session, "ghost-device-a")
     guest_b = await _make_ephemeral(db_session, "ghost-device-b")
     verified = await _make_verified(db_session, "rita@example.com")
+
+    league = await get_default_league(db_session)
+    originals = []
+    for player, month, value in ((guest_a, 1, 1600), (guest_b, 2, 1700)):
+        originals.append(
+            await record_rating_input(
+                db_session,
+                league.id,
+                player.id,
+                actor_account_id=player.id,
+                rating=value,
+                source="manual",
+                effective_at=datetime(2026, month, 1, tzinfo=UTC),
+            )
+        )
+    await db_session.commit()
 
     # A rated match guest_a vs guest_b on OPPOSITE sides.
     match = await _record_rated_match(db_session, guest_a, guest_a, guest_b)
@@ -1941,6 +1959,21 @@ async def test_merge_rated_self_play_collision_voids_match(
     assert rating_rows == [], (
         f"voided match must leave no rating_history, found {len(rating_rows)}"
     )
+
+    await recompute_league_ratings(db_session, league.id, {verified.id})
+    inputs = await rating_inputs(db_session, league.id, verified.id)
+    assert {row.id for row in inputs} == {row.id for row in originals}
+    assert {(row.player_id, row.actor_account_id) for row in inputs} == {
+        (guest_a.id, guest_a.id),
+        (guest_b.id, guest_b.id),
+    }
+    current = await db_session.scalar(
+        select(UserLeagueRating).where(
+            UserLeagueRating.league_id == league.id,
+            UserLeagueRating.user_id == verified.id,
+        )
+    )
+    assert current.rating_value == 1700
 
 
 async def test_void_match_clears_won_and_keeps_sides_intact(

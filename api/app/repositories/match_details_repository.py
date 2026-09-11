@@ -14,7 +14,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ARRAY, Uuid, cast, func, select
+from sqlalchemy import ARRAY, Uuid, and_, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, selectinload
 
@@ -220,21 +220,41 @@ class MatchDetailsRepository:
             "cited_user_id"
         )
         trail = (
-            select(RatingHistory.rating_value, RatingHistory.created_at)
+            select(
+                RatingHistory.rating_value,
+                RatingHistory.created_at,
+                RatingHistory.match_id,
+                func.rating_input_order(RatingHistory.rating_input_id).label(
+                    "input_order"
+                ),
+            )
             .where(
                 RatingHistory.user_id == cited,
                 RatingHistory.league_id == league_id,
-                RatingHistory.created_at < before,
+                or_(
+                    RatingHistory.created_at < before,
+                    and_(
+                        RatingHistory.created_at == before,
+                        RatingHistory.match_id.is_(None),
+                    ),
+                ),
                 is_rating_change(),
             )
-            .order_by(RatingHistory.created_at.desc())
+            .order_by(
+                RatingHistory.created_at.desc(),
+                RatingHistory.match_id.desc().nulls_last(),
+                func.rating_input_order(RatingHistory.rating_input_id).desc(),
+            )
             .limit(RATING_HISTORY_LIMIT)
             .lateral("trail")
         )
         rows = (
             await self._db.execute(
                 select(cited.label("user_id"), trail.c.rating_value).order_by(
-                    cited, trail.c.created_at
+                    cited,
+                    trail.c.created_at,
+                    trail.c.match_id.asc().nulls_first(),
+                    trail.c.input_order,
                 )
             )
         ).all()

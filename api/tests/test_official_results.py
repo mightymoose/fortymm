@@ -652,7 +652,9 @@ async def test_voided_pending_proposal_never_retires(db_session):
     assert await official_history(db_session, match_id) == []
 
 
-async def test_correction_preserves_rating_output_and_downstream_fixtures(db_session):
+async def test_correction_rebuilds_ratings_and_preserves_downstream_fixtures(
+    db_session,
+):
     from sqlalchemy import text
 
     from app.official_results import correct_result, official_history
@@ -686,7 +688,7 @@ async def test_correction_preserves_rating_output_and_downstream_fixtures(db_ses
     await db_session.commit()
     assert (
         await db_session.execute(ratings_query, {"match": match.id})
-    ).all() == ratings
+    ).all() != ratings
     assert (await db_session.execute(fixtures_query)).all() == fixtures
 
 
@@ -1356,7 +1358,9 @@ async def test_sql_consent_requires_the_acceptors_primary_player(db_session):
             )
 
 
-async def test_rating_recompute_keeps_original_outcome_after_correction(db_session):
+async def test_rating_correction_reconciles_later_opponents_and_replay_is_idempotent(
+    db_session,
+):
     from sqlalchemy import select
 
     from app.models import RatingHistory, RatingHistorySource
@@ -1413,12 +1417,18 @@ async def test_rating_recompute_keeps_original_outcome_after_correction(db_sessi
         director.id,
         expected_revision_id=root.id,
         games=board(2),
-        reason="Scores corrected; rating reconciliation is separate",
+        reason="Correct the scores and reconcile dependent ratings",
     )
     await db_session.commit()
+    corrected = (await db_session.execute(query)).all()
+    assert len(corrected) == 4
+    assert corrected != before
+    before_later = [row for row in before if row.match_id == later.id]
+    corrected_later = [row for row in corrected if row.match_id == later.id]
+    assert corrected_later != before_later
     await recompute_league_ratings(db_session, match.league_id, {player_id})
     await db_session.commit()
-    assert (await db_session.execute(query)).all() == before
+    assert (await db_session.execute(query)).all() == corrected
 
 
 async def test_corrections_and_voids_hint_other_active_event_entrants(

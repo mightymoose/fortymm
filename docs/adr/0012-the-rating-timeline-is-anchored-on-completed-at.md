@@ -4,6 +4,10 @@ status: accepted
 
 # The rating timeline is anchored on `completed_at`, and each user seeds from their own first affected match (#749, #244)
 
+Amended by [Rating inputs outlive rebuildable projections](20260911-rating-inputs-outlive-rebuildable-projections.md):
+the completion-time axis remains, but durable adjustments participate throughout
+replay and calculated history is replaceable, not an original-fact audit trail.
+
 `recompute_league_ratings` had two defects that turned out to be one defect wearing
 two hats.
 

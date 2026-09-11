@@ -536,7 +536,11 @@ async def _spark(
                 RatingHistory.league_id == league_id,
                 is_rating_change(),
             )
-            .order_by(RatingHistory.created_at.desc())
+            .order_by(
+                RatingHistory.created_at.desc(),
+                RatingHistory.match_id.desc().nulls_last(),
+                func.rating_input_order(RatingHistory.rating_input_id).desc(),
+            )
             .limit(SPARK_MAX_POINTS)
         )
     ).all()

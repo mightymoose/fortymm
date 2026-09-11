@@ -35,6 +35,7 @@ from app.ratings.stats import (
 from app.schemas.rating import RatingPoint
 from tests._helpers import (
     accept_standing_result,
+    input_history,
     make_client,
     make_user,
     opponent_session,
@@ -490,6 +491,11 @@ async def _rate(
             user_id=user.id,
             rating_strategy_id=league.rating_strategy_id,
             rating_value=rating_value,
+            rating_state=(
+                {**(league.rating_strategy.initial_state or {}), "rating": rating_value}
+                if rating_value is not None
+                else None
+            ),
         )
     )
     await db_session.commit()
@@ -522,7 +528,7 @@ def _provenance(
     rated match instead (``_rated_win``) — a manual row is a legitimate point on
     the chart and would move their line.
     """
-    return RatingHistory(
+    return input_history(
         league_id=league.id,
         user_id=user.id,
         match_id=None,
@@ -610,31 +616,87 @@ async def _record_rating_change(
     league: League | None = None,
     at: datetime | None = None,
 ) -> None:
-    """Seed the ``RatingHistory`` row a rated match writes when it completes —
-    the audit row the profile's per-row Δ column is read from. ``league``
-    defaults to the default league; it must name the league the match was played
-    on, since a rating change belongs to one ladder.
+    """A display fixture with real official provenance and controlled projection values.
 
-    ``at`` stamps the row's ``created_at``. In production a match row's
-    ``created_at`` IS its match's ``completed_at`` (ADR-0012: the live path writes
-    in the same transaction as ``mark_completed``, and the recompute stamps it
-    explicitly), so a test placing a rating change in the past must move BOTH — the
-    match's completion instant and the audit row — or the row it seeds is a shape
-    production never produces. Omitted, the row takes the server's ``now()``, which
-    is what every non-calendar test wants."""
+    Finalize through participant interfaces, then restore unrelated current-rating
+    snapshots. These read-only scenarios deliberately choose their displayed
+    numbers; replay behavior is verified separately against the calculator.
+    """
+    from sqlalchemy import delete, text
+
+    from app.result_acceptance import accept_result
+    from app.result_proposal import propose_result
+    from app.schemas.match import MatchResultsGameWrite
+
     league = league or await get_default_league(db_session)
+    if match.current_official_result_id is None:
+        players = [
+            side.players[0].user_id
+            for side in sorted(match.sides, key=lambda side: side.side_number)
+        ]
+        saved = {
+            row.user_id: (row.rating_strategy_id, row.rating_value, row.rating_state)
+            for row in (
+                await db_session.scalars(
+                    select(UserLeagueRating).where(
+                        UserLeagueRating.league_id == league.id,
+                        UserLeagueRating.user_id.in_(players),
+                    )
+                )
+            ).all()
+        }
+        completed_at = match.completed_at
+        match.status = MatchStatus.in_progress
+        match.completed_at = None
+        match.match_settings.best_of = 1
+        await db_session.flush()
+        proposed = await propose_result(
+            db_session,
+            match.id,
+            players[0],
+            games=[
+                MatchResultsGameWrite(game_number=1, side_1_points=11, side_2_points=4)
+            ],
+            supersedes_result_id=None,
+        )
+        await accept_result(
+            db_session, match.id, players[1], result_id=proposed.match.results[0].id
+        )
+        await db_session.execute(
+            delete(RatingHistory).where(RatingHistory.match_id == match.id)
+        )
+        for row in (
+            await db_session.scalars(
+                select(UserLeagueRating).where(
+                    UserLeagueRating.league_id == league.id,
+                    UserLeagueRating.user_id.in_(players),
+                )
+            )
+        ).all():
+            if row.user_id in saved:
+                row.rating_strategy_id, row.rating_value, row.rating_state = saved[
+                    row.user_id
+                ]
+            else:
+                await db_session.delete(row)
+        await db_session.execute(
+            text("UPDATE matches SET completed_at = :at WHERE id = :id"),
+            {"at": completed_at, "id": match.id},
+        )
+        await db_session.flush()
+        await db_session.refresh(match)
     row = RatingHistory(
         league_id=league.id,
         user_id=user.id,
         match_id=match.id,
+        official_result_id=match.current_official_result_id,
         rating_strategy_id=league.rating_strategy_id,
         rating_value=after,
         rating_state={"rating": after, "rd": 200.0, "volatility": 0.06},
         previous_rating_value=before,
         source=RatingHistorySource.match,
+        created_at=at or match.completed_at,
     )
-    if at is not None:
-        row.created_at = at
     db_session.add(row)
     await db_session.commit()
 
@@ -1148,31 +1210,33 @@ async def test_get_player_rating_change_is_null_when_undecided_or_unrated(
     assert rows[str(live.id)]["rating_change"] is None
 
 
-async def test_get_player_unrated_match_reports_no_rating_change_even_with_history(
+async def test_get_player_unrated_match_rejects_stray_history_and_reports_no_change(
     api_client: AsyncClient, db_session: AsyncSession
 ):
-    """The ``affects_rating`` arm of the Δ gate does real work: a DECIDED but
-    UNRATED match reports no rating change EVEN IF a ``rating_history`` row
-    exists for it.
-
-    Today no such row can exist — result_acceptance returns early for unrated
-    matches, recompute filters on ``affects_rating``, and voiding deletes the
-    rows — so every other test here passes with the ``affects_rating`` arm
-    deleted (the row's mere absence does the work). That invariant lives in
-    three modules the profile doesn't own. This test pins the guard itself: it
-    seeds the state those modules currently forbid and demands the profile still
-    render `—`, so "simplifying" the gate away reds here instead of silently
-    surfacing a `+0` on an unrated row the day the invariant slips."""
+    """The database rejects unsupported history; an unrated match has no delta."""
     await start_session(api_client, db_session)
     target = await make_user(db_session, "stray.target")
     rival = await make_user(db_session, "stray.rival")
     unrated = await _record_match_with_winner(
         db_session, target, rival, created_at=BASE_TIME, affects_rating=False
     )
-    # The row that must not happen — and must not be believed if it does.
-    await _record_rating_change(
-        db_session, target, unrated, before=1500.0, after=1524.0
-    )
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    with pytest.raises(IntegrityError):
+        async with db_session.begin_nested():
+            db_session.add(
+                RatingHistory(
+                    league_id=unrated.league_id,
+                    user_id=target.id,
+                    match_id=unrated.id,
+                    rating_strategy_id=unrated.league.rating_strategy_id,
+                    rating_value=1524,
+                    rating_state={"rating": 1524},
+                    source=RatingHistorySource.match,
+                )
+            )
+            await db_session.flush()
 
     body = (await api_client.get(f"/v1/players/{target.id}")).json()
     row = body["matches"]["items"][0]
@@ -1244,6 +1308,10 @@ async def _rated_cohort(
                 user_id=user.id,
                 rating_strategy_id=league.rating_strategy_id,
                 rating_value=base + i,
+                rating_state={
+                    **(league.rating_strategy.initial_state or {}),
+                    "rating": base + i,
+                },
             )
             for i, user in enumerate(users)
         ]
@@ -2175,9 +2243,8 @@ async def _rate_glicko2(
     write does (``state_rating_value``) — so these tests never exercise a
     rating/state disagreement that cannot occur.
 
-    ``_rate`` is the weaker sibling: it leaves ``rating_state`` null, which is
-    why the tests below all seed through this one — confidence is read out of the
-    state, not the column.
+    ``_rate`` uses the strategy's default uncertainty; this helper supplies
+    specific uncertainty values so confidence behavior is observable.
 
     Carries its ``_provenance`` row like ``_earn_rating`` does, and must: a player
     holding nothing but the seed the league gave them is UNRATED, and an unrated
@@ -2293,7 +2360,7 @@ async def test_get_player_confidence_is_null_for_an_unrated_player(
 
     The row here is the trap, and it is deliberately the hardest version of it:
     it exists (they are on the roster), it has never been scored
-    (``rating_value`` null), and it still carries the untouched SEED state —
+    (no input or rated-match provenance), and carries the untouched SEED state —
     rating 1500 at RD 350. Read the state without first checking that there is a
     rating, and the profile confidently reports "provisional, somewhere between
     814 and 2186" for a player it is simultaneously calling Unrated: a card
@@ -2308,7 +2375,7 @@ async def test_get_player_confidence_is_null_for_an_unrated_player(
             league_id=league.id,
             user_id=target.id,
             rating_strategy_id=league.rating_strategy_id,
-            rating_value=None,
+            rating_value=1500.0,
             rating_state={"rating": 1500.0, "rd": 350.0, "volatility": 0.06},
         )
     )
@@ -3499,7 +3566,7 @@ async def test_rating_history_carries_in_a_rating_that_came_from_no_match(
     await _rate(db_session, target, 1500.0)
 
     # An imported rating, 200 days ago. No match — it was never played for.
-    imported = RatingHistory(
+    imported = input_history(
         league_id=league.id,
         user_id=target.id,
         match_id=None,
@@ -3508,8 +3575,8 @@ async def test_rating_history_carries_in_a_rating_that_came_from_no_match(
         rating_state={"rating": 1500.0, "rd": 200.0, "volatility": 0.06},
         previous_rating_value=None,
         source=RatingHistorySource.import_,
+        created_at=NOW - timedelta(days=200),
     )
-    imported.created_at = NOW - timedelta(days=200)
     db_session.add(imported)
     await db_session.commit()
 
@@ -3560,7 +3627,7 @@ async def test_rating_history_plots_a_match_less_change_inside_the_window(
         before=1500.0,
         after=1560.0,
     )
-    correction = RatingHistory(
+    correction = input_history(
         league_id=league.id,
         user_id=target.id,
         match_id=None,
@@ -3570,8 +3637,8 @@ async def test_rating_history_plots_a_match_less_change_inside_the_window(
         previous_rating_value=1560.0,
         source=RatingHistorySource.manual,
         note="Corrected after a scoring dispute.",
+        created_at=NOW - timedelta(days=5),
     )
-    correction.created_at = NOW - timedelta(days=5)
     db_session.add(correction)
     await db_session.commit()
 
@@ -3770,7 +3837,7 @@ async def test_rating_history_peak_is_folded_before_the_line_is_thinned(
     await _rate(db_session, target, ratings[-1])
     db_session.add_all(
         [
-            RatingHistory(
+            input_history(
                 league_id=league.id,
                 user_id=target.id,
                 match_id=None,

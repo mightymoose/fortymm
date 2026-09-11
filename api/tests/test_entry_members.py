@@ -75,9 +75,9 @@ async def postgres_url(postgres_url, entry_schema):
             assert installed.returncode == 0, installed.stderr
             migrated = create_async_engine(url)
             # The shared fixtures supply their own catalogue seeds in both modes.
-            async with migrated.begin() as connection:
-                for table in reversed(Base.metadata.sorted_tables):
-                    await connection.execute(table.delete())
+            from tests._database_reset import reset_database
+
+            await reset_database(migrated, Base.metadata.sorted_tables)
             await migrated.dispose()
         yield url.render_as_string(hide_password=False)
     finally:

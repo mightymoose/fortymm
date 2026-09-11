@@ -1452,6 +1452,9 @@ def upgrade() -> None:
         sa.Column(
             "id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False
         ),
+        sa.Column("version", sa.Integer(), nullable=False, server_default=sa.text("1")),
+        sa.UniqueConstraint("key", "version", name="uq_rating_strategies_key_version"),
+        sa.CheckConstraint("version > 0", name="ck_rating_strategies_version"),
         sa.Column("key", sa.String(length=64), nullable=False),
         sa.Column("name", sa.String(length=128), nullable=False),
         sa.Column("description", sa.Text(), nullable=True),
@@ -1492,7 +1495,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        op.f("ix_rating_strategies_key"), "rating_strategies", ["key"], unique=True
+        op.f("ix_rating_strategies_key"), "rating_strategies", ["key"], unique=False
     )
     op.create_table(
         "roles",
@@ -2408,6 +2411,90 @@ def upgrade() -> None:
         "ix_match_sides_match_id", "match_sides", ["match_id"], unique=False
     )
     op.create_table(
+        "match_rating_bases",
+        sa.Column(
+            "match_id",
+            sa.UUID(),
+            sa.ForeignKey("matches.id", ondelete="RESTRICT"),
+            primary_key=True,
+        ),
+        sa.Column(
+            "rating_strategy_id",
+            sa.UUID(),
+            sa.ForeignKey("rating_strategies.id", ondelete="RESTRICT"),
+            nullable=False,
+        ),
+        sa.UniqueConstraint(
+            "match_id",
+            "rating_strategy_id",
+            name="uq_match_rating_bases_match_strategy",
+        ),
+    )
+    op.create_table(
+        "rating_inputs",
+        sa.Column(
+            "id",
+            sa.UUID(),
+            server_default=sa.text("gen_random_uuid()"),
+            primary_key=True,
+        ),
+        sa.Column(
+            "sequence",
+            sa.BigInteger(),
+            sa.Identity(always=True),
+            nullable=False,
+            unique=True,
+        ),
+        sa.Column(
+            "league_id",
+            sa.UUID(),
+            sa.ForeignKey("leagues.id", ondelete="RESTRICT"),
+            nullable=False,
+        ),
+        sa.Column(
+            "player_id",
+            sa.UUID(),
+            sa.ForeignKey("players.id", ondelete="RESTRICT"),
+            nullable=False,
+        ),
+        sa.Column(
+            "actor_account_id",
+            sa.UUID(),
+            sa.ForeignKey("accounts.id", ondelete="RESTRICT"),
+            nullable=False,
+        ),
+        sa.Column(
+            "rating_strategy_id",
+            sa.UUID(),
+            sa.ForeignKey("rating_strategies.id", ondelete="RESTRICT"),
+            nullable=False,
+        ),
+        sa.Column(
+            "supersedes_id",
+            sa.UUID(),
+            sa.ForeignKey("rating_inputs.id", ondelete="RESTRICT"),
+            unique=True,
+            nullable=True,
+        ),
+        sa.Column("rating", sa.Float(), nullable=False),
+        sa.Column("source", sa.String(16), nullable=False),
+        sa.Column("effective_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column(
+            "recorded_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("clock_timestamp()"),
+            nullable=False,
+        ),
+        sa.Column("note", sa.Text(), nullable=True),
+        sa.CheckConstraint(
+            "rating > '-Infinity'::float8 AND rating < 'Infinity'::float8",
+            name="ck_rating_inputs_finite",
+        ),
+        sa.CheckConstraint(
+            "source IN ('manual', 'import')", name="ck_rating_inputs_source"
+        ),
+    )
+    op.create_table(
         "rating_history",
         sa.Column(
             "id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False
@@ -2415,6 +2502,14 @@ def upgrade() -> None:
         sa.Column("league_id", sa.UUID(), nullable=False),
         sa.Column("user_id", sa.UUID(), nullable=False),
         sa.Column("match_id", sa.UUID(), nullable=True),
+        sa.Column(
+            "rating_input_id",
+            sa.UUID(),
+            sa.ForeignKey("rating_inputs.id", ondelete="RESTRICT"),
+            nullable=True,
+            unique=True,
+        ),
+        sa.Column("official_result_id", sa.UUID(), nullable=True),
         sa.Column("rating_strategy_id", sa.UUID(), nullable=False),
         sa.Column("rating_value", sa.Float(), nullable=False),
         sa.Column(
@@ -2440,7 +2535,7 @@ def upgrade() -> None:
             ["created_by_user_id"], ["accounts.id"], ondelete="RESTRICT"
         ),
         sa.ForeignKeyConstraint(["league_id"], ["leagues.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(["match_id"], ["matches.id"], ondelete="SET NULL"),
+        sa.ForeignKeyConstraint(["match_id"], ["matches.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(
             ["rating_strategy_id"], ["rating_strategies.id"], ondelete="RESTRICT"
         ),
@@ -4173,8 +4268,146 @@ def upgrade() -> None:
         FOR EACH ROW EXECUTE FUNCTION apply_administrator_void()
     """)
 
+    op.create_check_constraint(
+        "ck_rating_history_state_value",
+        "rating_history",
+        "(jsonb_typeof(rating_state) = 'object' AND jsonb_typeof(rating_state -> 'rating') = 'number' AND (rating_state ->> 'rating')::float8 = rating_value AND rating_value > '-Infinity'::float8 AND rating_value < 'Infinity'::float8) IS TRUE",
+    )
+    op.create_check_constraint(
+        "ck_user_league_ratings_state_value",
+        "user_league_ratings",
+        "((rating_state IS NULL OR rating_state = 'null'::jsonb) AND rating_value IS NULL) OR ((jsonb_typeof(rating_state) = 'object' AND jsonb_typeof(rating_state -> 'rating') = 'number' AND (rating_state ->> 'rating')::float8 = rating_value AND rating_value > '-Infinity'::float8 AND rating_value < 'Infinity'::float8) IS TRUE)",
+    )
+    op.create_check_constraint(
+        "ck_rating_history_source_provenance",
+        "rating_history",
+        "(source = 'match' AND match_id IS NOT NULL AND official_result_id IS NOT NULL AND rating_input_id IS NULL) OR (source IN ('manual', 'import') AND match_id IS NULL AND official_result_id IS NULL AND rating_input_id IS NOT NULL) OR (source = 'initial' AND match_id IS NULL AND official_result_id IS NULL AND rating_input_id IS NULL)",
+    )
+    op.create_foreign_key(
+        "fk_rating_history_match_basis",
+        "rating_history",
+        "match_rating_bases",
+        ["match_id", "rating_strategy_id"],
+        ["match_id", "rating_strategy_id"],
+        ondelete="RESTRICT",
+    )
+    op.create_foreign_key(
+        "fk_rating_history_official_result_match",
+        "rating_history",
+        "match_official_results",
+        ["official_result_id", "match_id"],
+        ["id", "match_id"],
+        ondelete="RESTRICT",
+    )
+    op.execute("""
+        CREATE FUNCTION guard_rating_input() RETURNS trigger LANGUAGE plpgsql AS $$
+        DECLARE previous rating_inputs;
+        BEGIN
+            IF TG_OP <> 'INSERT' THEN
+                RAISE EXCEPTION 'rating inputs are immutable' USING ERRCODE = '23514';
+            END IF;
+            IF NEW.supersedes_id IS NOT NULL THEN
+                SELECT * INTO previous FROM rating_inputs WHERE id = NEW.supersedes_id FOR UPDATE;
+                IF NOT FOUND OR
+                   (NEW.league_id, NEW.player_id, NEW.rating_strategy_id, NEW.source, NEW.effective_at)
+                   IS DISTINCT FROM
+                   (previous.league_id, previous.player_id, previous.rating_strategy_id, previous.source, previous.effective_at)
+                THEN
+                    RAISE EXCEPTION 'replacement must preserve input provenance and effective time' USING ERRCODE = '23514';
+                END IF;
+            END IF;
+            RETURN NEW;
+        END $$;
+    """)
+    op.execute("""
+        CREATE TRIGGER rating_input_immutable BEFORE INSERT OR UPDATE OR DELETE ON rating_inputs
+        FOR EACH ROW EXECUTE FUNCTION guard_rating_input();
+    """)
+
+    op.execute("""
+        CREATE FUNCTION reject_rating_fact_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            RAISE EXCEPTION 'rating fact is immutable; create a new version' USING ERRCODE = '23514';
+        END $$
+    """)
+    for table in ("rating_strategies", "match_rating_bases"):
+        op.execute(
+            f"CREATE TRIGGER immutable_rating_fact BEFORE UPDATE OR DELETE ON {table} FOR EACH ROW EXECUTE FUNCTION reject_rating_fact_mutation()"
+        )
+    op.execute("""
+        CREATE FUNCTION bind_match_rating_strategy() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            IF NEW.revision = 1 THEN
+                INSERT INTO match_rating_bases(match_id, rating_strategy_id)
+                SELECT m.id, l.rating_strategy_id FROM matches m
+                JOIN leagues l ON l.id = m.league_id
+                JOIN match_settings settings ON settings.id = m.match_settings_id
+                JOIN rating_strategies strategy ON strategy.id = l.rating_strategy_id
+                WHERE m.id = NEW.match_id AND settings.affects_rating AND strategy.is_automatic;
+            END IF;
+            RETURN NEW;
+        END $$
+    """)
+    op.execute(
+        "CREATE TRIGGER official_rating_basis AFTER INSERT ON match_official_results FOR EACH ROW EXECUTE FUNCTION bind_match_rating_strategy()"
+    )
+
+    op.execute("""
+        CREATE FUNCTION guard_rating_projection() RETURNS trigger LANGUAGE plpgsql AS $$
+        DECLARE fact rating_inputs; current_revision uuid; match_league uuid;
+        BEGIN
+            IF NEW.source IN ('manual', 'import') THEN
+                SELECT * INTO fact FROM rating_inputs WHERE id = NEW.rating_input_id;
+                IF NOT FOUND OR EXISTS (SELECT 1 FROM rating_inputs WHERE supersedes_id = fact.id)
+                   OR (NEW.league_id, NEW.user_id, NEW.rating_strategy_id, NEW.source::text,
+                       NEW.created_by_user_id, NEW.created_at, NEW.rating_value)
+                   IS DISTINCT FROM
+                      (fact.league_id, entry_canonical_player(fact.player_id), fact.rating_strategy_id,
+                       fact.source, fact.actor_account_id, fact.effective_at, fact.rating)
+                THEN
+                    RAISE EXCEPTION 'projection must match its active rating input' USING ERRCODE = '23514';
+                END IF;
+            ELSIF NEW.source = 'match' THEN
+                SELECT current_official_result_id, league_id INTO current_revision, match_league
+                FROM matches WHERE id = NEW.match_id;
+                IF NEW.official_result_id IS DISTINCT FROM current_revision OR NEW.league_id IS DISTINCT FROM match_league THEN
+                    RAISE EXCEPTION 'projection must use the current official result and league' USING ERRCODE = '23514';
+                END IF;
+            END IF;
+            RETURN NEW;
+        END $$
+    """)
+    op.execute(
+        "CREATE TRIGGER rating_projection_provenance BEFORE INSERT OR UPDATE ON rating_history FOR EACH ROW EXECUTE FUNCTION guard_rating_projection()"
+    )
+
+    op.execute("""
+        CREATE FUNCTION rating_input_order(input_uuid uuid) RETURNS bigint
+        LANGUAGE sql STABLE AS $$
+            WITH RECURSIVE chain AS (
+                SELECT id, supersedes_id, sequence FROM rating_inputs WHERE id = input_uuid
+                UNION ALL
+                SELECT prior.id, prior.supersedes_id, prior.sequence
+                FROM rating_inputs prior JOIN chain ON prior.id = chain.supersedes_id
+            )
+            SELECT sequence FROM chain WHERE supersedes_id IS NULL
+        $$
+    """)
+
 
 def downgrade() -> None:
+    op.execute("DROP FUNCTION rating_input_order(uuid)")
+    op.execute("DROP TRIGGER official_rating_basis ON match_official_results")
+    op.execute("DROP FUNCTION bind_match_rating_strategy()")
+    op.drop_constraint(
+        "fk_rating_history_match_basis", "rating_history", type_="foreignkey"
+    )
+    op.drop_table("match_rating_bases")
+    op.execute("DROP TRIGGER immutable_rating_fact ON rating_strategies")
+    op.execute("DROP FUNCTION reject_rating_fact_mutation()")
+    op.drop_constraint(
+        "fk_rating_history_official_result_match", "rating_history", type_="foreignkey"
+    )
     op.execute("DROP FUNCTION require_official_completion() CASCADE")
     op.execute("DROP FUNCTION guard_administrator_void() CASCADE")
     op.execute("DROP FUNCTION apply_administrator_void() CASCADE")
@@ -4277,6 +4510,9 @@ def downgrade() -> None:
         "ix_rating_history_league_id_user_id_created_at", table_name="rating_history"
     )
     op.drop_table("rating_history")
+    op.execute("DROP FUNCTION guard_rating_projection()")
+    op.drop_table("rating_inputs")
+    op.execute("DROP FUNCTION guard_rating_input()")
     op.drop_index("ix_match_sides_match_id", table_name="match_sides")
     op.drop_table("match_sides")
     op.drop_index("ix_match_results_match_id", table_name="match_results")

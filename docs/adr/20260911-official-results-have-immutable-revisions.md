@@ -2,6 +2,11 @@
 
 Status: Accepted for #1682, following the design interview. Part of #1669.
 
+The deferred rating integration below is implemented by
+[Rating inputs outlive rebuildable projections](20260911-rating-inputs-outlive-rebuildable-projections.md):
+administrator corrections and affected rating replay commit atomically.
+Advancement reconciliation remains deferred to #1684.
+
 ## Decision
 
 Participant proposals and official results have separate histories. An official
@@ -123,8 +128,8 @@ accepted/corrected histories through real backend operations, with honest actors
 and reasons, rather than backfilling disposable pre-beta data. Existing backend
 regressions verify unchanged public score behavior.
 
-Rating recomputation continues to replay the first official outcome until #1683
-introduces explicit correction reconciliation; changing the canonical winner must
-not silently alter rating input during an unrelated account-merge replay.
+Rating recomputation now uses the current official revision, with correction and
+reconciliation committed atomically as specified by the
+[rating-input provenance ADR](20260911-rating-inputs-outlive-rebuildable-projections.md).
 Corrections and administrator voids stage dashboard invalidation for every active
 event entrant, because either action can change shared standings.

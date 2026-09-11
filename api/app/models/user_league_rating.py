@@ -30,6 +30,15 @@ class UserLeagueRating(Base):
     __tablename__ = "user_league_ratings"
     __table_args__ = (
         CheckConstraint(
+            "((rating_state IS NULL OR rating_state = 'null'::jsonb) AND "
+            "rating_value IS NULL) OR ((jsonb_typeof(rating_state) = 'object' "
+            "AND jsonb_typeof(rating_state -> 'rating') = 'number' AND "
+            "(rating_state ->> 'rating')::float8 = rating_value AND "
+            "rating_value > '-Infinity'::float8 AND rating_value < "
+            "'Infinity'::float8) IS TRUE)",
+            name="ck_user_league_ratings_state_value",
+        ),
+        CheckConstraint(
             "rating_state IS NULL OR jsonb_typeof(rating_state) IN ('object', 'null')",
             name="ck_user_league_ratings_rating_state_object",
         ),

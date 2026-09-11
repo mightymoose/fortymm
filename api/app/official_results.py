@@ -144,60 +144,72 @@ async def correct_result(
     from app.models import MatchStatus
     from app.schemas.match import MatchResultsGameWrite
 
-    if not reason.strip():
-        raise ValueError("A correction requires a reason")
-    if (
-        sum(source is not None for source in (games, proposal_id, restore_revision_id))
-        != 1
-    ):
-        raise ValueError("Supply exactly one score source")
-    match = await load_match_for_write(db, match_id, actor_account_id, lock=True)
-    if match.status != MatchStatus.completed:
-        raise ValueError("Only a completed, non-voided match can be corrected")
-    current = match.current_official_result
-    if current is None or current.id != expected_revision_id:
-        raise StaleOfficialResultError("The official result changed")
-    revision = OfficialResult(
-        match_id=match_id,
-        revision=current.revision + 1,
-        predecessor_id=current.id,
-        proposal_id=proposal_id,
-        restored_from_id=restore_revision_id,
-        reason=reason.strip(),
-        resolution_method="administrator_ruling",
-        actor_account_id=actor_account_id,
-    )
-    await _attribute_authority(db, revision, actor_account_id)
-    if proposal_id is not None:
-        proposal = await db.scalar(
-            select(MatchResult).where(
-                MatchResult.id == proposal_id, MatchResult.match_id == match_id
+    async with db.begin_nested():
+        if not reason.strip():
+            raise ValueError("A correction requires a reason")
+        if (
+            sum(
+                source is not None
+                for source in (games, proposal_id, restore_revision_id)
             )
+            != 1
+        ):
+            raise ValueError("Supply exactly one score source")
+        match = await load_match_for_write(db, match_id, actor_account_id, lock=True)
+        if match.status != MatchStatus.completed:
+            raise ValueError("Only a completed, non-voided match can be corrected")
+        current = match.current_official_result
+        if current is None or current.id != expected_revision_id:
+            raise StaleOfficialResultError("The official result changed")
+        revision = OfficialResult(
+            match_id=match_id,
+            revision=current.revision + 1,
+            predecessor_id=current.id,
+            proposal_id=proposal_id,
+            restored_from_id=restore_revision_id,
+            reason=reason.strip(),
+            resolution_method="administrator_ruling",
+            actor_account_id=actor_account_id,
         )
-        if proposal is None:
-            raise ValueError("Proposal must belong to this match")
-        games = [MatchResultsGameWrite.model_validate(g) for g in proposal.games]
-    if restore_revision_id is not None:
-        source = await db.scalar(
-            select(OfficialResult).where(
-                OfficialResult.id == restore_revision_id,
-                OfficialResult.match_id == match_id,
+        await _attribute_authority(db, revision, actor_account_id)
+        if proposal_id is not None:
+            proposal = await db.scalar(
+                select(MatchResult).where(
+                    MatchResult.id == proposal_id, MatchResult.match_id == match_id
+                )
             )
+            if proposal is None:
+                raise ValueError("Proposal must belong to this match")
+            games = [MatchResultsGameWrite.model_validate(g) for g in proposal.games]
+        if restore_revision_id is not None:
+            source = await db.scalar(
+                select(OfficialResult).where(
+                    OfficialResult.id == restore_revision_id,
+                    OfficialResult.match_id == match_id,
+                )
+            )
+            if source is None:
+                raise ValueError("Restored revision must belong to this match")
+            games = [MatchResultsGameWrite.model_validate(g) for g in source.games]
+        assert games is not None
+        games = sorted(games, key=lambda g: g.game_number)
+        validate_finalize_games(games, match.match_settings.best_of)
+        revision.games = [g.model_dump() for g in games]
+        db.add(revision)
+        await db.flush()
+        # The append trigger synchronizes the canonical board for every writer.
+        match = await load_match_for_write(db, match_id, actor_account_id, lock=False)
+        from app.ratings.recompute import recompute_league_ratings
+
+        await recompute_league_ratings(
+            db,
+            match.league_id,
+            {player.user_id for side in match.sides for player in side.players},
         )
-        if source is None:
-            raise ValueError("Restored revision must belong to this match")
-        games = [MatchResultsGameWrite.model_validate(g) for g in source.games]
-    assert games is not None
-    games = sorted(games, key=lambda g: g.game_number)
-    validate_finalize_games(games, match.match_settings.best_of)
-    revision.games = [g.model_dump() for g in games]
-    db.add(revision)
-    await db.flush()
-    # The append trigger synchronizes the canonical board for every writer.
-    match = await load_match_for_write(db, match_id, actor_account_id, lock=False)
-    await _stage_ruling_hints(db, match)
-    await db.flush()
-    return revision
+        match = await load_match_for_write(db, match_id, actor_account_id, lock=False)
+        await _stage_ruling_hints(db, match)
+        await db.flush()
+        return revision
 
 
 async def void_official_match(
@@ -212,21 +224,30 @@ async def void_official_match(
     from app.match_voiding import void_match
     from app.models import MatchStatus
 
-    if not reason.strip():
-        raise ValueError("Voiding requires a reason")
-    match = await load_match_for_write(db, match_id, actor_account_id, lock=True)
-    if match.status == MatchStatus.voided:
-        raise ValueError("Match is already voided")
-    action = MatchVoidAction(
-        match_id=match_id,
-        actor_account_id=actor_account_id,
-        reason=reason.strip(),
-        official_result_id=match.current_official_result_id,
-    )
-    await _attribute_authority(db, action, actor_account_id)
-    db.add(action)
-    await db.flush()
-    await void_match(db, match)
-    await _stage_ruling_hints(db, match)
-    await db.flush()
-    return action
+    async with db.begin_nested():
+        if not reason.strip():
+            raise ValueError("Voiding requires a reason")
+        match = await load_match_for_write(db, match_id, actor_account_id, lock=True)
+        if match.status == MatchStatus.voided:
+            raise ValueError("Match is already voided")
+        action = MatchVoidAction(
+            match_id=match_id,
+            actor_account_id=actor_account_id,
+            reason=reason.strip(),
+            official_result_id=match.current_official_result_id,
+        )
+        await _attribute_authority(db, action, actor_account_id)
+        db.add(action)
+        await db.flush()
+        await void_match(db, match)
+        from app.ratings.recompute import recompute_league_ratings
+
+        await recompute_league_ratings(
+            db,
+            match.league_id,
+            {player.user_id for side in match.sides for player in side.players},
+        )
+        match = await load_match_for_write(db, match_id, actor_account_id, lock=False)
+        await _stage_ruling_hints(db, match)
+        await db.flush()
+        return action

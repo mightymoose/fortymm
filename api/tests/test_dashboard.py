@@ -22,6 +22,7 @@ from app.ratings.stats import league_percentile
 from app.schemas.dashboard import DashboardRatingState
 from tests._helpers import (
     accept_standing_result,
+    input_history,
     make_client,
     make_user,
     opponent_session,
@@ -581,7 +582,7 @@ def _provenance(user: User, league: League, value: float) -> RatingHistory:
     peer" seeded without one of these is a ghost who pads no denominator and answers
     no question — which is what these fixtures were, and why they could not have
     caught the bug they were guarding."""
-    return RatingHistory(
+    return input_history(
         league_id=league.id,
         user_id=user.id,
         match_id=None,
@@ -609,6 +610,7 @@ async def _rate_member(
         )
     )
     db_session.add(_provenance(user, league, value))
+    await db_session.flush()
 
 
 async def _seed_rated_peers(db_session: AsyncSession) -> League:
@@ -778,7 +780,7 @@ async def test_dashboard_sparkline_returns_most_recent_points(
     # rating climbs monotonically so we can read the order off the values.
     for i in range(40):
         db_session.add(
-            RatingHistory(
+            input_history(
                 league_id=default_league.id,
                 user_id=me.id,
                 rating_strategy_id=strategy.id,
@@ -789,7 +791,7 @@ async def test_dashboard_sparkline_returns_most_recent_points(
                     "volatility": 0.06,
                 },
                 previous_rating_value=1500.0 + i - 1 if i > 0 else None,
-                source=RatingHistorySource.match,
+                source=RatingHistorySource.manual,
                 created_at=now - timedelta(hours=40 - i),
             )
         )
