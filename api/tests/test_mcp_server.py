@@ -36,6 +36,7 @@ from zoneinfo import ZoneInfo
 
 import fakeredis
 import httpx
+import httpx2
 import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -43,6 +44,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastmcp import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from fastmcp.exceptions import ToolError
+from mcp import MCPError
+from mcp.types import INTERNAL_ERROR
 from pyrate_limiter import Duration, Rate
 from rq import Queue
 from sqlalchemy import select
@@ -247,23 +250,23 @@ async def _mcp_client(token: str | None) -> AsyncIterator[Client]:
     running (``ASGITransport`` skips the app lifespan). ``token`` becomes the
     ``Authorization: Bearer`` header, or is omitted entirely when ``None``.
     """
-    transport = httpx.ASGITransport(app=fastapi_app)
+    transport = httpx2.ASGITransport(app=fastapi_app)
 
     def _factory(
         headers: dict[str, str] | None = None,
-        timeout: httpx.Timeout | None = None,
-        auth: httpx.Auth | None = None,
+        timeout: httpx2.Timeout | None = None,
+        auth: httpx2.Auth | None = None,
         **kwargs: object,
-    ) -> httpx.AsyncClient:
+    ) -> httpx2.AsyncClient:
         # fastmcp's factory call passes extra kwargs (e.g. follow_redirects)
         # beyond the McpHttpClientFactory protocol's three; forward them, but
         # keep our ASGITransport + base_url so the client hits the mounted app.
         kwargs.pop("transport", None)
         kwargs.pop("base_url", None)
-        return httpx.AsyncClient(
+        return httpx2.AsyncClient(
             transport=transport,
             headers=headers,
-            timeout=timeout if timeout is not None else httpx.Timeout(30.0),
+            timeout=timeout if timeout is not None else httpx2.Timeout(30.0),
             auth=auth,
             base_url="http://testserver",
             **kwargs,  # type: ignore[arg-type]  # httpx kwargs are heterogeneous
@@ -277,17 +280,30 @@ async def _mcp_client(token: str | None) -> AsyncIterator[Client]:
         yield client
 
 
-async def _assert_rejected(client: Client) -> None:
-    """Connecting/listing tools fails at the transport with a 401.
+async def _assert_rejected(token: str | None) -> None:
+    """Assert the HTTP 401 as well as the SDK's failed handshake.
 
-    The ``pytest.raises`` is held here — inside the ``mcp_app.lifespan`` block —
-    so the 401 is caught before it would otherwise unwind through the session
-    manager's task group and be re-wrapped in an ``ExceptionGroup``.
+    MCP SDK 2 maps both authentication failures and server errors to INTERNAL_ERROR,
+    so catching MCPError alone would also accept a broken server returning 500.
     """
-    with pytest.raises(httpx.HTTPStatusError) as exc_info:
-        async with client:
-            await client.list_tools()
-    assert exc_info.value.response.status_code == 401
+    headers = {"Authorization": f"Bearer {token}"} if token is not None else {}
+    async with httpx2.AsyncClient(
+        transport=httpx2.ASGITransport(app=fastapi_app),
+        base_url="http://testserver",
+    ) as http_client:
+        response = await http_client.post(
+            MCP_URL,
+            headers={**headers, "Accept": "application/json, text/event-stream"},
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        )
+    assert response.status_code == 401
+
+    async with _mcp_client(token) as client:
+        # Catch inside the lifespan to avoid wrapping in its ExceptionGroup.
+        with pytest.raises(MCPError) as exc_info:
+            async with client:
+                await client.list_tools()
+        assert exc_info.value.code == INTERNAL_ERROR
 
 
 async def test_valid_auth0_jwt_can_list_tools(db_session: AsyncSession) -> None:
@@ -306,8 +322,7 @@ async def test_valid_auth0_jwt_can_list_tools(db_session: AsyncSession) -> None:
 async def test_missing_token_is_rejected(db_session: AsyncSession) -> None:
     """No ``Authorization`` header → rejected at the transport (401), before any
     tool body."""
-    async with _mcp_client(None) as client:
-        await _assert_rejected(client)
+    await _assert_rejected(None)
 
 
 async def test_bad_signature_is_rejected(db_session: AsyncSession) -> None:
@@ -319,8 +334,7 @@ async def test_bad_signature_is_rejected(db_session: AsyncSession) -> None:
     await _grant_mcp_access(db_session, user)
     forged = _sign_token(sub=sub, private_pem=_WRONG_PRIVATE_PEM)
 
-    async with _mcp_client(forged) as client:
-        await _assert_rejected(client)
+    await _assert_rejected(forged)
 
 
 async def test_wrong_audience_is_rejected(db_session: AsyncSession) -> None:
@@ -331,8 +345,7 @@ async def test_wrong_audience_is_rejected(db_session: AsyncSession) -> None:
     await _grant_mcp_access(db_session, user)
     token = _sign_token(sub=sub, aud="https://not-our-api.example.com/")
 
-    async with _mcp_client(token) as client:
-        await _assert_rejected(client)
+    await _assert_rejected(token)
 
 
 async def test_wrong_issuer_is_rejected(db_session: AsyncSession) -> None:
@@ -343,8 +356,7 @@ async def test_wrong_issuer_is_rejected(db_session: AsyncSession) -> None:
     await _grant_mcp_access(db_session, user)
     token = _sign_token(sub=sub, iss="https://evil.example.com/")
 
-    async with _mcp_client(token) as client:
-        await _assert_rejected(client)
+    await _assert_rejected(token)
 
 
 async def test_unlinked_sub_is_rejected(db_session: AsyncSession) -> None:
@@ -352,8 +364,7 @@ async def test_unlinked_sub_is_rejected(db_session: AsyncSession) -> None:
     authenticated it, but fortymm has no linked account for that subject."""
     token = _sign_token(sub="auth0|" + uuid.uuid4().hex)
 
-    async with _mcp_client(token) as client:
-        await _assert_rejected(client)
+    await _assert_rejected(token)
 
 
 async def test_linked_user_without_mcp_access_is_rejected(
@@ -366,8 +377,7 @@ async def test_linked_user_without_mcp_access_is_rejected(
     sub = await _link(db_session, user)  # linked, but never granted mcp.access
     token = _sign_token(sub=sub)
 
-    async with _mcp_client(token) as client:
-        await _assert_rejected(client)
+    await _assert_rejected(token)
 
 
 async def test_tombstoned_linked_users_token_is_rejected(
@@ -383,8 +393,7 @@ async def test_tombstoned_linked_users_token_is_rejected(
     guest.merged_at = datetime.now(UTC)
     await db_session.commit()
 
-    async with _mcp_client(token) as client:
-        await _assert_rejected(client)
+    await _assert_rejected(token)
 
 
 async def test_revoked_user_is_rejected_though_token_and_permission_still_hold(
@@ -415,8 +424,7 @@ async def test_revoked_user_is_rejected_though_token_and_permission_still_hold(
     # Same token, same grant, same link — only the player's own flag moved.
     assert user.auth0_sub is not None
     assert await user_has_permission(db_session, user.id, MCP_ACCESS_PERMISSION)
-    async with _mcp_client(token) as client:
-        await _assert_rejected(client)
+    await _assert_rejected(token)
 
 
 async def test_revoking_covers_every_tool_because_it_gates_the_transport(
@@ -430,11 +438,12 @@ async def test_revoking_covers_every_tool_because_it_gates_the_transport(
     user.agent_access_revoked_at = datetime.now(UTC)
     await db_session.commit()
 
+    await _assert_rejected(token)
     async with _mcp_client(token) as client:
-        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        with pytest.raises(MCPError) as exc_info:
             async with client:
                 await client.call_tool("list_my_matches", {})
-    assert exc_info.value.response.status_code == 401
+    assert exc_info.value.code == INTERNAL_ERROR
 
 
 def _email_verifier() -> FortymmAuth0TokenVerifier:
