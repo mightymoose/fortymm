@@ -41,6 +41,10 @@ class OfficialResult(Base):
             name="ck_official_results_actor",
         ),
         CheckConstraint(
+            "proposal_id IS NULL OR restored_from_id IS NULL",
+            name="ck_official_results_single_source",
+        ),
+        CheckConstraint(
             "resolution_method = 'administrator_ruling' OR (proposal_id IS NOT "
             "NULL AND predecessor_id IS NULL AND restored_from_id IS NULL)",
             name="ck_official_results_source",

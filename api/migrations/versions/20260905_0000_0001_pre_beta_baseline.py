@@ -3748,6 +3748,7 @@ def upgrade() -> None:
             director_grant_id uuid REFERENCES tournament_account_grants(id) ON DELETE RESTRICT,
             CONSTRAINT ck_official_results_method CHECK (resolution_method IN ('opponent_acceptance', 'timeout', 'administrator_ruling', 'immediate_finalization')),
             CONSTRAINT ck_official_results_actor CHECK ((resolution_method = 'timeout' AND actor_account_id IS NULL) OR (resolution_method <> 'timeout' AND actor_account_id IS NOT NULL)),
+            CONSTRAINT ck_official_results_single_source CHECK (proposal_id IS NULL OR restored_from_id IS NULL),
             CONSTRAINT ck_official_results_source CHECK (resolution_method = 'administrator_ruling' OR (proposal_id IS NOT NULL AND predecessor_id IS NULL AND restored_from_id IS NULL)),
             CONSTRAINT ck_official_results_authority CHECK ((resolution_method = 'administrator_ruling' AND tournament_id IS NOT NULL AND reason IS NOT NULL AND reason ~ '[^[:space:]]' AND ((owner_revision IS NOT NULL AND owner_revision >= 0 AND director_grant_id IS NULL) OR (owner_revision IS NULL AND director_grant_id IS NOT NULL))) OR (resolution_method <> 'administrator_ruling' AND tournament_id IS NULL AND reason IS NULL AND owner_revision IS NULL AND director_grant_id IS NULL)),
             CONSTRAINT ck_official_results_timeout CHECK ((resolution_method = 'timeout' AND timeout_deadline IS NOT NULL AND timeout_policy IS NOT NULL AND timeout_policy = 'retirement_window_v1' AND recorded_at >= timeout_deadline) OR (resolution_method <> 'timeout' AND timeout_deadline IS NULL AND timeout_policy IS NULL)),
@@ -3964,7 +3965,36 @@ def upgrade() -> None:
     """)
     op.execute("""
         CREATE FUNCTION advance_official_result() RETURNS trigger LANGUAGE plpgsql AS $$
+        DECLARE game jsonb; game_id uuid; wins_a integer := 0; wins_b integer := 0;
         BEGIN
+            -- Corrections must change every public score representation in this
+            -- same statement, including when the caller bypasses the service.
+            IF NEW.predecessor_id IS NOT NULL THEN
+                DELETE FROM match_games WHERE match_id = NEW.match_id
+                    AND game_number > jsonb_array_length(NEW.games);
+                FOR game IN SELECT value FROM jsonb_array_elements(NEW.games) LOOP
+                    INSERT INTO match_games (match_id, game_number)
+                    VALUES (NEW.match_id, (game->>'game_number')::integer)
+                    ON CONFLICT (match_id, game_number) DO UPDATE SET updated_at = clock_timestamp()
+                    RETURNING id INTO game_id;
+                    INSERT INTO match_game_scores (match_game_id, side_1_points, side_2_points)
+                    VALUES (game_id, (game->>'side_1_points')::integer, (game->>'side_2_points')::integer)
+                    ON CONFLICT (match_game_id) DO UPDATE SET
+                        side_1_points = EXCLUDED.side_1_points,
+                        side_2_points = EXCLUDED.side_2_points,
+                        version = match_game_scores.version + 1,
+                        updated_at = clock_timestamp();
+                    IF (game->>'side_1_points')::integer > (game->>'side_2_points')::integer THEN
+                        wins_a := wins_a + 1;
+                    ELSE
+                        wins_b := wins_b + 1;
+                    END IF;
+                END LOOP;
+                UPDATE match_sides SET
+                    score = CASE WHEN side_number = 1 THEN wins_a ELSE wins_b END,
+                    won = CASE WHEN side_number = 1 THEN wins_a > wins_b ELSE wins_b > wins_a END
+                    WHERE match_id = NEW.match_id;
+            END IF;
             UPDATE matches SET current_official_result_id = NEW.id WHERE id = NEW.match_id;
             RETURN NEW;
         END; $$

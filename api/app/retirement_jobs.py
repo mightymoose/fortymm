@@ -29,7 +29,7 @@ import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 from sqlalchemy.sql.base import ExecutableOption
@@ -238,7 +238,10 @@ async def retire_if_lapsed(
         return RetirementOutcome.superseded
 
     deadline = retirement_deadline(match)
-    if deadline is None or deadline > datetime.now(UTC):
+    # The official revision is timestamped and authorized by PostgreSQL too.
+    # One clock prevents host skew from turning a not-yet-due job into an error.
+    database_now = (await db.execute(select(func.clock_timestamp()))).scalar_one()
+    if deadline is None or deadline > database_now:
         await db.rollback()
         return RetirementOutcome.not_yet_due
 

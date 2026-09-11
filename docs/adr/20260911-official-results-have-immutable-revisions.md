@@ -98,7 +98,10 @@ Exercise the internal result interface against actual fresh Alembic installation
 all four resolutions, corrections/restoration, exact adoption, stale concurrent
 writers, revoked authority and voids. Direct SQL tests cover immutable snapshots,
 root/predecessor rules, scoped references, actor/reason/authority constraints and
-invalid scores. Verify metadata parity and downgrade/reinstall. Seed representative
+invalid scores. A ruling has at most one proposal/restoration source link.
+Correction appends synchronize the canonical games and winner inside the database
+transaction, including for direct SQL writers. Retirement eligibility uses the
+same database clock that records timeout revisions. Verify metadata parity and downgrade/reinstall. Seed representative
 accepted/corrected histories through real backend operations, with honest actors
 and reasons, rather than backfilling disposable pre-beta data. Existing backend
 regressions verify unchanged public score behavior.

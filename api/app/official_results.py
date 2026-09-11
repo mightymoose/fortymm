@@ -126,8 +126,6 @@ async def correct_result(
     from app.match_scoring import load_match_for_write
     from app.match_serialization import validate_finalize_games
     from app.models import MatchStatus
-    from app.result_acceptance import _set_side_won
-    from app.result_proposal import _commit_canonical_games
     from app.schemas.match import MatchResultsGameWrite
 
     if not reason.strip():
@@ -175,14 +173,12 @@ async def correct_result(
         games = [MatchResultsGameWrite.model_validate(g) for g in source.games]
     assert games is not None
     games = sorted(games, key=lambda g: g.game_number)
-    winner = validate_finalize_games(games, match.match_settings.best_of)
+    validate_finalize_games(games, match.match_settings.best_of)
     revision.games = [g.model_dump() for g in games]
     db.add(revision)
     await db.flush()
-    await _commit_canonical_games(db, match, games)
-    _set_side_won(match, winner)
-    match.current_official_result_id = revision.id
-    match.current_official_result = revision
+    # The append trigger synchronizes the canonical board for every writer.
+    match = await load_match_for_write(db, match_id, actor_account_id, lock=False)
     await stage_match_participant_hints(db, match)
     await db.flush()
     return revision

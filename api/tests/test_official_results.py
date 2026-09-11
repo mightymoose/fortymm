@@ -845,7 +845,8 @@ async def test_sql_append_advances_pointer_and_stale_snapshot_cannot_branch(
         (id, match_id, revision, predecessor_id, resolution_method,
          actor_account_id, reason, tournament_id, owner_revision, games)
         SELECT :new, match_id, revision + 1, id, 'administrator_ruling',
-               actor_account_id, 'Database ruling', tournament_id, owner_revision, games
+               actor_account_id, 'Database ruling', tournament_id, owner_revision,
+               '[{"game_number": 1,"side_1_points": 4,"side_2_points": 11}]'::jsonb
         FROM match_official_results WHERE id = :root
     """)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -868,6 +869,20 @@ async def test_sql_append_advances_pointer_and_stale_snapshot_cannot_branch(
             )
             == successor
         )
+        from app.match_scoring import load_match_for_write
+        from app.match_serialization import negotiation
+
+        refreshed = await load_match_for_write(
+            db_session, match.id, director.id, lock=False
+        )
+        assert [
+            (g.score.side_1_points, g.score.side_2_points) for g in refreshed.games
+        ] == [(4, 11)]
+        assert [
+            (s.score, s.won)
+            for s in sorted(refreshed.sides, key=lambda s: s.side_number)
+        ] == [(0, False), (1, True)]
+        assert negotiation(refreshed, None).standing_result.games[0].side_2_points == 11
         with pytest.raises(DBAPIError) as error:
             await stale.execute(statement, {"new": uuid.uuid4(), "root": root.id})
         assert error.value.orig.sqlstate == "40001"
@@ -878,3 +893,73 @@ async def test_sql_append_advances_pointer_and_stale_snapshot_cannot_branch(
         root.id,
         successor,
     ]
+
+
+async def test_sql_ruling_rejects_two_provenance_sources(db_session):
+    import uuid
+
+    import pytest
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    from app.official_results import official_history
+    from tests._helpers import directed_tournament_match
+
+    match, owner = await directed_tournament_match(
+        db_session, tag="two-sources", best_of=1
+    )
+    await propose_result(
+        db_session, match.id, owner.id, games=board(), supersedes_result_id=None
+    )
+    (root,) = await official_history(db_session, match.id)
+    with pytest.raises(IntegrityError, match="single_source"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("""
+                INSERT INTO match_official_results
+                (id, match_id, revision, predecessor_id, proposal_id, restored_from_id,
+                 resolution_method, actor_account_id, reason, tournament_id,
+                 owner_revision, games)
+                SELECT :new, match_id, 2, id, proposal_id, id,
+                       resolution_method, actor_account_id, reason, tournament_id,
+                       owner_revision, games
+                FROM match_official_results WHERE id = :root
+            """),
+                {"new": uuid.uuid4(), "root": root.id},
+            )
+
+
+async def test_timeout_uses_database_clock_when_application_clock_is_ahead(
+    db_session, monkeypatch
+):
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import Mock
+
+    from app.notifications.service import NotificationService
+    from app.official_results import official_history
+    from app.retirement_jobs import RetirementOutcome, retire_if_lapsed
+    from tests._helpers import FakeSender, directed_tournament_match
+
+    match, _ = await directed_tournament_match(
+        db_session, tag="timeout-clock", best_of=1
+    )
+    match.match_settings.retirement_window = timedelta(days=1)
+    await db_session.commit()
+    player = min(match.sides, key=lambda s: s.side_number).players[0].user_id
+    outcome = await propose_result(
+        db_session, match.id, player, games=board(), supersedes_result_id=None
+    )
+    match_id, proposal_id = match.id, outcome.match.results[0].id
+    clock = Mock(wraps=datetime)
+    clock.now.return_value = datetime.now(UTC) + timedelta(days=2)
+    monkeypatch.setattr("app.retirement_jobs.datetime", clock)
+    assert (
+        await retire_if_lapsed(
+            db_session,
+            match_id,
+            proposal_id,
+            NotificationService(db_session, FakeSender()),
+        )
+        == RetirementOutcome.not_yet_due
+    )
+    assert await official_history(db_session, match_id) == []
