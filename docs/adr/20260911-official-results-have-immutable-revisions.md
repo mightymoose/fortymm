@@ -122,3 +122,9 @@ Verify metadata parity and downgrade/reinstall. Seed representative
 accepted/corrected histories through real backend operations, with honest actors
 and reasons, rather than backfilling disposable pre-beta data. Existing backend
 regressions verify unchanged public score behavior.
+
+Rating recomputation continues to replay the first official outcome until #1683
+introduces explicit correction reconciliation; changing the canonical winner must
+not silently alter rating input during an unrelated account-merge replay.
+Corrections and administrator voids stage dashboard invalidation for every active
+event entrant, because either action can change shared standings.

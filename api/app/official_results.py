@@ -102,6 +102,23 @@ async def _attribute_authority(
         )
 
 
+async def _stage_ruling_hints(db: AsyncSession, match: Match) -> None:
+    from app.match_realtime import stage_match_participant_hints
+    from app.tournament_realtime import stage_event_entrant_hints
+
+    event_id = (
+        await db.execute(
+            select(TournamentEventStage.event_id)
+            .join(
+                TournamentFixture, TournamentFixture.stage_id == TournamentEventStage.id
+            )
+            .where(TournamentFixture.match_id == match.id)
+        )
+    ).scalar_one()
+    await stage_match_participant_hints(db, match)
+    await stage_event_entrant_hints(db, [event_id])
+
+
 class StaleOfficialResultError(ValueError):
     """The author must review the current official result before retrying."""
 
@@ -122,7 +139,6 @@ async def correct_result(
     Uses the caller's transaction; never repeats first-completion side effects.
     The expected revision is mandatory, including when restoring an older score.
     """
-    from app.match_realtime import stage_match_participant_hints
     from app.match_scoring import load_match_for_write
     from app.match_serialization import validate_finalize_games
     from app.models import MatchStatus
@@ -179,7 +195,7 @@ async def correct_result(
     await db.flush()
     # The append trigger synchronizes the canonical board for every writer.
     match = await load_match_for_write(db, match_id, actor_account_id, lock=False)
-    await stage_match_participant_hints(db, match)
+    await _stage_ruling_hints(db, match)
     await db.flush()
     return revision
 
@@ -192,7 +208,6 @@ async def void_official_match(
     reason: str,
 ) -> MatchVoidAction:
     """Record an administrator void, preserving scores. Caller owns the transaction."""
-    from app.match_realtime import stage_match_participant_hints
     from app.match_scoring import load_match_for_write
     from app.match_voiding import void_match
     from app.models import MatchStatus
@@ -212,6 +227,6 @@ async def void_official_match(
     db.add(action)
     await db.flush()
     await void_match(db, match)
-    await stage_match_participant_hints(db, match)
+    await _stage_ruling_hints(db, match)
     await db.flush()
     return action

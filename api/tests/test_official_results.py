@@ -1354,3 +1354,124 @@ async def test_sql_consent_requires_the_acceptors_primary_player(db_session):
             """),
                 {"new": uuid.uuid4(), "id": proposal_id},
             )
+
+
+async def test_rating_recompute_keeps_original_outcome_after_correction(db_session):
+    from sqlalchemy import select
+
+    from app.models import RatingHistory, RatingHistorySource
+    from app.official_results import correct_result, official_history
+    from app.ratings.recompute import recompute_league_ratings
+    from app.result_acceptance import accept_result
+    from tests._helpers import directed_tournament_match
+
+    match, director = await directed_tournament_match(
+        db_session, tag="rating-replay", best_of=1
+    )
+    await propose_result(
+        db_session, match.id, director.id, games=board(), supersedes_result_id=None
+    )
+    (root,) = await official_history(db_session, match.id)
+    player_id = min(match.sides, key=lambda s: s.side_number).players[0].user_id
+    from app.models import Account
+
+    player = await db_session.get(Account, player_id)
+    third = await make_user(db_session, "rating-replay-third")
+    later = await create_match(
+        db_session,
+        creator=player,
+        opponent_user_id=third.id,
+        league_id=match.league_id,
+        best_of=1,
+        rated=True,
+    )
+    outcome = await propose_result(
+        db_session, later.id, player.id, games=board(), supersedes_result_id=None
+    )
+    await accept_result(
+        db_session, later.id, third.id, result_id=outcome.match.results[0].id
+    )
+    query = (
+        select(
+            RatingHistory.match_id,
+            RatingHistory.user_id,
+            RatingHistory.rating_value,
+            RatingHistory.rating_state,
+            RatingHistory.previous_rating_value,
+        )
+        .where(
+            RatingHistory.league_id == match.league_id,
+            RatingHistory.source == RatingHistorySource.match,
+        )
+        .order_by(RatingHistory.match_id, RatingHistory.user_id)
+    )
+    before = (await db_session.execute(query)).all()
+    assert len(before) == 4
+    await correct_result(
+        db_session,
+        match.id,
+        director.id,
+        expected_revision_id=root.id,
+        games=board(2),
+        reason="Scores corrected; rating reconciliation is separate",
+    )
+    await db_session.commit()
+    await recompute_league_ratings(db_session, match.league_id, {player_id})
+    await db_session.commit()
+    assert (await db_session.execute(query)).all() == before
+
+
+async def test_corrections_and_voids_hint_other_active_event_entrants(
+    db_session, realtime_broker
+):
+    from sqlalchemy import select
+
+    from app.models import TournamentEntry, TournamentFixture
+    from app.official_results import (
+        correct_result,
+        official_history,
+        void_official_match,
+    )
+    from app.realtime import EventKind
+    from tests._helpers import directed_tournament_match
+    from tests._realtime import watch_hints
+
+    match, director = await directed_tournament_match(
+        db_session, tag="ruling-audience", best_of=1
+    )
+    await propose_result(
+        db_session, match.id, director.id, games=board(), supersedes_result_id=None
+    )
+    (root,) = await official_history(db_session, match.id)
+    third = await make_user(db_session, "ruling-other-entrant")
+    outsider = await make_user(db_session, "ruling-outsider")
+    event_id = await db_session.scalar(
+        select(TournamentFixture.scope_event_id).where(
+            TournamentFixture.match_id == match.id
+        )
+    )
+    db_session.add(TournamentEntry(event_id=event_id, user_id=third.id))
+    await db_session.commit()
+    participant = min(match.sides, key=lambda s: s.side_number).players[0].user_id
+    for action in ("correct", "void"):
+        async with watch_hints(
+            realtime_broker, participant, third.id, outsider.id
+        ) as watch:
+            if action == "correct":
+                await correct_result(
+                    db_session,
+                    match.id,
+                    director.id,
+                    expected_revision_id=root.id,
+                    games=board(2),
+                    reason="Standings correction",
+                )
+            else:
+                await void_official_match(
+                    db_session, match.id, director.id, reason="Duplicate match"
+                )
+            await db_session.commit()
+            hints = await watch.collect()
+        assert hints[participant] == [EventKind.dashboard_changed]
+        assert hints[third.id] == [EventKind.dashboard_changed]
+        assert hints[outsider.id] == []
