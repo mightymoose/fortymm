@@ -38,7 +38,8 @@ class MatchResult(Base):
     ``accepted_by_user_id IS NOT NULL``; *superseded* iff some other row's
     ``supersedes_result_id`` equals its id; the *head* of the chain is the one
     result nothing supersedes; the *standing* proposal is the head when it is not
-    yet accepted.
+    yet accepted and the match has no official result. Finalization by timeout,
+    immediate submission or a director ruling does not record human acceptance.
     """
 
     __tablename__ = "match_results"
@@ -61,9 +62,8 @@ class MatchResult(Base):
             unique=True,
             postgresql_where=text("supersedes_result_id IS NULL"),
         ),
-        # The acceptance columns are written together (propose's self-accept,
-        # accept's stamp), so a row with exactly one of them set is an illegal
-        # state — forbid it at the DB rather than trusting every write path.
+        # Opponent acceptance writes both columns together. A row with exactly
+        # one set is illegal; enforce the pair for every database writer.
         CheckConstraint(
             "(accepted_by_user_id IS NULL) = (accepted_at IS NULL)",
             name="ck_match_results_accepted_pair",

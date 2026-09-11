@@ -265,6 +265,35 @@ def negotiation(
     (``matches._list_row``) stay participant-only, matching
     :func:`serialize_details`' own call-site decision — a director who loses an
     accept race re-reads the match rather than re-rendering off the 409."""
+    official = (
+        match.current_official_result if match.current_official_result_id else None
+    )
+    if official is not None:
+        proposal = next(
+            (p for p in match.results if p.id == official.proposal_id), None
+        )
+        submitter = (
+            (proposal.submitted_for_player_id or proposal.submitted_by_user_id)
+            if proposal
+            else official.actor_account_id
+        )
+        if submitter is None:
+            raise ValueError("official result has no source attribution")
+        return MatchNegotiation(
+            viewer_state="final",
+            your_turn=False,
+            standing_result=NegotiationResult(
+                id=official.proposal_id or official.id,
+                games=[_negotiation_game(g) for g in official.games],
+                submitted_by=submitter,
+                submitted_at=proposal.submitted_at
+                if proposal
+                else official.recorded_at,
+            ),
+            prior_result=None,
+            diff=None,
+            retirement_deadline=None,
+        )
     accepted = accepted_result(match)
     if accepted is not None:
         return MatchNegotiation(

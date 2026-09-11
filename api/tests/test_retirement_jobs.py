@@ -86,7 +86,7 @@ async def _build_standing_match(
         match=match,
         submitted_for_player_id=poster.id,
         submitted_by_user_id=actor_id if actor_id is not None else poster.id,
-        games=[],
+        games=[{"game_number": 1, "side_1_points": 11, "side_2_points": 4}],
         submitted_at=datetime.now(UTC) - submitted_ago,
     )
     db.add(match)
@@ -126,9 +126,13 @@ async def test_retire_if_lapsed_accepts_and_completes_a_lapsed_rated_result(
     assert outcome is RetirementOutcome.retired
     await db_session.refresh(match)
     assert match.status is MatchStatus.completed
-    # Acceptance was stamped by the *owing* side (opponent), not the poster.
+    # Timeout resolution never impersonates the owing opponent.
     await db_session.refresh(result)
-    assert result.accepted_by_user_id == opponent.id
+    assert result.accepted_by_user_id is None
+    from app.official_results import official_history
+
+    (revision,) = await official_history(db_session, match.id)
+    assert revision.resolution_method == "timeout"
     # A completed rated singles match applies exactly one rating pair.
     assert await _rating_history_count(db_session, match.id) == 2
 
@@ -151,7 +155,7 @@ async def test_retire_with_superseded_result_id_is_a_noop(
         match_id=match_id,
         submitted_for_player_id=opponent.id,
         submitted_by_user_id=opponent.id,
-        games=[],
+        games=[{"game_number": 1, "side_1_points": 11, "side_2_points": 4}],
         supersedes_result_id=base_id,
         submitted_at=datetime.now(UTC) - timedelta(days=8),
     )
@@ -347,7 +351,7 @@ async def test_owing_side_follows_player_when_actor_is_a_bystander(
     # access mid-assertion would trigger a synchronous lazy load (the
     # sibling tests in this module follow the same pattern for ``match``/
     # ``result``).
-    match_id, result_id, opponent_id = match.id, result.id, opponent.id
+    match_id, result_id = match.id, result.id
     db_session.expire_all()
     outcome = await retire_if_lapsed(
         db_session, match_id, result_id, _notifications(db_session)
@@ -356,7 +360,7 @@ async def test_owing_side_follows_player_when_actor_is_a_bystander(
     # The represented Player still determines the owing side.
     assert outcome is RetirementOutcome.retired
     await db_session.refresh(result)
-    assert result.accepted_by_user_id == opponent_id
+    assert result.accepted_by_user_id is None
 
 
 # ----- notifications: retired-on-lapse notice -----------------------------

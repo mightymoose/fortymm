@@ -502,7 +502,7 @@ async def test_retirement_resolves_owing_player_to_its_current_account(
     )
     await db_session.commit()
     match_id, result_id = match.id, result.id
-    poster_id, opponent_account_id = poster.id, opponent_target.id
+    poster_id = poster.id
     db_session.expunge_all()
     outcome = await retire_if_lapsed(
         db_session, match_id, result_id, _notifications(db_session)
@@ -512,7 +512,12 @@ async def test_retirement_resolves_owing_player_to_its_current_account(
 
     saved_result = await db_session.get(MatchResult, result_id)
     assert saved_result.submitted_by_user_id == poster_id
-    assert saved_result.accepted_by_user_id == opponent_account_id
+    assert saved_result.accepted_by_user_id is None
+    from app.official_results import official_history
+
+    (revision,) = await official_history(db_session, match_id)
+    assert revision.resolution_method == "timeout"
+    assert revision.actor_account_id is None
 
 
 async def test_actor_foreign_keys_restrict_deletion_of_history(db_session):

@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     event,
     func,
@@ -26,6 +27,7 @@ if TYPE_CHECKING:
     from app.models.match_result import MatchResult
     from app.models.match_side import MatchSide
     from app.models.match_side_player import MatchSidePlayer
+    from app.models.official_result import OfficialResult
 
 
 class MatchStatus(enum.Enum):
@@ -45,6 +47,12 @@ class Match(Base):
 
     __tablename__ = "matches"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["current_official_result_id", "id"],
+            ["match_official_results.id", "match_official_results.match_id"],
+            name="fk_matches_current_official",
+            use_alter=True,
+        ),
         CheckConstraint(
             "status = 'voided' OR "
             "(status = 'completed' AND completed_at IS NOT NULL) OR "
@@ -121,6 +129,13 @@ class Match(Base):
     # on this, not on the mutable ``updated_at``.
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    current_official_result_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True)
+    )
+    current_official_result: Mapped["OfficialResult | None"] = relationship(
+        foreign_keys=[current_official_result_id], lazy="raise_on_sql", viewonly=True
     )
 
     def mark_completed(self) -> None:

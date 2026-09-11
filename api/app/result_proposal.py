@@ -31,7 +31,6 @@ from one place rather than the router owning them.
 
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -239,7 +238,8 @@ async def propose_result(
     requires no result exists; a counter must target the live standing proposal —
     either miss raises :class:`NegotiationConflictError` carrying the loaded
     ``Match``. It commits the canonical board and appends the ``MatchResult``,
-    self-accepting + finalizing solo/unrated matches immediately (``side.won`` and
+    recording an official revision and finalizing solo/unrated matches immediately
+    (``side.won`` and
     the rating update fire here) — as does ANY proposal submitted by a
     non-participant, i.e. the tournament's director (#1523): a director's result
     is authoritative and is never left standing for someone to accept on their
@@ -320,13 +320,19 @@ async def propose_result(
         match, player_id
     )
     if not awaiting_acceptance:
-        # Solo / unrated / director path: no second acceptance needed — the
-        # proposer self-accepts and the match finalizes immediately (stamping
-        # ``completed_at``). A solo match has no second human to accept, and a
-        # director is not a side for anyone else to accept on behalf of, so
-        # either way the proposer's own id is recorded as the acceptor.
-        result.accepted_by_user_id = user_id
-        result.accepted_at = datetime.now(UTC)
+        # Existing immediate/director finalization rules become official
+        # revisions. Name the actor without fabricating participant acceptance.
+        from app.official_results import record_initial_result
+
+        await record_initial_result(
+            db,
+            match,
+            result,
+            method="immediate_finalization"
+            if player_id is not None
+            else "administrator_ruling",
+            actor_account_id=user_id,
+        )
         # The one completion path shared with the rated accept (``finalize_match``):
         # mark completed, stamp ``side.won``, run the rating update, and advance
         # any tournament draw this match belongs to (#789).
