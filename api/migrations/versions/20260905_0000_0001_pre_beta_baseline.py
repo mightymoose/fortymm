@@ -1279,6 +1279,10 @@ ADVANCEMENT_TABLE_DDL = (
     """,
     "CREATE INDEX ix_fixture_advancement_decisions_event_id "
     "ON fixture_advancement_decisions (event_id)",
+    "CREATE INDEX ix_fixture_entry_a_play_evidence ON tournament_fixtures (entry_a_id) "
+    "WHERE match_id IS NOT NULL OR winner_entry_id IS NOT NULL",
+    "CREATE INDEX ix_fixture_entry_b_play_evidence ON tournament_fixtures (entry_b_id) "
+    "WHERE match_id IS NOT NULL OR winner_entry_id IS NOT NULL",
     "CREATE INDEX ix_fixture_event_play_evidence ON tournament_fixtures (scope_event_id) "
     "WHERE match_id IS NOT NULL OR winner_entry_id IS NOT NULL",
     """

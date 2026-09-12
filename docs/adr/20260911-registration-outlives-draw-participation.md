@@ -178,7 +178,14 @@ survivor also regains event eligibility, recording restoration on its withdrawal
 history. This does not revive ended participation or override stage withdrawals. If both have
 recorded play in the same stage, refuse the
 Player merge atomically and identify the conflicting entries for director
-resolution; no resolution workflow is added here. A merge grants no new stage
+resolution; no resolution workflow is added here. Conflict lookups use indexed
+fixture-side evidence within the colliding events, including archived play.
+Confirmation credentials remain recoverable after a merge conflict, but repeated
+attempts are bounded before taking account or tournament locks: live merge
+credentials allow one in-flight attempt and five attempts per hour. Concurrent or
+exhausted attempts return 429; unavailable retry-budget storage returns 503 with
+retry guidance. An expiring Redis counter survives database rollback. Invalid and
+ordinary confirmation links allocate no counter and retain their existing behavior. A merge grants no new stage
 admission. Event-format rules still determine whether multiple entries are actually
 duplicates; the explicit team-event exception remains.
 

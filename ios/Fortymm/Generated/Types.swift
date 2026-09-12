@@ -80,6 +80,12 @@ internal protocol APIProtocol: Sendable {
     /// into the account that owns the address and the caller is signed in as that
     /// account. See ``_confirm_account_merge``.
     ///
+    /// Live account-merge confirmations admit one attempt at a time and at most
+    /// five attempts per bearer per hour. A busy or exhausted credential returns
+    /// 429 without consuming the link; unavailable retry-budget storage returns
+    /// 503. Both responses include Retry-After. Ordinary confirmations keep their
+    /// existing availability.
+    ///
     /// A link a newer resend replaced is distinguishable from every other dead
     /// link: it 400s with a structured ``{"code": "replaced", "message": ...}``
     /// detail (#1616), the confirm-flow counterpart of ``consume_login_token``'s
@@ -1262,6 +1268,12 @@ extension APIProtocol {
     /// stamping an address onto the guest that requested it, the guest is folded
     /// into the account that owns the address and the caller is signed in as that
     /// account. See ``_confirm_account_merge``.
+    ///
+    /// Live account-merge confirmations admit one attempt at a time and at most
+    /// five attempts per bearer per hour. A busy or exhausted credential returns
+    /// 429 without consuming the link; unavailable retry-budget storage returns
+    /// 503. Both responses include Retry-After. Ordinary confirmations keep their
+    /// existing availability.
     ///
     /// A link a newer resend replaced is distinguishable from every other dead
     /// link: it 400s with a structured ``{"code": "replaced", "message": ...}``
@@ -14468,6 +14480,12 @@ internal enum Operations {
     /// stamping an address onto the guest that requested it, the guest is folded
     /// into the account that owns the address and the caller is signed in as that
     /// account. See ``_confirm_account_merge``.
+    ///
+    /// Live account-merge confirmations admit one attempt at a time and at most
+    /// five attempts per bearer per hour. A busy or exhausted credential returns
+    /// 429 without consuming the link; unavailable retry-budget storage returns
+    /// 503. Both responses include Retry-After. Ordinary confirmations keep their
+    /// existing availability.
     ///
     /// A link a newer resend replaced is distinguishable from every other dead
     /// link: it 400s with a structured ``{"code": "replaced", "message": ...}``

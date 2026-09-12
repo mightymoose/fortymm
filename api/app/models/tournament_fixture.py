@@ -241,6 +241,20 @@ class TournamentFixture(Base):
                 "match_id IS NOT NULL OR winner_entry_id IS NOT NULL"
             ),
         ),
+        Index(
+            "ix_fixture_entry_a_play_evidence",
+            "entry_a_id",
+            postgresql_where=text(
+                "match_id IS NOT NULL OR winner_entry_id IS NOT NULL"
+            ),
+        ),
+        Index(
+            "ix_fixture_entry_b_play_evidence",
+            "entry_b_id",
+            postgresql_where=text(
+                "match_id IS NOT NULL OR winner_entry_id IS NOT NULL"
+            ),
+        ),
         # One match belongs to at most one fixture in this topology (#1677).
         # NULL allows any number of unmaterialized fixtures. Completion also uses
         # this index to find the owning fixture and advance its draw.

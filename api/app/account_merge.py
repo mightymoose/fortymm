@@ -647,6 +647,13 @@ async def _resolve_entry_collisions(
                 )
                 .execution_options(include_draw_history=True)
                 .where(
+                    TournamentFixture.scope_event_id.in_(collided_event_ids),
+                    # The side evidence indexes exclude all unplayed history before
+                    # checking whether a linked match actually contains recorded play.
+                    or_(
+                        TournamentFixture.winner_entry_id.is_not(None),
+                        TournamentFixture.match_id.is_not(None),
+                    ),
                     or_(
                         TournamentFixture.entry_a_id.in_(entry_ids),
                         TournamentFixture.entry_b_id.in_(entry_ids),
