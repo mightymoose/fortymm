@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -24,6 +25,9 @@ class TournamentDrawRevision(Base):
     __tablename__ = "tournament_draw_revisions"
     __table_args__ = (
         UniqueConstraint("event_id", "id", name="uq_draw_revision_event_id"),
+        CheckConstraint(
+            "retained_fixture_count >= 0", name="ck_draw_revision_fixture_count"
+        ),
         CheckConstraint(
             "retired_at IS NULL OR retired_at >= created_at",
             name="ck_draw_revision_interval",
@@ -52,6 +56,9 @@ class TournamentDrawRevision(Base):
         DateTime(timezone=True), nullable=False, server_default=func.clock_timestamp()
     )
     retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retained_fixture_count: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default=text("0")
+    )
     configuration: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )

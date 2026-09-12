@@ -391,3 +391,44 @@ async def test_rejected_recut_does_not_issue_history_writes(
     assert revision.configuration == original_configuration
     current = (await db_session.scalars(select(TournamentFixture))).all()
     assert {str(row.id) for row in current} == {row["id"] for row in original.json()}
+
+
+async def test_rejected_actor_quota_reads_no_fixture_rows(
+    authed_client, db_session, default_league, monkeypatch, engine
+):
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from app.draws import DrawStorageLimitExceeded
+
+    client, owner = authed_client
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament, groups=[])
+    await _enter_field(db_session, event, 24, prefix="quota-read-work")
+    response = await client.post(
+        f"/v1/tournaments/{tournament.id}/events/{event.id}/draw"
+    )
+    assert response.status_code == 201, response.text
+    tournament_id, actor_id = tournament.id, owner.id
+    monkeypatch.setattr(limits, "MAX_FIXTURES_PER_ACTOR", 276)
+    probe_engine = create_async_engine(engine.url, poolclass=NullPool)
+    try:
+        async with AsyncSession(probe_engine) as probe:
+            reads = text(
+                "SELECT seq_tup_read + idx_tup_fetch FROM pg_stat_xact_user_tables "
+                "WHERE relname='tournament_fixtures'"
+            )
+            before = await probe.scalar(reads)
+            for _ in range(3):
+                with pytest.raises(DrawStorageLimitExceeded):
+                    await limits.enforce_draw_storage(
+                        probe,
+                        tournament_id=tournament_id,
+                        fixture_count=1,
+                        actor_id=actor_id,
+                    )
+            after = await probe.scalar(reads)
+            assert after == before
+    finally:
+        await probe_engine.dispose()

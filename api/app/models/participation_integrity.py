@@ -232,7 +232,9 @@ DRAW_HISTORY_INTEGRITY_DDL = (
             NEW.created_by_account_id)
         IS DISTINCT FROM (OLD.id, OLD.event_id, OLD.created_at, OLD.configuration,
             OLD.created_by_account_id)
-        OR (OLD.retired_at IS NOT NULL AND NEW IS DISTINCT FROM OLD)
+        OR (OLD.retired_at IS NOT NULL AND
+        (to_jsonb(NEW) - 'retained_fixture_count') IS DISTINCT FROM
+        (to_jsonb(OLD) - 'retained_fixture_count'))
         THEN
         RAISE EXCEPTION 'draw revision history is immutable' USING ERRCODE = '23514' ;
         END IF;
@@ -392,7 +394,7 @@ DRAW_HISTORY_INTEGRITY_DDL = (
         """,
     """
         CREATE CONSTRAINT TRIGGER check_revision_draw_retirement
-        AFTER INSERT OR UPDATE ON tournament_draw_revisions
+        AFTER INSERT OR UPDATE OF retired_at ON tournament_draw_revisions
         DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION
         check_draw_retirement()
         """,
@@ -486,7 +488,7 @@ DRAW_HISTORY_INTEGRITY_DDL = (
         END $$
         """,
     """
-        CREATE TRIGGER a_lock_draw_history_parent BEFORE INSERT OR UPDATE OR DELETE
+        CREATE TRIGGER a_lock_draw_history_parent BEFORE INSERT OR DELETE
         ON tournament_draw_revisions FOR EACH ROW EXECUTE FUNCTION
         lock_draw_history_parent()
         """,
@@ -805,6 +807,87 @@ DRAW_HISTORY_INTEGRITY_DDL = (
         CREATE TRIGGER lock_registration_parent BEFORE INSERT OR UPDATE
         ON tournament_entry_registrations FOR EACH ROW
         EXECUTE FUNCTION lock_registration_parent()
+        """,
+    """
+        CREATE FUNCTION guard_draw_fixture_count() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+        IF (TG_OP = 'INSERT' AND NEW.retained_fixture_count <> 0)
+        OR (TG_OP = 'UPDATE'
+        AND NEW.retained_fixture_count <> OLD.retained_fixture_count
+        AND pg_trigger_depth() < 2) THEN
+        RAISE EXCEPTION 'draw fixture count is maintained by fixture writes'
+        USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+        END $$
+        """,
+    """
+        CREATE TRIGGER guard_draw_fixture_count
+        BEFORE INSERT OR UPDATE OF retained_fixture_count ON tournament_draw_revisions
+        FOR EACH ROW EXECUTE FUNCTION guard_draw_fixture_count()
+        """,
+    """
+        CREATE FUNCTION update_draw_fixture_counts() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+        IF TG_OP = 'INSERT' THEN
+        UPDATE tournament_draw_revisions r
+        SET retained_fixture_count = r.retained_fixture_count + counts.delta
+        FROM (SELECT draw_revision_id, count(*) AS delta FROM new_counted_fixtures
+        GROUP BY draw_revision_id) counts WHERE r.id = counts.draw_revision_id;
+        ELSIF TG_OP = 'DELETE' THEN
+        UPDATE tournament_draw_revisions r
+        SET retained_fixture_count = r.retained_fixture_count - counts.delta
+        FROM (SELECT draw_revision_id, count(*) AS delta FROM old_counted_fixtures
+        GROUP BY draw_revision_id) counts WHERE r.id = counts.draw_revision_id;
+        ELSIF TG_OP = 'UPDATE' THEN
+        UPDATE tournament_draw_revisions r
+        SET retained_fixture_count = r.retained_fixture_count + counts.delta
+        FROM (
+        SELECT draw_revision_id, sum(delta) AS delta FROM (
+        SELECT draw_revision_id, count(*) AS delta FROM new_counted_fixtures
+        GROUP BY draw_revision_id
+        UNION ALL
+        SELECT draw_revision_id, -count(*) AS delta FROM old_counted_fixtures
+        GROUP BY draw_revision_id
+        ) changes GROUP BY draw_revision_id HAVING sum(delta) <> 0
+        ) counts WHERE r.id = counts.draw_revision_id;
+        ELSE
+        UPDATE tournament_draw_revisions SET retained_fixture_count = 0
+        WHERE retained_fixture_count <> 0;
+        END IF;
+        RETURN NULL;
+        END $$
+        """,
+    """
+        CREATE TRIGGER z_count_inserted_draw_fixtures AFTER INSERT
+        ON tournament_fixtures
+        REFERENCING NEW TABLE AS new_counted_fixtures FOR EACH STATEMENT
+        EXECUTE FUNCTION update_draw_fixture_counts()
+        """,
+    """
+        CREATE TRIGGER z_count_updated_draw_fixtures AFTER UPDATE ON tournament_fixtures
+        REFERENCING OLD TABLE AS old_counted_fixtures NEW TABLE AS new_counted_fixtures
+        FOR EACH STATEMENT EXECUTE FUNCTION update_draw_fixture_counts()
+        """,
+    """
+        CREATE TRIGGER z_count_deleted_draw_fixtures AFTER DELETE ON tournament_fixtures
+        REFERENCING OLD TABLE AS old_counted_fixtures FOR EACH STATEMENT
+        EXECUTE FUNCTION update_draw_fixture_counts()
+        """,
+    """
+        CREATE TRIGGER z_count_truncated_draw_fixtures AFTER TRUNCATE
+        ON tournament_fixtures
+        FOR EACH STATEMENT EXECUTE FUNCTION update_draw_fixture_counts()
+        """,
+    """
+        CREATE TRIGGER a_lock_draw_revision_update_parent
+        BEFORE UPDATE ON tournament_draw_revisions FOR EACH ROW
+        WHEN (NEW.retained_fixture_count = OLD.retained_fixture_count OR
+        (to_jsonb(NEW) - 'retained_fixture_count') IS DISTINCT FROM
+        (to_jsonb(OLD) - 'retained_fixture_count'))
+        EXECUTE FUNCTION lock_draw_history_parent()
         """,
 )
 

@@ -11,7 +11,6 @@ from app.models import (
     Account,
     TournamentDrawRevision,
     TournamentEvent,
-    TournamentFixture,
 )
 from app.models.tournament_draw_revision import MAX_DRAW_CONFIGURATION_BYTES
 
@@ -29,58 +28,42 @@ async def enforce_draw_storage(
     fixture_count: int,
     actor_id: uuid.UUID | None,
 ) -> None:
-    """Count retained and current rows while the caller holds the tournament lock."""
+    """Read bounded revision counters while the caller holds the tournament lock."""
     if fixture_count > MAX_FIXTURES_PER_CUT:
         raise DrawStorageLimitExceeded("cut", "fixtures", MAX_FIXTURES_PER_CUT)
-    revision_count = await db.scalar(
-        select(func.count())
-        .select_from(TournamentDrawRevision)
-        .join(TournamentEvent, TournamentEvent.id == TournamentDrawRevision.event_id)
-        .where(TournamentEvent.tournament_id == tournament_id)
-    )
-    if (revision_count or 0) >= MAX_REVISIONS_PER_TOURNAMENT:
+    tournament_counts = (
+        await db.scalars(
+            select(TournamentDrawRevision.retained_fixture_count)
+            .join(
+                TournamentEvent, TournamentEvent.id == TournamentDrawRevision.event_id
+            )
+            .where(TournamentEvent.tournament_id == tournament_id)
+            .limit(MAX_REVISIONS_PER_TOURNAMENT + 1)
+        )
+    ).all()
+    if len(tournament_counts) >= MAX_REVISIONS_PER_TOURNAMENT:
         raise DrawStorageLimitExceeded(
             "tournament", "draw revisions", MAX_REVISIONS_PER_TOURNAMENT
         )
-    stored_fixtures = await db.scalar(
-        select(func.count())
-        .select_from(TournamentFixture)
-        .join(
-            TournamentDrawRevision,
-            TournamentDrawRevision.id == TournamentFixture.draw_revision_id,
-        )
-        .join(TournamentEvent, TournamentEvent.id == TournamentDrawRevision.event_id)
-        .where(TournamentEvent.tournament_id == tournament_id)
-        .execution_options(include_draw_history=True)
-    )
-    if (stored_fixtures or 0) + fixture_count > MAX_FIXTURES_PER_TOURNAMENT:
+    if sum(tournament_counts) + fixture_count > MAX_FIXTURES_PER_TOURNAMENT:
         raise DrawStorageLimitExceeded(
             "tournament", "fixtures", MAX_FIXTURES_PER_TOURNAMENT
         )
 
     if actor_id is None:
         return
-    actor_revisions = await db.scalar(
-        select(func.count())
-        .select_from(TournamentDrawRevision)
-        .where(TournamentDrawRevision.created_by_account_id == actor_id)
-    )
-    if (actor_revisions or 0) >= MAX_REVISIONS_PER_ACTOR:
+    actor_counts = (
+        await db.scalars(
+            select(TournamentDrawRevision.retained_fixture_count)
+            .where(TournamentDrawRevision.created_by_account_id == actor_id)
+            .limit(MAX_REVISIONS_PER_ACTOR + 1)
+        )
+    ).all()
+    if len(actor_counts) >= MAX_REVISIONS_PER_ACTOR:
         raise DrawStorageLimitExceeded(
             "account", "draw revisions", MAX_REVISIONS_PER_ACTOR
         )
-
-    actor_fixtures = await db.scalar(
-        select(func.count())
-        .select_from(TournamentFixture)
-        .join(
-            TournamentDrawRevision,
-            TournamentDrawRevision.id == TournamentFixture.draw_revision_id,
-        )
-        .where(TournamentDrawRevision.created_by_account_id == actor_id)
-        .execution_options(include_draw_history=True)
-    )
-    if (actor_fixtures or 0) + fixture_count > MAX_FIXTURES_PER_ACTOR:
+    if sum(actor_counts) + fixture_count > MAX_FIXTURES_PER_ACTOR:
         raise DrawStorageLimitExceeded("account", "fixtures", MAX_FIXTURES_PER_ACTOR)
 
 

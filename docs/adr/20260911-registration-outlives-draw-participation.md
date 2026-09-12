@@ -134,7 +134,13 @@ Each externally requested revision records its original acting Account, which do
 not change on ownership transfer or identity reconciliation. Account allocation is
 serialized before acquiring the tournament lock, so simultaneous requests against
 different tournaments cannot overrun the Account budget. Enforcement uses retained
-PostgreSQL state and does not depend on a fail-open Redis rate limiter.
+PostgreSQL state and does not depend on a fail-open Redis rate limiter. Each draw
+revision stores a fixture total maintained transactionally by PostgreSQL statement
+triggers. Quota checks read bounded revision totals rather than scanning retained
+fixtures, so repeated refusals do not become more expensive as fixture history
+grows. Inserts, moves, deletes, and parent cascades maintain those totals; direct
+SQL cannot overwrite them. Counter-only updates do not revalidate the revision’s
+retired fixture graph.
 
 Explicit re-cuts remain supported even for apparently identical fields: withdrawal
 and re-entry can require new participation while preserving the same entry IDs.
