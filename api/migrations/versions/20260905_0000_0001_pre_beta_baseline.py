@@ -1698,11 +1698,13 @@ EVENT_LIFECYCLE_DDL = (
             AND NEW.match_id IS NOT DISTINCT FROM OLD.match_id) THEN
             RETURN NEW;
         END IF;
-        IF EXISTS (
-            SELECT 1 FROM match_games g
-            JOIN match_game_scores s ON s.match_game_id=g.id
-            WHERE g.match_id=NEW.match_id
-        ) THEN
+        IF EXISTS (SELECT 1 FROM matches
+            WHERE id=NEW.match_id AND status IN ('completed','voided'))
+            OR EXISTS (
+                SELECT 1 FROM match_games g
+                JOIN match_game_scores s ON s.match_game_id=g.id
+                WHERE g.match_id=NEW.match_id
+            ) THEN
             PERFORM t.id FROM tournaments t
             WHERE t.id=NEW.scope_tournament_id FOR SHARE OF t;
             PERFORM id FROM tournament_events WHERE id=NEW.scope_event_id FOR UPDATE;
@@ -1711,6 +1713,12 @@ EVENT_LIFECYCLE_DDL = (
                 RAISE EXCEPTION 'cancelled events cannot attach new play'
                     USING ERRCODE='23514';
             END IF;
+        END IF;
+        IF EXISTS (
+            SELECT 1 FROM match_games g
+            JOIN match_game_scores s ON s.match_game_id=g.id
+            WHERE g.match_id=NEW.match_id
+        ) THEN
             INSERT INTO tournament_event_recorded_games(match_id,game_number,event_id)
             SELECT g.match_id,g.game_number,NEW.scope_event_id FROM match_games g
             JOIN match_game_scores s ON s.match_game_id=g.id
@@ -1883,6 +1891,31 @@ ARCHIVE_DDL = (
     CREATE TRIGGER preserve_tournament_archive BEFORE INSERT OR UPDATE OR DELETE ON
         tournament_archive_history
     FOR EACH ROW EXECUTE FUNCTION preserve_tournament_archive()
+    """,
+    """
+    CREATE FUNCTION preserve_archived_event() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        IF TG_OP = 'UPDATE' AND NEW.tournament_id = OLD.tournament_id THEN
+            RETURN NEW;
+        END IF;
+        PERFORM id FROM tournaments WHERE id=OLD.tournament_id FOR SHARE NOWAIT;
+        IF EXISTS (SELECT 1 FROM tournament_archive_history
+            WHERE tournament_id=OLD.tournament_id) THEN
+            RAISE EXCEPTION 'archive history must preserve its events'
+                USING ERRCODE='23514';
+        END IF;
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
+        RETURN NEW;
+    EXCEPTION WHEN lock_not_available THEN
+        RAISE EXCEPTION 'event removal requires archive parent lock; retry'
+            USING ERRCODE='40001';
+    END $$
+    """,
+    """
+    CREATE TRIGGER preserve_archived_event BEFORE DELETE OR UPDATE OF tournament_id
+    ON tournament_events FOR EACH ROW EXECUTE FUNCTION preserve_archived_event()
     """,
 )
 
@@ -6622,6 +6655,7 @@ def downgrade() -> None:
     op.execute("DROP FUNCTION record_tournament_archive() CASCADE")
     op.execute("DROP FUNCTION append_tournament_archive() CASCADE")
     op.execute("DROP FUNCTION preserve_tournament_archive() CASCADE")
+    op.execute("DROP FUNCTION preserve_archived_event() CASCADE")
 
     op.drop_table("tournament_event_lifecycle_history")
     for function in (

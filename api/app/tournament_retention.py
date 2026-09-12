@@ -26,8 +26,7 @@ async def require_no_recorded_play(
     db: AsyncSession, *, tournament_id: uuid.UUID, event_id: uuid.UUID | None = None
 ) -> None:
     if (
-        event_id is None
-        and await db.scalar(
+        await db.scalar(
             select(TournamentArchiveHistory.tournament_id).where(
                 TournamentArchiveHistory.tournament_id == tournament_id
             )
@@ -35,7 +34,8 @@ async def require_no_recorded_play(
         is not None
     ):
         raise RecordedPlayDeletionError(
-            "Archive history must be preserved. This tournament cannot be deleted."
+            "Archive history must be preserved. "
+            "This event or tournament cannot be deleted."
         )
     # Keep the event -> member lock order used by roster writers. Locking the
     # events first also prevents new memberships appearing after this scan.

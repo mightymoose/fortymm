@@ -427,6 +427,9 @@ async def enter_event(
                 entry_id=entry.id, registered_by_account_id=actor.id
             )
         )
+        from app.event_lifecycle import reconcile_event
+
+        await reconcile_event(db, event.id)
         await db.commit()
     except IntegrityError:
         # The database is the final authority on duplicate active registration,
@@ -629,4 +632,7 @@ async def withdraw_from_event(
     # emitted), and it only ever removes a row from the partial unique index's
     # predicate, so there is no IntegrityError to catch here.
     entry.status = TournamentEntryStatus.withdrawn
+    from app.event_lifecycle import reconcile_event
+
+    await reconcile_event(db, event.id)
     await db.commit()

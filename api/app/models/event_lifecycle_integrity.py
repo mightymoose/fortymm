@@ -198,11 +198,13 @@ EVENT_LIFECYCLE_DDL = (
             AND NEW.match_id IS NOT DISTINCT FROM OLD.match_id) THEN
             RETURN NEW;
         END IF;
-        IF EXISTS (
-            SELECT 1 FROM match_games g
-            JOIN match_game_scores s ON s.match_game_id=g.id
-            WHERE g.match_id=NEW.match_id
-        ) THEN
+        IF EXISTS (SELECT 1 FROM matches
+            WHERE id=NEW.match_id AND status IN ('completed','voided'))
+            OR EXISTS (
+                SELECT 1 FROM match_games g
+                JOIN match_game_scores s ON s.match_game_id=g.id
+                WHERE g.match_id=NEW.match_id
+            ) THEN
             PERFORM t.id FROM tournaments t
             WHERE t.id=NEW.scope_tournament_id FOR SHARE OF t;
             PERFORM id FROM tournament_events WHERE id=NEW.scope_event_id FOR UPDATE;
@@ -211,6 +213,12 @@ EVENT_LIFECYCLE_DDL = (
                 RAISE EXCEPTION 'cancelled events cannot attach new play'
                     USING ERRCODE='23514';
             END IF;
+        END IF;
+        IF EXISTS (
+            SELECT 1 FROM match_games g
+            JOIN match_game_scores s ON s.match_game_id=g.id
+            WHERE g.match_id=NEW.match_id
+        ) THEN
             INSERT INTO tournament_event_recorded_games(match_id,game_number,event_id)
             SELECT g.match_id,g.game_number,NEW.scope_event_id FROM match_games g
             JOIN match_game_scores s ON s.match_game_id=g.id

@@ -59,6 +59,31 @@ ARCHIVE_DDL = (
         tournament_archive_history
     FOR EACH ROW EXECUTE FUNCTION preserve_tournament_archive()
     """,
+    """
+    CREATE FUNCTION preserve_archived_event() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        IF TG_OP = 'UPDATE' AND NEW.tournament_id = OLD.tournament_id THEN
+            RETURN NEW;
+        END IF;
+        PERFORM id FROM tournaments WHERE id=OLD.tournament_id FOR SHARE NOWAIT;
+        IF EXISTS (SELECT 1 FROM tournament_archive_history
+            WHERE tournament_id=OLD.tournament_id) THEN
+            RAISE EXCEPTION 'archive history must preserve its events'
+                USING ERRCODE='23514';
+        END IF;
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
+        RETURN NEW;
+    EXCEPTION WHEN lock_not_available THEN
+        RAISE EXCEPTION 'event removal requires archive parent lock; retry'
+            USING ERRCODE='40001';
+    END $$
+    """,
+    """
+    CREATE TRIGGER preserve_archived_event BEFORE DELETE OR UPDATE OF tournament_id
+    ON tournament_events FOR EACH ROW EXECUTE FUNCTION preserve_archived_event()
+    """,
 )
 
 
