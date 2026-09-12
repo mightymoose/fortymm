@@ -318,3 +318,76 @@ async def test_reservation_name_write_has_a_bounded_length(
     assert response.status_code == expected_status, response.text
     if expected_status == 422:
         assert any(error["loc"][-1] == "name" for error in response.json()["detail"])
+
+
+@pytest.mark.parametrize("rematerialise", [False, True])
+@pytest.mark.parametrize(
+    "setting",
+    [
+        "MAX_FIXTURES_PER_CUT",
+        "MAX_FIXTURES_PER_TOURNAMENT",
+        "MAX_FIXTURES_PER_ACTOR",
+        "MAX_REVISIONS_PER_TOURNAMENT",
+        "MAX_REVISIONS_PER_ACTOR",
+        "MAX_DRAW_CONFIGURATION_BYTES",
+    ],
+)
+async def test_rejected_recut_does_not_issue_history_writes(
+    authed_client,
+    db_session,
+    default_league,
+    engine,
+    monkeypatch,
+    setting,
+    rematerialise,
+):
+    from sqlalchemy import event as sa_event
+
+    from app.models import DrawType, TournamentEventDrawSettings
+
+    client, owner = authed_client
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(
+        db_session,
+        tournament,
+        draw_type=DrawType.rr_then_ko if rematerialise else DrawType.round_robin,
+    )
+    if rematerialise:
+        event.draw_settings = TournamentEventDrawSettings.for_draw_type(
+            DrawType.rr_then_ko, settings={"qualifiers_per_group": 2}
+        )
+    await _enter_field(db_session, event, 4, prefix="read-only-refusal")
+    url = f"/v1/tournaments/{tournament.id}/events/{event.id}/draw"
+    original = await client.post(url)
+    assert original.status_code == 201
+    original_configuration = (
+        await db_session.scalars(select(TournamentDrawRevision.configuration))
+    ).one()
+    if rematerialise:
+        await _enter_field(db_session, event, 4, prefix="rematerialise-refusal")
+    monkeypatch.setattr(limits, setting, 1)
+    writes = []
+
+    def collect(_connection, _cursor, statement, _parameters, _context, _executemany):
+        sql = statement.lstrip().lower()
+        if sql.startswith(
+            ("update tournament_", "insert into tournament_", "delete from tournament_")
+        ):
+            writes.append(statement)
+
+    sa_event.listen(engine.sync_engine, "before_cursor_execute", collect)
+    try:
+        refused = await client.post(url)
+    finally:
+        sa_event.remove(engine.sync_engine, "before_cursor_execute", collect)
+
+    assert refused.status_code == 422, refused.text
+    assert writes == [], (
+        "A rejected recut must not retire or clone history before rolling back"
+    )
+    db_session.expire_all()
+    revision = (await db_session.scalars(select(TournamentDrawRevision))).one()
+    assert revision.retired_at is None
+    assert revision.configuration == original_configuration
+    current = (await db_session.scalars(select(TournamentFixture))).all()
+    assert {str(row.id) for row in current} == {row["id"] for row in original.json()}

@@ -6,7 +6,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.models import League
 from app.tournament_draw_service import cut_event_draw, uncut_event_draw
@@ -706,8 +706,11 @@ async def test_archived_group_position_is_immutable(
 
 
 async def test_deferred_fixture_retirement_checks_read_only_changed_fixtures(
-    db_session: AsyncSession, default_league: League
+    db_session: AsyncSession, default_league: League, engine: AsyncEngine
 ) -> None:
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
     owner = await make_user(db_session, "retirement-work-owner")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     event = await _make_event(db_session, tournament, groups=[])
@@ -717,49 +720,34 @@ async def test_deferred_fixture_retirement_checks_read_only_changed_fixtures(
     fixtures = await cut_event_draw(
         db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
     )
-    # Reproduce a pooled connection whose trigger cached a sequential-scan plan
-    # while earlier tests were working with a small fixture table.
-    await db_session.execute(text("SET LOCAL enable_indexscan = off"))
-    await db_session.execute(text("SET LOCAL enable_bitmapscan = off"))
-    await db_session.execute(text("SET LOCAL plan_cache_mode = force_generic_plan"))
-    await db_session.execute(text("DISCARD PLANS"))
-    await db_session.execute(
-        text(
-            "UPDATE tournament_fixtures SET updated_at=updated_at "
-            "WHERE scope_event_id=:id"
-        ),
-        {"id": event_id},
-    )
-    await db_session.execute(
-        text("SET CONSTRAINTS check_fixture_draw_retirement IMMEDIATE")
-    )
-    await db_session.execute(
-        text("SET CONSTRAINTS check_fixture_draw_retirement DEFERRED")
-    )
-    await db_session.execute(text("SET LOCAL enable_indexscan = on"))
-    await db_session.execute(text("SET LOCAL enable_bitmapscan = on"))
-    # Measure reads performed by this constraint alone, not wall-clock latency or
-    # work done by unrelated fixture constraints during materialisation.
-    await db_session.execute(text("SET LOCAL enable_seqscan = off"))
-    # Planner settings do not replace PL/pgSQL plans cached on pooled connections.
-    await db_session.execute(text("DISCARD PLANS"))
-    await db_session.execute(
-        text(
-            "UPDATE tournament_fixtures SET updated_at=updated_at "
-            "WHERE scope_event_id=:id"
-        ),
-        {"id": event_id},
-    )
-    read_count = text(
-        "SELECT seq_tup_read + idx_tup_fetch FROM pg_stat_xact_user_tables "
-        "WHERE relname='tournament_fixtures'"
-    )
-    before = await db_session.scalar(read_count)
-    await db_session.execute(
-        text("SET CONSTRAINTS check_fixture_draw_retirement IMMEDIATE")
-    )
-    after = await db_session.scalar(read_count)
-    assert 0 < after - before <= len(fixtures) * 4
+    # Isolate algorithmic lookup work from SPI plans left on pooled connections.
+    # Configure a fresh physical connection before it first executes any trigger;
+    # do not couple this invariant to invalidating previously warmed plans.
+    # Real table statistics also avoid small-table planner assumptions.
+    probe_engine = create_async_engine(engine.url, poolclass=NullPool)
+    try:
+        async with probe_engine.connect() as probe:
+            await probe.execute(text("SET LOCAL enable_seqscan = off"))
+            await probe.execute(text("ANALYZE tournament_fixtures"))
+            await probe.execute(
+                text(
+                    "UPDATE tournament_fixtures SET updated_at=updated_at "
+                    "WHERE scope_event_id=:id"
+                ),
+                {"id": event_id},
+            )
+            read_count = text(
+                "SELECT seq_tup_read + idx_tup_fetch FROM pg_stat_xact_user_tables "
+                "WHERE relname='tournament_fixtures'"
+            )
+            before = await probe.scalar(read_count)
+            await probe.execute(
+                text("SET CONSTRAINTS check_fixture_draw_retirement IMMEDIATE")
+            )
+            after = await probe.scalar(read_count)
+            assert 0 < after - before <= len(fixtures) * 4
+    finally:
+        await probe_engine.dispose()
 
 
 async def test_retirement_checks_revalidate_after_an_immediate_constraint_cycle(

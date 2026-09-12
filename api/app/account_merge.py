@@ -346,8 +346,9 @@ async def _merge_players(
     # DELETE above (it is keyed on ``user_id == to_user_id``, and the cascade
     # skips a one-sided match), so ``void_match``'s by-``match_id`` delete is the
     # only thing that removes it. ``void_match`` does not commit.
+    collided_matches: list[Match] = []
     if collision.match_ids:
-        collided_matches = (
+        collided_matches = list(
             (await db.execute(select(Match).where(Match.id.in_(collision.match_ids))))
             .scalars()
             .all()
@@ -368,6 +369,13 @@ async def _merge_players(
         .where(Player.id == from_user_id)
         .values(merged_into_player_id=to_user_id, merged_at=datetime.now(UTC))
     )
+    # Advance only after the sporting identity is reconciled: a newly ready
+    # fixture must materialize against the merged Player, not the old identity.
+    if collided_matches:
+        from app.tournament_advancement import on_match_completed
+
+        for match in collided_matches:
+            await on_match_completed(db, match)
     # A voided rated collision was dropped by the belt-and-braces delete above
     # (its guest MatchSidePlayer was never re-pointed), so it got added into
     # `matches_moved`. But we just voided it — it no longer counts. Subtract the

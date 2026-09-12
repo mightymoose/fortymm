@@ -30,6 +30,7 @@ that field must not be separated by another writer's entry (see the route).
 import enum
 import uuid
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import replace
 from datetime import datetime
 from itertools import batched
 from types import MappingProxyType
@@ -70,7 +71,10 @@ from app.models import (
 )
 from app.models.draw_type import DRAW_TYPES_BY_ID
 from app.schemas.tournament import GroupRead, Reservation
-from app.tournament_draw_history import snapshot_draw_configuration
+from app.tournament_draw_history import (
+    bind_draw_configuration,
+    preview_draw_configuration,
+)
 from app.tournament_draw_limits import (
     enforce_draw_configuration_size,
     enforce_draw_storage,
@@ -814,29 +818,53 @@ async def cut_draw(
     ).draw_type is DrawType.rr_then_ko and group_count_for(
         GroupCountSource.structural, field_size=len(entrants)
     ) != len(_stage_groups(event, 0))
-    if re_materialised:
-        # Archive the previous configuration before resizing the current groups;
-        # historical fixtures retain their original stage and group references.
-        await uncut_draw(db, [event.id])
-        await db.refresh(event, attribute_names=["stages", "groups"])
-        await materialise_event_groups(db, event, field_size=len(entrants))
-        # A fresh group's ``id`` is ``gen_random_uuid()``, minted by the INSERT;
-        # ``draw_config`` hands those ids to the snake, so the rows have to exist
-        # before it reads them. Then ``event.groups`` — a VIEWONLY association the
-        # materialisation cannot write through, loaded when the caller loaded the
-        # event — is re-read so it reflects the rows just written.
-        await db.flush()
-        await db.refresh(event, attribute_names=["groups"])
-    if not re_materialised:
-        await uncut_draw(db, [event.id])
-        await db.refresh(event, attribute_names=["stages", "groups"])
-    planned = strategy.plan_initial(draw_config(event), entrants)
+    preview = preview_draw_configuration(
+        event, materialise_field_size=len(entrants) if re_materialised else None
+    )
+    stage_positions = {stage.id: stage.position for stage in preview.stages}
+    group_slots = {
+        group.id: (stage_positions[group.stage_id], group.position)
+        for group in preview.groups
+    }
+    group_ids_by_stage = {
+        position: tuple(
+            GroupId(group.id)
+            for group in sorted(preview.groups, key=lambda group: group.position)
+            if stage_positions[group.stage_id] == position
+        )
+        for position in stage_positions.values()
+    }
+    knockout_groups = group_ids_by_stage.get(1, ())
+    planned = strategy.plan_initial(
+        DrawConfig(
+            group_ids=group_ids_by_stage.get(0, ()),
+            knockout_group_id=knockout_groups[0] if len(knockout_groups) == 1 else None,
+        ),
+        entrants,
+    )
     await enforce_draw_storage(
         db,
         tournament_id=event.tournament_id,
         fixture_count=len(planned),
         actor_id=actor_id,
     )
+    await enforce_draw_configuration_size(db, preview.model_dump(mode="json"))
+    # Every refusal above is read-only. Only an accepted plan may retire history.
+    await uncut_draw(db, [event.id])
+    await db.refresh(event, attribute_names=["stages", "groups"])
+    if re_materialised:
+        await materialise_event_groups(db, event, field_size=len(entrants))
+        await db.flush()
+        await db.refresh(event, attribute_names=["groups"])
+    actual_stage_positions = {stage.id: stage.position for stage in event.stages}
+    actual_groups = {
+        (actual_stage_positions[group.stage_id], group.position): GroupId(group.id)
+        for group in event.groups
+    }
+    planned = [
+        replace(fixture, group_id=actual_groups[group_slots[_group_id_of(fixture)]])
+        for fixture in planned
+    ]
     # This event's stage ids keyed by ``position`` — what a planned fixture's
     # ``stage_id`` is resolved against below (ADR 20260815 decision 5's write seam).
     # Built from the already-eager ``TournamentEvent.stages`` collection
@@ -844,8 +872,7 @@ async def cut_draw(
     # ``event`` with its stages, so re-selecting them here would be a second
     # statement for a collection already in hand.
     stage_ids = {stage.position: stage.id for stage in event.stages}
-    configuration = snapshot_draw_configuration(event)
-    await enforce_draw_configuration_size(db, configuration)
+    configuration = bind_draw_configuration(preview, event)
     revision = TournamentDrawRevision(
         event_id=event.id,
         configuration=configuration,

@@ -77,6 +77,10 @@ Deferred retirement validation checks changed fixtures and participation periods
 by identity; stage/revision changes check their own dependent rows. It does not
 rescan a whole event for every inserted fixture. Validation reads final stored
 state, including after repeated changes within one transaction.
+Quota checks run against the prospective plan and configuration before any draw
+retirement. Group identities are bound after accepted configuration materialization;
+UUID replacement preserves the checked snapshot byte size.
+
 A refused replacement leaves the prior revision current and unchanged. Retirement
 changes only the retirement marker; other fixture fields remain as last recorded.
 

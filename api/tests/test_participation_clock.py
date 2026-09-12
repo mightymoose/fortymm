@@ -128,3 +128,35 @@ async def test_eligibility_restoration_uses_database_clock(
     assert withdrawal is not None
     assert withdrawal.restored_at is not None
     assert withdrawal.restored_at >= withdrawal.withdrawn_at
+
+
+async def test_stage_retirement_uses_database_clock(
+    db_session: AsyncSession,
+    drawn_history: dict[str, uuid.UUID],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from sqlalchemy import text
+
+    from app import tournament_event_stages
+    from tests.test_draw_history_integrity import _uncut
+
+    monkeypatch.setattr(
+        tournament_event_stages, "datetime", _LaggingClock, raising=False
+    )
+    await _uncut(db_session, drawn_history)
+    stage = (
+        await db_session.execute(
+            text(
+                "SELECT s.created_at, s.retired_at, "
+                "r.retired_at AS revision_retired_at "
+                "FROM tournament_fixtures f "
+                "JOIN tournament_event_stages s ON s.id=f.stage_id "
+                "JOIN tournament_draw_revisions r ON r.id=f.draw_revision_id "
+                "WHERE f.id=:id"
+            ),
+            {"id": drawn_history["fixture_id"]},
+        )
+    ).one()
+    assert stage.retired_at is not None
+    assert stage.retired_at >= stage.created_at
+    assert stage.retired_at >= stage.revision_retired_at

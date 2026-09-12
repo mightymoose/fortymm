@@ -44,9 +44,8 @@ otherwise — so this gate needs no COUNT of its own to establish that.
 import enum
 import uuid
 from collections.abc import Collection
-from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -232,7 +231,6 @@ async def archive_stage_configuration(
             )
         ).all()
     )
-    retired_at = datetime.now(UTC)
     replacements: list[TournamentEventStage] = []
     for stage in stages:
         groups = []
@@ -264,7 +262,7 @@ async def archive_stage_configuration(
             update(TournamentEventStage)
             .where(TournamentEventStage.id.in_([stage.id for stage in stages]))
             .values(
-                retired_at=retired_at,
+                retired_at=func.clock_timestamp(),
                 updated_at=TournamentEventStage.updated_at,
             )
         )

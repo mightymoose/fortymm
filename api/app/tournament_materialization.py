@@ -493,4 +493,7 @@ def _stage_is_complete(
             if not all(row.match_id in decided_matches for row in seated):
                 return False
         return True
-    return all(row.match_id in decided_matches for row in fixtures)
+    return all(
+        row.winner_entry_id is not None or row.match_id in decided_matches
+        for row in fixtures
+    )

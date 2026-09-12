@@ -9869,6 +9869,18 @@ async def test_a_merge_collision_on_a_played_event_does_not_corrupt_the_draw(
     # why its fixture survived above), and the survivor's is the one that stands.
     active = await _active_entries(db_session, event["id"])
     assert [e.user_id for e in active] == [survivor.id]
+    periods = (
+        await db_session.execute(
+            text(
+                "SELECT ended_at, end_reason FROM tournament_entry_participations "
+                "WHERE entry_id = :entry"
+            ),
+            {"entry": active[0].id},
+        )
+    ).all()
+    assert len(periods) == 1
+    assert periods[0].ended_at is not None
+    assert periods[0].end_reason == "stage_completed"
 
     # And the standings are not frozen by the void. A voided fixture never yields an
     # outcome, so it is excluded from the group's completeness count (ADR-0788). The
@@ -10697,6 +10709,58 @@ async def test_the_detail_bff_surfaces_live_standings_then_a_champion(
         row.ended_at is not None and row.end_reason == "stage_completed"
         for row in periods
     )
+
+
+async def test_matchless_winner_counts_toward_stage_completion(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    from app.official_results import void_official_match
+
+    client, owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
+    await _seed_field(db_session, event["id"], 3)
+    await _cut_the_draw(client, tournament_id, event["id"])
+    fixtures = await _fixture_rows(db_session, event["id"])
+    walkover = fixtures[0]
+    # Winner-only outcomes are a supported persisted sporting fact and seal a
+    # draw against re-cutting even when no playable Match was needed.
+    walkover.winner_entry_id = walkover.entry_a_id
+    await db_session.commit()
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    assert (await _go_live(client, tournament_id)).status_code == 201
+    remaining = [
+        fixture
+        for fixture in await _fixture_rows(db_session, event["id"])
+        if fixture.id != walkover.id
+    ]
+    assert len(remaining) == 2
+    periods_query = text(
+        "SELECT ended_at, end_reason FROM tournament_entry_participations "
+        "WHERE event_id = :event"
+    )
+    for index, fixture in enumerate(remaining):
+        assert fixture.match_id is not None
+        await void_official_match(
+            db_session, fixture.match_id, owner.id, reason="Fixture cannot be played"
+        )
+        await db_session.commit()
+        periods = (
+            await db_session.execute(periods_query, {"event": uuid.UUID(event["id"])})
+        ).all()
+        assert len(periods) == 3
+        if index == 0:
+            assert all(period.ended_at is None for period in periods)
+        else:
+            assert all(
+                period.ended_at is not None and period.end_reason == "stage_completed"
+                for period in periods
+            )
+    await db_session.refresh(walkover)
+    assert walkover.match_id is None
+    assert walkover.winner_entry_id == walkover.entry_a_id
 
 
 async def test_the_detail_bff_surfaces_single_elim_finishes(
