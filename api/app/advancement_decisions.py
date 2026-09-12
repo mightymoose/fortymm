@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from pydantic import TypeAdapter
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.draws import GroupAdvancement, KnockoutAdvancement, SideFill
@@ -316,7 +316,9 @@ async def replace_advancement(
             ).one()
             players = (
                 await db.scalars(
-                    select(TournamentEntryMember.player_id).where(
+                    select(
+                        func.entry_canonical_player(TournamentEntryMember.player_id)
+                    ).where(
                         TournamentEntryMember.entry_id == entry_id,
                         TournamentEntryMember.left_at.is_(None),
                     )

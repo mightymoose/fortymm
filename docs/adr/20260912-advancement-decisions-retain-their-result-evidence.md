@@ -30,6 +30,13 @@ with an honest explanation and no fabricated result references. It is distinct
 from verified evidence, and cannot be inferred merely from an empty evidence set.
 There is no legacy-data backfill.
 
+All advancement history, including explicitly unknown provenance, retains its
+fixture, entry, event and tournament. Even without any match or recorded play,
+such history prevents cutting or removing the draw and deleting its event or
+tournament. Existing HTTP actions return a clear 409 conflict; MCP actions report
+the same retention reason. Draws and parents without retained history continue
+to follow their existing deletion rules.
+
 ## Current selection and stale evidence
 
 “Current” identifies the decision governing the existing seat. “Stale” means a
@@ -60,6 +67,8 @@ Existing fixture and lineup retention rules continue to protect recorded play.
 Before recorded play, an explicit change to an already materialized, pristine
 match also updates that match side's participants in the same transaction. The
 fixture seat and its upcoming match cannot disagree about who will play.
+Participants are resolved to their canonical Players after Account merges;
+historical entry membership and advancement evidence remain unchanged.
 
 ## Relationship to existing decisions
 

@@ -1,5 +1,6 @@
 """Advancement evidence through the completion and internal history interfaces."""
 
+import pytest
 from sqlalchemy import select
 
 from app.result_proposal import propose_result
@@ -296,8 +297,10 @@ async def test_two_replacements_of_the_same_head_serialize_and_only_one_wins(
     assert len(await advancement_history(db_session, target.id, "a")) == 2
 
 
+@pytest.mark.parametrize("merge_replacement_player", [False, True])
 async def test_replacement_updates_a_materialized_match_before_recorded_play(
     db_session,
+    merge_replacement_player,
 ):
     from app.advancement_decisions import advancement_history, replace_advancement
     from app.models import (
@@ -328,6 +331,18 @@ async def test_replacement_updates_a_materialized_match_before_recorded_play(
     )
     await db_session.commit()
     (original,) = await advancement_history(db_session, target.id, "a")
+    survivor = None
+    if merge_replacement_player:
+        from app.account_merge import merge_user
+
+        replacement_entry = await db_session.get(TournamentEntry, source.entry_b_id)
+        survivor = await make_user(db_session, "replacement-survivor")
+        await merge_user(
+            db_session,
+            from_user_id=replacement_entry.user_id,
+            to_user_id=survivor.id,
+        )
+        await db_session.commit()
     corrected = await correct_result(
         db_session,
         match.id,
@@ -347,6 +362,22 @@ async def test_replacement_updates_a_materialized_match_before_recorded_play(
         official_result_ids=(corrected.id,),
     )
     await db_session.commit()
+    if survivor is not None:
+        from sqlalchemy import text
+
+        await db_session.execute(
+            text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
+            {"id": target.match_id},
+        )
+        await db_session.commit()
+        proposed = await propose_result(
+            db_session,
+            target.match_id,
+            survivor.id,
+            games=board(),
+            supersedes_result_id=None,
+        )
+        assert proposed.match.results[0].submitted_by_user_id == survivor.id
     actual = (
         await db_session.scalars(
             select(MatchSidePlayer.user_id)
@@ -355,6 +386,7 @@ async def test_replacement_updates_a_materialized_match_before_recorded_play(
         )
     ).one()
     expected = await db_session.get(TournamentEntry, source.entry_b_id)
+    await db_session.refresh(expected)
     assert actual == expected.user_id
 
 
