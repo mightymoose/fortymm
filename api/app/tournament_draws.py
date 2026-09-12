@@ -54,6 +54,7 @@ from app.draws import (
     unseated_entrant_allowance,
 )
 from app.models import (
+    AdvancementDecision,
     DrawType,
     EventFormat,
     TournamentEntry,
@@ -528,11 +529,27 @@ def event_reservations(event: TournamentEvent) -> list[Reservation]:
     ]
 
 
+async def draw_has_advancement_history(db: AsyncSession, event_id: uuid.UUID) -> bool:
+    """Retained decisions protect even imported draws without recorded play."""
+    return bool(
+        await db.scalar(
+            select(AdvancementDecision.id)
+            .join(
+                TournamentFixture,
+                TournamentFixture.id == AdvancementDecision.fixture_id,
+            )
+            .where(TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])))
+            .limit(1)
+        )
+    )
+
+
 async def draw_has_play(db: AsyncSession, event_id: uuid.UUID) -> bool:
     """Whether this event's draw shows any **evidence of play** — the one thing a cut,
     a re-cut and an un-cut are refused for (ADR-0786).
 
-    Evidence is either half of what play leaves behind on a fixture:
+    Evidence includes retained advancement decisions (even unknown provenance),
+    or either half of what play leaves behind on a fixture:
 
     * a ``winner_entry_id`` — the fixture is *decided*; a result has been recorded; or
     * a ``match_id`` — the fixture has *materialized* into a real match, which may
@@ -559,6 +576,9 @@ async def draw_has_play(db: AsyncSession, event_id: uuid.UUID) -> bool:
                 or_(
                     TournamentFixture.winner_entry_id.is_not(None),
                     TournamentFixture.match_id.is_not(None),
+                    select(AdvancementDecision.id)
+                    .where(AdvancementDecision.fixture_id == TournamentFixture.id)
+                    .exists(),
                 ),
             )
         )

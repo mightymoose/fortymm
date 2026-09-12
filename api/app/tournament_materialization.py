@@ -22,6 +22,7 @@ from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.advancement_decisions import record_side_fill
 from app.draws import (
     FixtureStage,
     OrderedEntrant,
@@ -197,6 +198,7 @@ async def materialize_event(
     # nothing and its materialization is unchanged.
     fixtures_by_id = {fixture.id: fixture for fixture in fixtures}
     for fill in plan.side_fills:
+        await record_side_fill(db, fill)
         _apply_side_fill(fixtures_by_id[fill.fixture_id], fill)
     # Readiness is decided by ``ready_fixtures`` — the shared helper ``advance()``
     # itself returns as ``ready_fixture_ids``, not a hand-rolled "both sides known?" —

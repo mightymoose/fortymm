@@ -483,11 +483,12 @@ class EventFormatMembershipError(Exception):
 
 
 class RecordedPlayDeletionError(Exception):
-    """A deletion would discard membership referenced by actual recorded play."""
+    """A deletion would discard recorded play or retained advancement history."""
 
-    def __init__(self) -> None:
+    def __init__(self, message: str | None = None) -> None:
         super().__init__(
-            "Recorded play must be preserved. "
+            message
+            or "Recorded play must be preserved. "
             "This event or tournament cannot be deleted."
         )
 
@@ -504,9 +505,10 @@ class DrawUnderWayError(Exception):
     409, not a 403: the caller is the owner and the draw is theirs — it is the draw
     that is past the point where a re-cut means anything. Never an ``HTTPException``."""
 
-    def __init__(self) -> None:
+    def __init__(self, message: str | None = None) -> None:
         super().__init__(
-            "This event's draw is already under way — at least one fixture has a "
+            message
+            or "This event's draw is already under way — at least one fixture has a "
             "match or a recorded winner — so it can no longer be cut or removed."
         )
 

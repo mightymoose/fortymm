@@ -46,6 +46,7 @@ from app.schedule_solves import request_solve, tournament_has_drawn_event
 from app.schemas.tournament import TournamentFixtureRead
 from app.tournament_draws import (
     cut_draw,
+    draw_has_advancement_history,
     draw_has_play,
     event_has_draw,
     uncut_draw,
@@ -112,6 +113,11 @@ async def _enforce_unplayed(db: AsyncSession, event: TournamentEvent) -> None:
     One exception for both verbs, because it is one fact — a re-cut and an un-cut are
     refused for the same reason.
     """
+    if await draw_has_advancement_history(db, event.id):
+        raise DrawUnderWayError(
+            "Advancement history must be preserved. "
+            "This event's draw can no longer be cut or removed."
+        )
     if await draw_has_play(db, event.id):
         raise DrawUnderWayError()
 

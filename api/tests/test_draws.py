@@ -25,7 +25,9 @@ from app.draws import (
     FixtureId,
     FixtureStage,
     FixtureState,
+    GroupAdvancement,
     GroupId,
+    KnockoutAdvancement,
     MatchId,
     MissingBracketSlot,
     MissingFixtureGames,
@@ -1427,7 +1429,12 @@ class TestSingleElimAdvance:
 
         # position 1 is odd → side a of round 2, position ceil(1/2) = 1.
         assert plan.side_fills == (
-            SideFill(fixture_id=by_rp[(2, 1)].fixture_id, side=Side.a, entry_id=winner),
+            SideFill(
+                fixture_id=by_rp[(2, 1)].fixture_id,
+                side=Side.a,
+                entry_id=winner,
+                provenance=KnockoutAdvancement(by_rp[(1, 1)].fixture_id),
+            ),
         )
 
     def test_an_even_position_winner_seats_into_the_successors_b_side(self) -> None:
@@ -1442,7 +1449,12 @@ class TestSingleElimAdvance:
 
         # position 2 is even → side b of round 2, position ceil(2/2) = 1.
         assert plan.side_fills == (
-            SideFill(fixture_id=by_rp[(2, 1)].fixture_id, side=Side.b, entry_id=winner),
+            SideFill(
+                fixture_id=by_rp[(2, 1)].fixture_id,
+                side=Side.b,
+                entry_id=winner,
+                provenance=KnockoutAdvancement(by_rp[(1, 2)].fixture_id),
+            ),
         )
 
     def test_advance_is_idempotent_once_the_seat_is_applied(self) -> None:
@@ -2081,11 +2093,27 @@ class TestRrThenKoAdvance:
                 fixture_id=by_slot[(2, 1)].fixture_id,
                 side=Side.a,
                 entry_id=_entry_id(6),
+                provenance=GroupAdvancement(
+                    source_group_id=_group("A"),
+                    qualification_place=1,
+                    qualifiers_per_group=2,
+                    group_count=3,
+                    group_index=0,
+                    seed=1,
+                ),
             ),
             SideFill(
                 fixture_id=by_slot[(1, 3)].fixture_id,
                 side=Side.b,
                 entry_id=_entry_id(12),
+                provenance=GroupAdvancement(
+                    source_group_id=_group("A"),
+                    qualification_place=2,
+                    qualifiers_per_group=2,
+                    group_count=3,
+                    group_index=0,
+                    seed=6,
+                ),
             ),
         )
         # Every other knockout side is still unknown: B and C have not finished.
@@ -2187,6 +2215,7 @@ class TestRrThenKoAdvance:
                 fixture_id=by_slot[(2, 2)].fixture_id,
                 side=Side.a,
                 entry_id=_entry_id(3),
+                provenance=KnockoutAdvancement(by_slot[(1, 3)].fixture_id),
             )
             in plan.side_fills
         )

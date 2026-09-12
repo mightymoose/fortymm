@@ -6,6 +6,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
+    AdvancementDecision,
     MatchGame,
     MatchLineup,
     MatchLineupPlayer,
@@ -83,3 +84,22 @@ async def require_no_recorded_play(
     )
     if await db.scalar(evidence) is not None:
         raise RecordedPlayDeletionError()
+
+    # Imported history need not have a match, lineup, or official result. Its
+    # explicit unknown provenance is still immutable, and parent deletion would
+    # destroy the seat it explains. The owner/event locks serialize this guard
+    # with advancement writers just as they do recorded-play retention.
+    advancement = (
+        select(AdvancementDecision.id)
+        .join(TournamentFixture, TournamentFixture.id == AdvancementDecision.fixture_id)
+        .join(
+            TournamentEventStage, TournamentEventStage.id == TournamentFixture.stage_id
+        )
+        .where(TournamentEventStage.event_id.in_(event_ids))
+        .limit(1)
+    )
+    if await db.scalar(advancement) is not None:
+        raise RecordedPlayDeletionError(
+            "Advancement history must be preserved. "
+            "This event or tournament cannot be deleted."
+        )
