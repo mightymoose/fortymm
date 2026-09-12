@@ -11023,6 +11023,10 @@ async def test_a_decided_matchs_placement_flags_neither_axis(
     match.status = frozen_status
     await seed_fixture_match_sides(db_session, fixture, match)
     fixture.match_id = match.id
+    if frozen_status is MatchStatus.completed:
+        from app.event_lifecycle import reconcile_event
+
+        await reconcile_event(db_session, fixture.scope_event_id)
     await db_session.commit()
 
     placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
@@ -11255,6 +11259,10 @@ async def test_a_played_out_fixture_refuses_a_placement_move(
     match.status = frozen_status
     await seed_fixture_match_sides(db_session, fixture, match)
     fixture.match_id = match.id
+    if frozen_status is MatchStatus.completed:
+        from app.event_lifecycle import reconcile_event
+
+        await reconcile_event(db_session, fixture.scope_event_id)
     await db_session.commit()
 
     response = await client.patch(

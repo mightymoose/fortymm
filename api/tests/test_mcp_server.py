@@ -5250,6 +5250,9 @@ async def test_place_fixture_played_out_fixture_raises_tool_error(
     await db_session.commit()
     await seed_fixture_match_sides(db_session, fixture, match)
     fixture.match_id = match.id
+    from app.event_lifecycle import reconcile_event
+
+    await reconcile_event(db_session, _event.id)
     await db_session.commit()
 
     async with _mcp_client(raw) as client, client:
