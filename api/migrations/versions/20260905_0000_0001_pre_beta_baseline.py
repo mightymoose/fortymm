@@ -3665,7 +3665,9 @@ def upgrade() -> None:
             ["tournament_id", "table_id"],
             ["tournament_tables.tournament_id", "tournament_tables.id"],
             name="fk_tournament_table_call_history_tournament_id_table_id",
-            ondelete="RESTRICT",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
         ),
         sa.PrimaryKeyConstraint("id"),
     )

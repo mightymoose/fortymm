@@ -9063,6 +9063,56 @@ async def test_table_outage_and_restore_preserve_membership_across_events(
     assert fixture.table_id == table_1
 
 
+async def test_a_live_manual_call_rejects_a_table_with_an_active_outage(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+) -> None:
+    """A live manual placement calls immediately, so it cannot call a table that is
+    currently out of service. Refusal leaves the existing placement alone and records
+    no call history."""
+    client, _ = authed_client
+    (
+        tournament_id,
+        _event_id,
+        fixture,
+        table_1,
+        _table_2,
+    ) = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix="manual-call-outage"
+    )
+    from app.tournament_table_availability import mark_table_out_of_service
+
+    await mark_table_out_of_service(
+        db_session,
+        tournament_id=uuid.UUID(tournament_id),
+        table_id=table_1,
+    )
+    await db_session.commit()
+    await _go_live_directly(db_session, tournament_id)
+
+    response = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T10:30:00"},
+    )
+
+    assert response.status_code == 409, response.text
+    assert "out of service" in response.json()["detail"]
+    db_session.expire_all()
+    await db_session.refresh(fixture)
+    assert fixture.scheduled_start == datetime(2026, 6, 13, 15, 0, tzinfo=UTC)
+    assert fixture.call_notified_count == 0
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(VenueTableCallHistory)
+            .where(VenueTableCallHistory.tournament_id == uuid.UUID(tournament_id))
+        )
+        == 0
+    )
+    assert not fake_notifications_queue.jobs
+
+
 async def test_a_table_can_have_only_one_active_outage(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
@@ -9335,8 +9385,10 @@ async def test_database_restricts_hard_deleting_a_table_in_call_history(
     await db_session.flush()
     await db_session.delete(table)
 
+    await db_session.flush()
     with pytest.raises(IntegrityError):
-        await db_session.flush()
+        await db_session.commit()
+    await db_session.rollback()
 
 
 @pytest.mark.parametrize(
