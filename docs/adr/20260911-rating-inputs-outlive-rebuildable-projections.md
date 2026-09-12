@@ -34,7 +34,9 @@ without deleting inputs or official results.
 
 Replay reconstructs the connected group of players reached through rated matches
 within the league, including earlier opponent histories. It leaves unrelated
-groups untouched. The former forward-only cascade seeded from existing calculated
+groups untouched. Replay discovers reachable match and Player IDs through indexed
+participation queries before loading complete matches; unrelated matches are not
+hydrated. The former forward-only cascade seeded from existing calculated
 rows; that optimization cannot independently recover uncertainty after those rows
 are deleted. Reconstructing earlier dependencies costs more work but makes the
 durable facts sufficient to rebuild. A heavily connected league may require a
@@ -63,6 +65,15 @@ must not commit a partial correction. Replay does not repeat first-completion
 notifications or advancement effects. Existing Account-merge background processing
 continues to own its per-league transactions. No public correction/adjustment
 endpoint, UI or strategy migration workflow is introduced.
+
+A deferred database constraint also protects direct SQL corrections of rated
+singles matches: every participant must have a projection for the current official
+revision, and their current rating must agree with their latest projection. Missing
+projection rows or current ratings do not bypass the constraint. This rejects
+advancing the score while retaining predecessor projections. The application replay
+service remains responsible for recalculating the entire affected history; the
+database does not independently verify calculator arithmetic. Unrated and solo
+matches do not require match-derived rating projections.
 
 **Known concurrent-writer defect** (a separate beta prerequisite in
 [#1669](https://github.com/mightymoose/fortymm/issues/1669)): the existing recompute advisory lock orders

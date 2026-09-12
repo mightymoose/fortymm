@@ -201,11 +201,12 @@ async def correct_result(
         match = await load_match_for_write(db, match_id, actor_account_id, lock=False)
         from app.ratings.recompute import recompute_league_ratings
 
-        await recompute_league_ratings(
-            db,
-            match.league_id,
-            {player.user_id for side in match.sides for player in side.players},
-        )
+        if match.match_settings.affects_rating:
+            await recompute_league_ratings(
+                db,
+                match.league_id,
+                {player.user_id for side in match.sides for player in side.players},
+            )
         match = await load_match_for_write(db, match_id, actor_account_id, lock=False)
         await _stage_ruling_hints(db, match)
         await db.flush()
@@ -242,11 +243,12 @@ async def void_official_match(
         await void_match(db, match)
         from app.ratings.recompute import recompute_league_ratings
 
-        await recompute_league_ratings(
-            db,
-            match.league_id,
-            {player.user_id for side in match.sides for player in side.players},
-        )
+        if match.match_settings.affects_rating:
+            await recompute_league_ratings(
+                db,
+                match.league_id,
+                {player.user_id for side in match.sides for player in side.players},
+            )
         match = await load_match_for_write(db, match_id, actor_account_id, lock=False)
         await _stage_ruling_hints(db, match)
         await db.flush()

@@ -863,6 +863,13 @@ async def test_sql_append_advances_pointer_and_stale_snapshot_cannot_branch(
         )
         successor = uuid.uuid4()
         await db_session.execute(statement, {"new": successor, "root": root.id})
+        from app.ratings.recompute import recompute_league_ratings
+
+        await recompute_league_ratings(
+            db_session,
+            match.league_id,
+            {player.user_id for side in match.sides for player in side.players},
+        )
         await db_session.commit()
         assert (
             await db_session.scalar(

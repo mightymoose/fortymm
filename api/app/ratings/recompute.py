@@ -17,13 +17,14 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 
 from app.models import (
     League,
     Match,
     MatchSettings,
     MatchSide,
+    MatchSidePlayer,
     MatchStatus,
     RatingHistory,
     RatingHistorySource,
@@ -94,18 +95,45 @@ async def recompute_league_ratings(
     await db.execute(
         text("SELECT pg_advisory_xact_lock(:key)"), {"key": _league_lock_key(league_id)}
     )
+    affected = {await canonical_player(db, user_id) for user_id in seed_user_ids}
+    match_ids: set[uuid.UUID] = set()
+    if strategy.is_automatic:
+        # Expand from the indexed participants before hydrating any match.
+        # Earlier opponents are dependencies too, so walk the whole component.
+        participant = aliased(MatchSidePlayer)
+        opponent = aliased(MatchSidePlayer)
+        frontier = set(affected)
+        while frontier:
+            edges = await db.execute(
+                select(participant.match_id, opponent.user_id)
+                .join(Match, Match.id == participant.match_id)
+                .join(MatchSettings, MatchSettings.id == Match.match_settings_id)
+                .join(
+                    opponent,
+                    (opponent.match_id == participant.match_id)
+                    & (opponent.match_side_id != participant.match_side_id),
+                )
+                .where(
+                    participant.user_id.in_(frontier),
+                    Match.league_id == league_id,
+                    Match.status == MatchStatus.completed,
+                    Match.current_official_result_id.is_not(None),
+                    MatchSettings.affects_rating.is_(True),
+                    MatchSettings.team_size == 1,
+                )
+            )
+            discovered: set[uuid.UUID] = set()
+            for match_id, player_id in edges:
+                match_ids.add(match_id)
+                discovered.add(player_id)
+            frontier = discovered - affected
+            affected.update(frontier)
     matches = (
         list(
             (
                 await db.scalars(
                     select(Match)
-                    .join(MatchSettings)
-                    .where(
-                        Match.league_id == league_id,
-                        Match.status == MatchStatus.completed,
-                        MatchSettings.affects_rating.is_(True),
-                        MatchSettings.team_size == 1,
-                    )
+                    .where(Match.id.in_(match_ids))
                     .options(
                         selectinload(Match.sides).selectinload(MatchSide.players),
                         selectinload(Match.current_official_result),
@@ -115,28 +143,9 @@ async def recompute_league_ratings(
                 )
             ).all()
         )
-        if strategy.is_automatic
+        if match_ids
         else []
     )
-    affected = {await canonical_player(db, user_id) for user_id in seed_user_ids}
-    neighbors: dict[uuid.UUID, set[uuid.UUID]] = {}
-    for match in matches:
-        sides = _decided_sides(match)
-        if sides is not None:
-            first, second = sides[0].players[0].user_id, sides[1].players[0].user_id
-            neighbors.setdefault(first, set()).add(second)
-            neighbors.setdefault(second, set()).add(first)
-    pending = list(affected)
-    while pending:
-        player = pending.pop()
-        newly_affected = neighbors.get(player, set()) - affected
-        affected.update(newly_affected)
-        pending.extend(newly_affected)
-    matches = [
-        match
-        for match in matches
-        if any(p.user_id in affected for side in match.sides for p in side.players)
-    ]
     inputs = list(
         (
             await db.scalars(

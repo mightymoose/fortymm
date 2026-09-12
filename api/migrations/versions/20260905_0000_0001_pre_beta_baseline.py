@@ -4394,8 +4394,57 @@ def upgrade() -> None:
         $$
     """)
 
+    op.execute("""
+        CREATE FUNCTION require_rating_reconciliation() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        DECLARE parent matches; participant uuid;
+        BEGIN
+            SELECT * INTO parent FROM matches WHERE id = NEW.match_id;
+            IF NEW.revision = 1 OR parent.status <> 'completed'
+               OR NOT EXISTS (SELECT 1 FROM match_rating_bases WHERE match_id = parent.id)
+               OR NOT EXISTS (SELECT 1 FROM match_settings
+                              WHERE id = parent.match_settings_id AND team_size = 1)
+               OR (SELECT count(DISTINCT match_side_id) FROM match_side_players
+                   WHERE match_id = parent.id) <> 2
+            THEN
+                RETURN NULL;
+            END IF;
+            FOR participant IN
+                SELECT entry_canonical_player(user_id) FROM match_side_players
+                WHERE match_id = parent.id
+            LOOP
+                IF NOT EXISTS (
+                    SELECT 1 FROM rating_history
+                    WHERE match_id = parent.id AND user_id = participant
+                      AND official_result_id = parent.current_official_result_id
+                ) OR NOT EXISTS (
+                    SELECT 1 FROM user_league_ratings current_rating
+                    JOIN LATERAL (
+                        SELECT rating_state FROM rating_history
+                        WHERE league_id = parent.league_id AND user_id = participant
+                        ORDER BY created_at DESC, match_id DESC NULLS LAST,
+                                 rating_input_order(rating_input_id) DESC NULLS LAST
+                        LIMIT 1
+                    ) latest ON current_rating.rating_state = latest.rating_state
+                    WHERE current_rating.league_id = parent.league_id
+                      AND current_rating.user_id = participant
+                ) THEN
+                    RAISE EXCEPTION 'rated correction requires rating reconciliation'
+                        USING ERRCODE = '23514';
+                END IF;
+            END LOOP;
+            RETURN NULL;
+        END $$
+    """)
+    op.execute("""
+        CREATE CONSTRAINT TRIGGER require_rating_reconciliation
+        AFTER INSERT ON match_official_results DEFERRABLE INITIALLY DEFERRED
+        FOR EACH ROW EXECUTE FUNCTION require_rating_reconciliation()
+    """)
+
 
 def downgrade() -> None:
+    op.execute("DROP FUNCTION require_rating_reconciliation() CASCADE")
     op.execute("DROP FUNCTION rating_input_order(uuid)")
     op.execute("DROP TRIGGER official_rating_basis ON match_official_results")
     op.execute("DROP FUNCTION bind_match_rating_strategy()")
