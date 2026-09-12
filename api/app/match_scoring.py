@@ -143,13 +143,15 @@ async def lock_match_for_transition(
         # Tournament completion guards require parents before the match. Take
         # these locks before loading/mutating it, so ordinary acceptance waits
         # safely for scheduling instead of leaking a retryable SQL error.
+        # Completion updates this parent: acquire UPDATE now, before the event,
+        # rather than upgrading SHARE while another event writer waits on us.
         await db.execute(
             text(
                 "SELECT t.id FROM tournaments t "
                 "JOIN tournament_events e ON e.tournament_id = t.id "
                 "JOIN tournament_event_stages s ON s.event_id = e.id "
                 "JOIN tournament_fixtures f ON f.stage_id = s.id "
-                "WHERE f.match_id = :match FOR SHARE OF t"
+                "WHERE f.match_id = :match FOR UPDATE OF t"
             ),
             {"match": match_id},
         )

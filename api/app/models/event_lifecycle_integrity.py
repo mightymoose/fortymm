@@ -8,6 +8,24 @@ from app.db import Base
 
 EVENT_LIFECYCLE_DDL = (
     """
+    CREATE FUNCTION lock_event_play_parent() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        PERFORM t.id FROM tournaments t
+        JOIN tournament_fixtures f ON f.scope_tournament_id=t.id
+        WHERE f.match_id=NEW.match_id FOR SHARE OF t;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER a_event_play_parent BEFORE INSERT OR UPDATE OF match_id
+    ON match_games FOR EACH ROW EXECUTE FUNCTION lock_event_play_parent()
+    """,
+    """
+    CREATE TRIGGER a_event_play_parent BEFORE INSERT
+    OR UPDATE OF match_id, submitted_by_user_id, accepted_by_user_id, accepted_at
+    ON match_results FOR EACH ROW EXECUTE FUNCTION lock_event_play_parent()
+    """,
+    """
     CREATE FUNCTION preserve_event_lifecycle() RETURNS trigger
     LANGUAGE plpgsql AS $$
     BEGIN
@@ -115,6 +133,10 @@ EVENT_LIFECYCLE_DDL = (
         game_no integer;
         state event_lifecycle_state;
     BEGIN
+        PERFORM t.id FROM tournaments t
+        JOIN tournament_fixtures f ON f.scope_tournament_id=t.id
+        JOIN match_games g ON g.match_id=f.match_id
+        WHERE g.id=NEW.match_game_id FOR SHARE OF t;
         SELECT e.id, e.lifecycle_state, g.match_id, g.game_number
         INTO event_uuid, state, match_uuid, game_no
         FROM tournament_events e
@@ -184,6 +206,8 @@ EVENT_LIFECYCLE_DDL = (
             JOIN match_game_scores s ON s.match_game_id=g.id
             WHERE g.match_id=NEW.match_id
         ) THEN
+            PERFORM t.id FROM tournaments t
+            WHERE t.id=NEW.scope_tournament_id FOR SHARE OF t;
             PERFORM id FROM tournament_events WHERE id=NEW.scope_event_id FOR UPDATE;
             IF EXISTS (SELECT 1 FROM tournament_events
                 WHERE id=NEW.scope_event_id AND lifecycle_state='cancelled') THEN
@@ -218,6 +242,9 @@ EVENT_LIFECYCLE_DDL = (
     BEGIN
         IF NEW.status='entered' AND (TG_OP='INSERT'
             OR OLD.status<>'entered' OR NEW.event_id<>OLD.event_id) THEN
+            PERFORM t.id FROM tournaments t
+            JOIN tournament_events e ON e.tournament_id=t.id
+            WHERE e.id=NEW.event_id FOR SHARE OF t;
             PERFORM id FROM tournament_events WHERE id=NEW.event_id FOR UPDATE;
             IF EXISTS (SELECT 1 FROM tournament_events
                 WHERE id=NEW.event_id AND lifecycle_state='cancelled') THEN
@@ -238,6 +265,9 @@ EVENT_LIFECYCLE_DDL = (
     LANGUAGE plpgsql AS $$
     DECLARE event_uuid uuid;
     BEGIN
+        PERFORM t.id FROM tournaments t
+        JOIN tournament_fixtures f ON f.scope_tournament_id=t.id
+        WHERE f.match_id=NEW.match_id FOR SHARE OF t;
         SELECT e.id INTO event_uuid FROM tournament_events e
         JOIN tournament_fixtures f ON f.scope_event_id=e.id
         WHERE f.match_id=NEW.match_id AND e.lifecycle_state='cancelled'

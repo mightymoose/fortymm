@@ -9,7 +9,7 @@ import uuid
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import TournamentEvent, TournamentFixture, User
+from app.models import Tournament, TournamentEvent, TournamentFixture, User
 from app.models.tournament import EventLifecycleState
 from app.tournament_queries import (
     active_entrants_by_event,
@@ -21,6 +21,13 @@ from app.tournament_serialization import event_results
 
 async def reconcile_event(db: AsyncSession, event_id: uuid.UUID) -> None:
     await db.flush()
+    # Completion and cancellation both serialize parent scope before event state.
+    await db.scalar(
+        select(Tournament.id)
+        .join(TournamentEvent, TournamentEvent.tournament_id == Tournament.id)
+        .where(TournamentEvent.id == event_id)
+        .with_for_update(of=Tournament)
+    )
     event = await db.scalar(
         select(TournamentEvent)
         .where(TournamentEvent.id == event_id)
@@ -107,6 +114,14 @@ async def require_game_recording_allowed(
     from app.match_errors import ScoreNotAllowedError
     from app.models.event_lifecycle import EventRecordedGame
 
+    # Finalization later needs this same parent lock. Taking the event first
+    # would deadlock against cancellation, which already holds the tournament.
+    await db.scalar(
+        select(Tournament.id)
+        .join(TournamentFixture, TournamentFixture.scope_tournament_id == Tournament.id)
+        .where(TournamentFixture.match_id == match_id)
+        .with_for_update(of=Tournament)
+    )
     state = await db.scalar(
         select(TournamentEvent.lifecycle_state)
         .join(TournamentFixture, TournamentFixture.scope_event_id == TournamentEvent.id)
