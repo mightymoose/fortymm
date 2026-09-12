@@ -20,7 +20,8 @@ import uuid
 from collections import defaultdict
 from collections.abc import Sequence
 
-from sqlalchemy import exists, or_, select, tuple_
+from sqlalchemy import any_, exists, literal, or_, select, tuple_
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -416,7 +417,10 @@ async def _actively_participating_fixture_ids(
             .join(side_a, side_a.id == TournamentFixture.participation_a_id)
             .join(side_b, side_b.id == TournamentFixture.participation_b_id)
             .where(
-                TournamentFixture.id.in_([fixture.id for fixture in fixtures]),
+                TournamentFixture.id
+                == any_(
+                    literal([fixture.id for fixture in fixtures], type_=ARRAY(UUID))
+                ),
                 side_a.ended_at.is_(None),
                 side_b.ended_at.is_(None),
             )

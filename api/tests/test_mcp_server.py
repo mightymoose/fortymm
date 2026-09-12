@@ -5386,7 +5386,14 @@ async def test_build_cut_storage_limit_raises_actionable_tool_error(
 
 
 @pytest.mark.parametrize(
-    "tool_name", ["build_cut", "uncut", "delete_event", "delete_tournament"]
+    "tool_name",
+    [
+        "build_cut",
+        "uncut",
+        "delete_event",
+        "delete_tournament",
+        "transition_tournament",
+    ],
 )
 async def test_draw_change_busy_actor_returns_actionable_refusal(
     db_session: AsyncSession, engine, default_league: League, tool_name: str
@@ -5408,6 +5415,8 @@ async def test_draw_change_busy_actor_returns_actionable_refusal(
         arguments["tournament_id"] = str(tournament.id)
     if tool_name == "delete_tournament":
         arguments.pop("event_id")
+    if tool_name == "transition_tournament":
+        arguments = {"tournament_id": str(tournament.id), "to": "live"}
     sessions = async_sessionmaker(engine)
     async with sessions() as gate:
         await lock_draw_actor(gate, actor_id)

@@ -1352,6 +1352,9 @@ async def transition_tournament(
     stage, moving out of the terminal ``archived``, and re-asserting the status the
     tournament already holds (a stale request, not a no-op).
 
+    Going live is refused while another draw operation by this account is in
+    progress. Retry after that operation finishes.
+
     **Going live has a precondition** (ADR-0786): the tournament must have at least one
     event, and every event must have a **draw** whose fixtures seat exactly its current
     entrants. A tournament with no events, an event with no draw, or an event whose
@@ -1378,6 +1381,8 @@ async def transition_tournament(
             tournament = await transition_tournament_core(
                 db, tournament_id=tournament_id, actor=actor, to=to
             )
+        except DrawActorBusy as error:
+            raise _map_draw_refusal_tool_error(error) from error
         except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
             raise _map_tournament_write_tool_error(
                 exc, tournament_id=tournament_id, owner_denial="transition"

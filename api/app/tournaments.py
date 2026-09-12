@@ -660,6 +660,9 @@ async def create_tournament_transition(
     re-asserting the status the tournament already holds — a request to publish
     an already-published tournament is a stale client, not a no-op.
 
+    A go-live request also returns `409` while another draw operation by this
+    account is in progress. Retry after that operation finishes.
+
     **Going live has a precondition** (ADR-0786): the tournament must have at least
     one event, and every event must have a **draw** whose fixtures seat exactly its
     current entrants. Three things are refused with a `409` that names the events at
@@ -690,6 +693,8 @@ async def create_tournament_transition(
         tournament = await transition_tournament(
             db, tournament_id=tournament_id, actor=current_user, to=payload.to
         )
+    except DrawActorBusy as error:
+        raise _draw_refusal(error) from error
     except _TOURNAMENT_WRITE_ERRORS as exc:
         # The shared arms: the 404 (absent) and the 403 (not the owner), judged in that
         # order by the locked owner-loader — so a stranger never learns a tournament's
