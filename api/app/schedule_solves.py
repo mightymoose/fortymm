@@ -8,11 +8,10 @@ deliberately *orchestration only*: it decides nothing about placement, it only
 moves the solver's inputs and outputs across the boundary honestly.
 
 **One solve in flight per tournament.** Every trigger funnels into
-:func:`request_solve`: a ``queued`` row absorbs the trigger (it is returned,
-nothing new is enqueued); a ``running`` row gets ``rerun_requested`` set (the
-job re-queues at finish); only when neither exists is a row inserted and the RQ
-job enqueued. The ledger row *is* the coalescing state — there is no separate
-lock or Redis key to drift from it.
+:func:`request_solve`. A queued ledger row absorbs another trigger; a running
+row requests a rerun. The durable requirement in ``app.required_repairs`` owns
+requested/completed generations, dispatch, retries, and worker fencing. The
+ledger records each solve's outcome and keeps pending work visible to clients.
 
 **The job is three phases, and the transaction boundaries are the design.**
 
@@ -46,18 +45,12 @@ lock or Redis key to drift from it.
     the broken-pin void below, for physics (a withdrawal), never a re-time. No
     per-fixture merging, ever: the output is taken whole or not at all.
 
-**Lock order: tournament → schedule_solves → tournament_fixtures.** Routes
-take the tournament row lock before calling :func:`request_solve` (which takes
-``FOR UPDATE`` on solve rows); phase (c) takes the same three in the same
-order, so the job and the routes queue behind each other and no pair can
-deadlock. Phase (a) takes only the solve-row lock — it never touches the
-tournament row, so it participates in no cycle. **Three tables, deliberately,
-not four**: every ``TournamentFixture`` lock here is taken ``with_for_update(of=
-TournamentFixture)``, so ``tournament_event_stages`` — which rides along on
-every fixture query as the eagerly-joined ``TournamentFixture.stage``
-(``lazy="joined"``, ``innerjoin=True``) — is never locked. Nothing writes a
-stage row on this path, so widening the lock to include it would only cost
-contention for no correctness this order needs.
+**Lock order: tournament → required_repairs → schedule_solves → fixtures.**
+Requests, worker claims, apply, and failure recording follow this order. The
+repair token is checked under lock before applying placements or completing a
+generation. Solving itself holds no transaction. Fixture locks use
+``with_for_update(of=TournamentFixture)`` so eagerly joined stage rows do not
+expand the lock set.
 
 The **fingerprint** is a sha256 over a canonical JSON of exactly the inputs
 the solver read, in their *wall-clock* form (never minute offsets, which
@@ -194,12 +187,10 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any, Literal, assert_never
 from zoneinfo import ZoneInfo
 
-from redis.exceptions import RedisError
 from sqlalchemy import exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app import match_calls, scheduling
-from app import queue as queue_module
+from app import match_calls, required_repairs, scheduling
 from app.config import get_settings
 from app.match_calls import _wall_now
 from app.models import (
@@ -218,6 +209,7 @@ from app.models import (
     TournamentFixture,
     TournamentStatus,
 )
+from app.models.required_repair import RepairState
 from app.models.tournament import EventLifecycleState
 from app.rq_async import run_async_db_job
 from app.scheduling import (
@@ -301,7 +293,7 @@ def _stale_running_lease_s() -> float:
     solver time cap, like ``_solve_num_workers`` and ``get_settings`` itself,
     so a large one-off solve's own raised ``SOLVER_TIME_CAP_S`` isn't reaped
     out from under itself by a lease still sized for the default."""
-    return get_settings().solver_time_cap_s * STALE_RUNNING_LEASE_MULTIPLE
+    return max(900, get_settings().solver_time_cap_s * STALE_RUNNING_LEASE_MULTIPLE)
 
 
 #: What a reaped row records — the honest fact that nothing finished it, not
@@ -376,7 +368,7 @@ async def request_solve(
     db: AsyncSession,
     tournament_id: uuid.UUID,
     trigger: ScheduleSolveTrigger,
-) -> ScheduleSolve | None:
+) -> ScheduleSolve:
     """Request a schedule solve for ``tournament_id`` — the one coalesced
     enqueue every trigger funnels into (ADR).
 
@@ -392,17 +384,16 @@ async def request_solve(
       ``failed``/``STALE_RUNNING_ERROR`` and fall through to the "neither"
       branch below, so this trigger gets a fresh row rather than being
       absorbed by a job that will never finish.
-    * Neither → insert a ``queued`` row and enqueue the RQ job with its id.
-      Returns ``None`` only when the enqueue itself fails (Redis down): the
-      row is taken back out rather than left as a zombie that would absorb
-      every later trigger while no job ever runs.
+    * Neither → insert a ``queued`` row and a durable repair requirement.
+      Dispatch happens after commit; Redis failure leaves accepted work pending.
 
     Does **not** commit — the caller owns the transaction, and callers that
     also mutate scheduling inputs must hold the tournament row lock first
-    (lock order: tournament → schedule_solves; see the module docstring).
+    (lock order: tournament → required_repairs → schedule_solves; see above).
     Both selects take ``FOR UPDATE`` so a concurrent job transition
     (queued→running, running→terminal) serializes with the branch decision.
     """
+    await required_repairs.request_schedule(db, tournament_id)
     queued = (
         (
             await db.execute(
@@ -418,6 +409,7 @@ async def request_solve(
         .first()
     )
     if queued is not None:
+        required_repairs.stage_schedule(db, queued.id)
         return queued
 
     running = (
@@ -436,7 +428,13 @@ async def request_solve(
     )
     if running is not None:
         now = datetime.now(UTC)
-        if _is_stale_running(running, now=now):
+        repair = await required_repairs.for_tournament(db, tournament_id)
+        stale = (
+            repair.lease_until <= now
+            if repair is not None and repair.lease_until is not None
+            else _is_stale_running(running, now=now)
+        )
+        if stale:
             # The row is locked (FOR UPDATE, above) and confirmed stale: the
             # worker that owned it is presumed dead (ADR). Reap it to a
             # terminal state and fall through to the "neither queued nor
@@ -448,6 +446,7 @@ async def request_solve(
         else:
             running.rerun_requested = True
             await db.flush()
+            required_repairs.stage_schedule(db, running.id)
             return running
 
     row = ScheduleSolve(
@@ -457,19 +456,7 @@ async def request_solve(
     )
     db.add(row)
     await db.flush()
-    try:
-        queue_module.get_queue().enqueue(
-            RUN_SCHEDULE_SOLVE_JOB,
-            str(row.id),
-            job_timeout=int(get_settings().solver_time_cap_s) + JOB_TIMEOUT_MARGIN_S,
-        )
-    except RedisError:
-        log.exception(
-            "Failed to enqueue schedule solve for tournament %s", tournament_id
-        )
-        await db.delete(row)
-        await db.flush()
-        return None
+    required_repairs.stage_schedule(db, row.id)
     return row
 
 
@@ -541,11 +528,21 @@ async def latest_solve(
         await db.execute(
             select(ScheduleSolve)
             .where(ScheduleSolve.tournament_id == tournament_id)
-            .order_by(ScheduleSolve.requested_at.desc(), ScheduleSolve.id.desc())
+            .order_by(
+                ScheduleSolve.status.in_(
+                    [ScheduleSolveStatus.queued, ScheduleSolveStatus.running]
+                ).desc(),
+                ScheduleSolve.requested_at.desc(),
+                ScheduleSolve.id.desc(),
+            )
             .limit(1)
         )
     ).scalar_one_or_none()
     if row is None or not _is_stale_running(row, now=datetime.now(UTC)):
+        return row
+    if await required_repairs.for_tournament(db, tournament_id) is not None:
+        # Recovery owns lease expiration. Keep the pending/running wire status
+        # until it dispatches the replacement, so pre-live clients keep polling.
         return row
 
     locked = (
@@ -1682,22 +1679,47 @@ async def execute_solve(
     now = _wall_now()
 
     async with sessionmaker() as db:
-        row = (
-            await db.execute(
-                select(ScheduleSolve)
-                .where(ScheduleSolve.id == solve_id)
-                .with_for_update()
-            )
-        ).scalar_one_or_none()
-        if row is None or row.status is not ScheduleSolveStatus.queued:
-            # Stale: the row was superseded, finished, or never committed
-            # (an enqueue whose transaction rolled back).
+        initial = await db.get(ScheduleSolve, solve_id)
+        if initial is None:
             return
-        tournament_id = row.tournament_id
+        tournament_id = initial.tournament_id
+        await db.execute(
+            select(Tournament.id)
+            .where(Tournament.id == tournament_id)
+            .with_for_update()
+        )
+        repair = await required_repairs.for_tournament(db, tournament_id)
+        if repair is None:
+            return
+        ownership = await required_repairs.claim(db, repair.id, now=datetime.now(UTC))
+        if ownership is None:
+            return
+        row = await db.scalar(
+            select(ScheduleSolve)
+            .where(
+                ScheduleSolve.tournament_id == tournament_id,
+                ScheduleSolve.status.in_(
+                    [ScheduleSolveStatus.queued, ScheduleSolveStatus.running]
+                ),
+            )
+            .order_by(ScheduleSolve.requested_at.desc(), ScheduleSolve.id.desc())
+            .limit(1)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if row is None or row.status is not ScheduleSolveStatus.queued:
+            if row is not None and row.status is ScheduleSolveStatus.running:
+                _reap_stale_running(row, now=datetime.now(UTC))
+            row = ScheduleSolve(
+                tournament_id=tournament_id,
+                trigger=ScheduleSolveTrigger.rerun,
+                status=ScheduleSolveStatus.queued,
+            )
+            db.add(row)
+            await db.flush()
+        solve_id = row.id
         row.status = ScheduleSolveStatus.running
         row.started_at = datetime.now(UTC)
-        # Committed on its own so that, whatever happens after, the row is
-        # ``running`` and the exception handler below can finish it honestly.
         await db.commit()
 
     try:
@@ -1721,11 +1743,17 @@ async def execute_solve(
             num_search_workers=_solve_num_workers(),
         )
 
-        await _apply_result(sessionmaker, solve_id, tournament_id, inputs, result)
+        await _apply_result(
+            sessionmaker, solve_id, tournament_id, inputs, result, ownership=ownership
+        )
     except Exception as exc:  # noqa: BLE001 -- the job's boundary: never leave a row running
         log.exception("Schedule solve %s failed", solve_id)
         await _finish_failed_best_effort(
-            sessionmaker, solve_id, error=str(exc) or type(exc).__name__
+            sessionmaker,
+            solve_id,
+            error=str(exc) or type(exc).__name__,
+            ownership=ownership,
+            permanent=not required_repairs.is_transient(exc),
         )
 
 
@@ -1735,6 +1763,8 @@ async def _apply_result(
     tournament_id: uuid.UUID,
     first: SolveInputs,
     result: SolveResult,
+    *,
+    ownership: required_repairs.Claim | None = None,
 ) -> None:
     """Phase (c): the guarded, whole-or-nothing apply (module docstring).
 
@@ -1749,7 +1779,7 @@ async def _apply_result(
     identical plan all write nothing and therefore hint nobody.
     """
     async with sessionmaker() as db:
-        # Lock order: tournament → schedule_solves → tournament_fixtures.
+        # Lock order: tournament → required_repairs → schedule_solves → fixtures.
         # The full tournament row (not just the id): the call evaluation below
         # reads its status, name and table catalogue. Same lock either way.
         tournament = (
@@ -1759,6 +1789,12 @@ async def _apply_result(
                 .with_for_update()
             )
         ).scalar_one_or_none()
+        if (
+            ownership is not None
+            and await required_repairs.lock_claim(db, ownership, now=datetime.now(UTC))
+            is None
+        ):
+            return
         row = (
             await db.execute(
                 select(ScheduleSolve)
@@ -1790,6 +1826,8 @@ async def _apply_result(
             row.status = ScheduleSolveStatus.failed
             row.error = SUPERSEDED_ERROR
             await request_solve(db, tournament_id, ScheduleSolveTrigger.rerun)
+            if ownership is not None:
+                await required_repairs.complete(db, ownership, now=datetime.now(UTC))
             await db.commit()
             return
 
@@ -1952,6 +1990,18 @@ async def _apply_result(
         await stage_event_entrant_hints(db, sorted(moved_event_ids))
         if rerun_was_requested:
             await request_solve(db, tournament_id, ScheduleSolveTrigger.rerun)
+        if ownership is not None:
+            if result.verdict is scheduling.Verdict.unknown:
+                await required_repairs.fail(
+                    db,
+                    ownership,
+                    error=TIME_CAP_ERROR,
+                    permanent=False,
+                    now=datetime.now(UTC),
+                )
+                await _queue_pending_retry(db, tournament_id)
+            else:
+                await required_repairs.complete(db, ownership, now=datetime.now(UTC))
         await db.commit()
     # Post-commit, by design: the pins and their in-app rows are durable;
     # push/email fan-out is best-effort (app.match_calls module docstring).
@@ -1963,12 +2013,33 @@ async def _finish_failed_best_effort(
     solve_id: uuid.UUID,
     *,
     error: str,
+    ownership: required_repairs.Claim | None = None,
+    permanent: bool = True,
 ) -> None:
     """Terminal write for a crashed run — best-effort, on a fresh session (the
     one that crashed may hold a broken transaction). Guarded on ``running`` so
     it can never clobber a terminal status a completed apply already wrote."""
     try:
         async with sessionmaker() as db:
+            tournament_id = await db.scalar(
+                select(ScheduleSolve.tournament_id).where(ScheduleSolve.id == solve_id)
+            )
+            if tournament_id is None:
+                return
+            await db.execute(
+                select(Tournament.id)
+                .where(Tournament.id == tournament_id)
+                .with_for_update()
+            )
+            if ownership is not None:
+                if not await required_repairs.fail(
+                    db,
+                    ownership,
+                    error=error,
+                    permanent=permanent,
+                    now=datetime.now(UTC),
+                ):
+                    return
             await db.execute(
                 update(ScheduleSolve)
                 .where(
@@ -1981,6 +2052,10 @@ async def _finish_failed_best_effort(
                     finished_at=datetime.now(UTC),
                 )
             )
+            if ownership is not None:
+                repair = await required_repairs.inspect(db, ownership.repair_id)
+                if repair is not None and repair.state is RepairState.pending:
+                    await _queue_pending_retry(db, tournament_id)
             await db.commit()
     except Exception:  # noqa: BLE001 -- best-effort by contract; the failure is already logged
         log.exception(
@@ -1988,3 +2063,24 @@ async def _finish_failed_best_effort(
             solve_id,
             error,
         )
+
+
+async def _queue_pending_retry(db: AsyncSession, tournament_id: uuid.UUID) -> None:
+    """Keep retryable work queued in the existing ledger without resetting backoff."""
+    queued = await db.scalar(
+        select(ScheduleSolve.id)
+        .where(
+            ScheduleSolve.tournament_id == tournament_id,
+            ScheduleSolve.status == ScheduleSolveStatus.queued,
+        )
+        .limit(1)
+    )
+    if queued is None:
+        db.add(
+            ScheduleSolve(
+                tournament_id=tournament_id,
+                trigger=ScheduleSolveTrigger.rerun,
+                status=ScheduleSolveStatus.queued,
+            )
+        )
+        await db.flush()

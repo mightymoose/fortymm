@@ -4,6 +4,11 @@ Date: 2026-07-16
 Status: accepted (amended 2026-07-19)
 (Number this ADR by its PR at land time; date-prefixed until then.)
 
+Dispatch and recovery are amended by
+[Required repairs commit with their mutations](20260912-required-repairs-commit-with-their-mutations.md):
+PostgreSQL repair generations retain the obligation until completion, independently
+of Redis delivery. The solve ledger and guarded whole-result apply remain.
+
 > **Amendment (2026-07-19, #1141):** a pin is no longer a *fully* rigid `(table, start)`
 > interval. A called match's **table** is still a hard constant it can never leave, but its
 > **start can be pushed later** when a predecessor overruns — the solver slides it on the same

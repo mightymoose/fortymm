@@ -1437,10 +1437,9 @@ async def test_merge_survives_a_dead_scheduling_queue(
     await merge_user(db_session, from_user_id=ephemeral.id, to_user_id=verified.id)
     await db_session.commit()
 
-    assert await _all_solve_rows(db_session) == [], (
-        "the enqueue failed, so no row may survive — a zombie would absorb "
-        "every later trigger while no job ever runs"
-    )
+    assert [row.status for row in await _all_solve_rows(db_session)] == [
+        ScheduleSolveStatus.queued
+    ]
     # The merge itself landed whole: draw intact, entry withdrawn onto the survivor.
     assert {f.id for f in await _fixtures_for(db_session, event)} == {
         f.id for f in before

@@ -150,6 +150,8 @@ from app.models.event_lifecycle import EventLifecycleHistory as EventLifecycleHi
 from app.models.event_reconciliation import (
     EventReconciliation as EventReconciliation,
 )
+from app.models.required_repair import RepairAttempt as RepairAttempt
+from app.models.required_repair import RequiredRepair as RequiredRepair
 from app.models.tournament_archive import (
     TournamentArchiveHistory as TournamentArchiveHistory,
 )

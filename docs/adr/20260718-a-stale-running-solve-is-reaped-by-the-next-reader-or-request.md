@@ -7,6 +7,12 @@ worktrees; see ADR-0788's note and the duplicate 0915s in this directory)
 
 Accepted — fix for issue #1102, decided before implementation.
 
+Recovery ownership and the permission to discard `rerun_requested` on failure
+are superseded by
+[Required repairs commit with their mutations](20260912-required-repairs-commit-with-their-mutations.md).
+A periodic durable scan now recovers pending generations without another reader
+or request; the historical design below explains the original failure mode.
+
 ## Context
 
 `execute_solve` (`app.schedule_solves`) is written so a row is never left

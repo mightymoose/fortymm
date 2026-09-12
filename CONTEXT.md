@@ -164,6 +164,21 @@ _Avoid_: cancelled match, annulled match, disputed match (that status is retired
 
 ## Rating recompute
 
+**Required repair**:
+An obligation recorded with a mutation to reconcile derived state after it
+commits. Schedule reconciliation and rating recompute after a Player merge retain
+this obligation until their work finishes, even when dispatch or a worker fails.
+Distinct from a best-effort realtime refetch hint.
+
+**Repair generation**:
+The version of a target's required repair, advanced by each relevant mutation.
+Several pending mutations may be repaired together from current state. Finishing
+one generation cannot discharge a newer mutation's obligation.
+
+**Repair attempt**:
+One worker's claimed execution of a required repair generation. A retry is a new
+attempt; it preserves the earlier outcome for diagnosis.
+
 **Rating timeline**:
 The ordered sequence of a league's completed **rated matches** and active
 **rating inputs**. Matches use their stable completion instant; inputs use their
@@ -914,8 +929,9 @@ event's unplayed, **free** **placements** onto **tables** within each
 A solve is **requested** (queued), **running**, then reaches a **verdict** —
 `succeeded`, `infeasible`, or `failed` — recorded on the tournament's **solve
 ledger**; at most one is in flight per tournament at a time (a fresh request
-coalesces onto the running one), and a **stale running** solve is reaped by the
-next reader or request. Requesting a solve is what "run the scheduler" means; it
+coalesces onto the running one). A **required repair** retains pending work
+through a worker failure; recovery does not depend on the next reader or request.
+Requesting a solve is what "run the scheduler" means; it
 is **not** a hypothetical or Monte-Carlo projection of who will win — it computes
 *when and where* the real matches play, not their outcomes.
 _Avoid_: simulation, run (a solve computes the real schedule, never a
