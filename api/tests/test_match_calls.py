@@ -64,6 +64,7 @@ from app.models import (
     User,
     VenueTable,
     VenueTableCallHistory,
+    VenueTableOutage,
 )
 from app.schedule_solves import RUN_SCHEDULE_SOLVE_JOB, SUPERSEDED_ERROR, request_solve
 from app.schemas.notification import NotificationJob
@@ -806,6 +807,38 @@ class TestResourceFreedomGate:
         assert blocked is not None
         assert blocked.pinned_at is None  # the table was busy — not called
         assert blocked.call_notified_count == 0
+        assert await _call_notifications(db_session) == []
+        assert fake_notifications_queue.jobs == []
+
+    async def test_a_due_fixture_on_an_out_of_service_table_is_not_called(
+        self,
+        db_session: AsyncSession,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        tournament_id, event_id = await _make_tournament(db_session)
+        fixture = await _the_fixture(db_session, event_id)
+        table_id = await _table(db_session, event_id, "t1")
+        fixture.table_id = table_id
+        fixture.scheduled_start = BASE + timedelta(minutes=5)
+        db_session.add(
+            VenueTableOutage(
+                tournament_id=tournament_id,
+                table_id=table_id,
+                effective_from=BASE - timedelta(minutes=1),
+            )
+        )
+        fixture_id = fixture.id
+        await db_session.commit()
+        _freeze_clocks(monkeypatch, BASE)
+
+        run_pin_tick(str(tournament_id))
+
+        db_session.expire_all()
+        fixture = await db_session.get(TournamentFixture, fixture_id)
+        assert fixture is not None
+        assert fixture.pinned_at is None
+        assert fixture.call_notified_count == 0
         assert await _call_notifications(db_session) == []
         assert fake_notifications_queue.jobs == []
 

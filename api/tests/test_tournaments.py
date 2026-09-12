@@ -8955,6 +8955,11 @@ async def test_releasing_and_readding_a_reserved_table_preserves_its_history(
 
     assert released.status_code == 200, released.text
     assert released.json()["reservations"][0]["table_ids"] == [table_2]
+    placed_after_release = await _fixture_in_detail(
+        client, tournament_id, str(fixture.id)
+    )
+    assert placed_after_release["table_id"] == table_1
+    assert placed_after_release["table_off_reservation"] is True
     db_session.expire_all()
     await db_session.refresh(fixture)
     assert fixture.table_id == table_1
@@ -9229,11 +9234,14 @@ async def test_the_opt_in_removes_the_catalogue_table_and_leaves_its_fixtures_un
     assert fixture.pinned_at is None
 
 
+@pytest.mark.parametrize("completed", [False, True])
 async def test_removing_a_table_with_call_history_retires_it_instead_of_deleting_it(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
+    default_league: League,
+    completed: bool,
 ) -> None:
-    client, _ = authed_client
+    client, owner = authed_client
     (
         tournament_id,
         _event_id,
@@ -9241,6 +9249,12 @@ async def test_removing_a_table_with_call_history_retires_it_instead_of_deleting
         table_1,
         table_2,
     ) = await _tournament_with_a_placed_fixture(client, db_session, prefix="retired")
+    if completed:
+        completed_match = await _make_match(db_session, owner, default_league)
+        completed_match.status = MatchStatus.completed
+        await seed_fixture_match_sides(db_session, fixture, completed_match)
+        fixture.match_id = completed_match.id
+    fixture.pinned_at = datetime.now(UTC)
     db_session.add(
         VenueTableCallHistory(
             tournament_id=uuid.UUID(tournament_id),
@@ -9277,7 +9291,8 @@ async def test_removing_a_table_with_call_history_retires_it_instead_of_deleting
             )
         )
     ).all()
-    assert {row.kind for row in history} == {"called", "cancelled"}
+    expected_history = {"called"} if completed else {"called", "cancelled"}
+    assert {row.kind for row in history} == expected_history
     assert (
         await db_session.scalar(
             select(func.count())

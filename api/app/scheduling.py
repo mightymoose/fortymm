@@ -915,9 +915,8 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         for f in in_progress
     }
 
-    # The latest minute any FIXED obstacle — an in-progress occupancy, or a
-    # pin, now a fixed obstacle in both dimensions (module docstring, "A pin
-    # is a constant in both dimensions") — actually ends. Both the soft
+    # The latest minute any FIXED obstacle — an in-progress occupancy, a pin,
+    # or a closed outage interval extending past now — actually ends. Both the soft
     # window below and the horizon further down anchor off this, not off
     # ``now``: a pin sitting well past ``now`` still occupies real wall-clock
     # time an unpinned fixture must route around, so treating ``now`` as the
@@ -928,6 +927,9 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         latest_fixed_end = max(latest_fixed_end, occ_end)
     for fixture, pin in pinned:
         latest_fixed_end = max(latest_fixed_end, pin.start_min + duration_of(fixture))
+    for outage in snapshot.table_outages:
+        if outage.end_min is not None and outage.end_min > now:
+            latest_fixed_end = max(latest_fixed_end, outage.end_min)
 
     # Soft window once live (ADR "the solver stops wedging"). While the day is
     # live a reservation window's END is advisory: the effective end extends to

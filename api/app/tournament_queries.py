@@ -565,6 +565,7 @@ async def _reservation_windows_by_group(
                     == TournamentEventGroupReservation.event_id,
                     TournamentEventReservationTable.reservation_id
                     == TournamentEventGroupReservation.reservation_id,
+                    TournamentEventReservationTable.effective_until.is_(None),
                 ),
             )
             .where(TournamentEventGroupReservation.group_id.in_(group_ids))

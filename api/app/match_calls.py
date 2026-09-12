@@ -138,6 +138,7 @@ from app.models import (
     TournamentStatus,
     User,
     VenueTableCallHistory,
+    VenueTableOutage,
 )
 from app.models.draw_type import StageDrawType
 from app.notifications.match_calls import (
@@ -499,7 +500,21 @@ async def call_due_fixtures(
     # it; the loop mutates these in place (freshly-built sets off the held
     # resources' own keys — this pass only needs "is it held", not "by whom").
     held = await _held_resources(db, tournament.id)
-    claimed_tables: set[str] = set(held.tables)
+    out_of_service_tables = set(
+        (
+            await db.scalars(
+                select(VenueTableOutage.table_id).where(
+                    VenueTableOutage.tournament_id == tournament.id,
+                    VenueTableOutage.effective_from <= now,
+                    or_(
+                        VenueTableOutage.effective_until.is_(None),
+                        VenueTableOutage.effective_until > now,
+                    ),
+                )
+            )
+        ).all()
+    )
+    claimed_tables: set[str] = set(held.tables) | out_of_service_tables
     claimed_users: set[uuid.UUID] = set(held.users)
     free: list[TournamentFixture] = []
     for fixture in sorted(due, key=lambda f: (f.scheduled_start, f.id)):

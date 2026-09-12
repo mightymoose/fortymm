@@ -31,6 +31,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
+    Match,
+    MatchStatus,
     Tournament,
     TournamentEventReservationTable,
     TournamentFixture,
@@ -183,12 +185,33 @@ async def _unplace_or_refuse(
             tables=labels,
             placements=len(placed),
         )
+    called_match_ids = {
+        fixture.match_id
+        for fixture in placed
+        if fixture.match_id is not None
+        and fixture.table_id is not None
+        and fixture.scheduled_start is not None
+        and fixture.pinned_at is not None
+        and fixture.call_notified_count > 0
+    }
+    settled_match_ids: set[uuid.UUID] = set()
+    if called_match_ids:
+        settled_match_ids = {
+            match_id
+            for match_id, status in (
+                await db.execute(
+                    select(Match.id, Match.status).where(Match.id.in_(called_match_ids))
+                )
+            ).all()
+            if status in (MatchStatus.completed, MatchStatus.voided)
+        }
     for fixture in placed:
         if (
             fixture.table_id is not None
             and fixture.scheduled_start is not None
             and fixture.pinned_at is not None
             and fixture.call_notified_count > 0
+            and fixture.match_id not in settled_match_ids
         ):
             db.add(
                 VenueTableCallHistory(

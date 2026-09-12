@@ -291,6 +291,24 @@ class TestHardConstraints:
         assert result.verdict in SOLVED
         assert result.placements[0].start_min >= 30
 
+    def test_a_live_outage_extends_the_advisory_window_through_restoration(
+        self,
+    ) -> None:
+        p1, p2 = _players(2)
+        snapshot = _one_reservation_snapshot(
+            (_fixture(1, p1, p2),), tables=1, window=(0, 60)
+        )
+        snapshot = dataclasses.replace(
+            snapshot,
+            is_live=True,
+            table_outages=(TableOutage(TableId("T1"), 0, 90),),
+        )
+
+        result = solve(snapshot, time_cap_s=CAP)
+
+        assert result.verdict in SOLVED
+        assert result.placements[0].start_min >= 90
+
     def test_outage_overlapping_a_pin_preserves_the_promise_and_blocks_remainder(
         self,
     ) -> None:
