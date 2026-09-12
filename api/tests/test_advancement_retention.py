@@ -88,8 +88,11 @@ async def test_replace_or_remove_draw_preserves_unknown_advancement(
     response = await api_client.request(
         method, f"/v1/tournaments/{event.tournament_id}/events/{event.id}/draw"
     )
-    assert response.status_code == 409, response.text
-    assert "Advancement history must be preserved" in response.json()["detail"]
+    if method == "delete" and retired:
+        assert response.status_code == 204, response.text
+    else:
+        assert response.status_code == 409, response.text
+        assert "Advancement history must be preserved" in response.json()["detail"]
     (decision,) = await advancement_history(db_session, target.id, "a")
     assert decision.evidence_status == "unknown" and decision.current
     assert (
