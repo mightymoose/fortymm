@@ -45,6 +45,12 @@ EVENT_LIFECYCLE_DDL = (
                 USING ERRCODE='23514';
         END IF;
         IF NEW.lifecycle_state <> OLD.lifecycle_state THEN
+            IF OLD.lifecycle_state='unstarted' AND NEW.lifecycle_state='in_progress'
+                AND NEW.started_at IS NULL AND NEW.first_recorded_play_at IS NULL THEN
+                RAISE EXCEPTION
+                    'starting an event requires play or known start evidence'
+                    USING ERRCODE='23514';
+            END IF;
             IF NOT (
                 (OLD.lifecycle_state='unstarted'
                     AND NEW.lifecycle_state IN ('in_progress','finished','cancelled'))

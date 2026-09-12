@@ -6,7 +6,7 @@ the database owns timestamps, versions and immutable transition history.
 
 import uuid
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Tournament, TournamentEvent, TournamentFixture, User
@@ -34,7 +34,10 @@ async def reconcile_event(db: AsyncSession, event_id: uuid.UUID) -> None:
         .with_for_update()
         .execution_options(populate_existing=True)
     )
-    if event is None or event.lifecycle_state is EventLifecycleState.cancelled:
+    if event is None:
+        return
+    if event.lifecycle_state is EventLifecycleState.cancelled:
+        await _record_void_reconciliations(db, event)
         return
     fixtures = (await fixtures_by_event(db, [event_id]))[event_id]
     entrants = (await active_entrants_by_event(db, [event_id]))[event_id]
@@ -63,6 +66,40 @@ async def reconcile_event(db: AsyncSession, event_id: uuid.UUID) -> None:
             .values(lifecycle_state=next_state)
         )
         await db.refresh(event)
+    await _record_void_reconciliations(db, event)
+
+
+async def _record_void_reconciliations(
+    db: AsyncSession, event: TournamentEvent
+) -> None:
+    """Assert the projected snapshot for this transaction's administrator voids.
+
+    The deferred database guard refuses a void without this explicit assertion.
+    Repeated reconciliations update only receipts born in the current transaction;
+    committed receipts remain retained historical assertions.
+    """
+    await db.execute(
+        text("""
+            INSERT INTO tournament_event_void_reconciliations
+                (void_action_id, event_id, lifecycle_state, lifecycle_version,
+                 transaction_id)
+            SELECT v.id, :event, :state, :version, pg_current_xact_id()::text::bigint
+            FROM match_void_actions v
+            JOIN tournament_fixtures f ON f.match_id=v.match_id
+            LEFT JOIN tournament_event_void_reconciliations r ON r.void_action_id=v.id
+            WHERE f.scope_event_id=:event AND
+                (r.void_action_id IS NULL OR
+                 r.transaction_id=pg_current_xact_id()::text::bigint)
+            ON CONFLICT (void_action_id) DO UPDATE SET
+                lifecycle_state=EXCLUDED.lifecycle_state,
+                lifecycle_version=EXCLUDED.lifecycle_version
+        """),
+        {
+            "event": event.id,
+            "state": event.lifecycle_state.value,
+            "version": event.lifecycle_version,
+        },
+    )
 
 
 async def reconcile_match_event(db: AsyncSession, match_id: uuid.UUID) -> None:

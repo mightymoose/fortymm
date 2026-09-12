@@ -418,10 +418,7 @@ async def _enforce_ready_to_go_live(db: AsyncSession, tournament: Tournament) ->
         (
             await db.execute(
                 select(TournamentEvent)
-                .where(
-                    TournamentEvent.tournament_id == tournament.id,
-                    TournamentEvent.lifecycle_state != EventLifecycleState.cancelled,
-                )
+                .where(TournamentEvent.tournament_id == tournament.id)
                 # The page's order, so the refusal names the events in the order the
                 # director is looking at them.
                 .order_by(TournamentEvent.created_at)
@@ -434,6 +431,15 @@ async def _enforce_ready_to_go_live(db: AsyncSession, tournament: Tournament) ->
         raise TournamentNotReadyToGoLiveError(
             _NOTHING_TO_START, uncut=[], stale=[], undrawable=[], no_events=True
         )
+    # Cancelled events still establish that this is a real tournament. They
+    # need no draw and must not strand its final transition to archival.
+    events = [
+        event
+        for event in events
+        if event.lifecycle_state is not EventLifecycleState.cancelled
+    ]
+    if not events:
+        return
     # ONE batched read for the whole tournament (three statements, whatever the number
     # of events — entries, fixtures, and the draw types the bye allowance turns on):
     # this runs with the row lock held, and a per-event query would hold it for a time

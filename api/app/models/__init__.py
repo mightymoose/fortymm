@@ -147,6 +147,9 @@ from app.models import event_lifecycle_integrity as event_lifecycle_integrity
 from app.models import tournament_archive_integrity as tournament_archive_integrity
 from app.models.advancement_decision import AdvancementDecision, AdvancementEvidence
 from app.models.event_lifecycle import EventLifecycleHistory as EventLifecycleHistory
+from app.models.event_void_reconciliation import (
+    EventVoidReconciliation as EventVoidReconciliation,
+)
 from app.models.tournament_archive import (
     TournamentArchiveHistory as TournamentArchiveHistory,
 )

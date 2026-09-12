@@ -820,6 +820,8 @@ ENTRY_INTEGRITY_DDL = (
             IF EXISTS (SELECT 1 FROM match_lineups WHERE match_id = OLD.match_id)
                 OR EXISTS (SELECT 1 FROM match_games WHERE match_id = OLD.match_id)
                 OR EXISTS (SELECT 1 FROM match_results WHERE match_id = OLD.match_id)
+                OR EXISTS (SELECT 1 FROM tournament_event_recorded_games
+                    WHERE match_id = OLD.match_id)
             THEN
                 RAISE EXCEPTION 'recorded match fixture must be retained'
                     USING ERRCODE = '23514';

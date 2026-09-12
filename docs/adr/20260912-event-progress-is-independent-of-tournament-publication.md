@@ -40,6 +40,12 @@ otherwise retain explicit unknowns. Seeded history follows the same rule, with
 no guessed legacy start or finish times. Version order remains authoritative
 even when timestamps are equal.
 
+An administrator void must commit with an explicit reconciliation assertion for
+its resulting event state and version. A deferred database guard rejects a bare
+SQL void without that assertion. Application writers use the existing results
+strategy through `reconcile_event`; SQL maintenance must reconcile and assert its
+result before committing. The database does not duplicate the draw strategies.
+
 ## Cancellation, archive and registration
 
 Cancellation is an explicit terminal state, permitted before or during play.
@@ -49,6 +55,8 @@ authority rules. Corrections never reopen a cancelled event. The internal backen
 operation and database support do not add a public cancellation endpoint or UI.
 Cancelled events are excluded from new match materialization, scheduling and calls;
 their existing match, placement and call records remain retained.
+If every event is cancelled, the tournament may still pass through live to archive;
+the existing refusal for a truly empty tournament remains.
 
 Archive records when a tournament was put away. It does not finish or cancel
 unfinished events and does not rewrite their state or history. Cancelled events
