@@ -4323,19 +4323,15 @@ async def test_pre_match_ratings_ignores_other_leagues(
     assert ratings[player.id] == PreMatchRating(history=[1500.0])
 
 
-async def test_pre_match_ratings_excludes_a_row_stamped_at_the_cutoff(
+async def test_pre_match_ratings_includes_an_adjustment_stamped_at_the_cutoff(
     db_session: AsyncSession,
     default_league: League,
     rating_strategies: dict[str, RatingStrategy],
 ):
-    """``before`` is an exclusive bound: a rating row stamped at *exactly* the
-    cutoff instant is not part of the "before" trail.
+    """Adjustments at the match instant precede the match in its input trail.
 
-    That strictness is what keeps a match's own rating row out of its own
-    pre-match sparkline — the trail must show what the player carried *into* the
-    match, never what the match itself did to them. Relaxing ``created_at <
-    before`` to ``<=`` lets the cutoff row in as the newest entry, hijacking both
-    ``value`` and ``history``, and fails this test.
+    The match's own calculated row remains excluded at equality; that behavior
+    is exercised by the same-time adjustment integration regression.
     """
     strategy = rating_strategies["glicko2"]
     player = await make_user(db_session, "cutoff-player")
@@ -4365,8 +4361,7 @@ async def test_pre_match_ratings_excludes_a_row_stamped_at_the_cutoff(
         [player.id], default_league.id, cutoff
     )
 
-    # The row *at* the cutoff is excluded; only the strictly-earlier one survives.
-    assert ratings[player.id] == PreMatchRating(history=[1500.0])
+    assert ratings[player.id] == PreMatchRating(history=[1500.0, 1650.0])
 
 
 # The whole view-extras block for a completed singles match whose two players have
@@ -5535,25 +5530,15 @@ async def _completed_rated_match(
     winner: User,
     loser: User,
 ) -> Match:
-    """Persist a completed, rated singles match: two sides, one player each, a
-    single decided game."""
-    settings = MatchSettings(team_size=1, best_of=1, affects_rating=True)
-    match = Match(
-        match_settings=settings,
-        league=league,
-        created_by_user_id=winner.id,
-        status=MatchStatus.completed,
-        completed_at=datetime(2026, 5, 1, tzinfo=UTC),
+    from sqlalchemy import delete
+
+    from tests.test_rating_recompute import _build_completed_match
+
+    match = await _build_completed_match(
+        db, league, winner, loser, datetime(2026, 5, 1, tzinfo=UTC)
     )
-    side1 = MatchSide(match=match, side_number=1, won=True, score=1)
-    side1.players.append(MatchSidePlayer(match=match, user=winner.primary_player))
-    side2 = MatchSide(match=match, side_number=2, won=False, score=0)
-    side2.players.append(MatchSidePlayer(match=match, user=loser.primary_player))
-    game = MatchGame(match=match, game_number=1)
-    game.score = MatchGameScore(side_1_points=11, side_2_points=4)
-    db.add(match)
+    await db.execute(delete(RatingHistory).where(RatingHistory.match_id == match.id))
     await db.commit()
-    await db.refresh(match)
     return match
 
 
@@ -5576,17 +5561,26 @@ def _match_history_row(
     ``created_at`` defaults to the column's ``now()`` server default; pass it to
     place the row at a chosen instant (never as ``None``, which would insert a
     NULL over that default)."""
-    row = RatingHistory(
+    from tests._helpers import input_history
+
+    factory = (
+        input_history
+        if source in (RatingHistorySource.manual, RatingHistorySource.import_)
+        else RatingHistory
+    )
+    row = factory(
         league_id=league.id,
         user_id=user.id,
         match_id=match.id if match is not None else None,
+        official_result_id=match.current_official_result_id
+        if match is not None
+        else None,
+        created_at=created_at or datetime.now(UTC),
         rating_strategy_id=strategy.id,
         rating_value=value,
         rating_state={"rating": value, "rd": 350.0, "volatility": 0.06},
         source=source,
     )
-    if created_at is not None:
-        row.created_at = created_at
     return row
 
 

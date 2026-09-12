@@ -7,6 +7,7 @@ from sqlalchemy.exc import IntegrityError
 from app.db import Base
 from app.match_creation import create_match
 from app.models import Account, Player
+from tests._database_reset import reset_database
 from tests._migration_database import empty_database, migrated_database
 
 
@@ -20,9 +21,7 @@ async def engine(request, postgres_url):
     else:
         async with migrated_database(postgres_url) as database:
             # Standard conftest fixtures supply representative catalogue seeds.
-            async with database.begin() as connection:
-                for table in reversed(Base.metadata.sorted_tables):
-                    await connection.execute(table.delete())
+            await reset_database(database, Base.metadata.sorted_tables)
             yield database
 
 

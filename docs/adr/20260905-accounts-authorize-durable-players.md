@@ -1,5 +1,10 @@
 # Accounts authorize durable Players
 
+The rating-history reconciliation clauses below are superseded by
+[Rating inputs outlive rebuildable projections](20260911-rating-inputs-outlive-rebuildable-projections.md):
+original inputs retain their Player and Account attribution through merges;
+only calculated projections may be deleted and rebuilt.
+
 The entry-repoint/deletion clauses below are superseded by
 [Entry members and lineup history](20260906-event-entries-have-members-and-match-lineups-have-history.md).
 Memberships preserve their original Player and project the explicit merge chain;

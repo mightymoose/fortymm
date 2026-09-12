@@ -11,6 +11,7 @@ from app.models.match import Match, MatchEnding, MatchStatus
 from app.models.match_game import MatchGame
 from app.models.match_game_score import MatchGameScore
 from app.models.match_lineup import MatchLineup, MatchLineupPlayer
+from app.models.match_rating_basis import MatchRatingBasis
 from app.models.match_result import MatchResult
 from app.models.match_settings import MatchSettings, VerificationPolicy
 from app.models.match_side import MatchSide
@@ -26,6 +27,7 @@ from app.models.official_result import MatchVoidAction, OfficialResult
 from app.models.permission import Permission
 from app.models.player import Player
 from app.models.rating_history import RatingHistory, RatingHistorySource
+from app.models.rating_input import RatingInput
 from app.models.rating_strategy import RatingStrategy
 from app.models.role import Role
 from app.models.role_permission import RolePermission
@@ -102,6 +104,8 @@ __all__ = [
     "NotificationPreference",
     "NotificationType",
     "Permission",
+    "RatingInput",
+    "MatchRatingBasis",
     "RatingHistory",
     "RatingHistorySource",
     "RatingStrategy",

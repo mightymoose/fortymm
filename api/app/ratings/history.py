@@ -144,7 +144,11 @@ async def _anchor_point(
             .where(at < start)
             # Ties on the instant (two changes stamped at the same moment) fall
             # back to write order, so the anchor is the LAST of them.
-            .order_by(at.desc(), RatingHistory.created_at.desc())
+            .order_by(
+                at.desc(),
+                RatingHistory.match_id.desc().nulls_last(),
+                func.rating_input_order(RatingHistory.rating_input_id).desc(),
+            )
             .limit(1)
         )
     ).first()
@@ -163,7 +167,11 @@ async def _window_points(
         await db.execute(
             _timeline(user_id, league_id)
             .where(at >= start)
-            .order_by(at.asc(), RatingHistory.created_at.asc())
+            .order_by(
+                at.asc(),
+                RatingHistory.match_id.asc().nulls_first(),
+                func.rating_input_order(RatingHistory.rating_input_id).asc(),
+            )
         )
     ).all()
     return [

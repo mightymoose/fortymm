@@ -12188,8 +12188,10 @@ async def test_the_version_check_runs_after_the_404_403_404_identity_gates(
 async def test_tournament_eligibility_reads_primary_player_rating(
     authed_client, db_session, default_league
 ):
+    from datetime import UTC, datetime
+
     from app.models import AccountPlayer, Player
-    from tests._helpers import rate_player
+    from app.ratings.inputs import record_rating_input
     from tests.test_tournaments import (
         CAP_UNDER_1500,
         _event_payload,
@@ -12203,7 +12205,16 @@ async def test_tournament_eligibility_reads_primary_player_rating(
     player = Player(username="rated-managed-player")
     account.player_grants.append(AccountPlayer(player=player, is_primary=True))
     await db_session.commit()
-    await rate_player(db_session, player, default_league, 1875.0)
+    await record_rating_input(
+        db_session,
+        default_league.id,
+        player.id,
+        actor_account_id=account.id,
+        rating=1875.0,
+        source="manual",
+        effective_at=datetime.now(UTC),
+    )
+    await db_session.commit()
     tournament_id, _ = await _tournament_with_events(
         client, _event_payload(predicates=[CAP_UNDER_1500])
     )

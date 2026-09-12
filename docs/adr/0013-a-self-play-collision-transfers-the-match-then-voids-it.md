@@ -9,6 +9,10 @@ status: accepted
 
 # A self-play collision transfers the match to the claimed account, then voids it (#750)
 
+Amended by [Rating inputs outlive rebuildable projections](20260911-rating-inputs-outlive-rebuildable-projections.md):
+collision voids delete calculated projections, while original rating inputs and
+their attribution survive Player reconciliation.
+
 When a **guest** merges into a **claimed account** they had already played, both
 users sit on opposite sides of the same match. `_repoint_match_side_players` skips
 re-pointing the guest's row (the `NOT EXISTS` guard — the claimed account is already

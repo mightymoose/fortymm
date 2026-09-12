@@ -36,7 +36,9 @@ and the recompute replays from the seeded state. This module is how the READ sid
 declines to present that prior as an achievement.
 """
 
-from sqlalchemy import ColumnElement, and_, select
+import uuid
+
+from sqlalchemy import ColumnElement, and_, func, literal, select, tuple_
 from sqlalchemy.orm import aliased
 
 from app.models import Player, RatingHistory, RatingHistorySource, UserLeagueRating
@@ -89,7 +91,18 @@ def had_rating_before() -> ColumnElement[bool]:
         .where(
             prior.user_id == RatingHistory.user_id,
             prior.league_id == RatingHistory.league_id,
-            prior.created_at < RatingHistory.created_at,
+            tuple_(
+                prior.created_at,
+                func.coalesce(prior.match_id, literal(uuid.UUID(int=0))),
+                func.coalesce(func.rating_input_order(prior.rating_input_id), 0),
+            )
+            < tuple_(
+                RatingHistory.created_at,
+                func.coalesce(RatingHistory.match_id, literal(uuid.UUID(int=0))),
+                func.coalesce(
+                    func.rating_input_order(RatingHistory.rating_input_id), 0
+                ),
+            ),
             is_rating_change(prior),
         )
         .correlate(RatingHistory)

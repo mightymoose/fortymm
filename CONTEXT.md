@@ -119,11 +119,10 @@ _Avoid_: set, leg, frame (the API's `PlayerMatchRow.sets` field was a misnomer a
 was renamed to `games`).
 
 **Rating**:
-A player's skill number in a league, moved only by **rated matches**. A player who
-has never finished a rated match has no rating ("Unrated" on their profile). Copy
-about "no rated matches yet" is correct when it is talking about *rating* — never
-when it is talking about a player's **match history**, which counts every kind of
-match.
+A player's skill number in a league, changed by **rated matches** and explicit
+**rating inputs**. Without either, a player is "Unrated" on their profile even if
+the calculator has a default starting state. **Match history** counts every kind
+of match, independently of whether the player has a rating.
 _Avoid_: score, rank, ELO (the number is a rating).
 
 **Rated match**:
@@ -157,7 +156,7 @@ _Avoid_: results, rated history, match log.
 **Voided match**:
 A match that was played and is still remembered, but which no longer counts: it
 is terminal, closed to new proposals, shown as "Voided", and contributes nothing
-to anyone's **rating**. Voiding a match deletes its rating history — a voided
+to anyone's **rating**. Voiding a match deletes its calculated rating projection — a voided
 match is absent from the **rating timeline**, not merely skipped by it. Distinct
 from an **unrated match**, which never counted in the first place, and from a
 deleted match, which is not remembered at all.
@@ -166,19 +165,36 @@ _Avoid_: cancelled match, annulled match, disputed match (that status is retired
 ## Rating recompute
 
 **Rating timeline**:
-The ordered sequence of a league's completed **rated matches**, against which
-every player's **rating** is a pure function. Ordered by each match's *completion*
-instant — stable, stamped once, and never moved by a later edit — not by when its
-rows were last written. A player's rating is whatever replaying the timeline from
-their initial state produces; a player whose timeline is empty sits at the
-strategy's initial state.
-_Avoid_: rating log, history (that is the audit table, `rating_history`).
+The ordered sequence of a league's completed **rated matches** and active
+**rating inputs**. Matches use their stable completion instant; inputs use their
+effective instant and precede matches at a tie. A player's rating is what replay
+from one strategy starting state produces. An empty match list may still contain
+inputs. Calculated history is a rebuildable **rating projection**.
+_Avoid_: rating log, audit history (the calculated timeline is not immutable).
+
+**Rating input**:
+A durable manual adjustment or imported rating, retaining its original Player,
+author and effective time. It sets only the rating number, preserving any
+uncertainty reached during replay. A correction retains and supersedes the original
+input at its original effective time. Player merges combine both input histories.
+
+**Rating projection**:
+Calculated timeline or current rating state, replaceable by replay. A match-derived
+projection names the official result revision and strategy version it used.
+Deleting obsolete projections never deletes original inputs or official results.
+
+**Rating strategy version**:
+An immutable definition of a rating formula, its parameters and state format.
+Historical references keep their meaning when later versions are introduced.
+See [rating inputs and projections](docs/adr/20260911-rating-inputs-outlive-rebuildable-projections.md).
 
 **Recompute**:
 Rebuilding a league's rating state from the **rating timeline** after something
-upstream disturbs it (an account **merge**, a **voided match**). Deterministic and
+upstream disturbs it (an account **merge**, a **voided match**, an administrator
+correction or a corrected rating input). Deterministic and
 idempotent: it reads current state and rewrites it, so a retry lands on the same
-answer. Runs one league at a time, in the background.
+answer. Runs one league at a time; an administrator correction includes its
+recompute in the same transaction.
 _Avoid_: recalculation, rating rebuild, backfill.
 
 ## Leagues
@@ -347,27 +363,22 @@ _Avoid_: H2H record vs *the field* (a head-to-head is always against one named
 opponent, never against everyone).
 
 **Cascade**:
-The forward propagation of staleness through the **rating timeline**. If a
-player's rating changes at match M, every later match they played is stale too,
-and so is everyone they played in those matches. The cascade walks forward
-chronologically, growing the set of **affected users** as it discovers them.
+The propagation of a rating change through shared matches in a league's
+**rating timeline**. Later opponents depend on the changed state; reconstructing
+that state also needs earlier opponent histories. Replay includes the connected
+group, leaving unrelated groups untouched.
 _Avoid_: ripple, fan-out, propagation.
 
 **Affected user / affected match**:
-A user whose rating the **cascade** has determined must be replayed, and a match
-that must be replayed because at least one of its participants was already
-affected when the cascade reached it. A match whose participants were *both*
-unaffected is not affected — its stored rating history is already exactly what a
-replay would produce, so replaying it is redundant.
+A user or match in the connected group being reconstructed by the **cascade**.
+This includes earlier dependencies needed to rebuild from original facts when
+calculated history is unavailable.
 
 **Seed**:
-The rating state an **affected user** is replayed *from*: their state as of the
-instant just before **their own** first affected match — not before some global
-cutoff. Seeding every user from one shared cutoff is what issue #749 describes:
-a user who joins the **cascade** late loses any intervening match that the
-cascade never replayed.
-_Avoid_: baseline, starting rating, initial state (that is the strategy's, and
-is what a player with an empty timeline seeds to).
+The starting state from which a player's timeline is reconstructed. Replay uses
+the recorded strategy's default and then applies durable inputs and matches in
+order. An automatically created enrollment projection is not an explicit rating
+input and cannot reset the combined timeline after a Player merge.
 
 **Self-play collision**:
 The discovery, at **merge** time, that the **guest** and the **claimed account**

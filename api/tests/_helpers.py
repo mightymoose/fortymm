@@ -31,7 +31,6 @@ from app.models import (
     Match,
     Permission,
     RatingHistory,
-    RatingHistorySource,
     Role,
     RolePermission,
     Tournament,
@@ -45,7 +44,6 @@ from app.models import (
     TournamentEventStageGroup,
     TournamentFixture,
     User,
-    UserLeagueRating,
     UserRole,
     VenueTable,
 )
@@ -748,60 +746,38 @@ async def grant_permissions(
 async def rate_player(
     db_session: AsyncSession, user: User, league: League, value: float
 ) -> None:
-    """Put ``user`` on ``league``'s ladder at ``value`` — **actually rated**, not merely
-    holding a rating row.
+    """Give a player a durable, explicitly supplied rating."""
+    from app.ratings.inputs import record_rating_input
 
-    The two are different, and the difference is what keeps the Unrated tests from
-    being vacuous. Minting a session JOINS the default league, which SEEDS a
-    ``user_league_ratings`` row at 1500 plus an ``initial`` rating-history event
-    (``app.ratings.rated``): every player in the suite already has a rating *row* on
-    the default league before they do anything. So a rating is made here in the two
-    moves that ``app.ratings.rated.is_rated_member`` actually asks about:
-
-    1. the seeded row's value is MOVED to ``value`` (inserted, if this is a league the
-       player never joined), and
-    2. a NON-``initial`` ``rating_history`` row is written — the thing that says
-       something real moved it.
-
-    Write only (1) and the player is still Unrated by every read on the platform, and
-    an "over the cap is refused" test goes green against a guard that refuses nobody.
-
-    Shared by the eligibility tests on BOTH sides of ADR-0783 — the entry route's
-    refusal (``test_tournament_entries``) and the detail read's ``entry_state``
-    (``test_tournaments``) — precisely because a second, subtly weaker copy of it in
-    one of them would let that side pass while testing nothing.
-    """
-    rating = (
-        await db_session.execute(
-            select(UserLeagueRating).where(
-                UserLeagueRating.league_id == league.id,
-                UserLeagueRating.user_id == user.id,
-            )
-        )
-    ).scalar_one_or_none()
-    if rating is None:
-        rating = UserLeagueRating(
-            league_id=league.id,
-            user_id=user.id,
-            rating_strategy_id=league.rating_strategy_id,
-        )
-        db_session.add(rating)
-    rating.rating_value = value
-    db_session.add(
-        RatingHistory(
-            league_id=league.id,
-            user_id=user.id,
-            match_id=None,
-            rating_strategy_id=league.rating_strategy_id,
-            rating_value=value,
-            rating_state={"rating": value, "rd": 200.0, "volatility": 0.06},
-            previous_rating_value=None,
-            # ``manual``, not ``initial``: an ``initial`` row is the seed every member
-            # joins with, and it makes nobody rated.
-            source=RatingHistorySource.manual,
-        )
+    await record_rating_input(
+        db_session,
+        league.id,
+        user.id,
+        actor_account_id=user.id,
+        rating=value,
+        source="manual",
+        effective_at=datetime.now(UTC),
     )
     await db_session.commit()
+
+
+def input_history(**fields) -> RatingHistory:
+    """A valid retained input and its projection for read-only fixture scenarios."""
+    from app.models import RatingInput
+
+    at = fields.setdefault("created_at", datetime.now(UTC))
+    actor = fields.setdefault("created_by_user_id", fields["user_id"])
+    fact = RatingInput(
+        league_id=fields["league_id"],
+        player_id=fields["user_id"],
+        actor_account_id=actor,
+        rating_strategy_id=fields["rating_strategy_id"],
+        rating=fields["rating_value"],
+        source=fields["source"].value,
+        effective_at=at,
+        note=fields.get("note"),
+    )
+    return RatingHistory(rating_input=fact, **fields)
 
 
 def make_client() -> AsyncClient:

@@ -41,6 +41,7 @@ from app.ratings.glicko2 import CALCULATOR as GLICKO2
 from app.result_acceptance import _apply_rating_update
 from tests._helpers import (
     accept_standing_result,
+    input_history,
     make_user,
     opponent_session,
     start_session,
@@ -198,11 +199,11 @@ async def _make_second_automatic_strategy(db_session: AsyncSession) -> RatingStr
         description="Second automatic strategy with an incompatible state shape.",
         state_schema={
             "type": "object",
-            "required": ["score"],
-            "properties": {"score": {"type": "number"}},
+            "required": ["rating", "score"],
+            "properties": {"rating": {"type": "number"}, "score": {"type": "number"}},
             "additionalProperties": False,
         },
-        initial_state={"score": 1000.0},
+        initial_state={"rating": 1000.0, "score": 1000.0},
         initial_rating_value=1000.0,
         is_automatic=True,
     )
@@ -299,8 +300,12 @@ async def test_rating_hook_freshly_seeded_row_does_not_raise(
 
     winner = await make_user(db_session, "hook-fresh-w")
     loser = await make_user(db_session, "hook-fresh-l")
-    match = await _build_completed_singles_match(
-        db_session, default_league, winner, loser
+    from datetime import UTC, datetime
+
+    from tests.test_rating_recompute import _build_completed_match
+
+    match = await _build_completed_match(
+        db_session, default_league, winner, loser, datetime.now(UTC)
     )
     loaded = await _load_match(db_session, match.id)
     assert loaded is not None
@@ -787,7 +792,7 @@ async def test_manual_history_row_with_null_match_round_trips(
     admin = await make_user(db_session, "admin")
     player = await make_user(db_session, "player")
 
-    row = RatingHistory(
+    row = input_history(
         league_id=default_league.id,
         user_id=player.id,
         match_id=None,
@@ -837,6 +842,7 @@ async def test_rating_history_rejects_duplicate_match_user_row(
         league_id=existing.league_id,
         user_id=existing.user_id,
         match_id=existing.match_id,
+        official_result_id=existing.official_result_id,
         rating_strategy_id=existing.rating_strategy_id,
         rating_value=existing.rating_value,
         rating_state=existing.rating_state,
@@ -924,7 +930,7 @@ async def test_rating_history_allows_many_null_match_rows_per_user(
     player = await make_user(db_session, "player")
     for value in (1500.0, 1600.0):
         db_session.add(
-            RatingHistory(
+            input_history(
                 league_id=default_league.id,
                 user_id=player.id,
                 match_id=None,

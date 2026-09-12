@@ -1797,6 +1797,7 @@ async def test_a_player_with_a_null_rating_on_the_ladder_enters_a_capped_event(
         )
     ).scalar_one()
     rating.rating_value = None
+    rating.rating_state = None
     await db_session.commit()
     event = await _make_event(db_session, predicates=CAP_UNDER_1500)
 

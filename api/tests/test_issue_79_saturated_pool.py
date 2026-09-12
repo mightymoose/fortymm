@@ -89,7 +89,6 @@ async def test_saturated_pool_returns_503_with_retry_after(
         await tiny.dispose()
         fastapi_app.dependency_overrides.clear()
         from app.db import Base
+        from tests._database_reset import reset_database
 
-        async with engine.begin() as conn:
-            for table in reversed(Base.metadata.sorted_tables):
-                await conn.execute(table.delete())
+        await reset_database(engine, Base.metadata.sorted_tables)

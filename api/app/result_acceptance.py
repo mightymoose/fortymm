@@ -66,8 +66,6 @@ from app.models import (
 from app.ratings import (
     RatingCalculator,
     RatingStrategyMismatchError,
-    get_calculator,
-    parse_strategy_key,
     state_rating_value,
     validate_state,
 )
@@ -209,13 +207,12 @@ def _calculator_for(match: Match) -> RatingCalculator | None:
     or its key has no registered calculator. Callers short-circuit on ``None``
     before doing any rating work — in particular before the doubles tripwire,
     so that only a match that would otherwise be rated can trip it."""
+    from app.ratings.registry import calculator_for_version
+
     strategy = match.league.rating_strategy
     if not strategy.is_automatic:
         return None
-    strategy_key = parse_strategy_key(strategy.key)
-    if strategy_key is None:
-        return None
-    return get_calculator(strategy_key)
+    return calculator_for_version(strategy)
 
 
 @dataclass(frozen=True)
@@ -236,6 +233,7 @@ def _write_match_rating_history(
     league_id: uuid.UUID,
     match_id: uuid.UUID,
     strategy: RatingStrategy,
+    official_result_id: uuid.UUID | None,
     winner: _SideRatingUpdate,
     loser: _SideRatingUpdate,
 ) -> None:
@@ -251,6 +249,7 @@ def _write_match_rating_history(
             league_id=league_id,
             user_id=winner.user_id,
             match_id=match_id,
+            official_result_id=official_result_id,
             rating_strategy_id=strategy.id,
             rating_value=winner.new_value,
             rating_state=winner.new_state,
@@ -263,6 +262,7 @@ def _write_match_rating_history(
             league_id=league_id,
             user_id=loser.user_id,
             match_id=match_id,
+            official_result_id=official_result_id,
             rating_strategy_id=strategy.id,
             rating_value=loser.new_value,
             rating_state=loser.new_state,
@@ -342,6 +342,7 @@ async def _apply_rating_update(db: AsyncSession, match: Match) -> None:
         league_id=league.id,
         match_id=match.id,
         strategy=strategy,
+        official_result_id=match.current_official_result_id,
         winner=_SideRatingUpdate(
             rating=winner_rating,
             user_id=winner_player.user_id,
