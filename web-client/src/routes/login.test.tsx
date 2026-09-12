@@ -494,9 +494,7 @@ describe('/login/verifying flow', () => {
 
   it('routes to ?error=net when the API is unreachable', async () => {
     server.use(
-      http.post('*/v1/login/consume', () =>
-        HttpResponse.json({ detail: 'down' }, { status: 503 }),
-      ),
+      http.post('*/v1/login/consume', () => HttpResponse.error()),
     )
     const { router } = renderAt('/login/verifying?token=anything')
 
