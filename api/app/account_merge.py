@@ -1,7 +1,7 @@
 """Combine same-person Players, transfer authority and tombstone the source Account.
 
 Historical actors retain their Account references. Sporting collisions use the
-existing reconciliation rules; callers enqueue rating recomputation after commit.
+existing reconciliation rules; rating repair commits atomically with the merge.
 Session tokens remain on the Account tombstone for session-ended detection.
 """
 
@@ -120,6 +120,12 @@ async def merge_user(
     if len(source.player_grants) > 1:
         raise ValueError("Merging accounts that manage multiple players is not enabled")
     await lock_merge_tournaments(db, source_id=from_user_id, target_id=to_user_id)
+    # Lock the repair before any rating rows: workers take repair → ratings too.
+    from app.required_repairs import request_rating
+
+    repair_player = target_player if target_player is not None else source_player
+    if repair_player is not None:
+        await request_rating(db, repair_player.id)
     summary = MergeSummary(matches_moved=0, matches_voided=0)
     if (
         source_player is not None

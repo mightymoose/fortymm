@@ -71,3 +71,7 @@ bypassed only inside the cleanup transaction. The setting is restored on commit
 or rollback; tests still exercise the real migrated constraints and can commit
 across multiple connections. This avoids the table/index storage rewrites from
 truncating the entire schema after every test.
+
+Required background repairs survive Redis outages in PostgreSQL. See the
+[required repair operator runbook](../docs/required-repair-operations.md) for
+failure inspection and explicit retry with `python -m app.repair_cli`.

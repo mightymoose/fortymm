@@ -7,7 +7,6 @@ from datetime import UTC, datetime, timedelta
 from email.utils import parseaddr
 from typing import Annotated, NamedTuple
 
-import redis.exceptions
 from fastapi import (
     APIRouter,
     Cookie,
@@ -65,7 +64,6 @@ from app.models import (
     UserRole,
 )
 from app.rate_limiting import RedisRateLimiter
-from app.ratings.jobs import RECOMPUTE_AFTER_MERGE_JOB
 from app.roles import grant_default_role
 from app.schemas.session import (
     AccountSwitchPreview,
@@ -328,18 +326,6 @@ async def _sign_in_after_merge(
         )
     )
     await db.commit()
-    # Enqueue on ANY merge, not only when matches_moved > 0. Two reasons the old
-    # `> 0` gate was too narrow: (1) a self-play collision VOIDS the guest's only
-    # rated match, so matches_moved is 0 yet the survivor's rating is still
-    # inflated by it and must be recomputed (ADR-0013); (2) even a zero-match
-    # merge can leave a stale survivor rating that the empty-timeline reset must
-    # rewrite. `merged is not None` is also the only gate expressible here: this
-    # `merged` is the response `MergeSummary`, which deliberately has no
-    # matches_voided count (adding one would drift the OpenAPI clients), so no
-    # void-aware condition is available at this layer. The recompute is a
-    # deterministic rewrite — enqueuing it on a true no-op merge is harmless.
-    if merged is not None:
-        _enqueue_rating_recompute_after_merge(user.player_id)
     _set_session_cookie(response, raw_session)
     return await _build_session_response(db, user, merged=merged)
 
@@ -978,33 +964,6 @@ def _enqueue_merge_email(to_email: str, raw_token: str, username: str) -> Job:
     )
 
 
-def _enqueue_rating_recompute_after_merge(user_id: uuid.UUID) -> None:
-    """Fire-and-forget the rating recompute for ``user_id`` after a merge.
-
-    Called after the merge has already committed — a Redis flap here can't
-    leave the DB inconsistent because the merge stands on its own. We
-    log+swallow enqueue failures rather than fail the sign-in: the recompute
-    is recoverable (re-run by admin tool or re-fire on next login), but a
-    failed sign-in here is user-visible breakage.
-
-    We catch only the Redis/connection failures we mean to tolerate — a
-    programmer error here (a signature mismatch in the recompute job, an
-    ImportError from a rename) should crash loudly in tests, not hide behind a
-    log line."""
-    try:
-        queue_module.get_ratings_queue().enqueue(
-            RECOMPUTE_AFTER_MERGE_JOB,
-            str(user_id),
-            result_ttl=60,
-            failure_ttl=86400,
-        )
-    except (redis.exceptions.RedisError, ConnectionError, TimeoutError):
-        log.exception(
-            "Failed to enqueue rating recompute after merge",
-            extra={"user_id": str(user_id)},
-        )
-
-
 async def _begin_account_merge(
     db: AsyncSession, guest: User, email: str
 ) -> SessionResponse:
@@ -1414,12 +1373,6 @@ async def confirm_email(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="That confirmation link is invalid or expired.",
         ) from None
-    # Enqueue on ANY merge — see the same gate in `_sign_in_after_merge` for why
-    # `matches_moved > 0` is too narrow (voided collisions and the empty-timeline
-    # reset both need a recompute at matches_moved == 0), and why this is the only
-    # gate expressible without drifting the response schema.
-    if merged is not None:
-        _enqueue_rating_recompute_after_merge(user.player_id)
     _set_session_cookie(response, raw_session)
     return await _build_session_response(db, user, merged=merged)
 

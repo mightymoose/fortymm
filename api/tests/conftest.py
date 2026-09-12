@@ -49,20 +49,31 @@ from tests._migration_database import migrated_database
 def fake_solver_queue(monkeypatch):
     connection = fakeredis.FakeStrictRedis()
     q = Queue(queue_module.SOLVER_QUEUE, connection=connection, is_async=False)
+    enqueue = q.enqueue
+
+    def enqueue_with_background_repairs(function, *args, **kwargs):
+        # Required repairs are dispatched after commit and run on a real worker.
+        # Keep only the health probe synchronous; record repairs for explicit drain.
+        background = function == "app.schedule_solves.run_schedule_solve"
+        previous = q._is_async
+        q._is_async = background or previous
+        try:
+            return enqueue(function, *args, **kwargs)
+        finally:
+            q._is_async = previous
+
+    monkeypatch.setattr(q, "enqueue", enqueue_with_background_repairs)
     monkeypatch.setattr(queue_module, "get_queue", lambda: q)
     return q
 
 
 @pytest.fixture(autouse=True)
 def _solver_job_database(monkeypatch, postgres_url):
-    """Jobs on the synchronous fake solver queue run INLINE at enqueue time and
-    open their own engine from ``DATABASE_URL`` (``run_schedule_solve`` — now
-    enqueued by every go-live and every tournament-match completion, not just
-    the solve-specific test files). Point that env var at the test database so
-    the inline run reads the same Postgres as the test — where it exits as a
-    stale no-op, the row it was enqueued for not yet being committed — instead
-    of dialing the compose default. Free: the autouse ``rating_strategies`` →
-    ``db_session`` chain already makes every test require ``postgres_url``."""
+    """Point explicit worker drains and synchronous probes at the migrated DB.
+
+    Schedule jobs are recorded for post-commit drain. Other existing queue
+    probes may still execute synchronously in the test process.
+    """
     monkeypatch.setenv("DATABASE_URL", postgres_url)
 
 
