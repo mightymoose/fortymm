@@ -905,6 +905,33 @@ async def test_a_byed_entrant_is_credited_with_a_win_worth_zero_games(
         }, "round 2 seats the byed entrant, and the bye passes to the seed without one"
 
 
+async def test_a_matchless_swiss_final_round_completes_participation(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    client, _ = authed_client
+    tournament_id, event_id, entries = await _field(client, db_session, 2, rounds=1)
+    assert (await _cut(client, tournament_id, event_id)).status_code == 201
+    (fixture,) = await _fixtures(db_session, event_id)
+    fixture.winner_entry_id = fixture.entry_a_id
+    await db_session.commit()
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    assert (await _go_live(client, tournament_id)).status_code == 201
+
+    periods = list(
+        await db_session.scalars(
+            select(TournamentEntryParticipation)
+            .where(TournamentEntryParticipation.stage_id == fixture.stage_id)
+            .execution_options(populate_existing=True)
+        )
+    )
+    assert {period.entry_id for period in periods} == {entry.id for entry in entries}
+    assert all(period.ended_at is not None for period in periods)
+    assert {period.end_reason for period in periods} == {"stage_completed"}
+    await db_session.refresh(fixture)
+    assert fixture.match_id is None
+    assert fixture.winner_entry_id == fixture.entry_a_id
+
+
 async def test_swiss_advances_only_the_current_stages_admitted_field(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:

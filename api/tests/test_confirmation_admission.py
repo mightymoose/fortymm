@@ -161,19 +161,61 @@ async def test_ordinary_confirmation_still_works_without_retry_storage(
     assert response.status_code == 200, response.text
 
 
-async def test_change_confirmation_skip_merge_remains_available_without_retry_store(
-    api_client, db_session, monkeypatch
+@pytest.mark.parametrize("purpose", [EmailPurpose.merge, EmailPurpose.change])
+async def test_confirmation_skip_merge_remains_available_without_retry_store(
+    api_client, db_session, monkeypatch, purpose
 ):
     from app import rate_limiting
 
-    raw, _ = await _conflicting_confirmation(
-        api_client, db_session, EmailPurpose.change
-    )
+    raw, _ = await _conflicting_confirmation(api_client, db_session, purpose)
     monkeypatch.setattr(rate_limiting, "_redis", None)
     response = await api_client.post(
         "/v1/me/email/confirm", json={"token": raw, "skip_merge": True}
     )
     assert response.status_code == 200, response.text
+    assert response.json()["data"]["user"]["email"] == (
+        "changed-confirmation@example.com"
+        if purpose is EmailPurpose.change
+        else "confirmation-conflict@example.com"
+    )
+
+
+@pytest.mark.parametrize("blocked_by", ["budget", "busy"])
+async def test_merge_token_skip_bypasses_admission_without_merging_guest(
+    api_client, db_session, engine, blocked_by
+):
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.email_merge_admission import admit_credential_merge
+    from app.models import User
+
+    raw, token_id = await _conflicting_confirmation(api_client, db_session)
+    token = await db_session.get(EmailToken, token_id)
+    guest_id = token.user_id
+    if blocked_by == "budget":
+        for _ in range(5):
+            response = await api_client.post(
+                "/v1/me/email/confirm", json={"token": raw}
+            )
+            assert response.status_code == 409, response.text
+        refused = await api_client.post("/v1/me/email/confirm", json={"token": raw})
+        assert refused.status_code == 429, refused.text
+        await db_session.rollback()
+
+    sessions = async_sessionmaker(engine)
+    async with sessions() as gate:
+        if blocked_by == "busy":
+            await admit_credential_merge(gate, hashlib.sha256(raw.encode()).digest())
+        async with asyncio.timeout(1):
+            response = await api_client.post(
+                "/v1/me/email/confirm", json={"token": raw, "skip_merge": True}
+            )
+        assert response.status_code == 200, response.text
+        await gate.rollback()
+    guest = await db_session.get(User, guest_id, populate_existing=True)
+    assert guest.merged_into_user_id is None
     assert (
-        response.json()["data"]["user"]["email"] == "changed-confirmation@example.com"
+        response.json()["data"]["user"]["email"] == "confirmation-conflict@example.com"
     )

@@ -48,7 +48,11 @@ from app.models import (
 from app.models.tournament_entry_participation import WithdrawalReason
 from app.schedule_solves import request_solve, tournament_has_drawn_event
 from app.tournament_authority import lock_merge_tournaments, merge_authority
-from app.tournament_draws import draw_has_play, uncut_draw
+from app.tournament_draws import (
+    active_draw_entrants_by_event,
+    draw_has_play,
+    uncut_draw,
+)
 from app.tournament_participation import close_registration, restore_event_eligibility
 
 # Bind the active state from the enum in reconciliation queries. The database
@@ -745,11 +749,17 @@ async def _resolve_entry_collisions(
         .with_for_update()
     )
 
-    # Resolving an already-withdrawn duplicate does not change a valid field.
+    # Registration can remain open after event-wide competition withdrawal.
+    # Only a duplicate in the same eligible field the initial cut reads can
+    # change that field when reconciliation supersedes it.
+    fields = await active_draw_entrants_by_event(db, sorted(collided_event_ids))
+    eligible_entry_ids = {
+        entrant.entry_id for field in fields.values() for entrant in field
+    }
     changed_field_event_ids = {
         event_id
         for event_id, duplicate_id, _ in collisions
-        if entries[duplicate_id].status is TournamentEntryStatus.entered
+        if duplicate_id in eligible_entry_ids
     }
     played_event_ids = {
         event_id

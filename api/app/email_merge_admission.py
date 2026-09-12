@@ -55,12 +55,11 @@ async def admit_credential_merge(
         )
         lifetime = LOGIN_TOKEN_LIFETIME
     else:
-        will_merge = or_(
-            EmailToken.purpose == EmailPurpose.merge,
-            and_(
-                literal(not skip_merge),
-                EmailToken.purpose == EmailPurpose.change,
-                browser_guest,
+        will_merge = and_(
+            literal(not skip_merge),
+            or_(
+                EmailToken.purpose == EmailPurpose.merge,
+                and_(EmailToken.purpose == EmailPurpose.change, browser_guest),
             ),
         )
         lifetime = EMAIL_CONFIRM_TOKEN_LIFETIME

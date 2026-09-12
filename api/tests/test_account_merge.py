@@ -909,20 +909,39 @@ async def test_merge_closes_duplicate_registration_with_reconciliation_actor(
     )
 
 
+@pytest.mark.parametrize("withdrawal_scope", ["registration", "competition"])
 async def test_merging_withdrawn_duplicate_does_not_retire_valid_current_draw(
     db_session: AsyncSession,
+    withdrawal_scope: str,
 ):
     guest = await _make_ephemeral(db_session, "old-registration-guest")
     survivor = await _make_verified(db_session, "old-registration@example.com")
     opponent = await _make_verified(db_session, "old-registration-opponent@example.com")
     event = await _make_rr_event(db_session, survivor)
     duplicate = await _enter(
-        db_session, event, guest, status=TournamentEntryStatus.withdrawn
+        db_session,
+        event,
+        guest,
+        status=(
+            TournamentEntryStatus.withdrawn
+            if withdrawal_scope == "registration"
+            else TournamentEntryStatus.entered
+        ),
     )
+    if withdrawal_scope == "competition":
+        from app.tournament_participation import WithdrawalReason, withdraw_competition
+
+        await withdraw_competition(
+            db_session, duplicate.id, survivor.id, WithdrawalReason.director_removal
+        )
+        await db_session.commit()
+        assert duplicate.status is TournamentEntryStatus.entered
     await _enter(db_session, event, survivor)
     await _enter(db_session, event, opponent)
     fixtures = await _cut(db_session, event)
     before = _seats(fixtures)
+    assert len(fixtures) == 1
+    assert duplicate.id not in (fixtures[0].entry_a_id, fixtures[0].entry_b_id)
 
     await merge_user(db_session, from_user_id=guest.id, to_user_id=survivor.id)
     await db_session.commit()
