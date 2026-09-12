@@ -470,3 +470,146 @@ async def test_missing_official_evidence_rolls_back_automatic_seating(db_session
     await db_session.refresh(target)
     assert target.entry_a_id is None
     assert await advancement_history(db_session, target_id, "a") == []
+
+
+async def _replacement_after_schedule_finished(db, *, materialized):
+    from app.advancement_decisions import advancement_history
+    from app.models import (
+        ScheduleSolveStatus,
+        Tournament,
+        TournamentEntry,
+        TournamentEvent,
+    )
+    from app.official_results import correct_result
+    from app.schedule_solves import latest_solve
+    from app.tournament_materialization import materialize_event
+    from tests._helpers import make_user
+
+    match, director, source, target = await knockout(db)
+    outcome = await propose_result(
+        db, match.id, director.id, games=board(), supersedes_result_id=None
+    )
+    if materialized:
+        opponent = await make_user(db, "scheduled-finalist")
+        entry = TournamentEntry(event_id=source.scope_event_id, user_id=opponent.id)
+        db.add(entry)
+        await db.flush()
+        target.entry_b_id = entry.id
+        await db.flush()
+        await materialize_event(
+            db,
+            await db.get(Tournament, source.scope_tournament_id),
+            await db.get(TournamentEvent, source.scope_event_id),
+        )
+    previous_solve = await latest_solve(db, source.scope_tournament_id)
+    assert previous_solve is not None
+    # Seed the previous solve as finished: the replacement must request a fresh
+    # solve rather than accidentally inheriting the source completion's queued run.
+    previous_solve.status = ScheduleSolveStatus.succeeded
+    await db.commit()
+    (original,) = await advancement_history(db, target.id, "a")
+    corrected = await correct_result(
+        db,
+        match.id,
+        director.id,
+        expected_revision_id=outcome.match.current_official_result_id,
+        reason="Correct qualifier",
+        games=board(winner=2),
+    )
+    await db.commit()
+    return director, source, target, original, corrected, previous_solve.id
+
+
+@pytest.mark.parametrize("materialized", [False, True])
+async def test_changed_participant_requests_a_schedule_recalculation(
+    db_session,
+    materialized,
+):
+    from app.advancement_decisions import replace_advancement
+    from app.models import ScheduleSolveStatus, ScheduleSolveTrigger
+    from app.schedule_solves import latest_solve
+
+    (
+        director,
+        source,
+        target,
+        original,
+        corrected,
+        old_solve_id,
+    ) = await _replacement_after_schedule_finished(
+        db_session, materialized=materialized
+    )
+    await replace_advancement(
+        db_session,
+        target.id,
+        "a",
+        expected_current_id=original.id,
+        actor_account_id=director.id,
+        reason="Seat corrected qualifier",
+        entry_id=source.entry_b_id,
+        official_result_ids=(corrected.id,),
+    )
+    await db_session.commit()
+    scheduled = await latest_solve(db_session, source.scope_tournament_id)
+    assert scheduled is not None and scheduled.id != old_solve_id
+    assert scheduled.trigger is ScheduleSolveTrigger.settings_changed
+    assert scheduled.status is ScheduleSolveStatus.queued
+
+
+@pytest.mark.parametrize("action", ["reaffirm", "reject", "rollback"])
+async def test_unchanged_or_rolled_back_replacement_leaves_schedule_unchanged(
+    db_session,
+    action,
+):
+    import uuid
+
+    from app.advancement_decisions import advancement_history, replace_advancement
+    from app.schedule_solves import latest_solve
+
+    (
+        director,
+        source,
+        target,
+        original,
+        corrected,
+        old_solve_id,
+    ) = await _replacement_after_schedule_finished(db_session, materialized=False)
+    tournament_id, target_id = source.scope_tournament_id, target.id
+    original_entry = source.entry_a_id
+
+    async def replacement(*, entry_id, expected_current_id=original.id):
+        await replace_advancement(
+            db_session,
+            target_id,
+            "a",
+            expected_current_id=expected_current_id,
+            actor_account_id=director.id,
+            reason="Review qualifier",
+            entry_id=entry_id,
+            official_result_ids=(corrected.id,),
+        )
+
+    if action == "reaffirm":
+        await replacement(entry_id=original_entry)
+    elif action == "reject":
+        with pytest.raises(ValueError, match="no longer current"):
+            await replacement(
+                entry_id=source.entry_b_id, expected_current_id=uuid.uuid4()
+            )
+    else:
+
+        class RollbackReplacement(Exception):
+            pass
+
+        with pytest.raises(RollbackReplacement):
+            async with db_session.begin_nested():
+                await replacement(entry_id=source.entry_b_id)
+                queued = await latest_solve(db_session, tournament_id)
+                assert queued is not None and queued.id != old_solve_id
+                raise RollbackReplacement
+    await db_session.commit()
+    scheduled = await latest_solve(db_session, tournament_id)
+    assert scheduled is not None and scheduled.id == old_solve_id
+    history = await advancement_history(db_session, target_id, "a")
+    assert len(history) == (2 if action == "reaffirm" else 1)
+    assert history[-1].entry_id == original_entry

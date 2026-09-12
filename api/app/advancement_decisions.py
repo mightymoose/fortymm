@@ -23,6 +23,7 @@ from app.models import (
     MatchSidePlayer,
     MatchStatus,
     OfficialResult,
+    ScheduleSolveTrigger,
     Tournament,
     TournamentEntryMember,
     TournamentEvent,
@@ -354,4 +355,13 @@ async def replace_advancement(
                 "guard_advancement_seat, guard_fixture_advancement DEFERRED"
             )
         )
+        if previous.entry_id != entry_id:
+            from app.schedule_solves import request_solve
+
+            # Entrant identity affects conflicts and rest even before a fixture
+            # materializes. Validate the replacement before enqueueing, and keep
+            # the solve ledger write in the same transaction as the changed seat.
+            await request_solve(
+                db, fixture.scope_tournament_id, ScheduleSolveTrigger.settings_changed
+            )
         return decision.id

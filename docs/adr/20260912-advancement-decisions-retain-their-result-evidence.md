@@ -69,6 +69,9 @@ match also updates that match side's participants in the same transaction. The
 fixture seat and its upcoming match cannot disagree about who will play.
 Participants are resolved to their canonical Players after Account merges;
 historical entry membership and advancement evidence remain unchanged.
+Changing the selected entry also requests a schedule solve in the same
+transaction, so player-conflict and rest constraints use the replacement entrant.
+Reaffirming the same entry does not request a solve.
 
 ## Relationship to existing decisions
 
