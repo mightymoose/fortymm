@@ -68,6 +68,10 @@ group mappings are refused; supported removal of a live reservation may cascade
 its link away because the immutable revision snapshot retains the cut-time mapping
 and reservation values. Retained fixtures must not
 prevent an otherwise supported configuration edit after removing an unplayed draw.
+Deferred retirement validation checks changed fixtures and participation periods
+by identity; stage/revision changes check their own dependent rows. It does not
+rescan a whole event for every inserted fixture. Validation reads final stored
+state, including after repeated changes within one transaction.
 A refused replacement leaves the prior revision current and unchanged. Retirement
 changes only the retirement marker; other fixture fields remain as last recorded.
 

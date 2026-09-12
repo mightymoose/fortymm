@@ -703,3 +703,65 @@ async def test_archived_group_position_is_immutable(
                     "event_id": drawn_history["event_id"],
                 },
             )
+
+
+async def test_deferred_fixture_retirement_checks_read_only_changed_fixtures(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    owner = await make_user(db_session, "retirement-work-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament, groups=[])
+    tournament_id, event_id = tournament.id, event.id
+    await _enter_field(db_session, event, 24, prefix="retirement-work-player")
+    await db_session.refresh(owner)
+    fixtures = await cut_event_draw(
+        db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
+    )
+    # Measure reads performed by this constraint alone, not wall-clock latency or
+    # work done by unrelated fixture constraints during materialisation.
+    await db_session.execute(text("SET LOCAL enable_seqscan = off"))
+    await db_session.execute(
+        text(
+            "UPDATE tournament_fixtures SET updated_at=updated_at "
+            "WHERE scope_event_id=:id"
+        ),
+        {"id": event_id},
+    )
+    read_count = text(
+        "SELECT seq_tup_read + idx_tup_fetch FROM pg_stat_xact_user_tables "
+        "WHERE relname='tournament_fixtures'"
+    )
+    before = await db_session.scalar(read_count)
+    await db_session.execute(
+        text("SET CONSTRAINTS check_fixture_draw_retirement IMMEDIATE")
+    )
+    after = await db_session.scalar(read_count)
+    assert 0 < after - before <= len(fixtures) * 4
+
+
+async def test_retirement_checks_revalidate_after_an_immediate_constraint_cycle(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID]
+) -> None:
+    await db_session.execute(
+        text("UPDATE tournament_fixtures SET updated_at=updated_at WHERE id=:id"),
+        {"id": drawn_history["fixture_id"]},
+    )
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await db_session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+    with pytest.raises(IntegrityError, match="draw retirement must be consistent"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE tournament_fixtures SET retired_at=clock_timestamp() "
+                    "WHERE id=:id"
+                ),
+                {"id": drawn_history["fixture_id"]},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    # Queue an event while current, then retire coherently before its check runs.
+    # The validator must read the stored final row, not that event's NEW snapshot.
+    await db_session.execute(
+        text("UPDATE tournament_fixtures SET updated_at=updated_at WHERE id=:id"),
+        {"id": drawn_history["fixture_id"]},
+    )
+    await _uncut(db_session, drawn_history)

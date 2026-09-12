@@ -312,39 +312,74 @@ DRAW_HISTORY_INTEGRITY_DDL = (
     """
         CREATE FUNCTION check_draw_retirement() RETURNS trigger
         LANGUAGE plpgsql AS $$
-        DECLARE event_uuid uuid;
         BEGIN
+        -- Deferred events carry old snapshots; validate each row's final state.
         IF TG_TABLE_NAME = 'tournament_fixtures' THEN
-        event_uuid := NEW.scope_event_id;
-        ELSE
-        event_uuid := NEW.event_id;
-        END IF;
         IF EXISTS (
         SELECT 1 FROM tournament_fixtures f
         JOIN tournament_draw_revisions r ON r.id = f.draw_revision_id
-        WHERE r.event_id = event_uuid
+        WHERE f.id = NEW.id
         AND (f.retired_at IS NULL) IS DISTINCT FROM (r.retired_at IS NULL)
         ) THEN
-        RAISE EXCEPTION 'draw retirement must be consistent' USING ERRCODE = '23514' ;
-        END IF;
-        IF EXISTS (
-        SELECT 1 FROM tournament_entry_participations p
-        JOIN tournament_draw_revisions r ON r.id=p.draw_revision_id
-        JOIN tournament_event_stages s ON s.id=p.stage_id
-        WHERE p.event_id=event_uuid AND p.ended_at IS NULL
-        AND (r.retired_at IS NOT NULL OR s.retired_at IS NOT NULL)
-        ) THEN
-        RAISE EXCEPTION 'active participation requires current draw configuration'
-        USING ERRCODE = '23514' ;
+        RAISE EXCEPTION 'draw retirement must be consistent' USING ERRCODE = '23514';
         END IF;
         IF EXISTS (
         SELECT 1 FROM tournament_fixtures f
-        JOIN tournament_event_stages s ON s.id=f.stage_id
-        WHERE s.event_id=event_uuid AND f.retired_at IS NULL AND s.retired_at IS NOT
-        NULL
+        JOIN tournament_event_stages s ON s.id = f.stage_id
+        WHERE f.id = NEW.id AND f.retired_at IS NULL AND s.retired_at IS NOT NULL
         ) THEN
-        RAISE EXCEPTION 'current fixture requires current stage' USING ERRCODE = '23514'
-        ;
+        RAISE EXCEPTION 'current fixture requires current stage'
+        USING ERRCODE = '23514';
+        END IF;
+        RETURN NULL;
+        END IF;
+        IF TG_TABLE_NAME = 'tournament_entry_participations' THEN
+        IF EXISTS (
+        SELECT 1 FROM tournament_entry_participations p
+        JOIN tournament_draw_revisions r ON r.id = p.draw_revision_id
+        JOIN tournament_event_stages s ON s.id = p.stage_id
+        WHERE p.id = NEW.id AND p.ended_at IS NULL
+        AND (r.retired_at IS NOT NULL OR s.retired_at IS NOT NULL)
+        ) THEN
+        RAISE EXCEPTION 'active participation requires current draw configuration'
+        USING ERRCODE = '23514';
+        END IF;
+        RETURN NULL;
+        END IF;
+        IF TG_TABLE_NAME = 'tournament_draw_revisions' THEN
+        IF EXISTS (
+        SELECT 1 FROM tournament_fixtures f
+        JOIN tournament_draw_revisions r ON r.id = f.draw_revision_id
+        WHERE r.id = NEW.id
+        AND (f.retired_at IS NULL) IS DISTINCT FROM (r.retired_at IS NULL)
+        ) THEN
+        RAISE EXCEPTION 'draw retirement must be consistent' USING ERRCODE = '23514';
+        END IF;
+        IF EXISTS (
+        SELECT 1 FROM tournament_entry_participations p
+        JOIN tournament_draw_revisions r ON r.id = p.draw_revision_id
+        WHERE r.id = NEW.id AND p.ended_at IS NULL AND r.retired_at IS NOT NULL
+        ) THEN
+        RAISE EXCEPTION 'active participation requires current draw configuration'
+        USING ERRCODE = '23514';
+        END IF;
+        RETURN NULL;
+        END IF;
+        IF EXISTS (
+        SELECT 1 FROM tournament_entry_participations p
+        JOIN tournament_event_stages s ON s.id = p.stage_id
+        WHERE s.id = NEW.id AND p.ended_at IS NULL AND s.retired_at IS NOT NULL
+        ) THEN
+        RAISE EXCEPTION 'active participation requires current draw configuration'
+        USING ERRCODE = '23514';
+        END IF;
+        IF EXISTS (
+        SELECT 1 FROM tournament_fixtures f
+        JOIN tournament_event_stages s ON s.id = f.stage_id
+        WHERE s.id = NEW.id AND f.retired_at IS NULL AND s.retired_at IS NOT NULL
+        ) THEN
+        RAISE EXCEPTION 'current fixture requires current stage'
+        USING ERRCODE = '23514';
         END IF;
         RETURN NULL;
         END $$
