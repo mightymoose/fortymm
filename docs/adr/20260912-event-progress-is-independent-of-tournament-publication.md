@@ -14,8 +14,11 @@ The first saved game score starts an event. The database preserves when play was
 first recorded, separately from when play actually began. Today's score interface
 records completed games, so the actual start time is unknown; neither a match
 call nor the score's save time may masquerade as that actual start time. Clearing
-or correcting a score never erases the first-recorded-play fact. A provisional
-lineup captured at a match call retains its existing meaning and uncall exception;
+or correcting a score never erases the first-recorded-play fact. Attaching older
+recorded match history may refine that timestamp earlier, using only its retained
+score evidence; clients cannot edit it, and transition observation history remains
+unchanged. The earliest retained evidence determines the timestamp regardless of
+attachment order. A provisional lineup captured at a match call retains its existing meaning and uncall exception;
 it does not, by itself, start the event.
 
 The existing per-draw results rules determine completion. When they become
@@ -40,12 +43,12 @@ otherwise retain explicit unknowns. Seeded history follows the same rule, with
 no guessed legacy start or finish times. Version order remains authoritative
 even when timestamps are equal.
 
-An administrator void or attachment of an already completed match must commit
-with an explicit reconciliation assertion for its resulting event state and
-version. Deferred database guards reject these writes without a current
+An administrator void, or attaching, removing, or replacing an already completed
+match, must commit with an explicit reconciliation assertion for each affected
+event's resulting state and version. Deferred database guards reject these writes without a current
 assertion; changing those inputs invalidates an earlier assertion in the same
-transaction. Committed assertions are retained. Application writers use the existing results
-strategy through `reconcile_event`; SQL maintenance must reconcile and assert its
+transaction. Committed assertions are retained. Application writers use the
+existing results strategy through `reconcile_event`; SQL maintenance must reconcile and assert its
 result before committing. The database does not duplicate the draw strategies.
 
 ## Cancellation, archive and registration

@@ -34,7 +34,16 @@ EVENT_LIFECYCLE_DDL = (
                 AND pg_trigger_depth() < 2)
             OR (OLD.first_recorded_play_at IS NOT NULL
                 AND NEW.first_recorded_play_at IS DISTINCT FROM
-                    OLD.first_recorded_play_at)
+                    OLD.first_recorded_play_at AND NOT (
+                    pg_trigger_depth() > 1 AND NEW.first_recorded_play_at IS NOT NULL
+                    AND NEW.first_recorded_play_at < OLD.first_recorded_play_at
+                    AND NEW.first_recorded_play_at = (
+                        SELECT min(s.created_at) FROM tournament_fixtures f
+                        JOIN match_games g ON g.match_id=f.match_id
+                        JOIN match_game_scores s ON s.match_game_id=g.id
+                        WHERE f.scope_event_id=NEW.id
+                    )
+                ))
             OR (NEW.started_at IS DISTINCT FROM OLD.started_at AND NOT (
                 OLD.lifecycle_state='unstarted' AND NEW.lifecycle_state='in_progress'
                 AND OLD.started_at IS NULL AND NEW.started_at IS NOT NULL
@@ -207,14 +216,14 @@ EVENT_LIFECYCLE_DDL = (
             JOIN match_game_scores s ON s.match_game_id=g.id
             WHERE g.match_id=NEW.match_id ON CONFLICT DO NOTHING;
             UPDATE tournament_events
-            SET first_recorded_play_at=(
+            SET first_recorded_play_at=LEAST(first_recorded_play_at, (
                     SELECT min(s.created_at) FROM match_games g
                     JOIN match_game_scores s ON s.match_game_id=g.id
                     WHERE g.match_id=NEW.match_id
-                ),
+                )),
                 lifecycle_state=CASE WHEN lifecycle_state='unstarted'
                     THEN 'in_progress'::event_lifecycle_state ELSE lifecycle_state END
-            WHERE id=NEW.scope_event_id AND first_recorded_play_at IS NULL;
+            WHERE id=NEW.scope_event_id;
         END IF;
         RETURN NEW;
     END $$

@@ -95,25 +95,29 @@ RECONCILIATION_DDL = (
     """
     CREATE FUNCTION invalidate_event_reconciliation() RETURNS trigger
     LANGUAGE plpgsql AS $$
-    DECLARE affected_event uuid;
+    DECLARE affected_events uuid[] := '{}';
     BEGIN
         IF TG_TABLE_NAME = 'match_void_actions' THEN
-            SELECT scope_event_id INTO affected_event FROM tournament_fixtures
+            SELECT ARRAY[scope_event_id] INTO affected_events FROM tournament_fixtures
                 WHERE match_id=NEW.match_id;
         ELSE
-            IF TG_OP = 'UPDATE' AND NEW.match_id IS NOT DISTINCT FROM OLD.match_id THEN
-                RETURN NEW;
+            IF TG_OP = 'UPDATE' AND NEW.match_id IS NOT DISTINCT FROM OLD.match_id
+                AND NEW.scope_event_id=OLD.scope_event_id THEN
+                RETURN NULL;
             END IF;
-            IF NOT EXISTS (SELECT 1 FROM matches
+            IF TG_OP <> 'DELETE' AND EXISTS (SELECT 1 FROM matches
                 WHERE id=NEW.match_id AND status='completed') THEN
-                RETURN NEW;
+                affected_events := array_append(affected_events, NEW.scope_event_id);
             END IF;
-            affected_event := NEW.scope_event_id;
+            IF TG_OP <> 'INSERT' AND EXISTS (SELECT 1 FROM matches
+                WHERE id=OLD.match_id AND status='completed') THEN
+                affected_events := array_append(affected_events, OLD.scope_event_id);
+            END IF;
         END IF;
         DELETE FROM tournament_event_reconciliations
-            WHERE event_id=affected_event
+            WHERE event_id=ANY(affected_events)
               AND transaction_id=pg_current_xact_id()::text::bigint;
-        RETURN NEW;
+        RETURN NULL;
     END $$
     """,
     """
@@ -123,24 +127,35 @@ RECONCILIATION_DDL = (
     """,
     """
     CREATE TRIGGER invalidate_attachment_event_reconciliation
-    AFTER INSERT OR UPDATE OF match_id ON tournament_fixtures
+    AFTER INSERT OR UPDATE OF match_id, scope_event_id OR DELETE ON tournament_fixtures
     FOR EACH ROW EXECUTE FUNCTION invalidate_event_reconciliation()
     """,
     """
     CREATE FUNCTION require_attachment_event_reconciliation() RETURNS trigger
     LANGUAGE plpgsql AS $$
+    DECLARE affected_events uuid[] := '{}';
     BEGIN
-        IF TG_OP = 'UPDATE' AND NEW.match_id IS NOT DISTINCT FROM OLD.match_id THEN
+        IF TG_OP = 'UPDATE' AND NEW.match_id IS NOT DISTINCT FROM OLD.match_id
+            AND NEW.scope_event_id=OLD.scope_event_id THEN
             RETURN NULL;
         END IF;
-        IF EXISTS (SELECT 1 FROM matches WHERE id=NEW.match_id AND status='completed')
-          AND NOT EXISTS (
-            SELECT 1 FROM tournament_event_reconciliations r
-            JOIN tournament_events e ON e.id=r.event_id
-            WHERE e.id=NEW.scope_event_id
-              AND r.lifecycle_state=e.lifecycle_state::text
-              AND r.lifecycle_version=e.lifecycle_version
-              AND r.transaction_id=pg_current_xact_id()::text::bigint
+        IF TG_OP <> 'DELETE' AND EXISTS (SELECT 1 FROM matches
+            WHERE id=NEW.match_id AND status='completed') THEN
+            affected_events := array_append(affected_events, NEW.scope_event_id);
+        END IF;
+        IF TG_OP <> 'INSERT' AND EXISTS (SELECT 1 FROM matches
+            WHERE id=OLD.match_id AND status='completed') THEN
+            affected_events := array_append(affected_events, OLD.scope_event_id);
+        END IF;
+        IF EXISTS (
+            SELECT 1 FROM tournament_events e WHERE e.id=ANY(affected_events)
+              AND NOT EXISTS (
+                SELECT 1 FROM tournament_event_reconciliations r
+                WHERE r.event_id=e.id
+                  AND r.lifecycle_state=e.lifecycle_state::text
+                  AND r.lifecycle_version=e.lifecycle_version
+                  AND r.transaction_id=pg_current_xact_id()::text::bigint
+            )
         ) THEN
             RAISE EXCEPTION 'completed attachment requires event reconciliation'
                 USING ERRCODE='23514';
@@ -150,7 +165,7 @@ RECONCILIATION_DDL = (
     """,
     """
     CREATE CONSTRAINT TRIGGER require_attachment_event_reconciliation
-    AFTER INSERT OR UPDATE OF match_id ON tournament_fixtures
+    AFTER INSERT OR UPDATE OF match_id, scope_event_id OR DELETE ON tournament_fixtures
     DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION require_attachment_event_reconciliation()
     """,
