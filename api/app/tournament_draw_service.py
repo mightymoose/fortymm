@@ -47,6 +47,7 @@ from app.schemas.tournament import TournamentFixtureRead
 from app.tournament_draw_limits import lock_draw_actor
 from app.tournament_draws import (
     cut_draw,
+    draw_has_advancement_history,
     draw_has_play,
     event_has_draw,
     uncut_draw,
@@ -104,6 +105,11 @@ async def _enforce_unplayed(db: AsyncSession, event: TournamentEvent) -> None:
     Read under the tournament lock. Retaining the former revision does not grant
     permission to redraw competition that is already under way.
     """
+    if await draw_has_advancement_history(db, event.id):
+        raise DrawUnderWayError(
+            "Advancement history must be preserved. "
+            "This event's draw can no longer be cut or removed."
+        )
     if await draw_has_play(db, event.id):
         raise DrawUnderWayError()
 

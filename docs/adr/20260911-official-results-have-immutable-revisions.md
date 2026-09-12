@@ -5,7 +5,10 @@ Status: Accepted for #1682, following the design interview. Part of #1669.
 The deferred rating integration below is implemented by
 [Rating inputs outlive rebuildable projections](20260911-rating-inputs-outlive-rebuildable-projections.md):
 administrator corrections and affected rating replay commit atomically.
-Advancement reconciliation remains deferred to #1684.
+Advancement provenance is implemented by
+[Advancement decisions retain their result evidence](20260912-advancement-decisions-retain-their-result-evidence.md):
+corrections make supporting evidence stale while preserving existing seats.
+Automatic advancement reconciliation remains deferred.
 
 ## Decision
 

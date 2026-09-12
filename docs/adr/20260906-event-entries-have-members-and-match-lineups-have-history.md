@@ -109,7 +109,10 @@ An event or tournament containing recorded play cannot be deleted. Historical
 membership references block cascading deletion in the database; the existing
 HTTP delete actions return a 409 refusal and MCP delete tools report the same
 reason. Owner/not-found checks still run first. Unplayed events remain deletable;
-this adds no deletion UI or alternative deletion workflow.
+this adds no deletion UI or alternative deletion workflow. The
+[advancement-decision ADR](20260912-advancement-decisions-retain-their-result-evidence.md)
+also retains events and tournaments with advancement history, including unknown
+provenance without recorded play.
 
 Deletion locks the event and membership rows before checking history. A concurrent
 first lineup holds membership foreign-key locks, so deletion waits and then reports

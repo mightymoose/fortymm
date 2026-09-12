@@ -28,6 +28,7 @@ from app.draws import (
     FixtureId,
     FixtureStage,
     FixtureState,
+    GroupAdvancement,
     GroupId,
     RrThenKoStrategy,
     Side,
@@ -303,8 +304,32 @@ def test_stage_template_writer_and_rr_then_ko_strategy_reader_agree() -> None:
     # receives the seating — i.e. only if the writer's template and the reader's split
     # agree on which position means what.
     assert set(plan.side_fills) == {
-        SideFill(fixture_id=knockout_fixture_id, side=Side.a, entry_id=entry_1),
-        SideFill(fixture_id=knockout_fixture_id, side=Side.b, entry_id=entry_2),
+        SideFill(
+            fixture_id=knockout_fixture_id,
+            side=Side.a,
+            entry_id=entry_1,
+            provenance=GroupAdvancement(
+                source_group_id=group_fixture.group_id,
+                qualification_place=1,
+                qualifiers_per_group=2,
+                group_count=1,
+                group_index=0,
+                seed=1,
+            ),
+        ),
+        SideFill(
+            fixture_id=knockout_fixture_id,
+            side=Side.b,
+            entry_id=entry_2,
+            provenance=GroupAdvancement(
+                source_group_id=group_fixture.group_id,
+                qualification_place=2,
+                qualifiers_per_group=2,
+                group_count=1,
+                group_index=0,
+                seed=2,
+            ),
+        ),
     }
 
 

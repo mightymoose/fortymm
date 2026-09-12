@@ -80,6 +80,8 @@ __all__ = [
     "AuthorityChangeReason",
     "TournamentAccountGrant",
     "TournamentAccountRole",
+    "AdvancementDecision",
+    "AdvancementEvidence",
     "Account",
     "LoginIdentity",
     "AccountPlayer",
@@ -148,6 +150,8 @@ __all__ = [
     "VerificationPolicy",
 ]
 
+from app.models import advancement_integrity as advancement_integrity
 from app.models import draw_visibility as draw_visibility
 from app.models import entry_supersession as entry_supersession
 from app.models import participation_integrity as participation_integrity
+from app.models.advancement_decision import AdvancementDecision, AdvancementEvidence

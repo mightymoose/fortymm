@@ -691,6 +691,21 @@ class SeatedPairing:
 
 
 @dataclass(frozen=True, slots=True)
+class KnockoutAdvancement:
+    source_fixture_id: FixtureId
+
+
+@dataclass(frozen=True, slots=True)
+class GroupAdvancement:
+    source_group_id: GroupId
+    qualification_place: int
+    qualifiers_per_group: int
+    group_count: int
+    group_index: int
+    seed: int
+
+
+@dataclass(frozen=True, slots=True)
 class SideFill:
     """Fill one side of one fixture with the entry that has become known for it.
 
@@ -702,6 +717,7 @@ class SideFill:
     fixture_id: FixtureId
     side: Side
     entry_id: EntryId
+    provenance: KnockoutAdvancement | GroupAdvancement | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1054,6 +1070,7 @@ class SingleElimStrategy:
                     fixture_id=successor.fixture_id,
                     side=side,
                     entry_id=fixture.winner_entry_id,
+                    provenance=KnockoutAdvancement(fixture.fixture_id),
                 )
             )
         return AdvancePlan(
@@ -1337,7 +1354,17 @@ class RrThenKoStrategy:
                     continue  # already seated — the source of idempotence
                 fills.append(
                     SideFill(
-                        fixture_id=slot.fixture_id, side=side, entry_id=tally.entry_id
+                        fixture_id=slot.fixture_id,
+                        side=side,
+                        entry_id=tally.entry_id,
+                        provenance=GroupAdvancement(
+                            group_id,
+                            place,
+                            self.qualifiers_per_group,
+                            len(group_ids),
+                            group_index,
+                            seed,
+                        ),
                     )
                 )
         return fills

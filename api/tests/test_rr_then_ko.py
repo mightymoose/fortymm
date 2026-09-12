@@ -1146,6 +1146,81 @@ async def test_a_finished_group_seats_its_qualifiers_into_the_bracket(
         # of them materialized into a match.
         assert all(f.match_id is None for f in bracket)
 
+        from app.advancement_decisions import advancement_history
+
+        expected_results = set(
+            (
+                await db_session.scalars(
+                    select(Match.current_official_result_id).where(
+                        Match.id.in_([f.match_id for f in group_a])
+                    )
+                )
+            ).all()
+        )
+        decisions = []
+        for fixture in bracket:
+            for side in ("a", "b"):
+                decisions.extend(
+                    await advancement_history(db_session, fixture.id, side)
+                )
+        assert len(decisions) == 2
+        assert {d.rule_settings["qualification_place"] for d in decisions} == {1, 2}
+        for decision in decisions:
+            assert decision.source_group_id == group_a_id
+            assert decision.rule_version == "group_finishing_order_v1"
+            assert decision.rule_settings["qualifiers_per_group"] == 2
+            assert set(decision.official_result_ids) == expected_results
+            assert len(decision.official_result_ids) == 6
+
+        from app.advancement_decisions import replace_advancement
+
+        chosen = decisions[0]
+        destination = next(
+            f for f in bracket if chosen.entry_id in (f.entry_a_id, f.entry_b_id)
+        )
+        side = "a" if destination.entry_a_id == chosen.entry_id else "b"
+        with pytest.raises(ValueError, match="complete"):
+            await replace_advancement(
+                db_session,
+                destination.id,
+                side,
+                expected_current_id=chosen.id,
+                actor_account_id=owner.id,
+                reason="Reaffirm after review",
+                entry_id=chosen.entry_id,
+                official_result_ids=chosen.official_result_ids[:1],
+            )
+        assert len(await advancement_history(db_session, destination.id, side)) == 1
+
+        from sqlalchemy import text
+        from sqlalchemy.exc import IntegrityError
+
+        with pytest.raises(IntegrityError, match="complete"):
+            async with db_session.begin_nested():
+                new_id = (
+                    await db_session.execute(
+                        text("""
+                    INSERT INTO fixture_advancement_decisions
+                    (fixture_id, side, entry_id, source_group_id, rule_version,
+                        rule_settings,
+                     revision, predecessor_id, actor_account_id, reason, evidence_count)
+                    SELECT fixture_id, side, entry_id, source_group_id, rule_version,
+                        rule_settings,
+                           revision + 1, id, :actor, 'Incomplete evidence', 1
+                    FROM fixture_advancement_decisions WHERE id = :id RETURNING id
+                """),
+                        {"id": chosen.id, "actor": owner.id},
+                    )
+                ).scalar_one()
+                await db_session.execute(
+                    text("""INSERT INTO advancement_decision_evidence
+                    SELECT :new, match_id, official_result_id FROM
+                        advancement_decision_evidence
+                    WHERE decision_id = :id LIMIT 1"""),
+                    {"new": new_id, "id": chosen.id},
+                )
+                await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
 
 def _reservation_payload(reservation: TournamentEventReservation) -> dict[str, Any]:
     """The full :class:`~app.schemas.tournament.ReservationUpsert` a PATCH must send

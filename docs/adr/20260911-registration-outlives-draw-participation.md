@@ -81,6 +81,10 @@ Quota checks run against the prospective plan and configuration before any draw
 retirement. Group identities are bound after accepted configuration materialization;
 UUID replacement preserves the checked snapshot byte size.
 
+Advancement decisions retain their source and destination fixtures under the
+September 12 advancement-provenance decision. Cut and parent-deletion guards
+include archived draws when checking that retained evidence.
+
 A refused replacement leaves the prior revision current and unchanged. Retirement
 changes only the retirement marker; other fixture fields remain as last recorded.
 
