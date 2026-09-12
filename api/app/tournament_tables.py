@@ -368,8 +368,7 @@ async def apply_table_catalogue(
     # active list order IS the catalogue order, so the read-back is in the order the
     # director sent without waiting for a re-select.
     tournament.tables = [
-        _table_for(stored, entry, position)
-        for position, entry in enumerate(submitted)
+        _table_for(stored, entry, position) for position, entry in enumerate(submitted)
     ]
     return AppliedCatalogue(
         changed=bool(removed) or any(entry.id is None for entry in submitted),
