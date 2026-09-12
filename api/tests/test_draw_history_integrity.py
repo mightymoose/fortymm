@@ -717,9 +717,32 @@ async def test_deferred_fixture_retirement_checks_read_only_changed_fixtures(
     fixtures = await cut_event_draw(
         db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
     )
+    # Reproduce a pooled connection whose trigger cached a sequential-scan plan
+    # while earlier tests were working with a small fixture table.
+    await db_session.execute(text("SET LOCAL enable_indexscan = off"))
+    await db_session.execute(text("SET LOCAL enable_bitmapscan = off"))
+    await db_session.execute(text("SET LOCAL plan_cache_mode = force_generic_plan"))
+    await db_session.execute(text("DISCARD PLANS"))
+    await db_session.execute(
+        text(
+            "UPDATE tournament_fixtures SET updated_at=updated_at "
+            "WHERE scope_event_id=:id"
+        ),
+        {"id": event_id},
+    )
+    await db_session.execute(
+        text("SET CONSTRAINTS check_fixture_draw_retirement IMMEDIATE")
+    )
+    await db_session.execute(
+        text("SET CONSTRAINTS check_fixture_draw_retirement DEFERRED")
+    )
+    await db_session.execute(text("SET LOCAL enable_indexscan = on"))
+    await db_session.execute(text("SET LOCAL enable_bitmapscan = on"))
     # Measure reads performed by this constraint alone, not wall-clock latency or
     # work done by unrelated fixture constraints during materialisation.
     await db_session.execute(text("SET LOCAL enable_seqscan = off"))
+    # Planner settings do not replace PL/pgSQL plans cached on pooled connections.
+    await db_session.execute(text("DISCARD PLANS"))
     await db_session.execute(
         text(
             "UPDATE tournament_fixtures SET updated_at=updated_at "
