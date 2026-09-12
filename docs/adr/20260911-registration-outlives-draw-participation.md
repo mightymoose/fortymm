@@ -91,6 +91,10 @@ Retained history makes repeated unplayed cuts a storage allocation, so director
 authority alone is insufficient. HTTP and MCP share hard limits: 150,000 fixtures
 per cut; 250,000 retained fixtures and 32 revisions per tournament; and 500,000
 retained fixtures and 128 revisions attributable to one Account across tournaments.
+Each retained configuration snapshot is also limited to 64 KiB of encoded JSON,
+so the revision limits bound retained configuration to 2 MiB per tournament and
+8 MiB per acting Account. Fixture counts alone cannot bound arbitrary text values. Reservation writes limit
+names to 255 characters; existing names remain readable.
 Both current and retired revisions count. A full 512-entry round robin still fits
 one cut. A refused allocation preserves the standing draw and reports an actionable
 error. Existing explicit deletion of unplayed events and tournaments can release

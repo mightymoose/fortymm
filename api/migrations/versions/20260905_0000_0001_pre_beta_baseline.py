@@ -4123,6 +4123,8 @@ def upgrade() -> None:
         configuration JSONB DEFAULT '{}' ::jsonb NOT NULL,
         PRIMARY KEY (id),
         CONSTRAINT uq_draw_revision_event_id UNIQUE (event_id, id),
+        CONSTRAINT ck_draw_revision_configuration_bytes
+        CHECK (octet_length(configuration::text) <= 65536),
         CONSTRAINT ck_draw_revision_interval CHECK (retired_at IS NULL OR retired_at >=
         created_at),
         FOREIGN KEY(event_id) REFERENCES tournament_events (id) ON DELETE CASCADE

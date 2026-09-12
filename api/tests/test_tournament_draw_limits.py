@@ -223,3 +223,98 @@ async def test_draw_revision_actor_cannot_be_reassigned_by_sql(
                 ),
                 {"actor": other.id, "id": revision.id},
             )
+
+
+async def test_oversized_unicode_configuration_preserves_current_draw(
+    authed_client, db_session, default_league
+):
+    from app.models import TournamentEventReservation
+
+    client, owner = authed_client
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    await _enter_field(db_session, event, 4, prefix="configuration-limit")
+    event_id = event.id
+    url = f"/v1/tournaments/{tournament.id}/events/{event_id}/draw"
+    first = await client.post(url)
+    assert first.status_code == 201
+    original = (await db_session.scalars(select(TournamentDrawRevision))).one()
+    original_id, original_configuration = original.id, original.configuration
+    reservation = (
+        await db_session.scalars(
+            select(TournamentEventReservation)
+            .where(TournamentEventReservation.event_id == event_id)
+            .order_by(TournamentEventReservation.id)
+        )
+    ).first()
+    assert reservation is not None
+    reservation.name = "界" * 22_000
+    await db_session.commit()
+
+    refused = await client.post(url)
+
+    assert refused.status_code == 422, refused.text
+    assert "65,536 configuration bytes per cut" in refused.json()["detail"]
+    db_session.expire_all()
+    revisions = (await db_session.scalars(select(TournamentDrawRevision))).all()
+    assert len(revisions) == 1
+    assert revisions[0].id == original_id
+    assert revisions[0].retired_at is None
+    assert revisions[0].configuration == original_configuration
+    current = (await db_session.scalars(select(TournamentFixture))).all()
+    assert {str(row.id) for row in current} == {row["id"] for row in first.json()}
+
+
+@pytest.mark.parametrize("byte_count", [65_536, 65_537])
+async def test_database_bounds_configuration_bytes(
+    authed_client, db_session, default_league, byte_count
+):
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    _, owner = authed_client
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    overhead = await db_session.scalar(
+        text("SELECT octet_length(jsonb_build_object('padding', '')::text)")
+    )
+    statement = text(
+        "INSERT INTO tournament_draw_revisions(event_id, configuration) "
+        "VALUES (:event, jsonb_build_object('padding', repeat('x', :padding)))"
+    )
+    values = {"event": event.id, "padding": byte_count - overhead}
+    if byte_count > 65_536:
+        with pytest.raises(
+            IntegrityError, match="ck_draw_revision_configuration_bytes"
+        ):
+            async with db_session.begin_nested():
+                await db_session.execute(statement, values)
+    else:
+        await db_session.execute(statement, values)
+        await db_session.commit()
+
+
+@pytest.mark.parametrize("length,expected_status", [(255, 200), (256, 422)])
+async def test_reservation_name_write_has_a_bounded_length(
+    authed_client, db_session, default_league, length, expected_status
+):
+    from app.tournament_reservations import reservation_read
+    from tests._helpers import patch_event
+    from tests.test_tournament_draw_service import RESERVATION_A
+
+    client, owner = authed_client
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament, groups=[RESERVATION_A])
+    reservations = [
+        reservation_read(row).model_dump(mode="json", exclude={"position"})
+        for row in event.reservations
+    ]
+    reservations[0]["name"] = "界" * length
+
+    response = await patch_event(
+        client, tournament.id, event.id, {"reservations": reservations}
+    )
+
+    assert response.status_code == expected_status, response.text
+    if expected_status == 422:
+        assert any(error["loc"][-1] == "name" for error in response.json()["detail"])

@@ -125,7 +125,7 @@ class DrawStorageLimitExceeded(DrawError):
     def __init__(
         self,
         scope: Literal["cut", "tournament", "account"],
-        resource: Literal["fixtures", "draw revisions"],
+        resource: Literal["fixtures", "draw revisions", "configuration bytes"],
         limit: int,
     ) -> None:
         self.scope = scope

@@ -2,7 +2,8 @@
 
 import uuid
 
-from sqlalchemy import func, select, text
+from sqlalchemy import Text, cast, func, literal, select, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.draws import DrawStorageLimitExceeded
@@ -12,6 +13,7 @@ from app.models import (
     TournamentEvent,
     TournamentFixture,
 )
+from app.models.tournament_draw_revision import MAX_DRAW_CONFIGURATION_BYTES
 
 MAX_FIXTURES_PER_CUT = 150_000
 MAX_FIXTURES_PER_TOURNAMENT = 250_000
@@ -95,3 +97,18 @@ async def lock_draw_actor(db: AsyncSession, actor_id: uuid.UUID) -> None:
         .where(Account.id == actor_id)
         .with_for_update(read=True, key_share=True)
     )
+
+
+async def enforce_draw_configuration_size(
+    db: AsyncSession, configuration: dict[str, object]
+) -> None:
+    """Measure the exact JSONB text representation enforced by the database check."""
+    byte_count = (
+        await db.execute(
+            select(func.octet_length(cast(literal(configuration, type_=JSONB), Text)))
+        )
+    ).scalar_one()
+    if byte_count > MAX_DRAW_CONFIGURATION_BYTES:
+        raise DrawStorageLimitExceeded(
+            "cut", "configuration bytes", MAX_DRAW_CONFIGURATION_BYTES
+        )

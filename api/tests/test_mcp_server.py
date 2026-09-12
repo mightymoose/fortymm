@@ -5359,17 +5359,27 @@ async def test_transferred_tournament_mutations_keep_historical_creator(
     assert data["can_edit"] is True
 
 
+@pytest.mark.parametrize(
+    "setting,budget,message",
+    [
+        ("MAX_FIXTURES_PER_CUT", 1, "1 fixtures per cut"),
+        ("MAX_DRAW_CONFIGURATION_BYTES", 64, "64 configuration bytes per cut"),
+    ],
+)
 async def test_build_cut_storage_limit_raises_actionable_tool_error(
     db_session: AsyncSession,
     default_league: League,
     monkeypatch: pytest.MonkeyPatch,
+    setting: str,
+    budget: int,
+    message: str,
 ) -> None:
     from app import tournament_draw_limits
 
     owner = await make_user(db_session, "mcp-draw-storage-limit")
     raw = await _mint(db_session, owner)
     _, event = await _seed_drawable_tournament(db_session, owner, default_league)
-    monkeypatch.setattr(tournament_draw_limits, "MAX_FIXTURES_PER_CUT", 1)
+    monkeypatch.setattr(tournament_draw_limits, setting, budget)
     async with _mcp_client(raw) as client, client:
-        with pytest.raises(ToolError, match="1 fixtures per cut"):
+        with pytest.raises(ToolError, match=message):
             await client.call_tool("build_cut", {"event_id": str(event.id)})

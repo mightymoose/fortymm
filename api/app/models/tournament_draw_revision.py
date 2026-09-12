@@ -17,6 +17,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
 
+MAX_DRAW_CONFIGURATION_BYTES = 65_536
+
 
 class TournamentDrawRevision(Base):
     __tablename__ = "tournament_draw_revisions"
@@ -25,6 +27,10 @@ class TournamentDrawRevision(Base):
         CheckConstraint(
             "retired_at IS NULL OR retired_at >= created_at",
             name="ck_draw_revision_interval",
+        ),
+        CheckConstraint(
+            f"octet_length(configuration::text) <= {MAX_DRAW_CONFIGURATION_BYTES}",
+            name="ck_draw_revision_configuration_bytes",
         ),
         Index(
             "uq_draw_revision_current_event",

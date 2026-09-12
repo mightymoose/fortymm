@@ -70,7 +70,10 @@ from app.models import (
 from app.models.draw_type import DRAW_TYPES_BY_ID
 from app.schemas.tournament import GroupRead, Reservation
 from app.tournament_draw_history import snapshot_draw_configuration
-from app.tournament_draw_limits import enforce_draw_storage
+from app.tournament_draw_limits import (
+    enforce_draw_configuration_size,
+    enforce_draw_storage,
+)
 from app.tournament_draw_settings import draw_settings_of
 from app.tournament_event_stages import GroupCountSource, archive_stage_configuration
 from app.tournament_queries import stage_ids_for_events
@@ -840,9 +843,11 @@ async def cut_draw(
     # ``event`` with its stages, so re-selecting them here would be a second
     # statement for a collection already in hand.
     stage_ids = {stage.position: stage.id for stage in event.stages}
+    configuration = snapshot_draw_configuration(event)
+    await enforce_draw_configuration_size(db, configuration)
     revision = TournamentDrawRevision(
         event_id=event.id,
-        configuration=snapshot_draw_configuration(event),
+        configuration=configuration,
         created_by_account_id=actor_id,
     )
     db.add(revision)
