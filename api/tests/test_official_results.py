@@ -1520,6 +1520,9 @@ async def test_corrections_and_voids_hint_other_active_event_entrants(
         )
     )
     db_session.add(TournamentEntry(event_id=event_id, user_id=third.id))
+    from app.event_lifecycle import reconcile_event
+
+    await reconcile_event(db_session, event_id)
     await db_session.commit()
     participant = min(match.sides, key=lambda s: s.side_number).players[0].user_id
     for action in ("correct", "void"):

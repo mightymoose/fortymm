@@ -329,6 +329,9 @@ async def test_replacement_updates_a_materialized_match_before_recorded_play(
         await db_session.get(Tournament, source.scope_tournament_id),
         await db_session.get(TournamentEvent, source.scope_event_id),
     )
+    from app.event_lifecycle import reconcile_event
+
+    await reconcile_event(db_session, source.scope_event_id)
     await db_session.commit()
     (original,) = await advancement_history(db_session, target.id, "a")
     survivor = None
@@ -506,6 +509,9 @@ async def _replacement_after_schedule_finished(db, *, materialized):
     # Seed the previous solve as finished: the replacement must request a fresh
     # solve rather than accidentally inheriting the source completion's queued run.
     previous_solve.status = ScheduleSolveStatus.succeeded
+    from app.event_lifecycle import reconcile_event
+
+    await reconcile_event(db, source.scope_event_id)
     await db.commit()
     (original,) = await advancement_history(db, target.id, "a")
     corrected = await correct_result(

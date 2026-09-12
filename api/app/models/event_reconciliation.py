@@ -83,6 +83,13 @@ RECONCILIATION_DDL = (
             END IF;
             SELECT ARRAY[scope_event_id] INTO affected_events FROM tournament_fixtures
                 WHERE match_id=NEW.id;
+        ELSIF TG_TABLE_NAME = 'tournament_events' THEN
+            IF NEW.lifecycle_state IS NOT DISTINCT FROM OLD.lifecycle_state
+                OR (NEW.lifecycle_state<>'finished' AND OLD.lifecycle_state<>'finished')
+            THEN
+                RETURN NULL;
+            END IF;
+            affected_events := ARRAY[NEW.id];
         ELSIF TG_TABLE_NAME = 'tournament_entries' THEN
             IF TG_OP = 'UPDATE' AND ROW(NEW.status, NEW.event_id)
                 IS NOT DISTINCT FROM ROW(OLD.status, OLD.event_id) THEN
@@ -153,6 +160,11 @@ RECONCILIATION_DDL = (
     """
     CREATE TRIGGER invalidate_entry_event_reconciliation
     AFTER INSERT OR UPDATE OF status, event_id OR DELETE ON tournament_entries
+    FOR EACH ROW EXECUTE FUNCTION invalidate_event_reconciliation()
+    """,
+    """
+    CREATE TRIGGER invalidate_progress_event_reconciliation
+    AFTER UPDATE OF lifecycle_state ON tournament_events
     FOR EACH ROW EXECUTE FUNCTION invalidate_event_reconciliation()
     """,
     """

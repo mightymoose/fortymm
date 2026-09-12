@@ -163,12 +163,14 @@ async def require_game_recording_allowed(
         select(Tournament.id)
         .join(TournamentFixture, TournamentFixture.scope_tournament_id == Tournament.id)
         .where(TournamentFixture.match_id == match_id)
+        .execution_options(include_draw_history=True)
         .with_for_update(of=Tournament)
     )
     state = await db.scalar(
         select(TournamentEvent.lifecycle_state)
         .join(TournamentFixture, TournamentFixture.scope_event_id == TournamentEvent.id)
         .where(TournamentFixture.match_id == match_id)
+        .execution_options(include_draw_history=True)
         .with_for_update(of=TournamentEvent)
     )
     if state is EventLifecycleState.cancelled:

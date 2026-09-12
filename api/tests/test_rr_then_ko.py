@@ -217,6 +217,9 @@ async def _enter(
         created_at=datetime(2026, 6, 1, 9, 0, tzinfo=UTC) + timedelta(minutes=minutes),
     )
     db.add(entry)
+    from app.event_lifecycle import reconcile_event
+
+    await reconcile_event(db, uuid.UUID(event_id))
     await db.commit()
     return entry
 

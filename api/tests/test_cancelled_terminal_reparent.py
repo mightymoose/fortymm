@@ -59,7 +59,7 @@ async def test_cancelled_event_rejects_terminal_fixture_reparenting(db_session):
             "draw_revision_id",
         )
     }
-    with pytest.raises(IntegrityError, match="cancelled events cannot attach"):
+    with pytest.raises(IntegrityError, match="cancelled events cannot accept fixtures"):
         async with db_session.begin_nested():
             values["id"] = source.id
             await db_session.execute(

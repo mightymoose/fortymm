@@ -794,7 +794,6 @@ ENTRY_INTEGRITY_DDL = (
     LANGUAGE plpgsql AS $$
     DECLARE event_row RECORD;
     BEGIN
-        IF TG_OP = 'INSERT' AND NEW.match_id IS NULL THEN RETURN NEW; END IF;
         IF TG_OP = 'UPDATE' THEN
             IF NEW.match_id IS NOT DISTINCT FROM OLD.match_id
                 AND NEW.stage_id IS NOT DISTINCT FROM OLD.stage_id
@@ -822,6 +821,11 @@ ENTRY_INTEGRITY_DDL = (
             IF TG_OP <> 'INSERT' AND event_row.id=OLD.scope_event_id
                 AND event_row.lifecycle_state='cancelled' THEN
                 RAISE EXCEPTION 'cancelled event fixture must be retained'
+                    USING ERRCODE = '23514';
+            END IF;
+            IF TG_OP <> 'DELETE' AND event_row.id=NEW.scope_event_id
+                AND event_row.lifecycle_state='cancelled' THEN
+                RAISE EXCEPTION 'cancelled events cannot accept fixtures'
                     USING ERRCODE = '23514';
             END IF;
         END LOOP;
