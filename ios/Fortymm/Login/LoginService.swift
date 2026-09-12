@@ -35,10 +35,10 @@ struct LoginService {
     /// session — including `merged` when the prior guest's matches were carried
     /// into the account — so the success screen can report what moved.
     ///
-    /// Classifies failure for the caller: a `4xx` is a rejected token (expired,
-    /// used, wrong account) and terminal; anything else (server error, offline)
-    /// is transient and worth a retry. Keeping that distinction here, not in the
-    /// view, is the same boundary-typing the rest of the API layer follows.
+    /// Dead-link 400 responses are terminal. Merge conflicts and temporary
+    /// limits retain the link and surface the server's guidance with a retry;
+    /// network failures are also retryable. Keeping that distinction here,
+    /// not in the view, follows the API layer's boundary-typing convention.
     func consume(token: String, skipMerge: Bool = false, switchFromUserId: String? = nil) async throws -> SessionResponse {
         let result: Result<SessionResponse, LinkCodedError>
         do {
@@ -46,8 +46,12 @@ struct LoginService {
                 "POST", "/v1/login/consume",
                 body: ConsumeLoginBody(token: token, skipMerge: skipMerge, switchFromUserId: switchFromUserId)
             )
-        } catch let APIError.http(status, _) where (400..<500).contains(status) {
+        } catch let APIError.http(status, _) where status == 400 {
             throw LoginConsumeError.rejected
+        } catch let APIError.http(_, detail) {
+            throw LoginConsumeError.retryable(
+                detail ?? "Sign-in is temporarily blocked. Please try again."
+            )
         } catch {
             throw LoginConsumeError.unreachable
         }
@@ -55,7 +59,12 @@ struct LoginService {
         case .success(let response): return response
         case .failure(let coded) where coded.detail.code == "account_switch_required":
             throw LoginConsumeError.accountSwitchRequired(coded.detail.accountSwitch)
-        case .failure: throw LoginConsumeError.rejected
+        case .failure(let coded) where ["invalid_or_expired", "email_changed", "replaced"].contains(coded.detail.code):
+            throw LoginConsumeError.rejected
+        case .failure(let coded):
+            throw LoginConsumeError.retryable(
+                coded.detail.message ?? "Sign-in is temporarily blocked. Please try again."
+            )
         }
     }
 
@@ -76,13 +85,13 @@ enum LoginConsumeError: Error {
     /// A newer link replaced this one — the fix is opening the most recent
     /// email, NOT resending, which would kill that newer link (#1616). Only
     /// the email-confirm flow produces this today (`ProfileService.confirmEmail`
-    /// parses the confirm endpoint's coded 400; `consume`'s own coded reasons
-    /// aren't parsed on iOS yet).
+    /// parses the confirm endpoint's coded 400; sign-in retains its existing
+    /// rejected-link screen for replaced login links).
     case replaced
-    /// The server couldn't be reached (5xx / timeout / offline). Retrying the
+    /// The server couldn't be reached (timeout / offline). Retrying the
     /// same still-valid link may succeed.
     case unreachable
-    /// Confirmation was blocked without consuming the link; show the server guidance.
+    /// Redemption was blocked without consuming the link; show the server guidance.
     case retryable(String)
 }
 

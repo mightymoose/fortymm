@@ -72,7 +72,7 @@ async def test_parallel_confirmation_refuses_before_account_locks(
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
     from app.db import get_session
-    from app.email_confirmation_admission import admit_merge_confirmation
+    from app.email_merge_admission import admit_credential_merge
     from app.main import app
     from app.models import User
     from app.sessions import SESSION_COOKIE_NAME
@@ -87,7 +87,7 @@ async def test_parallel_confirmation_refuses_before_account_locks(
 
     app.dependency_overrides[get_session] = independent_session
     async with sessions() as gate:
-        await admit_merge_confirmation(
+        await admit_credential_merge(
             gate,
             token_hash,
             hashlib.sha256(api_client.cookies[SESSION_COOKIE_NAME].encode()).digest(),

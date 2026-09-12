@@ -29,7 +29,6 @@ from app import queue as queue_module
 from app.account_merge import EntryMergeConflict, merge_user
 from app.config import Settings, get_settings
 from app.db import get_session
-from app.email_confirmation_admission import admit_merge_confirmation
 from app.email_credentials import (
     EMAIL_CONFIRM_TOKEN_LIFETIME,
     LOGIN_TOKEN_LIFETIME,
@@ -50,6 +49,7 @@ from app.email_credentials import login_token_clause as _login_token_clause
 from app.email_credentials import (
     pending_email_token_clause as _pending_email_token_clause,
 )
+from app.email_merge_admission import admit_credential_merge
 from app.leagues import add_user_to_default_league
 from app.models import (
     EmailIntent,
@@ -1281,7 +1281,7 @@ async def confirm_email(
     coded reasons (#1466). Every other dead confirmation link keeps the plain
     string detail it has always returned.
     """
-    await admit_merge_confirmation(
+    await admit_credential_merge(
         db,
         hash_token(payload.token),
         hash_token(session_cookie) if session_cookie else None,
@@ -1684,7 +1684,19 @@ async def consume_login_token(
     on it, which makes it the third writer of that pair alongside
     ``confirm_email`` and ``auth0_provisioning._provision_user``. All three
     stamp them together, so the invariant holds: email set implies confirmed.
+    Login links that would merge a guest admit one attempt at a time and five
+    attempts per bearer per hour. Busy or exhausted credentials return 429;
+    unavailable retry storage returns 503. Both include Retry-After and leave
+    the link valid. Ordinary sign-in and explicit skip-merge keep their
+    existing availability.
     """
+    await admit_credential_merge(
+        db,
+        hash_token(payload.token),
+        hash_token(session_cookie) if session_cookie else None,
+        skip_merge=payload.skip_merge,
+        flow="login",
+    )
     await lock_credential_accounts(
         db,
         hash_token(payload.token),

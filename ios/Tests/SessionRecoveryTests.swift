@@ -195,6 +195,13 @@ struct UnwritableSessionKeychain: SessionKeychain {
             precondition(message == "Withdraw the conflicting tournament entry before confirming.")
         }
         print("PASS: confirmation conflicts preserve the server's recovery guidance")
+        do {
+            _ = try await login.consume(token: "still-valid-login-link")
+            fatalError("Conflicting entries must block sign-in without rejecting the link")
+        } catch LoginConsumeError.retryable(let message) {
+            precondition(message == "Withdraw the conflicting tournament entry before confirming.")
+        }
+        print("PASS: sign-in conflicts preserve the server's recovery guidance")
         await tokens.update("retained-session")
         for (status, detail) in [
             (429, "Another account merge is in progress. Please try again shortly."),
@@ -209,6 +216,12 @@ struct UnwritableSessionKeychain: SessionKeychain {
             } catch LoginConsumeError.retryable(let message) {
                 precondition(message == detail)
             }
+            do {
+                _ = try await login.consume(token: "still-valid-login-link")
+                fatalError("Temporary sign-in merge failures must remain retryable")
+            } catch LoginConsumeError.retryable(let message) {
+                precondition(message == detail)
+            }
             let retainedToken = await tokens.token()
             precondition(retainedToken == "retained-session", "Merge failures must preserve the caller's session")
         }
@@ -216,6 +229,8 @@ struct UnwritableSessionKeychain: SessionKeychain {
         SessionTransport.body = #"{"data":{"user":{"id":"00000000-0000-0000-0000-000000000001","username":"confirmed","permissions":[]}}}"#
         let confirmed = try await ProfileService(client: client).confirmEmail(token: "still-valid-link")
         precondition(confirmed.data.user.username == "confirmed")
+        let signedIn = try await login.consume(token: "still-valid-login-link")
+        precondition(signedIn.data.user.username == "confirmed")
         print("PASS: throttled and unavailable confirmation can retry with the same link and session")
         SessionTransport.status = 400
         SessionTransport.body = #"{"detail":"Invalid or expired confirmation link"}"#
@@ -229,5 +244,20 @@ struct UnwritableSessionKeychain: SessionKeychain {
             fatalError("A replaced link must retain its distinct recovery flow")
         } catch LoginConsumeError.replaced { }
         print("PASS: dead and replaced confirmation links retain their terminal handling")
+        for code in ["invalid_or_expired", "email_changed", "replaced"] {
+            SessionTransport.body = String(data: try JSONSerialization.data(withJSONObject: [
+                "detail": ["code": code, "message": "This sign-in link is no longer valid."]
+            ]), encoding: .utf8)!
+            do {
+                _ = try await login.consume(token: "dead-login-link")
+                fatalError("A coded dead sign-in link must remain rejected")
+            } catch LoginConsumeError.rejected { }
+        }
+        SessionTransport.body = #"{"detail":"Invalid or expired sign-in link"}"#
+        do {
+            _ = try await login.consume(token: "dead-login-link")
+            fatalError("A plain dead sign-in link must remain rejected")
+        } catch LoginConsumeError.rejected { }
+        print("PASS: sign-in preserves all dead-link reasons and retries temporary merge failures")
     }
 }

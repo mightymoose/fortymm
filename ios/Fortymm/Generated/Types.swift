@@ -154,6 +154,11 @@ internal protocol APIProtocol: Sendable {
     /// on it, which makes it the third writer of that pair alongside
     /// ``confirm_email`` and ``auth0_provisioning._provision_user``. All three
     /// stamp them together, so the invariant holds: email set implies confirmed.
+    /// Login links that would merge a guest admit one attempt at a time and five
+    /// attempts per bearer per hour. Busy or exhausted credentials return 429;
+    /// unavailable retry storage returns 503. Both include Retry-After and leave
+    /// the link valid. Ordinary sign-in and explicit skip-merge keep their
+    /// existing availability.
     ///
     /// - Remark: HTTP `POST /v1/login/consume`.
     /// - Remark: Generated from `#/paths//v1/login/consume/post(consume_login_token_v1_login_consume_post)`.
@@ -1361,6 +1366,11 @@ extension APIProtocol {
     /// on it, which makes it the third writer of that pair alongside
     /// ``confirm_email`` and ``auth0_provisioning._provision_user``. All three
     /// stamp them together, so the invariant holds: email set implies confirmed.
+    /// Login links that would merge a guest admit one attempt at a time and five
+    /// attempts per bearer per hour. Busy or exhausted credentials return 429;
+    /// unavailable retry storage returns 503. Both include Retry-After and leave
+    /// the link valid. Ordinary sign-in and explicit skip-merge keep their
+    /// existing availability.
     ///
     /// - Remark: HTTP `POST /v1/login/consume`.
     /// - Remark: Generated from `#/paths//v1/login/consume/post(consume_login_token_v1_login_consume_post)`.
@@ -15045,6 +15055,11 @@ internal enum Operations {
     /// on it, which makes it the third writer of that pair alongside
     /// ``confirm_email`` and ``auth0_provisioning._provision_user``. All three
     /// stamp them together, so the invariant holds: email set implies confirmed.
+    /// Login links that would merge a guest admit one attempt at a time and five
+    /// attempts per bearer per hour. Busy or exhausted credentials return 429;
+    /// unavailable retry storage returns 503. Both include Retry-After and leave
+    /// the link valid. Ordinary sign-in and explicit skip-merge keep their
+    /// existing availability.
     ///
     /// - Remark: HTTP `POST /v1/login/consume`.
     /// - Remark: Generated from `#/paths//v1/login/consume/post(consume_login_token_v1_login_consume_post)`.
