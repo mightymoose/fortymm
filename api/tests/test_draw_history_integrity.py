@@ -1271,3 +1271,68 @@ async def test_parent_delete_discards_pending_entry_lifecycle_checks(
         {"id": undrawn_registration[id_key]},
     )
     await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def _retire_fixture_revision_without_stage(
+    db: AsyncSession, history: dict[str, uuid.UUID]
+) -> None:
+    await db.execute(
+        text(
+            "UPDATE tournament_entry_participations SET ended_at=clock_timestamp(),"
+            "end_reason='draw_retired' WHERE draw_revision_id=:id AND ended_at IS NULL"
+        ),
+        {"id": history["revision_id"]},
+    )
+    await db.execute(
+        text(
+            "UPDATE tournament_fixtures SET retired_at=clock_timestamp() "
+            "WHERE draw_revision_id=:id"
+        ),
+        {"id": history["revision_id"]},
+    )
+    await db.execute(
+        text(
+            "UPDATE tournament_draw_revisions SET retired_at=clock_timestamp() "
+            "WHERE id=:id"
+        ),
+        {"id": history["revision_id"]},
+    )
+
+
+async def test_retired_fixture_cannot_leave_its_stage_configuration_current(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID]
+) -> None:
+    with pytest.raises(IntegrityError, match="retired fixture requires retired stage"):
+        async with db_session.begin_nested():
+            await _retire_fixture_revision_without_stage(db_session, drawn_history)
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("configuration", ["stage", "group"])
+async def test_complete_sql_draw_retirement_freezes_referenced_configuration(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID], configuration: str
+) -> None:
+    await _retire_fixture_revision_without_stage(db_session, drawn_history)
+    await db_session.execute(
+        text(
+            "UPDATE tournament_event_stages SET retired_at=clock_timestamp() "
+            "WHERE id=(SELECT stage_id FROM tournament_fixtures WHERE id=:id)"
+        ),
+        {"id": drawn_history["fixture_id"]},
+    )
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    table = (
+        "tournament_event_stages"
+        if configuration == "stage"
+        else "tournament_event_stage_groups"
+    )
+    column = "stage_id" if configuration == "stage" else "group_id"
+    with pytest.raises(IntegrityError, match="history is immutable"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    f"UPDATE {table} SET position=position+10 WHERE id="
+                    f"(SELECT {column} FROM tournament_fixtures WHERE id=:id)"
+                ),
+                {"id": drawn_history["fixture_id"]},
+            )

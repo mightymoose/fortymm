@@ -780,3 +780,74 @@ async def test_swiss_bye_reregistration_still_requires_a_recut(
     assert (await draw_currency_by_event(db_session, [event_id]))[
         event_id
     ] is DrawCurrency.stale
+
+
+@pytest.mark.parametrize("event_wide", [True, False])
+async def test_competition_withdrawal_scope_controls_recut_field(
+    db_session: AsyncSession, default_league: League, event_wide: bool
+) -> None:
+    from app.tournament_draws import (
+        DrawCurrency,
+        active_draw_entrants_by_event,
+        draw_currency_by_event,
+    )
+    from app.tournament_participation import (
+        WithdrawalReason,
+        restore_event_eligibility,
+        withdraw_competition,
+    )
+
+    owner = await make_user(db_session, "competition-withdrawal-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament, groups=[])
+    entries = await _enter_field(db_session, event, 3, prefix="competition-field")
+    entry_ids = {entry.id for entry in entries}
+    withdrawn_id = entries[0].id
+    tournament_id, event_id, owner_id = tournament.id, event.id, owner.id
+    initial = await cut_event_draw(
+        db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
+    )
+    await withdraw_competition(
+        db_session,
+        withdrawn_id,
+        owner_id,
+        WithdrawalReason.director_removal,
+        stage_id=None if event_wide else initial[0].stage_id,
+    )
+    await db_session.commit()
+    await db_session.refresh(owner)
+
+    recut = await cut_event_draw(
+        db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
+    )
+
+    expected_field = entry_ids - {withdrawn_id} if event_wide else entry_ids
+    assert len(recut) == (1 if event_wide else 3)
+    assert {
+        entry_id
+        for fixture in recut
+        for entry_id in (fixture.entry_a_id, fixture.entry_b_id)
+    } == expected_field
+    assert {
+        entrant.entry_id
+        for entrant in (await active_draw_entrants_by_event(db_session, [event_id]))[
+            event_id
+        ]
+    } == expected_field
+    assert (await draw_currency_by_event(db_session, [event_id]))[
+        event_id
+    ] is DrawCurrency.current
+    assert (
+        await db_session.scalar(
+            select(TournamentEntry.status).where(TournamentEntry.id == withdrawn_id)
+        )
+        is TournamentEntryStatus.entered
+    )
+
+    await restore_event_eligibility(db_session, withdrawn_id, owner_id)
+    await db_session.commit()
+    await db_session.refresh(owner)
+    restored = await cut_event_draw(
+        db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
+    )
+    assert len(restored) == 3

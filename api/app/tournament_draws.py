@@ -66,6 +66,7 @@ from app.models import (
     TournamentEntryParticipation,
     TournamentEntryRegistration,
     TournamentEntryStatus,
+    TournamentEntryWithdrawal,
     TournamentEvent,
     TournamentEventStage,
     TournamentFixture,
@@ -128,6 +129,17 @@ def _registration_order() -> ColumnElement[datetime]:
     return func.least(current_order, reconciled_order)
 
 
+def _eligible_for_initial_draw() -> ColumnElement[bool]:
+    """Registration and event-wide eligibility determine a new draw's field."""
+    return (TournamentEntry.status == TournamentEntryStatus.entered) & ~exists(
+        select(TournamentEntryWithdrawal.id).where(
+            TournamentEntryWithdrawal.entry_id == TournamentEntry.id,
+            TournamentEntryWithdrawal.stage_id.is_(None),
+            TournamentEntryWithdrawal.restored_at.is_(None),
+        )
+    )
+
+
 async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[Entrant]:
     """The event's field, as the draw domain needs to see it: one :class:`Entrant` per
     **active** entry.
@@ -152,7 +164,7 @@ async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[En
                 _registration_order(),
             ).where(
                 TournamentEntry.event_id == event_id,
-                TournamentEntry.status == TournamentEntryStatus.entered,
+                _eligible_for_initial_draw(),
             )
         )
     ).all()
@@ -225,7 +237,7 @@ async def active_draw_entrants_by_event(
                 _registration_order(),
             ).where(
                 TournamentEntry.event_id.in_(event_ids),
-                TournamentEntry.status == TournamentEntryStatus.entered,
+                _eligible_for_initial_draw(),
             )
         )
     ).all()
@@ -725,7 +737,7 @@ async def draw_currency_by_event(
                 # Withdrawn entries are not entrants (ADR-0016), so a draw is not stale
                 # merely for failing to seat somebody who has left — it is stale for
                 # *still* seating them, which is what the comparison below catches.
-                TournamentEntry.status == TournamentEntryStatus.entered,
+                _eligible_for_initial_draw(),
             )
         )
     ).all()

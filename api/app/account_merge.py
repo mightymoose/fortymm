@@ -35,6 +35,7 @@ from app.models import (
     ScheduleSolveTrigger,
     Tournament,
     TournamentEntry,
+    TournamentEntryRegistration,
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventStage,
@@ -754,6 +755,30 @@ async def _resolve_entry_collisions(
     # tournament enqueues at most one solve for it (``request_solve`` would
     # coalesce the duplicate anyway; no reason to make it).
     solve_tournament_ids: set[uuid.UUID] = set()
+
+    # Recorded play chooses the durable survivor, not whether registration is
+    # still open. Carry an active duplicate's registration onto a withdrawn
+    # survivor with a new period; its ended participation and withdrawal history
+    # remain unchanged. Do this before closing duplicates so priority can still
+    # follow their reconciled registration periods.
+    reactivated_entry_ids = {
+        retained_id
+        for _, duplicate_id, retained_id in collisions
+        if entries[retained_id].status is TournamentEntryStatus.withdrawn
+        and entries[duplicate_id].status is TournamentEntryStatus.entered
+    }
+    if reactivated_entry_ids:
+        db.add_all(
+            TournamentEntryRegistration(
+                entry_id=entry_id, registered_by_account_id=actor_account_id
+            )
+            for entry_id in sorted(reactivated_entry_ids)
+        )
+        await db.execute(
+            update(TournamentEntry)
+            .where(TournamentEntry.id.in_(reactivated_entry_ids))
+            .values(status=TournamentEntryStatus.entered)
+        )
 
     # (1) Copy metadata between the captured collision entries while both are
     # still registered. A played source can survive its target duplicate; the

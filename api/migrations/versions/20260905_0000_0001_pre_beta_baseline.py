@@ -4682,13 +4682,15 @@ def upgrade() -> None:
         CREATE FUNCTION check_draw_retirement() RETURNS trigger
         LANGUAGE plpgsql AS $$
         DECLARE retirement_invalid boolean; stage_invalid boolean;
+        archived_stage_invalid boolean; fixture_current boolean;
         BEGIN
         -- Deferred events carry old snapshots; validate each row's final state.
         IF TG_TABLE_NAME = 'tournament_fixtures' THEN
         SELECT r.id IS NOT NULL AND
         (f.retired_at IS NULL) IS DISTINCT FROM (r.retired_at IS NULL),
-        f.retired_at IS NULL AND s.retired_at IS NOT NULL
-        INTO retirement_invalid, stage_invalid
+        f.retired_at IS NULL AND s.retired_at IS NOT NULL,
+        f.retired_at IS NOT NULL AND s.id IS NOT NULL AND s.retired_at IS NULL
+        INTO retirement_invalid, stage_invalid, archived_stage_invalid
         FROM tournament_fixtures f
         LEFT JOIN tournament_draw_revisions r ON r.id = f.draw_revision_id
         LEFT JOIN tournament_event_stages s ON s.id = f.stage_id
@@ -4698,6 +4700,10 @@ def upgrade() -> None:
         END IF;
         IF stage_invalid THEN
         RAISE EXCEPTION 'current fixture requires current stage'
+        USING ERRCODE = '23514';
+        END IF;
+        IF archived_stage_invalid THEN
+        RAISE EXCEPTION 'retired fixture requires retired stage'
         USING ERRCODE = '23514';
         END IF;
         RETURN NULL;
@@ -4742,13 +4748,20 @@ def upgrade() -> None:
         RAISE EXCEPTION 'active participation requires current draw configuration'
         USING ERRCODE = '23514';
         END IF;
-        IF EXISTS (
-        SELECT 1 FROM tournament_fixtures f
+        SELECT f.retired_at IS NULL INTO fixture_current
+        FROM tournament_fixtures f
         JOIN tournament_event_stages s ON s.id = f.stage_id
-        WHERE s.id = NEW.id AND f.retired_at IS NULL AND s.retired_at IS NOT NULL
-        ) THEN
+        WHERE s.id = NEW.id
+        AND (f.retired_at IS NULL) IS DISTINCT FROM (s.retired_at IS NULL)
+        LIMIT 1;
+        IF FOUND THEN
+        IF fixture_current THEN
         RAISE EXCEPTION 'current fixture requires current stage'
         USING ERRCODE = '23514';
+        ELSE
+        RAISE EXCEPTION 'retired fixture requires retired stage'
+        USING ERRCODE = '23514';
+        END IF;
         END IF;
         RETURN NULL;
         END $$

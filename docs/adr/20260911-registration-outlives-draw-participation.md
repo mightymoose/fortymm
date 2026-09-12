@@ -45,7 +45,9 @@ explicitly reversed. These are distinct from registration withdrawal and from
 resolving a match. None automatically awards a walkover, changes a result or
 rewrites recorded play. Missing a stage leaves later eligibility to that stage's
 admission rules; no new late-admission workflow is enabled in this change.
-Existing normal advancement remains supported.
+Existing normal advancement remains supported. Initial draw fields exclude entries
+with an unrestored event-wide competition withdrawal, even when their registration
+remains current.
 
 Entry status and recorded registration periods agree at commit: a withdrawn or
 superseded entry has no current registration or participation, and an entered
@@ -74,7 +76,9 @@ without deleting it; repeated removal remains idempotent.
 
 Only the current revision contributes to the event's operational draw, standings,
 scheduling, materialization and advancement. Historical stage and group references
-must survive changes to the current draw configuration. Retired stage, group and
+must survive changes to the current draw configuration. Fixture retirement agrees
+with both its revision and stage; an archived fixture cannot retain a mutable
+current stage. Retired stage, group and
 table metadata cannot be rewritten or reactivated. Direct changes to archived
 group mappings are refused; supported removal of a live reservation may cascade
 its link away because the immutable revision snapshot retains the cut-time mapping
@@ -158,7 +162,10 @@ participation with identity-reconciliation provenance, and resolve subsequent
 registration to the survivor. A superseded entry cannot be reactivated.
 
 If only one competing entry has recorded play, that entry survives regardless of
-which Account remains. If both have recorded play in the same stage, refuse the
+which Account remains. If that survivor is withdrawn and the duplicate is
+registered, reconciliation preserves active registration on the survivor through a
+new registration period. It does not revive ended participation. If both have
+recorded play in the same stage, refuse the
 Player merge atomically and identify the conflicting entries for director
 resolution; no resolution workflow is added here. A merge grants no new stage
 admission. Event-format rules still determine whether multiple entries are actually
