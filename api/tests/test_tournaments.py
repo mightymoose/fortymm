@@ -10301,6 +10301,85 @@ def _se_payload(**overrides: Any) -> dict[str, Any]:
     )
 
 
+async def test_void_does_not_advance_a_previously_ineligible_knockout_winner(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    from app.models import AdvancementDecision, TournamentEntryParticipation
+    from app.official_results import void_official_match
+    from app.tournament_participation import (
+        WithdrawalReason,
+        restore_event_eligibility,
+        withdraw_competition,
+    )
+
+    client, owner = authed_client
+    async with (
+        opponent_session(db_session, "void-ko-winner") as (winner_client, winner),
+        opponent_session(db_session, "void-ko-loser") as (loser_client, loser),
+    ):
+        tournament_id, (event,) = await _tournament_with_events(client, _se_payload())
+        bye_entry = await _enter(db_session, event["id"], owner, seed=1)
+        winning_entry = await _enter(db_session, event["id"], winner, seed=2)
+        losing_entry = await _enter(db_session, event["id"], loser, seed=3)
+        await _cut_the_draw(client, tournament_id, event["id"])
+        await _set_status(db_session, tournament_id, TournamentStatus.published)
+        assert (await _go_live(client, tournament_id)).status_code == 201
+        fixtures = await _fixture_rows(db_session, event["id"])
+        semifinal = next(f for f in fixtures if f.round == 1)
+        final = next(f for f in fixtures if f.round == 2)
+        await _call_fixtures(db_session, tournament_id, [semifinal])
+        await withdraw_competition(
+            db_session, winning_entry.id, owner.id, WithdrawalReason.director_removal
+        )
+        await db_session.commit()
+        await _win_fixture_match(
+            semifinal,
+            clients_by_entry={
+                winning_entry.id: winner_client,
+                losing_entry.id: loser_client,
+            },
+            winner_entry_id=winning_entry.id,
+            rated=True,
+        )
+        await db_session.refresh(semifinal)
+        await db_session.refresh(final)
+        assert semifinal.winner_entry_id == winning_entry.id
+        assert final.entry_a_id == bye_entry.id
+        assert final.entry_b_id is None and final.match_id is None
+        periods_query = select(
+            TournamentEntryParticipation.id, TournamentEntryParticipation.ended_at
+        ).where(TournamentEntryParticipation.entry_id == winning_entry.id)
+        periods_before = (await db_session.execute(periods_query)).all()
+        assert periods_before and all(
+            row.ended_at is not None for row in periods_before
+        )
+
+        await restore_event_eligibility(db_session, winning_entry.id, owner.id)
+        await db_session.commit()
+        assert semifinal.match_id is not None
+        await void_official_match(
+            db_session,
+            semifinal.match_id,
+            owner.id,
+            reason="The semifinal result is void",
+        )
+        await db_session.commit()
+        await db_session.refresh(semifinal)
+        await db_session.refresh(final)
+        assert semifinal.winner_entry_id == winning_entry.id
+        assert final.entry_b_id is None and final.match_id is None
+        assert (await db_session.execute(periods_query)).all() == periods_before
+        assert (
+            await db_session.scalar(
+                select(AdvancementDecision.id).where(
+                    AdvancementDecision.fixture_id == final.id
+                )
+            )
+            is None
+        )
+        assert await _match_count(db_session) == 1
+
+
 @pytest.mark.parametrize("survivor_wins", [False, True])
 async def test_merge_ended_bye_participation_cannot_materialize_a_new_match(
     authed_client: tuple[AsyncClient, User],

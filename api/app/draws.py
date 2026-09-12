@@ -1063,7 +1063,7 @@ class SingleElimStrategy:
         by_round_position = {(f.round, f.position): f for f in fixtures}
         side_fills: list[SideFill] = []
         for fixture in fixtures:
-            if fixture.winner_entry_id is None:
+            if fixture.winner_entry_id is None or fixture.match_voided:
                 continue
             successor_round, successor_position, side = _successor(
                 fixture.round, fixture.position
