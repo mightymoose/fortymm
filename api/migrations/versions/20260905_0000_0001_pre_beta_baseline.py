@@ -3418,6 +3418,10 @@ def upgrade() -> None:
             "effective_until IS NULL OR effective_until > effective_from",
             name="ck_tournament_event_reservation_tables_effective_interval",
         ),
+        sa.CheckConstraint(
+            "(effective_until IS NULL) = (position IS NOT NULL)",
+            name="ck_tournament_event_reservation_tables_activity_position",
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -3633,6 +3637,11 @@ def upgrade() -> None:
             "call_notified_count >= 0",
             name="ck_tournament_fixtures_call_notified_count",
         ),
+        sa.UniqueConstraint(
+            "scope_tournament_id",
+            "id",
+            name="uq_tournament_fixtures_scope_tournament_id_id",
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -3759,7 +3768,12 @@ def upgrade() -> None:
             name="ck_tournament_table_call_history_kind",
         ),
         sa.ForeignKeyConstraint(
-            ["fixture_id"], ["tournament_fixtures.id"], ondelete="SET NULL"
+            ["tournament_id", "fixture_id"],
+            ["tournament_fixtures.scope_tournament_id", "tournament_fixtures.id"],
+            name="fk_tournament_table_call_history_tournament_id_fixture_id",
+            ondelete="SET NULL (fixture_id)",
+            deferrable=True,
+            initially="DEFERRED",
         ),
         sa.ForeignKeyConstraint(
             ["tournament_id"], ["tournaments.id"], ondelete="CASCADE"
@@ -5070,8 +5084,8 @@ def upgrade() -> None:
         BEGIN
         IF TG_OP = 'UPDATE' AND OLD.retired_at IS NULL
         AND NEW.retired_at IS NOT NULL AND
-        (to_jsonb(NEW) - ARRAY['retired_at', 'position']) IS DISTINCT FROM
-        (to_jsonb(OLD) - ARRAY['retired_at', 'position']) THEN
+        (to_jsonb(NEW) - 'retired_at') IS DISTINCT FROM
+        (to_jsonb(OLD) - 'retired_at') THEN
         RAISE EXCEPTION 'retired stage history is immutable'
         USING ERRCODE = '23514';
         END IF;
@@ -5121,6 +5135,31 @@ def upgrade() -> None:
         CREATE TRIGGER preserve_retired_table_history BEFORE UPDATE OR DELETE
         ON tournament_tables FOR EACH ROW
         EXECUTE FUNCTION preserve_retired_table_history()
+        """)
+    op.execute("""
+        CREATE FUNCTION preserve_table_call_history() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+        IF TG_OP = 'DELETE' THEN
+        IF pg_trigger_depth() <= 1 THEN
+        RAISE EXCEPTION 'table call history is append-only' USING ERRCODE = '23514';
+        END IF;
+        RETURN OLD;
+        END IF;
+        IF (to_jsonb(NEW) - 'fixture_id') IS DISTINCT FROM
+        (to_jsonb(OLD) - 'fixture_id') OR
+        (NEW.fixture_id IS DISTINCT FROM OLD.fixture_id AND
+        (OLD.fixture_id IS NULL OR NEW.fixture_id IS NOT NULL OR
+        pg_trigger_depth() <= 1)) THEN
+        RAISE EXCEPTION 'table call history is append-only' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+        END $$
+        """)
+    op.execute("""
+        CREATE TRIGGER preserve_table_call_history BEFORE UPDATE OR DELETE
+        ON tournament_table_call_history FOR EACH ROW
+        EXECUTE FUNCTION preserve_table_call_history()
         """)
     op.execute("""
         CREATE FUNCTION preserve_archived_group_history() RETURNS trigger
@@ -6089,6 +6128,7 @@ def downgrade() -> None:
     op.execute("DROP FUNCTION preserve_archived_group_mapping() CASCADE")
     op.execute("DROP FUNCTION preserve_archived_group_history() CASCADE")
     op.execute("DROP FUNCTION preserve_retired_table_history() CASCADE")
+    op.execute("DROP FUNCTION preserve_table_call_history() CASCADE")
     op.execute("DROP FUNCTION preserve_retired_stage_history() CASCADE")
     op.execute("DROP FUNCTION preserve_participation_history() CASCADE")
     op.execute("DROP FUNCTION preserve_draw_revision_history() CASCADE")

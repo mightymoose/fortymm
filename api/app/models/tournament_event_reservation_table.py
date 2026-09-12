@@ -81,6 +81,10 @@ class TournamentEventReservationTable(Base):
             "effective_until IS NULL OR effective_until > effective_from",
             name="ck_tournament_event_reservation_tables_effective_interval",
         ),
+        CheckConstraint(
+            "(effective_until IS NULL) = (position IS NOT NULL)",
+            name="ck_tournament_event_reservation_tables_activity_position",
+        ),
         # A surrogate id preserves each membership period across release and re-add.
         # This read/FK index therefore covers the reservation's active and historical
         # rows; the primary key no longer doubles as the reservation lookup index.

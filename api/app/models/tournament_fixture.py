@@ -10,6 +10,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    UniqueConstraint,
     func,
     text,
 )
@@ -182,6 +183,11 @@ class TournamentFixture(Base):
         CheckConstraint(
             "call_notified_count >= 0",
             name="ck_tournament_fixtures_call_notified_count",
+        ),
+        UniqueConstraint(
+            "scope_tournament_id",
+            "id",
+            name="uq_tournament_fixtures_scope_tournament_id_id",
         ),
         CheckConstraint(
             "winner_entry_id IS NULL OR (entry_a_id IS NOT NULL AND "

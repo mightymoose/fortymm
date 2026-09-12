@@ -586,8 +586,8 @@ DRAW_HISTORY_INTEGRITY_DDL = (
         BEGIN
         IF TG_OP = 'UPDATE' AND OLD.retired_at IS NULL
         AND NEW.retired_at IS NOT NULL AND
-        (to_jsonb(NEW) - 'retired_at') IS DISTINCT FROM
-        (to_jsonb(OLD) - 'retired_at') THEN
+        (to_jsonb(NEW) - ARRAY['retired_at', 'position']) IS DISTINCT FROM
+        (to_jsonb(OLD) - ARRAY['retired_at', 'position']) THEN
         RAISE EXCEPTION 'retired table history is immutable' USING ERRCODE = '23514';
         END IF;
         IF OLD.retired_at IS NOT NULL THEN
@@ -607,6 +607,31 @@ DRAW_HISTORY_INTEGRITY_DDL = (
         CREATE TRIGGER preserve_retired_table_history BEFORE UPDATE OR DELETE
         ON tournament_tables FOR EACH ROW
         EXECUTE FUNCTION preserve_retired_table_history()
+        """,
+    """
+        CREATE FUNCTION preserve_table_call_history() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+        IF TG_OP = 'DELETE' THEN
+        IF pg_trigger_depth() <= 1 THEN
+        RAISE EXCEPTION 'table call history is append-only' USING ERRCODE = '23514';
+        END IF;
+        RETURN OLD;
+        END IF;
+        IF (to_jsonb(NEW) - 'fixture_id') IS DISTINCT FROM
+        (to_jsonb(OLD) - 'fixture_id') OR
+        (NEW.fixture_id IS DISTINCT FROM OLD.fixture_id AND
+        (OLD.fixture_id IS NULL OR NEW.fixture_id IS NOT NULL OR
+        pg_trigger_depth() <= 1)) THEN
+        RAISE EXCEPTION 'table call history is append-only' USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+        END $$
+        """,
+    """
+        CREATE TRIGGER preserve_table_call_history BEFORE UPDATE OR DELETE
+        ON tournament_table_call_history FOR EACH ROW
+        EXECUTE FUNCTION preserve_table_call_history()
         """,
     """
         CREATE FUNCTION preserve_archived_group_history() RETURNS trigger

@@ -35,6 +35,14 @@ class VenueTableCallHistory(Base):
             deferrable=True,
             initially="DEFERRED",
         ),
+        ForeignKeyConstraint(
+            ["tournament_id", "fixture_id"],
+            ["tournament_fixtures.scope_tournament_id", "tournament_fixtures.id"],
+            name="fk_tournament_table_call_history_tournament_id_fixture_id",
+            ondelete="SET NULL (fixture_id)",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         Index(
             "ix_tournament_table_call_history_tournament_id_table_id",
             "tournament_id",
@@ -56,9 +64,7 @@ class VenueTableCallHistory(Base):
         nullable=False,
     )
     table_id: Mapped[str] = mapped_column(UUID(as_uuid=False), nullable=False)
-    fixture_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tournament_fixtures.id", ondelete="SET NULL")
-    )
+    fixture_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     kind: Mapped[Literal["called", "moved", "cancelled"]] = mapped_column(
         String(16), nullable=False
     )

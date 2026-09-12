@@ -929,6 +929,137 @@ async def test_delete_by_creator_removes_row(
     assert remaining is None
 
 
+@pytest.mark.parametrize("operation", ["update", "delete"])
+async def test_table_call_history_cannot_be_rewritten_or_deleted(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    operation: str,
+) -> None:
+    client, _ = authed_client
+    tournament_id, _, fixture, table_id, _ = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix=f"append-only-{operation}"
+    )
+    history = VenueTableCallHistory(
+        tournament_id=uuid.UUID(tournament_id),
+        fixture_id=fixture.id,
+        table_id=table_id,
+        kind="called",
+        scheduled_start=fixture.scheduled_start,
+    )
+    db_session.add(history)
+    await db_session.flush()
+
+    statement = (
+        "UPDATE tournament_table_call_history SET kind = 'moved' WHERE id = :id"
+        if operation == "update"
+        else "DELETE FROM tournament_table_call_history WHERE id = :id"
+    )
+    with pytest.raises(IntegrityError, match="table call history is append-only"):
+        async with db_session.begin_nested():
+            await db_session.execute(text(statement), {"id": history.id})
+
+
+async def test_call_history_cannot_reference_a_fixture_from_another_tournament(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    client, _ = authed_client
+    tournament_a, _, _, table_a, _ = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix="history-scope-a"
+    )
+    _, _, fixture_b, _, _ = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix="history-scope-b"
+    )
+    history = VenueTableCallHistory(
+        tournament_id=uuid.UUID(tournament_a),
+        fixture_id=fixture_b.id,
+        table_id=table_a,
+        kind="called",
+        scheduled_start=fixture_b.scheduled_start,
+    )
+    db_session.add(history)
+    await db_session.flush()
+
+    with pytest.raises(
+        IntegrityError,
+        match="fk_tournament_table_call_history_tournament_id_fixture_id",
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "SET CONSTRAINTS "
+                    "fk_tournament_table_call_history_tournament_id_"
+                    "fixture_id IMMEDIATE"
+                )
+            )
+
+
+async def test_deleting_fixture_clears_only_its_call_history_fixture_reference(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    client, _ = authed_client
+    tournament_id, _, fixture, table_id, _ = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix="history-fixture-delete"
+    )
+    history = VenueTableCallHistory(
+        tournament_id=uuid.UUID(tournament_id),
+        fixture_id=fixture.id,
+        table_id=table_id,
+        kind="called",
+        scheduled_start=fixture.scheduled_start,
+    )
+    db_session.add(history)
+    await db_session.flush()
+
+    await db_session.execute(
+        text("DELETE FROM tournament_fixtures WHERE id = :id"), {"id": fixture.id}
+    )
+    fixture_reference = await db_session.scalar(
+        select(VenueTableCallHistory.fixture_id).where(
+            VenueTableCallHistory.id == history.id
+        )
+    )
+
+    assert fixture_reference is None
+
+
+@pytest.mark.parametrize(
+    "invalid_update",
+    [
+        "position = NULL",
+        "effective_until = effective_from + interval '1 second'",
+    ],
+)
+async def test_reservation_membership_activity_matches_its_position(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    invalid_update: str,
+) -> None:
+    client, _ = authed_client
+    tournament_id, *_ = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix="membership-position"
+    )
+    membership = await db_session.scalar(
+        select(TournamentEventReservationTable).where(
+            TournamentEventReservationTable.tournament_id == uuid.UUID(tournament_id),
+            TournamentEventReservationTable.effective_until.is_(None),
+        )
+    )
+    assert membership is not None
+
+    with pytest.raises(
+        IntegrityError,
+        match="ck_tournament_event_reservation_tables_activity_position",
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE tournament_event_reservation_tables SET "
+                    f"{invalid_update} WHERE id = :id"
+                ),
+                {"id": membership.id},
+            )
+
+
 async def test_delete_tournament_removes_its_call_history_before_table_cascade(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
