@@ -1370,10 +1370,12 @@ async def _mark_played(db: AsyncSession, fixture: TournamentFixture) -> None:
     await db.commit()
 
 
+@pytest.mark.parametrize("evidence", ["match", "fixture_winner"])
 @pytest.mark.parametrize("registration_withdrawn", [False, True])
 async def test_merge_refuses_duplicate_recorded_play_in_same_stage_atomically(
     db_session: AsyncSession,
     registration_withdrawn: bool,
+    evidence: str,
 ):
     guest = await _make_ephemeral(db_session, "stage-conflict-guest")
     survivor = await _make_verified(db_session, "stage-conflict@example.com")
@@ -1381,12 +1383,18 @@ async def test_merge_refuses_duplicate_recorded_play_in_same_stage_atomically(
     guest_entry = await _enter(db_session, event, guest)
     survivor_entry = await _enter(db_session, event, survivor)
     (fixture,) = await _cut(db_session, event)
-    accounts = {guest_entry.id: guest, survivor_entry.id: survivor}
-    match = await _record_match(
-        db_session, survivor, accounts[fixture.entry_a_id], accounts[fixture.entry_b_id]
-    )
-    fixture.match_id = match.id
-    await db_session.commit()
+    if evidence == "fixture_winner":
+        await _mark_played(db_session, fixture)
+    else:
+        accounts = {guest_entry.id: guest, survivor_entry.id: survivor}
+        match = await _record_match(
+            db_session,
+            survivor,
+            accounts[fixture.entry_a_id],
+            accounts[fixture.entry_b_id],
+        )
+        fixture.match_id = match.id
+        await db_session.commit()
     if registration_withdrawn:
         survivor_entry.status = TournamentEntryStatus.withdrawn
         await db_session.commit()
@@ -1414,8 +1422,10 @@ async def test_merge_refuses_duplicate_recorded_play_in_same_stage_atomically(
     )
 
 
+@pytest.mark.parametrize("evidence", ["match", "fixture_winner"])
 async def test_merge_keeps_the_entry_with_recorded_play_when_guest_account_is_retired(
     db_session: AsyncSession,
+    evidence: str,
 ):
     guest = await _make_ephemeral(db_session, "played-guest")
     survivor = await _make_verified(db_session, "played-survivor@example.com")
@@ -1424,12 +1434,18 @@ async def test_merge_keeps_the_entry_with_recorded_play_when_guest_account_is_re
     guest_entry = await _enter(db_session, event, guest)
     other_entry = await _enter(db_session, event, opponent)
     (fixture,) = await _cut(db_session, event)
-    accounts = {guest_entry.id: guest, other_entry.id: opponent}
-    match = await _record_match(
-        db_session, survivor, accounts[fixture.entry_a_id], accounts[fixture.entry_b_id]
-    )
-    fixture.match_id = match.id
-    await db_session.commit()
+    if evidence == "fixture_winner":
+        await _mark_played(db_session, fixture)
+    else:
+        accounts = {guest_entry.id: guest, other_entry.id: opponent}
+        match = await _record_match(
+            db_session,
+            survivor,
+            accounts[fixture.entry_a_id],
+            accounts[fixture.entry_b_id],
+        )
+        fixture.match_id = match.id
+        await db_session.commit()
     duplicate = await _enter(db_session, event, survivor)
 
     await merge_user(db_session, from_user_id=guest.id, to_user_id=survivor.id)

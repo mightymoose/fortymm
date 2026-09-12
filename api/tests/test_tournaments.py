@@ -8979,6 +8979,10 @@ async def test_removing_table_after_uncut_preserves_historical_placement(
     assert str(historical_table) == table_1
     reread = await client.get(f"/v1/tournaments/{tournament_id}")
     assert [row["id"] for row in reread.json()["table_catalogue"]] == [table_2]
+    event_read = next(
+        event for event in reread.json()["events"] if event["id"] == event_id
+    )
+    assert [row["table_ids"] for row in event_read["reservations"]] == [[table_2]]
     if delete_event_first:
         removed_event = await client.delete(
             f"/v1/tournaments/{tournament_id}/events/{event_id}"

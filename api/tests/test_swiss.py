@@ -34,6 +34,7 @@ from app.models import (
     MatchStatus,
     Tournament,
     TournamentEntry,
+    TournamentEntryParticipation,
     TournamentEntryStatus,
     TournamentEvent,
     TournamentFixture,
@@ -1012,9 +1013,26 @@ async def test_a_field_that_shrinks_mid_event_still_plays_out_and_finishes(
             "stalled the walk for good, leaving the event unplayable from here"
         )
 
+        participation_query = select(TournamentEntryParticipation).where(
+            TournamentEntryParticipation.event_id == uuid.UUID(event_id),
+            TournamentEntryParticipation.entry_id.in_(entry_ids[:3]),
+        )
+        before_final = (await db_session.scalars(participation_query)).all()
+        assert len(before_final) == 3
+        assert all(period.ended_at is None for period in before_final), (
+            "the next pairable round is still owed, even with surplus empty rows"
+        )
+
         await play(3, winner_index=0)
 
         db_session.expire_all()
+        completed_periods = (await db_session.scalars(participation_query)).all()
+        assert all(period.ended_at is not None for period in completed_periods), (
+            "permanently unpairable rows must not keep stage participation open"
+        )
+        assert {period.end_reason for period in completed_periods} == {
+            "stage_completed"
+        }
         results = (await _event_read(client, tournament_id))["results"]
 
         assert results["complete"] is True, (

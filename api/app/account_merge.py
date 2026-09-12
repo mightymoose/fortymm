@@ -642,6 +642,7 @@ async def _resolve_entry_collisions(
                         TournamentFixture.entry_b_id.in_(entry_ids),
                     ),
                     or_(
+                        TournamentFixture.winner_entry_id.is_not(None),
                         exists(
                             select(MatchLineup.id).where(
                                 MatchLineup.match_id == TournamentFixture.match_id

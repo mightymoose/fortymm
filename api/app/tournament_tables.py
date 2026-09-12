@@ -31,7 +31,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
-from app.models import Tournament, TournamentFixture, VenueTable
+from app.models import (
+    Tournament,
+    TournamentEventReservation,
+    TournamentEventReservationTable,
+    TournamentFixture,
+    VenueTable,
+)
 from app.schemas.tournament import (
     TournamentTableUpsert,
     TournamentTableWrite,
@@ -267,6 +273,21 @@ async def apply_table_catalogue(
         for table in retired:
             table.retired_at = datetime.now(UTC)
         if retired:
+            # Physical removal used to cascade these current reservation links.
+            # Retaining the catalogue identity must still release its reservations;
+            # the draw revision snapshot preserves historical configuration.
+            retired_ids = {str(table.id) for table in retired}
+            reservations = await db.scalars(
+                select(TournamentEventReservation).where(
+                    TournamentEventReservation.tables.any(
+                        TournamentEventReservationTable.table_id.in_(retired_ids)
+                    )
+                )
+            )
+            for reservation in reservations:
+                reservation.tables = [
+                    row for row in reservation.tables if row.table_id not in retired_ids
+                ]
             await db.flush()
             # Retired rows still belong to the tournament, but are no longer in
             # its current catalogue. Avoid delete-orphan treating retirement as

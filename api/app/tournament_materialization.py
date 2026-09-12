@@ -17,6 +17,7 @@ domain imports it, so the completion seam (#789) can import *this* without a cyc
 """
 
 import uuid
+from collections import defaultdict
 from collections.abc import Sequence
 
 from sqlalchemy import select
@@ -31,8 +32,10 @@ from app.draws import (
     reads_entrants,
     reads_fixture_games,
     ready_fixtures,
+    swiss_pairable_rows,
 )
 from app.models import (
+    DrawType,
     Match,
     MatchSettings,
     MatchSide,
@@ -214,15 +217,14 @@ async def materialize_event(
         )
     )
     decided_matches = set(completed_match_ids) | set(voided_match_ids)
-    stage_fixture_matches: dict[uuid.UUID, list[uuid.UUID | None]] = {}
+    stage_fixtures: dict[uuid.UUID, list[TournamentFixture]] = defaultdict(list)
     for fixture in fixtures:
-        stage_fixture_matches.setdefault(fixture.stage_id, []).append(fixture.match_id)
+        stage_fixtures[fixture.stage_id].append(fixture)
     completed_stages = {
         stage_id
-        for stage_id, match_ids in stage_fixture_matches.items()
-        if all(
-            match_id is not None and match_id in decided_matches
-            for match_id in match_ids
+        for stage_id, rows in stage_fixtures.items()
+        if _stage_is_complete(
+            rows, stages[stage_id].draw_type, len(entrants), decided_matches
         )
     }
     await complete_stage_participation(db, completed_stages)
@@ -429,3 +431,28 @@ def _add_side(match: Match, *, side_number: int, user_id: uuid.UUID) -> None:
     """
     side = MatchSide(match=match, side_number=side_number)
     side.players.append(MatchSidePlayer(match=match, user_id=user_id))
+
+
+def _stage_is_complete(
+    fixtures: Sequence[TournamentFixture],
+    draw_type: DrawType,
+    field_size: int,
+    decided_matches: set[uuid.UUID],
+) -> bool:
+    """A Swiss field shrink leaves surplus rows that can never need a result."""
+    if draw_type is DrawType.swiss:
+        by_round: dict[int, list[TournamentFixture]] = defaultdict(list)
+        for fixture in fixtures:
+            by_round[fixture.round].append(fixture)
+        for rows in by_round.values():
+            seated = [
+                row
+                for row in rows
+                if row.entry_a_id is not None and row.entry_b_id is not None
+            ]
+            if len(seated) < swiss_pairable_rows(len(rows), len(seated), field_size):
+                return False
+            if not all(row.match_id in decided_matches for row in seated):
+                return False
+        return True
+    return all(row.match_id in decided_matches for row in fixtures)
