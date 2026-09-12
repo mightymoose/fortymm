@@ -250,12 +250,12 @@ def _reservation_tables(
     desired_set = set(desired)
     active = {row.table_id: row for row in stored if row.effective_until is None}
     rows = [row for row in stored if row.effective_until is not None]
-    ended_at = datetime.now(UTC)
+    changed_at = datetime.now(UTC)
 
     for row in active.values():
         if row.table_id not in desired_set:
             row.effective_until = max(
-                ended_at,
+                changed_at,
                 row.effective_from + timedelta(microseconds=1),
             )
             row.position = None
@@ -268,6 +268,11 @@ def _reservation_tables(
                 tournament_id=tournament.id,
                 table_id=table_id,
                 position=position,
+                # ``now()`` is the transaction start in PostgreSQL; it can precede a
+                # release committed by the preceding request. Use the same app clock
+                # for a release and any fresh membership periods in this write so a
+                # quick re-add cannot overlap the closed period.
+                effective_from=changed_at,
                 event=event,
             )
             rows.append(row)
