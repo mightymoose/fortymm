@@ -25,7 +25,7 @@ from app.models import (
     MatchStatus,
     User,
 )
-from app.ratings.jobs import RECOMPUTE_AFTER_MERGE_JOB
+from app.required_repairs import for_player
 from app.sessions import (
     EMAIL_CONFIRM_TOKEN_LIFETIME,
     _pending_email_token_clause,
@@ -1536,8 +1536,9 @@ async def test_confirm_email_enqueues_recompute_for_voided_self_play_collision(
     # survivor (token owner) id.
     jobs = fake_ratings_queue.get_jobs()
     assert len(jobs) == 1
-    assert jobs[0].func_name == RECOMPUTE_AFTER_MERGE_JOB
-    assert jobs[0].args == (str(owner.id),)
+    repair = await for_player(db_session, owner.player_id)
+    assert repair is not None
+    assert jobs[0].args == (str(repair.id),)
 
 
 async def test_confirm_email_enqueues_recompute_even_when_no_matches_moved(
@@ -1564,8 +1565,9 @@ async def test_confirm_email_enqueues_recompute_even_when_no_matches_moved(
 
     jobs = fake_ratings_queue.get_jobs()
     assert len(jobs) == 1
-    assert jobs[0].func_name == RECOMPUTE_AFTER_MERGE_JOB
-    assert jobs[0].args == (str(owner.id),)
+    repair = await for_player(db_session, owner.player_id)
+    assert repair is not None
+    assert jobs[0].args == (str(repair.id),)
 
 
 # ---- confirm: merge into an existing account ------------------------------

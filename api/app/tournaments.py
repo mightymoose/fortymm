@@ -1649,9 +1649,9 @@ async def request_schedule_solve(
 
     Refused with a `422` — `{"code": "no_drawn_events", "message": ...}` — when no
     event of this tournament has a draw: the solver places a draw's fixtures, so
-    with nothing cut there is nothing to schedule. A `503` means the scheduling
-    queue itself was unreachable; nothing was queued, and the same request is safe
-    to retry.
+    with nothing cut there is nothing to schedule. Acceptance is durable: a Redis
+    outage does not reject a request committed to PostgreSQL. Pending work is
+    dispatched again by recovery scanning when the queue becomes available.
 
     Owner-only, like every other tournament mutation: an absent tournament is a
     `404`, a non-owner a `403`.
@@ -1660,13 +1660,12 @@ async def request_schedule_solve(
     # owns the row lock, the owner gate, the no-drawn-events gate, the coalesced
     # ``request_solve`` enqueue and the commit + read-back, and signals each refusal
     # with a domain exception. This handler maps each back to the exact status +
-    # body it produced before, so the wire contract is unchanged (404 → 403 → 422,
-    # ADR-0017's ordering; the 503 is the queue-down case):
+    # body it produced before (404 → 403 → 422, ADR-0017's ordering).
+    # Redis availability does not change durable acceptance:
     #
     #   TournamentNotFoundError        -> 404 "Tournament not found."
     #   NotTournamentOwnerError        -> 403 "You can only modify tournaments you …"
     #   NoDrawnEventsError             -> 422 {"code": "no_drawn_events", "message": …}
-    #   ScheduleQueueUnavailableError  -> 503 "The scheduling queue is unavailable, …"
     try:
         row = await _request_schedule_solve(
             db, tournament_id=tournament_id, actor=current_user
@@ -1680,17 +1679,6 @@ async def request_schedule_solve(
         # The exact 422 body this route composed inline — kept in the adapter, like
         # every other tournament refusal's HTTP copy.
         raise _no_drawn_events_refusal() from exc
-    except ScheduleQueueUnavailableError as exc:
-        # The enqueue failed (Redis down) and the verb took its row back out —
-        # nothing was queued, so the honest answer is "not available", not a ledger
-        # row that names a run that does not exist. Same request is safe to retry.
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "The scheduling queue is unavailable, so the solve was not queued. "
-                "Try again in a moment."
-            ),
-        ) from exc
     return ScheduleSolveRead.model_validate(row)
 
 

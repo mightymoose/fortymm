@@ -2,18 +2,9 @@
 snapshot + fingerprint, whole-or-nothing apply (ADR "the schedule is solved;
 the call is pinned").
 
-Two queue set-ups, deliberately:
-
-* The coalescing tests run under conftest's autouse **synchronous** fake
-  queue. The job executes inline at enqueue time — before the requesting
-  transaction commits — opens its own engine (pointed at the test database by
-  the autouse ``_job_database`` fixture below), finds no committed ``queued``
-  row, and exits as stale. That inline no-op is itself part of the contract
-  being tested: a job that fires before its row commits must do nothing.
-* The job-execution tests use ``solver_queue`` — an *async*, record-only
-  queue — so the enqueue is recorded, the test commits, and then runs the
-  recorded job exactly as a worker would (resolving the dotted path via
-  ``job.func``), post-commit.
+Schedule jobs are recorded by fake Redis and explicitly drained after commit.
+The coalescing tests inspect the durable queued ledger; execution tests invoke
+recorded jobs as a worker would, using the same database.
 
 THE race test stages a committed mutation on the gap between the job's
 snapshot and its apply, through the ``_solve`` module seam — a gatekeeper on
@@ -913,17 +904,16 @@ class TestRequestSolveCoalescing:
         )
 
         assert row is not None
+        await db_session.commit()
         (job,) = solver_queue.jobs
         assert job.func_name == RUN_SCHEDULE_SOLVE_JOB
         assert job.timeout == int(expected_time_cap_s) + JOB_TIMEOUT_MARGIN_S
         assert job.timeout > expected_time_cap_s
 
-    async def test_enqueue_failure_takes_the_row_back_out(
+    async def test_enqueue_failure_preserves_the_durable_request(
         self, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A row whose job never made it onto the queue would be a zombie —
-        absorbing every later trigger while nothing ever runs — so it is
-        removed and ``None`` returned."""
+        """Database recovery owns accepted work when Redis is unavailable."""
         tournament_id, _event_id = await _make_tournament(db_session)
 
         class _DeadQueue:
@@ -936,8 +926,11 @@ class TestRequestSolveCoalescing:
             db_session, tournament_id, ScheduleSolveTrigger.manual
         )
 
-        assert result is None
-        assert await _solve_rows(db_session, tournament_id) == []
+        await db_session.commit()
+        assert result.status is ScheduleSolveStatus.queued
+        assert [row.id for row in await _solve_rows(db_session, tournament_id)] == [
+            result.id
+        ]
 
 
 class TestLatestSolve:
@@ -1378,7 +1371,8 @@ class TestSolveJob:
         _run_recorded_job(solver_queue, row_id)
 
         db_session.expire_all()
-        (ledger,) = await _solve_rows(db_session, tournament_id)
+        ledger, pending = await _solve_rows(db_session, tournament_id)
+        assert pending.status is ScheduleSolveStatus.queued
         assert ledger.status is ScheduleSolveStatus.failed
         assert ledger.error == TIME_CAP_ERROR
         assert ledger.verdict is None
@@ -1640,7 +1634,8 @@ class TestSolveJob:
         _run_recorded_job(solver_queue, row_id)
 
         db_session.expire_all()
-        (ledger,) = await _solve_rows(db_session, tournament_id)
+        ledger, pending = await _solve_rows(db_session, tournament_id)
+        assert pending.status is ScheduleSolveStatus.queued
         assert ledger.status is ScheduleSolveStatus.failed
         assert ledger.infeasibility_reasons is None
 

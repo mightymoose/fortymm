@@ -30,6 +30,7 @@ from app.players import router as players_router
 from app.rate_limiting import init_rate_limit_redis, shutdown_rate_limit_redis
 from app.rbac import router as rbac_router
 from app.realtime import RealtimeBroker, init_broker, shutdown_broker
+from app.required_repairs import recovery_loop
 from app.sessions import (
     CSRF_COOKIE_NAME,
     CSRF_HEADER_NAME,
@@ -108,6 +109,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # row locks makes the second of any duplicate pair a no-op (see
         # app.match_calls). Cancelled (and awaited) on shutdown.
         pin_tick_task = asyncio.create_task(pin_tick_loop())
+        repair_task = asyncio.create_task(recovery_loop())
         try:
             # Run the mounted FastMCP app's own lifespan (its Streamable-HTTP
             # session manager) for the whole of ours — without this the manager
@@ -117,6 +119,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await stack.enter_async_context(mcp_app.lifespan(app))
                 yield
         finally:
+            repair_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await repair_task
             pin_tick_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await pin_tick_task

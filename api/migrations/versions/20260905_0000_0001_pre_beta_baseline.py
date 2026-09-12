@@ -4678,7 +4678,51 @@ def upgrade() -> None:
         op.execute(statement)
 
 
+    op.create_table(
+        "required_repairs",
+        sa.Column("dispatch_after", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column("available_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column("failures", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("last_error", sa.Text()),
+        sa.CheckConstraint("failures >= 0", name="ck_required_repairs_failures"),
+        sa.Column("state", sa.Enum("pending", "running", "completed", "failed", name="repair_state"), nullable=False, server_default="pending"),
+        sa.Column("claim_token", sa.UUID()),
+        sa.Column("lease_until", sa.DateTime(timezone=True)),
+        sa.Column("completed_at", sa.DateTime(timezone=True)),
+        sa.CheckConstraint("(state = 'running') = (claim_token IS NOT NULL AND lease_until IS NOT NULL) AND ((claim_token IS NULL) = (lease_until IS NULL))", name="ck_required_repairs_lease"),
+        sa.CheckConstraint("(state = 'completed') = (requested_generation = completed_generation) AND ((state = 'completed') = (completed_at IS NOT NULL))", name="ck_required_repairs_completion"),
+        sa.Column("id", sa.UUID(), primary_key=True, server_default=sa.text("gen_random_uuid()")),
+        sa.Column("player_id", sa.UUID(), sa.ForeignKey("players.id", ondelete="RESTRICT")),
+        sa.Column("tournament_id", sa.UUID(), sa.ForeignKey("tournaments.id", ondelete="CASCADE")),
+        sa.Column("requested_generation", sa.Integer(), nullable=False, server_default="1"),
+        sa.Column("completed_generation", sa.Integer(), nullable=False, server_default="0"),
+        sa.CheckConstraint("num_nonnulls(player_id, tournament_id) = 1", name="ck_required_repairs_target"),
+        sa.CheckConstraint("requested_generation > 0 AND completed_generation >= 0 AND completed_generation <= requested_generation", name="ck_required_repairs_generations"),
+        sa.UniqueConstraint("player_id", name="uq_required_repairs_player"),
+        sa.UniqueConstraint("tournament_id", name="uq_required_repairs_tournament"),
+    )
+
+    op.create_index("ix_required_repairs_recovery", "required_repairs", ["state", "dispatch_after"])
+    op.create_table(
+        "required_repair_attempts",
+        sa.Column("id", sa.UUID(), primary_key=True),
+        sa.Column("repair_id", sa.UUID(), sa.ForeignKey("required_repairs.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("generation", sa.Integer(), nullable=False),
+        sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("finished_at", sa.DateTime(timezone=True)),
+        sa.Column("outcome", sa.Text(), nullable=False, server_default="running"),
+        sa.Column("error", sa.Text()),
+        sa.CheckConstraint("generation > 0", name="ck_required_repair_attempts_generation"),
+        sa.CheckConstraint("outcome IN ('running', 'completed', 'expired', 'transient', 'permanent')", name="ck_required_repair_attempts_outcome"),
+        sa.CheckConstraint("(outcome = 'running') = (finished_at IS NULL)", name="ck_required_repair_attempts_finished"),
+    )
+    op.create_index("ix_required_repair_attempts_repair_id", "required_repair_attempts", ["repair_id"])
+
+
 def downgrade() -> None:
+    op.drop_table("required_repair_attempts")
+    op.drop_table("required_repairs")
+    postgresql.ENUM(name="repair_state").drop(op.get_bind(), checkfirst=True)
     op.execute("DROP FUNCTION IF EXISTS preserve_advancement_ownership() CASCADE")
     op.execute("DROP FUNCTION IF EXISTS preserve_advancement() CASCADE")
     op.execute("DROP FUNCTION IF EXISTS check_advancement() CASCADE")

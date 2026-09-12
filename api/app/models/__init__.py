@@ -144,3 +144,5 @@ __all__ = [
 
 from app.models import advancement_integrity as advancement_integrity
 from app.models.advancement_decision import AdvancementDecision, AdvancementEvidence
+from app.models.required_repair import RepairAttempt as RepairAttempt
+from app.models.required_repair import RequiredRepair as RequiredRepair

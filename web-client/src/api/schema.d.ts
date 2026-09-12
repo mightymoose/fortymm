@@ -1567,9 +1567,9 @@ export interface paths {
          *
          *     Refused with a `422` — `{"code": "no_drawn_events", "message": ...}` — when no
          *     event of this tournament has a draw: the solver places a draw's fixtures, so
-         *     with nothing cut there is nothing to schedule. A `503` means the scheduling
-         *     queue itself was unreachable; nothing was queued, and the same request is safe
-         *     to retry.
+         *     with nothing cut there is nothing to schedule. Acceptance is durable: a Redis
+         *     outage does not reject a request committed to PostgreSQL. Pending work is
+         *     dispatched again by recovery scanning when the queue becomes available.
          *
          *     Owner-only, like every other tournament mutation: an absent tournament is a
          *     `404`, a non-owner a `403`.

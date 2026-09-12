@@ -2131,8 +2131,9 @@ async def request_schedule_solve(tournament_id: uuid.UUID) -> ScheduleSolveRead:
     Raises a ``ToolError`` when no tournament with that id exists, when you are not
     the tournament's owner (only the creator may run the scheduler), when no event of
     the tournament has a cut draw yet (there is nothing to schedule — ``build_cut`` an
-    event's draw first, then retry), or when the scheduler queue itself is
-    unreachable (nothing was queued; the same request is safe to retry)."""
+    event's draw first, then retry). A committed request is accepted durably even
+    when Redis is unavailable; recovery scanning dispatches pending work when
+    the queue becomes available."""
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
         actor = await _load_user(db, user_id)
@@ -2153,11 +2154,6 @@ async def request_schedule_solve(tournament_id: uuid.UUID) -> ScheduleSolveRead:
                 "There is nothing to schedule yet: no event of this tournament has a "
                 "cut draw. The scheduler places a draw's fixtures, so build_cut at "
                 "least one event's draw first, then run it again."
-            ) from exc
-        except ScheduleQueueUnavailableError as exc:
-            raise ToolError(
-                "The scheduler queue is unavailable, so the solve was not queued. "
-                "Try again in a moment."
             ) from exc
         # The core committed and refreshed the queued/running ledger row — serialize
         # it into the same ``ScheduleSolveRead`` the HTTP route and the schedule

@@ -2,6 +2,12 @@
 
 Status: Accepted for #1683, following the design interview. Part of #1669.
 
+Background merge replay delivery is amended by
+[Required repairs commit with their mutations](20260912-required-repairs-commit-with-their-mutations.md):
+the merge transaction records durable repair intent. Per-league replay,
+synchronous corrections and the separate rating-writer serialization concern
+remain as specified here.
+
 Manual adjustments and imported ratings are original facts. Calculated rating
 history and current ratings are projections that may be deleted and rebuilt.
 Retain the original inputs and official result revisions, not every obsolete
