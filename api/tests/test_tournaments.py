@@ -91,7 +91,11 @@ from app.tournaments import (
     uncut_event_draw,
     update_event,
 )
-from tests._entry_seeds import entry_with_members, seed_fixture_match_sides
+from tests._entry_seeds import (
+    entry_with_members,
+    seed_fixture_match_sides,
+    withdraw_entry_with_history,
+)
 from tests._helpers import (
     accept_standing_result,
     assert_tournament_address_is_sql_null,
@@ -3832,7 +3836,7 @@ async def _cut_the_draw(client: AsyncClient, tournament_id: str, event_id: str) 
 async def _withdraw(db_session: AsyncSession, entry: TournamentEntry) -> None:
     """Withdraw an entry the way the route does — a soft delete (ADR-0016), so the row
     (and every fixture pointing at it) survives."""
-    entry.status = TournamentEntryStatus.withdrawn
+    await withdraw_entry_with_history(db_session, entry.id)
     await db_session.commit()
 
 
@@ -4061,8 +4065,8 @@ async def test_two_identical_transitions_racing_leave_exactly_one_winner(
     only when nobody was in a hurry: both requests would read ``draft``, both find
     the edge legal, and both answer 201, so a client could be told it published a
     tournament somebody else had already published. The row lock serializes them —
-    the loser blocks, re-reads the status the winner *committed*, and gets the 409
-    it is owed.
+    the loser receives a busy 409 or re-reads the committed status and receives
+    an already-in-status 409.
 
     Driven on two separate sessions (the handler called directly, as
     ``test_concurrent_accept_and_counter_serialize`` does for matches): the shared
@@ -7168,7 +7172,7 @@ async def test_a_draw_error_nobody_wrote_copy_for_refuses_without_leaking_its_me
         """The DrawError of some slice that has not been written."""
 
     async def _raise_an_unknown_draw_error(
-        db: AsyncSession, event: TournamentEvent
+        db: AsyncSession, event: TournamentEvent, *, actor_id: uuid.UUID
     ) -> None:
         raise SwissRoundNotSettled(
             "tournament_fixtures.group_id='g-a' has a NULL seat at "
@@ -7234,7 +7238,7 @@ async def test_a_refused_re_cut_leaves_the_standing_draw_untouched(
     assert before != []
 
     for entry in entries[:2]:
-        entry.status = TournamentEntryStatus.withdrawn
+        await withdraw_entry_with_history(db_session, entry.id)
     await db_session.commit()
 
     response = await client.post(_draw_url(tournament_id, event["id"]))
@@ -8941,6 +8945,124 @@ async def test_removing_a_catalogue_table_a_fixture_is_placed_at_is_a_409_naming
     assert fixture.pinned_at is not None
 
 
+@pytest.mark.parametrize("delete_event_first", [False, True])
+async def test_removing_table_after_uncut_preserves_historical_placement(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    delete_event_first: bool,
+) -> None:
+    client, _ = authed_client
+    (
+        tournament_id,
+        event_id,
+        fixture,
+        table_1,
+        table_2,
+    ) = await _tournament_with_a_placed_fixture(client, db_session, prefix="arch-table")
+    fixture_id = fixture.id
+    response = await client.delete(
+        f"/v1/tournaments/{tournament_id}/events/{event_id}/draw"
+    )
+    assert response.status_code == 204, response.text
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}",
+        json={
+            "details_version": 1,
+            "table_catalogue": [{"id": table_2, "label": "Table 2", "court": "A"}],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert [row["id"] for row in response.json()["table_catalogue"]] == [table_2]
+    historical_table = await db_session.scalar(
+        select(TournamentFixture.table_id)
+        .where(TournamentFixture.id == fixture_id)
+        .execution_options(include_draw_history=True)
+    )
+    assert str(historical_table) == table_1
+    reread = await client.get(f"/v1/tournaments/{tournament_id}")
+    assert [row["id"] for row in reread.json()["table_catalogue"]] == [table_2]
+    event_read = next(
+        event for event in reread.json()["events"] if event["id"] == event_id
+    )
+    assert [row["table_ids"] for row in event_read["reservations"]] == [[table_2]]
+    if delete_event_first:
+        removed_event = await client.delete(
+            f"/v1/tournaments/{tournament_id}/events/{event_id}"
+        )
+        assert removed_event.status_code == 204, removed_event.text
+        assert (
+            await db_session.scalar(
+                select(VenueTable.id)
+                .where(VenueTable.id == table_1)
+                .execution_options(include_draw_history=True)
+            )
+            is None
+        )
+        assert await db_session.scalar(
+            select(VenueTable.id).where(VenueTable.id == table_2)
+        ) == uuid.UUID(table_2)
+
+    removed = await client.delete(f"/v1/tournaments/{tournament_id}")
+    assert removed.status_code == 204, removed.text
+
+
+async def test_retired_table_survives_until_its_last_event_is_deleted(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    client, _ = authed_client
+    (
+        tournament_id,
+        first_event_id,
+        _,
+        table_1,
+        table_2,
+    ) = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix="shared-table"
+    )
+    second = await client.post(
+        f"/v1/tournaments/{tournament_id}/events",
+        json=_rr_payload({**RESERVATION_A, "table_ids": [table_1, table_2]}),
+    )
+    assert second.status_code == 201, second.text
+    second_event_id = second.json()["id"]
+    await _seed_field(db_session, second_event_id, 3, prefix="shared-table-other")
+    await _cut_the_draw(client, tournament_id, second_event_id)
+    fixture, *_ = await _fixture_rows(db_session, second_event_id)
+    placed = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T11:00:00"},
+    )
+    assert placed.status_code == 200, placed.text
+    for event_id in (first_event_id, second_event_id):
+        uncut = await client.delete(_draw_url(tournament_id, event_id))
+        assert uncut.status_code == 204, uncut.text
+    removed_table = await client.patch(
+        f"/v1/tournaments/{tournament_id}",
+        json={
+            "details_version": 1,
+            "table_catalogue": [{"id": table_2, "label": "Table 2", "court": "A"}],
+        },
+    )
+    assert removed_table.status_code == 200, removed_table.text
+    table_query = (
+        select(VenueTable.id)
+        .where(VenueTable.id == table_1)
+        .execution_options(include_draw_history=True)
+    )
+    first_deleted = await client.delete(
+        f"/v1/tournaments/{tournament_id}/events/{first_event_id}"
+    )
+    assert first_deleted.status_code == 204, first_deleted.text
+    assert await db_session.scalar(table_query) == uuid.UUID(table_1)
+    second_deleted = await client.delete(
+        f"/v1/tournaments/{tournament_id}/events/{second_event_id}"
+    )
+    assert second_deleted.status_code == 204, second_deleted.text
+    assert await db_session.scalar(table_query) is None
+
+
 async def test_the_opt_in_removes_the_catalogue_table_and_leaves_its_fixtures_unplaced(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
@@ -9751,6 +9873,18 @@ async def test_a_merge_collision_on_a_played_event_does_not_corrupt_the_draw(
     # why its fixture survived above), and the survivor's is the one that stands.
     active = await _active_entries(db_session, event["id"])
     assert [e.user_id for e in active] == [survivor.id]
+    periods = (
+        await db_session.execute(
+            text(
+                "SELECT ended_at, end_reason FROM tournament_entry_participations "
+                "WHERE entry_id = :entry"
+            ),
+            {"entry": active[0].id},
+        )
+    ).all()
+    assert len(periods) == 1
+    assert periods[0].ended_at is not None
+    assert periods[0].end_reason == "stage_completed"
 
     # And the standings are not frozen by the void. A voided fixture never yields an
     # outcome, so it is excluded from the group's completeness count (ADR-0788). The
@@ -10167,6 +10301,159 @@ def _se_payload(**overrides: Any) -> dict[str, Any]:
     )
 
 
+async def test_void_does_not_advance_a_previously_ineligible_knockout_winner(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    from app.models import AdvancementDecision, TournamentEntryParticipation
+    from app.official_results import void_official_match
+    from app.tournament_participation import (
+        WithdrawalReason,
+        restore_event_eligibility,
+        withdraw_competition,
+    )
+
+    client, owner = authed_client
+    async with (
+        opponent_session(db_session, "void-ko-winner") as (winner_client, winner),
+        opponent_session(db_session, "void-ko-loser") as (loser_client, loser),
+    ):
+        tournament_id, (event,) = await _tournament_with_events(client, _se_payload())
+        bye_entry = await _enter(db_session, event["id"], owner, seed=1)
+        winning_entry = await _enter(db_session, event["id"], winner, seed=2)
+        losing_entry = await _enter(db_session, event["id"], loser, seed=3)
+        await _cut_the_draw(client, tournament_id, event["id"])
+        await _set_status(db_session, tournament_id, TournamentStatus.published)
+        assert (await _go_live(client, tournament_id)).status_code == 201
+        fixtures = await _fixture_rows(db_session, event["id"])
+        semifinal = next(f for f in fixtures if f.round == 1)
+        final = next(f for f in fixtures if f.round == 2)
+        await _call_fixtures(db_session, tournament_id, [semifinal])
+        await withdraw_competition(
+            db_session, winning_entry.id, owner.id, WithdrawalReason.director_removal
+        )
+        await db_session.commit()
+        await _win_fixture_match(
+            semifinal,
+            clients_by_entry={
+                winning_entry.id: winner_client,
+                losing_entry.id: loser_client,
+            },
+            winner_entry_id=winning_entry.id,
+            rated=True,
+        )
+        await db_session.refresh(semifinal)
+        await db_session.refresh(final)
+        assert semifinal.winner_entry_id == winning_entry.id
+        assert final.entry_a_id == bye_entry.id
+        assert final.entry_b_id is None and final.match_id is None
+        periods_query = select(
+            TournamentEntryParticipation.id, TournamentEntryParticipation.ended_at
+        ).where(TournamentEntryParticipation.entry_id == winning_entry.id)
+        periods_before = (await db_session.execute(periods_query)).all()
+        assert periods_before and all(
+            row.ended_at is not None for row in periods_before
+        )
+
+        await restore_event_eligibility(db_session, winning_entry.id, owner.id)
+        await db_session.commit()
+        assert semifinal.match_id is not None
+        await void_official_match(
+            db_session,
+            semifinal.match_id,
+            owner.id,
+            reason="The semifinal result is void",
+        )
+        await db_session.commit()
+        await db_session.refresh(semifinal)
+        await db_session.refresh(final)
+        assert semifinal.winner_entry_id == winning_entry.id
+        assert final.entry_b_id is None and final.match_id is None
+        assert (await db_session.execute(periods_query)).all() == periods_before
+        assert (
+            await db_session.scalar(
+                select(AdvancementDecision.id).where(
+                    AdvancementDecision.fixture_id == final.id
+                )
+            )
+            is None
+        )
+        assert await _match_count(db_session) == 1
+
+
+@pytest.mark.parametrize("survivor_wins", [False, True])
+async def test_merge_ended_bye_participation_cannot_materialize_a_new_match(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    survivor_wins: bool,
+) -> None:
+    """A preserved bye seat is history, not permission to play after reconciliation."""
+    client, owner = authed_client
+    async with (
+        opponent_session(db_session, "se-duplicate-bye") as (_, guest),
+        opponent_session(db_session, "se-merge-opponent") as (
+            opponent_client,
+            opponent,
+        ),
+    ):
+        tournament_id, (event,) = await _tournament_with_events(client, _se_payload())
+        duplicate = await _enter(db_session, event["id"], guest, seed=1)
+        survivor = await _enter(db_session, event["id"], owner, seed=2)
+        other = await _enter(db_session, event["id"], opponent, seed=3)
+        await _cut_the_draw(client, tournament_id, event["id"])
+        await _set_status(db_session, tournament_id, TournamentStatus.published)
+        assert (await _go_live(client, tournament_id)).status_code == 201
+        fixtures = await _fixture_rows(db_session, event["id"])
+        semifinal = next(f for f in fixtures if f.round == 1)
+        final = next(f for f in fixtures if f.round == 2)
+        assert {semifinal.entry_a_id, semifinal.entry_b_id} == {survivor.id, other.id}
+        assert final.entry_a_id == duplicate.id and final.entry_b_id is None
+        assert final.match_id is None
+        semifinal_match_id = semifinal.match_id
+        assert semifinal_match_id is not None
+        await _call_fixtures(db_session, tournament_id, [semifinal])
+
+        # Recorded play keeps the survivor's entry and the underway draw at merge.
+        proposer, accepter = (
+            (client, opponent_client) if survivor_wins else (opponent_client, client)
+        )
+        proposal = await proposer.post(
+            f"/v1/matches/{semifinal_match_id}/results",
+            json={
+                "games": [
+                    {
+                        "game_number": n,
+                        "side_1_points": 11 if survivor_wins else 5,
+                        "side_2_points": 5 if survivor_wins else 11,
+                    }
+                    for n in (1, 2)
+                ]
+            },
+        )
+        assert proposal.status_code == 201, proposal.text
+        await merge_user(db_session, from_user_id=guest.id, to_user_id=owner.id)
+        await db_session.commit()
+        active = await _active_entries(db_session, event["id"])
+        assert {entry.id for entry in active} == {survivor.id, other.id}
+
+        # Acceptance advances the other contestant into the historical final seat.
+        await accept_standing_result(accepter, str(semifinal_match_id))
+        after = {
+            fixture.id: fixture
+            for fixture in await _fixture_rows(db_session, event["id"])
+        }
+        assert set(after) == {fixture.id for fixture in fixtures}
+        assert after[semifinal.id].match_id == semifinal_match_id
+        assert (
+            await _load_match(db_session, semifinal_match_id)
+        ).status is MatchStatus.completed
+        assert after[final.id].entry_a_id == duplicate.id
+        assert after[final.id].entry_b_id == (
+            survivor.id if survivor_wins else other.id
+        )
+        assert after[final.id].match_id is None
+        assert await _match_count(db_session) == 1
+
+
 @pytest.mark.parametrize("ownership_changes", [False, True])
 async def test_a_single_elim_event_plays_through_to_a_champion(
     authed_client: tuple[AsyncClient, User],
@@ -10490,6 +10777,193 @@ async def test_the_detail_bff_surfaces_live_standings_then_a_champion(
         (str(e2.id), 1, 2),
         (str(e3.id), 0, 3),
     ]
+
+    periods = (
+        await db_session.execute(
+            text(
+                "SELECT ended_at, end_reason FROM tournament_entry_participations "
+                "WHERE entry_id IN (:a, :b, :c)"
+            ),
+            {"a": e1.id, "b": e2.id, "c": e3.id},
+        )
+    ).all()
+    assert len(periods) == 3
+    assert all(
+        row.ended_at is not None and row.end_reason == "stage_completed"
+        for row in periods
+    )
+
+
+@pytest.mark.parametrize("draw_type", ["round-robin", "swiss"])
+async def test_reopened_match_keeps_stage_participation_open_despite_retained_winner(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession, draw_type: str
+) -> None:
+    from app.models import TournamentEntryParticipation
+    from app.official_results import void_official_match
+
+    client, owner = authed_client
+    settings = {"rounds": 1} if draw_type == "swiss" else {}
+    tournament_id, (event,) = await _tournament_with_events(
+        client,
+        _rr_payload(
+            RESERVATION_A,
+            draw_type=draw_type,
+            predicates=[],
+            match_settings={"rated": False, "length_games": 3},
+            **settings,
+        ),
+    )
+    entries = await _seed_field(db_session, event["id"], 4)
+    entry_ids = {entry.id for entry in entries}
+    await _cut_the_draw(client, tournament_id, event["id"])
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    assert (await _go_live(client, tournament_id)).status_code == 201
+    fixtures = await _fixture_rows(db_session, event["id"])
+    await _call_fixtures(db_session, tournament_id, fixtures)
+    first, *others = fixtures
+    assert first.match_id is not None and others
+    board = {
+        "games": [
+            {"game_number": n, "side_1_points": 11, "side_2_points": 5} for n in (1, 2)
+        ]
+    }
+    # A legacy correction can retain its fixture winner while its linked match
+    # is unresolved. New official results cannot be reopened at commit, so seed
+    # this supported historical state without inventing an official result.
+    reopened = await _load_match(db_session, first.match_id)
+    assert reopened.status is MatchStatus.in_progress
+    assert reopened.current_official_result_id is None
+    first.winner_entry_id = first.entry_a_id
+    await db_session.commit()
+    for fixture in others:
+        response = await client.post(
+            f"/v1/matches/{fixture.match_id}/results", json=board
+        )
+        assert response.status_code == 201, response.text
+    periods_query = (
+        select(TournamentEntryParticipation)
+        .where(TournamentEntryParticipation.entry_id.in_(entry_ids))
+        .execution_options(populate_existing=True)
+    )
+    periods = list(await db_session.scalars(periods_query))
+    assert len(periods) == 4
+    assert all(period.ended_at is None for period in periods)
+
+    await void_official_match(
+        db_session,
+        first.match_id,
+        owner.id,
+        reason="Resolve the reopened result as void",
+    )
+    await db_session.commit()
+    periods = list(await db_session.scalars(periods_query))
+    assert all(period.ended_at is not None for period in periods)
+    assert {period.end_reason for period in periods} == {"stage_completed"}
+
+
+@pytest.mark.parametrize("parent", ["event", "tournament"])
+@pytest.mark.parametrize("retired", [False, True])
+async def test_parent_delete_preserves_matchless_winner_history(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    parent: str,
+    retired: bool,
+) -> None:
+    from app.tournament_draws import uncut_draw
+
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
+    await _seed_field(db_session, event["id"], 2)
+    await _cut_the_draw(client, tournament_id, event["id"])
+    (fixture,) = await _fixture_rows(db_session, event["id"])
+    fixture_id = fixture.id
+    fixture.winner_entry_id = fixture.entry_a_id
+    await db_session.commit()
+    assert fixture.match_id is None
+    if retired:
+        # Trusted imports/archives can retain a matchless outcome in a retired
+        # revision. The ordinary uncut endpoint still refuses recorded play.
+        await uncut_draw(db_session, [uuid.UUID(event["id"])])
+        await db_session.commit()
+    fixture_query = text(
+        "SELECT row_to_json(f)::text FROM tournament_fixtures f WHERE id = :id"
+    )
+    periods_query = text(
+        "SELECT row_to_json(p)::text FROM tournament_entry_participations p "
+        "WHERE event_id = :event ORDER BY id"
+    )
+    fixture_before = await db_session.scalar(fixture_query, {"id": fixture_id})
+    periods_before = (
+        await db_session.execute(periods_query, {"event": uuid.UUID(event["id"])})
+    ).all()
+    assert fixture_before is not None and len(periods_before) == 2
+
+    url = f"/v1/tournaments/{tournament_id}"
+    if parent == "event":
+        url += f"/events/{event['id']}"
+    response = await client.delete(url)
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == (
+        "Recorded play must be preserved. This event or tournament cannot be deleted."
+    )
+    assert await db_session.scalar(fixture_query, {"id": fixture_id}) == fixture_before
+    assert (
+        await db_session.execute(periods_query, {"event": uuid.UUID(event["id"])})
+    ).all() == periods_before
+
+
+async def test_matchless_winner_counts_toward_stage_completion(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    from app.official_results import void_official_match
+
+    client, owner = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
+    await _seed_field(db_session, event["id"], 3)
+    await _cut_the_draw(client, tournament_id, event["id"])
+    fixtures = await _fixture_rows(db_session, event["id"])
+    walkover = fixtures[0]
+    # Winner-only outcomes are a supported persisted sporting fact and seal a
+    # draw against re-cutting even when no playable Match was needed.
+    walkover.winner_entry_id = walkover.entry_a_id
+    await db_session.commit()
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    assert (await _go_live(client, tournament_id)).status_code == 201
+    remaining = [
+        fixture
+        for fixture in await _fixture_rows(db_session, event["id"])
+        if fixture.id != walkover.id
+    ]
+    assert len(remaining) == 2
+    periods_query = text(
+        "SELECT ended_at, end_reason FROM tournament_entry_participations "
+        "WHERE event_id = :event"
+    )
+    for index, fixture in enumerate(remaining):
+        assert fixture.match_id is not None
+        await void_official_match(
+            db_session, fixture.match_id, owner.id, reason="Fixture cannot be played"
+        )
+        await db_session.commit()
+        periods = (
+            await db_session.execute(periods_query, {"event": uuid.UUID(event["id"])})
+        ).all()
+        assert len(periods) == 3
+        if index == 0:
+            assert all(period.ended_at is None for period in periods)
+        else:
+            assert all(
+                period.ended_at is not None and period.end_reason == "stage_completed"
+                for period in periods
+            )
+    await db_session.refresh(walkover)
+    assert walkover.match_id is None
+    assert walkover.winner_entry_id == walkover.entry_a_id
 
 
 async def test_the_detail_bff_surfaces_single_elim_finishes(

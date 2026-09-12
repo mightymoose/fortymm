@@ -46,6 +46,7 @@ struct AccountSwitchPreview: Decodable {
 struct LinkCodedError: Decodable, Error {
     struct Detail: Decodable {
         let code: String
+        let message: String?
         let accountSwitch: AccountSwitchPreview?
     }
     let detail: Detail

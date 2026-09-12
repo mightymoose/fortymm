@@ -2,6 +2,11 @@
 
 Status: Accepted for #1677, on the entry-members model in #1672.
 
+Amended by [Registration outlives draw participation](20260911-registration-outlives-draw-participation.md)
+for #1685: retiring a draw preserves even unplayed fixtures, and historical
+contestants retain their specific participation periods. Ownership and recorded-play
+constraints remain in force.
+
 ## Scope
 
 This implementation deliberately excludes #1673 and #1674, as agreed in the

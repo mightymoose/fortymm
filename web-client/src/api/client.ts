@@ -270,13 +270,19 @@ export class ApiError extends Error {
   readonly status: number
   readonly detail: string | null
   readonly body: unknown
+  readonly retryAt: number | null
 
-  constructor(status: number, detail: string | null, label: string, body?: unknown) {
+  constructor(status: number, detail: string | null, label: string, body?: unknown, retryAfter?: string | null) {
     super(detail ?? `Failed to ${label}`)
     this.name = 'ApiError'
     this.status = status
     this.detail = detail
     this.body = body
+    const delay = retryAfter?.trim()
+    const retryAt = delay && /^\d+$/.test(delay)
+      ? Date.now() + Number(delay) * 1000
+      : delay ? Date.parse(delay) : NaN
+    this.retryAt = Number.isFinite(retryAt) ? retryAt : null
   }
 }
 
@@ -341,7 +347,7 @@ export function unwrap<T>(
 ): T {
   const { data, error, response } = result
   if (error || (response && !response.ok)) {
-    throw new ApiError(response?.status ?? 0, extractDetail(error), label, error)
+    throw new ApiError(response?.status ?? 0, extractDetail(error), label, error, response?.headers.get('Retry-After'))
   }
   if (data === undefined && !options.allowEmpty) {
     throw new ApiError(response?.status ?? 0, null, label)

@@ -8,6 +8,7 @@ import pytest
 from httpx import AsyncClient
 from redis.exceptions import RedisError
 from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -35,6 +36,7 @@ from app.models import (
     SessionToken,
     Tournament,
     TournamentEntry,
+    TournamentEntryRegistration,
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
@@ -824,6 +826,151 @@ async def test_merge_preserves_original_membership_player_ids(
     assert projected == [verified.player_id, verified.player_id]
 
 
+@pytest.mark.parametrize("already_withdrawn", [False, True])
+async def test_merge_permanently_supersedes_duplicate_entry(
+    db_session: AsyncSession,
+    already_withdrawn: bool,
+):
+    guest = await _make_ephemeral(db_session, "superseded-guest")
+    survivor = await _make_verified(db_session, "superseded@example.com")
+    event = await _make_event(db_session, survivor)
+    duplicate = await _enter(db_session, event, guest)
+    retained = await _enter(db_session, event, survivor)
+    if already_withdrawn:
+        duplicate.status = TournamentEntryStatus.withdrawn
+        await db_session.commit()
+
+    await merge_user(db_session, from_user_id=guest.id, to_user_id=survivor.id)
+    await db_session.commit()
+
+    entries = {entry.id: entry for entry in await _entries_for(db_session, event)}
+    assert entries[duplicate.id].superseded_by_entry_id == retained.id
+    assert entries[duplicate.id].status is TournamentEntryStatus.withdrawn
+
+
+async def test_sql_cannot_clear_permanent_entry_supersession(db_session: AsyncSession):
+    guest = await _make_ephemeral(db_session, "permanent-guest")
+    survivor = await _make_verified(db_session, "permanent@example.com")
+    event = await _make_event(db_session, survivor)
+    duplicate = await _enter(db_session, event, guest)
+    await _enter(db_session, event, survivor)
+    await merge_user(db_session, from_user_id=guest.id, to_user_id=survivor.id)
+    await db_session.commit()
+
+    with pytest.raises(IntegrityError, match="supersession"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE tournament_entries SET superseded_by_entry_id = NULL "
+                    "WHERE id = :entry"
+                ),
+                {"entry": duplicate.id},
+            )
+
+
+async def test_merge_closes_duplicate_registration_with_reconciliation_actor(
+    db_session: AsyncSession,
+):
+    guest = await _make_ephemeral(db_session, "registration-merge-guest")
+    survivor = await _make_verified(db_session, "registration-merge@example.com")
+    event = await _make_rr_event(db_session, survivor)
+    duplicate = await _enter(db_session, event, guest)
+    await _enter(db_session, event, survivor)
+    registration = TournamentEntryRegistration(
+        entry_id=duplicate.id, registered_by_account_id=guest.id
+    )
+    db_session.add(registration)
+    await db_session.commit()
+    await _cut(db_session, event)
+
+    await merge_user(db_session, from_user_id=guest.id, to_user_id=survivor.id)
+    await db_session.commit()
+
+    await db_session.refresh(registration)
+    assert registration.withdrawal_reason == "identity_reconciliation"
+    assert registration.withdrawn_by_account_id == survivor.id
+    assert registration.withdrawn_at is not None
+    assert registration.registered_by_account_id == guest.id
+    periods = (
+        await db_session.execute(
+            text(
+                "SELECT ended_at, end_reason, ended_by_account_id "
+                "FROM tournament_entry_participations WHERE entry_id = :entry"
+            ),
+            {"entry": duplicate.id},
+        )
+    ).all()
+    assert periods
+    assert all(
+        ended is not None
+        and reason == "identity_reconciliation"
+        and actor == survivor.id
+        for ended, reason, actor in periods
+    )
+
+
+@pytest.mark.parametrize("withdrawal_scope", ["registration", "competition"])
+async def test_merging_withdrawn_duplicate_does_not_retire_valid_current_draw(
+    db_session: AsyncSession,
+    withdrawal_scope: str,
+):
+    guest = await _make_ephemeral(db_session, "old-registration-guest")
+    survivor = await _make_verified(db_session, "old-registration@example.com")
+    opponent = await _make_verified(db_session, "old-registration-opponent@example.com")
+    event = await _make_rr_event(db_session, survivor)
+    duplicate = await _enter(
+        db_session,
+        event,
+        guest,
+        status=(
+            TournamentEntryStatus.withdrawn
+            if withdrawal_scope == "registration"
+            else TournamentEntryStatus.entered
+        ),
+    )
+    if withdrawal_scope == "competition":
+        from app.tournament_participation import WithdrawalReason, withdraw_competition
+
+        await withdraw_competition(
+            db_session, duplicate.id, survivor.id, WithdrawalReason.director_removal
+        )
+        await db_session.commit()
+        assert duplicate.status is TournamentEntryStatus.entered
+    await _enter(db_session, event, survivor)
+    await _enter(db_session, event, opponent)
+    fixtures = await _cut(db_session, event)
+    before = _seats(fixtures)
+    assert len(fixtures) == 1
+    assert duplicate.id not in (fixtures[0].entry_a_id, fixtures[0].entry_b_id)
+
+    await merge_user(db_session, from_user_id=guest.id, to_user_id=survivor.id)
+    await db_session.commit()
+
+    assert _seats(await _fixtures_for(db_session, event)) == before
+    await db_session.refresh(duplicate)
+    assert duplicate.superseded_by_entry_id is not None
+
+
+async def test_sql_rejects_entry_supersession_cycle(db_session: AsyncSession):
+    guest = await _make_ephemeral(db_session, "cycle-guest")
+    survivor = await _make_verified(db_session, "cycle@example.com")
+    event = await _make_event(db_session, survivor)
+    duplicate = await _enter(db_session, event, guest)
+    retained = await _enter(db_session, event, survivor)
+    await merge_user(db_session, from_user_id=guest.id, to_user_id=survivor.id)
+    await db_session.commit()
+
+    with pytest.raises(IntegrityError, match="supersession"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE tournament_entries SET status = 'withdrawn', "
+                    "superseded_by_entry_id = :duplicate WHERE id = :retained"
+                ),
+                {"duplicate": duplicate.id, "retained": retained.id},
+            )
+
+
 async def test_merge_repoints_active_entry_over_survivors_withdrawn_row(
     db_session: AsyncSession,
 ):
@@ -1240,6 +1387,267 @@ async def _mark_played(db: AsyncSession, fixture: TournamentFixture) -> None:
     that flips its event onto the withdrawal arm (no ``Match`` row needed)."""
     fixture.winner_entry_id = fixture.entry_a_id
     await db.commit()
+
+
+@pytest.mark.parametrize("evidence", ["match", "fixture_winner"])
+@pytest.mark.parametrize("registration_withdrawn", [False, True])
+async def test_merge_refuses_duplicate_recorded_play_in_same_stage_atomically(
+    db_session: AsyncSession,
+    registration_withdrawn: bool,
+    evidence: str,
+):
+    guest = await _make_ephemeral(db_session, "stage-conflict-guest")
+    survivor = await _make_verified(db_session, "stage-conflict@example.com")
+    event = await _make_rr_event(db_session, survivor)
+    guest_entry = await _enter(db_session, event, guest)
+    survivor_entry = await _enter(db_session, event, survivor)
+    (fixture,) = await _cut(db_session, event)
+    if evidence == "fixture_winner":
+        await _mark_played(db_session, fixture)
+    else:
+        accounts = {guest_entry.id: guest, survivor_entry.id: survivor}
+        match = await _record_match(
+            db_session,
+            survivor,
+            accounts[fixture.entry_a_id],
+            accounts[fixture.entry_b_id],
+        )
+        fixture.match_id = match.id
+        await db_session.commit()
+    if registration_withdrawn:
+        from app.models import TournamentStatus
+        from app.tournament_entries import withdraw_from_event
+
+        tournament = await db_session.get(Tournament, event.tournament_id)
+        assert tournament is not None
+        tournament.status = TournamentStatus.published
+        await db_session.commit()
+        await withdraw_from_event(
+            db_session,
+            tournament_id=event.tournament_id,
+            event_id=event.id,
+            entry_id=survivor_entry.id,
+            actor=survivor,
+        )
+        await db_session.commit()
+    before = _seats([fixture])
+
+    with pytest.raises(ValueError, match="recorded play in the same stage") as error:
+        await merge_user(db_session, from_user_id=guest.id, to_user_id=survivor.id)
+    # A caller can safely commit after the refusal: neither sporting identities
+    # nor account ownership were partly reconciled before the conflict surfaced.
+    await db_session.commit()
+    assert str(guest_entry.id) in str(error.value)
+    assert str(survivor_entry.id) in str(error.value)
+    await db_session.refresh(guest)
+    assert guest.merged_into_user_id is None
+    assert _seats(await _fixtures_for(db_session, event)) == before
+    entries = await _entries_for(db_session, event)
+    assert (
+        next(entry for entry in entries if entry.id == guest_entry.id).status
+        is TournamentEntryStatus.entered
+    )
+    assert next(entry for entry in entries if entry.id == survivor_entry.id).status is (
+        TournamentEntryStatus.withdrawn
+        if registration_withdrawn
+        else TournamentEntryStatus.entered
+    )
+
+
+@pytest.mark.parametrize("evidence", ["match", "fixture_winner"])
+async def test_merge_keeps_the_entry_with_recorded_play_when_guest_account_is_retired(
+    db_session: AsyncSession,
+    evidence: str,
+):
+    guest = await _make_ephemeral(db_session, "played-guest")
+    survivor = await _make_verified(db_session, "played-survivor@example.com")
+    opponent = await _make_verified(db_session, "played-opponent@example.com")
+    event = await _make_rr_event(db_session, survivor)
+    earlier = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+    guest_entry = await _enter(
+        db_session, event, guest, created_at=earlier + timedelta(days=1)
+    )
+    other_entry = await _enter(db_session, event, opponent)
+    (fixture,) = await _cut(db_session, event)
+    if evidence == "fixture_winner":
+        await _mark_played(db_session, fixture)
+    else:
+        accounts = {guest_entry.id: guest, other_entry.id: opponent}
+        match = await _record_match(
+            db_session,
+            survivor,
+            accounts[fixture.entry_a_id],
+            accounts[fixture.entry_b_id],
+        )
+        fixture.match_id = match.id
+        await db_session.commit()
+    duplicate = await _enter(db_session, event, survivor, seed=3, created_at=earlier)
+
+    await merge_user(db_session, from_user_id=guest.id, to_user_id=survivor.id)
+    await db_session.commit()
+
+    entries = {entry.id: entry for entry in await _entries_for(db_session, event)}
+    assert entries[guest_entry.id].status is TournamentEntryStatus.entered
+    assert entries[guest_entry.id].user_id == survivor.id
+    assert entries[guest_entry.id].seed == 3
+    assert entries[guest_entry.id].created_at == earlier
+    assert entries[duplicate.id].status is TournamentEntryStatus.withdrawn
+    assert _seats(await _fixtures_for(db_session, event)) == _seats([fixture])
+
+
+@pytest.mark.parametrize("duplicate_eligible", [False, True])
+@pytest.mark.parametrize("played_guest", [False, True])
+async def test_merge_preserves_registration_on_a_withdrawn_played_survivor(
+    db_session: AsyncSession,
+    played_guest: bool,
+    duplicate_eligible: bool,
+):
+    from app.models import TournamentEntryParticipation, TournamentEntryWithdrawal
+    from app.tournament_draws import active_draw_entrants
+    from app.tournament_participation import WithdrawalReason, withdraw_competition
+    from tests._entry_seeds import withdraw_entry_with_history
+
+    guest = await _make_ephemeral(db_session, "withdrawn-played-guest")
+    survivor = await _make_verified(db_session, "withdrawn-played-survivor@example.com")
+    opponent = await _make_verified(db_session, "withdrawn-played-opponent@example.com")
+    played_user, duplicate_user = (
+        (guest, survivor) if played_guest else (survivor, guest)
+    )
+    event = await _make_rr_event(db_session, survivor)
+    played_entry = await _enter(db_session, event, played_user)
+    original_registration = TournamentEntryRegistration(
+        entry_id=played_entry.id, registered_by_account_id=played_user.id
+    )
+    db_session.add(original_registration)
+    await db_session.commit()
+    other_entry = await _enter(db_session, event, opponent)
+    (fixture,) = await _cut(db_session, event)
+    accounts = {played_entry.id: played_user, other_entry.id: opponent}
+    match = await _record_match(
+        db_session, survivor, accounts[fixture.entry_a_id], accounts[fixture.entry_b_id]
+    )
+    fixture.match_id = match.id
+    await db_session.commit()
+    await withdraw_entry_with_history(db_session, played_entry.id)
+    await db_session.commit()
+    duplicate = await _enter(db_session, event, duplicate_user, seed=3)
+    duplicate_registration = TournamentEntryRegistration(
+        entry_id=duplicate.id, registered_by_account_id=duplicate_user.id
+    )
+    db_session.add(duplicate_registration)
+    if not duplicate_eligible:
+        await withdraw_competition(
+            db_session, duplicate.id, survivor.id, WithdrawalReason.director_removal
+        )
+    await db_session.commit()
+    history_query = select(
+        TournamentEntryParticipation.id,
+        TournamentEntryParticipation.ended_at,
+        TournamentEntryParticipation.end_reason,
+    ).where(TournamentEntryParticipation.entry_id == played_entry.id)
+    history = (await db_session.execute(history_query)).all()
+    withdrawal_query = select(
+        TournamentEntryWithdrawal.id,
+        TournamentEntryWithdrawal.restored_at,
+        TournamentEntryWithdrawal.restored_by_account_id,
+        TournamentEntryWithdrawal.actor_account_id,
+        TournamentEntryWithdrawal.reason,
+    ).where(TournamentEntryWithdrawal.entry_id == played_entry.id)
+    withdrawals = (await db_session.execute(withdrawal_query)).all()
+    await db_session.refresh(original_registration)
+    old_withdrawal = original_registration.withdrawn_at
+
+    await merge_user(db_session, from_user_id=guest.id, to_user_id=survivor.id)
+    await db_session.commit()
+
+    entries = {entry.id: entry for entry in await _entries_for(db_session, event)}
+    assert entries[played_entry.id].status is TournamentEntryStatus.entered
+    assert entries[played_entry.id].user_id == survivor.id
+    assert entries[played_entry.id].seed == 3
+    assert entries[duplicate.id].status is TournamentEntryStatus.withdrawn
+    assert entries[duplicate.id].superseded_by_entry_id == played_entry.id
+    registrations = list(
+        await db_session.scalars(
+            select(TournamentEntryRegistration)
+            .where(
+                TournamentEntryRegistration.entry_id.in_(
+                    [played_entry.id, duplicate.id]
+                )
+            )
+            .execution_options(populate_existing=True)
+        )
+    )
+    current = [period for period in registrations if period.withdrawn_at is None]
+    assert len(current) == 1
+    assert current[0].entry_id == played_entry.id
+    assert current[0].registered_by_account_id == survivor.id
+    assert current[0].id != original_registration.id
+    assert original_registration.withdrawn_at == old_withdrawal
+    assert old_withdrawal is not None
+    assert duplicate_registration.withdrawal_reason == "identity_reconciliation"
+    assert (await db_session.execute(history_query)).all() == history
+    assert history and all(row.ended_at is not None for row in history)
+    restored = (await db_session.execute(withdrawal_query)).all()
+    assert len(restored) == len(withdrawals) == 1
+    assert restored[0].id == withdrawals[0].id
+    assert restored[0].actor_account_id == withdrawals[0].actor_account_id
+    assert restored[0].reason == withdrawals[0].reason
+    if duplicate_eligible:
+        assert restored[0].restored_at is not None
+        assert restored[0].restored_by_account_id == survivor.id
+    else:
+        assert restored == withdrawals
+    assert _seats(await _fixtures_for(db_session, event)) == _seats([fixture])
+
+    eligible_entries = {
+        entrant.entry_id: entrant
+        for entrant in await active_draw_entrants(db_session, event.id)
+    }
+    assert (played_entry.id in eligible_entries) is duplicate_eligible
+    if duplicate_eligible:
+        assert (
+            eligible_entries[played_entry.id].created_at
+            == duplicate_registration.registered_at
+        )
+    assert (await db_session.execute(history_query)).all() == history
+
+
+async def test_login_reports_entry_merge_conflict_without_consuming_credentials(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+):
+    guest = await start_session(api_client, db_session)
+    survivor = await _make_verified(db_session, "merge-conflict-login@example.com")
+    event = await _make_rr_event(db_session, survivor)
+    guest_entry = await _enter(db_session, event, guest)
+    survivor_entry = await _enter(db_session, event, survivor)
+    (fixture,) = await _cut(db_session, event)
+    accounts = {guest_entry.id: guest, survivor_entry.id: survivor}
+    match = await _record_match(
+        db_session, survivor, accounts[fixture.entry_a_id], accounts[fixture.entry_b_id]
+    )
+    fixture.match_id = match.id
+    raw_token = "entry-conflict-login-token"
+    token = EmailToken(
+        user_id=survivor.id,
+        purpose=EmailPurpose.login,
+        token=hashlib.sha256(raw_token.encode()).digest(),
+        sent_to=survivor.email,
+    )
+    db_session.add(token)
+    await db_session.commit()
+    token_id = token.id
+    guest_entry_id, survivor_entry_id = guest_entry.id, survivor_entry.id
+
+    response = await api_client.post("/v1/login/consume", json={"token": raw_token})
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "entry_merge_conflict"
+    assert str(guest_entry_id) in response.text
+    assert str(survivor_entry_id) in response.text
+    await db_session.refresh(guest)
+    assert guest.merged_into_user_id is None
+    assert await db_session.get(EmailToken, token_id) is not None
 
 
 class _DeadQueue:

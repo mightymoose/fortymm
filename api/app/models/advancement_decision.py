@@ -6,6 +6,7 @@ from datetime import datetime
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
+    FetchedValue,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -88,6 +89,9 @@ class AdvancementDecision(Base):
     )
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("tournament_events.id"), server_default=FetchedValue(), index=True
     )
     fixture_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tournament_fixtures.id"))
     side: Mapped[str]

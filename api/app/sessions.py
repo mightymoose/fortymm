@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import captcha as captcha_module
 from app import queue as queue_module
-from app.account_merge import merge_user
+from app.account_merge import EntryMergeConflict, merge_user
 from app.config import Settings, get_settings
 from app.db import get_session
 from app.email_credentials import (
@@ -48,6 +48,7 @@ from app.email_credentials import login_token_clause as _login_token_clause
 from app.email_credentials import (
     pending_email_token_clause as _pending_email_token_clause,
 )
+from app.email_merge_admission import admit_credential_merge
 from app.leagues import add_user_to_default_league
 from app.models import (
     EmailIntent,
@@ -173,7 +174,20 @@ async def _merge_guest_into(
         or guest.merged_into_user_id is not None
     ):
         return None
-    summary = await merge_user(db, from_user_id=guest.id, to_user_id=target.id)
+    try:
+        summary = await merge_user(db, from_user_id=guest.id, to_user_id=target.id)
+    except EntryMergeConflict as error:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "entry_merge_conflict",
+                "message": str(error),
+                "source_entry_id": str(error.source_entry_id),
+                "target_entry_id": str(error.target_entry_id),
+                "stage_id": str(error.stage_id),
+            },
+        ) from error
     return MergeSummary(matches_moved=summary.matches_moved)
 
 
@@ -1214,12 +1228,24 @@ async def confirm_email(
     into the account that owns the address and the caller is signed in as that
     account. See ``_confirm_account_merge``.
 
+    Confirmations that merge a guest account admit one attempt at a time and at most
+    five attempts per bearer per hour. A busy or exhausted credential returns
+    429 without consuming the link; unavailable retry-budget storage returns
+    503. Both responses include Retry-After. Ordinary confirmations keep their
+    existing availability.
+
     A link a newer resend replaced is distinguishable from every other dead
     link: it 400s with a structured ``{"code": "replaced", "message": ...}``
     detail (#1616), the confirm-flow counterpart of ``consume_login_token``'s
     coded reasons (#1466). Every other dead confirmation link keeps the plain
     string detail it has always returned.
     """
+    await admit_credential_merge(
+        db,
+        hash_token(payload.token),
+        hash_token(session_cookie) if session_cookie else None,
+        skip_merge=payload.skip_merge,
+    )
     await lock_credential_accounts(
         db,
         hash_token(payload.token),
@@ -1611,7 +1637,19 @@ async def consume_login_token(
     on it, which makes it the third writer of that pair alongside
     ``confirm_email`` and ``auth0_provisioning._provision_user``. All three
     stamp them together, so the invariant holds: email set implies confirmed.
+    Login links that would merge a guest admit one attempt at a time and five
+    attempts per bearer per hour. Busy or exhausted credentials return 429;
+    unavailable retry storage returns 503. Both include Retry-After and leave
+    the link valid. Ordinary sign-in and explicit skip-merge keep their
+    existing availability.
     """
+    await admit_credential_merge(
+        db,
+        hash_token(payload.token),
+        hash_token(session_cookie) if session_cookie else None,
+        skip_merge=payload.skip_merge,
+        flow="login",
+    )
     await lock_credential_accounts(
         db,
         hash_token(payload.token),

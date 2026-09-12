@@ -14,6 +14,10 @@ Date: 2026-07-11
 
 Accepted
 
+Amended by [Registration outlives draw participation](20260911-registration-outlives-draw-participation.md)
+for #1685: returning registration reuses the durable entry and records another
+period. The new-row-on-return decision below is superseded; derived counts remain.
+
 ## Context
 
 Tournament *setup* shipped in epic #595 — tournaments, events, tables, pools,

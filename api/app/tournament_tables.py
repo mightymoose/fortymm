@@ -26,10 +26,17 @@ import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
-from app.models import Tournament, TournamentFixture, VenueTable
+from app.models import (
+    Tournament,
+    TournamentEventReservation,
+    TournamentEventReservationTable,
+    TournamentFixture,
+    VenueTable,
+)
 from app.schemas.tournament import (
     TournamentTableUpsert,
     TournamentTableWrite,
@@ -249,6 +256,51 @@ async def apply_table_catalogue(
         unplaced_event_ids = await _unplace_or_refuse(
             db, removed, unplace=unplace_fixtures
         )
+        historical_table_ids = set(
+            await db.scalars(
+                select(TournamentFixture.table_id)
+                .where(
+                    TournamentFixture.table_id.in_(
+                        [str(table.id) for table in removed]
+                    ),
+                    TournamentFixture.retired_at.is_not(None),
+                )
+                .execution_options(include_draw_history=True)
+            )
+        )
+        retired = [table for table in removed if str(table.id) in historical_table_ids]
+        if retired:
+            # Physical removal used to cascade these current reservation links.
+            # Retaining the catalogue identity must still release its reservations;
+            # the draw revision snapshot preserves historical configuration.
+            retired_ids = {str(table.id) for table in retired}
+            await db.execute(
+                update(VenueTable)
+                .where(VenueTable.id.in_(retired_ids))
+                .values(
+                    retired_at=func.clock_timestamp(), updated_at=VenueTable.updated_at
+                )
+            )
+            reservations = await db.scalars(
+                select(TournamentEventReservation).where(
+                    TournamentEventReservation.tables.any(
+                        TournamentEventReservationTable.table_id.in_(retired_ids)
+                    )
+                )
+            )
+            for reservation in reservations:
+                reservation.tables = [
+                    row for row in reservation.tables if row.table_id not in retired_ids
+                ]
+            await db.flush()
+            # Retired rows still belong to the tournament, but are no longer in
+            # its current catalogue. Avoid delete-orphan treating retirement as
+            # physical removal when the live collection is replaced below.
+            set_committed_value(
+                tournament,
+                "tables",
+                [table for table in tournament.tables if table not in retired],
+            )
 
     # Assigning the whole collection is what expresses all three operations at once: the
     # rows carried over keep their identity (and every ref that names them), the fresh

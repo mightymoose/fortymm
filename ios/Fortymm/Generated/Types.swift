@@ -80,6 +80,12 @@ internal protocol APIProtocol: Sendable {
     /// into the account that owns the address and the caller is signed in as that
     /// account. See ``_confirm_account_merge``.
     ///
+    /// Confirmations that merge a guest account admit one attempt at a time and at most
+    /// five attempts per bearer per hour. A busy or exhausted credential returns
+    /// 429 without consuming the link; unavailable retry-budget storage returns
+    /// 503. Both responses include Retry-After. Ordinary confirmations keep their
+    /// existing availability.
+    ///
     /// A link a newer resend replaced is distinguishable from every other dead
     /// link: it 400s with a structured ``{"code": "replaced", "message": ...}``
     /// detail (#1616), the confirm-flow counterpart of ``consume_login_token``'s
@@ -148,6 +154,11 @@ internal protocol APIProtocol: Sendable {
     /// on it, which makes it the third writer of that pair alongside
     /// ``confirm_email`` and ``auth0_provisioning._provision_user``. All three
     /// stamp them together, so the invariant holds: email set implies confirmed.
+    /// Login links that would merge a guest admit one attempt at a time and five
+    /// attempts per bearer per hour. Busy or exhausted credentials return 429;
+    /// unavailable retry storage returns 503. Both include Retry-After and leave
+    /// the link valid. Ordinary sign-in and explicit skip-merge keep their
+    /// existing availability.
     ///
     /// - Remark: HTTP `POST /v1/login/consume`.
     /// - Remark: Generated from `#/paths//v1/login/consume/post(consume_login_token_v1_login_consume_post)`.
@@ -669,6 +680,11 @@ internal protocol APIProtocol: Sendable {
     func updateTournamentV1TournamentsTournamentIdPatch(_ input: Operations.UpdateTournamentV1TournamentsTournamentIdPatch.Input) async throws -> Operations.UpdateTournamentV1TournamentsTournamentIdPatch.Output
     /// Delete Tournament
     ///
+    /// Delete the owned tournament.
+    ///
+    /// Another retained-history operation for this account causes a prompt 409;
+    /// retry after it finishes.
+    ///
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/delete(delete_tournament_v1_tournaments__tournament_id__delete)`.
     func deleteTournamentV1TournamentsTournamentIdDelete(_ input: Operations.DeleteTournamentV1TournamentsTournamentIdDelete.Input) async throws -> Operations.DeleteTournamentV1TournamentsTournamentIdDelete.Output
@@ -682,6 +698,9 @@ internal protocol APIProtocol: Sendable {
     /// backwards, skipping a stage, moving out of the terminal `archived`, and
     /// re-asserting the status the tournament already holds — a request to publish
     /// an already-published tournament is a stale client, not a no-op.
+    ///
+    /// Every status transition returns `409` while another tournament operation by
+    /// this account is in progress. Retry after that operation finishes.
     ///
     /// **Going live has a precondition** (ADR-0786): the tournament must have at least
     /// one event, and every event must have a **draw** whose fixtures seat exactly its
@@ -762,6 +781,11 @@ internal protocol APIProtocol: Sendable {
     func updateEventV1TournamentsTournamentIdEventsEventIdPatch(_ input: Operations.UpdateEventV1TournamentsTournamentIdEventsEventIdPatch.Input) async throws -> Operations.UpdateEventV1TournamentsTournamentIdEventsEventIdPatch.Output
     /// Delete Event
     ///
+    /// Delete the owned event.
+    ///
+    /// Another retained-history operation for this account causes a prompt 409;
+    /// retry after it finishes.
+    ///
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/events/{event_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/delete(delete_event_v1_tournaments__tournament_id__events__event_id__delete)`.
     func deleteEventV1TournamentsTournamentIdEventsEventIdDelete(_ input: Operations.DeleteEventV1TournamentsTournamentIdEventsEventIdDelete.Input) async throws -> Operations.DeleteEventV1TournamentsTournamentIdEventsEventIdDelete.Output
@@ -818,10 +842,9 @@ internal protocol APIProtocol: Sendable {
     /// Withdraw an entry from an event — your own, or (as the tournament's owner) any
     /// entry in it.
     ///
-    /// The entry is **soft-deleted**: its status flips to `withdrawn` and the row
-    /// survives, so the event keeps its withdrawal history — and, because the
-    /// uniqueness guard is a *partial* index over active entries only, the player is
-    /// free to enter the same event again afterwards.
+    /// Withdrawal closes registration and all active stage participation, preserving
+    /// the entry, historical periods, and fixture references. Registering again uses
+    /// the same entry ID and requires an explicit draw re-cut to restore a seat.
     ///
     /// **Who may withdraw an entry** (ADR-0784) mirrors who may create one: the player
     /// themselves, or the tournament's **owner**, for any entry in it. Anybody else
@@ -856,17 +879,18 @@ internal protocol APIProtocol: Sendable {
     /// the seeding. Nothing else creates fixtures, and going live requires every event to
     /// have one (ADR-0786).
     ///
-    /// **Re-cutting replaces the draw wholesale.** The previous fixtures are deleted and a
-    /// fresh set is planned from the event's *current* active entrants — the old ones are
-    /// not patched, and their ids do not survive. That is the point: a draw is a plan made
-    /// against a field, and once the field has changed (somebody entered, somebody
-    /// withdrew) the whole plan is re-made, group sizes and seeding included.
+    /// **Re-cutting creates a new event-wide draw revision.** Previous fixtures and
+    /// participation remain as retired history. A fresh set is planned from the
+    /// event's current registered field, including its group sizes and seeding.
+    /// Scheduling, results, and advancement use only the current revision.
     ///
     /// Entrants are ordered by **seed** ascending where one is set, then by **registration
     /// order**. Nothing is random, so the same field always cuts the same draw.
     ///
-    /// Refused with a `409` once the draw shows any **evidence of play** — any fixture with
-    /// a recorded winner, or any fixture that has become a real match. A re-cut would throw
+    /// Refused with a `409` while another draw change is in progress for this account;
+    /// retry after that operation finishes. Also refused once the draw shows any **evidence
+    /// of play** — any fixture with a recorded winner, or any fixture that has become
+    /// a real match. A re-cut would throw
     /// those away, and a draw must never silently eat a score.
     ///
     /// Refused with a `422` when this event cannot produce a draw at all: it has
@@ -888,18 +912,21 @@ internal protocol APIProtocol: Sendable {
     func cutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost(_ input: Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Input) async throws -> Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Output
     /// Uncut Event Draw
     ///
-    /// Un-cut this event's draw: delete its fixtures, leaving the event with no draw.
+    /// Un-cut this event's draw: retire its current revision and keep its history.
     ///
-    /// The way back from a draw the director does not want. The event, its entrants and the
-    /// rest of the tournament are untouched — only the fixtures go — and the director is
-    /// free to change the groups and cut again.
+    /// Previous fixtures, participation, and draw configuration remain recorded.
+    /// The event has no current draw, and the director may edit its configuration
+    /// and cut again.
     ///
     /// Refused with a `409` on the same **evidence of play** that refuses a re-cut: a
-    /// fixture with a recorded winner, or one that has become a real match. Undoing a draw
-    /// that has been played would delete the fixtures those results belong to.
+    /// fixture with a recorded winner, or one that has become a real match. Retaining
+    /// history does not permit a re-cut or un-cut after play.
     ///
     /// An event with **no draw is already in the state this asks for**, so removing a draw
     /// that was never cut is a `204`, not a `404`: this is a DELETE, and it is idempotent.
+    ///
+    /// Refused with a `409` while another draw change for this account is in progress.
+    /// Retry after that operation finishes.
     ///
     /// Owner-only.
     ///
@@ -1263,6 +1290,12 @@ extension APIProtocol {
     /// into the account that owns the address and the caller is signed in as that
     /// account. See ``_confirm_account_merge``.
     ///
+    /// Confirmations that merge a guest account admit one attempt at a time and at most
+    /// five attempts per bearer per hour. A busy or exhausted credential returns
+    /// 429 without consuming the link; unavailable retry-budget storage returns
+    /// 503. Both responses include Retry-After. Ordinary confirmations keep their
+    /// existing availability.
+    ///
     /// A link a newer resend replaced is distinguishable from every other dead
     /// link: it 400s with a structured ``{"code": "replaced", "message": ...}``
     /// detail (#1616), the confirm-flow counterpart of ``consume_login_token``'s
@@ -1349,6 +1382,11 @@ extension APIProtocol {
     /// on it, which makes it the third writer of that pair alongside
     /// ``confirm_email`` and ``auth0_provisioning._provision_user``. All three
     /// stamp them together, so the invariant holds: email set implies confirmed.
+    /// Login links that would merge a guest admit one attempt at a time and five
+    /// attempts per bearer per hour. Busy or exhausted credentials return 429;
+    /// unavailable retry storage returns 503. Both include Retry-After and leave
+    /// the link valid. Ordinary sign-in and explicit skip-merge keep their
+    /// existing availability.
     ///
     /// - Remark: HTTP `POST /v1/login/consume`.
     /// - Remark: Generated from `#/paths//v1/login/consume/post(consume_login_token_v1_login_consume_post)`.
@@ -2230,6 +2268,11 @@ extension APIProtocol {
     }
     /// Delete Tournament
     ///
+    /// Delete the owned tournament.
+    ///
+    /// Another retained-history operation for this account causes a prompt 409;
+    /// retry after it finishes.
+    ///
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/delete(delete_tournament_v1_tournaments__tournament_id__delete)`.
     internal func deleteTournamentV1TournamentsTournamentIdDelete(
@@ -2251,6 +2294,9 @@ extension APIProtocol {
     /// backwards, skipping a stage, moving out of the terminal `archived`, and
     /// re-asserting the status the tournament already holds — a request to publish
     /// an already-published tournament is a stale client, not a no-op.
+    ///
+    /// Every status transition returns `409` while another tournament operation by
+    /// this account is in progress. Retry after that operation finishes.
     ///
     /// **Going live has a precondition** (ADR-0786): the tournament must have at least
     /// one event, and every event must have a **draw** whose fixtures seat exactly its
@@ -2361,6 +2407,11 @@ extension APIProtocol {
     }
     /// Delete Event
     ///
+    /// Delete the owned event.
+    ///
+    /// Another retained-history operation for this account causes a prompt 409;
+    /// retry after it finishes.
+    ///
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/events/{event_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/delete(delete_event_v1_tournaments__tournament_id__events__event_id__delete)`.
     internal func deleteEventV1TournamentsTournamentIdEventsEventIdDelete(
@@ -2435,10 +2486,9 @@ extension APIProtocol {
     /// Withdraw an entry from an event — your own, or (as the tournament's owner) any
     /// entry in it.
     ///
-    /// The entry is **soft-deleted**: its status flips to `withdrawn` and the row
-    /// survives, so the event keeps its withdrawal history — and, because the
-    /// uniqueness guard is a *partial* index over active entries only, the player is
-    /// free to enter the same event again afterwards.
+    /// Withdrawal closes registration and all active stage participation, preserving
+    /// the entry, historical periods, and fixture references. Registering again uses
+    /// the same entry ID and requires an explicit draw re-cut to restore a seat.
     ///
     /// **Who may withdraw an entry** (ADR-0784) mirrors who may create one: the player
     /// themselves, or the tournament's **owner**, for any entry in it. Anybody else
@@ -2481,17 +2531,18 @@ extension APIProtocol {
     /// the seeding. Nothing else creates fixtures, and going live requires every event to
     /// have one (ADR-0786).
     ///
-    /// **Re-cutting replaces the draw wholesale.** The previous fixtures are deleted and a
-    /// fresh set is planned from the event's *current* active entrants — the old ones are
-    /// not patched, and their ids do not survive. That is the point: a draw is a plan made
-    /// against a field, and once the field has changed (somebody entered, somebody
-    /// withdrew) the whole plan is re-made, group sizes and seeding included.
+    /// **Re-cutting creates a new event-wide draw revision.** Previous fixtures and
+    /// participation remain as retired history. A fresh set is planned from the
+    /// event's current registered field, including its group sizes and seeding.
+    /// Scheduling, results, and advancement use only the current revision.
     ///
     /// Entrants are ordered by **seed** ascending where one is set, then by **registration
     /// order**. Nothing is random, so the same field always cuts the same draw.
     ///
-    /// Refused with a `409` once the draw shows any **evidence of play** — any fixture with
-    /// a recorded winner, or any fixture that has become a real match. A re-cut would throw
+    /// Refused with a `409` while another draw change is in progress for this account;
+    /// retry after that operation finishes. Also refused once the draw shows any **evidence
+    /// of play** — any fixture with a recorded winner, or any fixture that has become
+    /// a real match. A re-cut would throw
     /// those away, and a draw must never silently eat a score.
     ///
     /// Refused with a `422` when this event cannot produce a draw at all: it has
@@ -2521,18 +2572,21 @@ extension APIProtocol {
     }
     /// Uncut Event Draw
     ///
-    /// Un-cut this event's draw: delete its fixtures, leaving the event with no draw.
+    /// Un-cut this event's draw: retire its current revision and keep its history.
     ///
-    /// The way back from a draw the director does not want. The event, its entrants and the
-    /// rest of the tournament are untouched — only the fixtures go — and the director is
-    /// free to change the groups and cut again.
+    /// Previous fixtures, participation, and draw configuration remain recorded.
+    /// The event has no current draw, and the director may edit its configuration
+    /// and cut again.
     ///
     /// Refused with a `409` on the same **evidence of play** that refuses a re-cut: a
-    /// fixture with a recorded winner, or one that has become a real match. Undoing a draw
-    /// that has been played would delete the fixtures those results belong to.
+    /// fixture with a recorded winner, or one that has become a real match. Retaining
+    /// history does not permit a re-cut or un-cut after play.
     ///
     /// An event with **no draw is already in the state this asks for**, so removing a draw
     /// that was never cut is a `204`, not a `404`: this is a DELETE, and it is idempotent.
+    ///
+    /// Refused with a `409` while another draw change for this account is in progress.
+    /// Retry after that operation finishes.
     ///
     /// Owner-only.
     ///
@@ -14469,6 +14523,12 @@ internal enum Operations {
     /// into the account that owns the address and the caller is signed in as that
     /// account. See ``_confirm_account_merge``.
     ///
+    /// Confirmations that merge a guest account admit one attempt at a time and at most
+    /// five attempts per bearer per hour. A busy or exhausted credential returns
+    /// 429 without consuming the link; unavailable retry-budget storage returns
+    /// 503. Both responses include Retry-After. Ordinary confirmations keep their
+    /// existing availability.
+    ///
     /// A link a newer resend replaced is distinguishable from every other dead
     /// link: it 400s with a structured ``{"code": "replaced", "message": ...}``
     /// detail (#1616), the confirm-flow counterpart of ``consume_login_token``'s
@@ -15027,6 +15087,11 @@ internal enum Operations {
     /// on it, which makes it the third writer of that pair alongside
     /// ``confirm_email`` and ``auth0_provisioning._provision_user``. All three
     /// stamp them together, so the invariant holds: email set implies confirmed.
+    /// Login links that would merge a guest admit one attempt at a time and five
+    /// attempts per bearer per hour. Busy or exhausted credentials return 429;
+    /// unavailable retry storage returns 503. Both include Retry-After and leave
+    /// the link valid. Ordinary sign-in and explicit skip-merge keep their
+    /// existing availability.
     ///
     /// - Remark: HTTP `POST /v1/login/consume`.
     /// - Remark: Generated from `#/paths//v1/login/consume/post(consume_login_token_v1_login_consume_post)`.
@@ -24471,6 +24536,11 @@ internal enum Operations {
     }
     /// Delete Tournament
     ///
+    /// Delete the owned tournament.
+    ///
+    /// Another retained-history operation for this account causes a prompt 409;
+    /// retry after it finishes.
+    ///
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/delete(delete_tournament_v1_tournaments__tournament_id__delete)`.
     internal enum DeleteTournamentV1TournamentsTournamentIdDelete {
@@ -24642,6 +24712,9 @@ internal enum Operations {
     /// backwards, skipping a stage, moving out of the terminal `archived`, and
     /// re-asserting the status the tournament already holds — a request to publish
     /// an already-published tournament is a stale client, not a no-op.
+    ///
+    /// Every status transition returns `409` while another tournament operation by
+    /// this account is in progress. Retry after that operation finishes.
     ///
     /// **Going live has a precondition** (ADR-0786): the tournament must have at least
     /// one event, and every event must have a **draw** whose fixtures seat exactly its
@@ -25278,6 +25351,11 @@ internal enum Operations {
     }
     /// Delete Event
     ///
+    /// Delete the owned event.
+    ///
+    /// Another retained-history operation for this account causes a prompt 409;
+    /// retry after it finishes.
+    ///
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/events/{event_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/delete(delete_event_v1_tournaments__tournament_id__events__event_id__delete)`.
     internal enum DeleteEventV1TournamentsTournamentIdEventsEventIdDelete {
@@ -25707,10 +25785,9 @@ internal enum Operations {
     /// Withdraw an entry from an event — your own, or (as the tournament's owner) any
     /// entry in it.
     ///
-    /// The entry is **soft-deleted**: its status flips to `withdrawn` and the row
-    /// survives, so the event keeps its withdrawal history — and, because the
-    /// uniqueness guard is a *partial* index over active entries only, the player is
-    /// free to enter the same event again afterwards.
+    /// Withdrawal closes registration and all active stage participation, preserving
+    /// the entry, historical periods, and fixture references. Registering again uses
+    /// the same entry ID and requires an explicit draw re-cut to restore a seat.
     ///
     /// **Who may withdraw an entry** (ADR-0784) mirrors who may create one: the player
     /// themselves, or the tournament's **owner**, for any entry in it. Anybody else
@@ -25915,17 +25992,18 @@ internal enum Operations {
     /// the seeding. Nothing else creates fixtures, and going live requires every event to
     /// have one (ADR-0786).
     ///
-    /// **Re-cutting replaces the draw wholesale.** The previous fixtures are deleted and a
-    /// fresh set is planned from the event's *current* active entrants — the old ones are
-    /// not patched, and their ids do not survive. That is the point: a draw is a plan made
-    /// against a field, and once the field has changed (somebody entered, somebody
-    /// withdrew) the whole plan is re-made, group sizes and seeding included.
+    /// **Re-cutting creates a new event-wide draw revision.** Previous fixtures and
+    /// participation remain as retired history. A fresh set is planned from the
+    /// event's current registered field, including its group sizes and seeding.
+    /// Scheduling, results, and advancement use only the current revision.
     ///
     /// Entrants are ordered by **seed** ascending where one is set, then by **registration
     /// order**. Nothing is random, so the same field always cuts the same draw.
     ///
-    /// Refused with a `409` once the draw shows any **evidence of play** — any fixture with
-    /// a recorded winner, or any fixture that has become a real match. A re-cut would throw
+    /// Refused with a `409` while another draw change is in progress for this account;
+    /// retry after that operation finishes. Also refused once the draw shows any **evidence
+    /// of play** — any fixture with a recorded winner, or any fixture that has become
+    /// a real match. A re-cut would throw
     /// those away, and a draw must never silently eat a score.
     ///
     /// Refused with a `422` when this event cannot produce a draw at all: it has
@@ -26128,18 +26206,21 @@ internal enum Operations {
     }
     /// Uncut Event Draw
     ///
-    /// Un-cut this event's draw: delete its fixtures, leaving the event with no draw.
+    /// Un-cut this event's draw: retire its current revision and keep its history.
     ///
-    /// The way back from a draw the director does not want. The event, its entrants and the
-    /// rest of the tournament are untouched — only the fixtures go — and the director is
-    /// free to change the groups and cut again.
+    /// Previous fixtures, participation, and draw configuration remain recorded.
+    /// The event has no current draw, and the director may edit its configuration
+    /// and cut again.
     ///
     /// Refused with a `409` on the same **evidence of play** that refuses a re-cut: a
-    /// fixture with a recorded winner, or one that has become a real match. Undoing a draw
-    /// that has been played would delete the fixtures those results belong to.
+    /// fixture with a recorded winner, or one that has become a real match. Retaining
+    /// history does not permit a re-cut or un-cut after play.
     ///
     /// An event with **no draw is already in the state this asks for**, so removing a draw
     /// that was never cut is a `204`, not a `404`: this is a DELETE, and it is idempotent.
+    ///
+    /// Refused with a `409` while another draw change for this account is in progress.
+    /// Retry after that operation finishes.
     ///
     /// Owner-only.
     ///

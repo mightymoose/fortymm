@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.draws import (
+    DrawActorBusy,
     DrawError,
     draw_error_detail,
 )
@@ -223,7 +224,8 @@ def _address_not_geocodable() -> HTTPException:
 # queue-down 503, and the ``DrawError`` family's 422 — stay inline in their adapters,
 # because each is one adapter's alone.
 _TournamentWriteError = (
-    TournamentNotFoundError
+    DrawActorBusy
+    | TournamentNotFoundError
     | NotTournamentOwnerError
     | EventNotFoundError
     | EventFormatMembershipError
@@ -232,6 +234,7 @@ _TournamentWriteError = (
     | LeagueNotEditableError
 )
 _TOURNAMENT_WRITE_ERRORS = (
+    DrawActorBusy,
     EventFormatMembershipError,
     TournamentNotFoundError,
     NotTournamentOwnerError,
@@ -249,6 +252,8 @@ def _map_tournament_write_error(exc: _TournamentWriteError) -> HTTPException:
     created."``, ``EventNotFoundError`` → 404 ``"Event not found."``, and both
     ``DrawUnderWayError`` and ``LeagueNotEditableError`` → 409 with their own
     carried, domain-authored sentence (``str(exc)``)."""
+    if isinstance(exc, DrawActorBusy):
+        return HTTPException(status_code=409, detail=draw_error_detail(exc))
     if isinstance(exc, TournamentNotFoundError):
         return HTTPException(status_code=404, detail="Tournament not found.")
     if isinstance(exc, NotTournamentOwnerError):
@@ -602,6 +607,11 @@ async def delete_tournament(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> Response:
+    """Delete the owned tournament.
+
+    Another retained-history operation for this account causes a prompt 409;
+    retry after it finishes.
+    """
     # Thin adapter over the transport-neutral ``delete_tournament`` verb: it owns
     # the load-lock, the owner gate and the delete, and signals each refusal with a
     # domain exception. This handler maps each back to the exact status + body it
@@ -617,6 +627,8 @@ async def delete_tournament(
         # The shared arms: the 404 (absent) and the 403 (not the owner) map
         # identically across the owner-only writes.
         raise _map_tournament_write_error(exc) from exc
+    except DrawActorBusy as error:
+        raise _draw_refusal(error) from error
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -652,6 +664,9 @@ async def create_tournament_transition(
     re-asserting the status the tournament already holds — a request to publish
     an already-published tournament is a stale client, not a no-op.
 
+    Every status transition returns `409` while another tournament operation by
+    this account is in progress. Retry after that operation finishes.
+
     **Going live has a precondition** (ADR-0786): the tournament must have at least
     one event, and every event must have a **draw** whose fixtures seat exactly its
     current entrants. Three things are refused with a `409` that names the events at
@@ -682,6 +697,8 @@ async def create_tournament_transition(
         tournament = await transition_tournament(
             db, tournament_id=tournament_id, actor=current_user, to=payload.to
         )
+    except DrawActorBusy as error:
+        raise _draw_refusal(error) from error
     except _TOURNAMENT_WRITE_ERRORS as exc:
         # The shared arms: the 404 (absent) and the 403 (not the owner), judged in that
         # order by the locked owner-loader — so a stranger never learns a tournament's
@@ -993,6 +1010,11 @@ async def delete_event(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> Response:
+    """Delete the owned event.
+
+    Another retained-history operation for this account causes a prompt 409;
+    retry after it finishes.
+    """
     # Thin adapter over the transport-neutral ``delete_event`` verb: it owns the
     # ``FOR UPDATE`` owner-load (404 tournament → 403 not-owner), the event load (404
     # event) and the delete, and signals each refusal with a domain exception. This
@@ -1009,6 +1031,8 @@ async def delete_event(
         )
     except _TOURNAMENT_WRITE_ERRORS as exc:
         raise _map_tournament_write_error(exc) from exc
+    except DrawActorBusy as error:
+        raise _draw_refusal(error) from error
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -1179,10 +1203,9 @@ async def withdraw_from_event(
     """Withdraw an entry from an event — your own, or (as the tournament's owner) any
     entry in it.
 
-    The entry is **soft-deleted**: its status flips to `withdrawn` and the row
-    survives, so the event keeps its withdrawal history — and, because the
-    uniqueness guard is a *partial* index over active entries only, the player is
-    free to enter the same event again afterwards.
+    Withdrawal closes registration and all active stage participation, preserving
+    the entry, historical periods, and fixture references. Registering again uses
+    the same entry ID and requires an explicit draw re-cut to restore a seat.
 
     **Who may withdraw an entry** (ADR-0784) mirrors who may create one: the player
     themselves, or the tournament's **owner**, for any entry in it. Anybody else
@@ -1253,7 +1276,10 @@ async def withdraw_from_event(
 
 
 def _draw_refusal(error: DrawError) -> HTTPException:
-    """The 422 for a draw the domain will not produce — in words a director can read.
+    """A known draw refusal in words a director can read.
+
+    An in-flight cut for the same account is a retryable 409. Other domain
+    refusals require changes to the requested draw and remain 422.
 
     A ``DrawError`` is not a bug: it is the domain saying that what was asked for is not
     a competition (``DegenerateDraw``) or is not a shape a fixture can seat
@@ -1269,7 +1295,10 @@ def _draw_refusal(error: DrawError) -> HTTPException:
     cut ahead of time to see whether it would succeed, so the two call sites' copy
     cannot drift apart. See that function's docstring for what each error composes to.
     """
-    return HTTPException(status_code=422, detail=draw_error_detail(error))
+    return HTTPException(
+        status_code=409 if isinstance(error, DrawActorBusy) else 422,
+        detail=draw_error_detail(error),
+    )
 
 
 # The play-evidence gate, the owner-scoped locking load, and the ``cut_draw`` /
@@ -1301,17 +1330,18 @@ async def cut_event_draw(
     the seeding. Nothing else creates fixtures, and going live requires every event to
     have one (ADR-0786).
 
-    **Re-cutting replaces the draw wholesale.** The previous fixtures are deleted and a
-    fresh set is planned from the event's *current* active entrants — the old ones are
-    not patched, and their ids do not survive. That is the point: a draw is a plan made
-    against a field, and once the field has changed (somebody entered, somebody
-    withdrew) the whole plan is re-made, group sizes and seeding included.
+    **Re-cutting creates a new event-wide draw revision.** Previous fixtures and
+    participation remain as retired history. A fresh set is planned from the
+    event's current registered field, including its group sizes and seeding.
+    Scheduling, results, and advancement use only the current revision.
 
     Entrants are ordered by **seed** ascending where one is set, then by **registration
     order**. Nothing is random, so the same field always cuts the same draw.
 
-    Refused with a `409` once the draw shows any **evidence of play** — any fixture with
-    a recorded winner, or any fixture that has become a real match. A re-cut would throw
+    Refused with a `409` while another draw change is in progress for this account;
+    retry after that operation finishes. Also refused once the draw shows any **evidence
+    of play** — any fixture with a recorded winner, or any fixture that has become
+    a real match. A re-cut would throw
     those away, and a draw must never silently eat a score.
 
     Refused with a `422` when this event cannot produce a draw at all: it has
@@ -1365,18 +1395,21 @@ async def uncut_event_draw(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> Response:
-    """Un-cut this event's draw: delete its fixtures, leaving the event with no draw.
+    """Un-cut this event's draw: retire its current revision and keep its history.
 
-    The way back from a draw the director does not want. The event, its entrants and the
-    rest of the tournament are untouched — only the fixtures go — and the director is
-    free to change the groups and cut again.
+    Previous fixtures, participation, and draw configuration remain recorded.
+    The event has no current draw, and the director may edit its configuration
+    and cut again.
 
     Refused with a `409` on the same **evidence of play** that refuses a re-cut: a
-    fixture with a recorded winner, or one that has become a real match. Undoing a draw
-    that has been played would delete the fixtures those results belong to.
+    fixture with a recorded winner, or one that has become a real match. Retaining
+    history does not permit a re-cut or un-cut after play.
 
     An event with **no draw is already in the state this asks for**, so removing a draw
     that was never cut is a `204`, not a `404`: this is a DELETE, and it is idempotent.
+
+    Refused with a `409` while another draw change for this account is in progress.
+    Retry after that operation finishes.
 
     Owner-only.
     """
@@ -1384,8 +1417,7 @@ async def uncut_event_draw(
     # row lock, the owner gate, the event-under-tournament load, the play-evidence
     # gate, the ``uncut_draw`` core and the ``had_draw``-gated re-solve trigger, and
     # signals each refusal with a domain exception. This handler maps each back to the
-    # exact status + body it produced before, so the wire contract is unchanged (the
-    # un-cut never produces a ``DrawError`` — it only deletes):
+    # corresponding status and human-readable detail:
     #
     #   TournamentNotFoundError  -> 404 "Tournament not found."
     #   EventNotFoundError       -> 404 "Event not found."
@@ -1396,9 +1428,9 @@ async def uncut_event_draw(
             db, tournament_id=tournament_id, event_id=event_id, actor=current_user
         )
     except _TOURNAMENT_WRITE_ERRORS as exc:
-        # Shared arms only — the un-cut never produces a ``DrawError`` (it only
-        # deletes), so every refusal it can raise maps through the shared adapter.
         raise _map_tournament_write_error(exc) from exc
+    except DrawError as error:
+        raise _draw_refusal(error) from error
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

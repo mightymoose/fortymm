@@ -3195,7 +3195,7 @@ async def test_build_cut_a_draw_error_nobody_wrote_copy_for_refuses_without_leak
         """The DrawError of some slice that has not been written."""
 
     async def _raise_an_unknown_draw_error(
-        db: AsyncSession, event: TournamentEvent
+        db: AsyncSession, event: TournamentEvent, *, actor_id: uuid.UUID | None = None
     ) -> None:
         raise SwissRoundNotSettled(leaked)
 
@@ -5357,3 +5357,77 @@ async def test_transferred_tournament_mutations_keep_historical_creator(
         data = result.structuredContent
     assert data["created_by_username"] == "original-director"
     assert data["can_edit"] is True
+
+
+@pytest.mark.parametrize(
+    "setting,budget,message",
+    [
+        ("MAX_FIXTURES_PER_CUT", 1, "1 fixtures per cut"),
+        ("MAX_DRAW_CONFIGURATION_BYTES", 64, "64 configuration bytes per cut"),
+    ],
+)
+async def test_build_cut_storage_limit_raises_actionable_tool_error(
+    db_session: AsyncSession,
+    default_league: League,
+    monkeypatch: pytest.MonkeyPatch,
+    setting: str,
+    budget: int,
+    message: str,
+) -> None:
+    from app import tournament_draw_limits
+
+    owner = await make_user(db_session, "mcp-draw-storage-limit")
+    raw = await _mint(db_session, owner)
+    _, event = await _seed_drawable_tournament(db_session, owner, default_league)
+    monkeypatch.setattr(tournament_draw_limits, setting, budget)
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match=message):
+            await client.call_tool("build_cut", {"event_id": str(event.id)})
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    [
+        "build_cut",
+        "uncut",
+        "delete_event",
+        "delete_tournament",
+        "transition_tournament",
+        "edit_tournament",
+        "request_schedule_solve",
+    ],
+)
+async def test_draw_change_busy_actor_returns_actionable_refusal(
+    db_session: AsyncSession, engine, default_league: League, tool_name: str
+) -> None:
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.tournament_draw_limits import lock_draw_actor
+
+    owner = await make_user(db_session, "mcp-busy-draw-owner")
+    raw = await _mint(db_session, owner)
+    tournament, event = await _seed_drawable_tournament(
+        db_session, owner, default_league
+    )
+    actor_id, event_id = owner.id, event.id
+    arguments: dict[str, object] = {"event_id": str(event_id)}
+    if tool_name in ("delete_event", "delete_tournament"):
+        arguments["tournament_id"] = str(tournament.id)
+    if tool_name == "delete_tournament":
+        arguments.pop("event_id")
+    if tool_name == "transition_tournament":
+        arguments = {"tournament_id": str(tournament.id), "to": "live"}
+    if tool_name in ("edit_tournament", "request_schedule_solve"):
+        arguments = {"tournament_id": str(tournament.id)}
+    if tool_name == "edit_tournament":
+        arguments["updates"] = {}
+    sessions = async_sessionmaker(engine)
+    async with sessions() as gate:
+        await lock_draw_actor(gate, actor_id)
+        async with _mcp_client(raw) as client, client:
+            async with asyncio.timeout(1):
+                with pytest.raises(ToolError, match="already in progress.*Retry"):
+                    await client.call_tool(tool_name, arguments)
+        await gate.rollback()
