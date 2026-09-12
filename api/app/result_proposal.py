@@ -326,7 +326,8 @@ async def propose_result(
     match.results.append(result)
     if supersedes_result_id is not None:
         # Persist the validated immutable correction before replacing its board.
-        # Its database trigger retains game identities even after cancellation.
+        # New score rows must match this standing correction after cancellation;
+        # the proposal alone never records play or authorizes arbitrary scores.
         try:
             await _commit_canonical_games(db, match, compacted)
         except IntegrityError as exc:

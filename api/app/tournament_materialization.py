@@ -44,6 +44,7 @@ from app.models import (
     TournamentEvent,
     TournamentFixture,
 )
+from app.models.tournament import EventLifecycleState
 from app.schemas.tournament import MatchSettings as EventMatchSettings
 from app.tournament_draws import (
     active_draw_entrants,
@@ -136,6 +137,8 @@ async def materialize_event(
     the event permanently. Only swiss declares it, so the other three still cost exactly
     the one fixture statement they always cost.
     """
+    if event.lifecycle_state is EventLifecycleState.cancelled:
+        return
     (
         fixtures,
         completed_match_ids,

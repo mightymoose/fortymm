@@ -47,6 +47,8 @@ It preserves prior progress and match records, blocks new game scoring, and allo
 correction of previously recorded scores and results under their existing
 authority rules. Corrections never reopen a cancelled event. The internal backend
 operation and database support do not add a public cancellation endpoint or UI.
+Cancelled events are excluded from new match materialization, scheduling and calls;
+their existing match, placement and call records remain retained.
 
 Archive records when a tournament was put away. It does not finish or cancel
 unfinished events and does not rewrite their state or history. Cancelled events

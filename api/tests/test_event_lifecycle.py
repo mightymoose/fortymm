@@ -380,6 +380,13 @@ async def test_attaching_previously_scored_match_observes_play_without_guessing_
     assert score.status_code == 201, score.text
     import uuid
 
+    first_saved_at = await db_session.scalar(
+        text(
+            "SELECT min(s.created_at) FROM match_game_scores s "
+            "JOIN match_games g ON g.id=s.match_game_id WHERE g.match_id=:id"
+        ),
+        {"id": uuid.UUID(match_id)},
+    )
     await attach_match_to_director_tournament(
         db_session,
         uuid.UUID(match_id),
@@ -401,7 +408,7 @@ async def test_attaching_previously_scored_match_observes_play_without_guessing_
         )
     ).one()
     assert state == "in_progress"
-    assert observation is not None
+    assert observation == first_saved_at
     assert actual is None
 
 
@@ -920,3 +927,108 @@ async def test_cancelled_sql_proposal_cannot_introduce_unrecorded_play(db_sessio
                     ),
                 },
             )
+
+
+async def test_cancelled_counter_claim_does_not_record_unscored_games(db_session):
+    import json
+
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    from app.event_lifecycle import cancel_event
+    from app.result_proposal import propose_result
+    from app.schemas.match import MatchResultsGameWrite
+    from tests._helpers import directed_tournament_match
+
+    match, director = await directed_tournament_match(
+        db_session, tag="cancel-counter-ledger", best_of=3
+    )
+    participants = sorted(match.sides, key=lambda side: side.side_number)
+    games = [
+        MatchResultsGameWrite(game_number=n, side_1_points=11, side_2_points=5)
+        for n in (1, 2)
+    ]
+    proposed = await propose_result(
+        db_session,
+        match.id,
+        participants[0].players[0].user_id,
+        games=games,
+        supersedes_result_id=None,
+    )
+    event_id, tournament_id = (
+        await db_session.execute(
+            text(
+                "SELECT scope_event_id,scope_tournament_id FROM tournament_fixtures "
+                "WHERE match_id=:id"
+            ),
+            {"id": match.id},
+        )
+    ).one()
+    await cancel_event(
+        db_session, tournament_id=tournament_id, event_id=event_id, actor=director
+    )
+    await db_session.commit()
+    expanded = [
+        games[0].model_dump(),
+        {"game_number": 2, "side_1_points": 5, "side_2_points": 11},
+        {"game_number": 3, "side_1_points": 11, "side_2_points": 5},
+    ]
+    counter_player = participants[1].players[0].user_id
+    await db_session.execute(
+        text(
+            "INSERT INTO match_results "
+            "(match_id,submitted_by_user_id,submitted_for_player_id,"
+            "supersedes_result_id,games) "
+            "VALUES (:match,:actor,:actor,:parent,CAST(:games AS jsonb))"
+        ),
+        {
+            "match": match.id,
+            "actor": counter_player,
+            "parent": proposed.match.results[0].id,
+            "games": json.dumps(expanded),
+        },
+    )
+    await db_session.commit()
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT count(*) FROM tournament_event_recorded_games WHERE "
+                "match_id=:id AND game_number=3"
+            ),
+            {"id": match.id},
+        )
+        == 0
+    )
+    game_id = await db_session.scalar(
+        text(
+            "INSERT INTO match_games (match_id,game_number) VALUES (:id,3) RETURNING id"
+        ),
+        {"id": match.id},
+    )
+    with pytest.raises(IntegrityError, match="cancelled"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "INSERT INTO match_game_scores "
+                    "(match_game_id,side_1_points,side_2_points) VALUES (:id,11,8)"
+                ),
+                {"id": game_id},
+            )
+    # Only a real score matching the standing correction may extend recorded play.
+    await db_session.execute(
+        text(
+            "INSERT INTO match_game_scores "
+            "(match_game_id,side_1_points,side_2_points) VALUES (:id,11,5)"
+        ),
+        {"id": game_id},
+    )
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT count(*) FROM tournament_event_recorded_games WHERE "
+                "match_id=:id AND game_number=3"
+            ),
+            {"id": match.id},
+        )
+        == 1
+    )

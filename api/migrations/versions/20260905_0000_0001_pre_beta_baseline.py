@@ -1557,6 +1557,19 @@ EVENT_LIFECYCLE_DDL = (
                         AND (game->>'side_1_points')::integer=NEW.side_1_points
                         AND (game->>'side_2_points')::integer=NEW.side_2_points
                 )
+            ) AND NOT EXISTS (
+                SELECT 1 FROM match_results r,
+                    jsonb_array_elements(r.games) game
+                WHERE r.match_id=match_uuid
+                    AND r.supersedes_result_id IS NOT NULL
+                    AND r.accepted_at IS NULL
+                    AND NOT EXISTS (SELECT 1 FROM match_results successor
+                        WHERE successor.supersedes_result_id=r.id)
+                    AND NOT EXISTS (SELECT 1 FROM match_official_results official
+                        WHERE official.match_id=match_uuid)
+                    AND (game->>'game_number')::integer=game_no
+                    AND (game->>'side_1_points')::integer=NEW.side_1_points
+                    AND (game->>'side_2_points')::integer=NEW.side_2_points
             ) THEN
             RAISE EXCEPTION 'cancelled events cannot record new games'
                 USING ERRCODE='23514';
@@ -1599,7 +1612,11 @@ EVENT_LIFECYCLE_DDL = (
             JOIN match_game_scores s ON s.match_game_id=g.id
             WHERE g.match_id=NEW.match_id ON CONFLICT DO NOTHING;
             UPDATE tournament_events
-            SET first_recorded_play_at=clock_timestamp(),
+            SET first_recorded_play_at=(
+                    SELECT min(s.created_at) FROM match_games g
+                    JOIN match_game_scores s ON s.match_game_id=g.id
+                    WHERE g.match_id=NEW.match_id
+                ),
                 lifecycle_state=CASE WHEN lifecycle_state='unstarted'
                     THEN 'in_progress'::event_lifecycle_state ELSE lifecycle_state END
             WHERE id=NEW.scope_event_id AND first_recorded_play_at IS NULL;
@@ -1653,12 +1670,6 @@ EVENT_LIFECYCLE_DDL = (
             ) THEN
             RAISE EXCEPTION 'cancelled events cannot propose unrecorded play'
                 USING ERRCODE='23514';
-        END IF;
-        IF event_uuid IS NOT NULL AND NEW.supersedes_result_id IS NOT NULL THEN
-            INSERT INTO tournament_event_recorded_games
-                (match_id,game_number,event_id)
-            SELECT NEW.match_id,(game->>'game_number')::integer,event_uuid
-            FROM jsonb_array_elements(NEW.games) game ON CONFLICT DO NOTHING;
         END IF;
         RETURN NEW;
     END $$

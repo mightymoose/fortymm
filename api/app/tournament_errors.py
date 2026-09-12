@@ -646,11 +646,13 @@ class FixturePlacementFrozenError(Exception):
     longer be changed."``, via ``str(exc)``) and the MCP tool its equivalent
     ``ToolError`` prose. Never an ``HTTPException``."""
 
-    def __init__(self, match_status: str) -> None:
-        super().__init__(
-            f"This fixture's match is already {match_status}, so its placement can "
-            "no longer be changed."
+    def __init__(self, match_status: str, *, event_cancelled: bool = False) -> None:
+        subject = (
+            "This fixture's event is cancelled"
+            if event_cancelled
+            else f"This fixture's match is already {match_status}"
         )
+        super().__init__(f"{subject}, so its placement can no longer be changed.")
         self.match_status = match_status
 
 

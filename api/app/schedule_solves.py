@@ -218,6 +218,7 @@ from app.models import (
     TournamentFixture,
     TournamentStatus,
 )
+from app.models.tournament import EventLifecycleState
 from app.rq_async import run_async_db_job
 from app.scheduling import (
     REST_MIN,
@@ -1000,7 +1001,10 @@ async def _load_solver_inputs(
         (
             await db.execute(
                 select(TournamentEvent)
-                .where(TournamentEvent.tournament_id == tournament_id)
+                .where(
+                    TournamentEvent.tournament_id == tournament_id,
+                    TournamentEvent.lifecycle_state != EventLifecycleState.cancelled,
+                )
                 .order_by(TournamentEvent.id)
             )
         )

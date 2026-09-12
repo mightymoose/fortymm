@@ -42,6 +42,7 @@ from app.models import (
     TournamentStatus,
     User,
 )
+from app.models.tournament import EventLifecycleState
 from app.schedule_solves import request_solve
 from app.schemas.tournament import TournamentCreate, named_list
 from app.tournament_authority import require_owner
@@ -417,7 +418,10 @@ async def _enforce_ready_to_go_live(db: AsyncSession, tournament: Tournament) ->
         (
             await db.execute(
                 select(TournamentEvent)
-                .where(TournamentEvent.tournament_id == tournament.id)
+                .where(
+                    TournamentEvent.tournament_id == tournament.id,
+                    TournamentEvent.lifecycle_state != EventLifecycleState.cancelled,
+                )
                 # The page's order, so the refusal names the events in the order the
                 # director is looking at them.
                 .order_by(TournamentEvent.created_at)
