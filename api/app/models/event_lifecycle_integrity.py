@@ -301,6 +301,17 @@ EVENT_LIFECYCLE_DDL = (
     CREATE FUNCTION preserve_recorded_score_identity() RETURNS trigger
     LANGUAGE plpgsql AS $$
     BEGIN
+        IF NEW.created_at > clock_timestamp() THEN
+            RAISE EXCEPTION 'score creation time cannot be in the future'
+                USING ERRCODE='23514';
+        END IF;
+        IF TG_OP = 'INSERT' THEN
+            RETURN NEW;
+        END IF;
+        IF NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+            RAISE EXCEPTION 'score creation time is immutable'
+                USING ERRCODE='23514';
+        END IF;
         IF NEW.match_game_id <> OLD.match_game_id THEN
             RAISE EXCEPTION 'a recorded score preserves its game identity'
                 USING ERRCODE='23514';
@@ -309,7 +320,7 @@ EVENT_LIFECYCLE_DDL = (
     END $$
     """,
     """
-    CREATE TRIGGER preserve_recorded_score_identity BEFORE UPDATE
+    CREATE TRIGGER preserve_recorded_score_identity BEFORE INSERT OR UPDATE
     ON match_game_scores FOR EACH ROW
     EXECUTE FUNCTION preserve_recorded_score_identity()
     """,

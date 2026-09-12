@@ -84,9 +84,15 @@ RECONCILIATION_DDL = (
             SELECT ARRAY[scope_event_id] INTO affected_events FROM tournament_fixtures
                 WHERE match_id=NEW.id;
         ELSE
-            IF TG_OP = 'UPDATE' AND NEW.match_id IS NOT DISTINCT FROM OLD.match_id
-                AND NEW.scope_event_id=OLD.scope_event_id
-                AND NEW.retired_at IS NOT DISTINCT FROM OLD.retired_at THEN
+            IF TG_OP = 'UPDATE' AND
+                ROW(NEW.match_id, NEW.scope_event_id, NEW.retired_at,
+                    NEW.entry_a_id, NEW.entry_b_id, NEW.stage_id,
+                    NEW.group_id, NEW.round)
+                IS NOT DISTINCT FROM
+                ROW(OLD.match_id, OLD.scope_event_id, OLD.retired_at,
+                    OLD.entry_a_id, OLD.entry_b_id, OLD.stage_id,
+                    OLD.group_id, OLD.round)
+            THEN
                 RETURN NULL;
             END IF;
             IF TG_OP <> 'DELETE' AND EXISTS (SELECT 1 FROM matches
@@ -120,7 +126,8 @@ RECONCILIATION_DDL = (
     """,
     """
     CREATE TRIGGER invalidate_attachment_event_reconciliation
-    AFTER INSERT OR UPDATE OF match_id, scope_event_id, retired_at OR DELETE
+    AFTER INSERT OR UPDATE OF match_id, scope_event_id, retired_at,
+        entry_a_id, entry_b_id, stage_id, group_id, round OR DELETE
     ON tournament_fixtures
     FOR EACH ROW EXECUTE FUNCTION invalidate_event_reconciliation()
     """,

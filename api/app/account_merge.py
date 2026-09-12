@@ -959,6 +959,12 @@ async def _resolve_entry_collisions(
     # Retire only unplayed draws whose active field changed. The shared operation
     # preserves the previous revision, fixtures and ended participation periods.
     await uncut_draw(db, unplayed_event_ids)
+    # Active registration is also a Swiss result input, even when a retained
+    # played draw needs no new pairing or schedule placement.
+    from app.event_lifecycle import reconcile_event
+
+    for event_id in sorted(collided_event_ids - unplayed_event_ids):
+        await reconcile_event(db, event_id)
 
     # The uncut arm's solve gate, AFTER the un-cut — uncut_event_draw's
     # doctrine: the former draw was retired, which frees this event's
