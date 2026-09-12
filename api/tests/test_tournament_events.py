@@ -46,6 +46,7 @@ from app.tournament_errors import (
     EventNotFoundError,
     EventReservationCapExceededError,
     GroupSetFrozenError,
+    MatchRulesFrozenError,
     NotTournamentOwnerError,
     TournamentNotFoundError,
 )
@@ -2091,3 +2092,24 @@ async def test_reservation_write_statement_count_does_not_drift(
 
     selects = [s for s in statements if s.strip().upper().startswith("SELECT")]
     assert len(selects) == EXPECTED_RESERVATION_WRITE_STATEMENTS, selects
+
+
+async def test_cut_draw_rejects_changed_match_rules(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    owner = await make_user(db_session, "frozen-match-rules-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_cut_event(db_session, tournament)
+    with pytest.raises(MatchRulesFrozenError, match="Uncut the draw first"):
+        await update_event(
+            db_session,
+            tournament_id=tournament.id,
+            event_id=event.id,
+            actor=owner,
+            updates=TournamentEventUpdate.model_validate(
+                {
+                    "lock_version": event.lock_version,
+                    "match_settings": {"rated": True, "length_games": 5},
+                }
+            ),
+        )

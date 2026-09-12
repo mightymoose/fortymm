@@ -38,7 +38,14 @@ from types import MappingProxyType
 from sqlalchemy import ColumnElement, exists, func, insert, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
+from sqlalchemy.orm.attributes import set_committed_value
 
+from app.competition_rules import (
+    effective_draw_settings,
+    format_rule_version,
+    snapshot_format_rules,
+    snapshot_match_rules,
+)
 from app.draws import (
     DrawConfig,
     DrawStrategy,
@@ -483,7 +490,7 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     group id.
 
     It does **not** carry the event's ``draw_type``, though it once did. The draw type
-    is what ``cut_draw`` picks the *strategy* with (``strategy_for_event(event)``), and
+    is what ``cut_draw`` picks the *strategy* from in the planning settings, and
     it does so before this config exists; copying it in here as well gave the domain
     a second place to learn a fact it had already acted on — one that no strategy read,
     and that a future one could read and be lied to by. See :class:`DrawConfig`.
@@ -542,8 +549,10 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
 
 
 def strategy_for_event(event: TournamentEvent) -> DrawStrategy:
-    """Parse this event's owned configuration and select its draw strategy."""
-    return strategy_for(draw_settings_of(event.draw_settings))
+    """Select the strategy from frozen rules, or planning settings before the cut."""
+    return strategy_for(
+        effective_draw_settings(event), version=format_rule_version(event)
+    )
 
 
 async def event_has_draw(db: AsyncSession, event_id: uuid.UUID) -> bool:
@@ -855,7 +864,7 @@ async def cut_draw(
     """
     if event.format is not EventFormat.singles:
         raise NonSinglesDraw(event.format)
-    strategy = strategy_for_event(event)
+    strategy = strategy_for(draw_settings_of(event.draw_settings))
     entrants = order_entrants(await active_draw_entrants(db, event.id))
     # The real-field re-derivation (see the docstring). ``group_count_for`` answers
     # ``1`` for every draw type but ``rr-then-ko``'s group stage (#1483's floor), and
@@ -931,10 +940,16 @@ async def cut_draw(
     revision = TournamentDrawRevision(
         event_id=event.id,
         configuration=configuration,
+        match_rules=snapshot_match_rules(event),
+        format_rules=snapshot_format_rules(event),
         created_by_account_id=actor_id,
     )
     db.add(revision)
     await db.flush()
+    event.current_rule_revision = revision
+    for stage in event.stages:
+        # The revision INSERT trigger already bound this persisted stage.
+        set_committed_value(stage, "rule_revision_id", revision.id)
     # A planned fixture's STAGE (ADR 20260815 decision 5) — taken from the fixture
     # itself (``PlannedFixture.stage``, the same :class:`~app.draws.FixtureStage`
     # projection the read side carries), never re-derived here.

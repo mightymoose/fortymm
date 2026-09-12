@@ -103,11 +103,6 @@ async def _build_standing_match(
     )
     db.add(result)
     await db.commit()
-    if window is None:
-        # Passing ``None`` to the constructor lets the column's 7-day
-        # server_default fill on INSERT; force the NULL with an explicit UPDATE.
-        settings.retirement_window = None
-        await db.commit()
     return match, result, poster, opponent
 
 

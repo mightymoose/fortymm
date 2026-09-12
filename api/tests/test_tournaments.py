@@ -6474,7 +6474,7 @@ async def _make_match(db_session: AsyncSession, creator: User, league: League) -
     broken.
     """
     match = Match(
-        match_settings=MatchSettings(team_size=1, best_of=5, affects_rating=False),
+        match_settings=MatchSettings(team_size=1, best_of=5, affects_rating=True),
         league_id=league.id,
         created_by_user_id=creator.id,
     )
@@ -12064,7 +12064,7 @@ async def _call_fixture_directly(
     tournament = await db_session.get(Tournament, uuid.UUID(tournament_id))
     assert tournament is not None
     match = Match(
-        match_settings=MatchSettings(team_size=1, best_of=1, affects_rating=False),
+        match_settings=MatchSettings(team_size=1, best_of=5, affects_rating=True),
         league_id=tournament.league_id,
         created_by_user_id=tournament.created_by_user_id,
         status=MatchStatus.in_progress,

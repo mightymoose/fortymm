@@ -648,14 +648,16 @@ async def _record_rating_change(
         completed_at = match.completed_at
         match.status = MatchStatus.in_progress
         match.completed_at = None
-        match.match_settings.best_of = 1
         await db_session.flush()
         proposed = await propose_result(
             db_session,
             match.id,
             players[0],
             games=[
-                MatchResultsGameWrite(game_number=1, side_1_points=11, side_2_points=4)
+                MatchResultsGameWrite(
+                    game_number=game_number, side_1_points=11, side_2_points=4
+                )
+                for game_number in range(1, match.match_settings.best_of // 2 + 2)
             ],
             supersedes_result_id=None,
         )

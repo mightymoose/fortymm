@@ -25,6 +25,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db import Base
 
 if TYPE_CHECKING:
+    from app.models.tournament_draw_revision import TournamentDrawRevision
     from app.models.tournament_entry import TournamentEntry
     from app.models.tournament_event_draw_settings import TournamentEventDrawSettings
     from app.models.tournament_event_reservation import TournamentEventReservation
@@ -387,6 +388,14 @@ class TournamentEvent(Base):
     )
 
     tournament: Mapped["Tournament"] = relationship(back_populates="events")
+
+    current_rule_revision: Mapped["TournamentDrawRevision | None"] = relationship(
+        primaryjoin="and_(TournamentEvent.id == TournamentDrawRevision.event_id, "
+        "TournamentDrawRevision.retired_at.is_(None))",
+        viewonly=True,
+        uselist=False,
+        lazy="joined",
+    )
 
     @property
     def draw_settings(self) -> "TournamentEventDrawSettings":

@@ -26,6 +26,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.advancement_decisions import record_side_fill
+from app.competition_rules import (
+    FrozenMatchRules,
+    effective_draw_settings,
+    match_rules_for_revision,
+)
 from app.draws import (
     FixtureStage,
     OrderedEntrant,
@@ -52,7 +57,6 @@ from app.models import (
     TournamentEvent,
     TournamentFixture,
 )
-from app.schemas.tournament import MatchSettings as EventMatchSettings
 from app.tournament_draws import (
     fixture_state,
     group_order,
@@ -162,7 +166,7 @@ async def materialize_event(
     strategy = strategy_for_event(event)
     game_counts = (
         await game_counts_by_match(db, completed_match_ids)
-        if reads_fixture_games(event.draw_settings.draw_type)
+        if reads_fixture_games(effective_draw_settings(event).draw_type)
         else {}
     )
     # The event's group order, resolved once and handed to every projection: it is what
@@ -193,7 +197,7 @@ async def materialize_event(
                 draw_revision_id=fixtures[0].draw_revision_id,
             )
         )
-        if reads_entrants(event.draw_settings.draw_type)
+        if reads_entrants(effective_draw_settings(event).draw_type)
         else ()
     )
     plan = strategy.advance(
@@ -252,7 +256,10 @@ async def materialize_event(
     if not ready_fixture_rows:
         return
     entry_users = await _entry_user_ids(db, ready_fixture_rows)
-    settings = EventMatchSettings.model_validate(event.match_settings)
+    rules_by_revision = {
+        revision_id: await match_rules_for_revision(db, revision_id)
+        for revision_id in {fixture.draw_revision_id for fixture in ready_fixture_rows}
+    }
     built: list[tuple[TournamentFixture, Match]] = []
     for fixture in ready_fixture_rows:
         # A ready fixture always has both sides known (that is what "ready" means); the
@@ -262,7 +269,8 @@ async def materialize_event(
             continue
         match = _build_match(
             tournament,
-            settings,
+            rules_by_revision[fixture.draw_revision_id],
+            source_rule_revision_id=fixture.draw_revision_id,
             side_1_user_id=entry_users[fixture.entry_a_id],
             side_2_user_id=entry_users[fixture.entry_b_id],
         )
@@ -470,8 +478,9 @@ def _apply_side_fill(fixture: TournamentFixture, fill: SideFill) -> None:
 
 def _build_match(
     tournament: Tournament,
-    settings: EventMatchSettings,
+    settings: FrozenMatchRules,
     *,
+    source_rule_revision_id: uuid.UUID,
     side_1_user_id: uuid.UUID,
     side_2_user_id: uuid.UUID,
 ) -> Match:
@@ -486,10 +495,9 @@ def _build_match(
     "score" rows (the fix for issue #1073). It carries the
     **tournament's** league and is created by the tournament **owner** (a tournament
     match has no player-initiator — the director's go-live created it; the field grants
-    no scoring rights, which are by side participation). Its ``MatchSettings`` copy the
-    only two things the event holds — ``best_of ← length_games``, ``affects_rating ←
-    rated`` — with ``team_size = 1`` and the model's default verification policy and
-    retirement window (the event has nothing else to copy).
+    no scoring rights, which are by side participation). Its immutable settings copy
+    every value from the fixture's retained rule revision, including verification and
+    retirement policy. Later defaults and planning edits cannot alter those values.
 
     **side 1 ← ``entry_a``, side 2 ← ``entry_b``** is a fixed convention, not a detail:
     it is what lets a completed match's winning ``side_number`` map back to the winning
@@ -497,9 +505,13 @@ def _build_match(
     """
     match = Match(
         match_settings=MatchSettings(
-            team_size=1,
-            best_of=settings.length_games,
-            affects_rating=settings.rated,
+            source_rule_revision_id=source_rule_revision_id,
+            rule_version=settings.rule_version,
+            team_size=settings.team_size,
+            best_of=settings.best_of,
+            affects_rating=settings.affects_rating,
+            verification_policy=settings.verification_policy,
+            retirement_window=settings.retirement_window,
         ),
         league_id=tournament.league_id,
         created_by_user_id=tournament.owner_account_id,

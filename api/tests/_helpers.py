@@ -8,7 +8,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any, Literal
 
@@ -19,16 +19,20 @@ from sqlalchemy import Select, event, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app import schedule_solves, scheduling
+from app.competition_rules import FrozenMatchRules, snapshot_format_rules
 from app.geocoding import FakeGeocoder, GeocodeResult
 from app.leagues import get_default_league
 from app.main import app as fastapi_app
-from app.match_creation import create_match
 from app.match_queries import match_eager_options
 from app.models import (
     DrawType,
     EventFormat,
     League,
     Match,
+    MatchSettings,
+    MatchSide,
+    MatchSidePlayer,
+    MatchStatus,
     Permission,
     RatingHistory,
     Role,
@@ -47,9 +51,11 @@ from app.models import (
     UserRole,
     VenueTable,
 )
+from app.models.tournament_draw_revision import TournamentDrawRevision
 from app.notifications.apns import Environment, SendOutcome, SendResult
 from app.notifications.dependencies import get_push_sender
 from app.notifications.jobs import DELIVER_NOTIFICATION_JOB
+from app.player_accounts import primary_player_id
 from app.scheduling import ScheduleSnapshot, SolveResult
 from app.schemas.notification import NotificationJob
 from app.schemas.tournament import draw_settings_from_storage
@@ -181,8 +187,9 @@ async def attach_match_to_director_tournament(
     director: User,
     p1: User,
     p2: User,
-    best_of: int = 5,
-    rated: bool = True,
+    best_of: int | None = None,
+    rated: bool | None = None,
+    draw_type: DrawType = DrawType.round_robin,
 ) -> Match:
     """Wire an ALREADY-CREATED match (``match_id``, between participants
     ``p1``/``p2``) onto a bare-minimum tournament/event/stage/group/fixture
@@ -209,6 +216,14 @@ async def attach_match_to_director_tournament(
     caller reads them)."""
     league = await get_default_league(db_session)
     assert league is not None, "the autouse default_league fixture seeds this"
+    match = (
+        await db_session.scalars(
+            select(Match).where(Match.id == match_id).options(*match_eager_options())
+        )
+    ).one()
+    rules = FrozenMatchRules.model_validate(match.match_settings, from_attributes=True)
+    assert best_of is None or best_of == rules.best_of
+    assert rated is None or rated == rules.affects_rating
 
     tournament = Tournament(
         name=f"{tag} Director Test Open",
@@ -222,18 +237,18 @@ async def attach_match_to_director_tournament(
         tournament_id=tournament.id,
         name="Singles",
         format=EventFormat.singles,
-        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
+        draw_settings=TournamentEventDrawSettings.for_draw_type(draw_type),
         max_players=None,
         entry_fee=Decimal("0.00"),
         timezone="America/Chicago",
         slot={"date": "2030-01-01", "start": "09:00", "end": "17:00"},
-        match_settings={"rated": rated, "length_games": best_of},
+        match_settings={"rated": rules.affects_rating, "length_games": rules.best_of},
     )
     db_session.add(event)
     await db_session.flush()
 
     stage = TournamentEventStage(event_id=event.id, position=0)
-    stage.draw_type = DrawType.round_robin
+    stage.draw_type = draw_type
     db_session.add(stage)
     await db_session.flush()
 
@@ -246,7 +261,19 @@ async def attach_match_to_director_tournament(
     db_session.add_all([entry_a, entry_b])
     await db_session.flush()
 
+    # Establish the complete rules before any fixture is attached, including a
+    # timeout policy a result-history scenario supplied at match creation.
+    revision = TournamentDrawRevision(
+        event_id=event.id,
+        created_by_account_id=director.id,
+        match_rules=rules.model_dump(mode="json"),
+        format_rules=snapshot_format_rules(event),
+    )
+    db_session.add(revision)
+    await db_session.flush()
+
     fixture = TournamentFixture(
+        draw_revision_id=revision.id,
         stage_id=stage.id,
         group_id=group.id,
         round=1,
@@ -271,16 +298,17 @@ async def directed_tournament_match(
     best_of: int = 5,
     rated: bool = True,
     director_is_participant: bool = False,
+    draw_type: DrawType = DrawType.round_robin,
+    retirement_window: timedelta | None = timedelta(days=7),
 ) -> tuple[Match, User]:
     """A best-of-``best_of`` match (rated by default) between two fresh
     participants, wired to a minimal tournament/event/stage/group/fixture chain
     so its creator resolves as the match's DIRECTOR (#1523) — the seed
     #1523's director-authorization tests build on.
 
-    Bypasses the draw/materialize/call pipeline entirely: the match is created
-    the ordinary way (``create_match``, which is born ``in_progress`` and
-    already scorable), and :func:`attach_match_to_director_tournament` wires a
-    bare-minimum tournament chain onto it after the fact.
+    Seeds the complete immutable match rules at creation and then attaches the
+    minimal tournament chain. Result tests can choose a short retirement window
+    without changing rules after a match exists.
 
     ``director_is_participant=True`` seats the returned director as one of the
     match's own two players (constraint 9's "a director who is also a
@@ -295,14 +323,26 @@ async def directed_tournament_match(
         else await make_user(db_session, f"{tag}-p1")
     )
     p2 = await make_user(db_session, f"{tag}-p2")
-    match = await create_match(
-        db_session,
-        creator=p1,
-        opponent_user_id=p2.id,
-        league_id=None,
-        best_of=best_of,
-        rated=rated,
+    league = await get_default_league(db_session)
+    assert league is not None
+    match = Match(
+        match_settings=MatchSettings(
+            team_size=1,
+            best_of=best_of,
+            affects_rating=rated,
+            retirement_window=retirement_window,
+        ),
+        league_id=league.id,
+        created_by_user_id=p1.id,
+        status=MatchStatus.in_progress,
     )
+    for number, participant in enumerate((p1, p2), start=1):
+        player_id = await primary_player_id(db_session, participant.id)
+        assert player_id is not None
+        side = MatchSide(match=match, side_number=number)
+        side.players = [MatchSidePlayer(match=match, user_id=player_id)]
+    db_session.add(match)
+    await db_session.flush()
     reloaded = await attach_match_to_director_tournament(
         db_session,
         match.id,
@@ -312,6 +352,7 @@ async def directed_tournament_match(
         p2=p2,
         best_of=best_of,
         rated=rated,
+        draw_type=draw_type,
     )
     return reloaded, director
 

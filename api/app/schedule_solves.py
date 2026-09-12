@@ -191,6 +191,7 @@ from sqlalchemy import exists, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import match_calls, required_repairs, scheduling
+from app.competition_rules import effective_match_settings
 from app.config import get_settings
 from app.match_calls import _wall_now
 from app.models import (
@@ -1116,7 +1117,7 @@ async def _load_solver_inputs(
     ] = [
         (
             event,
-            EventMatchSettings.model_validate(event.match_settings),
+            effective_match_settings(event),
             event_reservations(event),
         )
         for event in drawn_events

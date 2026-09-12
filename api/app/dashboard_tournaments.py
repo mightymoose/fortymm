@@ -38,6 +38,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.attention import list_attention_kind
+from app.competition_rules import effective_draw_settings, effective_match_settings
 from app.draws import group_label, seats_both_sides_at_cut
 from app.match_queries import current_game_number, match_eager_options
 from app.models import (
@@ -66,7 +67,6 @@ from app.schemas.dashboard import (
 from app.schemas.tournament import (
     Address,
     FixtureTimeRead,
-    MatchSettings,
     StandingsResultsRead,
     StandingsThenFinishesResultsRead,
     SwissStandingsResultsRead,
@@ -357,7 +357,7 @@ def _build_event(
 ) -> DashboardTournamentEvent:
     username_by_entry = {entrant.id: entrant.username for entrant in entrants}
     group_positions = {g.id: g.position for g in event_groups(event)}
-    settings = MatchSettings.model_validate(event.match_settings)
+    settings = effective_match_settings(event)
     # The draw type off the event's ``draw_settings`` row — its one home (ADR "an
     # event's draw configuration is a row, not a column"). Read once here and passed
     # down: the row rides along with the event on the panel's single entries query
@@ -368,7 +368,7 @@ def _build_event(
     # names each individual STAGE's own shape (what ``_round_label`` below reads, per
     # fixture, via ``stage_id``) — the two answer different questions and neither
     # substitutes for the other.
-    draw_type = event.draw_settings.draw_type
+    draw_type = effective_draw_settings(event).draw_type
 
     results = event_results(
         event,

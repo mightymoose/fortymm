@@ -19,7 +19,6 @@ from rq import Queue
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.match_creation import create_match
 from app.match_result_notifications import notify_result_accepted, notify_result_posted
 from app.models import (
     League,
@@ -58,21 +57,33 @@ def _decisive_board(winner_side: int) -> list[MatchResultsGameWrite]:
 
 
 async def _standing_singles_match(
-    db: AsyncSession, *, creator_name: str, opponent_name: str
+    db: AsyncSession,
+    *,
+    creator_name: str,
+    opponent_name: str,
+    retirement_window: timedelta = timedelta(days=7),
 ) -> tuple[Match, MatchResult, User, User]:
     """A rated singles match with a fresh standing (unaccepted) result posted
     by the creator — the real propose path, mirroring
     ``tests/test_accept_result_service.py``'s ``_propose_standing``."""
     creator = await make_user(db, creator_name)
     opponent = await make_user(db, opponent_name)
-    match = await create_match(
-        db,
-        creator=creator,
-        opponent_user_id=opponent.id,
-        league_id=None,
-        best_of=1,
-        rated=True,
+    match = Match(
+        match_settings=MatchSettings(
+            team_size=1,
+            best_of=1,
+            affects_rating=True,
+            retirement_window=retirement_window,
+        ),
+        created_by_user_id=creator.id,
+        league_id=await db.scalar(select(League.id).where(League.is_default.is_(True))),
+        status=MatchStatus.in_progress,
     )
+    for number, player in enumerate((creator, opponent), start=1):
+        side = MatchSide(match=match, side_number=number)
+        side.players = [MatchSidePlayer(match=match, user_id=player.id)]
+    db.add(match)
+    await db.commit()
     outcome = await propose_result(
         db,
         match.id,
@@ -267,6 +278,7 @@ async def test_review_prompt_hides_after_retirement_auto_accept(
         db_session,
         creator_name="retire-hide-creator",
         opponent_name="retire-hide-opp",
+        retirement_window=timedelta(microseconds=1),
     )
     notifications = _notifications(db_session)
     await notify_result_posted(notifications, match, creator.id)
@@ -276,7 +288,6 @@ async def test_review_prompt_hides_after_retirement_auto_accept(
     # Use a lapsed deadline on both application and database clocks.
     # The real job reloads by id, not by holding onto these objects.
     match_id, standing_id, opponent_id = match.id, standing.id, opponent.id
-    match.match_settings.retirement_window = timedelta(microseconds=1)
     await db_session.commit()
     db_session.expire_all()
 

@@ -90,6 +90,7 @@ class Match(Base):
     match_settings_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("match_settings.id", ondelete="RESTRICT"),
+        unique=True,
         nullable=False,
     )
     league_id: Mapped[uuid.UUID] = mapped_column(

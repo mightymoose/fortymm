@@ -230,9 +230,9 @@ DRAW_HISTORY_INTEGRITY_DDL = (
         RETURN OLD;
         END IF;
         IF (NEW.id, NEW.event_id, NEW.created_at, NEW.configuration,
-            NEW.created_by_account_id)
+            NEW.created_by_account_id, NEW.match_rules, NEW.format_rules)
         IS DISTINCT FROM (OLD.id, OLD.event_id, OLD.created_at, OLD.configuration,
-            OLD.created_by_account_id)
+            OLD.created_by_account_id, OLD.match_rules, OLD.format_rules)
         OR (OLD.retired_at IS NOT NULL AND
         (to_jsonb(NEW) - 'retained_fixture_count') IS DISTINCT FROM
         (to_jsonb(OLD) - 'retained_fixture_count'))

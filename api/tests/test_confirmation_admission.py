@@ -25,7 +25,11 @@ async def _conflicting_confirmation(api_client, db_session, purpose=EmailPurpose
     (fixture,) = await _cut(db_session, event)
     accounts = {guest_entry.id: guest, survivor_entry.id: survivor}
     match = await _record_match(
-        db_session, survivor, accounts[fixture.entry_a_id], accounts[fixture.entry_b_id]
+        db_session,
+        survivor,
+        accounts[fixture.entry_a_id],
+        accounts[fixture.entry_b_id],
+        affects_rating=True,
     )
     fixture.match_id = match.id
     raw = "recoverable-confirmation-conflict"

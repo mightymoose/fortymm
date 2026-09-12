@@ -1,5 +1,9 @@
 # 788. Tournament matches materialize at go-live; an event's results are a per-draw-type strategy
 
+[Competition rules freeze at draw-cut](20260912-competition-rules-freeze-at-draw-cut.md)
+supersedes materialization from current event settings and implicit defaults.
+Matches instead inherit the effective rules frozen with their draw revision.
+
 The database's absent partner model is superseded by [Entry members and lineup history](20260906-event-entries-have-members-and-match-lineups-have-history.md).
 Public doubles/team flows remain deferred; actual participants have preserved
 snapshots while results continue to be derived from current outcomes.

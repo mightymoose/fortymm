@@ -2148,7 +2148,14 @@ def ready_fixtures(fixtures: Sequence[FixtureState]) -> tuple[FixtureId, ...]:
     return tuple(f.fixture_id for f in ready)
 
 
-def strategy_for(settings: DrawSettingsWriteArm) -> DrawStrategy:
+def strategy_for(settings: DrawSettingsWriteArm, *, version: int = 1) -> DrawStrategy:
+    """Dispatch an explicit interpretation; semantic changes add a new version."""
+    if version != 1:
+        raise ValueError(f"Unsupported draw rule version: {version}")
+    return _strategy_for_v1(settings)
+
+
+def _strategy_for_v1(settings: DrawSettingsWriteArm) -> DrawStrategy:
     """The strategy that cuts and advances this draw configuration.
 
     **Total** — every arm returns a strategy, and there is no refusal arm left to reach.

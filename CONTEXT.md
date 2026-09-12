@@ -539,6 +539,18 @@ At most one revision is current. Re-cutting supersedes the old revision; removin
 a draw retires it. Earlier fixtures and participation remain historical records,
 excluded from current scheduling, standings and advancement.
 
+**Competition rules revision**:
+The immutable effective rules captured for every stage at one draw-cut, including
+match policies, defaults and the versioned interpretation of its format. Later
+matches, standings and advancement use these rules. Every successful recut has a
+distinct revision, even when its values are unchanged.
+
+**Match rules snapshot**:
+The immutable rules a match owns from creation. A tournament match inherits its
+competition rules revision; a standalone match captures its supplied rules and
+effective defaults. Neither changes when planning settings or defaults change.
+See [competition rules](docs/adr/20260912-competition-rules-freeze-at-draw-cut.md).
+
 **Fixture**:
 A planned pairing in a **draw**: a round and a position (and a **group**, when
 the draw is grouped), whose sides may still be unknown. A fixture is not a

@@ -298,7 +298,9 @@ async def test_a_knockout_stages_group_sorts_after_the_group_stages(
         tournament_id=tournament.id,
         name="Open Singles",
         format=EventFormat.singles,
-        draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.rr_then_ko),
+        draw_settings=TournamentEventDrawSettings.for_draw_type(
+            DrawType.rr_then_ko, settings={"qualifiers_per_group": 2}
+        ),
         max_players=64,
         entry_fee=Decimal("20.00"),
         timezone="America/Chicago",

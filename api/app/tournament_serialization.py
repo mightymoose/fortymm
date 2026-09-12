@@ -20,6 +20,7 @@ from typing import Any, assert_never, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.competition_rules import effective_draw_settings, format_rule_version
 from app.draws import (
     EntryId,
     GroupId,
@@ -292,7 +293,9 @@ def event_results(
     # ``results_for`` returns the union of the two implemented strategies; narrow it
     # with an exhaustive ``match`` so each shape builds its own input and serializes its
     # own way, and a third strategy is a type error here until it declares both.
-    strategy = results_for(e.draw_settings.draw_type)
+    strategy = results_for(
+        effective_draw_settings(e).draw_type, version=format_rule_version(e)
+    )
     match strategy:
         case RoundRobinResults():
             return _serialize_standings(

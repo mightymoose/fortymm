@@ -834,6 +834,10 @@ async def _wire_fixture_to_match(
     db_session.add(tournament)
     await db_session.flush()
 
+    settings = await db_session.scalar(
+        select(MatchSettings).join(Match).where(Match.id == uuid.UUID(match_id))
+    )
+    assert settings is not None
     stages = mint_stages(DrawType.single_elim)
     event = TournamentEvent(
         tournament_id=tournament.id,
@@ -844,7 +848,10 @@ async def _wire_fixture_to_match(
         entry_fee=Decimal("0.00"),
         timezone="America/Chicago",
         slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
-        match_settings={"rated": False, "length_games": 3},
+        match_settings={
+            "rated": settings.affects_rating,
+            "length_games": settings.best_of,
+        },
         stages=stages,
     )
     stages[0].groups = event_groups([], event=event, group_count=1)
@@ -5241,7 +5248,7 @@ async def test_place_fixture_played_out_fixture_raises_tool_error(
     tournament_id, fixture_id = tournament.id, fixture.id
     table_id = str(tournament.tables[1].id)
     match = Match(
-        match_settings=MatchSettings(team_size=1, best_of=5, affects_rating=False),
+        match_settings=MatchSettings(team_size=1, best_of=5, affects_rating=True),
         league_id=default_league.id,
         created_by_user_id=owner.id,
     )

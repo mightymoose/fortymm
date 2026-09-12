@@ -78,6 +78,7 @@ from app.tournament_errors import (
     EventNotFoundError,
     EventVersionConflictError,
     GroupSetFrozenError,
+    MatchRulesFrozenError,
 )
 from app.tournament_event_stages import mint_stages, remint_stages_in_place
 from app.tournament_queries import stage_ids_for_events
@@ -1089,6 +1090,12 @@ async def update_event(
     # the re-solve trigger): a draw is cut or removed only under this same lock, so
     # the answer cannot move between here and the commit.
     has_draw = await event_has_draw(db, event.id)
+    if (
+        has_draw
+        and updates.match_settings is not None
+        and updates.match_settings != MatchSettings.model_validate(event.match_settings)
+    ):
+        raise MatchRulesFrozenError()
     facts_before = _event_scheduling_facts(event)
     # Captured BEFORE the setattr loop overwrites it: a timezone edit preserves the
     # wall-clock of already-placed fixtures, which needs the zone they were placed IN to
