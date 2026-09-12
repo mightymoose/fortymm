@@ -35,6 +35,10 @@ contestant or winner. Empty future fixtures confer no participation: in a
 group-to-knockout draw, normal qualification creates knockout participation when
 advancement places the qualifier into that stage.
 
+Swiss advancement and completion use the active participation field of the
+current stage and draw revision, including admitted byes. Registration alone does
+not add an entrant to later rounds.
+
 Stage withdrawal ends only that stage's participation. Event-wide competition
 withdrawal ends all active participation and blocks further admission until
 explicitly reversed. These are distinct from registration withdrawal and from

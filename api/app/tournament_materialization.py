@@ -51,9 +51,9 @@ from app.models import (
 )
 from app.schemas.tournament import MatchSettings as EventMatchSettings
 from app.tournament_draws import (
-    active_draw_entrants,
     fixture_state,
     group_order,
+    participating_draw_entrants,
     strategy_for_event,
 )
 from app.tournament_participation import complete_stage_participation
@@ -141,9 +141,9 @@ async def materialize_event(
     **The event's entrants are loaded the same way, behind the same kind of gate**
     (``app.draws.reads_entrants``). ``advance()`` takes the field as well as the
     fixtures because for swiss the two are not the same thing: a bye is the absence of a
-    fixture row, so its byed entrant — and a latecomer the currency check tolerates —
-    is in no row at all, and a next round paired from the rows would leave them out of
-    the event permanently. Only swiss declares it, so the other three still cost exactly
+    fixture row, so its admitted byed entrant is in no row at all, and a next round
+    paired from the rows would leave them out of the event permanently. Only swiss
+    declares it, so the other three still cost exactly
     the one fixture statement they always cost.
     """
     (
@@ -179,17 +179,17 @@ async def materialize_event(
         stage.id: FixtureStage(position=stage.position, draw_type=stage.draw_type)
         for stage in event.stages
     }
-    # The **field**, beside the fixtures, for the one draw type that cannot recover it
-    # from them: a swiss bye is the absence of a fixture row, so pairing the next round
-    # from the seated set alone would drop the byed entrant out of the event. Read
-    # through the same pair the cut reads it through — ``active_draw_entrants`` then
-    # ``order_entrants`` — so the field a draw is advanced against is the field it was
-    # cut from, by construction rather than by two loaders agreeing. Gated exactly as
-    # the game counts are, and for the same reason: on the completion seam this is a
-    # round trip per result submission, and three of the four draw types would discard
-    # it (``app.draws.reads_entrants``).
+    # Swiss needs its admitted field as well as fixtures: byes have no seated
+    # row, stage withdrawals can remain registered, and late registrations do
+    # not join an underway stage. The same field size governs completion below.
     entrants: Sequence[OrderedEntrant] = (
-        order_entrants(await active_draw_entrants(db, event.id))
+        order_entrants(
+            await participating_draw_entrants(
+                db,
+                stage_id=fixtures[0].stage_id,
+                draw_revision_id=fixtures[0].draw_revision_id,
+            )
+        )
         if reads_entrants(event.draw_settings.draw_type)
         else ()
     )

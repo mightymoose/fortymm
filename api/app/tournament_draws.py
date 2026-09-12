@@ -162,6 +162,36 @@ async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[En
     ]
 
 
+async def participating_draw_entrants(
+    db: AsyncSession, *, stage_id: uuid.UUID, draw_revision_id: uuid.UUID
+) -> list[Entrant]:
+    """The admitted field for advancing one stage of its current draw revision.
+
+    Stage withdrawal ends admission without closing event registration. Conversely,
+    registering after the cut does not admit an entry to an already underway stage.
+    Byed entrants remain in this field even though no fixture seats them yet.
+    """
+    rows = (
+        await db.execute(
+            select(TournamentEntry.id, TournamentEntry.seed, _registration_order())
+            .join(
+                TournamentEntryParticipation,
+                TournamentEntryParticipation.entry_id == TournamentEntry.id,
+            )
+            .where(
+                TournamentEntry.status == TournamentEntryStatus.entered,
+                TournamentEntryParticipation.stage_id == stage_id,
+                TournamentEntryParticipation.draw_revision_id == draw_revision_id,
+                TournamentEntryParticipation.ended_at.is_(None),
+            )
+        )
+    ).all()
+    return [
+        Entrant(entry_id=EntryId(entry_id), seed=seed, created_at=created_at)
+        for entry_id, seed, created_at in rows
+    ]
+
+
 async def active_draw_entrants_by_event(
     db: AsyncSession, event_ids: Sequence[uuid.UUID]
 ) -> dict[uuid.UUID, list[Entrant]]:

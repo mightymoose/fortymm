@@ -905,6 +905,100 @@ async def test_a_byed_entrant_is_credited_with_a_win_worth_zero_games(
         }, "round 2 seats the byed entrant, and the bye passes to the seed without one"
 
 
+async def test_swiss_advances_only_the_current_stages_admitted_field(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    from app.tournament_participation import WithdrawalReason, withdraw_competition
+
+    client, owner = authed_client
+    async with (
+        opponent_session(db_session, "swiss-admitted-two") as (client_2, user_2),
+        opponent_session(db_session, "swiss-admitted-three") as (client_3, user_3),
+        opponent_session(db_session, "swiss-admitted-four") as (client_4, user_4),
+    ):
+        tournament_id = await _tournament(client)
+        event_id = (await _create_event(client, tournament_id)).json()["id"]
+        entries = [
+            await _enter(db_session, event_id, user, seed=seed, minutes=seed)
+            for seed, user in enumerate((owner, user_2, user_3, user_4), start=1)
+        ]
+        entry_ids = [entry.id for entry in entries]
+        clients = dict(
+            zip(entry_ids, [client, client_2, client_3, client_4], strict=True)
+        )
+        assert (await _cut(client, tournament_id, event_id)).status_code == 201
+        await _set_status(db_session, tournament_id, TournamentStatus.published)
+        assert (await _go_live(client, tournament_id)).status_code == 201
+        stage_id = (await _fixtures(db_session, event_id))[0].stage_id
+        await withdraw_competition(
+            db_session,
+            entry_ids[3],
+            owner.id,
+            WithdrawalReason.director_removal,
+            stage_id=stage_id,
+        )
+        await db_session.commit()
+        late = await _enter(
+            db_session,
+            event_id,
+            await make_user(db_session, "swiss-not-admitted"),
+            seed=5,
+            minutes=5,
+        )
+        late_id = late.id
+        still_registered = set(
+            await db_session.scalars(
+                select(TournamentEntry.id).where(
+                    TournamentEntry.event_id == uuid.UUID(event_id),
+                    TournamentEntry.status == TournamentEntryStatus.entered,
+                )
+            )
+        )
+        assert still_registered == {*entry_ids, late_id}
+
+        for round_number in (1, 2, 3):
+            db_session.expire_all()
+            rows = [
+                fixture
+                for fixture in await _fixtures(db_session, event_id)
+                if fixture.round == round_number and fixture.match_id is not None
+            ]
+            assert len(rows) == (2 if round_number == 1 else 1)
+            if round_number > 1:
+                assert all(
+                    {row.entry_a_id, row.entry_b_id} <= set(entry_ids[:3])
+                    for row in rows
+                )
+            await _call_fixtures(db_session, tournament_id, rows)
+            for row in rows:
+                assert row.entry_a_id is not None
+                await _win_fixture_match(
+                    row,
+                    clients_by_entry=clients,
+                    winner_entry_id=row.entry_a_id,
+                    rated=False,
+                )
+
+        periods = list(
+            await db_session.scalars(
+                select(TournamentEntryParticipation)
+                .where(TournamentEntryParticipation.stage_id == stage_id)
+                .execution_options(populate_existing=True)
+            )
+        )
+        assert {period.entry_id for period in periods} == set(entry_ids)
+        assert all(period.ended_at is not None for period in periods)
+        assert {
+            period.end_reason for period in periods if period.entry_id in entry_ids[:3]
+        } == {"stage_completed"}
+        assert (
+            next(
+                period for period in periods if period.entry_id == entry_ids[3]
+            ).end_reason
+            == "director_removal"
+        )
+
+
 async def test_a_field_that_shrinks_mid_event_still_plays_out_and_finishes(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:
