@@ -1647,6 +1647,15 @@ COMPETITION_RULE_INTEGRITY_DDL = (
             'string')) IS NOT TRUE THEN
             RAISE EXCEPTION 'invalid match rule snapshot' USING ERRCODE='23514';
         END IF;
+        IF NEW.match_rules->'team_size' IS DISTINCT FROM
+            to_jsonb(CASE WHEN event_row.format='doubles' THEN 2 ELSE 1 END) OR
+            NEW.match_rules->'best_of' IS DISTINCT FROM
+                event_row.match_settings->'length_games' OR
+            NEW.match_rules->'affects_rating' IS DISTINCT FROM
+                event_row.match_settings->'rated' THEN
+            RAISE EXCEPTION 'match rules must agree with the event' USING
+            ERRCODE='23514';
+        END IF;
         IF NEW.match_rules->'retirement_window' <> 'null'::jsonb AND
             (NEW.match_rules->>'retirement_window') !~
             '^P([0-9]+D)?(T([0-9]+H)?([0-9]+M)?([0-9]+([.][0-9]+)?S)?)?$' THEN
@@ -1664,6 +1673,11 @@ COMPETITION_RULE_INTEGRITY_DDL = (
             'rr-then-ko','swiss')
             AND jsonb_typeof(NEW.format_rules->'settings') = 'object') IS NOT TRUE THEN
             RAISE EXCEPTION 'invalid format rule snapshot' USING ERRCODE='23514';
+        END IF;
+        IF NEW.format_rules->>'draw_type' IS DISTINCT FROM draw_key OR
+            NEW.format_rules->'settings' IS DISTINCT FROM event_row.draw_settings THEN
+            RAISE EXCEPTION 'format rules must agree with the event' USING
+            ERRCODE='23514';
         END IF;
         IF (CASE NEW.format_rules->>'draw_type'
             WHEN 'round-robin' THEN NEW.format_rules->'settings' = '{}'::jsonb
