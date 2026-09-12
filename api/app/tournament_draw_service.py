@@ -41,7 +41,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.draws import DrawError
-from app.models import ScheduleSolveTrigger, TournamentEvent, User
+from app.models import (
+    ScheduleSolveTrigger,
+    TournamentDrawRevision,
+    TournamentEvent,
+    User,
+)
 from app.schedule_solves import request_solve, tournament_has_drawn_event
 from app.schemas.tournament import TournamentFixtureRead
 from app.tournament_draw_limits import lock_draw_actor
@@ -165,6 +170,17 @@ async def uncut_event_draw(
     event = await _load_owned_event_for_draw(
         db, tournament_id=tournament_id, event_id=event_id, actor=actor
     )
+    current_revision = await db.scalar(
+        select(TournamentDrawRevision.id)
+        .where(
+            TournamentDrawRevision.event_id == event.id,
+            TournamentDrawRevision.retired_at.is_(None),
+        )
+        .limit(1)
+    )
+    if current_revision is None:
+        await db.commit()
+        return
     await _enforce_unplayed(db, event)
     # An absent current draw changes no scheduling input.
     had_draw = await event_has_draw(db, event.id)

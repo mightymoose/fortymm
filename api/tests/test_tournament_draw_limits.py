@@ -118,15 +118,14 @@ async def test_actor_budget_survives_ownership_transfer(
     )
 
 
-async def test_actor_budget_serializes_cuts_across_tournaments_before_parent_locks(
+async def test_actor_budget_refuses_concurrent_cuts_before_parent_locks(
     db_session, engine, default_league, monkeypatch
 ):
     import asyncio
 
-    from sqlalchemy import text
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from app.draws import DrawStorageLimitExceeded
+    from app.draws import DrawActorBusy, DrawStorageLimitExceeded
     from app.models import Tournament, User
     from app.tournament_draw_service import cut_event_draw
     from tests._helpers import make_user
@@ -143,50 +142,36 @@ async def test_actor_budget_serializes_cuts_across_tournaments_before_parent_loc
         targets.append((tournament.id, event.id))
     monkeypatch.setattr(limits, "MAX_REVISIONS_PER_ACTOR", 1)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
-    pids = [asyncio.get_running_loop().create_future() for _ in targets]
 
     async def cut(index):
         async with sessions() as writer:
             actor = (
                 await writer.scalars(select(User).where(User.id == actor_id))
             ).one()
-            pids[index].set_result(await writer.scalar(text("SELECT pg_backend_pid()")))
             tournament_id, event_id = targets[index]
             try:
                 await cut_event_draw(
                     writer, tournament_id=tournament_id, event_id=event_id, actor=actor
                 )
+            except DrawActorBusy:
+                return "busy"
             except DrawStorageLimitExceeded:
-                return False
-            return True
+                return "budget"
+            return "cut"
 
     async with sessions() as gate, sessions() as probe:
         await limits.lock_draw_actor(gate, actor_id)
-        pending = [asyncio.create_task(cut(index)) for index in range(2)]
-        try:
-            async with asyncio.timeout(5):
-                for pid_future, task in zip(pids, pending, strict=True):
-                    pid = await pid_future
-                    while not await probe.scalar(
-                        text("SELECT cardinality(pg_blocking_pids(:pid)) > 0"),
-                        {"pid": pid},
-                    ):
-                        if task.done():
-                            await task
-                            raise AssertionError(
-                                "Cut did not wait for the shared actor quota"
-                            )
-                        await asyncio.sleep(0.01)
-            await probe.execute(
-                select(Tournament.id)
-                .where(Tournament.id.in_([target[0] for target in targets]))
-                .with_for_update(nowait=True)
-            )
-        finally:
-            await probe.rollback()
-            await gate.rollback()
-            outcomes = await asyncio.gather(*pending)
-    assert sorted(outcomes) == [False, True]
+        async with asyncio.timeout(1):
+            assert await asyncio.gather(cut(0), cut(1)) == ["busy", "busy"]
+        await probe.execute(
+            select(Tournament.id)
+            .where(Tournament.id.in_([target[0] for target in targets]))
+            .with_for_update(nowait=True)
+        )
+        await probe.rollback()
+        await gate.rollback()
+    assert await cut(0) == "cut"
+    assert await cut(1) == "budget"
     assert (
         await db_session.scalar(
             select(func.count()).select_from(TournamentDrawRevision)
@@ -432,3 +417,33 @@ async def test_rejected_actor_quota_reads_no_fixture_rows(
             assert after == before
     finally:
         await probe_engine.dispose()
+
+
+async def test_busy_actor_cut_refuses_promptly_and_can_retry(
+    authed_client, db_session, engine, default_league
+):
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    client, owner = authed_client
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    await _enter_field(db_session, event, 4, prefix="busy-cut")
+    url = f"/v1/tournaments/{tournament.id}/events/{event.id}/draw"
+    sessions = async_sessionmaker(engine)
+    async with sessions() as gate:
+        await limits.lock_draw_actor(gate, owner.id)
+        async with asyncio.timeout(1):
+            refused = await client.post(url)
+        assert refused.status_code == 409, refused.text
+        assert "already being cut" in refused.json()["detail"]
+        assert "Retry" in refused.json()["detail"]
+        assert (
+            await db_session.scalar(
+                select(func.count()).select_from(TournamentDrawRevision)
+            )
+            == 0
+        )
+        await gate.rollback()
+    assert (await client.post(url)).status_code == 201

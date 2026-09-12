@@ -1421,8 +1421,10 @@ export interface paths {
          *     Entrants are ordered by **seed** ascending where one is set, then by **registration
          *     order**. Nothing is random, so the same field always cuts the same draw.
          *
-         *     Refused with a `409` once the draw shows any **evidence of play** — any fixture with
-         *     a recorded winner, or any fixture that has become a real match. A re-cut would throw
+         *     Refused with a `409` while another draw is being cut for this account; retry
+         *     after that operation finishes. Also refused once the draw shows any **evidence
+         *     of play** — any fixture with a recorded winner, or any fixture that has become
+         *     a real match. A re-cut would throw
          *     those away, and a draw must never silently eat a score.
          *
          *     Refused with a `422` when this event cannot produce a draw at all: it has

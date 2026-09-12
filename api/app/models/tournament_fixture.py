@@ -234,6 +234,13 @@ class TournamentFixture(Base):
         # Every read of a draw is "the fixtures of this stage" — ``advance()`` loads
         # the whole set, and the detail BFF loads it per event (through its stages).
         Index("ix_tournament_fixtures_stage_id", "stage_id"),
+        Index(
+            "ix_fixture_event_play_evidence",
+            "scope_event_id",
+            postgresql_where=text(
+                "match_id IS NOT NULL OR winner_entry_id IS NOT NULL"
+            ),
+        ),
         # One match belongs to at most one fixture in this topology (#1677).
         # NULL allows any number of unmaterialized fixtures. Completion also uses
         # this index to find the owning fixture and advance its draw.

@@ -9,6 +9,25 @@ from app.db import Base
 
 ADVANCEMENT_INTEGRITY_DDL = (
     """
+    CREATE FUNCTION advancement_event_scope() RETURNS trigger LANGUAGE plpgsql AS $$
+    DECLARE fixture_event UUID;
+    BEGIN
+        SELECT scope_event_id INTO fixture_event FROM tournament_fixtures
+            WHERE id = NEW.fixture_id;
+        IF NEW.event_id IS NULL THEN NEW.event_id := fixture_event; END IF;
+        IF NEW.event_id IS DISTINCT FROM fixture_event THEN
+            RAISE EXCEPTION 'advancement event must match its target fixture' USING
+                ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER advancement_event_scope BEFORE INSERT ON
+        fixture_advancement_decisions
+    FOR EACH ROW EXECUTE FUNCTION advancement_event_scope()
+    """,
+    """
     CREATE FUNCTION preserve_advancement() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN
         RAISE EXCEPTION 'advancement history is immutable' USING ERRCODE = '23514';
@@ -35,6 +54,10 @@ ADVANCEMENT_INTEGRITY_DDL = (
                 NEW.decision_id;
         END IF;
         SELECT * INTO target FROM tournament_fixtures WHERE id = decision.fixture_id;
+        IF decision.event_id IS DISTINCT FROM target.scope_event_id THEN
+            RAISE EXCEPTION 'advancement event must match its target fixture' USING
+                ERRCODE = '23514';
+        END IF;
         IF NOT EXISTS (SELECT 1 FROM tournament_entries e WHERE e.id = decision.entry_id
             AND e.event_id = target.scope_event_id) THEN
             RAISE EXCEPTION 'advancement entry must belong to its target event' USING

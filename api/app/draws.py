@@ -119,6 +119,10 @@ class DrawError(Exception):
     """
 
 
+class DrawActorBusy(DrawError):
+    """This account already has an in-flight draw cut."""
+
+
 class DrawStorageLimitExceeded(DrawError):
     """The requested revision would exceed a durable draw-storage budget."""
 
@@ -216,6 +220,11 @@ def draw_error_detail(error: DrawError) -> str:
     string.
     """
     match error:
+        case DrawActorBusy():
+            detail = (
+                "A draw is already being cut for this account. "
+                "Retry after that operation finishes."
+            )
         case DrawStorageLimitExceeded():
             detail = (
                 f"This draw would exceed the storage limit of {error.limit:,} "

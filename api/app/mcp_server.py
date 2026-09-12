@@ -62,6 +62,7 @@ from app.config import get_settings
 from app.db import get_sessionmaker
 from app.draws import (
     DegenerateDraw,
+    DrawActorBusy,
     DrawError,
     DrawStorageLimitExceeded,
     NonSinglesDraw,
@@ -1907,7 +1908,7 @@ def _map_draw_refusal_tool_error(error: DrawError) -> ToolError:
       which invents a ``DrawError`` subclass carrying internals and asserts none of
       them reach the client."""
     match error:
-        case DrawStorageLimitExceeded():
+        case DrawActorBusy() | DrawStorageLimitExceeded():
             return ToolError(draw_error_detail(error))
         case NonSinglesDraw():
             return ToolError(
@@ -1940,7 +1941,8 @@ async def build_cut(event_id: uuid.UUID) -> list[TournamentFixtureRead]:
     fixtures in **group → round → position** order — the same ``TournamentFixtureRead``
     the detail page and ``get_schedule`` carry.
 
-    Raises a ``ToolError`` when no event has that id, when you are not the owner of the
+    Raises a ``ToolError`` while another cut for this account is in flight (retry
+    after it finishes), when no event has that id, when you are not the owner of the
     event's tournament, when the draw already shows evidence of play (a fixture with a
     recorded winner or a linked match — it can no longer be cut), or when the event
     cannot produce a draw at all: it is not a singles event, it has no groups configured

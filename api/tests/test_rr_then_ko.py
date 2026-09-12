@@ -1023,6 +1023,102 @@ async def test_a_patch_response_still_splits_groups_from_the_bracket(
 # ----- the seam: a finished group seats its qualifiers ------------------------------
 
 
+async def test_group_completion_does_not_advance_a_superseded_qualifier(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    from app.account_merge import merge_user
+    from app.models import AdvancementDecision, MatchStatus
+    from tests.test_account_merge import _record_match, _record_result
+
+    client, owner = authed_client
+    async with (
+        opponent_session(db_session, "rrko-merge-b") as (client_b, user_b),
+        opponent_session(db_session, "rrko-merge-c") as (client_c, user_c),
+        opponent_session(db_session, "rrko-merge-d") as (client_d, user_d),
+    ):
+        tournament_id = await _tournament(client)
+        event_id = (await _create_event(client, tournament_id)).json()["id"]
+        players = {1: owner, 6: user_b, 7: user_c, 12: user_d}
+        entries = {}
+        for seed in range(1, 13):
+            player = players.get(seed) or await make_user(
+                db_session, f"merge-extra-{seed}"
+            )
+            entries[seed] = await _enter(
+                db_session, event_id, player, seed=seed, minutes=seed
+            )
+        assert (await _cut(client, tournament_id, event_id)).status_code == 201
+        await _set_status(db_session, tournament_id, TournamentStatus.published)
+        live = await client.post(
+            f"/v1/tournaments/{tournament_id}/transitions", json={"to": "live"}
+        )
+        assert live.status_code == 201, live.text
+        source_id = entries[1].id
+        group_id = await _group_id(db_session, event_id, "Reservation A")
+        group = [
+            f for f in await _fixtures(db_session, event_id) if f.group_id == group_id
+        ]
+        await _call(db_session, tournament_id, group)
+        clients = {
+            entries[1].id: client,
+            entries[6].id: client_b,
+            entries[7].id: client_c,
+            entries[12].id: client_d,
+        }
+        final_pair = {entries[6].id, entries[12].id}
+        final = next(f for f in group if {f.entry_a_id, f.entry_b_id} == final_pair)
+        for fixture in group:
+            if fixture.id != final.id:
+                winner = (
+                    source_id
+                    if source_id in (fixture.entry_a_id, fixture.entry_b_id)
+                    else fixture.entry_a_id
+                )
+                assert winner is not None
+                await _win(fixture, clients_by_entry=clients, winner_entry_id=winner)
+
+        # This entry has separately recorded knockout play, but no group play.
+        # Such explicit historical seating is allowed; the merge must preserve it.
+        target = await make_user(db_session, "rrko-merge-target")
+        target_entry = await _enter(db_session, event_id, target, seed=13, minutes=13)
+        target_id = target_entry.id
+        opponent = await make_user(db_session, "rrko-merge-ko-opponent")
+        opponent_entry = await _enter(
+            db_session, event_id, opponent, seed=14, minutes=14
+        )
+        knockout = next(
+            f
+            for f in await _fixtures(db_session, event_id)
+            if _is_knockout(f) and f.round == 1
+        )
+        recorded = await _record_match(db_session, target, target, opponent)
+        await _record_result(db_session, recorded, submitted_by=target)
+        knockout.entry_a_id, knockout.entry_b_id = target_id, opponent_entry.id
+        knockout.match_id = recorded.id
+        await db_session.commit()
+        await merge_user(db_session, from_user_id=owner.id, to_user_id=target.id)
+        await db_session.commit()
+
+        await _win(final, clients_by_entry=clients, winner_entry_id=entries[6].id)
+        completed = await db_session.get(Match, final.match_id, populate_existing=True)
+        assert completed.status is MatchStatus.completed
+        source = await db_session.get(
+            TournamentEntry, source_id, populate_existing=True
+        )
+        assert source.superseded_by_entry_id == target_id
+        bracket = [f for f in await _fixtures(db_session, event_id) if _is_knockout(f)]
+        assert all(source_id not in (f.entry_a_id, f.entry_b_id) for f in bracket)
+        assert (
+            await db_session.scalar(
+                select(AdvancementDecision.id).where(
+                    AdvancementDecision.entry_id == source_id
+                )
+            )
+            is None
+        )
+        assert next(f for f in bracket if f.id == knockout.id).match_id == recorded.id
+
+
 async def test_a_finished_group_seats_its_qualifiers_into_the_bracket(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:

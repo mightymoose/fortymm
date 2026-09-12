@@ -20,7 +20,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import exists, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -46,6 +46,8 @@ from app.models import (
     Tournament,
     TournamentEntry,
     TournamentEntryParticipation,
+    TournamentEntryStatus,
+    TournamentEntryWithdrawal,
     TournamentEvent,
     TournamentFixture,
 )
@@ -207,7 +209,7 @@ async def materialize_event(
     # keeps the whole advance idempotent; round-robin plans no fills, so this loop does
     # nothing and its materialization is unchanged.
     fixtures_by_id = {fixture.id: fixture for fixture in fixtures}
-    for fill in plan.side_fills:
+    for fill in await _eligible_side_fills(db, plan.side_fills):
         await record_side_fill(db, fill)
         _apply_side_fill(fixtures_by_id[fill.fixture_id], fill)
     # Readiness is decided by ``ready_fixtures`` — the shared helper ``advance()``
@@ -353,6 +355,49 @@ async def _fixtures_with_match_statuses(
         elif status is MatchStatus.voided:
             voided_match_ids.add(fixture.match_id)
     return fixtures, completed_match_ids, frozenset(voided_match_ids)
+
+
+async def _eligible_side_fills(
+    db: AsyncSession, fills: Sequence[SideFill]
+) -> list[SideFill]:
+    """Check destination admission before recording a decision or changing its seat.
+
+    Qualification can still name a historical entry superseded during play. Even a
+    half-filled fixture writes participation, so eligibility cannot wait until the
+    fixture is ready to become a match.
+    """
+    if not fills:
+        return []
+    eligible = set(
+        (
+            await db.execute(
+                select(TournamentFixture.id, TournamentEntry.id)
+                .join(
+                    TournamentEntry,
+                    TournamentEntry.event_id == TournamentFixture.scope_event_id,
+                )
+                .where(
+                    tuple_(TournamentFixture.id, TournamentEntry.id).in_(
+                        [(fill.fixture_id, fill.entry_id) for fill in fills]
+                    ),
+                    TournamentEntry.status == TournamentEntryStatus.entered,
+                    TournamentEntry.superseded_by_entry_id.is_(None),
+                    ~exists(
+                        select(TournamentEntryWithdrawal.id).where(
+                            TournamentEntryWithdrawal.entry_id == TournamentEntry.id,
+                            TournamentEntryWithdrawal.restored_at.is_(None),
+                            or_(
+                                TournamentEntryWithdrawal.stage_id.is_(None),
+                                TournamentEntryWithdrawal.stage_id
+                                == TournamentFixture.stage_id,
+                            ),
+                        )
+                    ),
+                )
+            )
+        ).tuples()
+    )
+    return [fill for fill in fills if (fill.fixture_id, fill.entry_id) in eligible]
 
 
 async def _actively_participating_fixture_ids(

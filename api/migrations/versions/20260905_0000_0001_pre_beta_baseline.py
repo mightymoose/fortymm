@@ -1237,6 +1237,7 @@ DRAW_TYPE_SEED = [
 ADVANCEMENT_TABLE_DDL = (
     """
     CREATE TABLE fixture_advancement_decisions (
+        event_id UUID NOT NULL REFERENCES tournament_events(id),
         id UUID DEFAULT gen_random_uuid() NOT NULL,
         fixture_id UUID NOT NULL,
         side VARCHAR NOT NULL,
@@ -1276,6 +1277,10 @@ ADVANCEMENT_TABLE_DDL = (
     """
     CREATE UNIQUE INDEX uq_advancement_root ON fixture_advancement_decisions (fixture_id, side) WHERE predecessor_id IS NULL
     """,
+    "CREATE INDEX ix_fixture_advancement_decisions_event_id "
+    "ON fixture_advancement_decisions (event_id)",
+    "CREATE INDEX ix_fixture_event_play_evidence ON tournament_fixtures (scope_event_id) "
+    "WHERE match_id IS NOT NULL OR winner_entry_id IS NOT NULL",
     """
     CREATE TABLE advancement_decision_evidence (
         decision_id UUID NOT NULL,
@@ -1290,6 +1295,25 @@ ADVANCEMENT_TABLE_DDL = (
 )
 
 ADVANCEMENT_INTEGRITY_DDL = (
+    """
+    CREATE FUNCTION advancement_event_scope() RETURNS trigger LANGUAGE plpgsql AS $$
+    DECLARE fixture_event UUID;
+    BEGIN
+        SELECT scope_event_id INTO fixture_event FROM tournament_fixtures
+            WHERE id = NEW.fixture_id;
+        IF NEW.event_id IS NULL THEN NEW.event_id := fixture_event; END IF;
+        IF NEW.event_id IS DISTINCT FROM fixture_event THEN
+            RAISE EXCEPTION 'advancement event must match its target fixture' USING
+                ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER advancement_event_scope BEFORE INSERT ON
+        fixture_advancement_decisions
+    FOR EACH ROW EXECUTE FUNCTION advancement_event_scope()
+    """,
     """
     CREATE FUNCTION preserve_advancement() RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
@@ -1317,6 +1341,10 @@ ADVANCEMENT_INTEGRITY_DDL = (
                     NEW.decision_id;
             END IF;
             SELECT * INTO target FROM tournament_fixtures WHERE id = decision.fixture_id;
+        IF decision.event_id IS DISTINCT FROM target.scope_event_id THEN
+            RAISE EXCEPTION 'advancement event must match its target fixture' USING
+                ERRCODE = '23514';
+        END IF;
             IF NOT EXISTS (SELECT 1 FROM tournament_entries e WHERE e.id = decision.entry_id
                 AND e.event_id = target.scope_event_id) THEN
                 RAISE EXCEPTION 'advancement entry must belong to its target event' USING
@@ -5868,6 +5896,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("DROP FUNCTION IF EXISTS preserve_advancement_ownership() CASCADE")
     op.execute("DROP FUNCTION IF EXISTS preserve_advancement() CASCADE")
+    op.execute("DROP FUNCTION IF EXISTS advancement_event_scope() CASCADE")
     op.execute("DROP FUNCTION IF EXISTS check_advancement() CASCADE")
     op.execute("DROP FUNCTION IF EXISTS guard_advancement_seat() CASCADE")
     op.execute("DROP FUNCTION IF EXISTS append_advancement() CASCADE")

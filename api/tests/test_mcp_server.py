@@ -5383,3 +5383,26 @@ async def test_build_cut_storage_limit_raises_actionable_tool_error(
     async with _mcp_client(raw) as client, client:
         with pytest.raises(ToolError, match=message):
             await client.call_tool("build_cut", {"event_id": str(event.id)})
+
+
+async def test_build_cut_busy_actor_returns_actionable_refusal(
+    db_session: AsyncSession, engine, default_league: League
+) -> None:
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.tournament_draw_limits import lock_draw_actor
+
+    owner = await make_user(db_session, "mcp-busy-draw-owner")
+    raw = await _mint(db_session, owner)
+    _, event = await _seed_drawable_tournament(db_session, owner, default_league)
+    actor_id, event_id = owner.id, event.id
+    sessions = async_sessionmaker(engine)
+    async with sessions() as gate:
+        await lock_draw_actor(gate, actor_id)
+        async with _mcp_client(raw) as client, client:
+            async with asyncio.timeout(1):
+                with pytest.raises(ToolError, match="already being cut.*Retry"):
+                    await client.call_tool("build_cut", {"event_id": str(event_id)})
+        await gate.rollback()

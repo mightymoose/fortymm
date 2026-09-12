@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
 from app.draws import (
+    DrawActorBusy,
     DrawError,
     draw_error_detail,
 )
@@ -1252,7 +1253,10 @@ async def withdraw_from_event(
 
 
 def _draw_refusal(error: DrawError) -> HTTPException:
-    """The 422 for a draw the domain will not produce — in words a director can read.
+    """A known draw refusal in words a director can read.
+
+    An in-flight cut for the same account is a retryable 409. Other domain
+    refusals require changes to the requested draw and remain 422.
 
     A ``DrawError`` is not a bug: it is the domain saying that what was asked for is not
     a competition (``DegenerateDraw``) or is not a shape a fixture can seat
@@ -1268,7 +1272,10 @@ def _draw_refusal(error: DrawError) -> HTTPException:
     cut ahead of time to see whether it would succeed, so the two call sites' copy
     cannot drift apart. See that function's docstring for what each error composes to.
     """
-    return HTTPException(status_code=422, detail=draw_error_detail(error))
+    return HTTPException(
+        status_code=409 if isinstance(error, DrawActorBusy) else 422,
+        detail=draw_error_detail(error),
+    )
 
 
 # The play-evidence gate, the owner-scoped locking load, and the ``cut_draw`` /
@@ -1308,8 +1315,10 @@ async def cut_event_draw(
     Entrants are ordered by **seed** ascending where one is set, then by **registration
     order**. Nothing is random, so the same field always cuts the same draw.
 
-    Refused with a `409` once the draw shows any **evidence of play** — any fixture with
-    a recorded winner, or any fixture that has become a real match. A re-cut would throw
+    Refused with a `409` while another draw is being cut for this account; retry
+    after that operation finishes. Also refused once the draw shows any **evidence
+    of play** — any fixture with a recorded winner, or any fixture that has become
+    a real match. A re-cut would throw
     those away, and a draw must never silently eat a score.
 
     Refused with a `422` when this event cannot produce a draw at all: it has

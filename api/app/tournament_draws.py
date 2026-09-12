@@ -564,17 +564,19 @@ async def event_has_draw(db: AsyncSession, event_id: uuid.UUID) -> bool:
     played, so the play guard would wave the change through, and every fixture would
     still be orphaned.
 
-    A ``COUNT``, not a load: the answer is a yes/no, and a 200-fixture round-robin
-    should not be pulled into memory to learn it.
+    The current revision's transactionally maintained count bounds this lookup.
     """
-    fixtures = (
-        await db.execute(
-            select(func.count())
-            .select_from(TournamentFixture)
-            .where(TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])))
+    return bool(
+        await db.scalar(
+            select(TournamentDrawRevision.id)
+            .where(
+                TournamentDrawRevision.event_id == event_id,
+                TournamentDrawRevision.retired_at.is_(None),
+                TournamentDrawRevision.retained_fixture_count > 0,
+            )
+            .limit(1)
         )
-    ).scalar_one()
-    return fixtures > 0
+    )
 
 
 def event_groups(event: TournamentEvent) -> list[GroupRead]:
@@ -627,11 +629,7 @@ async def draw_has_advancement_history(db: AsyncSession, event_id: uuid.UUID) ->
     return bool(
         await db.scalar(
             select(AdvancementDecision.id)
-            .join(
-                TournamentFixture,
-                TournamentFixture.id == AdvancementDecision.fixture_id,
-            )
-            .where(TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])))
+            .where(AdvancementDecision.event_id == event_id)
             .limit(1)
             .execution_options(include_draw_history=True)
         )
@@ -656,29 +654,22 @@ async def draw_has_play(db: AsyncSession, event_id: uuid.UUID) -> bool:
     strict is a director who linked a match by accident having to unlink it; the cost of
     being lax is a player's recorded result vanishing.
 
-    A ``COUNT`` rather than a load of the fixtures: the guard's answer is a yes/no, and
-    loading a 200-fixture round-robin to learn it would grow with the draw it is
-    guarding. It is read inside the tournament's row lock, so what it sees is what the
-    last committed writer wrote.
+    A partial event index contains only fixtures with evidence. Negative checks
+    never visit retained unplayed fixtures. The caller holds the tournament lock.
     """
-    played = (
-        await db.execute(
-            select(func.count())
-            .select_from(TournamentFixture)
-            .where(
-                TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])),
-                or_(
-                    TournamentFixture.winner_entry_id.is_not(None),
-                    TournamentFixture.match_id.is_not(None),
-                    select(AdvancementDecision.id)
-                    .where(AdvancementDecision.fixture_id == TournamentFixture.id)
-                    .exists(),
-                ),
-            )
-            .execution_options(include_draw_history=True)
+    played = await db.scalar(
+        select(TournamentFixture.id)
+        .where(
+            TournamentFixture.scope_event_id == event_id,
+            or_(
+                TournamentFixture.winner_entry_id.is_not(None),
+                TournamentFixture.match_id.is_not(None),
+            ),
         )
-    ).scalar_one()
-    return played > 0
+        .limit(1)
+        .execution_options(include_draw_history=True)
+    )
+    return bool(played) or await draw_has_advancement_history(db, event_id)
 
 
 class DrawCurrency(enum.Enum):

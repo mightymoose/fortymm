@@ -6,7 +6,7 @@ from sqlalchemy import Text, cast, func, literal, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.draws import DrawStorageLimitExceeded
+from app.draws import DrawActorBusy, DrawStorageLimitExceeded
 from app.models import (
     Account,
     TournamentDrawRevision,
@@ -68,11 +68,13 @@ async def enforce_draw_storage(
 
 
 async def lock_draw_actor(db: AsyncSession, actor_id: uuid.UUID) -> None:
-    """Serialize this actor's cuts before taking any tournament lock."""
-    await db.execute(
-        text("SELECT pg_advisory_xact_lock(hashtextextended(:actor, 1710))"),
+    """Admit one cut per actor without queuing request database connections."""
+    acquired = await db.scalar(
+        text("SELECT pg_try_advisory_xact_lock(hashtextextended(:actor, 1710))"),
         {"actor": str(actor_id)},
     )
+    if not acquired:
+        raise DrawActorBusy()
     # The revision's historical-actor FK must not take this lock after Tournament,
     # where a concurrent Account merge already holding Account would invert it.
     await db.execute(

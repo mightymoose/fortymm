@@ -33,7 +33,9 @@ Each known fixture contestant references the participation period that earned it
 seat as well as its durable entry. An ended participation remains a valid historical
 contestant or winner. Empty future fixtures confer no participation: in a
 group-to-knockout draw, normal qualification creates knockout participation when
-advancement places the qualifier into that stage.
+advancement places the qualifier into that stage. Advancement checks eligibility
+before applying a fixture-side fill or recording its decision, so an ineligible
+qualifier cannot roll back the result that completed the preceding stage.
 
 Swiss advancement and completion use the active participation field of the
 current stage and draw revision, including admitted byes. Registration alone does
@@ -72,7 +74,9 @@ A cut creates an event-wide draw revision, including both stages when the event
 has groups followed by a knockout. At most one revision is current. Re-cutting
 retires the former revision and its participation periods, preserves its fixtures,
 and creates a replacement atomically. Removing a draw retires the current revision
-without deleting it; repeated removal remains idempotent.
+without deleting it; repeated removal remains idempotent. Once no current draw
+remains, removal returns after authority and ownership checks without scanning or
+rewriting archived fixtures.
 
 Only the current revision contributes to the event's operational draw, standings,
 scheduling, materialization and advancement. Historical stage and group references
@@ -100,7 +104,10 @@ UUID replacement preserves the checked snapshot byte size.
 
 Advancement decisions retain their source and destination fixtures under the
 September 12 advancement-provenance decision. Cut and parent-deletion guards
-include archived draws when checking that retained evidence.
+include archived draws when checking that retained evidence. Historical play
+lookups use an index containing only fixtures with match/winner evidence;
+advancement decisions carry a database-checked event key for indexed event-scoped
+lookups. Negative history checks do not scan all retained fixtures.
 
 A refused replacement leaves the prior revision current and unchanged. Retirement
 changes only the retirement marker; other fixture fields remain as last recorded.
@@ -137,7 +144,9 @@ storage; reaching a limit never deletes history automatically.
 Each externally requested revision records its original acting Account, which does
 not change on ownership transfer or identity reconciliation. Account allocation is
 serialized before acquiring the tournament lock, so simultaneous requests against
-different tournaments cannot overrun the Account budget. Enforcement uses retained
+different tournaments cannot overrun the Account budget. A concurrent cut by the
+same Account fails promptly instead of waiting on the actor lock while retaining a
+request database connection. Enforcement uses retained
 PostgreSQL state and does not depend on a fail-open Redis rate limiter. Each draw
 revision stores a fixture total maintained transactionally by PostgreSQL statement
 triggers. Quota checks read bounded revision totals rather than scanning retained

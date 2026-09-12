@@ -325,3 +325,45 @@ async def test_sql_cannot_create_a_self_linked_history_revision(db_session):
                 {"new": new_id, "id": original.id},
             )
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_advancement_event_scope_is_filled_and_cannot_be_forged(db_session):
+    import pytest
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    from app.tournament_draws import draw_has_advancement_history
+
+    _, _, source, target = await knockout(db_session)
+    _, _, foreign, _ = await knockout(db_session, "scope-foreign")
+    statement = text(
+        "INSERT INTO fixture_advancement_decisions "
+        "(fixture_id,event_id,side,entry_id,rule_version,rule_settings,"
+        "evidence_count,unknown_reason) VALUES "
+        "(:fixture,:event,'a',:entry,'unknown','{}',0,'Imported history') "
+        "RETURNING event_id"
+    )
+    with pytest.raises(IntegrityError, match="advancement event must match"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                statement,
+                {
+                    "fixture": target.id,
+                    "event": foreign.scope_event_id,
+                    "entry": source.entry_a_id,
+                },
+            )
+    target.entry_a_id = source.entry_a_id
+    await db_session.flush()
+    event_id = await db_session.scalar(
+        statement,
+        {
+            "fixture": target.id,
+            "event": None,
+            "entry": source.entry_a_id,
+        },
+    )
+    await db_session.commit()
+    assert event_id == source.scope_event_id
+    assert await draw_has_advancement_history(db_session, event_id)
+    assert not await draw_has_advancement_history(db_session, foreign.scope_event_id)
