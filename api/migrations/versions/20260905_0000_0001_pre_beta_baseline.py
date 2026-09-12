@@ -5049,6 +5049,30 @@ def upgrade() -> None:
         REFERENCING NEW TABLE AS inserted_fixtures FOR EACH STATEMENT
         EXECUTE FUNCTION validate_fixture_insert_batch()
         """)
+    op.execute("""
+        CREATE FUNCTION check_withdrawal_participation() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+        -- Re-read final state after restoration or parent deletion.
+        IF EXISTS (
+        SELECT 1 FROM tournament_entry_withdrawals w
+        JOIN tournament_entry_participations p
+        ON p.event_id = w.event_id AND p.entry_id = w.entry_id
+        WHERE w.id = NEW.id AND w.restored_at IS NULL AND p.ended_at IS NULL
+        AND (w.stage_id IS NULL OR w.stage_id = p.stage_id)
+        ) THEN
+        RAISE EXCEPTION 'withdrawal requires participation to end'
+        USING ERRCODE = '23514';
+        END IF;
+        RETURN NULL;
+        END $$
+        """)
+    op.execute("""
+        CREATE CONSTRAINT TRIGGER check_withdrawal_participation
+        AFTER INSERT OR UPDATE ON tournament_entry_withdrawals
+        DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+        EXECUTE FUNCTION check_withdrawal_participation()
+        """)
     # End draw history integrity.
 
     for statement in AUTHORITY_INTEGRITY_DDL:
@@ -5654,6 +5678,7 @@ def downgrade() -> None:
     op.drop_table("advancement_decision_evidence")
     op.drop_table("fixture_advancement_decisions")
     # Drop draw history integrity.
+    op.execute("DROP FUNCTION check_withdrawal_participation() CASCADE")
     op.execute("DROP FUNCTION validate_fixture_insert_batch() CASCADE")
     op.execute("DROP FUNCTION preserve_archived_group_mapping() CASCADE")
     op.execute("DROP FUNCTION preserve_archived_group_history() CASCADE")

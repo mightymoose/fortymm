@@ -755,6 +755,30 @@ async def _resolve_entry_collisions(
     # coalesce the duplicate anyway; no reason to make it).
     solve_tournament_ids: set[uuid.UUID] = set()
 
+    # (1) Copy metadata between the captured collision entries while both are
+    # still registered. A played source can survive its target duplicate; the
+    # withdrawal below must not erase that duplicate from this transfer.
+    await db.execute(
+        text(
+            """
+            UPDATE tournament_entries AS survivor
+            SET created_at = LEAST(survivor.created_at, guest.created_at),
+                seed = COALESCE(survivor.seed, guest.seed)
+            FROM tournament_entries AS guest
+            WHERE survivor.id = ANY(:target_entry_ids)
+              AND survivor.status = :active
+              AND guest.id = ANY(:source_entry_ids)
+              AND guest.status = :active
+              AND guest.event_id = survivor.event_id
+              AND guest.event_id IN (
+                SELECT id FROM tournament_events
+                WHERE NOT allow_multiple_entries_per_player
+              )
+            """
+        ),
+        params,
+    )
+
     if played_event_ids:
         # The withdrawal arm's solve gate, read while the guest's entries are
         # still ``entered``: withdraw_from_event's doctrine, in bulk. Entries
@@ -795,8 +819,7 @@ async def _resolve_entry_collisions(
             .scalars()
             .all()
         )
-        # Preserve played fixtures and original memberships. Withdrawal also
-        # removes these collisions from the unplayed-event self-joins below.
+        # Preserve played fixtures and original memberships.
         await db.execute(
             update(TournamentEntry)
             .where(
@@ -806,29 +829,6 @@ async def _resolve_entry_collisions(
             )
             .values(status=TournamentEntryStatus.withdrawn)
         )
-
-    # (1) Registration order and seed follow the earlier registration onto the
-    # survivor.
-    await db.execute(
-        text(
-            """
-            UPDATE tournament_entries AS survivor
-            SET created_at = LEAST(survivor.created_at, guest.created_at),
-                seed = COALESCE(survivor.seed, guest.seed)
-            FROM tournament_entries AS guest
-            WHERE survivor.id = ANY(:target_entry_ids)
-              AND survivor.status = :active
-              AND guest.id = ANY(:source_entry_ids)
-              AND guest.status = :active
-              AND guest.event_id = survivor.event_id
-              AND guest.event_id IN (
-                SELECT id FROM tournament_events
-                WHERE NOT allow_multiple_entries_per_player
-              )
-            """
-        ),
-        params,
-    )
 
     # Read which unplayed events had a draw before un-cutting it. Only a
     # removed draw owes a solve; an undrawn event has no schedule to change.

@@ -43,6 +43,10 @@ rewrites recorded play. Missing a stage leaves later eligibility to that stage's
 admission rules; no new late-admission workflow is enabled in this change.
 Existing normal advancement remains supported.
 
+At commit, an unrestored withdrawal cannot coexist with an open participation
+period in its scope. Deferred validation permits the normal insert-then-close
+transaction while enforcing the same rule for direct SQL writers.
+
 Withdrawals record their effective time, acting Account, a category
 (self-withdrawal, director removal or identity reconciliation) and an optional
 explanation. Self-withdrawal explicitly names its Account; historical actors do not

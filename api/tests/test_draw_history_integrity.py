@@ -861,3 +861,146 @@ async def test_explicit_sql_fixture_insert_retries_when_parent_is_locked(
                     ),
                     {"id": drawn_history["fixture_id"]},
                 )
+
+
+async def _insert_active_withdrawal(
+    db: AsyncSession, history: dict[str, uuid.UUID], *, stage_scoped: bool
+) -> uuid.UUID:
+    return (
+        await db.execute(
+            text(
+                "INSERT INTO tournament_entry_withdrawals "
+                "(event_id,entry_id,stage_id,actor_account_id,reason) "
+                "SELECT event_id,entry_id,CASE WHEN :stage_scoped THEN stage_id END,"
+                ":actor,'director_removal' FROM tournament_entry_participations "
+                "WHERE id=:id RETURNING id"
+            ),
+            {
+                "id": history["participation_id"],
+                "actor": history["owner_id"],
+                "stage_scoped": stage_scoped,
+            },
+        )
+    ).scalar_one()
+
+
+@pytest.mark.parametrize("stage_scoped", [False, True])
+async def test_active_withdrawal_requires_matching_participation_to_end(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID], stage_scoped: bool
+) -> None:
+    with pytest.raises(
+        IntegrityError, match="withdrawal requires participation to end"
+    ):
+        async with db_session.begin_nested():
+            await _insert_active_withdrawal(
+                db_session, drawn_history, stage_scoped=stage_scoped
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("stage_scoped", [False, True])
+async def test_withdrawal_closure_matches_its_scope_across_stages(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID], stage_scoped: bool
+) -> None:
+    other_period_id = (
+        await db_session.execute(
+            text(
+                "WITH stage AS (INSERT INTO tournament_event_stages "
+                "(event_id,position,draw_type_id) SELECT event_id,100,draw_type_id "
+                "FROM tournament_event_stages WHERE id=(SELECT stage_id FROM "
+                "tournament_entry_participations WHERE id=:id) RETURNING id), "
+                "stage_group AS (INSERT INTO tournament_event_stage_groups "
+                "(stage_id,position) SELECT id,0 FROM stage RETURNING id,stage_id) "
+                "INSERT INTO tournament_entry_participations "
+                "(event_id,entry_id,stage_id,group_id,draw_revision_id) "
+                "SELECT p.event_id,p.entry_id,g.stage_id,g.id,p.draw_revision_id "
+                "FROM tournament_entry_participations p CROSS JOIN stage_group g "
+                "WHERE p.id=:id RETURNING id"
+            ),
+            {"id": drawn_history["participation_id"]},
+        )
+    ).scalar_one()
+    await _insert_active_withdrawal(
+        db_session, drawn_history, stage_scoped=stage_scoped
+    )
+    close_period = text(
+        "UPDATE tournament_entry_participations SET ended_at=clock_timestamp(),"
+        "end_reason='director_removal',ended_by_account_id=:actor WHERE id=:id"
+    )
+    await db_session.execute(
+        close_period,
+        {"id": drawn_history["participation_id"], "actor": drawn_history["owner_id"]},
+    )
+    if not stage_scoped:
+        with pytest.raises(
+            IntegrityError, match="withdrawal requires participation to end"
+        ):
+            async with db_session.begin_nested():
+                await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        await db_session.execute(
+            close_period, {"id": other_period_id, "actor": drawn_history["owner_id"]}
+        )
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT ended_at IS NULL FROM tournament_entry_participations "
+                "WHERE id=:id"
+            ),
+            {"id": other_period_id},
+        )
+        is stage_scoped
+    )
+
+
+async def test_restoring_withdrawal_before_constraint_flush_uses_final_state(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID]
+) -> None:
+    withdrawal_id = await _insert_active_withdrawal(
+        db_session, drawn_history, stage_scoped=False
+    )
+    await db_session.execute(
+        text(
+            "UPDATE tournament_entry_withdrawals SET restored_at=clock_timestamp(),"
+            "restored_by_account_id=:actor WHERE id=:id"
+        ),
+        {"actor": drawn_history["owner_id"], "id": withdrawal_id},
+    )
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT ended_at IS NULL FROM tournament_entry_participations "
+                "WHERE id=:id"
+            ),
+            {"id": drawn_history["participation_id"]},
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "parent_table,id_key",
+    [("tournaments", "tournament_id"), ("tournament_events", "event_id")],
+)
+async def test_parent_cascade_can_remove_pending_withdrawal_and_participation(
+    db_session: AsyncSession,
+    drawn_history: dict[str, uuid.UUID],
+    parent_table: str,
+    id_key: str,
+) -> None:
+    withdrawal_id = await _insert_active_withdrawal(
+        db_session, drawn_history, stage_scoped=True
+    )
+    await db_session.execute(
+        text(f"DELETE FROM {parent_table} WHERE id=:id"),
+        {"id": drawn_history[id_key]},
+    )
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    assert (
+        await db_session.scalar(
+            text("SELECT count(*) FROM tournament_entry_withdrawals WHERE id=:id"),
+            {"id": withdrawal_id},
+        )
+        == 0
+    )

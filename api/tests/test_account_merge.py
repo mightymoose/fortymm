@@ -1431,7 +1431,10 @@ async def test_merge_keeps_the_entry_with_recorded_play_when_guest_account_is_re
     survivor = await _make_verified(db_session, "played-survivor@example.com")
     opponent = await _make_verified(db_session, "played-opponent@example.com")
     event = await _make_rr_event(db_session, survivor)
-    guest_entry = await _enter(db_session, event, guest)
+    earlier = datetime(2026, 6, 1, 9, 0, tzinfo=UTC)
+    guest_entry = await _enter(
+        db_session, event, guest, created_at=earlier + timedelta(days=1)
+    )
     other_entry = await _enter(db_session, event, opponent)
     (fixture,) = await _cut(db_session, event)
     if evidence == "fixture_winner":
@@ -1446,7 +1449,7 @@ async def test_merge_keeps_the_entry_with_recorded_play_when_guest_account_is_re
         )
         fixture.match_id = match.id
         await db_session.commit()
-    duplicate = await _enter(db_session, event, survivor)
+    duplicate = await _enter(db_session, event, survivor, seed=3, created_at=earlier)
 
     await merge_user(db_session, from_user_id=guest.id, to_user_id=survivor.id)
     await db_session.commit()
@@ -1454,6 +1457,8 @@ async def test_merge_keeps_the_entry_with_recorded_play_when_guest_account_is_re
     entries = {entry.id: entry for entry in await _entries_for(db_session, event)}
     assert entries[guest_entry.id].status is TournamentEntryStatus.entered
     assert entries[guest_entry.id].user_id == survivor.id
+    assert entries[guest_entry.id].seed == 3
+    assert entries[guest_entry.id].created_at == earlier
     assert entries[duplicate.id].status is TournamentEntryStatus.withdrawn
     assert _seats(await _fixtures_for(db_session, event)) == _seats([fixture])
 
