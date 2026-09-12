@@ -156,8 +156,10 @@ async def test_round_robin_void_receipt_preserves_complete_event(
         await db_session.execute(
             text(
                 "SELECT lifecycle_state,lifecycle_version "
-                "FROM tournament_event_void_reconciliations "
-                "WHERE void_action_id=:id"
+                "FROM tournament_event_reconciliations "
+                "WHERE event_id=(SELECT f.scope_event_id FROM tournament_fixtures f "
+                "JOIN match_void_actions v ON v.match_id=f.match_id WHERE v.id=:id) "
+                "ORDER BY transaction_id DESC LIMIT 1"
             ),
             {"id": action.id},
         )
@@ -168,9 +170,12 @@ async def test_round_robin_void_receipt_preserves_complete_event(
     from sqlalchemy.exc import IntegrityError
 
     for statement in (
-        "DELETE FROM tournament_event_void_reconciliations WHERE void_action_id=:id",
-        "UPDATE tournament_event_void_reconciliations SET lifecycle_version=999 "
-        "WHERE void_action_id=:id",
+        "DELETE FROM tournament_event_reconciliations WHERE event_id="
+        "(SELECT f.scope_event_id FROM tournament_fixtures f "
+        "JOIN match_void_actions v ON v.match_id=f.match_id WHERE v.id=:id)",
+        "UPDATE tournament_event_reconciliations SET lifecycle_version=999 "
+        "WHERE event_id=(SELECT f.scope_event_id FROM tournament_fixtures f "
+        "JOIN match_void_actions v ON v.match_id=f.match_id WHERE v.id=:id)",
     ):
         with pytest.raises(IntegrityError, match="receipts are retained"):
             async with db_session.begin_nested():

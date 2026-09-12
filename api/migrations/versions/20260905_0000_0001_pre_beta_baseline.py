@@ -1802,27 +1802,28 @@ ARCHIVE_DDL = (
 )
 
 
-VOID_RECONCILIATION_DDL = (
+RECONCILIATION_DDL = (
     """
-    CREATE FUNCTION preserve_event_void_reconciliation() RETURNS trigger
+    CREATE FUNCTION preserve_event_reconciliation() RETURNS trigger
     LANGUAGE plpgsql AS $$
     BEGIN
+        IF TG_OP = 'DELETE' AND pg_trigger_depth() > 1 AND
+            OLD.transaction_id = pg_current_xact_id()::text::bigint THEN
+            RETURN OLD;
+        END IF;
         IF TG_OP = 'DELETE' OR (TG_OP = 'UPDATE' AND
             (OLD.transaction_id <> pg_current_xact_id()::text::bigint OR
-             NEW.void_action_id <> OLD.void_action_id OR NEW.event_id <> OLD.event_id))
+             NEW.transaction_id <> OLD.transaction_id OR NEW.event_id <> OLD.event_id))
         THEN
-            RAISE EXCEPTION 'void reconciliation receipts are retained'
+            RAISE EXCEPTION 'event reconciliation receipts are retained'
                 USING ERRCODE='23514';
         END IF;
         IF NOT EXISTS (
-            SELECT 1 FROM match_void_actions v
-            JOIN tournament_fixtures f ON f.match_id=v.match_id
-            JOIN tournament_events e ON e.id=f.scope_event_id
-            WHERE v.id=NEW.void_action_id AND e.id=NEW.event_id
+            SELECT 1 FROM tournament_events e WHERE e.id=NEW.event_id
               AND e.lifecycle_state::text=NEW.lifecycle_state
               AND e.lifecycle_version=NEW.lifecycle_version
         ) THEN
-            RAISE EXCEPTION 'void reconciliation must name the current event snapshot'
+            RAISE EXCEPTION 'event reconciliation must name the current event snapshot'
                 USING ERRCODE='23514';
         END IF;
         NEW.transaction_id := pg_current_xact_id()::text::bigint;
@@ -1830,9 +1831,9 @@ VOID_RECONCILIATION_DDL = (
     END $$
     """,
     """
-    CREATE TRIGGER preserve_event_void_reconciliation
-    BEFORE INSERT OR UPDATE OR DELETE ON tournament_event_void_reconciliations
-    FOR EACH ROW EXECUTE FUNCTION preserve_event_void_reconciliation()
+    CREATE TRIGGER preserve_event_reconciliation
+    BEFORE INSERT OR UPDATE OR DELETE ON tournament_event_reconciliations
+    FOR EACH ROW EXECUTE FUNCTION preserve_event_reconciliation()
     """,
     """
     CREATE FUNCTION require_void_event_reconciliation() RETURNS trigger
@@ -1842,8 +1843,8 @@ VOID_RECONCILIATION_DDL = (
             SELECT 1 FROM tournament_fixtures f
             JOIN tournament_events e ON e.id=f.scope_event_id
             WHERE f.match_id=NEW.match_id AND NOT EXISTS (
-                SELECT 1 FROM tournament_event_void_reconciliations r
-                WHERE r.void_action_id=NEW.id AND r.event_id=e.id
+                SELECT 1 FROM tournament_event_reconciliations r
+                WHERE r.event_id=e.id
                   AND r.lifecycle_state=e.lifecycle_state::text
                   AND r.lifecycle_version=e.lifecycle_version
                   AND r.transaction_id=pg_current_xact_id()::text::bigint
@@ -1859,6 +1860,68 @@ VOID_RECONCILIATION_DDL = (
     CREATE CONSTRAINT TRIGGER require_void_event_reconciliation
     AFTER INSERT ON match_void_actions DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION require_void_event_reconciliation()
+    """,
+    """
+    CREATE FUNCTION invalidate_event_reconciliation() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    DECLARE affected_event uuid;
+    BEGIN
+        IF TG_TABLE_NAME = 'match_void_actions' THEN
+            SELECT scope_event_id INTO affected_event FROM tournament_fixtures
+                WHERE match_id=NEW.match_id;
+        ELSE
+            IF TG_OP = 'UPDATE' AND NEW.match_id IS NOT DISTINCT FROM OLD.match_id THEN
+                RETURN NEW;
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM matches
+                WHERE id=NEW.match_id AND status='completed') THEN
+                RETURN NEW;
+            END IF;
+            affected_event := NEW.scope_event_id;
+        END IF;
+        DELETE FROM tournament_event_reconciliations
+            WHERE event_id=affected_event
+              AND transaction_id=pg_current_xact_id()::text::bigint;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER invalidate_void_event_reconciliation
+    AFTER INSERT ON match_void_actions
+    FOR EACH ROW EXECUTE FUNCTION invalidate_event_reconciliation()
+    """,
+    """
+    CREATE TRIGGER invalidate_attachment_event_reconciliation
+    AFTER INSERT OR UPDATE OF match_id ON tournament_fixtures
+    FOR EACH ROW EXECUTE FUNCTION invalidate_event_reconciliation()
+    """,
+    """
+    CREATE FUNCTION require_attachment_event_reconciliation() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        IF TG_OP = 'UPDATE' AND NEW.match_id IS NOT DISTINCT FROM OLD.match_id THEN
+            RETURN NULL;
+        END IF;
+        IF EXISTS (SELECT 1 FROM matches WHERE id=NEW.match_id AND status='completed')
+          AND NOT EXISTS (
+            SELECT 1 FROM tournament_event_reconciliations r
+            JOIN tournament_events e ON e.id=r.event_id
+            WHERE e.id=NEW.scope_event_id
+              AND r.lifecycle_state=e.lifecycle_state::text
+              AND r.lifecycle_version=e.lifecycle_version
+              AND r.transaction_id=pg_current_xact_id()::text::bigint
+        ) THEN
+            RAISE EXCEPTION 'completed attachment requires event reconciliation'
+                USING ERRCODE='23514';
+        END IF;
+        RETURN NULL;
+    END $$
+    """,
+    """
+    CREATE CONSTRAINT TRIGGER require_attachment_event_reconciliation
+    AFTER INSERT OR UPDATE OF match_id ON tournament_fixtures
+    DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION require_attachment_event_reconciliation()
     """,
 )
 
@@ -5249,31 +5312,27 @@ def upgrade() -> None:
         op.execute(statement)
 
     op.create_table(
-        "tournament_event_void_reconciliations",
-        sa.Column(
-            "void_action_id",
-            sa.UUID(),
-            sa.ForeignKey("match_void_actions.id", ondelete="RESTRICT"),
-            primary_key=True,
-        ),
+        "tournament_event_reconciliations",
         sa.Column(
             "event_id",
             sa.UUID(),
             sa.ForeignKey("tournament_events.id", ondelete="RESTRICT"),
-            nullable=False,
+            primary_key=True,
         ),
         sa.Column("lifecycle_state", sa.String(), nullable=False),
         sa.Column("lifecycle_version", sa.Integer(), nullable=False),
-        sa.Column("transaction_id", sa.BigInteger(), nullable=False),
+        sa.Column("transaction_id", sa.BigInteger(), primary_key=True),
     )
-    for statement in VOID_RECONCILIATION_DDL:
+    for statement in RECONCILIATION_DDL:
         op.execute(statement)
 
 
 def downgrade() -> None:
     op.execute("DROP FUNCTION require_void_event_reconciliation() CASCADE")
-    op.execute("DROP FUNCTION preserve_event_void_reconciliation() CASCADE")
-    op.drop_table("tournament_event_void_reconciliations")
+    op.execute("DROP FUNCTION preserve_event_reconciliation() CASCADE")
+    op.execute("DROP FUNCTION invalidate_event_reconciliation() CASCADE")
+    op.execute("DROP FUNCTION require_attachment_event_reconciliation() CASCADE")
+    op.drop_table("tournament_event_reconciliations")
     op.execute("DROP FUNCTION preserve_recorded_score_identity() CASCADE")
     op.execute("DROP FUNCTION preserve_recorded_game_identity() CASCADE")
     op.execute("DROP FUNCTION retain_cancelled_event_counter() CASCADE")

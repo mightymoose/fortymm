@@ -943,6 +943,10 @@ async def test_fixture_attaching_an_already_played_match_captures_history(
         text("UPDATE tournament_fixtures SET match_id = :match WHERE id = :id"),
         {"match": match.id, "id": fixture.id},
     )
+    if status == "completed":
+        from app.event_lifecycle import reconcile_event
+
+        await reconcile_event(db_session, event.id)
     await db_session.commit()
     assert set(
         await db_session.scalars(text("SELECT player_id FROM match_lineup_players"))

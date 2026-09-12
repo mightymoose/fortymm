@@ -17,6 +17,7 @@ from app.models import (
     TournamentEventStage,
     TournamentFixture,
 )
+from app.models.event_reconciliation import EventReconciliation
 from app.models.tournament_archive import TournamentArchiveHistory
 from app.tournament_errors import RecordedPlayDeletionError
 
@@ -61,6 +62,18 @@ async def require_no_recorded_play(
     ):
         raise RecordedPlayDeletionError(
             "Event lifecycle history must be preserved. "
+            "This event or tournament cannot be deleted."
+        )
+    if (
+        await db.scalar(
+            select(EventReconciliation.event_id)
+            .where(EventReconciliation.event_id.in_(event_ids))
+            .limit(1)
+        )
+        is not None
+    ):
+        raise RecordedPlayDeletionError(
+            "Event reconciliation history must be preserved. "
             "This event or tournament cannot be deleted."
         )
     # A first lineup's FK takes KEY SHARE on these rows, even when its caller

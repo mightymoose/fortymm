@@ -29,6 +29,7 @@ from app.models import (
     EventFormat,
     League,
     Match,
+    MatchStatus,
     Permission,
     RatingHistory,
     Role,
@@ -256,6 +257,14 @@ async def attach_match_to_director_tournament(
         entry_b_id=entry_b.id,
     )
     db_session.add(fixture)
+    await db_session.flush()
+    if (
+        await db_session.scalar(select(Match.status).where(Match.id == match_id))
+        == MatchStatus.completed
+    ):
+        from app.event_lifecycle import reconcile_event
+
+        await reconcile_event(db_session, event.id)
     await db_session.commit()
     return (
         await db_session.execute(

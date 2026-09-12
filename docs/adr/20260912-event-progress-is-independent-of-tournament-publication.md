@@ -40,9 +40,11 @@ otherwise retain explicit unknowns. Seeded history follows the same rule, with
 no guessed legacy start or finish times. Version order remains authoritative
 even when timestamps are equal.
 
-An administrator void must commit with an explicit reconciliation assertion for
-its resulting event state and version. A deferred database guard rejects a bare
-SQL void without that assertion. Application writers use the existing results
+An administrator void or attachment of an already completed match must commit
+with an explicit reconciliation assertion for its resulting event state and
+version. Deferred database guards reject these writes without a current
+assertion; changing those inputs invalidates an earlier assertion in the same
+transaction. Committed assertions are retained. Application writers use the existing results
 strategy through `reconcile_event`; SQL maintenance must reconcile and assert its
 result before committing. The database does not duplicate the draw strategies.
 

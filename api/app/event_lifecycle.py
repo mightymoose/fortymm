@@ -37,7 +37,7 @@ async def reconcile_event(db: AsyncSession, event_id: uuid.UUID) -> None:
     if event is None:
         return
     if event.lifecycle_state is EventLifecycleState.cancelled:
-        await _record_void_reconciliations(db, event)
+        await _record_reconciliation(db, event)
         return
     fixtures = (await fixtures_by_event(db, [event_id]))[event_id]
     entrants = (await active_entrants_by_event(db, [event_id]))[event_id]
@@ -66,31 +66,30 @@ async def reconcile_event(db: AsyncSession, event_id: uuid.UUID) -> None:
             .values(lifecycle_state=next_state)
         )
         await db.refresh(event)
-    await _record_void_reconciliations(db, event)
+    await _record_reconciliation(db, event)
 
 
-async def _record_void_reconciliations(
-    db: AsyncSession, event: TournamentEvent
-) -> None:
-    """Assert the projected snapshot for this transaction's administrator voids.
+async def _record_reconciliation(db: AsyncSession, event: TournamentEvent) -> None:
+    """Assert this transaction's projected event snapshot for deferred integrity.
 
-    The deferred database guard refuses a void without this explicit assertion.
-    Repeated reconciliations update only receipts born in the current transaction;
-    committed receipts remain retained historical assertions.
+    A plain unstarted event has no receipt obligation and remains deletable.
+    Completed attachments and administrator voids invalidate an earlier assertion;
+    their transaction must reconcile again after changing the result inputs.
     """
     await db.execute(
         text("""
-            INSERT INTO tournament_event_void_reconciliations
-                (void_action_id, event_id, lifecycle_state, lifecycle_version,
-                 transaction_id)
-            SELECT v.id, :event, :state, :version, pg_current_xact_id()::text::bigint
-            FROM match_void_actions v
-            JOIN tournament_fixtures f ON f.match_id=v.match_id
-            LEFT JOIN tournament_event_void_reconciliations r ON r.void_action_id=v.id
-            WHERE f.scope_event_id=:event AND
-                (r.void_action_id IS NULL OR
-                 r.transaction_id=pg_current_xact_id()::text::bigint)
-            ON CONFLICT (void_action_id) DO UPDATE SET
+            INSERT INTO tournament_event_reconciliations
+                (event_id, lifecycle_state, lifecycle_version, transaction_id)
+            SELECT :event, :state, :version, pg_current_xact_id()::text::bigint
+            WHERE :version > 0 OR EXISTS (
+                SELECT 1 FROM tournament_fixtures f
+                JOIN matches m ON m.id=f.match_id
+                WHERE f.scope_event_id=:event AND
+                    (m.status='completed' OR EXISTS (
+                        SELECT 1 FROM match_void_actions v WHERE v.match_id=m.id
+                    ))
+            )
+            ON CONFLICT (event_id, transaction_id) DO UPDATE SET
                 lifecycle_state=EXCLUDED.lifecycle_state,
                 lifecycle_version=EXCLUDED.lifecycle_version
         """),
