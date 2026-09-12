@@ -27,7 +27,7 @@ import asyncio
 import threading
 import uuid
 from collections import defaultdict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from itertools import combinations
@@ -65,7 +65,6 @@ from app.models import (
     SolverVerdict,
     Tournament,
     TournamentEntry,
-    TournamentEntryStatus,
     TournamentEvent,
     TournamentEventGroupReservation,
     TournamentEventReservation,
@@ -425,7 +424,10 @@ async def _make_running_solve(
     return running.id
 
 
-def _commit_concurrently(database_url: str, statement: Executable) -> None:
+def _commit_concurrently(
+    database_url: str,
+    statement: Executable | Callable[[AsyncSession], Awaitable[None]],
+) -> None:
     """Commit ``statement`` through a separate engine on its own loop + thread
     — a genuinely concurrent writer, independent of every session the test or
     the job holds."""
@@ -435,7 +437,10 @@ def _commit_concurrently(database_url: str, statement: Executable) -> None:
         try:
             maker = async_sessionmaker(engine, expire_on_commit=False)
             async with maker() as db:
-                await db.execute(statement)
+                if callable(statement):
+                    await statement(db)
+                else:
+                    await db.execute(statement)
                 await db.commit()
         finally:
             await engine.dispose()
@@ -1811,14 +1816,14 @@ class TestDriftGuard:
                 .limit(1)
             )
         ).scalar_one()
+        from tests._entry_seeds import withdraw_entry_with_history
+
+        async def withdraw(db: AsyncSession) -> None:
+            await withdraw_entry_with_history(db, an_entry_id)
+
         hijack_solve(
             monkeypatch,
-            after_solve=lambda: _commit_concurrently(
-                postgres_url,
-                update(TournamentEntry)
-                .where(TournamentEntry.id == an_entry_id)
-                .values(status=TournamentEntryStatus.withdrawn),
-            ),
+            after_solve=lambda: _commit_concurrently(postgres_url, withdraw),
         )
         return tournament_id, event_id, row_id
 

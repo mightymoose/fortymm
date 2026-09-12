@@ -40,6 +40,7 @@ from app.tournament_event_stages import GroupCountSource
 from app.tournament_queries import stage_ids_for_events
 from app.tournament_reservations import group_count_for
 from app.tournaments import TOURNAMENT_CREATE
+from tests._entry_seeds import withdraw_entry_with_history
 from tests._helpers import (
     grant_permissions,
     make_user,
@@ -726,14 +727,15 @@ async def test_a_refused_re_cut_that_moves_the_count_leaves_the_standing_draw_un
     tournament_id = await _tournament(client)
     event = await _create_event(client, tournament_id)
     entries = await _seed_field(db_session, event["id"], 10)
+    withdrawn_ids = [entry.id for entry in entries[5:]]
     assert (await client.post(_draw_url(tournament_id, event["id"]))).status_code == 201
     groups_before = await _stored_group_ids(db_session, event["id"])
     assert len(groups_before) == 2
     fixtures_before = _snapshot(await _fixtures(db_session, event["id"]))
     assert fixtures_before
 
-    for entry in entries[5:]:
-        entry.status = TournamentEntryStatus.withdrawn
+    for entry_id in withdrawn_ids:
+        await withdraw_entry_with_history(db_session, entry_id)
     await db_session.commit()
 
     response = await client.post(_draw_url(tournament_id, event["id"]))

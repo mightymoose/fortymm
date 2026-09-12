@@ -91,7 +91,11 @@ from app.tournaments import (
     uncut_event_draw,
     update_event,
 )
-from tests._entry_seeds import entry_with_members, seed_fixture_match_sides
+from tests._entry_seeds import (
+    entry_with_members,
+    seed_fixture_match_sides,
+    withdraw_entry_with_history,
+)
 from tests._helpers import (
     accept_standing_result,
     assert_tournament_address_is_sql_null,
@@ -3832,7 +3836,7 @@ async def _cut_the_draw(client: AsyncClient, tournament_id: str, event_id: str) 
 async def _withdraw(db_session: AsyncSession, entry: TournamentEntry) -> None:
     """Withdraw an entry the way the route does — a soft delete (ADR-0016), so the row
     (and every fixture pointing at it) survives."""
-    entry.status = TournamentEntryStatus.withdrawn
+    await withdraw_entry_with_history(db_session, entry.id)
     await db_session.commit()
 
 
@@ -7234,7 +7238,7 @@ async def test_a_refused_re_cut_leaves_the_standing_draw_untouched(
     assert before != []
 
     for entry in entries[:2]:
-        entry.status = TournamentEntryStatus.withdrawn
+        await withdraw_entry_with_history(db_session, entry.id)
     await db_session.commit()
 
     response = await client.post(_draw_url(tournament_id, event["id"]))

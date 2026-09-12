@@ -1396,7 +1396,20 @@ async def test_merge_refuses_duplicate_recorded_play_in_same_stage_atomically(
         fixture.match_id = match.id
         await db_session.commit()
     if registration_withdrawn:
-        survivor_entry.status = TournamentEntryStatus.withdrawn
+        from app.models import TournamentStatus
+        from app.tournament_entries import withdraw_from_event
+
+        tournament = await db_session.get(Tournament, event.tournament_id)
+        assert tournament is not None
+        tournament.status = TournamentStatus.published
+        await db_session.commit()
+        await withdraw_from_event(
+            db_session,
+            tournament_id=event.tournament_id,
+            event_id=event.id,
+            entry_id=survivor_entry.id,
+            actor=survivor,
+        )
         await db_session.commit()
     before = _seats([fixture])
 

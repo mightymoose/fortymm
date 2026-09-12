@@ -740,6 +740,72 @@ DRAW_HISTORY_INTEGRITY_DDL = (
         REFERENCING OLD TABLE AS old_fixtures
         FOR EACH STATEMENT EXECUTE FUNCTION lock_fixture_write_batch()
         """,
+    """
+        CREATE FUNCTION check_entry_lifecycle() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        DECLARE entry_uuid uuid;
+        BEGIN
+        IF TG_TABLE_NAME = 'tournament_entries' THEN entry_uuid := NEW.id;
+        ELSE entry_uuid := NEW.entry_id;
+        END IF;
+        IF EXISTS (
+        SELECT 1 FROM tournament_entries e WHERE e.id = entry_uuid
+        AND (e.status = 'withdrawn' OR e.superseded_by_entry_id IS NOT NULL)
+        AND (EXISTS (SELECT 1 FROM tournament_entry_participations p
+        WHERE p.entry_id = e.id AND p.ended_at IS NULL)
+        OR EXISTS (SELECT 1 FROM tournament_entry_registrations r
+        WHERE r.entry_id = e.id AND r.withdrawn_at IS NULL))
+        ) THEN
+        RAISE EXCEPTION 'withdrawn entry requires closed registration and participation'
+        USING ERRCODE = '23514';
+        END IF;
+        IF EXISTS (
+        SELECT 1 FROM tournament_entries e WHERE e.id = entry_uuid
+        AND e.status = 'entered' AND e.superseded_by_entry_id IS NULL
+        AND EXISTS (SELECT 1 FROM tournament_entry_registrations r
+        WHERE r.entry_id = e.id)
+        AND NOT EXISTS (SELECT 1 FROM tournament_entry_registrations r
+        WHERE r.entry_id = e.id AND r.withdrawn_at IS NULL)
+        ) THEN
+        RAISE EXCEPTION 'entered entry requires current registration'
+        USING ERRCODE = '23514';
+        END IF;
+        RETURN NULL;
+        END $$
+        """,
+    """
+        CREATE CONSTRAINT TRIGGER check_entry_lifecycle
+        AFTER INSERT OR UPDATE ON tournament_entries
+        DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+        EXECUTE FUNCTION check_entry_lifecycle()
+        """,
+    """
+        CREATE CONSTRAINT TRIGGER check_registration_entry_lifecycle
+        AFTER INSERT OR UPDATE ON tournament_entry_registrations
+        DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+        EXECUTE FUNCTION check_entry_lifecycle()
+        """,
+    """
+        CREATE FUNCTION lock_registration_parent() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        DECLARE event_uuid uuid;
+        BEGIN
+        SELECT event_id INTO event_uuid FROM tournament_entries WHERE id = NEW.entry_id;
+        PERFORM t.id FROM tournaments t
+        JOIN tournament_events e ON e.tournament_id = t.id
+        WHERE e.id = event_uuid FOR SHARE OF t NOWAIT;
+        PERFORM id FROM tournament_events WHERE id = event_uuid FOR UPDATE NOWAIT;
+        RETURN NEW;
+        EXCEPTION WHEN lock_not_available THEN
+        RAISE EXCEPTION 'registration requires parent locks before write; retry'
+        USING ERRCODE = '40001';
+        END $$
+        """,
+    """
+        CREATE TRIGGER lock_registration_parent BEFORE INSERT OR UPDATE
+        ON tournament_entry_registrations FOR EACH ROW
+        EXECUTE FUNCTION lock_registration_parent()
+        """,
 )
 
 

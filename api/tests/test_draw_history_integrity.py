@@ -451,6 +451,7 @@ async def undrawn_registration(
     return {
         "entry_id": entry_id,
         "registration_id": registration_id,
+        "owner_id": owner_id,
         "event_id": event_id,
         "tournament_id": tournament_id,
     }
@@ -1090,3 +1091,183 @@ async def test_fixture_batch_locks_every_affected_event(
                     text(statement),
                     {"first": drawn_history["fixture_id"], "other": other[0].id},
                 )
+
+
+async def test_withdrawn_entry_requires_closed_registration_and_participation(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID]
+) -> None:
+    with pytest.raises(IntegrityError, match="withdrawn entry requires closed"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE tournament_entries SET status='withdrawn' WHERE id="
+                    "(SELECT entry_id FROM tournament_entry_participations "
+                    "WHERE id=:id)"
+                ),
+                {"id": drawn_history["participation_id"]},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_closing_registration_requires_final_withdrawn_entry_state(
+    db_session: AsyncSession, undrawn_registration: dict[str, uuid.UUID]
+) -> None:
+    with pytest.raises(
+        IntegrityError, match="entered entry requires current registration"
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE tournament_entry_registrations SET withdrawn_at="
+                    "clock_timestamp(),withdrawn_by_account_id=:actor,"
+                    "withdrawal_reason='self_withdrawal' WHERE id=:id"
+                ),
+                {
+                    "id": undrawn_registration["registration_id"],
+                    "actor": undrawn_registration["owner_id"],
+                },
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("operation", ["INSERT", "UPDATE"])
+async def test_registration_writer_retries_when_entry_parent_is_locked(
+    db_session: AsyncSession, undrawn_registration: dict[str, uuid.UUID], operation: str
+) -> None:
+    from sqlalchemy.exc import DBAPIError
+
+    async with AsyncSession(bind=db_session.bind) as gatekeeper:
+        await gatekeeper.execute(
+            text("SELECT id FROM tournament_events WHERE id=:id FOR UPDATE"),
+            {"id": undrawn_registration["event_id"]},
+        )
+        with pytest.raises(DBAPIError, match="registration requires parent locks"):
+            async with db_session.begin_nested():
+                await db_session.execute(text("SET LOCAL lock_timeout = '500ms'"))
+                statement = (
+                    "UPDATE tournament_entry_registrations "
+                    "SET registered_at=registered_at "
+                    "WHERE id=:id"
+                    if operation == "UPDATE"
+                    else "INSERT INTO tournament_entry_registrations "
+                    "(entry_id,registered_at,registered_by_account_id,withdrawn_at,"
+                    "withdrawn_by_account_id,withdrawal_reason) SELECT entry_id,"
+                    "registered_at,registered_by_account_id,clock_timestamp(),"
+                    "registered_by_account_id,'self_withdrawal' "
+                    "FROM tournament_entry_registrations WHERE id=:id"
+                )
+                await db_session.execute(
+                    text(statement), {"id": undrawn_registration["registration_id"]}
+                )
+
+
+async def _close_registration_interval(
+    db: AsyncSession, history: dict[str, uuid.UUID]
+) -> None:
+    await db.execute(
+        text(
+            "UPDATE tournament_entry_registrations SET withdrawn_at=clock_timestamp(),"
+            "withdrawn_by_account_id=:actor,withdrawal_reason='self_withdrawal' "
+            "WHERE id=:id"
+        ),
+        {"actor": history["owner_id"], "id": history["registration_id"]},
+    )
+
+
+@pytest.mark.parametrize("superseded", [False, True])
+async def test_invalid_entry_cannot_keep_or_receive_current_registration(
+    db_session: AsyncSession,
+    undrawn_registration: dict[str, uuid.UUID],
+    superseded: bool,
+) -> None:
+    from app.models import TournamentEvent
+
+    survivor = None
+    if superseded:
+        event = await db_session.get(TournamentEvent, undrawn_registration["event_id"])
+        assert event is not None
+        other = await _enter_field(db_session, event, 1, prefix="registration-survivor")
+        survivor = other[0].id
+    change_status = text(
+        "UPDATE tournament_entries SET status='withdrawn', "
+        "superseded_by_entry_id=:other "
+        "WHERE id=:id"
+    )
+    values = {"other": survivor, "id": undrawn_registration["entry_id"]}
+    with pytest.raises(IntegrityError, match="withdrawn entry requires closed"):
+        async with db_session.begin_nested():
+            await db_session.execute(change_status, values)
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await _close_registration_interval(db_session, undrawn_registration)
+    await db_session.execute(change_status, values)
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await db_session.execute(text("SET CONSTRAINTS ALL DEFERRED"))
+    with pytest.raises(IntegrityError, match="withdrawn entry requires closed"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "INSERT INTO tournament_entry_registrations "
+                    "(entry_id,registered_by_account_id) VALUES (:id,:actor)"
+                ),
+                {
+                    "id": undrawn_registration["entry_id"],
+                    "actor": undrawn_registration["owner_id"],
+                },
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_registration_reentry_checks_final_transaction_state(
+    db_session: AsyncSession, undrawn_registration: dict[str, uuid.UUID]
+) -> None:
+    await _close_registration_interval(db_session, undrawn_registration)
+    await db_session.execute(
+        text("UPDATE tournament_entries SET status='withdrawn' WHERE id=:id"),
+        {"id": undrawn_registration["entry_id"]},
+    )
+    await db_session.execute(
+        text(
+            "INSERT INTO tournament_entry_registrations "
+            "(entry_id,registered_by_account_id) VALUES (:id,:actor)"
+        ),
+        {
+            "id": undrawn_registration["entry_id"],
+            "actor": undrawn_registration["owner_id"],
+        },
+    )
+    await db_session.execute(
+        text("UPDATE tournament_entries SET status='entered' WHERE id=:id"),
+        {"id": undrawn_registration["entry_id"]},
+    )
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT count(*) FROM tournament_entry_registrations "
+                "WHERE entry_id=:id AND withdrawn_at IS NULL"
+            ),
+            {"id": undrawn_registration["entry_id"]},
+        )
+        == 1
+    )
+
+
+@pytest.mark.parametrize(
+    "parent_table,id_key",
+    [("tournament_events", "event_id"), ("tournaments", "tournament_id")],
+)
+async def test_parent_delete_discards_pending_entry_lifecycle_checks(
+    db_session: AsyncSession,
+    undrawn_registration: dict[str, uuid.UUID],
+    parent_table: str,
+    id_key: str,
+) -> None:
+    await db_session.execute(
+        text("UPDATE tournament_entries SET status='withdrawn' WHERE id=:id"),
+        {"id": undrawn_registration["entry_id"]},
+    )
+    await db_session.execute(
+        text(f"DELETE FROM {parent_table} WHERE id=:id"),
+        {"id": undrawn_registration[id_key]},
+    )
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))

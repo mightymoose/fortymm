@@ -56,7 +56,6 @@ from app.models import (
     ScheduleSolveTrigger,
     Tournament,
     TournamentEntry,
-    TournamentEntryStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
     TournamentFixture,
@@ -69,7 +68,7 @@ from app.schemas.notification import NotificationJob
 from app.tournament_draws import cut_draw
 from app.tournament_event_stages import mint_stages
 from app.tournament_queries import stage_ids_for_events, stage_ids_for_tournament
-from tests._entry_seeds import seed_fixture_match_sides
+from tests._entry_seeds import seed_fixture_match_sides, withdraw_entry_with_history
 from tests._helpers import (
     event_groups,
     hijack_solve,
@@ -1791,7 +1790,7 @@ class TestBrokenPinRepair:
                 select(TournamentEntry).where(TournamentEntry.id == fixture.entry_a_id)
             )
         ).scalar_one()
-        withdrawn_entry.status = TournamentEntryStatus.withdrawn
+        await withdraw_entry_with_history(db_session, withdrawn_entry.id)
         await db_session.commit()
         _freeze_clocks(monkeypatch, BASE)
 

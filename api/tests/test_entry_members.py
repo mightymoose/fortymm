@@ -31,6 +31,7 @@ from app.models import (
     TournamentStatus,
 )
 from app.tournament_authority import transfer_ownership
+from app.tournament_participation import WithdrawalReason, close_entry_participation
 from tests._helpers import make_user, start_session
 from tests.test_tournament_entries import _entries_url, _make_event
 from tests.test_tournament_fixtures import _make_event as make_drawn_event
@@ -1647,6 +1648,9 @@ async def test_entry_update_refuses_inverted_parent_lock_order(
             text("UPDATE tournament_entries SET status = 'withdrawn' WHERE id = :id"),
             {"id": entries[0].id},
         )
+        await close_entry_participation(
+            writer, entries[0].id, players[0].id, WithdrawalReason.self_withdrawal
+        )
         await writer.commit()
 
 
@@ -2095,6 +2099,9 @@ async def test_entry_withdrawal_does_not_relock_unchanged_adder(db_session, engi
         await withdrawing.execute(
             text("UPDATE tournament_entries SET status = 'withdrawn' WHERE id = :id"),
             {"id": entries[0].id},
+        )
+        await close_entry_participation(
+            withdrawing, entries[0].id, players[0].id, WithdrawalReason.self_withdrawal
         )
         await withdrawing.commit()
         assert (
@@ -2724,6 +2731,9 @@ async def test_direct_entry_deletion_cannot_erase_membership_history(
         await db_session.execute(
             text("UPDATE tournament_entries SET status = 'withdrawn' WHERE id = :id"),
             {"id": entries[0].id},
+        )
+        await close_entry_participation(
+            db_session, entries[0].id, players[0].id, WithdrawalReason.self_withdrawal
         )
         await db_session.commit()
     original_members = set(

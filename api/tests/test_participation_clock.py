@@ -4,11 +4,16 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import tournament_participation
-from app.models import TournamentEntryParticipation, TournamentEntryRegistration
+from app.models import (
+    TournamentEntry,
+    TournamentEntryParticipation,
+    TournamentEntryRegistration,
+    TournamentEntryStatus,
+)
 from app.tournament_participation import WithdrawalReason, close_registration
 from tests.test_draw_history_integrity import drawn_history as drawn_history
 
@@ -44,6 +49,11 @@ async def test_registration_withdrawal_uses_database_clock(
         entry_id,
         drawn_history["owner_id"],
         WithdrawalReason.director_removal,
+    )
+    await db_session.execute(
+        update(TournamentEntry)
+        .where(TournamentEntry.id == entry_id)
+        .values(status=TournamentEntryStatus.withdrawn)
     )
     await db_session.commit()
 

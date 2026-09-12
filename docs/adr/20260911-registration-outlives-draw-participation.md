@@ -43,6 +43,10 @@ rewrites recorded play. Missing a stage leaves later eligibility to that stage's
 admission rules; no new late-admission workflow is enabled in this change.
 Existing normal advancement remains supported.
 
+Entry status and recorded registration periods agree at commit: a withdrawn or
+superseded entry has no current registration or participation, and an entered
+entry with registration history has a current registration.
+
 At commit, an unrestored withdrawal cannot coexist with an open participation
 period in its scope. Deferred validation permits the normal insert-then-close
 transaction while enforcing the same rule for direct SQL writers.

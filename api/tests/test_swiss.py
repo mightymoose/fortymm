@@ -24,7 +24,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.draws import _swiss_seated_pairings
@@ -53,6 +53,7 @@ from app.tournament_materialization import materialize_event
 from app.tournament_queries import stage_ids_for_events
 from app.tournament_serialization import _field_input, _seated_pairings
 from app.tournaments import TOURNAMENT_CREATE
+from tests._entry_seeds import withdraw_entry_with_history
 from tests._helpers import (
     counted_statements,
     grant_permissions,
@@ -928,14 +929,10 @@ async def test_a_field_that_shrinks_mid_event_still_plays_out_and_finishes(
     The table reads 1, 3, 2, seed 2 takes the bye, and the two left have already met:
     the documented last resort, which pairs them again rather than stranding the round.
 
-    **The withdrawal is written as the statement that causes it in production.** The
-    ordinary withdrawal endpoint is window-gated and answers 409 on a live event, so
-    nothing here could reach the pairing code through it. ``app.account_merge`` can and
-    does: when a guest who is already playing claims a verified account that is also
-    entered, the merge flips the colliding entry to ``withdrawn`` — deliberately, rather
-    than deleting it, *because* the row seats fixtures that have been played. This is
-    that ``UPDATE``. Driving ``merge_user`` itself would add a re-pointed user, a voided
-    self-play match and a re-solve without adding anything this asserts.
+    The ordinary withdrawal endpoint is window-gated on a live event. Seed the
+    complete withdrawal lifecycle through the shared core, as reconciliation can
+    while live, so the registration and stage participation close together. Identity
+    transfer and self-play voiding are separate behaviors from the shrinking field.
     """
     client, owner = authed_client
     async with (
@@ -957,11 +954,7 @@ async def test_a_field_that_shrinks_mid_event_still_plays_out_and_finishes(
             zip(entry_ids, [client, client_2, client_3, client_4], strict=True)
         )
 
-        await db_session.execute(
-            update(TournamentEntry)
-            .where(TournamentEntry.id == entry_ids[3])
-            .values(status=TournamentEntryStatus.withdrawn)
-        )
+        await withdraw_entry_with_history(db_session, entry_ids[3])
         await db_session.commit()
 
         async def play(round_number: int, winner_index: int) -> None:
