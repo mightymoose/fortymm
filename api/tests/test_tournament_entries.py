@@ -138,7 +138,7 @@ async def _make_event(
     assert league is not None, "the autouse default_league fixture seeds this"
     tournament = Tournament(
         name="Spring Open",
-        status=status,
+        status=TournamentStatus.draft,
         address={
             "venue": "Berkeley TT Club",
             "street": "1 Shattuck Ave",
@@ -168,6 +168,8 @@ async def _make_event(
         predicates=predicates if predicates is not None else [],
     )
     db_session.add(event)
+    await db_session.flush()
+    tournament.status = status
     await db_session.commit()
     await db_session.refresh(event)
     return event

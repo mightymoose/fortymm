@@ -93,6 +93,7 @@ from app.tournament_errors import (
     TableInUseError,
     TableNotInCatalogueError,
     TournamentAlreadyInStatusError,
+    TournamentArchivedError,
     TournamentDetailsVersionConflictError,
     TournamentNotFoundError,
     TournamentNotPreLiveError,
@@ -231,6 +232,7 @@ _TournamentWriteError = (
     | EventFormatMembershipError
     | DrawUnderWayError
     | RecordedPlayDeletionError
+    | TournamentArchivedError
     | LeagueNotEditableError
 )
 _TOURNAMENT_WRITE_ERRORS = (
@@ -242,6 +244,7 @@ _TOURNAMENT_WRITE_ERRORS = (
     DrawUnderWayError,
     LeagueNotEditableError,
     RecordedPlayDeletionError,
+    TournamentArchivedError,
 )
 
 

@@ -1054,6 +1054,7 @@ ENTRY_INTEGRITY_DDL = (
     """
     CREATE OR REPLACE FUNCTION lock_fixture_link() RETURNS trigger
     LANGUAGE plpgsql AS $$
+    DECLARE event_row RECORD;
     BEGIN
         IF TG_OP = 'INSERT' AND NEW.match_id IS NULL THEN RETURN NEW; END IF;
         IF TG_OP = 'UPDATE' THEN
@@ -1074,10 +1075,18 @@ ENTRY_INTEGRITY_DDL = (
         JOIN tournament_event_stages s ON s.event_id = e.id
         WHERE s.id IN (NEW.stage_id, OLD.stage_id)
         ORDER BY t.id FOR SHARE OF t NOWAIT;
-        PERFORM e.id FROM tournament_events e
-        JOIN tournament_event_stages s ON s.event_id = e.id
-        WHERE s.id IN (NEW.stage_id, OLD.stage_id)
-        ORDER BY e.id FOR UPDATE OF e NOWAIT;
+        FOR event_row IN
+            SELECT e.id, e.lifecycle_state FROM tournament_events e
+            JOIN tournament_event_stages s ON s.event_id = e.id
+            WHERE s.id IN (NEW.stage_id, OLD.stage_id)
+            ORDER BY e.id FOR UPDATE OF e NOWAIT
+        LOOP
+            IF TG_OP <> 'INSERT' AND event_row.id=OLD.scope_event_id
+                AND event_row.lifecycle_state='cancelled' THEN
+                RAISE EXCEPTION 'cancelled event fixture must be retained'
+                    USING ERRCODE = '23514';
+            END IF;
+        END LOOP;
         IF TG_OP <> 'INSERT' THEN
             IF EXISTS (SELECT 1 FROM match_lineups WHERE match_id = OLD.match_id)
                 OR EXISTS (SELECT 1 FROM match_games WHERE match_id = OLD.match_id)
@@ -1910,8 +1919,16 @@ ARCHIVE_DDL = (
         IF TG_OP = 'UPDATE' AND NEW.tournament_id = OLD.tournament_id THEN
             RETURN NEW;
         END IF;
-        PERFORM id FROM tournaments WHERE id=OLD.tournament_id FOR SHARE NOWAIT;
-        IF EXISTS (SELECT 1 FROM tournament_archive_history
+        IF TG_OP = 'INSERT' THEN
+            PERFORM id FROM tournaments WHERE id=NEW.tournament_id FOR SHARE NOWAIT;
+        ELSIF TG_OP = 'DELETE' THEN
+            PERFORM id FROM tournaments WHERE id=OLD.tournament_id FOR SHARE NOWAIT;
+        ELSE
+            PERFORM id FROM tournaments
+            WHERE id IN (OLD.tournament_id, NEW.tournament_id)
+            ORDER BY id FOR SHARE NOWAIT;
+        END IF;
+        IF TG_OP <> 'INSERT' AND EXISTS (SELECT 1 FROM tournament_archive_history
             WHERE tournament_id=OLD.tournament_id) THEN
             RAISE EXCEPTION 'archive history must preserve its events'
                 USING ERRCODE='23514';
@@ -1919,14 +1936,20 @@ ARCHIVE_DDL = (
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
+        IF EXISTS (SELECT 1 FROM tournament_archive_history
+            WHERE tournament_id=NEW.tournament_id) THEN
+            RAISE EXCEPTION 'an archived tournament cannot accept new events'
+                USING ERRCODE='23514';
+        END IF;
         RETURN NEW;
     EXCEPTION WHEN lock_not_available THEN
-        RAISE EXCEPTION 'event removal requires archive parent lock; retry'
+        RAISE EXCEPTION 'event composition requires archive parent lock; retry'
             USING ERRCODE='40001';
     END $$
     """,
     """
-    CREATE TRIGGER preserve_archived_event BEFORE DELETE OR UPDATE OF tournament_id
+    CREATE TRIGGER preserve_archived_event
+    BEFORE INSERT OR DELETE OR UPDATE OF tournament_id
     ON tournament_events FOR EACH ROW EXECUTE FUNCTION preserve_archived_event()
     """,
 )
@@ -1977,6 +2000,25 @@ RECONCILIATION_DDL = (
             END IF;
             SELECT ARRAY[scope_event_id] INTO affected_events FROM tournament_fixtures
                 WHERE match_id=NEW.id;
+        ELSIF TG_TABLE_NAME = 'tournament_entries' THEN
+            IF TG_OP = 'UPDATE' AND ROW(NEW.status, NEW.event_id)
+                IS NOT DISTINCT FROM ROW(OLD.status, OLD.event_id) THEN
+                RETURN NULL;
+            END IF;
+            IF TG_OP <> 'DELETE' AND NEW.status='entered' THEN
+                affected_events := array_append(affected_events, NEW.event_id);
+            END IF;
+            IF TG_OP <> 'INSERT' AND OLD.status='entered' THEN
+                affected_events := array_append(affected_events, OLD.event_id);
+            END IF;
+            SELECT array_agg(e.id) INTO affected_events FROM tournament_events e
+            WHERE e.id=ANY(affected_events) AND (
+                e.lifecycle_version>0 OR EXISTS (
+                    SELECT 1 FROM tournament_fixtures f
+                    JOIN matches m ON m.id=f.match_id
+                    WHERE f.scope_event_id=e.id AND m.status IN ('completed','voided')
+                )
+            );
         ELSE
             IF TG_OP = 'UPDATE' AND
                 ROW(NEW.match_id, NEW.scope_event_id, NEW.retired_at,
@@ -2023,6 +2065,11 @@ RECONCILIATION_DDL = (
     AFTER INSERT OR UPDATE OF match_id, scope_event_id, retired_at,
         entry_a_id, entry_b_id, stage_id, group_id, round OR DELETE
     ON tournament_fixtures
+    FOR EACH ROW EXECUTE FUNCTION invalidate_event_reconciliation()
+    """,
+    """
+    CREATE TRIGGER invalidate_entry_event_reconciliation
+    AFTER INSERT OR UPDATE OF status, event_id OR DELETE ON tournament_entries
     FOR EACH ROW EXECUTE FUNCTION invalidate_event_reconciliation()
     """,
     """

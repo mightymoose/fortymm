@@ -38,6 +38,7 @@ from app.models import (
     TournamentEvent,
     TournamentEventReservation,
     TournamentFixture,
+    TournamentStatus,
     User,
     VenueTable,
 )
@@ -78,6 +79,7 @@ from app.tournament_errors import (
     EventNotFoundError,
     EventVersionConflictError,
     GroupSetFrozenError,
+    TournamentArchivedError,
 )
 from app.tournament_event_stages import mint_stages, remint_stages_in_place
 from app.tournament_queries import stage_ids_for_events
@@ -157,6 +159,8 @@ async def create_event(
     it is judged on, ADR-0783) without re-querying the column the verb just loaded.
     """
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
+    if tournament.status is TournamentStatus.archived:
+        raise TournamentArchivedError()
     # The event's stages, also ROWS (ADR 20260815) and also created with the event in
     # this same transaction — every event holds its minted stages from the moment it
     # exists, never as a follow-up write. ``mint_stages`` reads the template straight

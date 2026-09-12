@@ -792,6 +792,7 @@ ENTRY_INTEGRITY_DDL = (
     """
     CREATE OR REPLACE FUNCTION lock_fixture_link() RETURNS trigger
     LANGUAGE plpgsql AS $$
+    DECLARE event_row RECORD;
     BEGIN
         IF TG_OP = 'INSERT' AND NEW.match_id IS NULL THEN RETURN NEW; END IF;
         IF TG_OP = 'UPDATE' THEN
@@ -812,10 +813,18 @@ ENTRY_INTEGRITY_DDL = (
         JOIN tournament_event_stages s ON s.event_id = e.id
         WHERE s.id IN (NEW.stage_id, OLD.stage_id)
         ORDER BY t.id FOR SHARE OF t NOWAIT;
-        PERFORM e.id FROM tournament_events e
-        JOIN tournament_event_stages s ON s.event_id = e.id
-        WHERE s.id IN (NEW.stage_id, OLD.stage_id)
-        ORDER BY e.id FOR UPDATE OF e NOWAIT;
+        FOR event_row IN
+            SELECT e.id, e.lifecycle_state FROM tournament_events e
+            JOIN tournament_event_stages s ON s.event_id = e.id
+            WHERE s.id IN (NEW.stage_id, OLD.stage_id)
+            ORDER BY e.id FOR UPDATE OF e NOWAIT
+        LOOP
+            IF TG_OP <> 'INSERT' AND event_row.id=OLD.scope_event_id
+                AND event_row.lifecycle_state='cancelled' THEN
+                RAISE EXCEPTION 'cancelled event fixture must be retained'
+                    USING ERRCODE = '23514';
+            END IF;
+        END LOOP;
         IF TG_OP <> 'INSERT' THEN
             IF EXISTS (SELECT 1 FROM match_lineups WHERE match_id = OLD.match_id)
                 OR EXISTS (SELECT 1 FROM match_games WHERE match_id = OLD.match_id)

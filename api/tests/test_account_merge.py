@@ -549,6 +549,9 @@ async def _enter(
         # a NOT NULL column instead of falling back to ``now()``.
         entry.created_at = created_at
     db.add(entry)
+    from app.event_lifecycle import reconcile_event
+
+    await reconcile_event(db, event.id)
     await db.commit()
     await db.refresh(entry)
     return entry

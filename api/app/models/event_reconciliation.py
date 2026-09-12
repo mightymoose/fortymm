@@ -83,6 +83,25 @@ RECONCILIATION_DDL = (
             END IF;
             SELECT ARRAY[scope_event_id] INTO affected_events FROM tournament_fixtures
                 WHERE match_id=NEW.id;
+        ELSIF TG_TABLE_NAME = 'tournament_entries' THEN
+            IF TG_OP = 'UPDATE' AND ROW(NEW.status, NEW.event_id)
+                IS NOT DISTINCT FROM ROW(OLD.status, OLD.event_id) THEN
+                RETURN NULL;
+            END IF;
+            IF TG_OP <> 'DELETE' AND NEW.status='entered' THEN
+                affected_events := array_append(affected_events, NEW.event_id);
+            END IF;
+            IF TG_OP <> 'INSERT' AND OLD.status='entered' THEN
+                affected_events := array_append(affected_events, OLD.event_id);
+            END IF;
+            SELECT array_agg(e.id) INTO affected_events FROM tournament_events e
+            WHERE e.id=ANY(affected_events) AND (
+                e.lifecycle_version>0 OR EXISTS (
+                    SELECT 1 FROM tournament_fixtures f
+                    JOIN matches m ON m.id=f.match_id
+                    WHERE f.scope_event_id=e.id AND m.status IN ('completed','voided')
+                )
+            );
         ELSE
             IF TG_OP = 'UPDATE' AND
                 ROW(NEW.match_id, NEW.scope_event_id, NEW.retired_at,
@@ -129,6 +148,11 @@ RECONCILIATION_DDL = (
     AFTER INSERT OR UPDATE OF match_id, scope_event_id, retired_at,
         entry_a_id, entry_b_id, stage_id, group_id, round OR DELETE
     ON tournament_fixtures
+    FOR EACH ROW EXECUTE FUNCTION invalidate_event_reconciliation()
+    """,
+    """
+    CREATE TRIGGER invalidate_entry_event_reconciliation
+    AFTER INSERT OR UPDATE OF status, event_id OR DELETE ON tournament_entries
     FOR EACH ROW EXECUTE FUNCTION invalidate_event_reconciliation()
     """,
     """

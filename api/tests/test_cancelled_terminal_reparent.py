@@ -38,6 +38,9 @@ async def test_cancelled_event_rejects_terminal_fixture_reparenting(db_session):
     await db_session.commit()
     tournament = await db_session.get(Tournament, target_tournament)
     owner = await db_session.get(User, tournament.owner_account_id)
+    await db_session.execute(
+        text("DELETE FROM tournament_fixtures WHERE id=:id"), {"id": target.id}
+    )
     await cancel_event(
         db_session, tournament_id=target_tournament, event_id=target_event, actor=owner
     )
@@ -58,9 +61,6 @@ async def test_cancelled_event_rejects_terminal_fixture_reparenting(db_session):
     }
     with pytest.raises(IntegrityError, match="cancelled events cannot attach"):
         async with db_session.begin_nested():
-            await db_session.execute(
-                text("DELETE FROM tournament_fixtures WHERE id=:id"), {"id": target.id}
-            )
             values["id"] = source.id
             await db_session.execute(
                 text(

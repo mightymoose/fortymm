@@ -65,8 +65,16 @@ ARCHIVE_DDL = (
         IF TG_OP = 'UPDATE' AND NEW.tournament_id = OLD.tournament_id THEN
             RETURN NEW;
         END IF;
-        PERFORM id FROM tournaments WHERE id=OLD.tournament_id FOR SHARE NOWAIT;
-        IF EXISTS (SELECT 1 FROM tournament_archive_history
+        IF TG_OP = 'INSERT' THEN
+            PERFORM id FROM tournaments WHERE id=NEW.tournament_id FOR SHARE NOWAIT;
+        ELSIF TG_OP = 'DELETE' THEN
+            PERFORM id FROM tournaments WHERE id=OLD.tournament_id FOR SHARE NOWAIT;
+        ELSE
+            PERFORM id FROM tournaments
+            WHERE id IN (OLD.tournament_id, NEW.tournament_id)
+            ORDER BY id FOR SHARE NOWAIT;
+        END IF;
+        IF TG_OP <> 'INSERT' AND EXISTS (SELECT 1 FROM tournament_archive_history
             WHERE tournament_id=OLD.tournament_id) THEN
             RAISE EXCEPTION 'archive history must preserve its events'
                 USING ERRCODE='23514';
@@ -74,14 +82,20 @@ ARCHIVE_DDL = (
         IF TG_OP = 'DELETE' THEN
             RETURN OLD;
         END IF;
+        IF EXISTS (SELECT 1 FROM tournament_archive_history
+            WHERE tournament_id=NEW.tournament_id) THEN
+            RAISE EXCEPTION 'an archived tournament cannot accept new events'
+                USING ERRCODE='23514';
+        END IF;
         RETURN NEW;
     EXCEPTION WHEN lock_not_available THEN
-        RAISE EXCEPTION 'event removal requires archive parent lock; retry'
+        RAISE EXCEPTION 'event composition requires archive parent lock; retry'
             USING ERRCODE='40001';
     END $$
     """,
     """
-    CREATE TRIGGER preserve_archived_event BEFORE DELETE OR UPDATE OF tournament_id
+    CREATE TRIGGER preserve_archived_event
+    BEFORE INSERT OR DELETE OR UPDATE OF tournament_id
     ON tournament_events FOR EACH ROW EXECUTE FUNCTION preserve_archived_event()
     """,
 )

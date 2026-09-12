@@ -85,3 +85,11 @@ async def withdraw_entry_with_history(db: AsyncSession, entry_id: uuid.UUID) -> 
         .where(TournamentEntry.id == entry_id)
         .values(status=TournamentEntryStatus.withdrawn)
     )
+
+    from app.event_lifecycle import reconcile_event
+
+    event_id = await db.scalar(
+        select(TournamentEntry.event_id).where(TournamentEntry.id == entry_id)
+    )
+    assert event_id is not None
+    await reconcile_event(db, event_id)

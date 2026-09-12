@@ -771,3 +771,10 @@ class InactiveTournamentActorError(Exception):
 
     def __init__(self) -> None:
         super().__init__("This account is no longer active. Refresh your session.")
+
+
+class TournamentArchivedError(Exception):
+    """An archived tournament cannot acquire additional event composition."""
+
+    def __init__(self) -> None:
+        super().__init__("An archived tournament cannot accept new events.")

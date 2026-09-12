@@ -43,17 +43,21 @@ Transition observation times and actual sporting occurrence times have distinct
 meanings. Record exact occurrence times only when supported by evidence;
 otherwise retain explicit unknowns. Seeded history follows the same rule, with
 no guessed legacy start or finish times. Version order remains authoritative
-even when timestamps are equal.
+even when timestamps are equal. Saved score creation times are immutable and cannot
+claim a future observation.
 
 An administrator void, a match transition into or out of a completed or voided
-state, or attaching, removing, replacing, or retiring such a match must commit
+state, attaching, removing, replacing, or retiring such a match, or changing its
+fixture result inputs must commit
 with an explicit reconciliation assertion for each affected event's resulting
 state and version. Deferred database guards reject these writes without a current
 assertion. Each mutation retains its affected event before associations can
 change; changing those inputs invalidates an earlier assertion in the same
 transaction. Committed assertions are retained. Application writers use the
 existing results strategy through `reconcile_event`; SQL maintenance must
-reconcile and assert its result before committing. The database does not duplicate the draw strategies.
+reconcile and assert its result before committing. Active-entry changes in events
+with progress require the same assertion, including SQL maintenance and account
+merges. The database does not duplicate the draw strategies.
 
 ## Cancellation, archive and registration
 
@@ -63,7 +67,8 @@ attached completed or voided results, and allows correction of previously record
 authority rules. Corrections never reopen a cancelled event. The internal backend
 operation and database support do not add a public cancellation endpoint or UI.
 Cancelled events are excluded from new match materialization, scheduling and calls;
-their existing match, placement and call records remain retained.
+their existing fixture topology, match, placement and call records remain retained,
+even when no play was recorded.
 If every event is cancelled, the tournament may still pass through live to archive;
 the existing refusal for a truly empty tournament remains.
 
@@ -71,7 +76,8 @@ Archive records when a tournament was put away. It does not finish or cancel
 unfinished events and does not rewrite their state or history. Cancelled events
 and archived tournaments cannot be hard-deleted, even when no play occurred.
 Archived tournaments also retain their unstarted events: those events cannot be
-deleted or moved to another tournament. Existing play, official-result and
+deleted or moved to another tournament. New events cannot be created or moved
+into an archived tournament. Existing play, official-result and
 advancement-history retention continues to apply. Lifecycle history itself cannot be rewritten or deleted.
 
 Registration permission remains a separate policy. For compatibility, publishing
