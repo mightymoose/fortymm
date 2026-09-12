@@ -98,6 +98,9 @@ RECONCILIATION_DDL = (
                 affected_events := array_append(affected_events, OLD.scope_event_id);
             END IF;
         END IF;
+        IF COALESCE(cardinality(affected_events), 0) = 0 THEN
+            RETURN NULL;
+        END IF;
         INSERT INTO tournament_event_reconciliations
             (event_id, transaction_id, lifecycle_state, lifecycle_version, reconciled)
         SELECT id, pg_current_xact_id()::text::bigint,

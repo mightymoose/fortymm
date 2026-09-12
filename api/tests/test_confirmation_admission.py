@@ -28,6 +28,9 @@ async def _conflicting_confirmation(api_client, db_session, purpose=EmailPurpose
         db_session, survivor, accounts[fixture.entry_a_id], accounts[fixture.entry_b_id]
     )
     fixture.match_id = match.id
+    from app.event_lifecycle import reconcile_event
+
+    await reconcile_event(db_session, event.id)
     raw = "recoverable-confirmation-conflict"
     token = EmailToken(
         user_id=guest.id if purpose is EmailPurpose.merge else survivor.id,
