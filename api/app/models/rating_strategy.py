@@ -7,8 +7,10 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Float,
+    Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -28,6 +30,8 @@ class RatingStrategy(Base):
 
     __tablename__ = "rating_strategies"
     __table_args__ = (
+        UniqueConstraint("key", "version", name="uq_rating_strategies_key_version"),
+        CheckConstraint("version > 0", name="ck_rating_strategies_version"),
         CheckConstraint(
             "jsonb_typeof(state_schema) = 'object'",
             name="ck_rating_strategies_state_schema_object",
@@ -44,8 +48,9 @@ class RatingStrategy(Base):
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
-    key: Mapped[str] = mapped_column(
-        String(64), unique=True, nullable=False, index=True
+    key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("1")
     )
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

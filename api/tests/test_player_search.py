@@ -18,14 +18,14 @@ from app.models import (
     UserLeagueRating,
 )
 from app.player_search import search_players_by_username
-from tests._helpers import make_user
+from tests._helpers import input_history, make_user
 
 
 def _provenance(user: User, league: League, rating_value: float) -> RatingHistory:
     """A ``manual`` rating-history row — the cheapest production shape that
     carries provenance, so ``is_rated_member()`` treats the seeded number as an
     actual rating (see ``test_players._provenance``)."""
-    return RatingHistory(
+    return input_history(
         league_id=league.id,
         user_id=user.id,
         match_id=None,

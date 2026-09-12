@@ -1,3 +1,8 @@
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.models.rating_strategy import RatingStrategy
+
 from app.ratings.base import RatingCalculator, RatingStrategyKey
 from app.ratings.glicko2 import CALCULATOR as GLICKO2_CALCULATOR
 
@@ -27,3 +32,21 @@ def parse_strategy_key(key: str) -> RatingStrategyKey | None:
 
 def get_calculator(key: RatingStrategyKey) -> RatingCalculator | None:
     return STRATEGIES.get(key)
+
+
+def calculator_for_version(strategy: "RatingStrategy") -> RatingCalculator | None:
+    """Version 1 pins the vendored formula, constants and state interpretation.
+
+    New formula/configuration/schema semantics require a new version and an
+    explicit implementation here; an unavailable historical version never falls
+    through to whatever calculator happens to be newest.
+    """
+    key = parse_strategy_key(strategy.key)
+    if strategy.version != 1 or key is None:
+        raise ValueError(
+            f"Unsupported rating strategy version: {strategy.key}/{strategy.version}"
+        )
+    calculator = get_calculator(key)
+    if strategy.is_automatic and calculator is None:
+        raise ValueError(f"Unsupported automatic rating strategy: {strategy.key}")
+    return calculator

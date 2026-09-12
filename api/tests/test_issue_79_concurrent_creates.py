@@ -91,8 +91,7 @@ async def test_concurrent_rated_creates_do_not_500(
         fastapi_app.dependency_overrides.clear()
         # Clean up the rows this test committed through its own sessions
         # (they bypass the db_session fixture's truncate).
-        async with engine.begin() as conn:
-            from app.db import Base
+        from app.db import Base
+        from tests._database_reset import reset_database
 
-            for table in reversed(Base.metadata.sorted_tables):
-                await conn.execute(table.delete())
+        await reset_database(engine, Base.metadata.sorted_tables)
