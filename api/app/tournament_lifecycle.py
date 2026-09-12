@@ -507,8 +507,8 @@ async def transition_tournament(
     Runs the same orchestration the HTTP handler used to run inline, in the same
     order and under the same lock:
 
-    * Go-live first acquires the nonblocking actor draw gate, refusing concurrent
-      draw work before it can wait for a tournament lock.
+    * Every transition first acquires the nonblocking actor gate, refusing
+      concurrent tournament operations before waiting for a tournament lock.
     * Loads under the tournament row lock via
       :func:`_load_owned_tournament_for_update` (the ``FOR UPDATE`` load, then the
       owner gate), so the refusals are judged **404 → 403 → 409**: an absent id raises
@@ -518,8 +518,8 @@ async def transition_tournament(
       cannot touch is in. The lock is essential: two identical requests racing here
       would otherwise both read the same ``from``, both find a legal edge, and both
       succeed, turning the "already in that status" conflict into a silent no-op. The
-      loser on other transitions blocks, re-reads the committed status, and gets
-      the 409 it is owed.
+      loser receives a busy 409 while the winner is active, or re-reads the
+      committed status and receives the already-in-status 409 after it finishes.
     * **409** — the forward-only :data:`LEGAL_TRANSITIONS` table judges the edge. A
       re-asserted status raises :class:`TournamentAlreadyInStatusError` (its own
       single-ended sentence); any other illegal edge raises
@@ -550,8 +550,7 @@ async def transition_tournament(
     Commits and refreshes before returning. Never raises ``HTTPException`` — the
     caller adapts each domain exception to its transport.
     """
-    if to is TournamentStatus.live:
-        await lock_draw_actor(db, actor.id)
+    await lock_draw_actor(db, actor.id)
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
 
     if (tournament.status, to) not in LEGAL_TRANSITIONS:

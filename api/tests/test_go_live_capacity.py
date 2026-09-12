@@ -1,5 +1,6 @@
 """Go-live admits large ready sets without fixture-sized SQL parameter lists."""
 
+import pytest
 from sqlalchemy import event as sql_event
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -68,11 +69,13 @@ async def test_go_live_binds_ready_participation_as_one_collection(
     )
 
 
-async def test_busy_actor_go_live_refuses_before_tournament_lock_and_can_retry(
+@pytest.mark.parametrize("target", ["published", "live", "archived"])
+async def test_busy_actor_transition_refuses_before_tournament_lock_and_can_retry(
     api_client,
     db_session,
     default_league,
     engine,
+    target,
 ):
     import asyncio
 
@@ -86,7 +89,11 @@ async def test_busy_actor_go_live_refuses_before_tournament_lock_and_can_retry(
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     event = await _make_event(db_session, tournament, groups=[])
     await _enter_field(db_session, event, 2, prefix="busy-go-live")
-    tournament.status = TournamentStatus.published
+    tournament.status = {
+        "published": TournamentStatus.draft,
+        "live": TournamentStatus.published,
+        "archived": TournamentStatus.live,
+    }[target]
     await db_session.commit()
     await cut_event_draw(
         db_session,
@@ -107,13 +114,13 @@ async def test_busy_actor_go_live_refuses_before_tournament_lock_and_can_retry(
         async with asyncio.timeout(1):
             response = await api_client.post(
                 f"/v1/tournaments/{tournament_id}/transitions",
-                json={"to": "live"},
+                json={"to": target},
             )
         assert response.status_code == 409
         assert "already in progress" in response.json()["detail"]
     response = await api_client.post(
         f"/v1/tournaments/{tournament_id}/transitions",
-        json={"to": "live"},
+        json={"to": target},
     )
     assert response.status_code == 201
-    assert response.json()["status"] == "live"
+    assert response.json()["status"] == target

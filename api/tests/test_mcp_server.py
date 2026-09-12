@@ -5393,6 +5393,8 @@ async def test_build_cut_storage_limit_raises_actionable_tool_error(
         "delete_event",
         "delete_tournament",
         "transition_tournament",
+        "edit_tournament",
+        "request_schedule_solve",
     ],
 )
 async def test_draw_change_busy_actor_returns_actionable_refusal(
@@ -5410,13 +5412,17 @@ async def test_draw_change_busy_actor_returns_actionable_refusal(
         db_session, owner, default_league
     )
     actor_id, event_id = owner.id, event.id
-    arguments = {"event_id": str(event_id)}
+    arguments: dict[str, object] = {"event_id": str(event_id)}
     if tool_name in ("delete_event", "delete_tournament"):
         arguments["tournament_id"] = str(tournament.id)
     if tool_name == "delete_tournament":
         arguments.pop("event_id")
     if tool_name == "transition_tournament":
         arguments = {"tournament_id": str(tournament.id), "to": "live"}
+    if tool_name in ("edit_tournament", "request_schedule_solve"):
+        arguments = {"tournament_id": str(tournament.id)}
+    if tool_name == "edit_tournament":
+        arguments["updates"] = {}
     sessions = async_sessionmaker(engine)
     async with sessions() as gate:
         await lock_draw_actor(gate, actor_id)

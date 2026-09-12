@@ -44,3 +44,36 @@ async def test_parent_delete_refuses_busy_actor_before_tournament_lock(
         await gate.rollback()
     deleted = await client.delete(url)
     assert deleted.status_code == 204, deleted.text
+
+
+@pytest.mark.parametrize("operation", ["edit", "solve"])
+async def test_owner_write_refuses_busy_actor_before_tournament_lock(
+    authed_client, db_session, engine, default_league, operation
+):
+    client, owner = authed_client
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament, groups=[])
+    await _enter_field(db_session, event, 2, prefix="owner-write")
+    tournament_id, actor_id = tournament.id, owner.id
+    assert (
+        await client.post(f"/v1/tournaments/{tournament_id}/events/{event.id}/draw")
+    ).status_code == 201
+
+    async def request():
+        if operation == "edit":
+            return await client.patch(f"/v1/tournaments/{tournament_id}", json={})
+        return await client.post(f"/v1/tournaments/{tournament_id}/schedule/solves")
+
+    async with async_sessionmaker(engine)() as gate:
+        await lock_draw_actor(gate, actor_id)
+        await gate.execute(
+            select(Tournament.id)
+            .where(Tournament.id == tournament_id)
+            .with_for_update()
+        )
+        async with asyncio.timeout(1):
+            response = await request()
+        assert response.status_code == 409, response.text
+        assert "already in progress" in response.json()["detail"]
+    response = await request()
+    assert response.status_code == (200 if operation == "edit" else 202), response.text

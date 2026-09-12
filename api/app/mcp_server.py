@@ -1035,6 +1035,7 @@ async def list_my_tournaments() -> list[TournamentDetailRead]:
 # league 404, the two draw freezes, the entry refusal, the placement freeze — stay
 # inline in their tool, because each is one tool's alone.
 _TOURNAMENT_WRITE_TOOL_ERRORS = (
+    DrawActorBusy,
     EventFormatMembershipError,
     RecordedPlayDeletionError,
     TournamentNotFoundError,
@@ -1067,6 +1068,8 @@ def _map_tournament_write_tool_error(
     ``withdraw_from_event`` has no owner arm at all — its owner-ish refusal is the
     separate ``NotAllowedToWithdrawError``, mapped in the tool — so it passes neither,
     routing only its two not-found arms through here."""
+    if isinstance(exc, DrawActorBusy):
+        return ToolError(draw_error_detail(exc))
     if isinstance(exc, TournamentNotFoundError):
         return ToolError(f"No tournament found with id {tournament_id}.")
     if isinstance(exc, EventNotFoundError):
@@ -1352,8 +1355,8 @@ async def transition_tournament(
     stage, moving out of the terminal ``archived``, and re-asserting the status the
     tournament already holds (a stale request, not a no-op).
 
-    Going live is refused while another draw operation by this account is in
-    progress. Retry after that operation finishes.
+    Every status transition is refused while another tournament operation by this
+    account is in progress. Retry after that operation finishes.
 
     **Going live has a precondition** (ADR-0786): the tournament must have at least one
     event, and every event must have a **draw** whose fixtures seat exactly its current
@@ -2167,6 +2170,8 @@ async def request_schedule_solve(tournament_id: uuid.UUID) -> ScheduleSolveRead:
             row = await request_schedule_solve_core(
                 db, tournament_id=tournament_id, actor=actor
             )
+        except DrawActorBusy as exc:
+            raise ToolError(draw_error_detail(exc)) from exc
         except TournamentNotFoundError as exc:
             raise ToolError(f"No tournament found with id {tournament_id}.") from exc
         except NotTournamentOwnerError as exc:

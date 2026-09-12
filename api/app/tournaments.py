@@ -224,7 +224,8 @@ def _address_not_geocodable() -> HTTPException:
 # queue-down 503, and the ``DrawError`` family's 422 — stay inline in their adapters,
 # because each is one adapter's alone.
 _TournamentWriteError = (
-    TournamentNotFoundError
+    DrawActorBusy
+    | TournamentNotFoundError
     | NotTournamentOwnerError
     | EventNotFoundError
     | EventFormatMembershipError
@@ -233,6 +234,7 @@ _TournamentWriteError = (
     | LeagueNotEditableError
 )
 _TOURNAMENT_WRITE_ERRORS = (
+    DrawActorBusy,
     EventFormatMembershipError,
     TournamentNotFoundError,
     NotTournamentOwnerError,
@@ -250,6 +252,8 @@ def _map_tournament_write_error(exc: _TournamentWriteError) -> HTTPException:
     created."``, ``EventNotFoundError`` → 404 ``"Event not found."``, and both
     ``DrawUnderWayError`` and ``LeagueNotEditableError`` → 409 with their own
     carried, domain-authored sentence (``str(exc)``)."""
+    if isinstance(exc, DrawActorBusy):
+        return HTTPException(status_code=409, detail=draw_error_detail(exc))
     if isinstance(exc, TournamentNotFoundError):
         return HTTPException(status_code=404, detail="Tournament not found.")
     if isinstance(exc, NotTournamentOwnerError):
@@ -660,8 +664,8 @@ async def create_tournament_transition(
     re-asserting the status the tournament already holds — a request to publish
     an already-published tournament is a stale client, not a no-op.
 
-    A go-live request also returns `409` while another draw operation by this
-    account is in progress. Retry after that operation finishes.
+    Every status transition returns `409` while another tournament operation by
+    this account is in progress. Retry after that operation finishes.
 
     **Going live has a precondition** (ADR-0786): the tournament must have at least
     one event, and every event must have a **draw** whose fixtures seat exactly its

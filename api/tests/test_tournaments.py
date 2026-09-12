@@ -4065,8 +4065,8 @@ async def test_two_identical_transitions_racing_leave_exactly_one_winner(
     only when nobody was in a hurry: both requests would read ``draft``, both find
     the edge legal, and both answer 201, so a client could be told it published a
     tournament somebody else had already published. The row lock serializes them —
-    the loser blocks, re-reads the status the winner *committed*, and gets the 409
-    it is owed.
+    the loser receives a busy 409 or re-reads the committed status and receives
+    an already-in-status 409.
 
     Driven on two separate sessions (the handler called directly, as
     ``test_concurrent_accept_and_counter_serialize`` does for matches): the shared
