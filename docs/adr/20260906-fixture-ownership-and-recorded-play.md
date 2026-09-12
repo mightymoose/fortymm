@@ -2,6 +2,11 @@
 
 Status: Accepted for #1677, on the entry-members model in #1672.
 
+[Event progress is independent of tournament publication](20260912-event-progress-is-independent-of-tournament-publication.md)
+extends retention to cancelled events, archived tournaments and lifecycle history,
+including histories without play. Its first-score start rule does not change the
+provisional lineup's call/uncall semantics below.
+
 ## Scope
 
 This implementation deliberately excludes #1673 and #1674, as agreed in the

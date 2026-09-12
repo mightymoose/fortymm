@@ -262,9 +262,10 @@ async def delete_event(
     * **404** — an event id that names no event under this tournament (a mismatched
       pair included) raises :class:`EventNotFoundError`.
 
-    Recorded actual play prevents deletion. An unplayed event can still be deleted
-    regardless of publication or draw state. Never raises ``HTTPException`` — the
-    caller adapts each domain exception to its transport.
+    Recorded play and event lifecycle history prevent deletion. An unplayed,
+    unstarted event without retained history can still be deleted.
+    Never raises ``HTTPException`` — the caller adapts each domain exception to its
+    transport.
 
     Draw settings are inline event values and disappear with this row, including
     when the event is deleted by a database cascade.

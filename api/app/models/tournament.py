@@ -40,6 +40,13 @@ class TournamentStatus(enum.Enum):
     archived = "archived"
 
 
+class EventLifecycleState(enum.Enum):
+    unstarted = "unstarted"
+    in_progress = "in_progress"
+    finished = "finished"
+    cancelled = "cancelled"
+
+
 class EventFormat(enum.Enum):
     singles = "singles"
     doubles = "doubles"
@@ -91,6 +98,15 @@ class Tournament(Base):
         ),
         CheckConstraint("details_version >= 1", name="ck_tournaments_details_version"),
         CheckConstraint(
+            "(status = 'archived') = (archive_observed_at IS NOT NULL)",
+            name="ck_tournaments_archive_state",
+        ),
+        CheckConstraint(
+            "archived_at IS NULL OR (archive_observed_at IS NOT NULL "
+            "AND archived_at <= archive_observed_at)",
+            name="ck_tournaments_archive_chronology",
+        ),
+        CheckConstraint(
             "address IS NULL OR jsonb_typeof(address) = 'object'",
             name="ck_tournaments_address_object",
         ),
@@ -112,6 +128,10 @@ class Tournament(Base):
     ownership_revision: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("0")
     )
+    archive_observed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[TournamentStatus] = mapped_column(
@@ -243,6 +263,21 @@ class TournamentEvent(Base):
 
     __tablename__ = "tournament_events"
     __table_args__ = (
+        CheckConstraint("lifecycle_version >= 0", name="ck_event_lifecycle_version"),
+        CheckConstraint(
+            (
+                "lifecycle_state <> 'unstarted' OR (started_at IS NULL AND "
+                "first_recorded_play_at IS NULL)"
+            ),
+            name="ck_event_unstarted_has_no_play",
+        ),
+        CheckConstraint(
+            (
+                "started_at IS NULL OR first_recorded_play_at IS NULL OR "
+                "started_at <= first_recorded_play_at"
+            ),
+            name="ck_event_play_chronology",
+        ),
         CheckConstraint(
             "NOT allow_multiple_entries_per_player OR format = 'teams'",
             name="ck_tournament_events_multiple_entries_teams_only",
@@ -296,6 +331,18 @@ class TournamentEvent(Base):
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
+    lifecycle_state: Mapped[EventLifecycleState] = mapped_column(
+        Enum(EventLifecycleState, name="event_lifecycle_state"),
+        nullable=False,
+        server_default="unstarted",
+    )
+    lifecycle_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
+    first_recorded_play_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     tournament_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("tournaments.id", ondelete="CASCADE"),

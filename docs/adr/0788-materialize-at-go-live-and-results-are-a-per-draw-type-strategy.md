@@ -4,6 +4,12 @@ The database's absent partner model is superseded by [Entry members and lineup h
 Public doubles/team flows remain deferred; actual participants have preserved
 snapshots while results continue to be derived from current outcomes.
 
+The “event-completion is derived, never stored” and “no extra hooks” clauses are
+superseded by
+[Event progress is independent of tournament publication](20260912-event-progress-is-independent-of-tournament-publication.md).
+The results strategies still determine completeness; event progress and its
+changes are now retained separately from publication and archive.
+
 Date: 2026-07-13 (numbered by issue #788 — sequential numbers collide across
 concurrent worktrees; see ADR-0786's note and the duplicate 0008s in this directory)
 

@@ -628,6 +628,9 @@ async def enter_game_score(
     match = await load_match(db, match_id, user_id, lock=True)
     ensure_scorable(match)
     ensure_game_in_range(match, game_number)
+    from app.event_lifecycle import require_game_recording_allowed
+
+    await require_game_recording_allowed(db, match.id, (game_number,))
 
     game = _game_by_number(match, game_number)
     if game is None or game.score is None:

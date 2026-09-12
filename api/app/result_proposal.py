@@ -295,10 +295,22 @@ async def propose_result(
         if standing is None or supersedes_result_id != standing.id:
             raise NegotiationConflictError(match)
 
+    from app.event_lifecycle import require_game_recording_allowed
+    from app.match_errors import ScoreNotAllowedError
+
+    if supersedes_result_id is None:
+        try:
+            await require_game_recording_allowed(
+                db, match.id, tuple(game.game_number for game in compacted)
+            )
+        except ScoreNotAllowedError as exc:
+            raise MatchClosedError(str(exc)) from exc
+
     # Sync the canonical ``match_games`` to the proposed board so the scoreboard
     # ``games``/``can_score`` rendering stays correct. After the first post the
     # scratchpad is frozen, so ``match_games`` stays == the standing snapshot.
-    await _commit_canonical_games(db, match, compacted)
+    if supersedes_result_id is None:
+        await _commit_canonical_games(db, match, compacted)
 
     from app.player_accounts import primary_player_id
 
@@ -312,6 +324,17 @@ async def propose_result(
         supersedes_result_id=supersedes_result_id,
     )
     match.results.append(result)
+    if supersedes_result_id is not None:
+        # Persist the validated immutable correction before replacing its board.
+        # Its database trigger retains game identities even after cancellation.
+        try:
+            await _commit_canonical_games(db, match, compacted)
+        except IntegrityError as exc:
+            await db.rollback()
+            reloaded = await _load_match(db, match_id)
+            if reloaded is None:
+                raise MatchNotFoundError() from exc
+            raise NegotiationConflictError(reloaded) from exc
 
     # Only a rated two-human match, proposed by one of its own participants,
     # leaves the other side owing an acceptance (#1523: a director's proposal

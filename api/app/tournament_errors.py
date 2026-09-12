@@ -483,7 +483,7 @@ class EventFormatMembershipError(Exception):
 
 
 class RecordedPlayDeletionError(Exception):
-    """A deletion would discard recorded play or retained advancement history."""
+    """A deletion would discard play, advancement, event or archive history."""
 
     def __init__(self, message: str | None = None) -> None:
         super().__init__(

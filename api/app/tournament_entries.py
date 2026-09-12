@@ -162,27 +162,14 @@ async def _load_entrant(db: AsyncSession, user_id: uuid.UUID) -> Player:
     return user
 
 
-def _enforce_entry_registration_open(tournament: Tournament) -> None:
-    """Raise the ``registration_closed`` refusal unless the window is open (ADR-0968).
-
-    Same decision (``registration_open``) and the same words
-    (``registration_refusal_detail``) as the withdraw route's enforcer — only the
-    envelope differs, because only the entry endpoint's refusals are coded so far. So
-    the two routes cannot come to disagree about *whether* registration is open, which
-    is the property worth protecting.
-
-    One code for all three closed statuses. The status is *why*, and the client does
-    not branch on which one — it branches on "the window is shut", and the per-status
-    sentence rides along as the message (a fallback for a client that does not know the
-    code, and prose for a human). ``registration_open`` is asked module-qualified so a
-    test can stub the single decision point for both the enter and withdraw legs.
-    """
-    if tournament_registration.registration_open(tournament):
+def _enforce_entry_registration_open(
+    tournament: Tournament, event: TournamentEvent
+) -> None:
+    """Adapt the shared entry policy to the existing coded refusal (ADR-0968)."""
+    refusal = tournament_registration.entry_registration_refusal(tournament, event)
+    if refusal is None:
         return
-    raise EntryRefusedError(
-        EntryRefusal.registration_closed,
-        tournament_registration.registration_refusal_detail(tournament.status),
-    )
+    raise EntryRefusedError(EntryRefusal.registration_closed, refusal)
 
 
 async def _enforce_rating_eligible(
@@ -401,7 +388,7 @@ async def enter_event(
     # and hands back the number that admitted the entrant — the same number reported
     # beside their name, read once. Capacity is counted UNDER THE LOCK taken above, and
     # nothing between its count and the commit may take a lock of its own.
-    _enforce_entry_registration_open(tournament)
+    _enforce_entry_registration_open(tournament, event)
     rating = await _enforce_rating_eligible(db, tournament, event, entrant)
     await _enforce_event_has_room(db, event)
 

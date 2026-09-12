@@ -63,3 +63,7 @@ async def void_match(db: AsyncSession, match: Match) -> None:
         update(MatchSide).where(MatchSide.match_id == match.id).values(won=None)
     )
     await db.execute(delete(RatingHistory).where(RatingHistory.match_id == match.id))
+
+    from app.event_lifecycle import reconcile_match_event
+
+    await reconcile_match_event(db, match.id)

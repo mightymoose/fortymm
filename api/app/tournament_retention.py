@@ -1,4 +1,4 @@
-"""Deletion guards for recorded tournament play; callers hold the owner row lock."""
+"""Retention guards for sporting and lifecycle history; callers hold the owner lock."""
 
 import uuid
 
@@ -17,12 +17,25 @@ from app.models import (
     TournamentEventStage,
     TournamentFixture,
 )
+from app.models.tournament_archive import TournamentArchiveHistory
 from app.tournament_errors import RecordedPlayDeletionError
 
 
 async def require_no_recorded_play(
     db: AsyncSession, *, tournament_id: uuid.UUID, event_id: uuid.UUID | None = None
 ) -> None:
+    if (
+        event_id is None
+        and await db.scalar(
+            select(TournamentArchiveHistory.tournament_id).where(
+                TournamentArchiveHistory.tournament_id == tournament_id
+            )
+        )
+        is not None
+    ):
+        raise RecordedPlayDeletionError(
+            "Archive history must be preserved. This tournament cannot be deleted."
+        )
     # Keep the event -> member lock order used by roster writers. Locking the
     # events first also prevents new memberships appearing after this scan.
     events = select(TournamentEvent.id).where(
@@ -33,6 +46,23 @@ async def require_no_recorded_play(
     event_ids = list(
         (await db.scalars(events.order_by(TournamentEvent.id).with_for_update())).all()
     )
+    from app.models.tournament import EventLifecycleState
+
+    if (
+        await db.scalar(
+            select(TournamentEvent.id)
+            .where(
+                TournamentEvent.id.in_(event_ids),
+                TournamentEvent.lifecycle_state != EventLifecycleState.unstarted,
+            )
+            .limit(1)
+        )
+        is not None
+    ):
+        raise RecordedPlayDeletionError(
+            "Event lifecycle history must be preserved. "
+            "This event or tournament cannot be deleted."
+        )
     # A first lineup's FK takes KEY SHARE on these rows, even when its caller
     # never locks the tournament (a rated participant proposal). Wait for that
     # transaction before the subsequent READ COMMITTED history check, then keep

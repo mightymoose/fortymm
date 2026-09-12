@@ -1423,6 +1423,349 @@ ADVANCEMENT_INTEGRITY_DDL = (
 )
 
 
+EVENT_LIFECYCLE_DDL = (
+    """
+    CREATE FUNCTION preserve_event_lifecycle() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        IF TG_OP = 'DELETE' THEN
+            IF OLD.lifecycle_state <> 'unstarted'
+                OR OLD.first_recorded_play_at IS NOT NULL THEN
+                RAISE EXCEPTION 'event lifecycle history must be preserved'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN OLD;
+        END IF;
+        IF TG_OP = 'INSERT' THEN
+            IF NEW.lifecycle_state <> 'unstarted' OR NEW.lifecycle_version <> 0
+                OR NEW.first_recorded_play_at IS NOT NULL
+                OR NEW.started_at IS NOT NULL THEN
+                RAISE EXCEPTION
+                    'events are created unstarted without fabricated history'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END IF;
+        IF NEW.lifecycle_version <> OLD.lifecycle_version
+            OR (NEW.first_recorded_play_at IS DISTINCT FROM OLD.first_recorded_play_at
+                AND pg_trigger_depth() < 2)
+            OR (OLD.first_recorded_play_at IS NOT NULL
+                AND NEW.first_recorded_play_at IS DISTINCT FROM
+                    OLD.first_recorded_play_at)
+            OR (NEW.started_at IS DISTINCT FROM OLD.started_at AND NOT (
+                OLD.lifecycle_state='unstarted' AND NEW.lifecycle_state='in_progress'
+                AND OLD.started_at IS NULL AND NEW.started_at IS NOT NULL
+                AND NEW.started_at <= clock_timestamp()))
+            OR (OLD.lifecycle_version > 0 AND NEW.tournament_id <> OLD.tournament_id)
+        THEN
+            RAISE EXCEPTION 'event lifecycle facts are immutable'
+                USING ERRCODE='23514';
+        END IF;
+        IF NEW.lifecycle_state <> OLD.lifecycle_state THEN
+            IF NOT (
+                (OLD.lifecycle_state='unstarted'
+                    AND NEW.lifecycle_state IN ('in_progress','finished','cancelled'))
+                OR (OLD.lifecycle_state='in_progress'
+                    AND NEW.lifecycle_state IN ('finished','cancelled'))
+                OR (OLD.lifecycle_state='finished'
+                    AND NEW.lifecycle_state='in_progress')) THEN
+                RAISE EXCEPTION 'illegal event lifecycle transition'
+                    USING ERRCODE='23514';
+            END IF;
+            NEW.lifecycle_version := OLD.lifecycle_version + 1;
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER preserve_event_lifecycle BEFORE INSERT OR UPDATE OR DELETE ON
+        tournament_events
+    FOR EACH ROW EXECUTE FUNCTION preserve_event_lifecycle()
+    """,
+    """
+    CREATE FUNCTION append_event_lifecycle() RETURNS trigger LANGUAGE plpgsql AS $$
+    DECLARE decision_at timestamptz := clock_timestamp();
+    BEGIN
+        IF NEW.lifecycle_state <> OLD.lifecycle_state THEN
+            INSERT INTO tournament_event_lifecycle_history(
+                event_id, version, from_state, to_state, observed_at, occurred_at)
+            VALUES (
+                NEW.id, NEW.lifecycle_version, OLD.lifecycle_state,
+                NEW.lifecycle_state, decision_at,
+                CASE WHEN NEW.lifecycle_state='cancelled' THEN decision_at
+                    WHEN OLD.lifecycle_state='unstarted'
+                        AND NEW.lifecycle_state='in_progress' THEN NEW.started_at END);
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER append_event_lifecycle AFTER UPDATE ON tournament_events
+    FOR EACH ROW EXECUTE FUNCTION append_event_lifecycle()
+    """,
+    """
+    CREATE FUNCTION preserve_event_lifecycle_history() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        IF TG_OP <> 'INSERT' OR pg_trigger_depth() < 2 THEN
+            RAISE EXCEPTION 'event lifecycle history is append only and database owned'
+                USING ERRCODE='23514';
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER preserve_event_lifecycle_history BEFORE INSERT OR UPDATE OR DELETE
+        ON tournament_event_lifecycle_history
+    FOR EACH ROW EXECUTE FUNCTION preserve_event_lifecycle_history()
+    """,
+    """
+    CREATE TRIGGER preserve_event_recorded_games BEFORE INSERT OR UPDATE OR DELETE
+        ON tournament_event_recorded_games
+    FOR EACH ROW EXECUTE FUNCTION preserve_event_lifecycle_history()
+    """,
+    """
+    CREATE FUNCTION record_event_play() RETURNS trigger LANGUAGE plpgsql AS $$
+    DECLARE
+        event_uuid uuid;
+        match_uuid uuid;
+        game_no integer;
+        state event_lifecycle_state;
+    BEGIN
+        SELECT e.id, e.lifecycle_state, g.match_id, g.game_number
+        INTO event_uuid, state, match_uuid, game_no
+        FROM tournament_events e
+        JOIN tournament_fixtures f ON f.scope_event_id=e.id
+        JOIN match_games g ON g.match_id=f.match_id
+        WHERE g.id=NEW.match_game_id
+        FOR UPDATE OF e;
+        IF event_uuid IS NULL THEN
+            RETURN NEW;
+        END IF;
+        IF state='cancelled'
+            AND NOT EXISTS (
+                SELECT 1 FROM tournament_event_recorded_games
+                WHERE match_id=match_uuid AND game_number=game_no
+            ) AND NOT (
+                pg_trigger_depth() > 1 AND EXISTS (
+                    SELECT 1 FROM match_official_results r,
+                        jsonb_array_elements(r.games) game
+                    WHERE r.match_id=match_uuid AND r.revision > 1
+                        AND r.revision=(SELECT max(revision)
+                            FROM match_official_results WHERE match_id=match_uuid)
+                        AND (game->>'game_number')::integer=game_no
+                        AND (game->>'side_1_points')::integer=NEW.side_1_points
+                        AND (game->>'side_2_points')::integer=NEW.side_2_points
+                )
+            ) THEN
+            RAISE EXCEPTION 'cancelled events cannot record new games'
+                USING ERRCODE='23514';
+        END IF;
+        INSERT INTO tournament_event_recorded_games(match_id,game_number,event_id)
+        VALUES (match_uuid,game_no,event_uuid) ON CONFLICT DO NOTHING;
+        UPDATE tournament_events
+        SET first_recorded_play_at=clock_timestamp(),
+            lifecycle_state=CASE WHEN lifecycle_state='unstarted'
+                THEN 'in_progress'::event_lifecycle_state ELSE lifecycle_state END
+        WHERE id=event_uuid AND first_recorded_play_at IS NULL;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER record_event_play BEFORE INSERT ON match_game_scores
+    FOR EACH ROW EXECUTE FUNCTION record_event_play();
+    """,
+    """
+    CREATE FUNCTION observe_attached_event_play() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        IF NEW.match_id IS NULL OR (TG_OP='UPDATE'
+            AND NEW.match_id IS NOT DISTINCT FROM OLD.match_id) THEN
+            RETURN NEW;
+        END IF;
+        IF EXISTS (
+            SELECT 1 FROM match_games g
+            JOIN match_game_scores s ON s.match_game_id=g.id
+            WHERE g.match_id=NEW.match_id
+        ) THEN
+            PERFORM id FROM tournament_events WHERE id=NEW.scope_event_id FOR UPDATE;
+            IF EXISTS (SELECT 1 FROM tournament_events
+                WHERE id=NEW.scope_event_id AND lifecycle_state='cancelled') THEN
+                RAISE EXCEPTION 'cancelled events cannot attach new play'
+                    USING ERRCODE='23514';
+            END IF;
+            INSERT INTO tournament_event_recorded_games(match_id,game_number,event_id)
+            SELECT g.match_id,g.game_number,NEW.scope_event_id FROM match_games g
+            JOIN match_game_scores s ON s.match_game_id=g.id
+            WHERE g.match_id=NEW.match_id ON CONFLICT DO NOTHING;
+            UPDATE tournament_events
+            SET first_recorded_play_at=clock_timestamp(),
+                lifecycle_state=CASE WHEN lifecycle_state='unstarted'
+                    THEN 'in_progress'::event_lifecycle_state ELSE lifecycle_state END
+            WHERE id=NEW.scope_event_id AND first_recorded_play_at IS NULL;
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER observe_attached_event_play AFTER INSERT OR UPDATE OF match_id ON
+        tournament_fixtures
+    FOR EACH ROW EXECUTE FUNCTION observe_attached_event_play()
+    """,
+    """
+    CREATE FUNCTION guard_cancelled_event_entry() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        IF NEW.status='entered' AND (TG_OP='INSERT'
+            OR OLD.status<>'entered' OR NEW.event_id<>OLD.event_id) THEN
+            PERFORM id FROM tournament_events WHERE id=NEW.event_id FOR UPDATE;
+            IF EXISTS (SELECT 1 FROM tournament_events
+                WHERE id=NEW.event_id AND lifecycle_state='cancelled') THEN
+                RAISE EXCEPTION 'cancelled events cannot accept new entries'
+                    USING ERRCODE='23514';
+            END IF;
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER guard_cancelled_event_entry BEFORE INSERT OR UPDATE ON
+        tournament_entries
+    FOR EACH ROW EXECUTE FUNCTION guard_cancelled_event_entry()
+    """,
+    """
+    CREATE FUNCTION retain_cancelled_event_counter() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    DECLARE event_uuid uuid;
+    BEGIN
+        SELECT e.id INTO event_uuid FROM tournament_events e
+        JOIN tournament_fixtures f ON f.scope_event_id=e.id
+        WHERE f.match_id=NEW.match_id AND e.lifecycle_state='cancelled'
+        FOR UPDATE OF e;
+        IF event_uuid IS NOT NULL AND NEW.supersedes_result_id IS NULL
+            AND EXISTS (
+                SELECT 1 FROM jsonb_array_elements(NEW.games) game
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM tournament_event_recorded_games recorded
+                    WHERE recorded.match_id=NEW.match_id
+                        AND recorded.game_number=(game->>'game_number')::integer
+                )
+            ) THEN
+            RAISE EXCEPTION 'cancelled events cannot propose unrecorded play'
+                USING ERRCODE='23514';
+        END IF;
+        IF event_uuid IS NOT NULL AND NEW.supersedes_result_id IS NOT NULL THEN
+            INSERT INTO tournament_event_recorded_games
+                (match_id,game_number,event_id)
+            SELECT NEW.match_id,(game->>'game_number')::integer,event_uuid
+            FROM jsonb_array_elements(NEW.games) game ON CONFLICT DO NOTHING;
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER retain_cancelled_event_counter AFTER INSERT ON match_results
+    FOR EACH ROW EXECUTE FUNCTION retain_cancelled_event_counter()
+    """,
+    """
+    CREATE FUNCTION preserve_recorded_score_identity() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        IF NEW.match_game_id <> OLD.match_game_id THEN
+            RAISE EXCEPTION 'a recorded score preserves its game identity'
+                USING ERRCODE='23514';
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER preserve_recorded_score_identity BEFORE UPDATE
+    ON match_game_scores FOR EACH ROW
+    EXECUTE FUNCTION preserve_recorded_score_identity()
+    """,
+    """
+    CREATE FUNCTION preserve_recorded_game_identity() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        IF ROW(NEW.match_id, NEW.game_number)
+            IS DISTINCT FROM ROW(OLD.match_id, OLD.game_number)
+            AND (
+                EXISTS (SELECT 1 FROM match_game_scores
+                    WHERE match_game_id=OLD.id)
+                OR EXISTS (SELECT 1 FROM tournament_event_recorded_games
+                    WHERE match_id=OLD.match_id AND game_number=OLD.game_number)
+            ) THEN
+            RAISE EXCEPTION 'a recorded game preserves its match and number identity'
+                USING ERRCODE='23514';
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER preserve_recorded_game_identity BEFORE UPDATE
+    ON match_games FOR EACH ROW
+    EXECUTE FUNCTION preserve_recorded_game_identity()
+    """,
+)
+
+
+ARCHIVE_DDL = (
+    """
+    CREATE FUNCTION record_tournament_archive() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        IF TG_OP = 'UPDATE' AND OLD.status = 'archived' AND
+            (NEW.status, NEW.archive_observed_at, NEW.archived_at) IS DISTINCT FROM
+            (OLD.status, OLD.archive_observed_at, OLD.archived_at) THEN
+            RAISE EXCEPTION 'archive history must be preserved' USING ERRCODE='23514';
+        END IF;
+        IF NEW.status = 'archived' AND
+            (TG_OP = 'INSERT' OR OLD.status <> 'archived') THEN
+            NEW.archive_observed_at := clock_timestamp();
+            IF TG_OP = 'UPDATE' AND NEW.archived_at IS NULL THEN
+                NEW.archived_at := NEW.archive_observed_at;
+            END IF;
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER record_tournament_archive BEFORE INSERT OR UPDATE ON tournaments
+    FOR EACH ROW EXECUTE FUNCTION record_tournament_archive()
+    """,
+    """
+    CREATE FUNCTION append_tournament_archive() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        IF NEW.status = 'archived' AND
+            (TG_OP = 'INSERT' OR OLD.status <> 'archived') THEN
+            INSERT INTO tournament_archive_history(
+                tournament_id, observed_at, occurred_at)
+            VALUES (NEW.id, NEW.archive_observed_at, NEW.archived_at);
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER append_tournament_archive AFTER INSERT OR UPDATE ON tournaments
+    FOR EACH ROW EXECUTE FUNCTION append_tournament_archive()
+    """,
+    """
+    CREATE FUNCTION preserve_tournament_archive() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        IF TG_OP <> 'INSERT' OR pg_trigger_depth() < 2 THEN
+            RAISE EXCEPTION 'archive history is immutable and database owned'
+                USING ERRCODE='23514';
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER preserve_tournament_archive BEFORE INSERT OR UPDATE OR DELETE ON
+        tournament_archive_history
+    FOR EACH ROW EXECUTE FUNCTION preserve_tournament_archive()
+    """,
+)
+
+
 def upgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
     op.create_table(
@@ -2227,6 +2570,16 @@ def upgrade() -> None:
     )
     op.create_table(
         "tournaments",
+        sa.CheckConstraint(
+            "(status = 'archived') = (archive_observed_at IS NOT NULL)",
+            name="ck_tournaments_archive_state",
+        ),
+        sa.CheckConstraint(
+            "archived_at IS NULL OR (archive_observed_at IS NOT NULL AND archived_at <= archive_observed_at)",
+            name="ck_tournaments_archive_chronology",
+        ),
+        sa.Column("archive_observed_at", sa.DateTime(timezone=True)),
+        sa.Column("archived_at", sa.DateTime(timezone=True)),
         sa.Column(
             "id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False
         ),
@@ -2894,6 +3247,35 @@ def upgrade() -> None:
     )
     op.create_table(
         "tournament_events",
+        sa.CheckConstraint("lifecycle_version >= 0", name="ck_event_lifecycle_version"),
+        sa.CheckConstraint(
+            "lifecycle_state <> 'unstarted' OR (started_at IS NULL AND first_recorded_play_at IS NULL)",
+            name="ck_event_unstarted_has_no_play",
+        ),
+        sa.CheckConstraint(
+            "started_at IS NULL OR first_recorded_play_at IS NULL OR started_at <= first_recorded_play_at",
+            name="ck_event_play_chronology",
+        ),
+        sa.Column(
+            "lifecycle_state",
+            sa.Enum(
+                "unstarted",
+                "in_progress",
+                "finished",
+                "cancelled",
+                name="event_lifecycle_state",
+            ),
+            nullable=False,
+            server_default="unstarted",
+        ),
+        sa.Column(
+            "lifecycle_version",
+            sa.Integer(),
+            nullable=False,
+            server_default=sa.text("0"),
+        ),
+        sa.Column("first_recorded_play_at", sa.DateTime(timezone=True)),
+        sa.Column("started_at", sa.DateTime(timezone=True)),
         sa.Column(
             "id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False
         ),
@@ -4677,8 +5059,120 @@ def upgrade() -> None:
     for statement in (*ADVANCEMENT_TABLE_DDL, *ADVANCEMENT_INTEGRITY_DDL):
         op.execute(statement)
 
+    op.create_table(
+        "tournament_event_recorded_games",
+        sa.Column(
+            "match_id",
+            sa.UUID(),
+            sa.ForeignKey("matches.id", ondelete="RESTRICT"),
+            primary_key=True,
+        ),
+        sa.Column("game_number", sa.Integer(), primary_key=True),
+        sa.Column(
+            "event_id",
+            sa.UUID(),
+            sa.ForeignKey("tournament_events.id", ondelete="RESTRICT"),
+            nullable=False,
+        ),
+        sa.Column(
+            "observed_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("clock_timestamp()"),
+        ),
+    )
+    op.create_table(
+        "tournament_event_lifecycle_history",
+        sa.Column(
+            "id",
+            sa.UUID(),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
+        sa.Column(
+            "event_id",
+            sa.UUID(),
+            sa.ForeignKey("tournament_events.id", ondelete="RESTRICT"),
+            nullable=False,
+        ),
+        sa.Column("version", sa.Integer(), nullable=False),
+        sa.Column(
+            "from_state",
+            postgresql.ENUM(
+                "unstarted",
+                "in_progress",
+                "finished",
+                "cancelled",
+                name="event_lifecycle_state",
+                create_type=False,
+            ),
+            nullable=False,
+        ),
+        sa.Column(
+            "to_state",
+            postgresql.ENUM(
+                "unstarted",
+                "in_progress",
+                "finished",
+                "cancelled",
+                name="event_lifecycle_state",
+                create_type=False,
+            ),
+            nullable=False,
+        ),
+        sa.Column("observed_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("occurred_at", sa.DateTime(timezone=True)),
+        sa.UniqueConstraint(
+            "event_id", "version", name="uq_event_lifecycle_history_version"
+        ),
+        sa.CheckConstraint(
+            "version > 0 AND from_state <> to_state",
+            name="ck_event_lifecycle_transition",
+        ),
+        sa.CheckConstraint(
+            "occurred_at IS NULL OR occurred_at <= observed_at",
+            name="ck_event_lifecycle_chronology",
+        ),
+    )
+    for statement in EVENT_LIFECYCLE_DDL:
+        op.execute(statement)
+
+    op.create_table(
+        "tournament_archive_history",
+        sa.Column(
+            "tournament_id",
+            sa.UUID(),
+            sa.ForeignKey("tournaments.id", ondelete="RESTRICT"),
+            primary_key=True,
+        ),
+        sa.Column("observed_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("occurred_at", sa.DateTime(timezone=True)),
+    )
+    for statement in ARCHIVE_DDL:
+        op.execute(statement)
+
 
 def downgrade() -> None:
+    op.execute("DROP FUNCTION preserve_recorded_score_identity() CASCADE")
+    op.execute("DROP FUNCTION preserve_recorded_game_identity() CASCADE")
+    op.execute("DROP FUNCTION retain_cancelled_event_counter() CASCADE")
+    op.execute("DROP FUNCTION guard_cancelled_event_entry() CASCADE")
+    op.execute("DROP FUNCTION observe_attached_event_play() CASCADE")
+    op.drop_table("tournament_event_recorded_games")
+    op.drop_table("tournament_archive_history")
+    op.execute("DROP FUNCTION record_tournament_archive() CASCADE")
+    op.execute("DROP FUNCTION append_tournament_archive() CASCADE")
+    op.execute("DROP FUNCTION preserve_tournament_archive() CASCADE")
+
+    op.drop_table("tournament_event_lifecycle_history")
+    for function in (
+        "preserve_event_lifecycle",
+        "append_event_lifecycle",
+        "preserve_event_lifecycle_history",
+    ):
+        op.execute(f"DROP FUNCTION {function}() CASCADE")
+    op.execute("DROP FUNCTION record_event_play() CASCADE")
+
     op.execute("DROP FUNCTION IF EXISTS preserve_advancement_ownership() CASCADE")
     op.execute("DROP FUNCTION IF EXISTS preserve_advancement() CASCADE")
     op.execute("DROP FUNCTION IF EXISTS check_advancement() CASCADE")
@@ -4872,6 +5366,7 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_accounts_email"), table_name="accounts")
     op.drop_table("accounts")
     # ### end Alembic commands ###
+    postgresql.ENUM(name="event_lifecycle_state").drop(op.get_bind(), checkfirst=True)
     postgresql.ENUM(name="event_format").drop(op.get_bind(), checkfirst=True)
 
     postgresql.ENUM(name="league_visibility").drop(op.get_bind(), checkfirst=True)
