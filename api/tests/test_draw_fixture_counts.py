@@ -113,10 +113,12 @@ async def test_parent_cascade_removes_retired_revision_storage(
     assert await _counts(db_session) == {}
 
 
+@pytest.mark.parametrize("moved", [1, 3])
 async def test_fixture_move_transfers_storage_between_revisions(
     db_session: AsyncSession,
     default_league: League,
     drawn_history: dict[str, uuid.UUID],
+    moved: int,
 ) -> None:
     owner = await make_user(db_session, "counter-move-owner")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
@@ -133,16 +135,24 @@ async def test_fixture_move_transfers_storage_between_revisions(
     )
     await db_session.execute(
         text(
-            "UPDATE tournament_fixtures SET (stage_id,group_id,draw_revision_id)="
+            "WITH chosen AS (SELECT id,row_number() OVER (ORDER BY id) AS position "
+            "FROM tournament_fixtures WHERE draw_revision_id=:revision "
+            "ORDER BY id LIMIT :moved) "
+            "UPDATE tournament_fixtures f SET (stage_id,group_id,draw_revision_id)="
             "(SELECT stage_id,group_id,draw_revision_id FROM tournament_fixtures "
-            "WHERE id=:other),entry_a_id=NULL,entry_b_id=NULL,round=100 WHERE id=:first"
+            "WHERE id=:other),entry_a_id=NULL,entry_b_id=NULL,round=100,"
+            "position=chosen.position FROM chosen WHERE f.id=chosen.id"
         ),
-        {"other": other[0].id, "first": drawn_history["fixture_id"]},
+        {
+            "other": other[0].id,
+            "revision": drawn_history["revision_id"],
+            "moved": moved,
+        },
     )
     await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
     counts = await _counts(db_session)
-    assert counts[drawn_history["revision_id"]] == 5
-    assert counts[other_revision] == 2
+    assert counts[drawn_history["revision_id"]] == 6 - moved
+    assert counts[other_revision] == 1 + moved
 
 
 async def test_fixture_truncate_resets_surviving_revision_counter(

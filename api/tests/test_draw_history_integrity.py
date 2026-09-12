@@ -732,7 +732,7 @@ async def test_deferred_fixture_retirement_checks_read_only_changed_fixtures(
             await probe.execute(text("ANALYZE tournament_fixtures"))
             await probe.execute(
                 text(
-                    "UPDATE tournament_fixtures SET updated_at=updated_at "
+                    "UPDATE tournament_fixtures SET retired_at=retired_at "
                     "WHERE scope_event_id=:id"
                 ),
                 {"id": event_id},

@@ -64,8 +64,9 @@ PARTICIPATION_INTEGRITY_DDL = (
         END $$
         """,
     """
-        CREATE TRIGGER fixture_participation BEFORE INSERT OR UPDATE ON
-        tournament_fixtures
+        CREATE TRIGGER fixture_participation BEFORE INSERT OR UPDATE OF
+        entry_a_id, entry_b_id, participation_a_id, participation_b_id,
+        stage_id, group_id, draw_revision_id ON tournament_fixtures
         FOR EACH ROW EXECUTE FUNCTION fixture_participation()
         """,
 )
@@ -401,7 +402,8 @@ DRAW_HISTORY_INTEGRITY_DDL = (
         """,
     """
         CREATE CONSTRAINT TRIGGER check_fixture_draw_retirement
-        AFTER INSERT OR UPDATE ON tournament_fixtures
+        AFTER INSERT OR UPDATE OF stage_id, draw_revision_id, retired_at
+        ON tournament_fixtures
         DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION
         check_draw_retirement()
         """,
@@ -457,8 +459,10 @@ DRAW_HISTORY_INTEGRITY_DDL = (
         END $$
         """,
     """
-        CREATE TRIGGER validate_new_fixture_seats AFTER UPDATE
-        ON tournament_fixtures FOR EACH ROW EXECUTE FUNCTION
+        CREATE TRIGGER validate_new_fixture_seats AFTER UPDATE OF
+        entry_a_id, entry_b_id, participation_a_id, participation_b_id,
+        stage_id, group_id, draw_revision_id ON tournament_fixtures
+        FOR EACH ROW EXECUTE FUNCTION
         validate_new_fixture_seats()
         """,
     """
@@ -727,12 +731,21 @@ DRAW_HISTORY_INTEGRITY_DDL = (
         IF TG_OP = 'UPDATE' THEN
         SELECT array_agg(DISTINCT s.event_id) INTO affected_events
         FROM tournament_event_stages s JOIN (
-        SELECT stage_id FROM old_fixtures UNION SELECT stage_id FROM new_fixtures
+        SELECT o.stage_id FROM old_fixtures o FULL JOIN new_fixtures n ON n.id=o.id
+        WHERE o.match_id IS NOT DISTINCT FROM n.match_id OR
+              (to_jsonb(o) - ARRAY['match_id','updated_at']) IS DISTINCT FROM
+              (to_jsonb(n) - ARRAY['match_id','updated_at'])
+        UNION
+        SELECT n.stage_id FROM old_fixtures o FULL JOIN new_fixtures n ON n.id=o.id
+        WHERE o.match_id IS NOT DISTINCT FROM n.match_id OR
+              (to_jsonb(o) - ARRAY['match_id','updated_at']) IS DISTINCT FROM
+              (to_jsonb(n) - ARRAY['match_id','updated_at'])
         ) f ON f.stage_id = s.id;
         ELSE
         SELECT array_agg(DISTINCT s.event_id) INTO affected_events
         FROM tournament_event_stages s JOIN old_fixtures f ON f.stage_id = s.id;
         END IF;
+        IF affected_events IS NULL THEN RETURN NULL; END IF;
         PERFORM t.id FROM tournaments t WHERE t.id IN (
         SELECT e.tournament_id FROM tournament_events e
         WHERE e.id = ANY(affected_events)
@@ -856,16 +869,9 @@ DRAW_HISTORY_INTEGRITY_DDL = (
         GROUP BY draw_revision_id) counts WHERE r.id = counts.draw_revision_id;
         ELSIF TG_OP = 'UPDATE' THEN
         UPDATE tournament_draw_revisions r
-        SET retained_fixture_count = r.retained_fixture_count + counts.delta
-        FROM (
-        SELECT draw_revision_id, sum(delta) AS delta FROM (
-        SELECT draw_revision_id, count(*) AS delta FROM new_counted_fixtures
-        GROUP BY draw_revision_id
-        UNION ALL
-        SELECT draw_revision_id, -count(*) AS delta FROM old_counted_fixtures
-        GROUP BY draw_revision_id
-        ) changes GROUP BY draw_revision_id HAVING sum(delta) <> 0
-        ) counts WHERE r.id = counts.draw_revision_id;
+        SET retained_fixture_count = r.retained_fixture_count +
+        CASE WHEN r.id = NEW.draw_revision_id THEN 1 ELSE -1 END
+        WHERE r.id IN (OLD.draw_revision_id, NEW.draw_revision_id);
         ELSE
         UPDATE tournament_draw_revisions SET retained_fixture_count = 0
         WHERE retained_fixture_count <> 0;
@@ -880,9 +886,16 @@ DRAW_HISTORY_INTEGRITY_DDL = (
         EXECUTE FUNCTION update_draw_fixture_counts()
         """,
     """
-        CREATE TRIGGER z_count_updated_draw_fixtures AFTER UPDATE ON tournament_fixtures
-        REFERENCING OLD TABLE AS old_counted_fixtures NEW TABLE AS new_counted_fixtures
-        FOR EACH STATEMENT EXECUTE FUNCTION update_draw_fixture_counts()
+        CREATE TRIGGER a_lock_moved_fixture_revision
+        BEFORE UPDATE OF draw_revision_id ON tournament_fixtures FOR EACH ROW
+        WHEN (NEW.draw_revision_id IS DISTINCT FROM OLD.draw_revision_id)
+        EXECUTE FUNCTION lock_draw_history_parent()
+        """,
+    """
+        CREATE TRIGGER z_count_updated_draw_fixtures AFTER UPDATE OF draw_revision_id
+        ON tournament_fixtures FOR EACH ROW
+        WHEN (NEW.draw_revision_id IS DISTINCT FROM OLD.draw_revision_id)
+        EXECUTE FUNCTION update_draw_fixture_counts()
         """,
     """
         CREATE TRIGGER z_count_deleted_draw_fixtures AFTER DELETE ON tournament_fixtures
