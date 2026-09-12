@@ -73,8 +73,9 @@ its link away because the immutable revision snapshot retains the cut-time mappi
 and reservation values. Retained fixtures must not
 prevent an otherwise supported configuration edit after removing an unplayed draw.
 Draw cuts allocate participation periods once and supply their identities to each
-fixture. Insert statements lock distinct parent events and validate their fixture
-seats as a batch. Direct SQL retains automatic seating when period identities are
+fixture. Insert statements validate their fixture seats as a batch. Fixture
+insert, update and delete statements lock distinct parent events once per batch,
+including both old and new parents when a fixture moves. Direct SQL retains automatic seating when period identities are
 omitted; updates and deletes retain their row guards.
 
 Deferred retirement validation checks changed fixtures and participation periods

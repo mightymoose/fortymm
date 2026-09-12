@@ -1004,3 +1004,89 @@ async def test_parent_cascade_can_remove_pending_withdrawal_and_participation(
         )
         == 0
     )
+
+
+@pytest.mark.parametrize("operation", ["UPDATE", "DELETE"])
+async def test_fixture_bulk_writes_lock_parents_once_per_statement(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID], operation: str
+) -> None:
+    await db_session.execute(text("SET LOCAL track_functions = 'all'"))
+    function_calls = text(
+        "SELECT COALESCE(sum(calls), 0) FROM pg_stat_xact_user_functions "
+        "WHERE funcname=:name"
+    )
+    before_rows = await db_session.scalar(
+        function_calls, {"name": "lock_draw_history_parent"}
+    )
+    before_batches = await db_session.scalar(
+        function_calls, {"name": "lock_fixture_write_batch"}
+    )
+    statement = (
+        "UPDATE tournament_fixtures SET updated_at=updated_at "
+        if operation == "UPDATE"
+        else "DELETE FROM tournament_fixtures "
+    )
+    await db_session.execute(
+        text(statement + "WHERE scope_event_id=:id"),
+        {"id": drawn_history["event_id"]},
+    )
+    after_rows = await db_session.scalar(
+        function_calls, {"name": "lock_draw_history_parent"}
+    )
+    assert after_rows == before_rows
+    after_batches = await db_session.scalar(
+        function_calls, {"name": "lock_fixture_write_batch"}
+    )
+    assert after_batches - before_batches == 1
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("operation", ["UPDATE", "DELETE", "MOVE"])
+@pytest.mark.parametrize("locked_side", ["former", "other"])
+async def test_fixture_batch_locks_every_affected_event(
+    db_session: AsyncSession,
+    default_league: League,
+    drawn_history: dict[str, uuid.UUID],
+    operation: str,
+    locked_side: str,
+) -> None:
+    from sqlalchemy.exc import DBAPIError
+
+    owner = await make_user(db_session, "batch-lock-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament, groups=[])
+    tournament_id, event_id = tournament.id, event.id
+    await _enter_field(db_session, event, 2, prefix="batch-lock-player")
+    await db_session.refresh(owner)
+    other = await cut_event_draw(
+        db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
+    )
+    locked_id = drawn_history["event_id"] if locked_side == "former" else event_id
+    async with AsyncSession(bind=db_session.bind) as gatekeeper:
+        await gatekeeper.execute(
+            text("SELECT id FROM tournament_events WHERE id=:id FOR UPDATE"),
+            {"id": locked_id},
+        )
+        with pytest.raises(
+            DBAPIError, match="(draw history|fixture link) requires parent locks"
+        ):
+            async with db_session.begin_nested():
+                await db_session.execute(text("SET LOCAL lock_timeout = '500ms'"))
+                if operation == "MOVE":
+                    statement = (
+                        "UPDATE tournament_fixtures SET "
+                        "(stage_id,group_id,draw_revision_id)=(SELECT "
+                        "stage_id,group_id,draw_revision_id FROM tournament_fixtures "
+                        "WHERE id=:other), entry_a_id=NULL,entry_b_id=NULL "
+                        "WHERE id=:first"
+                    )
+                else:
+                    statement = (
+                        "UPDATE tournament_fixtures SET updated_at=updated_at "
+                        if operation == "UPDATE"
+                        else "DELETE FROM tournament_fixtures "
+                    ) + "WHERE id IN (:first,:other)"
+                await db_session.execute(
+                    text(statement),
+                    {"first": drawn_history["fixture_id"], "other": other[0].id},
+                )

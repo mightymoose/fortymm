@@ -4851,10 +4851,6 @@ def upgrade() -> None:
         END $$
         """)
     op.execute("""
-        CREATE TRIGGER a_lock_draw_history_parent BEFORE UPDATE OR DELETE
-        ON tournament_fixtures FOR EACH ROW EXECUTE FUNCTION lock_draw_history_parent()
-        """)
-    op.execute("""
         CREATE TRIGGER a_lock_draw_history_parent BEFORE INSERT OR UPDATE OR DELETE
         ON tournament_draw_revisions FOR EACH ROW EXECUTE FUNCTION
         lock_draw_history_parent()
@@ -5072,6 +5068,42 @@ def upgrade() -> None:
         AFTER INSERT OR UPDATE ON tournament_entry_withdrawals
         DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
         EXECUTE FUNCTION check_withdrawal_participation()
+        """)
+    op.execute("""
+        CREATE FUNCTION lock_fixture_write_batch() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        DECLARE affected_events uuid[];
+        BEGIN
+        IF TG_OP = 'UPDATE' THEN
+        SELECT array_agg(DISTINCT s.event_id) INTO affected_events
+        FROM tournament_event_stages s JOIN (
+        SELECT stage_id FROM old_fixtures UNION SELECT stage_id FROM new_fixtures
+        ) f ON f.stage_id = s.id;
+        ELSE
+        SELECT array_agg(DISTINCT s.event_id) INTO affected_events
+        FROM tournament_event_stages s JOIN old_fixtures f ON f.stage_id = s.id;
+        END IF;
+        PERFORM t.id FROM tournaments t WHERE t.id IN (
+        SELECT e.tournament_id FROM tournament_events e
+        WHERE e.id = ANY(affected_events)
+        ) ORDER BY t.id FOR SHARE NOWAIT;
+        PERFORM e.id FROM tournament_events e WHERE e.id = ANY(affected_events)
+        ORDER BY e.id FOR UPDATE NOWAIT;
+        RETURN NULL;
+        EXCEPTION WHEN lock_not_available THEN
+        RAISE EXCEPTION 'draw history requires parent locks before write; retry'
+        USING ERRCODE = '40001';
+        END $$
+        """)
+    op.execute("""
+        CREATE TRIGGER lock_fixture_update_batch AFTER UPDATE ON tournament_fixtures
+        REFERENCING OLD TABLE AS old_fixtures NEW TABLE AS new_fixtures
+        FOR EACH STATEMENT EXECUTE FUNCTION lock_fixture_write_batch()
+        """)
+    op.execute("""
+        CREATE TRIGGER lock_fixture_delete_batch AFTER DELETE ON tournament_fixtures
+        REFERENCING OLD TABLE AS old_fixtures
+        FOR EACH STATEMENT EXECUTE FUNCTION lock_fixture_write_batch()
         """)
     # End draw history integrity.
 
@@ -5678,6 +5710,7 @@ def downgrade() -> None:
     op.drop_table("advancement_decision_evidence")
     op.drop_table("fixture_advancement_decisions")
     # Drop draw history integrity.
+    op.execute("DROP FUNCTION lock_fixture_write_batch() CASCADE")
     op.execute("DROP FUNCTION check_withdrawal_participation() CASCADE")
     op.execute("DROP FUNCTION validate_fixture_insert_batch() CASCADE")
     op.execute("DROP FUNCTION preserve_archived_group_mapping() CASCADE")
