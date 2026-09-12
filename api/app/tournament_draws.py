@@ -31,9 +31,10 @@ import enum
 import uuid
 from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime
+from itertools import batched
 from types import MappingProxyType
 
-from sqlalchemy import ColumnElement, exists, func, or_, select, update
+from sqlalchemy import ColumnElement, exists, func, insert, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -879,30 +880,53 @@ async def cut_draw(
     initial_group_id = GroupId(initial_groups[0].id)
     for entrant in entrants:
         seats.setdefault((entrant.entry_id, initial_stage_id), initial_group_id)
-    for (entry_id, stage_id), group_id in seats.items():
-        db.add(
-            TournamentEntryParticipation(
-                draw_revision_id=revision.id,
-                event_id=event.id,
-                entry_id=entry_id,
-                stage_id=stage_id,
-                group_id=group_id,
+    participation_by_seat = {
+        (entry_id, stage_id): TournamentEntryParticipation(
+            draw_revision_id=revision.id,
+            event_id=event.id,
+            entry_id=entry_id,
+            stage_id=stage_id,
+            group_id=group_id,
+        )
+        for (entry_id, stage_id), group_id in seats.items()
+    }
+    db.add_all(participation_by_seat.values())
+    await db.flush()
+
+    def participation_id(
+        entry_id: EntryId | None, stage_id: uuid.UUID
+    ) -> uuid.UUID | None:
+        if entry_id is None:
+            return None
+        return participation_by_seat[(entry_id, stage_id)].id
+
+    # Explicit multi-VALUES statements keep transition-table validation batched.
+    # ORM insert ordering otherwise emits one statement for each generated UUID.
+    for batch in batched(planned, 500, strict=False):
+        await db.execute(
+            insert(TournamentFixture).values(
+                [
+                    {
+                        "draw_revision_id": revision.id,
+                        "stage_id": _stage_id_at(stage_ids, fixture.stage.position),
+                        "group_id": _group_id_of(fixture),
+                        "round": fixture.round,
+                        "position": fixture.position,
+                        "entry_a_id": fixture.entry_a_id,
+                        "entry_b_id": fixture.entry_b_id,
+                        "participation_a_id": participation_id(
+                            fixture.entry_a_id,
+                            _stage_id_at(stage_ids, fixture.stage.position),
+                        ),
+                        "participation_b_id": participation_id(
+                            fixture.entry_b_id,
+                            _stage_id_at(stage_ids, fixture.stage.position),
+                        ),
+                    }
+                    for fixture in batch
+                ]
             )
         )
-    db.add_all(
-        [
-            TournamentFixture(
-                draw_revision_id=revision.id,
-                stage_id=_stage_id_at(stage_ids, fixture.stage.position),
-                group_id=_group_id_of(fixture),
-                round=fixture.round,
-                position=fixture.position,
-                entry_a_id=fixture.entry_a_id,
-                entry_b_id=fixture.entry_b_id,
-            )
-            for fixture in planned
-        ]
-    )
 
 
 def _stage_id_at(stage_ids: Mapping[int, uuid.UUID], position: int) -> uuid.UUID:

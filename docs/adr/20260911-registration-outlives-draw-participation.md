@@ -68,6 +68,11 @@ group mappings are refused; supported removal of a live reservation may cascade
 its link away because the immutable revision snapshot retains the cut-time mapping
 and reservation values. Retained fixtures must not
 prevent an otherwise supported configuration edit after removing an unplayed draw.
+Draw cuts allocate participation periods once and supply their identities to each
+fixture. Insert statements lock distinct parent events and validate their fixture
+seats as a batch. Direct SQL retains automatic seating when period identities are
+omitted; updates and deletes retain their row guards.
+
 Deferred retirement validation checks changed fixtures and participation periods
 by identity; stage/revision changes check their own dependent rows. It does not
 rescan a whole event for every inserted fixture. Validation reads final stored

@@ -788,3 +788,88 @@ async def test_retirement_checks_revalidate_after_an_immediate_constraint_cycle(
         {"id": drawn_history["fixture_id"]},
     )
     await _uncut(db_session, drawn_history)
+
+
+@pytest.mark.parametrize(
+    "function_name,max_calls",
+    [
+        ("seat_participation", 0),
+        ("validate_new_fixture_seats", 0),
+        ("lock_draw_history_parent", 26),
+    ],
+)
+async def test_bulk_cut_uses_preallocated_participation_for_fixture_seats(
+    db_session: AsyncSession,
+    default_league: League,
+    function_name: str,
+    max_calls: int,
+) -> None:
+    from app.tournament_draws import cut_draw
+
+    owner = await make_user(db_session, "batch-seat-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament, groups=[])
+    await _enter_field(db_session, event, 24, prefix="batch-seat-player")
+    await db_session.refresh(event)
+    await db_session.execute(text("SET LOCAL track_functions = 'all'"))
+    function_calls = text(
+        "SELECT COALESCE(sum(calls), 0) FROM pg_stat_xact_user_functions "
+        "WHERE funcname = :name"
+    )
+    before_calls = await db_session.scalar(function_calls, {"name": function_name})
+    before_batches = await db_session.scalar(
+        function_calls, {"name": "validate_fixture_insert_batch"}
+    )
+    await cut_draw(db_session, event)
+    await db_session.flush()
+    calls = await db_session.scalar(function_calls, {"name": function_name})
+    assert calls - before_calls <= max_calls
+    batch_calls = await db_session.scalar(
+        function_calls, {"name": "validate_fixture_insert_batch"}
+    )
+    assert batch_calls - before_batches == 1
+
+
+@pytest.mark.parametrize(
+    "parent_table,id_key",
+    [("tournaments", "tournament_id"), ("tournament_events", "event_id")],
+)
+@pytest.mark.parametrize("immediate", [False, True])
+async def test_explicit_sql_fixture_insert_retries_when_parent_is_locked(
+    db_session: AsyncSession,
+    drawn_history: dict[str, uuid.UUID],
+    parent_table: str,
+    id_key: str,
+    immediate: bool,
+) -> None:
+    from sqlalchemy.exc import DBAPIError
+
+    async with AsyncSession(bind=db_session.bind) as gatekeeper:
+        await gatekeeper.execute(
+            text(f"SELECT id FROM {parent_table} WHERE id=:id FOR UPDATE"),
+            {"id": drawn_history[id_key]},
+        )
+        # Explicitly immediate FKs run before AFTER STATEMENT triggers. Their
+        # normal key-share wait can precede our NOWAIT event lock; a SQL caller's
+        # lock_timeout bounds that wait without weakening the FK or seat checks.
+        expected = (
+            "lock timeout"
+            if immediate and parent_table == "tournament_events"
+            else "draw history requires parent locks"
+        )
+        with pytest.raises(DBAPIError, match=expected):
+            async with db_session.begin_nested():
+                await db_session.execute(text("SET LOCAL lock_timeout = '500ms'"))
+                if immediate:
+                    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+                await db_session.execute(
+                    text(
+                        "INSERT INTO tournament_fixtures("
+                        "stage_id,group_id,round,position,"
+                        "entry_a_id,entry_b_id,participation_a_id,participation_b_id,"
+                        "draw_revision_id) SELECT stage_id,group_id,100,position,"
+                        "entry_a_id,entry_b_id,participation_a_id,participation_b_id,"
+                        "draw_revision_id FROM tournament_fixtures WHERE id=:id"
+                    ),
+                    {"id": drawn_history["fixture_id"]},
+                )

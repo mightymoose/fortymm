@@ -4445,22 +4445,22 @@ def upgrade() -> None:
     op.execute("""
         CREATE FUNCTION check_draw_retirement() RETURNS trigger
         LANGUAGE plpgsql AS $$
+        DECLARE retirement_invalid boolean; stage_invalid boolean;
         BEGIN
         -- Deferred events carry old snapshots; validate each row's final state.
         IF TG_TABLE_NAME = 'tournament_fixtures' THEN
-        IF EXISTS (
-        SELECT 1 FROM tournament_fixtures f
-        JOIN tournament_draw_revisions r ON r.id = f.draw_revision_id
-        WHERE f.id = NEW.id
-        AND (f.retired_at IS NULL) IS DISTINCT FROM (r.retired_at IS NULL)
-        ) THEN
+        SELECT r.id IS NOT NULL AND
+        (f.retired_at IS NULL) IS DISTINCT FROM (r.retired_at IS NULL),
+        f.retired_at IS NULL AND s.retired_at IS NOT NULL
+        INTO retirement_invalid, stage_invalid
+        FROM tournament_fixtures f
+        LEFT JOIN tournament_draw_revisions r ON r.id = f.draw_revision_id
+        LEFT JOIN tournament_event_stages s ON s.id = f.stage_id
+        WHERE f.id = NEW.id;
+        IF retirement_invalid THEN
         RAISE EXCEPTION 'draw retirement must be consistent' USING ERRCODE = '23514';
         END IF;
-        IF EXISTS (
-        SELECT 1 FROM tournament_fixtures f
-        JOIN tournament_event_stages s ON s.id = f.stage_id
-        WHERE f.id = NEW.id AND f.retired_at IS NULL AND s.retired_at IS NOT NULL
-        ) THEN
+        IF stage_invalid THEN
         RAISE EXCEPTION 'current fixture requires current stage'
         USING ERRCODE = '23514';
         END IF;
@@ -4575,7 +4575,7 @@ def upgrade() -> None:
         END $$
         """)
     op.execute("""
-        CREATE TRIGGER validate_new_fixture_seats AFTER INSERT OR UPDATE
+        CREATE TRIGGER validate_new_fixture_seats AFTER UPDATE
         ON tournament_fixtures FOR EACH ROW EXECUTE FUNCTION
         validate_new_fixture_seats()
         """)
@@ -4619,7 +4619,7 @@ def upgrade() -> None:
         END $$
         """)
     op.execute("""
-        CREATE TRIGGER a_lock_draw_history_parent BEFORE INSERT OR UPDATE OR DELETE
+        CREATE TRIGGER a_lock_draw_history_parent BEFORE UPDATE OR DELETE
         ON tournament_fixtures FOR EACH ROW EXECUTE FUNCTION lock_draw_history_parent()
         """)
     op.execute("""
@@ -4771,6 +4771,51 @@ def upgrade() -> None:
         CREATE TRIGGER preserve_archived_group_mapping
         BEFORE INSERT OR UPDATE OR DELETE ON tournament_event_group_reservations
         FOR EACH ROW EXECUTE FUNCTION preserve_archived_group_mapping()
+        """)
+    op.execute("""
+        CREATE FUNCTION validate_fixture_insert_batch() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+        PERFORM t.id FROM tournaments t WHERE t.id IN (
+        SELECT e.tournament_id FROM tournament_events e
+        JOIN tournament_event_stages s ON s.event_id = e.id
+        JOIN inserted_fixtures f ON f.stage_id = s.id
+        ) ORDER BY t.id FOR SHARE NOWAIT;
+        PERFORM e.id FROM tournament_events e WHERE e.id IN (
+        SELECT s.event_id FROM tournament_event_stages s
+        JOIN inserted_fixtures f ON f.stage_id = s.id
+        ) ORDER BY e.id FOR UPDATE NOWAIT;
+        IF EXISTS (
+        SELECT 1 FROM inserted_fixtures f
+        LEFT JOIN tournament_event_stages s ON s.id = f.stage_id
+        LEFT JOIN tournament_draw_revisions r ON r.id = f.draw_revision_id
+        AND r.event_id = s.event_id
+        WHERE s.id IS NULL OR r.id IS NULL
+        OR s.retired_at IS NOT NULL OR r.retired_at IS NOT NULL
+        ) THEN
+        RAISE EXCEPTION 'new fixture requires a current stage and revision'
+        USING ERRCODE = '23514';
+        END IF;
+        IF EXISTS (
+        SELECT 1 FROM inserted_fixtures f
+        LEFT JOIN tournament_entry_participations a ON a.id = f.participation_a_id
+        LEFT JOIN tournament_entry_participations b ON b.id = f.participation_b_id
+        WHERE (f.entry_a_id IS NOT NULL AND (a.id IS NULL OR a.ended_at IS NOT NULL))
+        OR (f.entry_b_id IS NOT NULL AND (b.id IS NULL OR b.ended_at IS NOT NULL))
+        ) THEN
+        RAISE EXCEPTION 'new fixture seat requires active participation'
+        USING ERRCODE = '23514';
+        END IF;
+        RETURN NULL;
+        EXCEPTION WHEN lock_not_available THEN
+        RAISE EXCEPTION 'draw history requires parent locks before write; retry'
+        USING ERRCODE = '40001';
+        END $$
+        """)
+    op.execute("""
+        CREATE TRIGGER validate_fixture_insert_batch AFTER INSERT ON tournament_fixtures
+        REFERENCING NEW TABLE AS inserted_fixtures FOR EACH STATEMENT
+        EXECUTE FUNCTION validate_fixture_insert_batch()
         """)
     # End draw history integrity.
 
@@ -5367,6 +5412,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # Drop draw history integrity.
+    op.execute("DROP FUNCTION validate_fixture_insert_batch() CASCADE")
     op.execute("DROP FUNCTION preserve_archived_group_mapping() CASCADE")
     op.execute("DROP FUNCTION preserve_archived_group_history() CASCADE")
     op.execute("DROP FUNCTION preserve_retired_table_history() CASCADE")
