@@ -4536,6 +4536,36 @@ def upgrade() -> None:
         ON tournament_entry_withdrawals FOR EACH ROW
         EXECUTE FUNCTION preserve_competition_withdrawal_history()
         """)
+    op.execute("""
+        CREATE FUNCTION preserve_retired_stage_history() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+        IF TG_OP = 'UPDATE' AND OLD.retired_at IS NULL
+        AND NEW.retired_at IS NOT NULL AND
+        (to_jsonb(NEW) - 'retired_at') IS DISTINCT FROM
+        (to_jsonb(OLD) - 'retired_at') THEN
+        RAISE EXCEPTION 'retired stage history is immutable'
+        USING ERRCODE = '23514';
+        END IF;
+        IF OLD.retired_at IS NOT NULL THEN
+        IF TG_OP = 'DELETE' THEN
+        IF EXISTS (SELECT 1 FROM tournament_events WHERE id = OLD.event_id) THEN
+        RAISE EXCEPTION 'retired stage history is immutable'
+        USING ERRCODE = '23514';
+        END IF;
+        ELSIF NEW IS DISTINCT FROM OLD THEN
+        RAISE EXCEPTION 'retired stage history is immutable'
+        USING ERRCODE = '23514';
+        END IF;
+        END IF;
+        RETURN COALESCE(NEW, OLD);
+        END $$
+        """)
+    op.execute("""
+        CREATE TRIGGER a_preserve_retired_stage_history BEFORE UPDATE OR DELETE
+        ON tournament_event_stages FOR EACH ROW
+        EXECUTE FUNCTION preserve_retired_stage_history()
+        """)
     # End draw history integrity.
 
     for statement in AUTHORITY_INTEGRITY_DDL:
@@ -4957,6 +4987,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # Drop draw history integrity.
+    op.execute("DROP FUNCTION preserve_retired_stage_history() CASCADE")
     op.execute("DROP FUNCTION preserve_participation_history() CASCADE")
     op.execute("DROP FUNCTION preserve_draw_revision_history() CASCADE")
     op.execute("DROP FUNCTION assign_participation_revision() CASCADE")

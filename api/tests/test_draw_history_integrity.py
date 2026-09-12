@@ -519,3 +519,111 @@ async def test_uncut_changes_only_the_fixture_retirement_timestamp(
         fixture_key,
     )
     assert retired_at is not None
+
+
+@pytest.mark.parametrize("already_retired", [False, True])
+@pytest.mark.parametrize(
+    "metadata_change",
+    [
+        "position = position + 10",
+        "draw_type_id = (SELECT id FROM draw_types WHERE key = 'single-elim')",
+    ],
+)
+async def test_retired_stage_configuration_cannot_be_rewritten(
+    db_session: AsyncSession,
+    drawn_history: dict[str, uuid.UUID],
+    already_retired: bool,
+    metadata_change: str,
+) -> None:
+    stage_id = await db_session.scalar(
+        text("SELECT stage_id FROM tournament_fixtures WHERE id = :id"),
+        {"id": drawn_history["fixture_id"]},
+    )
+    if already_retired:
+        await _uncut(db_session, drawn_history)
+    with pytest.raises(IntegrityError, match="retired stage history is immutable"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    f"UPDATE tournament_event_stages SET {metadata_change}, "
+                    "retired_at = COALESCE(retired_at, clock_timestamp()) "
+                    "WHERE id = :id"
+                ),
+                {"id": stage_id},
+            )
+
+
+@pytest.mark.parametrize(
+    "parent_table,id_key",
+    [("tournament_events", "event_id"), ("tournaments", "tournament_id")],
+)
+async def test_parent_delete_removes_superseded_entries_together(
+    db_session: AsyncSession,
+    undrawn_registration: dict[str, uuid.UUID],
+    parent_table: str,
+    id_key: str,
+) -> None:
+    from app.models import TournamentEvent
+
+    event = await db_session.get(TournamentEvent, undrawn_registration["event_id"])
+    assert event is not None
+    duplicates = await _enter_field(db_session, event, 1, prefix="superseded-delete")
+    duplicate_id = duplicates[0].id
+    await db_session.execute(
+        text(
+            "UPDATE tournament_entries SET status = 'withdrawn', "
+            "superseded_by_entry_id = :survivor WHERE id = :duplicate"
+        ),
+        {"survivor": undrawn_registration["entry_id"], "duplicate": duplicate_id},
+    )
+    await db_session.commit()
+    await db_session.execute(
+        text(f"DELETE FROM {parent_table} WHERE id = :id"),
+        {"id": undrawn_registration[id_key]},
+    )
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    retained = await db_session.scalar(
+        text("SELECT count(*) FROM tournament_entries WHERE event_id = :id"),
+        {"id": undrawn_registration["event_id"]},
+    )
+    assert retained == 0
+
+
+@pytest.mark.parametrize(
+    "parent_table,id_key",
+    [("tournament_events", "event_id"), ("tournaments", "tournament_id")],
+)
+async def test_uncut_preserves_stage_metadata_until_its_parent_is_deleted(
+    db_session: AsyncSession,
+    drawn_history: dict[str, uuid.UUID],
+    parent_table: str,
+    id_key: str,
+) -> None:
+    stage_id = await db_session.scalar(
+        text("SELECT stage_id FROM tournament_fixtures WHERE id = :id"),
+        {"id": drawn_history["fixture_id"]},
+    )
+    snapshot = text(
+        "SELECT to_jsonb(s) - 'retired_at' FROM tournament_event_stages s "
+        "WHERE id = :id"
+    )
+    stage_key = {"id": stage_id}
+    before = await db_session.scalar(snapshot, stage_key)
+    await _uncut(db_session, drawn_history)
+    after = await db_session.scalar(snapshot, stage_key)
+    assert after == before
+    retired_at = await db_session.scalar(
+        text("SELECT retired_at FROM tournament_event_stages WHERE id = :id"),
+        stage_key,
+    )
+    assert retired_at is not None
+    await db_session.execute(
+        text(f"DELETE FROM {parent_table} WHERE id = :id"),
+        {"id": drawn_history[id_key]},
+    )
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    retained = await db_session.scalar(
+        text("SELECT count(*) FROM tournament_event_stages WHERE id = :id"),
+        stage_key,
+    )
+    assert retained == 0

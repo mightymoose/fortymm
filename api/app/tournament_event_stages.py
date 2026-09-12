@@ -46,7 +46,7 @@ import uuid
 from collections.abc import Collection
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -235,7 +235,6 @@ async def archive_stage_configuration(
     retired_at = datetime.now(UTC)
     replacements: list[TournamentEventStage] = []
     for stage in stages:
-        stage.retired_at = retired_at
         groups = []
         for group in stage.groups:
             link = group.reservation_link
@@ -259,6 +258,16 @@ async def archive_stage_configuration(
             )
         )
     # Retire before INSERT: the partial position index permits one current stage.
+    # Preserve the archived metadata, including the pre-retirement update timestamp.
+    if stages:
+        await db.execute(
+            update(TournamentEventStage)
+            .where(TournamentEventStage.id.in_([stage.id for stage in stages]))
+            .values(
+                retired_at=retired_at,
+                updated_at=TournamentEventStage.updated_at,
+            )
+        )
     await db.flush()
     db.add_all(replacements)
     await db.flush()

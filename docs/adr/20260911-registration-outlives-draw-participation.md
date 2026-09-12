@@ -69,7 +69,8 @@ changes only the retirement marker; other fixture fields remain as last recorded
 
 Removing a catalogue table referenced by a retired fixture retires the table from
 the current catalogue rather than deleting its identity. Historical placements
-keep their table reference. Current placements retain the existing explicit
+keep their table reference. Deleting the last event that references a retired
+table reclaims that otherwise unreachable catalogue row. Current placements retain the existing explicit
 unplace-or-refuse behavior; unreferenced removed tables may still be deleted.
 The existing explicit deletion of an unplayed event or tournament remains supported.
 The table foreign key uses deferred `NO ACTION`, preserving the reference at commit

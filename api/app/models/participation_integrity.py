@@ -500,6 +500,36 @@ DRAW_HISTORY_INTEGRITY_DDL = (
         ON tournament_entry_withdrawals FOR EACH ROW
         EXECUTE FUNCTION preserve_competition_withdrawal_history()
         """,
+    """
+        CREATE FUNCTION preserve_retired_stage_history() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+        IF TG_OP = 'UPDATE' AND OLD.retired_at IS NULL
+        AND NEW.retired_at IS NOT NULL AND
+        (to_jsonb(NEW) - 'retired_at') IS DISTINCT FROM
+        (to_jsonb(OLD) - 'retired_at') THEN
+        RAISE EXCEPTION 'retired stage history is immutable'
+        USING ERRCODE = '23514';
+        END IF;
+        IF OLD.retired_at IS NOT NULL THEN
+        IF TG_OP = 'DELETE' THEN
+        IF EXISTS (SELECT 1 FROM tournament_events WHERE id = OLD.event_id) THEN
+        RAISE EXCEPTION 'retired stage history is immutable'
+        USING ERRCODE = '23514';
+        END IF;
+        ELSIF NEW IS DISTINCT FROM OLD THEN
+        RAISE EXCEPTION 'retired stage history is immutable'
+        USING ERRCODE = '23514';
+        END IF;
+        END IF;
+        RETURN COALESCE(NEW, OLD);
+        END $$
+        """,
+    """
+        CREATE TRIGGER a_preserve_retired_stage_history BEFORE UPDATE OR DELETE
+        ON tournament_event_stages FOR EACH ROW
+        EXECUTE FUNCTION preserve_retired_stage_history()
+        """,
 )
 
 

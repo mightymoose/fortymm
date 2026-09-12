@@ -39,6 +39,7 @@ from app.models import (
     TournamentEventReservation,
     TournamentFixture,
     User,
+    VenueTable,
 )
 from app.schedule_preview import preview_field_size
 from app.schedule_solves import request_solve
@@ -275,6 +276,19 @@ async def delete_event(
     # The explicit parent deletion owns its entire history. Let database cascades
     # remove children after the event disappears, even when ORM collections are loaded.
     await db.execute(delete(TournamentEvent).where(TournamentEvent.id == event.id))
+    # Retired catalogue rows exist only to keep historical fixture references valid.
+    # Once the last referencing event is deleted, reclaim those hidden rows.
+    await db.execute(
+        delete(VenueTable)
+        .where(
+            VenueTable.tournament_id == tournament_id,
+            VenueTable.retired_at.is_not(None),
+            ~select(TournamentFixture.id)
+            .where(TournamentFixture.table_id == VenueTable.id)
+            .exists(),
+        )
+        .execution_options(include_draw_history=True)
+    )
     await db.commit()
 
 

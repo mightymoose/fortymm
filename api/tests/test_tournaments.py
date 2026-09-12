@@ -8988,8 +8988,75 @@ async def test_removing_table_after_uncut_preserves_historical_placement(
             f"/v1/tournaments/{tournament_id}/events/{event_id}"
         )
         assert removed_event.status_code == 204, removed_event.text
+        assert (
+            await db_session.scalar(
+                select(VenueTable.id)
+                .where(VenueTable.id == table_1)
+                .execution_options(include_draw_history=True)
+            )
+            is None
+        )
+        assert await db_session.scalar(
+            select(VenueTable.id).where(VenueTable.id == table_2)
+        ) == uuid.UUID(table_2)
+
     removed = await client.delete(f"/v1/tournaments/{tournament_id}")
     assert removed.status_code == 204, removed.text
+
+
+async def test_retired_table_survives_until_its_last_event_is_deleted(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    client, _ = authed_client
+    (
+        tournament_id,
+        first_event_id,
+        _,
+        table_1,
+        table_2,
+    ) = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix="shared-table"
+    )
+    second = await client.post(
+        f"/v1/tournaments/{tournament_id}/events",
+        json=_rr_payload({**RESERVATION_A, "table_ids": [table_1, table_2]}),
+    )
+    assert second.status_code == 201, second.text
+    second_event_id = second.json()["id"]
+    await _seed_field(db_session, second_event_id, 3, prefix="shared-table-other")
+    await _cut_the_draw(client, tournament_id, second_event_id)
+    fixture, *_ = await _fixture_rows(db_session, second_event_id)
+    placed = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T11:00:00"},
+    )
+    assert placed.status_code == 200, placed.text
+    for event_id in (first_event_id, second_event_id):
+        uncut = await client.delete(_draw_url(tournament_id, event_id))
+        assert uncut.status_code == 204, uncut.text
+    removed_table = await client.patch(
+        f"/v1/tournaments/{tournament_id}",
+        json={
+            "details_version": 1,
+            "table_catalogue": [{"id": table_2, "label": "Table 2", "court": "A"}],
+        },
+    )
+    assert removed_table.status_code == 200, removed_table.text
+    table_query = (
+        select(VenueTable.id)
+        .where(VenueTable.id == table_1)
+        .execution_options(include_draw_history=True)
+    )
+    first_deleted = await client.delete(
+        f"/v1/tournaments/{tournament_id}/events/{first_event_id}"
+    )
+    assert first_deleted.status_code == 204, first_deleted.text
+    assert await db_session.scalar(table_query) == uuid.UUID(table_1)
+    second_deleted = await client.delete(
+        f"/v1/tournaments/{tournament_id}/events/{second_event_id}"
+    )
+    assert second_deleted.status_code == 204, second_deleted.text
+    assert await db_session.scalar(table_query) is None
 
 
 async def test_the_opt_in_removes_the_catalogue_table_and_leaves_its_fixtures_unplaced(
