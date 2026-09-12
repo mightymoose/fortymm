@@ -25,17 +25,20 @@ cycle-free.
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models import (
+    Match,
+    MatchStatus,
     Tournament,
-    TournamentEventReservation,
     TournamentEventReservationTable,
     TournamentFixture,
     VenueTable,
+    VenueTableCallHistory,
 )
 from app.schemas.tournament import (
     TournamentTableUpsert,
@@ -164,14 +167,13 @@ async def _unplace_or_refuse(
     together, are what the broken-pin void clears (``app.schedule_solves``), for the
     same reason.
 
-    The explicit ``flush`` IS the mechanism, not belt-and-braces. The caller removes the
-    ``VenueTable`` rows straight after this returns, by dropping them from
-    ``Tournament.tables`` (``delete-orphan``), and ``tournament_fixtures.table_id`` is
-    ``ON DELETE RESTRICT`` — checked immediately, never deferred. There is no ORM
-    ``relationship`` between the two (the FK is a bare column), so the unit of work has
-    no dependency to order the child UPDATEs ahead of the parent DELETEs; flushing here
-    puts them in the database first, in this transaction, where the RESTRICT check will
-    find them.
+    The explicit ``flush`` IS the mechanism, not belt-and-braces. The caller either
+    hard-deletes an uncalled table or retains a called table as retired. For the former,
+    ``tournament_fixtures.table_id`` is ``ON DELETE RESTRICT`` — checked immediately,
+    never deferred. There is no ORM ``relationship`` between the two (the FK is a bare
+    column), so the unit of work has no dependency to order the child UPDATEs ahead of
+    the parent DELETE; flushing here puts them in the database first, in this
+    transaction, where the RESTRICT check will find them.
     """
     placed = await _placed_fixtures(db, [str(table.id) for table in removed])
     if not placed:
@@ -184,7 +186,43 @@ async def _unplace_or_refuse(
             tables=labels,
             placements=len(placed),
         )
+    called_match_ids = {
+        fixture.match_id
+        for fixture in placed
+        if fixture.match_id is not None
+        and fixture.table_id is not None
+        and fixture.scheduled_start is not None
+        and fixture.pinned_at is not None
+        and fixture.call_notified_count > 0
+    }
+    settled_match_ids: set[uuid.UUID] = set()
+    if called_match_ids:
+        settled_match_ids = {
+            match_id
+            for match_id, status in (
+                await db.execute(
+                    select(Match.id, Match.status).where(Match.id.in_(called_match_ids))
+                )
+            ).all()
+            if status in (MatchStatus.completed, MatchStatus.voided)
+        }
     for fixture in placed:
+        if (
+            fixture.table_id is not None
+            and fixture.scheduled_start is not None
+            and fixture.pinned_at is not None
+            and fixture.call_notified_count > 0
+            and fixture.match_id not in settled_match_ids
+        ):
+            db.add(
+                VenueTableCallHistory(
+                    tournament_id=fixture.scope_tournament_id,
+                    fixture_id=fixture.id,
+                    table_id=fixture.table_id,
+                    scheduled_start=fixture.scheduled_start,
+                    kind="cancelled",
+                )
+            )
         fixture.table_id = None
         fixture.scheduled_start = None
         fixture.pinned_at = None
@@ -202,11 +240,11 @@ async def apply_table_catalogue(
     """Make ``tournament``'s catalogue equal ``submitted`` as an **id-keyed diff**, and
     report what that did (:class:`AppliedCatalogue`).
 
-    Each entry either cites the ``id`` of a table the tournament already has — which
+    Each entry either cites the ``id`` of an active table the tournament has — which
     keeps that row, with the ``label``/``court`` and the position this payload gives it
     — or omits one, which adds a row the database mints an id for. A stored table no
-    entry cites is **removed**, by dropping it from ``Tournament.tables``, which
-    ``delete-orphan`` turns into a ``DELETE``.
+    entry cites is explicitly removed: an uncalled table is deleted, while a table in
+    call history is retired and kept with its stable identity.
 
     **Keying on the id is what makes a reorder move tables.** The by-position stopgap
     this replaces (chore 2a) matched the i-th sent against the i-th stored, so sending
@@ -231,13 +269,17 @@ async def apply_table_catalogue(
 
     With ``unplace_fixtures`` the removal goes through and those fixtures are unplaced,
     and the events they belong to come back on the result so the caller can hint their
-    entrants: a player whose promised table just disappeared is told by nothing else.
+    entrants. Active reservation memberships on a retired table are closed at the same
+    time; uncalled hard-deletions still cascade through their memberships.
 
     ``changed`` answers the re-solve trigger, and is deliberately about the **set** of
     tables: the solver reduces the catalogue to its ids, so an add or a remove changes
     its inputs while re-wording a label — or re-ordering the list — does not.
     """
-    stored = {table.id: table for table in tournament.tables}
+    retired = [table for table in tournament.tables if table.retired_at is not None]
+    stored = {
+        table.id: table for table in tournament.tables if table.retired_at is None
+    }
     # Judged first, over the whole payload, because a catalogue naming a table this
     # tournament does not have is not a catalogue: every subsequent question (what is
     # kept, and therefore what is removed) would be answered against a list the client
@@ -247,7 +289,7 @@ async def apply_table_catalogue(
             raise TableNotInCatalogueError(index=index, table_id=str(entry.id))
 
     kept = {entry.id for entry in submitted if entry.id is not None}
-    removed = [table for table in tournament.tables if table.id not in kept]
+    removed = [table for table in stored.values() if table.id not in kept]
     unplaced_event_ids: tuple[uuid.UUID, ...] = ()
     if removed:
         # The refusal, or the opt-in's unplacing — either way this returns before a
@@ -256,57 +298,75 @@ async def apply_table_catalogue(
         unplaced_event_ids = await _unplace_or_refuse(
             db, removed, unplace=unplace_fixtures
         )
+        removed_ids = [str(table.id) for table in removed]
         historical_table_ids = set(
             await db.scalars(
                 select(TournamentFixture.table_id)
                 .where(
-                    TournamentFixture.table_id.in_(
-                        [str(table.id) for table in removed]
-                    ),
+                    TournamentFixture.table_id.in_(removed_ids),
                     TournamentFixture.retired_at.is_not(None),
                 )
                 .execution_options(include_draw_history=True)
             )
         )
-        retired = [table for table in removed if str(table.id) in historical_table_ids]
-        if retired:
-            # Physical removal used to cascade these current reservation links.
-            # Retaining the catalogue identity must still release its reservations;
-            # the draw revision snapshot preserves historical configuration.
-            retired_ids = {str(table.id) for table in retired}
-            await db.execute(
-                update(VenueTable)
-                .where(VenueTable.id.in_(retired_ids))
-                .values(
-                    retired_at=func.clock_timestamp(), updated_at=VenueTable.updated_at
-                )
-            )
-            reservations = await db.scalars(
-                select(TournamentEventReservation).where(
-                    TournamentEventReservation.tables.any(
-                        TournamentEventReservationTable.table_id.in_(retired_ids)
+        called_table_ids = set(
+            (
+                await db.scalars(
+                    select(VenueTableCallHistory.table_id).where(
+                        VenueTableCallHistory.tournament_id == tournament.id,
+                        VenueTableCallHistory.table_id.in_(removed_ids),
                     )
                 )
-            )
-            for reservation in reservations:
-                reservation.tables = [
-                    row for row in reservation.tables if row.table_id not in retired_ids
-                ]
-            await db.flush()
-            # Retired rows still belong to the tournament, but are no longer in
-            # its current catalogue. Avoid delete-orphan treating retirement as
-            # physical removal when the live collection is replaced below.
-            set_committed_value(
-                tournament,
-                "tables",
-                [table for table in tournament.tables if table not in retired],
-            )
+            ).all()
+        )
+        retired_ids = historical_table_ids | called_table_ids
+        retired = [table for table in removed if str(table.id) in retired_ids]
+    else:
+        retired_ids = set()
 
-    # Assigning the whole collection is what expresses all three operations at once: the
-    # rows carried over keep their identity (and every ref that names them), the fresh
-    # ``VenueTable``s are inserts, and the stored rows left out are orphans that
-    # ``delete-orphan`` deletes. The list order IS the catalogue order, so the read-back
-    # is in the order the director sent without waiting for a re-select.
+    retired_now = datetime.now(UTC)
+    if retired_ids:
+        await db.execute(
+            update(VenueTable)
+            .where(VenueTable.id.in_(retired_ids))
+            .values(
+                retired_at=retired_now,
+                position=None,
+                updated_at=VenueTable.updated_at,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        for table in retired:
+            set_committed_value(table, "retired_at", retired_now)
+            set_committed_value(table, "position", None)
+
+        memberships = (
+            await db.scalars(
+                select(TournamentEventReservationTable).where(
+                    TournamentEventReservationTable.tournament_id == tournament.id,
+                    TournamentEventReservationTable.table_id.in_(retired_ids),
+                    TournamentEventReservationTable.effective_until.is_(None),
+                )
+            )
+        ).all()
+        for membership in memberships:
+            membership.effective_until = max(
+                retired_now,
+                membership.effective_from + timedelta(microseconds=1),
+            )
+            membership.position = None
+
+        # A retired table is outside the active-only relationship. Detach it without
+        # triggering delete-orphan; the row itself and its retained references remain.
+        set_committed_value(
+            tournament,
+            "tables",
+            [table for table in tournament.tables if table not in retired],
+        )
+
+    # Assigning the active collection applies removals and reordering in one diff. The
+    # active list order IS the catalogue order, so the read-back is in the order the
+    # director sent without waiting for a re-select.
     tournament.tables = [
         _table_for(stored, entry, position) for position, entry in enumerate(submitted)
     ]

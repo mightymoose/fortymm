@@ -137,6 +137,8 @@ from app.models import (
     TournamentFixture,
     TournamentStatus,
     User,
+    VenueTableCallHistory,
+    VenueTableOutage,
 )
 from app.models.draw_type import StageDrawType
 from app.notifications.match_calls import (
@@ -181,6 +183,27 @@ PIN_TICK_INTERVAL_S = 60.0
 #: The external channels the post-commit fan-out is restricted to — in-app was
 #: already persisted inside the pin transaction (module docstring).
 _FANOUT_CHANNELS = [NotificationChannel.PUSH, NotificationChannel.EMAIL]
+
+
+def _record_table_call_history(
+    db: AsyncSession,
+    *,
+    tournament_id: uuid.UUID,
+    fixture_id: uuid.UUID,
+    table_id: str,
+    scheduled_start: datetime,
+    kind: str,
+) -> None:
+    """Append the stable table reference behind an announced call transition."""
+    db.add(
+        VenueTableCallHistory(
+            tournament_id=tournament_id,
+            fixture_id=fixture_id,
+            table_id=table_id,
+            scheduled_start=scheduled_start,
+            kind=kind,
+        )
+    )
 
 
 def _wall_now() -> datetime:
@@ -477,7 +500,21 @@ async def call_due_fixtures(
     # it; the loop mutates these in place (freshly-built sets off the held
     # resources' own keys — this pass only needs "is it held", not "by whom").
     held = await _held_resources(db, tournament.id)
-    claimed_tables: set[str] = set(held.tables)
+    out_of_service_tables = set(
+        (
+            await db.scalars(
+                select(VenueTableOutage.table_id).where(
+                    VenueTableOutage.tournament_id == tournament.id,
+                    VenueTableOutage.effective_from <= now,
+                    or_(
+                        VenueTableOutage.effective_until.is_(None),
+                        VenueTableOutage.effective_until > now,
+                    ),
+                )
+            )
+        ).all()
+    )
+    claimed_tables: set[str] = set(held.tables) | out_of_service_tables
     claimed_users: set[uuid.UUID] = set(held.users)
     free: list[TournamentFixture] = []
     for fixture in sorted(due, key=lambda f: (f.scheduled_start, f.id)):
@@ -558,6 +595,16 @@ async def call_due_fixtures(
             increment_always=True,
             fanout=fanout,
         )
+        assert fixture.table_id is not None
+        assert fixture.scheduled_start is not None
+        _record_table_call_history(
+            db,
+            tournament_id=tournament.id,
+            fixture_id=fixture.id,
+            table_id=fixture.table_id,
+            scheduled_start=fixture.scheduled_start,
+            kind="called",
+        )
     # The players were just told → the scheduled match goes live, in this same
     # transaction as the notification (ADR "born scheduled, live when called").
     await _go_live_on_call(db, [fixture.match_id for fixture, *_ in calls])
@@ -603,6 +650,7 @@ async def notify_pin_repairs(
     tournament: Tournament,
     *,
     cancelled: Sequence[TournamentFixture],
+    cancelled_placements: dict[uuid.UUID, tuple[str, datetime]] | None = None,
     withdrawn_entry_ids: AbstractSet[uuid.UUID],
     ingredients: "CopyIngredients | None" = None,
 ) -> list[NotificationJob]:
@@ -711,6 +759,18 @@ async def notify_pin_repairs(
             told = True
         if told:
             fixture.call_notified_count += 1
+        if cancelled_placements is not None:
+            placement = cancelled_placements.get(fixture.id)
+            if placement is not None:
+                table_id, scheduled_start = placement
+                _record_table_call_history(
+                    db,
+                    tournament_id=tournament.id,
+                    fixture_id=fixture.id,
+                    table_id=table_id,
+                    scheduled_start=scheduled_start,
+                    kind="cancelled",
+                )
 
     await db.flush()
     return fanout
@@ -771,6 +831,8 @@ async def apply_manual_placement(
     never on a silent transition; a clear does not reset it.
     """
     was_told = fixture.pinned_at is not None and fixture.call_notified_count > 0
+    previous_table_id = fixture.table_id
+    previous_scheduled_start = fixture.scheduled_start
     live = tournament.status is TournamentStatus.live
 
     fixture.table_id = table_id
@@ -794,6 +856,15 @@ async def apply_manual_placement(
             fanout = await _tell_both_entrants(
                 db, tournament, fixture, build=_cancelled_by_schedule_change
             )
+            if previous_table_id is not None and previous_scheduled_start is not None:
+                _record_table_call_history(
+                    db,
+                    tournament_id=tournament.id,
+                    fixture_id=fixture.id,
+                    table_id=previous_table_id,
+                    scheduled_start=previous_scheduled_start,
+                    kind="cancelled",
+                )
         # Un-call: a called match with the pin now lifted would otherwise sit
         # in_progress with no pin — the ambiguous state the ADR eliminated.
         # Revert it to pending, but only if pristine (no play). Guarded to
@@ -819,6 +890,16 @@ async def apply_manual_placement(
             else _called_to(table_id, scheduled_start)
         )
         fanout = await _tell_both_entrants(db, tournament, fixture, build=builder)
+        anchored_start = fixture.scheduled_start
+        assert anchored_start is not None
+        _record_table_call_history(
+            db,
+            tournament_id=tournament.id,
+            fixture_id=fixture.id,
+            table_id=table_id,
+            scheduled_start=anchored_start,
+            kind="moved" if was_told else "called",
+        )
         # A live placement of a never-told fixture *is* a call → its scheduled
         # match goes live. A *moved* correction lands on an already-live match;
         # :func:`_go_live_on_call` is guarded (``WHERE status == pending``) so it
@@ -1125,7 +1206,11 @@ async def load_copy_ingredients(
     # the table id's text.
     table_labels = {
         str(table.id): table.label
-        for table in (TournamentTable.model_validate(row) for row in tournament.tables)
+        for table in (
+            TournamentTable.model_validate(row)
+            for row in tournament.tables
+            if row.retired_at is None
+        )
     }
     group_labels = {
         event.id: {
@@ -1266,6 +1351,12 @@ async def execute_pin_tick(
         ).scalar_one_or_none()
         if tournament is None or tournament.status is not TournamentStatus.live:
             return
+
+        # A service-state change also serializes on this row. Re-anchor the
+        # due and outage checks to the time after taking it: using the probe's
+        # older instant could ignore an outage committed while this tick waited.
+        now = _wall_now()
+        due_clauses = _due_fixture_clauses(tournament_id, now)
 
         fixtures: Sequence[TournamentFixture] = (
             (

@@ -59,7 +59,7 @@ from app import queue as queue_module
 from app import scheduling
 from app.config import get_settings
 from app.match_calls import _wall_now
-from app.models import Tournament, TournamentStatus, User
+from app.models import Tournament, TournamentStatus, User, VenueTableOutage
 from app.schedule_preview import (
     DegenerateConfiguration,
     PreviewSnapshot,
@@ -402,6 +402,13 @@ async def request_schedule_preview(
     on, plus the field sizes and the drawn fixtures a caller renders a skeleton
     from before the solve returns (ADR "instant structure and a streamed solve")."""
     tournament = await _load_owned_pre_live_tournament(db, tournament_id, actor)
+    table_outages = (
+        await db.scalars(
+            select(VenueTableOutage).where(
+                VenueTableOutage.tournament_id == tournament_id
+            )
+        )
+    ).all()
 
     # The real wall-clock instant the preview is judged from — the same ``now``
     # source the live solve uses (:func:`app.match_calls._wall_now`), threaded into
@@ -409,7 +416,10 @@ async def request_schedule_preview(
     # reservation reports the same ``PastWindow`` a pre-live solve would (#1101), not a
     # falsely-feasible verdict from a hardcoded ``now_min = 0``.
     preview = build_preview_snapshot(
-        tournament, count_overrides=count_overrides, now=_wall_now()
+        tournament,
+        count_overrides=count_overrides,
+        table_outages=table_outages,
+        now=_wall_now(),
     )
     # event id → display name, built once (the summaries are the tournament's own
     # events, so a miss would be a builder bug — fall back to the raw id, since a

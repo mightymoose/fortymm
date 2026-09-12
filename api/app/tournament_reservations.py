@@ -85,7 +85,7 @@ callable from a REPL and cycle-free."""
 
 import uuid
 from collections.abc import Sequence
-from datetime import date, time
+from datetime import UTC, date, datetime, time, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -200,7 +200,9 @@ def reservation_read(reservation: TournamentEventReservation) -> Reservation:
         id=reservation.id,
         name=reservation.name,
         slot=_slot_read(reservation),
-        table_ids=[row.table_id for row in reservation.tables],
+        table_ids=[
+            row.table_id for row in reservation.tables if row.effective_until is None
+        ],
         position=reservation.position,
     )
 
@@ -219,12 +221,9 @@ def _reservation_tables(
     not as a literal, because on the create path the event does not have an id yet (see
     the module docstring's "The tables").
 
-    Keyed rather than replaced wholesale for a mechanical reason as well as a tidy one:
-    a row's identity IS ``(event, reservation, table)``, so re-sending a table the
-    reservation already holds and letting the collection be rebuilt would ask the unit
-    of work to INSERT a primary key it is about to DELETE — and it emits the inserts
-    first. Keeping the row and moving its ``position`` is the same end state with no
-    such window.
+    Active periods are keyed by table id. A released period is retained with its end
+    timestamp and no current list position; re-adding that table creates a new period
+    rather than rewriting the one that ended.
 
     **A table the tournament's catalogue does not hold is dropped, silently**, which is
     this module's one judgement call and is the ADR's "quiet" half said at write time. A
@@ -239,26 +238,47 @@ def _reservation_tables(
     database would not accept it if it did.
 
     Duplicates collapse (``dict.fromkeys``, order-preserving) for the same reason: the
-    primary key says a reservation holds a table at most once, and a payload that names
-    one twice means what it says once.
+    active-membership constraint says a reservation holds a table at most once, and a
+    payload that names one twice means what it says once.
     """
-    catalogue = {str(table.id) for table in tournament.tables}
-    kept = {row.table_id: row for row in stored}
-    rows: list[TournamentEventReservationTable] = []
-    for table_id in dict.fromkeys(submitted):
-        if table_id not in catalogue:
-            continue
-        row = kept.get(table_id)
-        if row is None:
+    catalogue = {
+        str(table.id) for table in tournament.tables if table.retired_at is None
+    }
+    desired = [
+        table_id for table_id in dict.fromkeys(submitted) if table_id in catalogue
+    ]
+    desired_set = set(desired)
+    active = {row.table_id: row for row in stored if row.effective_until is None}
+    rows = [row for row in stored if row.effective_until is not None]
+    changed_at = datetime.now(UTC)
+
+    for row in active.values():
+        if row.table_id not in desired_set:
+            row.effective_until = max(
+                changed_at,
+                row.effective_from + timedelta(microseconds=1),
+            )
+            row.position = None
+            rows.append(row)
+
+    for position, table_id in enumerate(desired):
+        active_row = active.get(table_id)
+        if active_row is None:
             row = TournamentEventReservationTable(
                 tournament_id=tournament.id,
                 table_id=table_id,
-                position=len(rows),
+                position=position,
+                # ``now()`` is the transaction start in PostgreSQL; it can precede a
+                # release committed by the preceding request. Use the same app clock
+                # for a release and any fresh membership periods in this write so a
+                # quick re-add cannot overlap the closed period.
+                effective_from=changed_at,
                 event=event,
             )
+            rows.append(row)
         else:
-            row.position = len(rows)
-        rows.append(row)
+            active_row.position = position
+            rows.append(active_row)
     return rows
 
 

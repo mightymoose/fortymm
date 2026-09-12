@@ -143,7 +143,7 @@ def _tournament_fields(
         "description": t.description,
         "status": t.status,
         "address": t.address,
-        "table_catalogue": t.tables,
+        "table_catalogue": [table for table in t.tables if table.retired_at is None],
         "league_id": t.league_id,
         "created_by_user_id": t.created_by_user_id,
         "created_by_username": created_by_username,

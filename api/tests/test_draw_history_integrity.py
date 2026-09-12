@@ -659,8 +659,8 @@ async def test_retired_table_metadata_cannot_be_rewritten(
     if already_retired:
         await db_session.execute(
             text(
-                "UPDATE tournament_tables SET retired_at = clock_timestamp() "
-                "WHERE id = :id"
+                "UPDATE tournament_tables SET retired_at = clock_timestamp(), "
+                "position = NULL WHERE id = :id"
             ),
             table_key,
         )
@@ -669,7 +669,8 @@ async def test_retired_table_metadata_cannot_be_rewritten(
             await db_session.execute(
                 text(
                     "UPDATE tournament_tables SET label = 'Changed', "
-                    "retired_at = COALESCE(retired_at, clock_timestamp()) "
+                    "retired_at = COALESCE(retired_at, clock_timestamp()), "
+                    "position = NULL "
                     "WHERE id = :id"
                 ),
                 table_key,

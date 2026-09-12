@@ -42,6 +42,7 @@ from app.scheduling import (
     SolveResult,
     TableConflict,
     TableId,
+    TableOutage,
     Verdict,
     Window,
     WindowTooShortForMatch,
@@ -275,6 +276,86 @@ class TestDurations:
 
 
 class TestHardConstraints:
+    def test_outage_time_is_excluded_from_reported_venue_capacity(self) -> None:
+        """The infeasibility residual reports usable table-minutes after outages.
+
+        A table reserved for an hour but unavailable for that whole hour offers no
+        usable capacity, even though it remains part of the reservation's catalogue.
+        """
+        p1, p2 = _players(2)
+        snapshot = _one_reservation_snapshot(
+            (_fixture(1, p1, p2),), tables=1, window=(0, 60)
+        )
+        snapshot = dataclasses.replace(
+            snapshot,
+            table_outages=(TableOutage(TableId("T1"), 0, 60),),
+        )
+
+        result = solve(snapshot, time_cap_s=CAP)
+
+        assert result.verdict is Verdict.infeasible
+        assert result.reasons == (NoSingleCause(required_min=25, available_min=0),)
+
+    def test_outage_blocks_a_table_for_its_time_interval(self) -> None:
+        p1, p2 = _players(2)
+        snapshot = _one_reservation_snapshot(
+            (_fixture(1, p1, p2),), tables=1, window=(0, 120)
+        )
+        snapshot = dataclasses.replace(
+            snapshot,
+            table_outages=(TableOutage(TableId("T1"), 0, 30),),
+        )
+
+        result = solve(snapshot, time_cap_s=CAP)
+
+        assert result.verdict in SOLVED
+        assert result.placements[0].start_min >= 30
+
+    def test_a_live_outage_extends_the_advisory_window_through_restoration(
+        self,
+    ) -> None:
+        p1, p2 = _players(2)
+        snapshot = _one_reservation_snapshot(
+            (_fixture(1, p1, p2),), tables=1, window=(0, 60)
+        )
+        snapshot = dataclasses.replace(
+            snapshot,
+            is_live=True,
+            table_outages=(TableOutage(TableId("T1"), 0, 90),),
+        )
+
+        result = solve(snapshot, time_cap_s=CAP)
+
+        assert result.verdict in SOLVED
+        assert result.placements[0].start_min >= 90
+
+    def test_outage_overlapping_a_pin_preserves_the_promise_and_blocks_remainder(
+        self,
+    ) -> None:
+        p1, p2, p3, p4 = _players(4)
+        snapshot = _one_reservation_snapshot(
+            (
+                _fixture(1, p1, p2, pin=Pin(TableId("T1"), 10)),
+                _fixture(2, p3, p4),
+            ),
+            tables=1,
+            window=(0, 120),
+        )
+        snapshot = dataclasses.replace(
+            snapshot,
+            table_outages=(TableOutage(TableId("T1"), 0, 50),),
+        )
+
+        result = solve(snapshot, time_cap_s=CAP)
+
+        assert result.verdict in SOLVED
+        placements = {
+            placement.fixture_id: placement for placement in result.placements
+        }
+        assert placements[FixtureId("F1")].table_id == TableId("T1")
+        assert placements[FixtureId("F1")].start_min == 10
+        assert placements[FixtureId("F2")].start_min >= 50
+
     @pytest.mark.parametrize("seed", [0, 1, 2, 3])
     def test_random_single_reservation_instances(self, seed: int) -> None:
         snapshot = _random_snapshot(seed)

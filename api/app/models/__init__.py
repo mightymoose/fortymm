@@ -68,6 +68,8 @@ from app.models.tournament_event_stage import TournamentEventStage
 from app.models.tournament_event_stage_group import TournamentEventStageGroup
 from app.models.tournament_fixture import TournamentFixture
 from app.models.tournament_table import VenueTable
+from app.models.tournament_table_call_history import VenueTableCallHistory
+from app.models.tournament_table_outage import VenueTableOutage
 from app.models.user import User
 from app.models.user_league_rating import UserLeagueRating
 from app.models.user_role import UserRole
@@ -147,6 +149,8 @@ __all__ = [
     "EmailIntent",
     "FirstSignInIntent",
     "VenueTable",
+    "VenueTableOutage",
+    "VenueTableCallHistory",
     "VerificationPolicy",
 ]
 

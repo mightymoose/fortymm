@@ -27,9 +27,9 @@ these four coded refusals are judged here, before it is called: a missing fixtur
 (:class:`FixturePlacementFrozenError`); a ``table_id`` that names no table in the
 tournament's catalogue (:class:`PlacementTableNotFoundError`, ADR 20260801); and — the
 one hard exception to the "double-booking SAVEs" rule above — a **live** placement that
-would call the fixture onto a table or a player an unfinished ``in_progress`` match
-already holds (:class:`PlacementClashError`, ADR "A called match holds its time, and a
-clashing call is refused").
+would call the fixture onto an out-of-service table, or a table or player an unfinished
+``in_progress`` match already holds (:class:`PlacementClashError`, ADR "A called match
+holds its time, and a clashing call is refused").
 """
 
 import uuid
@@ -57,6 +57,7 @@ from app.models import (
     TournamentFixture,
     TournamentStatus,
     User,
+    VenueTableOutage,
 )
 from app.schedule_solves import request_solve
 from app.schemas.tournament import (
@@ -171,7 +172,9 @@ def _enforce_table_exists(tournament: Tournament, table_id: str | None) -> None:
     """
     if table_id is None:
         return
-    if table_id not in {str(table.id) for table in tournament.tables}:
+    if table_id not in {
+        str(table.id) for table in tournament.tables if table.retired_at is None
+    }:
         raise PlacementTableNotFoundError(table_id)
 
 
@@ -201,8 +204,8 @@ async def _enforce_no_live_call_clash(
 ) -> None:
     """Raise :class:`PlacementClashError` when this placement, while the
     tournament is **live**, would CALL the fixture — a full placement (table
-    AND start both set) with both entrants known — onto a table or a player
-    an unfinished ``in_progress`` match in this tournament already holds (ADR
+    AND start both set) with both entrants known — onto a table that is out of
+    service or a table or player an unfinished ``in_progress`` match holds (ADR
     "A called match holds its time, and a clashing call is refused").
 
     A no-op for anything that isn't a live call: pre-live (ADR-0790 keeps
@@ -212,8 +215,9 @@ async def _enforce_no_live_call_clash(
     either) — matching exactly the condition under which that function itself
     would notify.
 
-    Reads :func:`app.match_calls._held_resources`, the same occupancy read
-    the automatic call pass uses, **excluding this fixture's own match**: a
+    Checks for an active outage before reading occupancy. For a live-match
+    clash, reads :func:`app.match_calls._held_resources`, the same occupancy
+    read the automatic call pass uses, **excluding this fixture's own match**: a
     fixture that is itself already ``in_progress`` (being re-placed, e.g.
     moved to a different table while it plays) is not a clash against
     itself — that is a *move*, judged elsewhere. Checks the table first, then
@@ -228,6 +232,24 @@ async def _enforce_no_live_call_clash(
         or fixture.entry_b_id is None
     ):
         return
+
+    active_outage = await db.scalar(
+        select(VenueTableOutage.id)
+        .where(
+            VenueTableOutage.tournament_id == tournament.id,
+            VenueTableOutage.table_id == table_id,
+            VenueTableOutage.effective_until.is_(None),
+        )
+        .limit(1)
+    )
+    if active_outage is not None:
+        table_label = next(
+            (table.label for table in tournament.tables if str(table.id) == table_id),
+            table_id,
+        )
+        raise PlacementClashError(
+            f"{table_label} is out of service. Restore it before calling a match there."
+        )
 
     held = await _held_resources(db, tournament.id, exclude_match_id=fixture.match_id)
     if not held.tables and not held.users:
@@ -306,8 +328,9 @@ async def place_fixture(
       double-booking are flags derived on read, not refusals (ADR-0790) — **except**
       the case below.
     * **409** — the one hard exception to "double-booking saves": while the
-      tournament is **live**, a full placement that would CALL this fixture onto a
-      table or a player an unfinished ``in_progress`` match already holds is refused
+      tournament is **live**, a full placement that would CALL this fixture onto an
+      out-of-service table or a table or player an unfinished ``in_progress`` match
+      already holds is refused
       (:func:`_enforce_no_live_call_clash`, raising :class:`PlacementClashError`, ADR
       "A called match holds its time, and a clashing call is refused") — nothing is
       written and nobody is notified. A no-op pre-live, on a half-placement, or with a

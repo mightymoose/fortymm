@@ -64,6 +64,7 @@ from app.models import (
     TournamentFixture,
     TournamentStatus,
     User,
+    VenueTableOutage,
 )
 from app.result_proposal import propose_result
 from app.schedule_solves import (
@@ -2154,6 +2155,39 @@ class TestBracketConfinement:
         assert {p.table_id for p in result.placements} < set(catalogue)
         for placement in result.placements:
             assert inputs.base + timedelta(minutes=placement.end_min) <= reserved_end
+
+
+class TestOutageIntervals:
+    async def test_snapshot_turns_a_closed_outage_into_a_solver_obstacle(
+        self, db_session: AsyncSession
+    ) -> None:
+        tournament_id, _event_id = await _make_tournament(db_session)
+        table_id = (await table_ids_of(db_session, tournament_id))[0]
+        db_session.add(
+            VenueTableOutage(
+                tournament_id=tournament_id,
+                table_id=table_id,
+                effective_from=BASE + timedelta(minutes=10),
+                effective_until=BASE + timedelta(minutes=30),
+            )
+        )
+        await db_session.flush()
+
+        inputs = await schedule_solves._load_solver_inputs(
+            db_session, tournament_id, now=BASE, lock=False
+        )
+
+        assert inputs is not None
+        assert inputs.snapshot.table_outages == (
+            scheduling.TableOutage(scheduling.TableId(table_id), 10, 30),
+        )
+        result = scheduling.solve(inputs.snapshot)
+        assert result.verdict in (Verdict.optimal, Verdict.feasible)
+        assert all(
+            placement.start_min >= 30
+            for placement in result.placements
+            if str(placement.table_id) == table_id
+        )
 
 
 class TestEventWideReservation:

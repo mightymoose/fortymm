@@ -334,6 +334,15 @@ class RestShadow:
     completed_at_min: int
 
 
+@dataclass(frozen=True, slots=True)
+class TableOutage:
+    """A table-wide unavailable interval in the solve's minute frame."""
+
+    table_id: TableId
+    start_min: int
+    end_min: int | None
+
+
 def coalesce_rest_shadows(shadows: Iterable[RestShadow]) -> tuple[RestShadow, ...]:
     """One shadow per human, keeping the latest completion.
 
@@ -386,6 +395,7 @@ class ScheduleSnapshot:
     in_progress: tuple[InProgressMatch, ...] = ()
     previous_plan: tuple[PreviousPlacement, ...] = ()
     rest_shadows: tuple[RestShadow, ...] = ()
+    table_outages: tuple[TableOutage, ...] = ()
     is_live: bool = False
 
 
@@ -683,8 +693,9 @@ def _aggregate_capacity(snapshot: ScheduleSnapshot) -> tuple[int, int]:
     directly — a solve only reaches this on a *built* model, so the snapshot's
     cross-references have already passed :func:`_validated`.
 
-    ``available_min`` is the union of the reservations' coverage, per table, not
-    their sum. **Reservations overlap**: reservations may share a table (per-table
+    ``available_min`` is the union of the reservations' coverage, per table, after
+    subtracting each table's outage intervals, not their sum. **Reservations overlap**:
+    reservations may share a table (per-table
     no-overlap is global, see :class:`ScheduleReservation`), and a snapshot builder may
     lay a whole-venue reservation over an event's own reservations — which is exactly
     what an rr-then-ko event carries, a reservation for its group stage and an
@@ -709,10 +720,22 @@ def _aggregate_capacity(snapshot: ScheduleSnapshot) -> tuple[int, int]:
             spans_by_table[table_id].append(
                 (reservation.window.start_min, reservation.window.end_min)
             )
+    outages_by_table: dict[TableId, list[tuple[int, int]]] = defaultdict(list)
+    for outage in snapshot.table_outages:
+        table_spans = spans_by_table.get(outage.table_id, [])
+        if not table_spans:
+            continue
+        outage_end = (
+            outage.end_min
+            if outage.end_min is not None
+            else max(end for _, end in table_spans)
+        )
+        if outage_end > outage.start_min:
+            outages_by_table[outage.table_id].append((outage.start_min, outage_end))
     available = sum(
         end - start
-        for spans in spans_by_table.values()
-        for start, end in _merge_spans(spans)
+        for table_id, spans in spans_by_table.items()
+        for start, end in _subtract_spans(spans, outages_by_table[table_id])
     )
     return required, available
 
@@ -849,6 +872,29 @@ def _merge_spans(spans: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
     return merged
 
 
+def _subtract_spans(
+    spans: Iterable[tuple[int, int]], blocked_spans: Iterable[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """Return the parts of the first half-open span set outside the second."""
+    blocked = _merge_spans(blocked_spans)
+    available: list[tuple[int, int]] = []
+    for start, end in _merge_spans(spans):
+        cursor = start
+        for blocked_start, blocked_end in blocked:
+            if blocked_end <= cursor:
+                continue
+            if blocked_start >= end:
+                break
+            if blocked_start > cursor:
+                available.append((cursor, min(blocked_start, end)))
+            cursor = max(cursor, blocked_end)
+            if cursor >= end:
+                break
+        if cursor < end:
+            available.append((cursor, end))
+    return available
+
+
 def _overlapping_fixture_ids(
     spans: list[tuple[int, int, FixtureId]],
 ) -> tuple[FixtureId, ...]:
@@ -905,9 +951,8 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         for f in in_progress
     }
 
-    # The latest minute any FIXED obstacle — an in-progress occupancy, or a
-    # pin, now a fixed obstacle in both dimensions (module docstring, "A pin
-    # is a constant in both dimensions") — actually ends. Both the soft
+    # The latest minute any FIXED obstacle — an in-progress occupancy, a pin,
+    # or a closed outage interval extending past now — actually ends. Both the soft
     # window below and the horizon further down anchor off this, not off
     # ``now``: a pin sitting well past ``now`` still occupies real wall-clock
     # time an unpinned fixture must route around, so treating ``now`` as the
@@ -918,6 +963,9 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
         latest_fixed_end = max(latest_fixed_end, occ_end)
     for fixture, pin in pinned:
         latest_fixed_end = max(latest_fixed_end, pin.start_min + duration_of(fixture))
+    for outage in snapshot.table_outages:
+        if outage.end_min is not None and outage.end_min > now:
+            latest_fixed_end = max(latest_fixed_end, outage.end_min)
 
     # Soft window once live (ADR "the solver stops wedging"). While the day is
     # live a reservation window's END is advisory: the effective end extends to
@@ -1270,6 +1318,17 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     table_fixed_spans: defaultdict[TableId, list[tuple[int, int]]] = defaultdict(list)
     for table_id, spans in table_occupancy.items():
         table_fixed_spans[table_id].extend((s, e) for s, e, _ in spans)
+    for outage in snapshot.table_outages:
+        outage_end = (
+            outage.end_min
+            if outage.end_min is not None
+            else max(
+                (effective_end(reservation) for reservation in reservations.values()),
+                default=outage.start_min,
+            )
+        )
+        if outage_end > outage.start_min:
+            table_fixed_spans[outage.table_id].append((outage.start_min, outage_end))
     pin_tables: dict[FixtureId, TableId] = {}
     pin_starts: dict[FixtureId, int] = {}
     pin_durations: dict[FixtureId, int] = {}
