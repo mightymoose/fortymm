@@ -10782,6 +10782,59 @@ async def test_reopened_match_keeps_stage_participation_open_despite_retained_wi
     assert {period.end_reason for period in periods} == {"stage_completed"}
 
 
+@pytest.mark.parametrize("parent", ["event", "tournament"])
+@pytest.mark.parametrize("retired", [False, True])
+async def test_parent_delete_preserves_matchless_winner_history(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    parent: str,
+    retired: bool,
+) -> None:
+    from app.tournament_draws import uncut_draw
+
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
+    await _seed_field(db_session, event["id"], 2)
+    await _cut_the_draw(client, tournament_id, event["id"])
+    (fixture,) = await _fixture_rows(db_session, event["id"])
+    fixture_id = fixture.id
+    fixture.winner_entry_id = fixture.entry_a_id
+    await db_session.commit()
+    assert fixture.match_id is None
+    if retired:
+        # Trusted imports/archives can retain a matchless outcome in a retired
+        # revision. The ordinary uncut endpoint still refuses recorded play.
+        await uncut_draw(db_session, [uuid.UUID(event["id"])])
+        await db_session.commit()
+    fixture_query = text(
+        "SELECT row_to_json(f)::text FROM tournament_fixtures f WHERE id = :id"
+    )
+    periods_query = text(
+        "SELECT row_to_json(p)::text FROM tournament_entry_participations p "
+        "WHERE event_id = :event ORDER BY id"
+    )
+    fixture_before = await db_session.scalar(fixture_query, {"id": fixture_id})
+    periods_before = (
+        await db_session.execute(periods_query, {"event": uuid.UUID(event["id"])})
+    ).all()
+    assert fixture_before is not None and len(periods_before) == 2
+
+    url = f"/v1/tournaments/{tournament_id}"
+    if parent == "event":
+        url += f"/events/{event['id']}"
+    response = await client.delete(url)
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == (
+        "Recorded play must be preserved. This event or tournament cannot be deleted."
+    )
+    assert await db_session.scalar(fixture_query, {"id": fixture_id}) == fixture_before
+    assert (
+        await db_session.execute(periods_query, {"event": uuid.UUID(event["id"])})
+    ).all() == periods_before
+
+
 async def test_matchless_winner_counts_toward_stage_completion(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
