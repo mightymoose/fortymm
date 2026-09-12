@@ -106,7 +106,7 @@ async def test_user_role_links_user_and_role(db_session: AsyncSession):
     assert fetched.created_at is not None
 
 
-async def test_user_role_cascades_when_user_deleted(db_session: AsyncSession):
+async def test_account_deletion_retains_its_role_grants(db_session: AsyncSession):
     user = User(username="bob")
     role = Role(name="member")
     db_session.add_all([user, role])
@@ -115,9 +115,10 @@ async def test_user_role_cascades_when_user_deleted(db_session: AsyncSession):
     db_session.add(UserRole(user_id=user.id, role_id=role.id))
     await db_session.commit()
 
-    await db_session.delete(user)
-    await db_session.commit()
-    db_session.expunge_all()
+    with pytest.raises(IntegrityError, match="identities must be retained"):
+        async with db_session.begin_nested():
+            await db_session.delete(user)
+            await db_session.flush()
 
     remaining = (await db_session.execute(select(UserRole))).scalars().all()
-    assert remaining == []
+    assert len(remaining) == 1

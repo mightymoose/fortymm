@@ -127,6 +127,7 @@ async def create_match(
                 select(Player).where(
                     Player.id == opponent_user_id,
                     Player.merged_into_player_id.is_(None),
+                    Player.retired_at.is_(None),
                 )
             )
         ).scalar_one_or_none()
@@ -140,7 +141,7 @@ async def create_match(
             .where(
                 AccountPlayer.player_id == opponent.id,
                 AccountPlayer.is_primary.is_(True),
-                Account.merged_into_user_id.is_(None),
+                Account.is_active,
             )
             .limit(1)
         ):

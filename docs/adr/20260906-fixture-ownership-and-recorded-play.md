@@ -1,5 +1,7 @@
 # Fixture ownership and recorded play
 
+[Identity and sporting retention](20260912-identities-and-sporting-history-survive-deletion.md) further protects registrations and all table-call history, including cancelled calls without scores. Only unused draft tournaments remain hard-deletable.
+
 Status: Accepted for #1677, on the entry-members model in #1672.
 
 Amended by [Registration outlives draw participation](20260911-registration-outlives-draw-participation.md)

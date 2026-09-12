@@ -21,8 +21,9 @@ async def require_player(
         .join(AccountPlayer)
         .join(Account)
         .where(
-            Account.merged_into_user_id.is_(None),
+            Account.is_active,
             Player.merged_into_player_id.is_(None),
+            Player.retired_at.is_(None),
             AccountPlayer.account_id == account_id,
             AccountPlayer.player_id == player_id,
         )
@@ -49,8 +50,9 @@ def primary_player_reference(account_id: uuid.UUID) -> ScalarSelect[uuid.UUID]:
         .where(
             AccountPlayer.account_id == account_id,
             AccountPlayer.is_primary,
-            Account.merged_into_user_id.is_(None),
+            Account.is_active,
             Player.merged_into_player_id.is_(None),
+            Player.retired_at.is_(None),
         )
         .scalar_subquery()
     )
@@ -70,8 +72,9 @@ async def managing_account_ids(
             .join(Player)
             .where(
                 AccountPlayer.player_id.in_(player_ids),
-                Account.merged_into_user_id.is_(None),
+                Account.is_active,
                 Player.merged_into_player_id.is_(None),
+                Player.retired_at.is_(None),
             )
             .distinct()
             .order_by(Account.id)

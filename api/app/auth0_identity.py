@@ -34,7 +34,7 @@ async def resolve_linked_user(db: AsyncSession, sub: str) -> User | None:
     result = await db.execute(
         select(User).where(
             User.auth0_sub == sub,
-            User.merged_into_user_id.is_(None),
+            User.is_active,
         )
     )
     return result.scalar_one_or_none()

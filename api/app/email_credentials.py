@@ -28,7 +28,7 @@ async def email_action_is_valid(
     db: AsyncSession, action: EmailIntent | EmailToken
 ) -> bool:
     owner = await db.get(User, action.user_id)
-    if owner is None or owner.merged_into_user_id is not None:
+    if owner is None or not owner.is_active:
         return False
     if action.purpose == EmailPurpose.merge:
         target = (
@@ -37,9 +37,7 @@ async def email_action_is_valid(
             else None
         )
         return (
-            target is not None
-            and target.merged_into_user_id is None
-            and target.email == action.sent_to
+            target is not None and target.is_active and target.email == action.sent_to
         )
     if action.purpose == EmailPurpose.change:
         if owner.email != action.prior_email:

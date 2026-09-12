@@ -160,6 +160,7 @@ async def _load_entrant(db: AsyncSession, user_id: uuid.UUID) -> Player:
             select(Player).where(
                 Player.id == user_id,
                 Player.merged_into_player_id.is_(None),
+                Player.retired_at.is_(None),
             )
         )
     ).scalar_one_or_none()

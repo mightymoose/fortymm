@@ -58,6 +58,7 @@ from app.tournament_errors import (
     InactiveTournamentActorError,
     LeagueNotFoundError,
     NoDefaultLeagueError,
+    RecordedPlayDeletionError,
     TournamentAlreadyInStatusError,
     TournamentNotReadyToGoLiveError,
 )
@@ -216,17 +217,17 @@ async def delete_tournament(
     Issues the ``DELETE`` and commits it. Never raises ``HTTPException`` — the caller
     adapts each domain exception to its transport.
 
-    Delete the parent with database cascades so retained child history disappears
-    only as part of the explicitly requested tournament deletion.
+    Only unused drafts without registrations or sporting history are disposable.
+    Deferred references permit transactional removal of their owned setup.
     """
     await lock_draw_actor(db, actor.id)
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
     await require_owner(db, tournament, actor.id)
     await require_no_recorded_play(db, tournament_id=tournament.id)
-    # Delete the parent in one database statement. ORM child deletes would run
-    # before the parent disappears, violating retained-history guards and table
-    # references. Deferred table-call integrity lets the explicit tournament delete
-    # cascade its own history and tables together.
+    if tournament.status != TournamentStatus.draft:
+        raise RecordedPlayDeletionError("Only unused draft tournaments can be deleted.")
+    # Delete disposable setup together; deferred references validate the final
+    # aggregate without clearing placements or deleting protected child history.
     await db.execute(delete(Tournament).where(Tournament.id == tournament.id))
     await db.commit()
 

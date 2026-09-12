@@ -475,7 +475,13 @@ async def _find_session_user(db: AsyncSession, raw_token: str) -> User | None:
     token = result.scalar_one_or_none()
     if token is None:
         return None
-    user_result = await db.execute(select(User).where(User.id == token.user_id))
+    user_result = await db.execute(
+        select(User).where(
+            User.id == token.user_id,
+            User.deactivated_at.is_(None),
+            User.erased_at.is_(None),
+        )
+    )
     return user_result.scalar_one_or_none()
 
 
@@ -1544,6 +1550,8 @@ async def request_login_email(
     await _verify_captcha_or_400(payload.captcha_token)
 
     user, first_sign_in = await resolve_login_recipient(db, email)
+    if not user.is_active:
+        return LoginRequestAccepted(email=email)
     guest_id = await _requesting_guest_id(db, session_cookie, target=user)
     await _issue_and_send_login_email(
         db,

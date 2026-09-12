@@ -437,6 +437,22 @@ it can exist without a Player. Historical actions belong to the acting Account.
 A durable sporting identity with a username, matches, tournament entries and
 ratings. A Player can exist without a login and can be managed by multiple Accounts.
 
+**Account deactivation**:
+Reversible suspension of an Account's ability to sign in and act. Its email and
+current access relationships remain; its Players are not automatically retired.
+Reactivation honors current authority without restoring revoked or transferred rights.
+
+**Account erasure**:
+Removal of identifying Account data and credentials while preserving an inert
+Account reference for historical attribution. Distinct from deactivation and merge;
+reusing an email does not reclaim former Player access.
+
+**Player retirement**:
+Reversible removal from current discovery, selection, active rosters, and leaderboards,
+while retaining the same sporting identity, reserved username, results, and rating data.
+Restoration does not re-enter withdrawn competitions. A merged Player requires separate
+reconciliation rather than ordinary restoration.
+
 **Management grant**:
 Explicit authority for an Account to act for a Player in sporting workflows.
 It does not confer authority to change other Accounts or their access.

@@ -735,8 +735,8 @@ def serialize_event(
     # needs the entrant's username, and only the *active* entries), so the fields
     # are listed explicitly rather than validated straight off the attributes —
     # which would also fire a lazy load. The event's ``entered`` count is not
-    # listed at all: it is a computed field over ``entrants`` (ADR-0016), so
-    # there is nothing here that could disagree with the list.
+    # listed at all: it counts held registrations, including retired identities
+    # hidden from the visible roster after results and capacity are projected.
     #
     # ``entry_state`` is the caller's, and it is computed from the entrants already
     # loaded plus the caller's ``rating`` on this tournament's league — passed in,
@@ -759,7 +759,7 @@ def serialize_event(
     # served stages and the results' stage-split cannot disagree.
     stage_reads = [EventStageRead.model_validate(s) for s in e.stages]
     stage_draw_types = _stage_draw_types(stage_reads)
-    return TournamentEventRead.model_validate(
+    result = TournamentEventRead.model_validate(
         {
             "id": e.id,
             "tournament_id": e.tournament_id,
@@ -846,6 +846,11 @@ def serialize_event(
             ),
         }
     )
+    # Capacity and results above include every held registration. Retirement
+    # changes roster visibility without withdrawing a seat or rewriting results.
+    result.entrants = [entrant for entrant in entrants if entrant._visible_on_roster]
+    result._hidden_entrants = len(entrants) - len(result.entrants)
+    return result
 
 
 def _events_date_range(events: Sequence[TournamentEvent]) -> DateRange | None:

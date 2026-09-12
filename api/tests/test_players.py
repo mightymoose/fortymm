@@ -4397,3 +4397,27 @@ async def test_rating_history_endpoint_is_empty_for_a_player_who_never_played(
             "peak": None,
             "change": None,
         }, window
+
+
+async def test_retired_player_does_not_rank_but_keeps_rating_history(
+    api_client, db_session
+):
+    from app.identity_lifecycle import restore_player, retire_player
+
+    await start_session(api_client, db_session)
+    retired = await make_user(db_session, "retirement.top")
+    active = await make_user(db_session, "retirement.active")
+    await _earn_rating(db_session, retired, 3000.0)
+    await _earn_rating(db_session, active, 2000.0)
+    await retire_player(db_session, retired.player_id)
+    await db_session.commit()
+    response = await api_client.get("/v1/players", params={"page_size": 100})
+    assert _rank_for(response.json()["items"], "retirement.active") == 1
+    assert all(
+        item["username"] != "retirement.top" for item in response.json()["items"]
+    )
+    await restore_player(db_session, retired.player_id)
+    await db_session.commit()
+    response = await api_client.get("/v1/players", params={"page_size": 100})
+    assert _rank_for(response.json()["items"], "retirement.top") == 1
+    assert _rank_for(response.json()["items"], "retirement.active") == 2

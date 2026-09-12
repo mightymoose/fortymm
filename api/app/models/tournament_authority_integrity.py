@@ -13,6 +13,7 @@ AUTHORITY_INTEGRITY_DDL = (
         SELECT EXISTS (
             SELECT 1 FROM tournaments t JOIN accounts a ON a.id = account_uuid
             WHERE t.id = tournament_uuid AND a.merged_at IS NULL
+                AND a.deactivated_at IS NULL AND a.erased_at IS NULL
                 AND (t.owner_account_id = account_uuid OR EXISTS (
                     SELECT 1 FROM tournament_account_grants g
                     WHERE g.tournament_id = t.id AND g.account_id = account_uuid
@@ -39,6 +40,7 @@ AUTHORITY_INTEGRITY_DDL = (
         END;
         IF TG_OP = 'INSERT' AND NOT EXISTS (
             SELECT 1 FROM accounts WHERE id = NEW.account_id AND merged_at IS NULL
+                AND deactivated_at IS NULL AND erased_at IS NULL
         ) THEN
             RAISE EXCEPTION 'authority recipient must be active'
                 USING ERRCODE = '23514';
@@ -146,7 +148,8 @@ AUTHORITY_INTEGRITY_DDL = (
                     USING ERRCODE = '40001';
             END;
             IF NOT EXISTS (SELECT 1 FROM accounts
-                WHERE id = NEW.owner_account_id AND merged_at IS NULL) THEN
+                WHERE id = NEW.owner_account_id AND merged_at IS NULL
+                    AND deactivated_at IS NULL AND erased_at IS NULL) THEN
                 RAISE EXCEPTION 'owner must be active' USING ERRCODE = '23514';
             END IF;
         END IF;

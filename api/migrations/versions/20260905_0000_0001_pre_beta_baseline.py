@@ -17,6 +17,7 @@ AUTHORITY_INTEGRITY_DDL = (
         SELECT EXISTS (
             SELECT 1 FROM tournaments t JOIN accounts a ON a.id = account_uuid
             WHERE t.id = tournament_uuid AND a.merged_at IS NULL
+                AND a.deactivated_at IS NULL AND a.erased_at IS NULL
                 AND (t.owner_account_id = account_uuid OR EXISTS (
                     SELECT 1 FROM tournament_account_grants g
                     WHERE g.tournament_id = t.id AND g.account_id = account_uuid
@@ -43,6 +44,7 @@ AUTHORITY_INTEGRITY_DDL = (
         END;
         IF TG_OP = 'INSERT' AND NOT EXISTS (
             SELECT 1 FROM accounts WHERE id = NEW.account_id AND merged_at IS NULL
+                AND deactivated_at IS NULL AND erased_at IS NULL
         ) THEN
             RAISE EXCEPTION 'authority recipient must be active'
                 USING ERRCODE = '23514';
@@ -150,7 +152,8 @@ AUTHORITY_INTEGRITY_DDL = (
                     USING ERRCODE = '40001';
             END;
             IF NOT EXISTS (SELECT 1 FROM accounts
-                WHERE id = NEW.owner_account_id AND merged_at IS NULL) THEN
+                WHERE id = NEW.owner_account_id AND merged_at IS NULL
+                    AND deactivated_at IS NULL AND erased_at IS NULL) THEN
                 RAISE EXCEPTION 'owner must be active' USING ERRCODE = '23514';
             END IF;
         END IF;
@@ -816,9 +819,7 @@ ENTRY_INTEGRITY_DDL = (
                         USING ERRCODE = '40001';
                 END;
             END IF;
-            IF TG_OP = 'DELETE' AND EXISTS (
-                SELECT 1 FROM tournament_events WHERE id = OLD.event_id
-            ) THEN
+            IF TG_OP = 'DELETE' THEN
                 RAISE EXCEPTION 'entry history must be retained; withdraw the entry'
                     USING ERRCODE = '23514';
             END IF;
@@ -1499,10 +1500,130 @@ ADVANCEMENT_INTEGRITY_DDL = (
 )
 
 
+IDENTITY_RETENTION_DDL = (
+    """
+    CREATE FUNCTION preserve_retired_username() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        IF OLD.retired_at IS NOT NULL
+            AND NEW.username IS DISTINCT FROM OLD.username THEN
+            RAISE EXCEPTION 'retired Player username remains reserved'
+                USING ERRCODE='23514';
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """CREATE TRIGGER preserve_retired_username BEFORE UPDATE OF username ON players
+    FOR EACH ROW EXECUTE FUNCTION preserve_retired_username()""",
+    """
+    CREATE FUNCTION preserve_identity() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        RAISE EXCEPTION 'identities must be retained' USING ERRCODE='23514';
+    END $$
+    """,
+    """CREATE TRIGGER preserve_account BEFORE DELETE ON accounts
+    FOR EACH ROW EXECUTE FUNCTION preserve_identity()""",
+    """CREATE TRIGGER preserve_player BEFORE DELETE ON players
+    FOR EACH ROW EXECUTE FUNCTION preserve_identity()""",
+    """
+    CREATE FUNCTION preserve_account_erasure() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        IF (TG_OP = 'UPDATE' AND OLD.erased_at IS NOT NULL
+            AND NEW.erased_at IS DISTINCT FROM OLD.erased_at)
+            OR (NEW.erased_at IS NOT NULL AND (
+                NEW.deactivated_at IS NULL OR NEW.email IS NOT NULL
+                OR NEW.display_name <> 'Erased account'
+                OR NEW.confirmed_at IS NOT NULL OR NEW.last_seen_at IS NOT NULL
+                OR NEW.agent_access_linked_at IS NOT NULL
+                OR NEW.agent_access_revoked_at IS NOT NULL
+            )) THEN
+            RAISE EXCEPTION 'erased identity must remain inert' USING ERRCODE='23514';
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """CREATE TRIGGER preserve_account_erasure BEFORE INSERT OR UPDATE ON accounts
+    FOR EACH ROW EXECUTE FUNCTION preserve_account_erasure()""",
+)
+
+SPORTING_RETENTION_DDL = (
+    """
+    CREATE FUNCTION preserve_recorded_score_identity() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        IF NEW.match_game_id <> OLD.match_game_id THEN
+            RAISE EXCEPTION 'a recorded score preserves its game identity'
+                USING ERRCODE='23514';
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER preserve_recorded_score_identity BEFORE UPDATE
+    ON match_game_scores FOR EACH ROW
+    EXECUTE FUNCTION preserve_recorded_score_identity()
+    """,
+    """
+    CREATE FUNCTION preserve_published_tournament() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        IF OLD.status <> 'draft' THEN
+            RAISE EXCEPTION 'only unused draft tournaments can be deleted'
+                USING ERRCODE='23514';
+        END IF;
+        RETURN OLD;
+    END $$
+    """,
+    """CREATE TRIGGER preserve_published_tournament BEFORE DELETE ON tournaments
+    FOR EACH ROW EXECUTE FUNCTION preserve_published_tournament()""",
+    """
+    CREATE FUNCTION retain_match_play() RETURNS trigger LANGUAGE plpgsql AS $$
+    DECLARE target_match uuid;
+    BEGIN
+        IF TG_TABLE_NAME = 'match_results' THEN
+            target_match := NEW.match_id;
+        ELSE
+            SELECT match_id INTO target_match FROM match_games
+            WHERE id = NEW.match_game_id;
+        END IF;
+        WITH recorded AS (
+            INSERT INTO match_recorded_play(match_id)
+            VALUES (target_match)
+            ON CONFLICT DO NOTHING RETURNING match_id
+        )
+        INSERT INTO match_recorded_participants(match_id, side_number, player_id)
+        SELECT p.match_id, s.side_number, p.user_id
+        FROM recorded r JOIN match_side_players p ON p.match_id = r.match_id
+        JOIN match_sides s ON s.id = p.match_side_id;
+        RETURN NEW;
+    END $$
+    """,
+    """CREATE TRIGGER retain_proposal_participants AFTER INSERT ON match_results
+    FOR EACH ROW EXECUTE FUNCTION retain_match_play()""",
+    """CREATE TRIGGER retain_match_play AFTER INSERT ON match_game_scores
+    FOR EACH ROW EXECUTE FUNCTION retain_match_play()""",
+    """
+    CREATE FUNCTION preserve_match_play() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        IF TG_OP <> 'INSERT' OR pg_trigger_depth() < 2 THEN
+            RAISE EXCEPTION 'recorded play history is immutable and database owned'
+                USING ERRCODE='23514';
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """CREATE TRIGGER preserve_match_participants BEFORE INSERT OR UPDATE OR DELETE
+    ON match_recorded_participants
+    FOR EACH ROW EXECUTE FUNCTION preserve_match_play()""",
+    """CREATE TRIGGER preserve_match_play BEFORE INSERT OR UPDATE OR DELETE
+    ON match_recorded_play FOR EACH ROW EXECUTE FUNCTION preserve_match_play()""",
+)
+
 def upgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
     op.create_table(
         "accounts",
+        sa.Column("deactivated_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("erased_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("id", sa.UUID(), nullable=False),
         sa.Column(
             "display_name",
@@ -1725,6 +1846,7 @@ def upgrade() -> None:
     op.create_index(op.f("ix_permissions_name"), "permissions", ["name"], unique=True)
     op.create_table(
         "players",
+        sa.Column("retired_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("id", sa.UUID(), nullable=False),
         sa.Column("username", sa.String(length=255), nullable=False),
         sa.Column(
@@ -3654,12 +3776,8 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.ForeignKeyConstraint(
-            ["entry_a_id"], ["tournament_entries.id"], ondelete="CASCADE"
-        ),
-        sa.ForeignKeyConstraint(
-            ["entry_b_id"], ["tournament_entries.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(['entry_a_id'], ['tournament_entries.id'], ondelete='NO ACTION', deferrable=True, initially='DEFERRED'),
+        sa.ForeignKeyConstraint(['entry_b_id'], ['tournament_entries.id'], ondelete='NO ACTION', deferrable=True, initially='DEFERRED'),
         sa.ForeignKeyConstraint(["match_id"], ["matches.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(
             ["stage_id", "group_id"],
@@ -3671,15 +3789,8 @@ def upgrade() -> None:
             initially="DEFERRED",
             deferrable=True,
         ),
-        sa.ForeignKeyConstraint(
-            ["table_id"],
-            ["tournament_tables.id"],
-            deferrable=True,
-            initially="DEFERRED",
-        ),
-        sa.ForeignKeyConstraint(
-            ["winner_entry_id"], ["tournament_entries.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(['table_id'], ['tournament_tables.id'], ondelete='NO ACTION', deferrable=True, initially='DEFERRED'),
+        sa.ForeignKeyConstraint(['winner_entry_id'], ['tournament_entries.id'], ondelete='NO ACTION', deferrable=True, initially='DEFERRED'),
         sa.ForeignKeyConstraint(
             ["scope_event_id", "stage_id"],
             ["tournament_event_stages.event_id", "tournament_event_stages.id"],
@@ -3767,14 +3878,7 @@ def upgrade() -> None:
             "kind IN ('called', 'moved', 'cancelled')",
             name="ck_tournament_table_call_history_kind",
         ),
-        sa.ForeignKeyConstraint(
-            ["tournament_id", "fixture_id"],
-            ["tournament_fixtures.scope_tournament_id", "tournament_fixtures.id"],
-            name="fk_tournament_table_call_history_tournament_id_fixture_id",
-            ondelete="SET NULL (fixture_id)",
-            deferrable=True,
-            initially="DEFERRED",
-        ),
+        sa.ForeignKeyConstraint(['tournament_id', 'fixture_id'], ['tournament_fixtures.scope_tournament_id', 'tournament_fixtures.id'], name='fk_tournament_table_call_history_tournament_id_fixture_id', ondelete='NO ACTION', deferrable=True, initially='DEFERRED'),
         sa.ForeignKeyConstraint(
             ["tournament_id"], ["tournaments.id"], ondelete="CASCADE"
         ),
@@ -4229,7 +4333,7 @@ def upgrade() -> None:
         sa.Column(
             "inherited_from_grant_id",
             sa.UUID(),
-            sa.ForeignKey("tournament_account_grants.id", ondelete="RESTRICT"),
+            sa.ForeignKey('tournament_account_grants.id', ondelete='NO ACTION', deferrable=True, initially='DEFERRED'),
             nullable=True,
         ),
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
@@ -5140,20 +5244,7 @@ def upgrade() -> None:
         CREATE FUNCTION preserve_table_call_history() RETURNS trigger
         LANGUAGE plpgsql AS $$
         BEGIN
-        IF TG_OP = 'DELETE' THEN
-        IF pg_trigger_depth() <= 1 THEN
-        RAISE EXCEPTION 'table call history is append-only' USING ERRCODE = '23514';
-        END IF;
-        RETURN OLD;
-        END IF;
-        IF (to_jsonb(NEW) - 'fixture_id') IS DISTINCT FROM
-        (to_jsonb(OLD) - 'fixture_id') OR
-        (NEW.fixture_id IS DISTINCT FROM OLD.fixture_id AND
-        (OLD.fixture_id IS NULL OR NEW.fixture_id IS NOT NULL OR
-        pg_trigger_depth() <= 1)) THEN
-        RAISE EXCEPTION 'table call history is append-only' USING ERRCODE = '23514';
-        END IF;
-        RETURN NEW;
+        RAISE EXCEPTION 'table call history must be retained' USING ERRCODE='23514';
         END $$
         """)
     op.execute("""
@@ -6105,7 +6196,28 @@ def upgrade() -> None:
     op.create_index("ix_required_repair_attempts_repair_id", "required_repair_attempts", ["repair_id"])
 
 
+    op.create_table(
+        "match_recorded_play",
+        sa.Column("match_id", sa.UUID(), primary_key=True),
+        sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False,
+                  server_default=sa.text("clock_timestamp()")),
+        sa.ForeignKeyConstraint(["match_id"], ["matches.id"], ondelete="RESTRICT"),
+    )
+    op.create_table(
+        "match_recorded_participants",
+        sa.Column("match_id", sa.UUID(), primary_key=True),
+        sa.Column("side_number", sa.SmallInteger(), primary_key=True),
+        sa.Column("player_id", sa.UUID(), primary_key=True),
+        sa.CheckConstraint("side_number IN (1, 2)", name="ck_recorded_participant_side"),
+        sa.ForeignKeyConstraint(["match_id"], ["match_recorded_play.match_id"], ondelete="RESTRICT"),
+        sa.ForeignKeyConstraint(["player_id"], ["players.id"], ondelete="RESTRICT"),
+    )
+    for statement in IDENTITY_RETENTION_DDL + SPORTING_RETENTION_DDL:
+        op.execute(statement)
+
 def downgrade() -> None:
+    op.drop_table("match_recorded_participants")
+    op.drop_table("match_recorded_play")
     op.drop_table("required_repair_attempts")
     op.drop_table("required_repairs")
     postgresql.ENUM(name="repair_state").drop(op.get_bind(), checkfirst=True)
@@ -6390,6 +6502,13 @@ def downgrade() -> None:
 
     # Dropping tables removes their triggers, but not their function definitions.
     for function in (
+        "preserve_identity",
+        "preserve_retired_username",
+        "preserve_account_erasure",
+        "preserve_recorded_score_identity",
+        "preserve_published_tournament",
+        "retain_match_play",
+        "preserve_match_play",
         "preserve_entry_supersession",
         "guard_proposal_insert",
         "guard_proposal_update",

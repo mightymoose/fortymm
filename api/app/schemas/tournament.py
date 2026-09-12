@@ -1352,6 +1352,9 @@ class TournamentEntrantRead(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    # Read-query metadata, never part of the wire contract or sporting history.
+    _visible_on_roster: bool = PrivateAttr(default=True)
+
     id: uuid.UUID
     user_id: uuid.UUID
     username: str
@@ -2078,16 +2081,13 @@ class TournamentEventRead(BaseModel):
     # tournament-detail page, not a second round-trip.
     results: EventResultsRead | None
 
+    _hidden_entrants: int = PrivateAttr(default=0)
+
     @computed_field  # type: ignore[prop-decorator]  # pydantic wraps the property
     @property
     def entered(self) -> int:
-        """The registration count. Derived — there is no stored counter (ADR-0016).
-
-        It is ``len(entrants)`` rather than a field of its own precisely so the
-        count and the list it counts cannot disagree: an event that says it has
-        52 entrants but lists 51 is not a representable state.
-        """
-        return len(self.entrants)
+        """Held registrations, including identities hidden from the active roster."""
+        return len(self.entrants) + self._hidden_entrants
 
 
 class DrawTypeRead(BaseModel):

@@ -106,7 +106,7 @@ async def resolve_or_provision_user(
     email = email.lower()
     matched = await _resolve_live_user_by_email(db, email)
     if matched is not None:
-        if matched.agent_access_revoked_at is not None:
+        if not matched.is_active or matched.agent_access_revoked_at is not None:
             # The player switched agent access off. Matching must not bind here,
             # or a disconnected account would silently re-acquire an
             # ``auth0_sub`` on the agent's very next request and the database

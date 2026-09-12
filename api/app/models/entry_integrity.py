@@ -554,9 +554,7 @@ ENTRY_INTEGRITY_DDL = (
                         USING ERRCODE = '40001';
                 END;
             END IF;
-            IF TG_OP = 'DELETE' AND EXISTS (
-                SELECT 1 FROM tournament_events WHERE id = OLD.event_id
-            ) THEN
+            IF TG_OP = 'DELETE' THEN
                 RAISE EXCEPTION 'entry history must be retained; withdraw the entry'
                     USING ERRCODE = '23514';
             END IF;

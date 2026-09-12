@@ -10,7 +10,6 @@ those exceptions map back to is pinned by the unchanged endpoint tests in
 """
 
 import uuid
-from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -495,21 +494,6 @@ async def test_the_venue_tables_fk_cascades_in_the_database(
     await db_session.commit()
     tournament_id = tournament.id
     assert len(await _catalogue_ids(db_session, tournament_id)) == 1
-    table = await db_session.scalar(
-        select(VenueTable).where(VenueTable.tournament_id == tournament_id)
-    )
-    assert table is not None
-    db_session.add(
-        VenueTableCallHistory(
-            tournament_id=tournament_id,
-            table_id=str(table.id),
-            fixture_id=None,
-            kind="called",
-            scheduled_start=datetime.now(UTC),
-        )
-    )
-    await db_session.commit()
-
     await db_session.execute(
         text("DELETE FROM tournaments WHERE id = :id"), {"id": tournament_id}
     )

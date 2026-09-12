@@ -144,6 +144,8 @@ async def merge_user(
         raise ValueError("Both accounts must exist")
     if source.merged_into_user_id is not None or target.merged_into_user_id is not None:
         raise ValueError("Cannot merge a tombstoned account")
+    if not source.is_active or not target.is_active:
+        raise ValueError("Cannot merge an inactive account")
     source_player, target_player = source.primary_player, target.primary_player
     source_display_name = source.username
     if len(source.player_grants) > 1:

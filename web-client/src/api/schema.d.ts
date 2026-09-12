@@ -5504,11 +5504,7 @@ export interface components {
             results: (components["schemas"]["StandingsResultsRead"] | components["schemas"]["FinishesResultsRead"] | components["schemas"]["StandingsThenFinishesResultsRead"] | components["schemas"]["SwissStandingsResultsRead"]) | null;
             /**
              * Entered
-             * @description The registration count. Derived — there is no stored counter (ADR-0016).
-             *
-             *     It is ``len(entrants)`` rather than a field of its own precisely so the
-             *     count and the list it counts cannot disagree: an event that says it has
-             *     52 entrants but lists 51 is not a representable state.
+             * @description Held registrations, including identities hidden from the active roster.
              */
             readonly entered: number;
         };
