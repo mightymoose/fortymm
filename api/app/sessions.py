@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import captcha as captcha_module
 from app import queue as queue_module
-from app.account_merge import merge_user
+from app.account_merge import EntryMergeConflict, merge_user
 from app.config import Settings, get_settings
 from app.db import get_session
 from app.email_credentials import (
@@ -175,7 +175,20 @@ async def _merge_guest_into(
         or guest.merged_into_user_id is not None
     ):
         return None
-    summary = await merge_user(db, from_user_id=guest.id, to_user_id=target.id)
+    try:
+        summary = await merge_user(db, from_user_id=guest.id, to_user_id=target.id)
+    except EntryMergeConflict as error:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "entry_merge_conflict",
+                "message": str(error),
+                "source_entry_id": str(error.source_entry_id),
+                "target_entry_id": str(error.target_entry_id),
+                "stage_id": str(error.stage_id),
+            },
+        ) from error
     return MergeSummary(matches_moved=summary.matches_moved)
 
 

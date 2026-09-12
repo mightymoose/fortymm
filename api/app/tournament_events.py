@@ -23,7 +23,7 @@ import uuid
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -272,7 +272,9 @@ async def delete_event(
     await _load_owned_tournament_for_update(db, tournament_id, actor)
     event = await _load_event(db, tournament_id, event_id)
     await require_no_recorded_play(db, tournament_id=tournament_id, event_id=event.id)
-    await db.delete(event)
+    # The explicit parent deletion owns its entire history. Let database cascades
+    # remove children after the event disappears, even when ORM collections are loaded.
+    await db.execute(delete(TournamentEvent).where(TournamentEvent.id == event.id))
     await db.commit()
 
 

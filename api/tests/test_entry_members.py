@@ -954,7 +954,10 @@ async def test_lineup_cannot_use_entries_from_another_event(db_session):
     other_event = await make_drawn_event(db_session)
     with pytest.raises(
         IntegrityError,
-        match="fixture entries must belong to its event|fk_fixture_event_entry_",
+        match=(
+            "fixture entries must belong to its event|fk_fixture_event_entry_|"
+            "new fixture requires a current stage and revision"
+        ),
     ):
         async with db_session.begin_nested():
             await db_session.execute(
@@ -1452,7 +1455,12 @@ async def test_recorded_match_cannot_lose_its_fixture(db_session, action, eviden
             "WHERE id = :id"
         ),
     }[action]
-    with pytest.raises(IntegrityError, match="recorded match fixture must be retained"):
+    expected_error = (
+        "fixture entries must belong to its event"
+        if action == "stage"
+        else "recorded match fixture must be retained"
+    )
+    with pytest.raises(IntegrityError, match=expected_error):
         async with db_session.begin_nested():
             await db_session.execute(
                 text(statement),
@@ -2362,7 +2370,7 @@ async def test_fixture_link_refuses_inverted_parent_lock_order(
         # fixture row. Correct behavior is a retryable refusal, not this timeout.
         await linking.execute(text("SET LOCAL lock_timeout = '200ms'"))
         with pytest.raises(
-            DBAPIError, match="fixture link requires parent locks"
+            DBAPIError, match="draw history requires parent locks before write; retry"
         ) as exc:
             await linking.execute(
                 text("UPDATE tournament_fixtures SET match_id = :match WHERE id = :id"),

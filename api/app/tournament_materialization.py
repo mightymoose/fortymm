@@ -50,6 +50,7 @@ from app.tournament_draws import (
     group_order,
     strategy_for_event,
 )
+from app.tournament_participation import complete_stage_participation
 from app.tournament_queries import game_counts_by_match, stage_ids_for_events
 
 
@@ -212,6 +213,19 @@ async def materialize_event(
             ]
         )
     )
+    decided_matches = set(completed_match_ids) | set(voided_match_ids)
+    stage_fixture_matches: dict[uuid.UUID, list[uuid.UUID | None]] = {}
+    for fixture in fixtures:
+        stage_fixture_matches.setdefault(fixture.stage_id, []).append(fixture.match_id)
+    completed_stages = {
+        stage_id
+        for stage_id, match_ids in stage_fixture_matches.items()
+        if all(
+            match_id is not None and match_id in decided_matches
+            for match_id in match_ids
+        )
+    }
+    await complete_stage_participation(db, completed_stages)
     ready_fixture_rows = [f for f in fixtures if f.id in ready]
     if not ready_fixture_rows:
         return

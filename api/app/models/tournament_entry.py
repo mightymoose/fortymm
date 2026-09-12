@@ -5,9 +5,11 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -34,12 +36,14 @@ class TournamentEntryStatus(enum.Enum):
 class TournamentEntry(Base):
     """The competing unit in one event, with separately recorded Player members.
 
-    **Withdrawal is a soft-delete**: withdrawing flips ``status`` to
-    ``withdrawn`` and keeps the row, so an event's entry history survives. That
-    frees its players to enter again. Deferred database checks enforce current
-    membership cardinality and per-event participation, with an explicit team
-    exception. Membership intervals and actual match lineups retain history;
-    see ``entry_integrity`` and the entry-members ADR.
+    Registration withdrawal closes its current registration and participation,
+    sets ``status`` to ``withdrawn``, and preserves this identity. Re-entry opens
+    a registration period on the same entry without restoring old draw seats.
+    Superseded duplicate entries remain historical and cannot register again.
+    Deferred checks enforce current membership cardinality and per-event
+    participation, with the explicit team exception. Membership intervals and
+    actual match lineups retain history; see ``entry_integrity`` and the
+    registration/history ADR.
 
     An event's ``entered`` count is derived from a live count of active entries;
     it is not a stored column.
@@ -55,6 +59,18 @@ class TournamentEntry(Base):
         UniqueConstraint("event_id", "id", name="uq_tournament_entries_event_id_id"),
         Index("ix_tournament_entries_event_id", "event_id"),
         Index("ix_tournament_entries_added_by_user_id", "added_by_user_id"),
+        Index("ix_tournament_entries_superseded_by_entry_id", "superseded_by_entry_id"),
+        ForeignKeyConstraint(
+            ["event_id", "superseded_by_entry_id"],
+            ["tournament_entries.event_id", "tournament_entries.id"],
+            name="fk_tournament_entries_superseded_same_event",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "superseded_by_entry_id IS NULL OR "
+            "(superseded_by_entry_id <> id AND status = 'withdrawn')",
+            name="ck_tournament_entries_superseded_withdrawn",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -100,6 +116,9 @@ class TournamentEntry(Base):
         nullable=True,
     )
     seed: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    superseded_by_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
     status: Mapped[TournamentEntryStatus] = mapped_column(
         Enum(
             TournamentEntryStatus,

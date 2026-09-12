@@ -10,7 +10,6 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
-    UniqueConstraint,
     func,
     text,
 )
@@ -78,19 +77,67 @@ class TournamentFixture(Base):
     a class-level property access does not satisfy the SQL-expression types those
     methods expect).
 
-    The ``UNIQUE (stage_id, group_id, round, position)`` below is the identity a re-cut
-    reconciles on. It no longer needs **NULLS NOT DISTINCT** (Postgres 15+): that
-    clause existed only so the guard also covered an un-grouped draw, where
-    ``group_id`` was ``NULL`` for every row and the default (NULLS DISTINCT) would
-    compare each such ``NULL`` unequal to itself — no draw is un-grouped any more, so
-    the clause is gone with the state it existed for. Keying on ``stage_id`` rather
-    than ``event_id`` is also what makes the knockout stage's round numbering
-    restarting at 1 fall out of the key, rather than needing to be a documented
-    namespace rule.
+    Current fixture positions are unique within a stage and group. Retired draws
+    retain their fixtures and exact participation references under their event-wide
+    revision. Ordinary ORM reads select current fixtures; history queries opt in
+    explicitly with ``include_draw_history``.
     """
 
     __tablename__ = "tournament_fixtures"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["scope_event_id", "draw_revision_id"],
+            ["tournament_draw_revisions.event_id", "tournament_draw_revisions.id"],
+            name="fk_fixture_draw_revision",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        ForeignKeyConstraint(
+            [
+                "participation_a_id",
+                "entry_a_id",
+                "stage_id",
+                "group_id",
+                "draw_revision_id",
+            ],
+            [
+                "tournament_entry_participations.id",
+                "tournament_entry_participations.entry_id",
+                "tournament_entry_participations.stage_id",
+                "tournament_entry_participations.group_id",
+                "tournament_entry_participations.draw_revision_id",
+            ],
+            name="fk_fixture_participation_a",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        ForeignKeyConstraint(
+            [
+                "participation_b_id",
+                "entry_b_id",
+                "stage_id",
+                "group_id",
+                "draw_revision_id",
+            ],
+            [
+                "tournament_entry_participations.id",
+                "tournament_entry_participations.entry_id",
+                "tournament_entry_participations.stage_id",
+                "tournament_entry_participations.group_id",
+                "tournament_entry_participations.draw_revision_id",
+            ],
+            name="fk_fixture_participation_b",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        CheckConstraint(
+            "(participation_a_id IS NULL) = (entry_a_id IS NULL)",
+            name="ck_fixture_participation_a_presence",
+        ),
+        CheckConstraint(
+            "(participation_b_id IS NULL) = (entry_b_id IS NULL)",
+            name="ck_fixture_participation_b_presence",
+        ),
         ForeignKeyConstraint(
             ["scope_tournament_id", "scope_event_id"],
             ["tournament_events.tournament_id", "tournament_events.id"],
@@ -175,12 +222,14 @@ class TournamentFixture(Base):
         # (#1484): that existed only to cover an un-grouped draw, where ``group_id``
         # was NULL for every row — see the class docstring. ``group_id`` is NOT NULL
         # now, so a plain UNIQUE already compares every row.
-        UniqueConstraint(
+        Index(
+            "uq_tournament_fixtures_stage_id_group_id_round_position",
             "stage_id",
             "group_id",
             "round",
             "position",
-            name="uq_tournament_fixtures_stage_id_group_id_round_position",
+            unique=True,
+            postgresql_where=text("retired_at IS NULL"),
         ),
         # Every read of a draw is "the fixtures of this stage" — ``advance()`` loads
         # the whole set, and the detail BFF loads it per event (through its stages).
@@ -196,6 +245,17 @@ class TournamentFixture(Base):
         # same argument ``VenueTable`` makes for its own ``tournament_id``.
         Index("ix_tournament_fixtures_table_id", "table_id"),
     )
+
+    participation_a_id: Mapped[uuid.UUID | None] = mapped_column(
+        server_default=FetchedValue()
+    )
+    participation_b_id: Mapped[uuid.UUID | None] = mapped_column(
+        server_default=FetchedValue()
+    )
+    draw_revision_id: Mapped[uuid.UUID] = mapped_column(
+        nullable=False, server_default=FetchedValue()
+    )
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
@@ -240,24 +300,9 @@ class TournamentFixture(Base):
     #: (it cannot be deferred), so it would make that delete depend on the order
     #: Postgres happens to fire the two cascades in.
     #:
-    #: Withdrawal is a *soft*-delete, so it does not touch these rows — but an entry
-    #: **can** be hard-deleted elsewhere: ``merge_user`` (``app/account_merge.py``)
-    #: DELETEs a guest's duplicate *active* entry when the surviving account is already
-    #: entered in the same event. Under this CASCADE that would silently take any
-    #: fixtures referencing the guest's entry with it, punching a hole in a cut draw.
-    #: The fix belongs in the merge path, not here — and it is **not** to re-point these
-    #: columns onto the survivor's entry. That would seat one human in two slots of the
-    #: same group, and because the go-live currency check compares entrant *sets*, the
-    #: corrupted draw would silently satisfy it and go live. The merge instead **un-cuts
-    #: the event's draw** (a draw cut from a field that double-counted a human is wrong
-    #: throughout — its group sizes and seeding were computed against N+1 entrants), and
-    #: the director re-cuts. That un-cut path is only for an **unplayed** draw. Once
-    #: play has begun (a fixture here has a ``match_id`` or a ``winner_entry_id`` —
-    #: ``draw_has_play``), the draw cannot be un-cut, so instead the guest's colliding
-    #: entry is **withdrawn** (soft-deleted, not hard-deleted — these rows survive) and
-    #: the exposed guest-vs-survivor self-play match is transferred then voided
-    #: (ADR-0788). See ADR-786 and ADR-788; ``_resolve_entry_collisions`` holds both
-    #: paths.
+    #: Registration withdrawal and identity reconciliation retain these entry IDs.
+    #: Each contestant also names its exact historical participation period, so
+    #: re-registration or a replacement draw cannot reactivate an old seat.
     entry_a_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("tournament_entries.id", ondelete="CASCADE"),
@@ -297,8 +342,9 @@ class TournamentFixture(Base):
     #: exist is not a state the director chose but a dangling pointer nothing downstream
     #: can render. It was soft only because there was no table to point at.
     #:
-    #: ``ON DELETE RESTRICT``, deliberately, and deliberately unlike ``group_id``'s
-    #: procedural freeze: ``SET NULL`` would destroy information on an *unrelated* write
+    #: A deferred ``NO ACTION`` reference preserves placements at commit and lets
+    #: whole-tournament deletion cascade without rewriting archived fixtures.
+    #: ``SET NULL`` would destroy information on an unrelated write
     #: — the fixture would stop being "placed at a table that vanished" and become
     #: indistinguishable from "nobody ever placed this", as an invisible side effect of
     #: editing the venue. The database refuses by default and the director says yes on
@@ -317,7 +363,7 @@ class TournamentFixture(Base):
     #: apart.
     table_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("tournament_tables.id", ondelete="RESTRICT"),
+        ForeignKey("tournament_tables.id", deferrable=True, initially="DEFERRED"),
         nullable=True,
     )
     #: A **placement**'s predicted start — a ``timestamptz`` **instant**

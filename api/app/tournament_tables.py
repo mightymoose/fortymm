@@ -25,9 +25,11 @@ cycle-free.
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models import Tournament, TournamentFixture, VenueTable
 from app.schemas.tournament import (
@@ -249,6 +251,31 @@ async def apply_table_catalogue(
         unplaced_event_ids = await _unplace_or_refuse(
             db, removed, unplace=unplace_fixtures
         )
+        historical_table_ids = set(
+            await db.scalars(
+                select(TournamentFixture.table_id)
+                .where(
+                    TournamentFixture.table_id.in_(
+                        [str(table.id) for table in removed]
+                    ),
+                    TournamentFixture.retired_at.is_not(None),
+                )
+                .execution_options(include_draw_history=True)
+            )
+        )
+        retired = [table for table in removed if str(table.id) in historical_table_ids]
+        for table in retired:
+            table.retired_at = datetime.now(UTC)
+        if retired:
+            await db.flush()
+            # Retired rows still belong to the tournament, but are no longer in
+            # its current catalogue. Avoid delete-orphan treating retirement as
+            # physical removal when the live collection is replaced below.
+            set_committed_value(
+                tournament,
+                "tables",
+                [table for table in tournament.tables if table not in retired],
+            )
 
     # Assigning the whole collection is what expresses all three operations at once: the
     # rows carried over keep their identity (and every ref that names them), the fresh

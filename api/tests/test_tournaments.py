@@ -8941,6 +8941,53 @@ async def test_removing_a_catalogue_table_a_fixture_is_placed_at_is_a_409_naming
     assert fixture.pinned_at is not None
 
 
+@pytest.mark.parametrize("delete_event_first", [False, True])
+async def test_removing_table_after_uncut_preserves_historical_placement(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    delete_event_first: bool,
+) -> None:
+    client, _ = authed_client
+    (
+        tournament_id,
+        event_id,
+        fixture,
+        table_1,
+        table_2,
+    ) = await _tournament_with_a_placed_fixture(client, db_session, prefix="arch-table")
+    fixture_id = fixture.id
+    response = await client.delete(
+        f"/v1/tournaments/{tournament_id}/events/{event_id}/draw"
+    )
+    assert response.status_code == 204, response.text
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}",
+        json={
+            "details_version": 1,
+            "table_catalogue": [{"id": table_2, "label": "Table 2", "court": "A"}],
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert [row["id"] for row in response.json()["table_catalogue"]] == [table_2]
+    historical_table = await db_session.scalar(
+        select(TournamentFixture.table_id)
+        .where(TournamentFixture.id == fixture_id)
+        .execution_options(include_draw_history=True)
+    )
+    assert str(historical_table) == table_1
+    reread = await client.get(f"/v1/tournaments/{tournament_id}")
+    assert [row["id"] for row in reread.json()["table_catalogue"]] == [table_2]
+    if delete_event_first:
+        removed_event = await client.delete(
+            f"/v1/tournaments/{tournament_id}/events/{event_id}"
+        )
+        assert removed_event.status_code == 204, removed_event.text
+    removed = await client.delete(f"/v1/tournaments/{tournament_id}")
+    assert removed.status_code == 204, removed.text
+
+
 async def test_the_opt_in_removes_the_catalogue_table_and_leaves_its_fixtures_unplaced(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
@@ -10490,6 +10537,21 @@ async def test_the_detail_bff_surfaces_live_standings_then_a_champion(
         (str(e2.id), 1, 2),
         (str(e3.id), 0, 3),
     ]
+
+    periods = (
+        await db_session.execute(
+            text(
+                "SELECT ended_at, end_reason FROM tournament_entry_participations "
+                "WHERE entry_id IN (:a, :b, :c)"
+            ),
+            {"a": e1.id, "b": e2.id, "c": e3.id},
+        )
+    ).all()
+    assert len(periods) == 3
+    assert all(
+        row.ended_at is not None and row.end_reason == "stage_completed"
+        for row in periods
+    )
 
 
 async def test_the_detail_bff_surfaces_single_elim_finishes(

@@ -189,14 +189,36 @@ _Avoid_: home league, main league, global league.
 **Entry**:
 A competing unit's place in one tournament **event**, with one current member for
 singles, two for doubles, and a variable team roster. Its identity, seed, draw
-position and results survive membership changes. Soft-deleted on withdrawal, so a
-player may re-enter (ADR-0016, amended by the September 6 entry-members ADR).
+position and results survive membership changes. Withdrawal ends registration and
+participation, but re-entry preserves the entry's identity and opens a new
+registration period (see the September 11 registration and participation ADR).
 An entry knows **who created it**: `NULL` means the
 player entered themselves, otherwise it names the director who added them
 (ADR-0784). Those are the only two ways an entry comes to exist, and the second is
 not a different endpoint — it is the same one, told who to enter.
-_Avoid_: registration, signup, ticket (an entry is the row; *registration* is the
-window it may be created in).
+_Avoid_: registration, signup, ticket (an entry is the competing unit;
+registration records whether it is entered).
+
+**Registration period**:
+One uninterrupted interval during which an **entry** is registered in its event.
+Withdrawal ends the period; re-entry opens another without replacing the entry.
+Distinct from the **registration window**, which controls when registration is allowed.
+
+**Participation period**:
+An entry's admission to one **stage** and its group within one **draw revision**.
+At most one period is active per entry per stage. Ending it preserves the seats
+and fixtures it earned; a later period does not revive those seats. Normal
+qualification can admit an entry to a later stage without replacing its identity.
+
+**Competition withdrawal**:
+Ending an entry's participation in one stage or throughout the event. Event-wide
+withdrawal blocks further admission until explicitly reversed. Registration
+withdrawal also ends event-wide participation; neither resolves match outcomes.
+
+**Superseded entry**:
+A duplicate entry retained after a same-person Player merge, permanently pointing
+to the surviving entry. Its history stays intact, but it cannot register again;
+future registration uses the survivor.
 
 **Entry member**:
 A Player's recorded interval of membership in an **entry**. A current member has
@@ -360,8 +382,10 @@ is what a player with an empty timeline seeds to).
 The discovery, at **merge** time, that the **guest** and the **claimed account**
 they are merging into sat on *opposite sides of the same match* — proving both
 sides were always the same person. The match is transferred wholly to the claimed
-account and then **voided**: it is kept as a record but stops counting. Not an
-error, and never a reason to refuse the merge.
+account and then **voided**: it is kept as a record but stops counting. Ordinarily
+this is not an error. A separate tournament guard refuses a Player merge when
+duplicate entries both have recorded play in the same stage; that conflict needs
+director resolution.
 _Avoid_: duplicate player, self match (a **solo match** is a different thing).
 
 ## Session and identity
@@ -461,13 +485,20 @@ The complete set of **fixtures** an event's draw type prescribes for its
 entrants — a bracket, a set of **groups**, groups feeding a bracket, or **swiss**
 rounds of pairings. A draw is
 **cut** (the deliberate, reviewable act of generating it; re-cutting replaces
-it wholesale and is refused once there is any evidence of play), and it is
-**current** when its fixtures cover exactly the event's active entrants —
-an entry landing after the cut makes the draw **stale**. Going live requires
+it with a new **draw revision** and is refused once there is any evidence of play),
+and it is **current** when its participation covers the event's active entrants —
+an entry landing or withdrawing after the cut makes the draw **stale**. Re-entry
+does not restore an ended participation period. Going live requires
 every event's draw to exist and be current; a draw may be cut and re-cut
 freely before that.
 _Avoid_: bracket (one draw type's shape, not the general concept), schedule
 (when a fixture is *played* is the schedule's concern, not the draw's).
+
+**Draw revision**:
+One retained, event-wide cut of a draw, including every stage's planned fixtures.
+At most one revision is current. Re-cutting supersedes the old revision; removing
+a draw retires it. Earlier fixtures and participation remain historical records,
+excluded from current scheduling, standings and advancement.
 
 **Fixture**:
 A planned pairing in a **draw**: a round and a position (and a **group**, when

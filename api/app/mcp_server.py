@@ -1830,7 +1830,7 @@ class DrawUncutConfirmation(BaseModel):
 
     An MCP tool should answer with a meaningful value, so this names *what* was un-cut
     (the resolved ``tournament_id`` + the ``event_id``) and asserts the outcome:
-    ``fixtures_remaining`` is ``0`` after a successful un-cut — the core deleted the
+    ``fixtures_remaining`` is ``0`` after a successful un-cut — the core retired the
     draw wholesale, so the event provably has no fixtures left. Un-cutting a never-cut
     draw is an idempotent success too — it deletes nothing and still confirms ``0``
     remaining (ADR-0786).
@@ -1930,8 +1930,8 @@ async def build_cut(event_id: uuid.UUID) -> list[TournamentFixtureRead]:
     owning tournament is resolved from it. Cutting is owner-gated (only the
     tournament's creator may cut), and it is NOT tied to status — a draw may be cut and
     re-cut freely while a director inspects the groups and the seeding. **Re-cutting
-    replaces the draw wholesale**: the previous fixtures are deleted and a fresh set is
-    planned from the event's current active entrants (their ids do not survive).
+    creates a new event-wide revision**: previous fixtures and participation remain
+    as retired history. The new draw uses the current registered field.
     Returns the created
     fixtures in **group → round → position** order — the same ``TournamentFixtureRead``
     the detail page and ``get_schedule`` carry.
@@ -1963,8 +1963,9 @@ async def build_cut(event_id: uuid.UUID) -> list[TournamentFixtureRead]:
 
 @mcp.tool
 async def uncut(event_id: uuid.UUID) -> DrawUncutConfirmation:
-    """Un-cut an event's DRAW as the authenticated MCP caller: delete its
-    fixtures, leaving the event with no draw. Returns a confirmation carrying the
+    """Un-cut an event's DRAW as the authenticated MCP caller: retire its current
+    revision, preserving its fixtures and participation as history. Returns a
+    confirmation carrying the
     resolved tournament, the event, and the fixtures now remaining (``0`` on success).
 
     Mirrors ``DELETE /v1/tournaments/{tournament_id}/events/{event_id}/draw`` (which

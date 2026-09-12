@@ -818,10 +818,9 @@ internal protocol APIProtocol: Sendable {
     /// Withdraw an entry from an event — your own, or (as the tournament's owner) any
     /// entry in it.
     ///
-    /// The entry is **soft-deleted**: its status flips to `withdrawn` and the row
-    /// survives, so the event keeps its withdrawal history — and, because the
-    /// uniqueness guard is a *partial* index over active entries only, the player is
-    /// free to enter the same event again afterwards.
+    /// Withdrawal closes registration and all active stage participation, preserving
+    /// the entry, historical periods, and fixture references. Registering again uses
+    /// the same entry ID and requires an explicit draw re-cut to restore a seat.
     ///
     /// **Who may withdraw an entry** (ADR-0784) mirrors who may create one: the player
     /// themselves, or the tournament's **owner**, for any entry in it. Anybody else
@@ -856,11 +855,10 @@ internal protocol APIProtocol: Sendable {
     /// the seeding. Nothing else creates fixtures, and going live requires every event to
     /// have one (ADR-0786).
     ///
-    /// **Re-cutting replaces the draw wholesale.** The previous fixtures are deleted and a
-    /// fresh set is planned from the event's *current* active entrants — the old ones are
-    /// not patched, and their ids do not survive. That is the point: a draw is a plan made
-    /// against a field, and once the field has changed (somebody entered, somebody
-    /// withdrew) the whole plan is re-made, group sizes and seeding included.
+    /// **Re-cutting creates a new event-wide draw revision.** Previous fixtures and
+    /// participation remain as retired history. A fresh set is planned from the
+    /// event's current registered field, including its group sizes and seeding.
+    /// Scheduling, results, and advancement use only the current revision.
     ///
     /// Entrants are ordered by **seed** ascending where one is set, then by **registration
     /// order**. Nothing is random, so the same field always cuts the same draw.
@@ -888,15 +886,15 @@ internal protocol APIProtocol: Sendable {
     func cutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost(_ input: Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Input) async throws -> Operations.CutEventDrawV1TournamentsTournamentIdEventsEventIdDrawPost.Output
     /// Uncut Event Draw
     ///
-    /// Un-cut this event's draw: delete its fixtures, leaving the event with no draw.
+    /// Un-cut this event's draw: retire its current revision and keep its history.
     ///
-    /// The way back from a draw the director does not want. The event, its entrants and the
-    /// rest of the tournament are untouched — only the fixtures go — and the director is
-    /// free to change the groups and cut again.
+    /// Previous fixtures, participation, and draw configuration remain recorded.
+    /// The event has no current draw, and the director may edit its configuration
+    /// and cut again.
     ///
     /// Refused with a `409` on the same **evidence of play** that refuses a re-cut: a
-    /// fixture with a recorded winner, or one that has become a real match. Undoing a draw
-    /// that has been played would delete the fixtures those results belong to.
+    /// fixture with a recorded winner, or one that has become a real match. Retaining
+    /// history does not permit a re-cut or un-cut after play.
     ///
     /// An event with **no draw is already in the state this asks for**, so removing a draw
     /// that was never cut is a `204`, not a `404`: this is a DELETE, and it is idempotent.
@@ -2435,10 +2433,9 @@ extension APIProtocol {
     /// Withdraw an entry from an event — your own, or (as the tournament's owner) any
     /// entry in it.
     ///
-    /// The entry is **soft-deleted**: its status flips to `withdrawn` and the row
-    /// survives, so the event keeps its withdrawal history — and, because the
-    /// uniqueness guard is a *partial* index over active entries only, the player is
-    /// free to enter the same event again afterwards.
+    /// Withdrawal closes registration and all active stage participation, preserving
+    /// the entry, historical periods, and fixture references. Registering again uses
+    /// the same entry ID and requires an explicit draw re-cut to restore a seat.
     ///
     /// **Who may withdraw an entry** (ADR-0784) mirrors who may create one: the player
     /// themselves, or the tournament's **owner**, for any entry in it. Anybody else
@@ -2481,11 +2478,10 @@ extension APIProtocol {
     /// the seeding. Nothing else creates fixtures, and going live requires every event to
     /// have one (ADR-0786).
     ///
-    /// **Re-cutting replaces the draw wholesale.** The previous fixtures are deleted and a
-    /// fresh set is planned from the event's *current* active entrants — the old ones are
-    /// not patched, and their ids do not survive. That is the point: a draw is a plan made
-    /// against a field, and once the field has changed (somebody entered, somebody
-    /// withdrew) the whole plan is re-made, group sizes and seeding included.
+    /// **Re-cutting creates a new event-wide draw revision.** Previous fixtures and
+    /// participation remain as retired history. A fresh set is planned from the
+    /// event's current registered field, including its group sizes and seeding.
+    /// Scheduling, results, and advancement use only the current revision.
     ///
     /// Entrants are ordered by **seed** ascending where one is set, then by **registration
     /// order**. Nothing is random, so the same field always cuts the same draw.
@@ -2521,15 +2517,15 @@ extension APIProtocol {
     }
     /// Uncut Event Draw
     ///
-    /// Un-cut this event's draw: delete its fixtures, leaving the event with no draw.
+    /// Un-cut this event's draw: retire its current revision and keep its history.
     ///
-    /// The way back from a draw the director does not want. The event, its entrants and the
-    /// rest of the tournament are untouched — only the fixtures go — and the director is
-    /// free to change the groups and cut again.
+    /// Previous fixtures, participation, and draw configuration remain recorded.
+    /// The event has no current draw, and the director may edit its configuration
+    /// and cut again.
     ///
     /// Refused with a `409` on the same **evidence of play** that refuses a re-cut: a
-    /// fixture with a recorded winner, or one that has become a real match. Undoing a draw
-    /// that has been played would delete the fixtures those results belong to.
+    /// fixture with a recorded winner, or one that has become a real match. Retaining
+    /// history does not permit a re-cut or un-cut after play.
     ///
     /// An event with **no draw is already in the state this asks for**, so removing a draw
     /// that was never cut is a `204`, not a `404`: this is a DELETE, and it is idempotent.
@@ -25707,10 +25703,9 @@ internal enum Operations {
     /// Withdraw an entry from an event — your own, or (as the tournament's owner) any
     /// entry in it.
     ///
-    /// The entry is **soft-deleted**: its status flips to `withdrawn` and the row
-    /// survives, so the event keeps its withdrawal history — and, because the
-    /// uniqueness guard is a *partial* index over active entries only, the player is
-    /// free to enter the same event again afterwards.
+    /// Withdrawal closes registration and all active stage participation, preserving
+    /// the entry, historical periods, and fixture references. Registering again uses
+    /// the same entry ID and requires an explicit draw re-cut to restore a seat.
     ///
     /// **Who may withdraw an entry** (ADR-0784) mirrors who may create one: the player
     /// themselves, or the tournament's **owner**, for any entry in it. Anybody else
@@ -25915,11 +25910,10 @@ internal enum Operations {
     /// the seeding. Nothing else creates fixtures, and going live requires every event to
     /// have one (ADR-0786).
     ///
-    /// **Re-cutting replaces the draw wholesale.** The previous fixtures are deleted and a
-    /// fresh set is planned from the event's *current* active entrants — the old ones are
-    /// not patched, and their ids do not survive. That is the point: a draw is a plan made
-    /// against a field, and once the field has changed (somebody entered, somebody
-    /// withdrew) the whole plan is re-made, group sizes and seeding included.
+    /// **Re-cutting creates a new event-wide draw revision.** Previous fixtures and
+    /// participation remain as retired history. A fresh set is planned from the
+    /// event's current registered field, including its group sizes and seeding.
+    /// Scheduling, results, and advancement use only the current revision.
     ///
     /// Entrants are ordered by **seed** ascending where one is set, then by **registration
     /// order**. Nothing is random, so the same field always cuts the same draw.
@@ -26128,15 +26122,15 @@ internal enum Operations {
     }
     /// Uncut Event Draw
     ///
-    /// Un-cut this event's draw: delete its fixtures, leaving the event with no draw.
+    /// Un-cut this event's draw: retire its current revision and keep its history.
     ///
-    /// The way back from a draw the director does not want. The event, its entrants and the
-    /// rest of the tournament are untouched — only the fixtures go — and the director is
-    /// free to change the groups and cut again.
+    /// Previous fixtures, participation, and draw configuration remain recorded.
+    /// The event has no current draw, and the director may edit its configuration
+    /// and cut again.
     ///
     /// Refused with a `409` on the same **evidence of play** that refuses a re-cut: a
-    /// fixture with a recorded winner, or one that has become a real match. Undoing a draw
-    /// that has been played would delete the fixtures those results belong to.
+    /// fixture with a recorded winner, or one that has become a real match. Retaining
+    /// history does not permit a re-cut or un-cut after play.
     ///
     /// An event with **no draw is already in the state this asks for**, so removing a draw
     /// that was never cut is a `204`, not a `404`: this is a DELETE, and it is idempotent.

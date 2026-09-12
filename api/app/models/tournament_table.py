@@ -69,9 +69,11 @@ class VenueTable(Base):
         UniqueConstraint(
             "tournament_id",
             "position",
+            "retired_at",
             name="uq_tournament_tables_tournament_position",
             deferrable=True,
             initially="DEFERRED",
+            postgresql_nulls_not_distinct=True,
         ),
         # Redundant against the primary key, and there for exactly one purpose: SQL can
         # only reference a UNIQUE set of columns, so this is the target that lets
@@ -113,6 +115,7 @@ class VenueTable(Base):
     # beside the array it is derived from would be carrying a field and its own
     # derivation (api/CLAUDE.md).
     position: Mapped[int] = mapped_column(Integer, nullable=False)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

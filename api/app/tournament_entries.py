@@ -68,6 +68,7 @@ from app.models import (
     ScheduleSolveTrigger,
     Tournament,
     TournamentEntry,
+    TournamentEntryRegistration,
     TournamentEntryStatus,
     TournamentEvent,
     TournamentFixture,
@@ -97,6 +98,11 @@ from app.tournament_errors import (
     WithdrawalRegistrationClosedError,
 )
 from app.tournament_events import _load_event
+from app.tournament_participation import (
+    WithdrawalReason,
+    close_registration,
+    restore_event_eligibility,
+)
 from app.tournament_queries import active_entry_count, entrant_rating
 
 
@@ -351,14 +357,13 @@ async def enter_event(
         if client_ip is not None:
             await _enforce_entry_rate_limit(client_ip)
 
-    if not self_registration:
-        # The entry's adder FK must be secured before the tournament: Account merge
-        # locks its actor before owned tournaments. This changes no refusal ordering.
-        await db.execute(
-            select(User.id)
-            .where(User.id == actor.id)
-            .with_for_update(read=True, key_share=True)
-        )
+    # Registration provenance references the actor even for self-registration.
+    # Account merge locks Account before Tournament; take the same order here.
+    await db.execute(
+        select(User.id)
+        .where(User.id == actor.id)
+        .with_for_update(read=True, key_share=True)
+    )
 
     # Load first, then decide — the 404-before-anything-else ordering. The tournament is
     # loaded *locked*, and locked first (the row whose status decides this request must
@@ -407,28 +412,38 @@ async def enter_event(
 
     # ``added_by_user_id`` is the fork's one lasting trace: NULL on the self path, the
     # director's id on the other (ADR-0784). A fact about the past, stored now.
-    entry = TournamentEntry(
-        event_id=event.id,
-        user_id=entrant.id,
-        added_by_user_id=added_by_user_id,
+    entry = await db.scalar(
+        select(TournamentEntry)
+        .where(
+            TournamentEntry.event_id == event.id,
+            TournamentEntry.user_id == entrant.id,
+            TournamentEntry.status == TournamentEntryStatus.withdrawn,
+            TournamentEntry.superseded_by_entry_id.is_(None),
+        )
+        .order_by(TournamentEntry.created_at, TournamentEntry.id)
+        .limit(1)
     )
-    db.add(entry)
+    if entry is None:
+        entry = TournamentEntry(
+            event_id=event.id,
+            user_id=entrant.id,
+            added_by_user_id=added_by_user_id,
+        )
+        db.add(entry)
+    else:
+        entry.status = TournamentEntryStatus.entered
     try:
+        await db.flush()
+        await restore_event_eligibility(db, entry.id, actor.id)
+        db.add(
+            TournamentEntryRegistration(
+                entry_id=entry.id, registered_by_account_id=actor.id
+            )
+        )
         await db.commit()
     except IntegrityError:
-        # The partial unique index on (event_id, user_id) WHERE status='entered'
-        # rejected
-        # this — letting the database decide is the point: a pre-flight SELECT would
-        # leave
-        # a window in which two concurrent requests both see "not entered" and both
-        # insert. ``from None`` drops the DBAPI error so nothing about the schema
-        # reaches
-        # the response. Because the index is partial, a player whose only prior entry is
-        # *withdrawn* does not land here — they enter again cleanly. It is the index,
-        # and
-        # only the index, that can raise here (which is why ``added_by_user_id`` carries
-        # no CHECK constraint — a second constraint would be reported as a false
-        # "already entered").
+        # The database is the final authority on duplicate active registration,
+        # including canonical Player identities changed by concurrent reconciliation.
         await db.rollback()
         raise EntryRefusedError(
             EntryRefusal.already_entered,
@@ -538,16 +553,16 @@ async def withdraw_from_event(
     actor: User,
 ) -> None:
     """Withdraw an entry from a singles event — ``actor``'s own, or (as the tournament's
-    owner) any entry in it — by **soft-deleting** it: its status flips to ``withdrawn``
-    and the row survives.
+    owner) any entry in it. Close its registration and participation with historical
+    actor provenance, block event admission, and retain the durable entry and fixtures.
 
     Runs the same orchestration the HTTP handler used to run inline, in the same order
     and under the same lock:
 
     * **Load first, then authorize.** The tournament is loaded **locked**
       (:func:`_load_tournament_for_update`, raising :class:`TournamentNotFoundError`)
-      and locked FIRST — the same row lock, in the same order, the
-      enter/transition/PATCH routes take, so no pair can deadlock, and so a withdrawal
+      after securing the actor Account — the same row lock the
+      enter/transition/PATCH routes take, so a withdrawal
       cannot pass the ``published`` gate and commit *after* the tournament went live,
       pulling a player out of the very field the draw is cut from. Then the event
       (:func:`_load_event`, raising :class:`EventNotFoundError`) and then the entry
@@ -573,15 +588,17 @@ async def withdraw_from_event(
       nothing left to lock, so it skips both — which is what preserves the idempotent
       no-op withdrawal in ``live`` and ``archived`` too.
 
-    Idempotent by construction: withdrawing is an assignment, not a decrement, so
-    applied to an already-withdrawn entry it writes the value the row already holds and
-    SQLAlchemy emits no UPDATE. The flip only ever *removes* a row from the partial
-    unique index's predicate, so — unlike the enter verb — no ``IntegrityError`` is
-    reachable here, and the withdrawn player is free to enter the same event again.
-    Commits before returning. Never raises ``HTTPException`` — the caller adapts each
-    domain exception to its transport.
+    An already-withdrawn entry is an idempotent no-op. A later permitted registration
+    opens another period on the same entry without restoring prior draw seats.
+    Commits before returning. The caller adapts domain exceptions to its transport.
     """
-    # Load-then-authorize, as everywhere else here: the tournament (locked, and first),
+    # Secure the historical actor FK before Tournament, matching Account merge.
+    await db.execute(
+        select(User.id)
+        .where(User.id == actor.id)
+        .with_for_update(read=True, key_share=True)
+    )
+    # Load-then-authorize, as everywhere else here: the tournament (locked),
     # the event under it, and the entry under that event must all exist before ownership
     # is considered — so a wrong (tournament, event, entry) triple is a 404, and 403
     # means "this entry is real, but it isn't yours to take back".
@@ -610,6 +627,14 @@ async def withdraw_from_event(
     # through to the idempotent assignment — the 204 in every status ADR-0016 designed.
     if entry.status is TournamentEntryStatus.entered:
         _enforce_withdrawal_registration_open(tournament)
+        await close_registration(
+            db,
+            entry.id,
+            actor.id,
+            WithdrawalReason.self_withdrawal
+            if entry.user_id == actor_player_id
+            else WithdrawalReason.director_removal,
+        )
         await _trigger_solve_if_seated(db, tournament_id, entry)
 
     # Idempotent by construction: an assignment, not a decrement. Applied to an

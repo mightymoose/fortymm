@@ -26,7 +26,7 @@ and its 500.
 import uuid
 from typing import assert_never
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.draws import DrawError, NonSinglesDraw, draw_error_detail, order_entrants
@@ -38,7 +38,6 @@ from app.models import (
     ScheduleSolveTrigger,
     Tournament,
     TournamentEvent,
-    TournamentFixture,
     TournamentStatus,
     User,
 )
@@ -63,7 +62,6 @@ from app.tournament_errors import (
 )
 from app.tournament_geocoding import geocode_address
 from app.tournament_materialization import materialize_live_draw
-from app.tournament_queries import stage_ids_for_tournament
 from app.tournament_realtime import stage_tournament_entrant_hints
 from app.tournament_retention import require_no_recorded_play
 from app.tournament_tables import stored_tables
@@ -217,32 +215,16 @@ async def delete_tournament(
     Issues the ``DELETE`` and commits it. Never raises ``HTTPException`` — the caller
     adapts each domain exception to its transport.
 
-    It also **unplaces every fixture first**, and that one IS the mechanism. A
-    fixture's ``table_id`` is a foreign key with ``ON DELETE RESTRICT`` (ADR 20260801),
-    ``Tournament.tables`` is loaded, so SQLAlchemy issues the child ``DELETE`` of
-    ``tournament_tables`` **itself** — as its own statement, ahead of the
-    ``tournaments`` row whose cascade takes the fixtures. RESTRICT is checked
-    immediately and cannot be deferred, so at that moment the fixtures are still
-    there, still pointing at the tables, and the whole delete dies on a foreign-key
-    violation. Dropping the references first is not a policy decision sneaking in:
-    RESTRICT exists so a placement is not destroyed as a side effect of editing the
-    **venue**, and this is not a venue edit — the fixture is being deleted too, one
-    statement later, along with everything else the director asked to be rid of. The
-    refusal that ADR belongs to is the tournament PATCH's, over a table removed out
-    from under a fixture that survives it.
+    Delete the parent with database cascades so retained child history disappears
+    only as part of the explicitly requested tournament deletion.
     """
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
     await require_owner(db, tournament, actor.id)
     await require_no_recorded_play(db, tournament_id=tournament.id)
-    # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5); the event
-    # is reachable through the stage.
-    await db.execute(
-        update(TournamentFixture)
-        .where(TournamentFixture.stage_id.in_(stage_ids_for_tournament(tournament.id)))
-        .values(table_id=None)
-    )
-    await db.delete(tournament)
-    await db.flush()
+    # Delete the parent in one database statement. ORM child deletes would run
+    # before the parent disappears, violating retained-history guards and table
+    # references. The existing FK cascades handle the explicitly deleted graph.
+    await db.execute(delete(Tournament).where(Tournament.id == tournament.id))
     await db.commit()
 
 

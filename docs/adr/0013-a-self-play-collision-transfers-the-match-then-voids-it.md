@@ -9,6 +9,11 @@ status: accepted
 
 # A self-play collision transfers the match to the claimed account, then voids it (#750)
 
+Amended by [Registration outlives draw participation](20260911-registration-outlives-draw-participation.md)
+for #1685: duplicate event entries with recorded play in the same stage block
+Player reconciliation before any transfer or void. The ordinary standalone
+self-play policy below remains; "never blocks" does not override this tournament guard.
+
 When a **guest** merges into a **claimed account** they had already played, both
 users sit on opposite sides of the same match. `_repoint_match_side_players` skips
 re-pointing the guest's row (the `NOT EXISTS` guard — the claimed account is already

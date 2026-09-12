@@ -98,19 +98,10 @@ async def _load_owned_event_for_draw(
 
 
 async def _enforce_unplayed(db: AsyncSession, event: TournamentEvent) -> None:
-    """Raise :class:`DrawUnderWayError` once an event's draw shows **evidence of
-    play** — the single gate on both cutting and un-cutting a draw (ADR-0786).
+    """Refuse draw replacement or removal once a winner or linked match exists.
 
-    It is what makes a re-cut safe. A cut replaces the draw wholesale, so a draw with
-    a decided fixture (a recorded winner) or a materialized one (a linked match, which
-    may already carry games) cannot be re-cut without throwing away results players
-    actually produced. The refusal is on the *evidence*, not on the tournament's
-    status: a director may cut and re-cut right up until the first fixture becomes
-    real. Read under the tournament's row lock, like every other judge-then-write
-    guard, so the evidence it reads is the evidence the write below is authorized by.
-
-    One exception for both verbs, because it is one fact — a re-cut and an un-cut are
-    refused for the same reason.
+    Read under the tournament lock. Retaining the former revision does not grant
+    permission to redraw competition that is already under way.
     """
     if await draw_has_play(db, event.id):
         raise DrawUnderWayError()
@@ -123,41 +114,16 @@ async def cut_event_draw(
     event_id: uuid.UUID,
     actor: User,
 ) -> list[TournamentFixtureRead]:
-    """Cut (or re-cut) the draw of the event ``actor`` owns, and return its fixtures
-    in the page's canonical **group → round → position** order.
+    """Create a current draw revision and return its fixtures in canonical order.
 
-    Runs the same orchestration the HTTP handler used to run inline, under the
-    tournament row lock (:func:`_load_owned_event_for_draw`):
+    The shared load locks the tournament, checks authority and event ownership,
+    then refuses evidence of play. The draw core retires the former revision and
+    creates its replacement in this transaction. A planning refusal rolls back
+    configuration changes and retirement, preserving the previous current draw.
 
-    * **404 / 403** — absent tournament, event not under it, or a non-owner, judged
-      first so the draw's own state is never the reason a stranger's request is
-      refused.
-    * **409** — a draw with evidence of play raises :class:`DrawUnderWayError`, asked
-      before anything is planned or deleted, so a refused re-cut leaves the standing
-      draw exactly as it was.
-    * **the DrawError family** — :func:`cut_draw` plans, deletes and re-inserts inside
-      *this* transaction (the lock still held, so the field cannot move under it and
-      the DELETE and INSERTs land together). When it refuses — an unsupported draw
-      type, a non-singles event, a degenerate field — it raises
-      :class:`~app.draws.DrawError`, and this verb rolls back and lets the error
-      propagate **unchanged** for the adapter to map to the existing 422. The rollback
-      is load-bearing, not belt-and-braces: ``cut_draw`` plans before it deletes when
-      it can, but a re-cut of an ``rr-then-ko`` event whose real field moved the group
-      count deletes the standing fixtures and re-materialises the group rows *before*
-      the snake can refuse (#1387), so on that branch the transaction is the only
-      thing that keeps a refused re-cut from destroying the draw it was replacing. A
-      caller that caught the error per event and committed the rest would persist
-      exactly that. It is deliberately *not* converted to an ``HTTPException`` here.
-
-    On success it requests a ``settings_changed`` solve in the same transaction under
-    the row lock (the order ``request_solve`` requires): the fixtures just changed
-    wholesale — a re-cut deleted the old rows (any pins died with them) and a first cut
-    minted the day's inputs. The cut *is* the drawn event, so no drawn-event gate is
-    needed; a ``None`` return (Redis down) deliberately costs the solve, never the cut.
-
-    Commits, then reads the draw back through :func:`fixtures_by_event` — the same
-    loader the detail page reads it through — so the fixtures this answers with are
-    byte-for-byte the ones the page will show. Never raises ``HTTPException``.
+    Request a settings solve, commit, and read through the same current-draw
+    loader as the tournament detail page. A queue outage costs the solve rather
+    than the cut. Domain errors remain transport-neutral for HTTP and MCP callers.
     """
     event = await _load_owned_event_for_draw(
         db, tournament_id=tournament_id, event_id=event_id, actor=actor
@@ -166,13 +132,8 @@ async def cut_event_draw(
     try:
         await cut_draw(db, event)
     except DrawError:
-        # The domain refusing to produce a draw is not a bug — it is an answer, and it
-        # is the caller's to act on. Roll back — on the re-materialising re-cut branch
-        # the fixtures and group rows are already gone from the session by the time the
-        # snake refuses (see the docstring), and on every other branch the rollback
-        # clears the session and preserves the router's inline behaviour — and let the
-        # error propagate: the adapter composes the 422 sentence, the core stays
-        # FastAPI-free.
+        # Configuration may already have been cloned or resized. Roll back
+        # the entire attempted replacement before the adapter reports refusal.
         await db.rollback()
         raise
     await request_solve(db, tournament_id, ScheduleSolveTrigger.settings_changed)
@@ -187,29 +148,17 @@ async def uncut_event_draw(
     event_id: uuid.UUID,
     actor: User,
 ) -> None:
-    """Un-cut the draw of the event ``actor`` owns: delete its fixtures, leaving the
-    event with no draw.
+    """Retire the current draw while preserving fixtures and participation history.
 
-    The same 404 → 403 → 409 ordering, and the same row lock, as
-    :func:`cut_event_draw`: this verb deletes what that verb writes, and the guard that
-    protects the fixtures cannot depend on which caller is asking. An event with **no
-    draw is already in the state this asks for**, so un-cutting a never-cut draw
-    deletes nothing and is a success (the router answers 204 either way) — which is
-    why the solve trigger is read off ``had_draw`` below, not assumed.
-
-    On a real un-cut of a draw it requests a ``settings_changed`` solve in the same
-    transaction under the row lock, gated on a drawn event **surviving** the un-cut
-    (``tournament_has_drawn_event``): un-cutting the only draw leaves nothing to place,
-    and a solve over an empty board is a no-op ledger entry. A ``None`` return (Redis
-    down) deliberately costs the solve, never the un-cut. Never raises an
-    ``HTTPException``.
+    Use the same authority, ownership and play checks as cutting. Removing an
+    absent draw remains idempotent. A real removal requests a settings solve only
+    when another current draw remains in the tournament, then commits.
     """
     event = await _load_owned_event_for_draw(
         db, tournament_id=tournament_id, event_id=event_id, actor=actor
     )
     await _enforce_unplayed(db, event)
-    # Read before the DELETE: whether this verb is about to change anything at all. The
-    # idempotent un-cut of a never-cut draw deletes nothing and must trigger nothing.
+    # An absent current draw changes no scheduling input.
     had_draw = await event_has_draw(db, event.id)
     await uncut_draw(db, [event.id])
     if had_draw and await tournament_has_drawn_event(db, tournament_id):

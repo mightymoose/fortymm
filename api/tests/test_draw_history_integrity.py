@@ -1,0 +1,427 @@
+"""Trusted SQL writers cannot rewrite sporting history in the migrated schema."""
+
+import uuid
+
+import pytest
+import pytest_asyncio
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import League
+from app.tournament_draw_service import cut_event_draw, uncut_event_draw
+from tests._helpers import make_user
+from tests.test_tournament_draw_service import (
+    _enter_field,
+    _make_event,
+    _make_tournament,
+)
+
+
+@pytest_asyncio.fixture
+async def drawn_history(
+    db_session: AsyncSession, default_league: League
+) -> dict[str, uuid.UUID]:
+    owner = await make_user(db_session, "integrity-history-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament, groups=[])
+    tournament_id, event_id = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="integrity-history")
+    await db_session.refresh(owner)
+    fixtures = await cut_event_draw(
+        db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
+    )
+    fixture_id = fixtures[0].id
+    row = (
+        await db_session.execute(
+            text(
+                "SELECT participation_a_id, draw_revision_id FROM "
+                "tournament_fixtures WHERE id = :id"
+            ),
+            {"id": fixture_id},
+        )
+    ).one()
+    return {
+        "fixture_id": fixture_id,
+        "participation_id": row.participation_a_id,
+        "revision_id": row.draw_revision_id,
+        "owner_id": owner.id,
+        "tournament_id": tournament_id,
+        "event_id": event_id,
+    }
+
+
+async def test_participation_start_is_immutable(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID]
+) -> None:
+    with pytest.raises(IntegrityError, match="participation history is immutable"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE tournament_entry_participations SET started_at = "
+                    "started_at - interval '1 day' WHERE id = :id"
+                ),
+                {"id": drawn_history["participation_id"]},
+            )
+
+
+async def test_ended_participation_cannot_reopen(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID]
+) -> None:
+    await db_session.execute(
+        text(
+            "UPDATE tournament_entry_participations SET ended_at = "
+            "clock_timestamp(), end_reason = 'stage_completed' WHERE id = :id"
+        ),
+        {"id": drawn_history["participation_id"]},
+    )
+    with pytest.raises(IntegrityError, match="participation history is immutable"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE tournament_entry_participations SET ended_at = "
+                    "NULL, end_reason = NULL WHERE id = :id"
+                ),
+                {"id": drawn_history["participation_id"]},
+            )
+
+
+async def test_draw_revision_configuration_is_immutable(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID]
+) -> None:
+    with pytest.raises(IntegrityError, match="draw revision history is immutable"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE tournament_draw_revisions SET configuration = '{}' "
+                    "WHERE id = :id"
+                ),
+                {"id": drawn_history["revision_id"]},
+            )
+
+
+async def test_direct_fixture_insert_assigns_one_revision_to_its_participation(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    owner = await make_user(db_session, "sql-fixture-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament, groups=[])
+    entries = await _enter_field(db_session, event, 2, prefix="sql-fixture")
+    entry_ids = [entry.id for entry in entries]
+    await db_session.refresh(event)
+    fixture_id = (
+        await db_session.execute(
+            text(
+                "INSERT INTO "
+                "tournament_fixtures(stage_id,group_id,round,position,entry_a_id,entry_b_id)"
+                " VALUES (:stage,:group,1,1,:a,:b) RETURNING id"
+            ),
+            {
+                "stage": event.stages[0].id,
+                "group": event.groups[0].id,
+                "a": entry_ids[0],
+                "b": entry_ids[1],
+            },
+        )
+    ).scalar_one()
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    row = (
+        await db_session.execute(
+            text(
+                "SELECT f.draw_revision_id, p.draw_revision_id FROM "
+                "tournament_fixtures f JOIN tournament_entry_participations p "
+                "ON p.id = f.participation_a_id WHERE f.id = :id"
+            ),
+            {"id": fixture_id},
+        )
+    ).one()
+    assert row[0] == row[1]
+
+
+async def _uncut(db: AsyncSession, ids: dict[str, uuid.UUID]) -> None:
+    from app.models import User
+
+    owner = await db.get(User, ids["owner_id"])
+    assert owner is not None
+    await uncut_event_draw(
+        db, tournament_id=ids["tournament_id"], event_id=ids["event_id"], actor=owner
+    )
+
+
+async def test_retired_revision_cannot_be_reopened(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID]
+) -> None:
+    await _uncut(db_session, drawn_history)
+    with pytest.raises(IntegrityError, match="draw revision history is immutable"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE tournament_draw_revisions SET retired_at = NULL "
+                    "WHERE id = :id"
+                ),
+                {"id": drawn_history["revision_id"]},
+            )
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE tournament_fixtures SET round = round + 1 WHERE id = :id",
+        "DELETE FROM tournament_fixtures WHERE id = :id",
+    ],
+)
+async def test_retired_fixture_cannot_be_rewritten_or_deleted(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID], statement: str
+) -> None:
+    await _uncut(db_session, drawn_history)
+    with pytest.raises(IntegrityError, match="retired fixture history is immutable"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(statement), {"id": drawn_history["fixture_id"]}
+            )
+
+
+@pytest.mark.parametrize(
+    "table,id_key",
+    [
+        ("tournament_fixtures", "fixture_id"),
+        ("tournament_draw_revisions", "revision_id"),
+    ],
+)
+async def test_draw_retirement_must_include_revision_and_fixtures(
+    db_session: AsyncSession,
+    drawn_history: dict[str, uuid.UUID],
+    table: str,
+    id_key: str,
+) -> None:
+    with pytest.raises(IntegrityError, match="draw retirement must be consistent"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    f"UPDATE {table} SET retired_at = clock_timestamp() WHERE id = :id"
+                ),
+                {"id": drawn_history[id_key]},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_retired_stage_cannot_admit_new_participation(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID]
+) -> None:
+    await _uncut(db_session, drawn_history)
+    with pytest.raises(
+        IntegrityError, match="participation requires a current stage and revision"
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "INSERT INTO "
+                    "tournament_entry_participations(event_id,entry_id,stage_id,group_id)"
+                    " SELECT event_id,entry_id,stage_id,group_id FROM "
+                    "tournament_entry_participations WHERE id = :id"
+                ),
+                {"id": drawn_history["participation_id"]},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_ended_participation_cannot_take_a_new_fixture_seat(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID]
+) -> None:
+    await db_session.execute(
+        text(
+            "UPDATE tournament_entry_participations SET ended_at = "
+            "clock_timestamp(), end_reason = 'stage_completed' WHERE id = :id"
+        ),
+        {"id": drawn_history["participation_id"]},
+    )
+    with pytest.raises(
+        IntegrityError, match="new fixture seat requires active participation"
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "INSERT INTO "
+                    "tournament_fixtures(stage_id,group_id,round,position,entry_a_id,entry_b_id,participation_a_id,participation_b_id,draw_revision_id)"
+                    " SELECT "
+                    "stage_id,group_id,round,position+100,entry_a_id,entry_b_id,participation_a_id,participation_b_id,draw_revision_id"
+                    " FROM tournament_fixtures WHERE id = :id"
+                ),
+                {"id": drawn_history["fixture_id"]},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_revision_retirement_closes_participation_without_fixtures(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID]
+) -> None:
+    await _uncut(db_session, drawn_history)
+    revision_id = (
+        await db_session.execute(
+            text(
+                "INSERT INTO "
+                "tournament_entry_participations(event_id,entry_id,stage_id,group_id)"
+                " SELECT s.event_id,p.entry_id,s.id,g.id FROM "
+                "tournament_event_stages s JOIN "
+                "tournament_event_stage_groups g ON g.stage_id=s.id JOIN "
+                "tournament_entry_participations p ON p.event_id=s.event_id"
+                " WHERE p.id=:id AND s.retired_at IS NULL RETURNING "
+                "draw_revision_id"
+            ),
+            {"id": drawn_history["participation_id"]},
+        )
+    ).scalar_one()
+    with pytest.raises(
+        IntegrityError, match="active participation requires current draw configuration"
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE tournament_draw_revisions SET "
+                    "retired_at=clock_timestamp() WHERE id=:id"
+                ),
+                {"id": revision_id},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize(
+    "table,id_key",
+    [
+        ("tournament_entry_participations", "participation_id"),
+        ("tournament_draw_revisions", "revision_id"),
+    ],
+)
+async def test_history_cannot_be_deleted_while_its_event_exists(
+    db_session: AsyncSession,
+    drawn_history: dict[str, uuid.UUID],
+    table: str,
+    id_key: str,
+) -> None:
+    await _uncut(db_session, drawn_history)
+    with pytest.raises(IntegrityError, match="history cannot be deleted"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(f"DELETE FROM {table} WHERE id=:id"), {"id": drawn_history[id_key]}
+            )
+
+
+async def test_direct_history_writer_retries_when_parent_is_locked(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID]
+) -> None:
+    from sqlalchemy.exc import DBAPIError
+
+    async with AsyncSession(bind=db_session.bind) as gatekeeper:
+        await gatekeeper.execute(
+            text("SELECT id FROM tournaments WHERE id=:id FOR UPDATE"),
+            {"id": drawn_history["tournament_id"]},
+        )
+        with pytest.raises(DBAPIError, match="draw history requires parent locks"):
+            async with db_session.begin_nested():
+                await db_session.execute(
+                    text(
+                        "UPDATE tournament_fixtures SET "
+                        "updated_at=clock_timestamp() WHERE id=:id"
+                    ),
+                    {"id": drawn_history["fixture_id"]},
+                )
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE tournament_entry_withdrawals SET explanation='rewritten' WHERE id=:id",
+        "DELETE FROM tournament_entry_withdrawals WHERE id=:id",
+        (
+            "UPDATE tournament_entry_withdrawals SET "
+            "restored_at=NULL,restored_by_account_id=NULL WHERE id=:id"
+        ),
+    ],
+)
+async def test_competition_withdrawal_history_is_preserved(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID], statement: str
+) -> None:
+    from app.tournament_participation import WithdrawalReason, withdraw_competition
+
+    entry_id = (
+        await db_session.execute(
+            text("SELECT entry_id FROM tournament_entry_participations WHERE id=:id"),
+            {"id": drawn_history["participation_id"]},
+        )
+    ).scalar_one()
+    await withdraw_competition(
+        db_session,
+        entry_id,
+        drawn_history["owner_id"],
+        WithdrawalReason.director_removal,
+    )
+    await db_session.flush()
+    withdrawal_id = (
+        await db_session.execute(
+            text("SELECT id FROM tournament_entry_withdrawals WHERE entry_id=:id"),
+            {"id": entry_id},
+        )
+    ).scalar_one()
+    if "restored_at=NULL" in statement:
+        await db_session.execute(
+            text(
+                "UPDATE tournament_entry_withdrawals SET "
+                "restored_at=clock_timestamp(),restored_by_account_id=:actor "
+                "WHERE id=:id"
+            ),
+            {"actor": drawn_history["owner_id"], "id": withdrawal_id},
+        )
+    with pytest.raises(IntegrityError, match="withdrawal history is immutable"):
+        async with db_session.begin_nested():
+            await db_session.execute(text(statement), {"id": withdrawal_id})
+
+
+async def test_group_move_ends_old_period_without_repointing_other_fixtures(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID]
+) -> None:
+    group_id = (
+        await db_session.execute(
+            text(
+                "INSERT INTO tournament_event_stage_groups(stage_id,position) "
+                "SELECT stage_id,1 FROM tournament_fixtures WHERE id=:id RETURNING id"
+            ),
+            {"id": drawn_history["fixture_id"]},
+        )
+    ).scalar_one()
+    await db_session.execute(
+        text("UPDATE tournament_fixtures SET group_id=:group_id WHERE id=:id"),
+        {"group_id": group_id, "id": drawn_history["fixture_id"]},
+    )
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    old_period = (
+        await db_session.execute(
+            text(
+                "SELECT ended_at,end_reason FROM tournament_entry_participations "
+                "WHERE id=:id"
+            ),
+            {"id": drawn_history["participation_id"]},
+        )
+    ).one()
+    assert old_period.ended_at is not None
+    assert old_period.end_reason == "group_changed"
+    new_period = (
+        await db_session.execute(
+            text(
+                "SELECT p.id,p.group_id FROM tournament_entry_participations p "
+                "JOIN tournament_fixtures f ON f.participation_a_id=p.id WHERE f.id=:id"
+            ),
+            {"id": drawn_history["fixture_id"]},
+        )
+    ).one()
+    assert new_period.id != drawn_history["participation_id"]
+    assert new_period.group_id == group_id
+    retained = (
+        await db_session.execute(
+            text(
+                "SELECT count(*) FROM tournament_fixtures "
+                "WHERE participation_a_id=:id OR participation_b_id=:id"
+            ),
+            {"id": drawn_history["participation_id"]},
+        )
+    ).scalar_one()
+    assert retained > 0

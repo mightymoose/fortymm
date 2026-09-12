@@ -2,6 +2,11 @@
 
 Status: Accepted for #1672, building on the Account/Player separation in #1671.
 
+Amended by [Registration outlives draw participation](20260911-registration-outlives-draw-participation.md)
+for #1685: entries persist across re-registration, duplicate entries are permanently
+superseded, a played entry takes precedence, and duplicate recorded play in the same
+stage blocks a Player merge. Original membership and lineup history remain preserved.
+
 ## Scope
 
 Database structure and integrity tests, a reset-compatible pre-beta baseline, and

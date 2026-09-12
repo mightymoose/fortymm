@@ -15,7 +15,7 @@ import uuid
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.draws import NonSinglesDraw
@@ -280,6 +280,18 @@ async def test_recut_of_an_unplayed_draw_replaces_wholesale(
     assert first_ids.isdisjoint(second_ids)
     rows = await _fixture_rows(db_session, event_id)
     assert {r.id for r in rows} == second_ids
+    retained_ids = set(
+        (
+            await db_session.execute(
+                text(
+                    "SELECT id FROM tournament_fixtures WHERE scope_event_id = "
+                    ":event_id"
+                ),
+                {"event_id": event_id},
+            )
+        ).scalars()
+    )
+    assert retained_ids == first_ids | second_ids
 
 
 # ----- evidence of play refuses both a re-cut and an un-cut ------------------
@@ -485,3 +497,286 @@ async def test_an_event_under_the_wrong_tournament_raises_event_not_found(
             event_id=event_id,
             actor=owner,
         )
+
+
+async def test_cut_records_participation_and_withdrawal_ends_it(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    from app.tournament_entries import withdraw_from_event
+
+    owner = await make_user(db_session, "owner-periods")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament.status = TournamentStatus.published
+    await db_session.commit()
+    event = await _make_event(db_session, tournament)
+    tournament_id, event_id, owner_id = tournament.id, event.id, owner.id
+    await _enter_field(db_session, event, 4, prefix="periods")
+    await db_session.refresh(owner)
+    fixtures = await cut_event_draw(
+        db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
+    )
+    entry_id = fixtures[0].entry_a_id
+    assert entry_id is not None
+    await db_session.refresh(owner)
+    await withdraw_from_event(
+        db_session,
+        tournament_id=tournament_id,
+        event_id=event_id,
+        entry_id=entry_id,
+        actor=owner,
+    )
+    period = (
+        await db_session.execute(
+            text(
+                "SELECT ended_at, ended_by_account_id, end_reason FROM "
+                "tournament_entry_participations WHERE entry_id = :entry_id"
+            ),
+            {"entry_id": entry_id},
+        )
+    ).one()
+    assert period.ended_at is not None
+    assert period.ended_by_account_id == owner_id
+    assert period.end_reason == "director_removal"
+
+
+async def test_fixture_keeps_specific_participation_when_draw_is_replaced(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    owner = await make_user(db_session, "owner-links")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    tournament_id, event_id = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="links")
+    await db_session.refresh(owner)
+    first = await cut_event_draw(
+        db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
+    )
+    fixture_id = first[0].id
+    await db_session.refresh(owner)
+    await cut_event_draw(
+        db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
+    )
+    row = (
+        await db_session.execute(
+            text(
+                "SELECT p.entry_id, p.ended_at, p.end_reason, f.entry_a_id "
+                "FROM tournament_fixtures f JOIN tournament_entry_participations p "
+                "ON p.id = f.participation_a_id WHERE f.id = :fixture_id"
+            ),
+            {"fixture_id": fixture_id},
+        )
+    ).one()
+    assert row.entry_id == row.entry_a_id
+    assert row.ended_at is not None
+    assert row.end_reason == "draw_retired"
+
+
+async def test_recut_has_one_current_event_wide_revision(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    owner = await make_user(db_session, "owner-revisions")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    tournament_id, event_id = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="revisions")
+    for _ in range(2):
+        await db_session.refresh(owner)
+        await cut_event_draw(
+            db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
+        )
+    revisions = (
+        await db_session.execute(
+            text(
+                "SELECT r.id, r.retired_at, count(f.id) AS fixtures FROM "
+                "tournament_draw_revisions r "
+                "JOIN tournament_fixtures f ON f.draw_revision_id = r.id "
+                "WHERE r.event_id = :event_id GROUP BY r.id ORDER BY r.created_at"
+            ),
+            {"event_id": event_id},
+        )
+    ).all()
+    assert len(revisions) == 2
+    assert revisions[0].retired_at is not None
+    assert revisions[1].retired_at is None
+    assert [row.fixtures for row in revisions] == [2, 2]
+
+
+async def test_reregistering_same_entry_does_not_restore_draw_currency(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    from app.tournament_draws import DrawCurrency, draw_currency_by_event
+    from app.tournament_entries import enter_event, withdraw_from_event
+
+    owner = await make_user(db_session, "owner-currency-period")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament.status = TournamentStatus.published
+    await db_session.commit()
+    event = await _make_event(db_session, tournament)
+    tournament_id, event_id = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="currency-period")
+    await db_session.refresh(owner)
+    fixtures = await cut_event_draw(
+        db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
+    )
+    entry_id = fixtures[0].entry_a_id
+    entry = await db_session.get(TournamentEntry, entry_id)
+    assert entry is not None
+    player_id = entry.user_id
+    await db_session.refresh(owner)
+    await withdraw_from_event(
+        db_session,
+        tournament_id=tournament_id,
+        event_id=event_id,
+        entry_id=entry.id,
+        actor=owner,
+    )
+    await db_session.refresh(owner)
+    registered = await enter_event(
+        db_session,
+        tournament_id=tournament_id,
+        event_id=event_id,
+        actor=owner,
+        user_id=player_id,
+    )
+    assert registered.id == entry_id
+    assert (await draw_currency_by_event(db_session, [event_id]))[
+        event_id
+    ] is DrawCurrency.stale
+
+
+async def test_withdrawn_entry_cannot_gain_active_participation_by_sql(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    from app.tournament_entries import withdraw_from_event
+
+    owner = await make_user(db_session, "owner-no-admission")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament.status = TournamentStatus.published
+    await db_session.commit()
+    event = await _make_event(db_session, tournament)
+    tournament_id, event_id = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="no-admission")
+    await db_session.refresh(owner)
+    fixtures = await cut_event_draw(
+        db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
+    )
+    entry_id = fixtures[0].entry_a_id
+    assert entry_id is not None
+    await db_session.refresh(owner)
+    await withdraw_from_event(
+        db_session,
+        tournament_id=tournament_id,
+        event_id=event_id,
+        entry_id=entry_id,
+        actor=owner,
+    )
+    with pytest.raises(IntegrityError):
+        await db_session.execute(
+            text(
+                "INSERT INTO "
+                "tournament_entry_participations(event_id,entry_id,stage_id,group"
+                "_id) "
+                "SELECT event_id,entry_id,stage_id,group_id FROM "
+                "tournament_entry_participations "
+                "WHERE entry_id = :entry_id LIMIT 1"
+            ),
+            {"entry_id": entry_id},
+        )
+        await db_session.commit()
+    await db_session.rollback()
+
+
+async def test_swiss_bye_has_stage_participation_without_a_fixture(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    owner = await make_user(db_session, "owner-bye-period")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(
+        db_session, tournament, draw_type=DrawType.swiss, groups=[]
+    )
+    event.draw_settings = TournamentEventDrawSettings.for_draw_type(
+        DrawType.swiss, settings={"rounds": 3}
+    )
+    await db_session.commit()
+    tournament_id, event_id = tournament.id, event.id
+    entries = await _enter_field(db_session, event, 3, prefix="bye-period")
+    expected_ids = {entry.id for entry in entries}
+    await db_session.refresh(owner)
+    fixtures = await cut_event_draw(
+        db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
+    )
+    assert sum(f.entry_a_id is not None for f in fixtures) == 1
+    admitted = set(
+        (
+            await db_session.execute(
+                text(
+                    "SELECT entry_id FROM tournament_entry_participations "
+                    "WHERE event_id = :event_id AND ended_at IS NULL"
+                ),
+                {"event_id": event_id},
+            )
+        ).scalars()
+    )
+    assert admitted == expected_ids
+
+
+async def test_swiss_bye_reregistration_still_requires_a_recut(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    from app.tournament_draws import DrawCurrency, draw_currency_by_event
+    from app.tournament_entries import enter_event, withdraw_from_event
+
+    owner = await make_user(db_session, "owner-bye-currency")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tournament.status = TournamentStatus.published
+    await db_session.commit()
+    event = await _make_event(
+        db_session, tournament, draw_type=DrawType.swiss, groups=[]
+    )
+    event.draw_settings = TournamentEventDrawSettings.for_draw_type(
+        DrawType.swiss, settings={"rounds": 3}
+    )
+    await db_session.commit()
+    tournament_id, event_id = tournament.id, event.id
+    entries = await _enter_field(db_session, event, 3, prefix="bye-currency")
+    entry_players = {entry.id: entry.user_id for entry in entries}
+    await db_session.refresh(owner)
+    fixtures = await cut_event_draw(
+        db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
+    )
+    seated = {
+        entry_id
+        for f in fixtures
+        for entry_id in (f.entry_a_id, f.entry_b_id)
+        if entry_id is not None
+    }
+    bye_id = next(entry_id for entry_id in entry_players if entry_id not in seated)
+    await db_session.refresh(owner)
+    await withdraw_from_event(
+        db_session,
+        tournament_id=tournament_id,
+        event_id=event_id,
+        entry_id=bye_id,
+        actor=owner,
+    )
+    await db_session.refresh(owner)
+    registered = await enter_event(
+        db_session,
+        tournament_id=tournament_id,
+        event_id=event_id,
+        actor=owner,
+        user_id=entry_players[bye_id],
+    )
+    assert registered.id == bye_id
+    assert (await draw_currency_by_event(db_session, [event_id]))[
+        event_id
+    ] is DrawCurrency.stale

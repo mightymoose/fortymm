@@ -42,11 +42,24 @@ otherwise — so this gate needs no COUNT of its own to establish that.
 """
 
 import enum
+import uuid
+from collections.abc import Collection
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
-from app.models import DrawType, TournamentEvent, TournamentEventStage
+from app.models import (
+    DrawType,
+    TournamentEvent,
+    TournamentEventStage,
+    TournamentEventStageGroup,
+    TournamentFixture,
+)
+from app.models.tournament_event_group_reservation import (
+    TournamentEventGroupReservation,
+)
 
 
 class GroupCountSource(enum.Enum):
@@ -132,7 +145,10 @@ def mint_stages(draw_type: DrawType) -> list[TournamentEventStage]:
 async def remint_stages_in_place(
     db: AsyncSession, event: TournamentEvent, draw_type: DrawType
 ) -> None:
-    """Re-apply ``draw_type``'s template onto ``event``'s stages IN PLACE.
+    """Re-apply ``draw_type``'s template onto the event's current editable stages.
+
+    Draw retirement has already cloned any previously drawn stage graph, so this
+    operation cannot mutate stages or groups referenced by a historical draw.
 
     Reads the current rows through an explicit query — **never** through
     ``TournamentEvent.stages`` (that relationship is eager now, but this still reaches
@@ -186,3 +202,63 @@ async def remint_stages_in_place(
             )
     for stale in existing[len(template) :]:
         await db.delete(stale)
+
+
+async def archive_stage_configuration(
+    db: AsyncSession, event_ids: Collection[uuid.UUID]
+) -> None:
+    """Preserve the real stage/group graph of retired draws and mint editable copies.
+
+    A never-cut event is unchanged. The caller retires fixtures first and refreshes
+    any already-loaded event stage/group collections before planning a new draw.
+    The tournament row lock and caller's transaction serialize the replacement.
+    """
+    drawn_events = (
+        select(TournamentEventStage.event_id)
+        .join(TournamentFixture, TournamentFixture.stage_id == TournamentEventStage.id)
+        .where(TournamentEventStage.retired_at.is_(None))
+    )
+    stages = list(
+        (
+            await db.scalars(
+                select(TournamentEventStage)
+                .where(
+                    TournamentEventStage.event_id.in_(event_ids),
+                    TournamentEventStage.event_id.in_(drawn_events),
+                    TournamentEventStage.retired_at.is_(None),
+                )
+                .options(selectinload(TournamentEventStage.groups))
+                .execution_options(include_draw_history=True)
+            )
+        ).all()
+    )
+    retired_at = datetime.now(UTC)
+    replacements: list[TournamentEventStage] = []
+    for stage in stages:
+        stage.retired_at = retired_at
+        groups = []
+        for group in stage.groups:
+            link = group.reservation_link
+            groups.append(
+                TournamentEventStageGroup(
+                    position=group.position,
+                    reservation_link=TournamentEventGroupReservation(
+                        event_id=stage.event_id,
+                        reservation_id=link.reservation_id,
+                    )
+                    if link is not None
+                    else None,
+                )
+            )
+        replacements.append(
+            TournamentEventStage(
+                event_id=stage.event_id,
+                position=stage.position,
+                draw_type=stage.draw_type,
+                groups=groups,
+            )
+        )
+    # Retire before INSERT: the partial position index permits one current stage.
+    await db.flush()
+    db.add_all(replacements)
+    await db.flush()
