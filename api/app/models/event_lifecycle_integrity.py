@@ -195,7 +195,8 @@ EVENT_LIFECYCLE_DDL = (
     LANGUAGE plpgsql AS $$
     BEGIN
         IF NEW.match_id IS NULL OR (TG_OP='UPDATE'
-            AND NEW.match_id IS NOT DISTINCT FROM OLD.match_id) THEN
+            AND NEW.match_id IS NOT DISTINCT FROM OLD.match_id
+            AND NEW.scope_event_id IS NOT DISTINCT FROM OLD.scope_event_id) THEN
             RETURN NEW;
         END IF;
         IF EXISTS (SELECT 1 FROM matches
@@ -237,8 +238,8 @@ EVENT_LIFECYCLE_DDL = (
     END $$
     """,
     """
-    CREATE TRIGGER observe_attached_event_play AFTER INSERT OR UPDATE OF match_id ON
-        tournament_fixtures
+    CREATE TRIGGER observe_attached_event_play AFTER INSERT OR UPDATE OF
+        match_id, stage_id, scope_event_id ON tournament_fixtures
     FOR EACH ROW EXECUTE FUNCTION observe_attached_event_play()
     """,
     """

@@ -66,6 +66,8 @@ from app.models import (
     User,
     UserLeagueRating,
     VenueTable,
+    VenueTableCallHistory,
+    VenueTableOutage,
 )
 from app.models.tournament import DrawType, EventFormat
 from app.schemas.notification import NotificationJob
@@ -81,6 +83,7 @@ from app.tournament_entry_refusals import EntryRefusal
 from app.tournament_errors import EVENT_VERSION_CONFLICT_CODE
 from app.tournament_materialization import materialize_event, materialize_live_draw
 from app.tournament_queries import stage_ids_for_events
+from app.tournament_table_availability import mark_table_out_of_service, restore_table
 from app.tournaments import (
     TOURNAMENT_CREATE,
     create_tournament_transition,
@@ -924,6 +927,175 @@ async def test_delete_by_creator_removes_row(
         )
     ).scalar_one_or_none()
     assert remaining is None
+
+
+@pytest.mark.parametrize("operation", ["update", "delete"])
+async def test_table_call_history_cannot_be_rewritten_or_deleted(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    operation: str,
+) -> None:
+    client, _ = authed_client
+    tournament_id, _, fixture, table_id, _ = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix=f"append-only-{operation}"
+    )
+    history = VenueTableCallHistory(
+        tournament_id=uuid.UUID(tournament_id),
+        fixture_id=fixture.id,
+        table_id=table_id,
+        kind="called",
+        scheduled_start=fixture.scheduled_start,
+    )
+    db_session.add(history)
+    await db_session.flush()
+
+    statement = (
+        "UPDATE tournament_table_call_history SET kind = 'moved' WHERE id = :id"
+        if operation == "update"
+        else "DELETE FROM tournament_table_call_history WHERE id = :id"
+    )
+    with pytest.raises(IntegrityError, match="table call history is append-only"):
+        async with db_session.begin_nested():
+            await db_session.execute(text(statement), {"id": history.id})
+
+
+async def test_call_history_cannot_reference_a_fixture_from_another_tournament(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    client, _ = authed_client
+    tournament_a, _, _, table_a, _ = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix="history-scope-a"
+    )
+    _, _, fixture_b, _, _ = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix="history-scope-b"
+    )
+    history = VenueTableCallHistory(
+        tournament_id=uuid.UUID(tournament_a),
+        fixture_id=fixture_b.id,
+        table_id=table_a,
+        kind="called",
+        scheduled_start=fixture_b.scheduled_start,
+    )
+    db_session.add(history)
+    await db_session.flush()
+
+    with pytest.raises(
+        IntegrityError,
+        match="fk_tournament_table_call_history_tournament_id_fixture_id",
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "SET CONSTRAINTS "
+                    "fk_tournament_table_call_history_tournament_id_"
+                    "fixture_id IMMEDIATE"
+                )
+            )
+
+
+async def test_deleting_fixture_clears_only_its_call_history_fixture_reference(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    client, _ = authed_client
+    tournament_id, _, fixture, table_id, _ = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix="history-fixture-delete"
+    )
+    history = VenueTableCallHistory(
+        tournament_id=uuid.UUID(tournament_id),
+        fixture_id=fixture.id,
+        table_id=table_id,
+        kind="called",
+        scheduled_start=fixture.scheduled_start,
+    )
+    db_session.add(history)
+    await db_session.flush()
+
+    await db_session.execute(
+        text("DELETE FROM tournament_fixtures WHERE id = :id"), {"id": fixture.id}
+    )
+    fixture_reference = await db_session.scalar(
+        select(VenueTableCallHistory.fixture_id).where(
+            VenueTableCallHistory.id == history.id
+        )
+    )
+
+    assert fixture_reference is None
+
+
+@pytest.mark.parametrize(
+    "invalid_update",
+    [
+        "position = NULL",
+        "effective_until = effective_from + interval '1 second'",
+    ],
+)
+async def test_reservation_membership_activity_matches_its_position(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    invalid_update: str,
+) -> None:
+    client, _ = authed_client
+    tournament_id, *_ = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix="membership-position"
+    )
+    membership = await db_session.scalar(
+        select(TournamentEventReservationTable).where(
+            TournamentEventReservationTable.tournament_id == uuid.UUID(tournament_id),
+            TournamentEventReservationTable.effective_until.is_(None),
+        )
+    )
+    assert membership is not None
+
+    with pytest.raises(
+        IntegrityError,
+        match="ck_tournament_event_reservation_tables_activity_position",
+    ):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE tournament_event_reservation_tables SET "
+                    f"{invalid_update} WHERE id = :id"
+                ),
+                {"id": membership.id},
+            )
+
+
+async def test_delete_tournament_removes_its_call_history_before_table_cascade(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    client, _ = authed_client
+    (
+        tournament_id,
+        _event_id,
+        fixture,
+        table_1,
+        _table_2,
+    ) = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix="delete-call"
+    )
+    db_session.add(
+        VenueTableCallHistory(
+            tournament_id=uuid.UUID(tournament_id),
+            fixture_id=fixture.id,
+            table_id=table_1,
+            kind="called",
+            scheduled_start=fixture.scheduled_start,
+        )
+    )
+    await db_session.commit()
+
+    response = await client.delete(f"/v1/tournaments/{tournament_id}")
+
+    assert response.status_code == 204, response.text
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(VenueTableCallHistory)
+            .where(VenueTableCallHistory.tournament_id == uuid.UUID(tournament_id))
+        )
+        == 0
+    )
 
 
 async def test_create_rejects_unknown_field(
@@ -8891,6 +9063,330 @@ async def _tournament_with_a_placed_fixture(
     return tournament_id, event["id"], fixture, table_1, table_2
 
 
+async def test_releasing_and_readding_a_reserved_table_preserves_its_history(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """Release is a membership change, not a table deletion or a placement rewrite.
+
+    Re-adding the same table opens a new membership period under the same table
+    identity; it must not overwrite the period that records the earlier reservation.
+    """
+    client, _ = authed_client
+    (
+        tournament_id,
+        event_id,
+        fixture,
+        table_1,
+        table_2,
+    ) = await _tournament_with_a_placed_fixture(client, db_session, prefix="membership")
+    (reservation,) = _kept(await _reservations_of(db_session, event_id))
+
+    released = await patch_event(
+        client,
+        tournament_id,
+        event_id,
+        {"reservations": [{**reservation, "table_ids": [table_2]}]},
+    )
+
+    assert released.status_code == 200, released.text
+    assert released.json()["reservations"][0]["table_ids"] == [table_2]
+    placed_after_release = await _fixture_in_detail(
+        client, tournament_id, str(fixture.id)
+    )
+    assert placed_after_release["table_id"] == table_1
+    assert placed_after_release["table_off_reservation"] is True
+    db_session.expire_all()
+    await db_session.refresh(fixture)
+    assert fixture.table_id == table_1
+
+    readded = await patch_event(
+        client,
+        tournament_id,
+        event_id,
+        {"reservations": [{**reservation, "table_ids": [table_2, table_1]}]},
+    )
+
+    assert readded.status_code == 200, readded.text
+    assert readded.json()["reservations"][0]["table_ids"] == [table_2, table_1]
+    history = (
+        await db_session.execute(
+            text(
+                """
+                SELECT effective_from, effective_until
+                FROM tournament_event_reservation_tables
+                WHERE tournament_id = :tournament_id
+                  AND reservation_id = :reservation_id
+                  AND table_id = :table_id
+                ORDER BY effective_from
+                """
+            ),
+            {
+                "tournament_id": tournament_id,
+                "reservation_id": reservation["id"],
+                "table_id": table_1,
+            },
+        )
+    ).all()
+    assert len(history) == 2
+    assert history[0].effective_from < history[0].effective_until
+    assert history[0].effective_until <= history[1].effective_from
+    assert history[1].effective_until is None
+
+    db_session.expire_all()
+    await db_session.refresh(fixture)
+    assert fixture.table_id == table_1
+
+
+async def test_table_outage_and_restore_preserve_membership_across_events(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """An outage belongs to the tournament table, not one reservation or event.
+
+    Restoring it closes the outage period; neither transition erases the table's
+    reservation memberships or the fixture placement that names its stable identity.
+    """
+    from app.tournament_table_availability import (
+        mark_table_out_of_service,
+        restore_table,
+    )
+
+    client, _ = authed_client
+    (
+        tournament_id,
+        event_id,
+        fixture,
+        table_1,
+        _table_2,
+    ) = await _tournament_with_a_placed_fixture(client, db_session, prefix="outage")
+    other_event = (
+        await client.post(
+            f"/v1/tournaments/{tournament_id}/events",
+            json=_rr_payload({**RESERVATION_B, "table_ids": [table_1]}),
+        )
+    ).json()
+    first_event_ids = (await _reservations_of(db_session, event_id))[0]["table_ids"]
+    other_event_ids = (await _reservations_of(db_session, other_event["id"]))[0][
+        "table_ids"
+    ]
+    assert table_1 in first_event_ids
+    assert table_1 in other_event_ids
+
+    outage = await mark_table_out_of_service(
+        db_session,
+        tournament_id=uuid.UUID(tournament_id),
+        table_id=table_1,
+    )
+    assert outage.effective_until is None
+
+    restored = await restore_table(
+        db_session,
+        tournament_id=uuid.UUID(tournament_id),
+        table_id=table_1,
+    )
+    assert restored.id == outage.id
+    assert restored.effective_until is not None
+    assert restored.effective_until > restored.effective_from
+    assert (await _reservations_of(db_session, event_id))[0]["table_ids"] == (
+        first_event_ids
+    )
+    assert (await _reservations_of(db_session, other_event["id"]))[0][
+        "table_ids"
+    ] == other_event_ids
+    db_session.expire_all()
+    await db_session.refresh(fixture)
+    assert fixture.table_id == table_1
+
+
+async def test_opening_an_outage_waits_for_tournament_writers(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+) -> None:
+    """Outage transitions share the tournament lock with call and solve writers.
+
+    The outage's effective start is stamped only after the lock is acquired, so it
+    cannot appear to have begun before a call that committed while the transition
+    waited.
+    """
+    client, _ = authed_client
+    (
+        tournament_id,
+        _event_id,
+        _fixture,
+        table_1,
+        _table_2,
+    ) = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix="outage-writer-lock"
+    )
+    tournament_uuid = uuid.UUID(tournament_id)
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def change_outage(*, restore: bool = False) -> datetime:
+        async with make_session() as session:
+            if restore:
+                outage = await restore_table(
+                    session,
+                    tournament_id=tournament_uuid,
+                    table_id=table_1,
+                )
+            else:
+                outage = await mark_table_out_of_service(
+                    session,
+                    tournament_id=tournament_uuid,
+                    table_id=table_1,
+                )
+            await session.commit()
+            if restore:
+                assert outage.effective_until is not None
+                return outage.effective_until
+            return outage.effective_from
+
+    async with make_session() as writer:
+        await writer.execute(
+            select(Tournament.id)
+            .where(Tournament.id == tournament_uuid)
+            .with_for_update()
+        )
+        opening = asyncio.create_task(change_outage())
+        await asyncio.sleep(0.25)
+        assert not opening.done(), "outage change bypassed the tournament writer lock"
+        await writer.commit()
+        unlocked_at = datetime.now(UTC)
+        effective_from = await opening
+
+    assert effective_from >= unlocked_at
+
+    async with make_session() as writer:
+        await writer.execute(
+            select(Tournament.id)
+            .where(Tournament.id == tournament_uuid)
+            .with_for_update()
+        )
+        restoring = asyncio.create_task(change_outage(restore=True))
+        await asyncio.sleep(0.25)
+        assert not restoring.done(), "restore bypassed the tournament writer lock"
+        await writer.commit()
+        unlocked_at = datetime.now(UTC)
+        effective_until = await restoring
+
+    assert effective_until is not None
+    assert effective_until >= unlocked_at
+
+
+async def test_a_live_manual_call_rejects_a_table_with_an_active_outage(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    fake_notifications_queue: Queue,
+) -> None:
+    """A live manual placement calls immediately, so it cannot call a table that is
+    currently out of service. Refusal leaves the existing placement alone and records
+    no call history."""
+    client, _ = authed_client
+    (
+        tournament_id,
+        _event_id,
+        fixture,
+        table_1,
+        _table_2,
+    ) = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix="manual-call-outage"
+    )
+    from app.tournament_table_availability import mark_table_out_of_service
+
+    await mark_table_out_of_service(
+        db_session,
+        tournament_id=uuid.UUID(tournament_id),
+        table_id=table_1,
+    )
+    await db_session.commit()
+    await _go_live_directly(db_session, tournament_id)
+
+    response = await client.patch(
+        _placement_url(tournament_id, str(fixture.id)),
+        json={"table_id": table_1, "scheduled_start": "2026-06-13T10:30:00"},
+    )
+
+    assert response.status_code == 409, response.text
+    assert "out of service" in response.json()["detail"]
+    db_session.expire_all()
+    await db_session.refresh(fixture)
+    assert fixture.scheduled_start == datetime(2026, 6, 13, 15, 0, tzinfo=UTC)
+    assert fixture.call_notified_count == 0
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(VenueTableCallHistory)
+            .where(VenueTableCallHistory.tournament_id == uuid.UUID(tournament_id))
+        )
+        == 0
+    )
+    assert not fake_notifications_queue.jobs
+
+
+async def test_a_table_can_have_only_one_active_outage(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    client, _ = authed_client
+    (
+        tournament_id,
+        _event_id,
+        _fixture,
+        table_1,
+        _table_2,
+    ) = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix="outage-uniq"
+    )
+    started = datetime.now(UTC)
+    db_session.add_all(
+        [
+            VenueTableOutage(
+                tournament_id=uuid.UUID(tournament_id),
+                table_id=table_1,
+                effective_from=started,
+            ),
+            VenueTableOutage(
+                tournament_id=uuid.UUID(tournament_id),
+                table_id=table_1,
+                effective_from=started + timedelta(minutes=1),
+            ),
+        ]
+    )
+
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+
+async def test_an_outage_interval_must_end_after_it_starts(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    client, _ = authed_client
+    (
+        tournament_id,
+        _event_id,
+        _fixture,
+        table_1,
+        _table_2,
+    ) = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix="outage-time"
+    )
+    started = datetime.now(UTC)
+    db_session.add(
+        VenueTableOutage(
+            tournament_id=uuid.UUID(tournament_id),
+            table_id=table_1,
+            effective_from=started,
+            effective_until=started,
+        )
+    )
+
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+
 async def test_removing_a_catalogue_table_a_fixture_is_placed_at_is_a_409_naming_it(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
@@ -9046,6 +9542,24 @@ async def test_retired_table_survives_until_its_last_event_is_deleted(
         },
     )
     assert removed_table.status_code == 200, removed_table.text
+    retained_table = await db_session.scalar(
+        select(VenueTable)
+        .where(VenueTable.id == uuid.UUID(table_1))
+        .execution_options(include_draw_history=True)
+    )
+    assert retained_table is not None
+    assert retained_table.retired_at is not None
+    assert retained_table.position is None
+    closed_memberships = (
+        await db_session.scalars(
+            select(TournamentEventReservationTable).where(
+                TournamentEventReservationTable.table_id == table_1,
+                TournamentEventReservationTable.effective_until.is_not(None),
+            )
+        )
+    ).all()
+    assert closed_memberships
+    assert all(row.position is None for row in closed_memberships)
     table_query = (
         select(VenueTable.id)
         .where(VenueTable.id == table_1)
@@ -9116,6 +9630,119 @@ async def test_the_opt_in_removes_the_catalogue_table_and_leaves_its_fixtures_un
     assert fixture.table_id is None
     assert fixture.scheduled_start is None
     assert fixture.pinned_at is None
+
+
+@pytest.mark.parametrize("completed", [False, True])
+async def test_removing_a_table_with_call_history_retires_it_instead_of_deleting_it(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    default_league: League,
+    completed: bool,
+) -> None:
+    client, owner = authed_client
+    (
+        tournament_id,
+        _event_id,
+        fixture,
+        table_1,
+        table_2,
+    ) = await _tournament_with_a_placed_fixture(client, db_session, prefix="retired")
+    if completed:
+        completed_match = await _make_match(db_session, owner, default_league)
+        completed_match.status = MatchStatus.completed
+        await seed_fixture_match_sides(db_session, fixture, completed_match)
+        fixture.match_id = completed_match.id
+    fixture.pinned_at = datetime.now(UTC)
+    db_session.add(
+        VenueTableCallHistory(
+            tournament_id=uuid.UUID(tournament_id),
+            fixture_id=fixture.id,
+            table_id=table_1,
+            kind="called",
+            scheduled_start=fixture.scheduled_start,
+        )
+    )
+    fixture.call_notified_count = 1
+    await db_session.flush()
+    if completed:
+        from app.event_lifecycle import reconcile_event
+
+        await reconcile_event(db_session, uuid.UUID(_event_id))
+
+    response = await client.patch(
+        f"/v1/tournaments/{tournament_id}",
+        json={
+            "details_version": 1,
+            "table_catalogue": [{"id": table_2, "label": "Table 2", "court": "A"}],
+            "unplace_fixtures_on_removed_tables": True,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert [table["id"] for table in response.json()["table_catalogue"]] == [table_2]
+    retired = await db_session.scalar(
+        select(VenueTable)
+        .where(VenueTable.id == uuid.UUID(table_1))
+        .execution_options(include_draw_history=True)
+    )
+    assert retired is not None
+    assert retired.retired_at is not None
+    assert retired.position is None
+    history = (
+        await db_session.scalars(
+            select(VenueTableCallHistory).where(
+                VenueTableCallHistory.table_id == table_1
+            )
+        )
+    ).all()
+    expected_history = {"called"} if completed else {"called", "cancelled"}
+    assert {row.kind for row in history} == expected_history
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(TournamentEventReservationTable)
+            .where(
+                TournamentEventReservationTable.table_id == table_1,
+                TournamentEventReservationTable.effective_until.is_(None),
+            )
+        )
+        == 0
+    )
+
+
+async def test_database_restricts_hard_deleting_a_table_in_call_history(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    client, _ = authed_client
+    (
+        tournament_id,
+        _event_id,
+        fixture,
+        table_1,
+        _table_2,
+    ) = await _tournament_with_a_placed_fixture(client, db_session, prefix="history-fk")
+    table = await db_session.get(VenueTable, uuid.UUID(table_1))
+    assert table is not None
+    fixture.table_id = None
+    fixture.scheduled_start = None
+    fixture.pinned_at = None
+    db_session.add(
+        VenueTableCallHistory(
+            tournament_id=uuid.UUID(tournament_id),
+            fixture_id=fixture.id,
+            table_id=table_1,
+            kind="called",
+            scheduled_start=datetime.now(UTC),
+        )
+    )
+    await db_session.flush()
+    await db_session.delete(table)
+
+    await db_session.flush()
+    with pytest.raises(IntegrityError):
+        await db_session.commit()
+    await db_session.rollback()
 
 
 @pytest.mark.parametrize(

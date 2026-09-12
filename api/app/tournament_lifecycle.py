@@ -226,7 +226,8 @@ async def delete_tournament(
     await require_no_recorded_play(db, tournament_id=tournament.id)
     # Delete the parent in one database statement. ORM child deletes would run
     # before the parent disappears, violating retained-history guards and table
-    # references. The existing FK cascades handle the explicitly deleted graph.
+    # references. Deferred table-call integrity lets the explicit tournament delete
+    # cascade its own history and tables together.
     await db.execute(delete(Tournament).where(Tournament.id == tournament.id))
     await db.commit()
 

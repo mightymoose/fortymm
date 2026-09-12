@@ -29,6 +29,8 @@ from app.models import (
     TournamentEntryMember,
     TournamentFixture,
     TournamentStatus,
+    VenueTable,
+    VenueTableCallHistory,
 )
 from app.tournament_authority import transfer_ownership
 from app.tournament_participation import WithdrawalReason, close_entry_participation
@@ -3384,3 +3386,36 @@ async def test_ending_cannot_contradict_whether_play_started(
                 {"id": match.id, "ending": ending},
             )
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("operation", ["update", "delete"])
+async def test_table_call_history_is_append_only_in_both_schema_builds(
+    db_session, operation: str
+) -> None:
+    event = await make_drawn_event(db_session)
+    table = VenueTable(
+        tournament_id=event.tournament_id,
+        label="History table",
+        court="A",
+        position=0,
+    )
+    db_session.add(table)
+    await db_session.flush()
+    history = VenueTableCallHistory(
+        tournament_id=event.tournament_id,
+        table_id=str(table.id),
+        fixture_id=None,
+        kind="called",
+        scheduled_start=datetime.now(UTC),
+    )
+    db_session.add(history)
+    await db_session.flush()
+
+    statement = (
+        "UPDATE tournament_table_call_history SET kind = 'moved' WHERE id = :id"
+        if operation == "update"
+        else "DELETE FROM tournament_table_call_history WHERE id = :id"
+    )
+    with pytest.raises(IntegrityError, match="table call history is append-only"):
+        async with db_session.begin_nested():
+            await db_session.execute(text(statement), {"id": history.id})

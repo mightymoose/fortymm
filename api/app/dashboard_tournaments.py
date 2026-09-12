@@ -171,7 +171,9 @@ async def build_tournament_panels(
             tables_by_tournament[tournament.id] = {
                 str(table.id): table
                 for table in (
-                    TournamentTable.model_validate(row) for row in tournament.tables
+                    TournamentTable.model_validate(row)
+                    for row in tournament.tables
+                    if row.retired_at is None
                 )
             }
         by_tournament[tournament.id].append(

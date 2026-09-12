@@ -58,8 +58,8 @@ reconcile and assert its result before committing. The database does not duplica
 ## Cancellation, archive and registration
 
 Cancellation is an explicit terminal state, permitted before or during play.
-It preserves prior progress and match records, blocks new game scoring, and allows
-correction of previously recorded scores and results under their existing
+It preserves prior progress and match records, blocks new game scoring and newly
+attached completed or voided results, and allows correction of previously recorded scores and results under their existing
 authority rules. Corrections never reopen a cancelled event. The internal backend
 operation and database support do not add a public cancellation endpoint or UI.
 Cancelled events are excluded from new match materialization, scheduling and calls;
@@ -70,14 +70,17 @@ the existing refusal for a truly empty tournament remains.
 Archive records when a tournament was put away. It does not finish or cancel
 unfinished events and does not rewrite their state or history. Cancelled events
 and archived tournaments cannot be hard-deleted, even when no play occurred.
-Existing play, official-result and advancement-history retention continues to
-apply. Lifecycle history itself cannot be rewritten or deleted.
+Archived tournaments also retain their unstarted events: those events cannot be
+deleted or moved to another tournament. Existing play, official-result and
+advancement-history retention continues to apply. Lifecycle history itself cannot be rewritten or deleted.
 
 Registration permission remains a separate policy. For compatibility, publishing
 opens the tournament-wide entry and withdrawal window, and going live closes it,
 including for events still unstarted. Cancelled events additionally refuse new
 entries. This issue does not introduce independent event registration windows or
-change existing idempotent withdrawal behavior.
+change existing idempotent withdrawal behavior. Successful entry and withdrawal
+changes reconcile event progress because the active field can change Swiss
+completion; re-entry can reopen a previously complete event.
 
 ## Amended decisions
 

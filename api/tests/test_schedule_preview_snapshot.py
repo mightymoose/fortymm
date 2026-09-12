@@ -46,6 +46,7 @@ from app.models import (
     TournamentFixture,
     TournamentStatus,
     User,
+    VenueTableOutage,
 )
 from app.models.tournament import DrawType, EventFormat
 from app.schedule_preview import (
@@ -1068,6 +1069,41 @@ async def test_preview_snapshot_creates_no_entry_or_fixture_rows(
     ).scalar_one()
     assert entries == 0
     assert fixtures == 0
+
+
+async def test_preview_snapshot_respects_a_table_outage(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    owner = await make_user(db_session, "prev-outage")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    await _add_event(db_session, tournament, max_players=4, length_games=1)
+    loaded = await _load(db_session, tournament.id)
+    table_id = str(loaded.tables[0].id)
+    outage_start = datetime(2026, 6, 13, 16, 10, tzinfo=UTC)
+    outage_end = datetime(2026, 6, 13, 16, 30, tzinfo=UTC)
+    outage = VenueTableOutage(
+        tournament_id=tournament.id,
+        table_id=table_id,
+        effective_from=outage_start,
+        effective_until=outage_end,
+    )
+
+    preview = build_preview_snapshot(
+        loaded,
+        table_outages=(outage,),
+        now=datetime(2026, 6, 13, 6, tzinfo=UTC),
+    )
+
+    assert preview.snapshot.table_outages == (
+        scheduling.TableOutage(scheduling.TableId(table_id), 10, 30),
+    )
+    result = scheduling.solve(preview.snapshot, time_cap_s=5.0)
+    assert result.verdict in (scheduling.Verdict.optimal, scheduling.Verdict.feasible)
+    assert all(
+        placement.start_min >= 30
+        for placement in result.placements
+        if str(placement.table_id) == table_id
+    )
 
 
 async def test_preview_snapshot_is_solver_ready(

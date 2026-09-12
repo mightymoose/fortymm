@@ -242,8 +242,9 @@ class Tournament(Base):
     # ``test_the_venue_tables_fk_cascades_in_the_database`` is one of those paths
     # precisely because the ORM-path test stays green without it.
     #
-    # ``delete-orphan`` is what the catalogue *write* leans on — a table dropped from
-    # the submitted list is removed by taking it out of this collection.
+    # ``delete-orphan`` is what the catalogue write uses for a hard deletion of an
+    # uncalled table. A table with call history stays in this collection as a retired
+    # row with no position; active catalogue projections filter it out.
     tables: Mapped[list["VenueTable"]] = relationship(
         primaryjoin=(
             "and_(Tournament.id == VenueTable.tournament_id, "
