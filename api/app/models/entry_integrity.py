@@ -633,6 +633,11 @@ ENTRY_INTEGRITY_DDL = (
                     USING ERRCODE = '40001';
             END;
         END IF;
+        IF TG_TABLE_NAME IN ('match_games', 'match_results') THEN
+            PERFORM t.id FROM tournaments t
+            JOIN tournament_events e ON e.tournament_id = t.id
+            WHERE e.id = event_uuid FOR SHARE OF t;
+        END IF;
         IF TG_TABLE_NAME IN ('tournament_entries', 'matches') THEN
             IF TG_OP = 'UPDATE' THEN
                 BEGIN

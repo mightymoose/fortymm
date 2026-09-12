@@ -851,6 +851,11 @@ ENTRY_INTEGRITY_DDL = (
                     USING ERRCODE = '40001';
             END;
         END IF;
+        IF TG_TABLE_NAME IN ('match_games', 'match_results') THEN
+            PERFORM t.id FROM tournaments t
+            JOIN tournament_events e ON e.tournament_id = t.id
+            WHERE e.id = event_uuid FOR SHARE OF t;
+        END IF;
         IF TG_TABLE_NAME IN ('tournament_entries', 'matches') THEN
             IF TG_OP = 'UPDATE' THEN
                 BEGIN
@@ -1424,24 +1429,6 @@ ADVANCEMENT_INTEGRITY_DDL = (
 
 
 EVENT_LIFECYCLE_DDL = (
-    """
-    CREATE FUNCTION lock_event_play_parent() RETURNS trigger LANGUAGE plpgsql AS $$
-    BEGIN
-        PERFORM t.id FROM tournaments t
-        JOIN tournament_fixtures f ON f.scope_tournament_id=t.id
-        WHERE f.match_id=NEW.match_id FOR SHARE OF t;
-        RETURN NEW;
-    END $$
-    """,
-    """
-    CREATE TRIGGER a_event_play_parent BEFORE INSERT OR UPDATE OF match_id
-    ON match_games FOR EACH ROW EXECUTE FUNCTION lock_event_play_parent()
-    """,
-    """
-    CREATE TRIGGER a_event_play_parent BEFORE INSERT
-    OR UPDATE OF match_id, submitted_by_user_id, accepted_by_user_id, accepted_at
-    ON match_results FOR EACH ROW EXECUTE FUNCTION lock_event_play_parent()
-    """,
     """
     CREATE FUNCTION preserve_event_lifecycle() RETURNS trigger
     LANGUAGE plpgsql AS $$
@@ -5194,7 +5181,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("DROP FUNCTION lock_event_play_parent() CASCADE")
     op.execute("DROP FUNCTION preserve_recorded_score_identity() CASCADE")
     op.execute("DROP FUNCTION preserve_recorded_game_identity() CASCADE")
     op.execute("DROP FUNCTION retain_cancelled_event_counter() CASCADE")
