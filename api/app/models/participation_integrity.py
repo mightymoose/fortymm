@@ -530,6 +530,80 @@ DRAW_HISTORY_INTEGRITY_DDL = (
         ON tournament_event_stages FOR EACH ROW
         EXECUTE FUNCTION preserve_retired_stage_history()
         """,
+    """
+        CREATE FUNCTION preserve_retired_table_history() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+        IF TG_OP = 'UPDATE' AND OLD.retired_at IS NULL
+        AND NEW.retired_at IS NOT NULL AND
+        (to_jsonb(NEW) - 'retired_at') IS DISTINCT FROM
+        (to_jsonb(OLD) - 'retired_at') THEN
+        RAISE EXCEPTION 'retired table history is immutable' USING ERRCODE = '23514';
+        END IF;
+        IF OLD.retired_at IS NOT NULL THEN
+        IF TG_OP = 'DELETE' THEN
+        IF EXISTS (SELECT 1 FROM tournaments WHERE id = OLD.tournament_id)
+        AND EXISTS (SELECT 1 FROM tournament_fixtures WHERE table_id = OLD.id) THEN
+        RAISE EXCEPTION 'retired table history is immutable' USING ERRCODE = '23514';
+        END IF;
+        ELSIF NEW IS DISTINCT FROM OLD THEN
+        RAISE EXCEPTION 'retired table history is immutable' USING ERRCODE = '23514';
+        END IF;
+        END IF;
+        RETURN COALESCE(NEW, OLD);
+        END $$
+        """,
+    """
+        CREATE TRIGGER preserve_retired_table_history BEFORE UPDATE OR DELETE
+        ON tournament_tables FOR EACH ROW
+        EXECUTE FUNCTION preserve_retired_table_history()
+        """,
+    """
+        CREATE FUNCTION preserve_archived_group_history() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+        IF EXISTS (SELECT 1 FROM tournament_event_stages
+        WHERE id IN (OLD.stage_id, NEW.stage_id) AND retired_at IS NOT NULL
+        AND EXISTS (SELECT 1 FROM tournament_events
+        WHERE id = tournament_event_stages.event_id)) THEN
+        IF TG_OP = 'DELETE' OR NEW IS DISTINCT FROM OLD THEN
+        RAISE EXCEPTION 'archived group history is immutable' USING ERRCODE = '23514';
+        END IF;
+        END IF;
+        RETURN COALESCE(NEW, OLD);
+        END $$
+        """,
+    """
+        CREATE TRIGGER preserve_archived_group_history
+        BEFORE INSERT OR UPDATE OR DELETE ON tournament_event_stage_groups
+        FOR EACH ROW EXECUTE FUNCTION preserve_archived_group_history()
+        """,
+    """
+        CREATE FUNCTION preserve_archived_group_mapping() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+        IF TG_OP = 'DELETE' AND NOT EXISTS (
+        SELECT 1 FROM tournament_event_reservations
+        WHERE event_id = OLD.event_id AND id = OLD.reservation_id) THEN
+        -- The immutable revision snapshot owns cut-time reservation values and links.
+        RETURN OLD;
+        END IF;
+        IF EXISTS (SELECT 1 FROM tournament_event_stages
+        WHERE id IN (OLD.stage_id, NEW.stage_id) AND retired_at IS NOT NULL
+        AND EXISTS (SELECT 1 FROM tournament_events
+        WHERE id = tournament_event_stages.event_id)) THEN
+        IF TG_OP = 'DELETE' OR NEW IS DISTINCT FROM OLD THEN
+        RAISE EXCEPTION 'archived group mapping is immutable' USING ERRCODE = '23514';
+        END IF;
+        END IF;
+        RETURN COALESCE(NEW, OLD);
+        END $$
+        """,
+    """
+        CREATE TRIGGER preserve_archived_group_mapping
+        BEFORE INSERT OR UPDATE OR DELETE ON tournament_event_group_reservations
+        FOR EACH ROW EXECUTE FUNCTION preserve_archived_group_mapping()
+        """,
 )
 
 

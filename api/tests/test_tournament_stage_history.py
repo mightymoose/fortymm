@@ -1,5 +1,6 @@
 """Draw configuration survives supported uncut, edit, and recut operations."""
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -191,3 +192,98 @@ async def test_recut_smaller_field_keeps_superseded_group_references(
         len(set(original_groups)) == 3
     )  # Two original pools and the original bracket.
     assert set(original_groups).isdisjoint(group.id for group in event.groups)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "parent_event",
+        "parent_tournament",
+        "DELETE FROM tournament_event_group_reservations WHERE group_id=:id",
+        "UPDATE tournament_event_group_reservations SET updated_at=clock_timestamp() "
+        "WHERE group_id=:id",
+        "INSERT INTO tournament_event_group_reservations "
+        "SELECT * FROM tournament_event_group_reservations WHERE group_id=:id",
+    ],
+)
+async def test_archived_mapping_rejects_direct_deletion_but_reservation_can_be_removed(
+    db_session: AsyncSession, default_league: League, mutation: str
+) -> None:
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    from tests.test_tournament_draw_service import RESERVATION_A
+
+    owner = await make_user(db_session, "mapping-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament, groups=[RESERVATION_A])
+    tournament_id, event_id = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="mapping-player")
+    await db_session.refresh(owner)
+    original = await cut_event_draw(
+        db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
+    )
+    group_id = original[0].group_id
+    revision_id = await db_session.scalar(
+        text("SELECT draw_revision_id FROM tournament_fixtures WHERE id=:id"),
+        {"id": original[0].id},
+    )
+    snapshot = await db_session.scalar(
+        text("SELECT configuration FROM tournament_draw_revisions WHERE id=:id"),
+        {"id": revision_id},
+    )
+    await db_session.refresh(owner)
+    await uncut_event_draw(
+        db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
+    )
+    if mutation.startswith("parent_"):
+        if mutation == "parent_event":
+            await db_session.execute(
+                text("DELETE FROM tournament_events WHERE id=:id"), {"id": event_id}
+            )
+        else:
+            await db_session.execute(
+                text("DELETE FROM tournaments WHERE id=:id"), {"id": tournament_id}
+            )
+        await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        assert (
+            await db_session.scalar(
+                text(
+                    "SELECT count(*) FROM tournament_event_group_reservations "
+                    "WHERE group_id=:id"
+                ),
+                {"id": group_id},
+            )
+            == 0
+        )
+        return
+    with pytest.raises(IntegrityError, match="archived group mapping is immutable"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(mutation),
+                {"id": group_id},
+            )
+    await db_session.refresh(event)
+    await db_session.refresh(owner)
+    await update_event(
+        db_session,
+        tournament_id=tournament_id,
+        event_id=event_id,
+        actor=owner,
+        updates=TournamentEventUpdate.model_validate(
+            {"reservations": [], "lock_version": event.lock_version}
+        ),
+    )
+    await db_session.refresh(owner)
+    await cut_event_draw(
+        db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
+    )
+    assert (
+        await db_session.scalar(
+            text("SELECT configuration FROM tournament_draw_revisions WHERE id=:id"),
+            {"id": revision_id},
+        )
+        == snapshot
+    )
+    assert snapshot["groups"][0]["reservation_id"] is not None
+    assert snapshot["reservations"][0]["name"] == "Reservation A"

@@ -627,3 +627,79 @@ async def test_uncut_preserves_stage_metadata_until_its_parent_is_deleted(
         stage_key,
     )
     assert retained == 0
+
+
+@pytest_asyncio.fixture
+async def historical_table(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID]
+) -> dict[str, uuid.UUID]:
+    table_id = await db_session.scalar(
+        text(
+            "SELECT id FROM tournament_tables WHERE tournament_id = :id "
+            "ORDER BY position LIMIT 1"
+        ),
+        {"id": drawn_history["tournament_id"]},
+    )
+    await db_session.execute(
+        text("UPDATE tournament_fixtures SET table_id = :table_id WHERE id = :id"),
+        {"table_id": table_id, "id": drawn_history["fixture_id"]},
+    )
+    await _uncut(db_session, drawn_history)
+    return {**drawn_history, "table_id": table_id}
+
+
+@pytest.mark.parametrize("already_retired", [False, True])
+async def test_retired_table_metadata_cannot_be_rewritten(
+    db_session: AsyncSession,
+    historical_table: dict[str, uuid.UUID],
+    already_retired: bool,
+) -> None:
+    table_key = {"id": historical_table["table_id"]}
+    if already_retired:
+        await db_session.execute(
+            text(
+                "UPDATE tournament_tables SET retired_at = clock_timestamp() "
+                "WHERE id = :id"
+            ),
+            table_key,
+        )
+    with pytest.raises(IntegrityError, match="retired table history is immutable"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE tournament_tables SET label = 'Changed', "
+                    "retired_at = COALESCE(retired_at, clock_timestamp()) "
+                    "WHERE id = :id"
+                ),
+                table_key,
+            )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "UPDATE tournament_event_stage_groups SET position = position + 10 "
+        "WHERE id = (SELECT group_id FROM tournament_fixtures WHERE id=:id)",
+        "DELETE FROM tournament_event_stage_groups "
+        "WHERE id = (SELECT group_id FROM tournament_fixtures WHERE id=:id)",
+        "INSERT INTO tournament_event_stage_groups(stage_id,position) "
+        "SELECT stage_id, 100 FROM tournament_fixtures WHERE id=:id",
+        "UPDATE tournament_event_stage_groups SET stage_id = "
+        "(SELECT stage_id FROM tournament_fixtures WHERE id=:id) "
+        "WHERE stage_id IN (SELECT id FROM tournament_event_stages "
+        "WHERE event_id=:event_id AND retired_at IS NULL)",
+    ],
+)
+async def test_archived_group_position_is_immutable(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID], mutation: str
+) -> None:
+    await _uncut(db_session, drawn_history)
+    with pytest.raises(IntegrityError, match="archived group history is immutable"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(mutation),
+                {
+                    "id": drawn_history["fixture_id"],
+                    "event_id": drawn_history["event_id"],
+                },
+            )

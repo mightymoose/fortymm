@@ -62,7 +62,11 @@ without deleting it; repeated removal remains idempotent.
 
 Only the current revision contributes to the event's operational draw, standings,
 scheduling, materialization and advancement. Historical stage and group references
-must survive changes to the current draw configuration. Retained fixtures must not
+must survive changes to the current draw configuration. Retired stage, group and
+table metadata cannot be rewritten or reactivated. Direct changes to archived
+group mappings are refused; supported removal of a live reservation may cascade
+its link away because the immutable revision snapshot retains the cut-time mapping
+and reservation values. Retained fixtures must not
 prevent an otherwise supported configuration edit after removing an unplayed draw.
 A refused replacement leaves the prior revision current and unchanged. Retirement
 changes only the retirement marker; other fixture fields remain as last recorded.

@@ -25,9 +25,8 @@ cycle-free.
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -270,13 +269,18 @@ async def apply_table_catalogue(
             )
         )
         retired = [table for table in removed if str(table.id) in historical_table_ids]
-        for table in retired:
-            table.retired_at = datetime.now(UTC)
         if retired:
             # Physical removal used to cascade these current reservation links.
             # Retaining the catalogue identity must still release its reservations;
             # the draw revision snapshot preserves historical configuration.
             retired_ids = {str(table.id) for table in retired}
+            await db.execute(
+                update(VenueTable)
+                .where(VenueTable.id.in_(retired_ids))
+                .values(
+                    retired_at=func.clock_timestamp(), updated_at=VenueTable.updated_at
+                )
+            )
             reservations = await db.scalars(
                 select(TournamentEventReservation).where(
                     TournamentEventReservation.tables.any(

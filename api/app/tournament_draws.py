@@ -639,6 +639,7 @@ async def draw_currency_by_event(
     Stable entry IDs alone cannot establish currency: withdrawal closes the old
     participation even when the same entry registers again. Any withdrawn period
     in the current revision makes it stale, including an unseated Swiss bye.
+    A group-change period stops making it stale once no current seat uses it.
     The registered field must also match the seated field subject to each draw
     type's bye allowance. An event without current fixtures is uncut.
 
@@ -687,6 +688,13 @@ async def draw_currency_by_event(
                         == TournamentFixture.draw_revision_id,
                         TournamentEntryParticipation.ended_at.is_not(None),
                         TournamentEntryParticipation.end_reason != "stage_completed",
+                        or_(
+                            TournamentEntryParticipation.end_reason != "group_changed",
+                            TournamentEntryParticipation.id
+                            == TournamentFixture.participation_a_id,
+                            TournamentEntryParticipation.id
+                            == TournamentFixture.participation_b_id,
+                        ),
                     )
                 ),
             )

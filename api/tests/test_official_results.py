@@ -617,6 +617,58 @@ async def test_sql_cross_match_links_and_mismatched_adoption_are_rejected(db_ses
             )
 
 
+async def test_administrator_void_completes_stage_participation_without_a_winner(
+    db_session,
+):
+    from sqlalchemy import select
+
+    from app.models import MatchStatus, TournamentEntryParticipation, TournamentFixture
+    from app.models.tournament_entry_participation import ParticipationEndReason
+    from app.official_results import official_history, void_official_match
+    from tests._helpers import directed_tournament_match
+
+    match, director = await directed_tournament_match(
+        db_session, tag="void-stage-completion", best_of=1
+    )
+    player = min(match.sides, key=lambda side: side.side_number).players[0].user_id
+    outcome = await propose_result(
+        db_session, match.id, player, games=board(), supersedes_result_id=None
+    )
+    proposal_id = outcome.match.results[0].id
+    fixture = await db_session.scalar(
+        select(TournamentFixture).where(TournamentFixture.match_id == match.id)
+    )
+    periods_query = select(TournamentEntryParticipation).where(
+        TournamentEntryParticipation.stage_id == fixture.stage_id
+    )
+    before = list(await db_session.scalars(periods_query))
+    assert len(before) == 2
+    assert all(period.ended_at is None for period in before)
+
+    await void_official_match(
+        db_session, match.id, director.id, reason="Last fixture cannot be played"
+    )
+    await db_session.commit()
+
+    periods = list(
+        await db_session.scalars(
+            periods_query.execution_options(populate_existing=True)
+        )
+    )
+    assert {period.id for period in periods} == {period.id for period in before}
+    assert all(period.ended_at is not None for period in periods)
+    assert all(
+        period.end_reason is ParticipationEndReason.stage_completed
+        for period in periods
+    )
+    await db_session.refresh(fixture)
+    assert fixture.match_id == match.id
+    assert fixture.winner_entry_id is None
+    assert match.status is MatchStatus.voided
+    assert await official_history(db_session, match.id) == []
+    assert [proposal.id for proposal in match.results] == [proposal_id]
+
+
 async def test_voided_pending_proposal_never_retires(db_session):
     from datetime import timedelta
 
