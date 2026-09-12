@@ -1,0 +1,97 @@
+"""Durable storage budgets for retained draw history."""
+
+import uuid
+
+from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.draws import DrawStorageLimitExceeded
+from app.models import (
+    Account,
+    TournamentDrawRevision,
+    TournamentEvent,
+    TournamentFixture,
+)
+
+MAX_FIXTURES_PER_CUT = 150_000
+MAX_FIXTURES_PER_TOURNAMENT = 250_000
+MAX_FIXTURES_PER_ACTOR = 500_000
+MAX_REVISIONS_PER_TOURNAMENT = 32
+MAX_REVISIONS_PER_ACTOR = 128
+
+
+async def enforce_draw_storage(
+    db: AsyncSession,
+    *,
+    tournament_id: uuid.UUID,
+    fixture_count: int,
+    actor_id: uuid.UUID | None,
+) -> None:
+    """Count retained and current rows while the caller holds the tournament lock."""
+    if fixture_count > MAX_FIXTURES_PER_CUT:
+        raise DrawStorageLimitExceeded("cut", "fixtures", MAX_FIXTURES_PER_CUT)
+    revision_count = await db.scalar(
+        select(func.count())
+        .select_from(TournamentDrawRevision)
+        .join(TournamentEvent, TournamentEvent.id == TournamentDrawRevision.event_id)
+        .where(TournamentEvent.tournament_id == tournament_id)
+    )
+    if (revision_count or 0) >= MAX_REVISIONS_PER_TOURNAMENT:
+        raise DrawStorageLimitExceeded(
+            "tournament", "draw revisions", MAX_REVISIONS_PER_TOURNAMENT
+        )
+    stored_fixtures = await db.scalar(
+        select(func.count())
+        .select_from(TournamentFixture)
+        .join(
+            TournamentDrawRevision,
+            TournamentDrawRevision.id == TournamentFixture.draw_revision_id,
+        )
+        .join(TournamentEvent, TournamentEvent.id == TournamentDrawRevision.event_id)
+        .where(TournamentEvent.tournament_id == tournament_id)
+        .execution_options(include_draw_history=True)
+    )
+    if (stored_fixtures or 0) + fixture_count > MAX_FIXTURES_PER_TOURNAMENT:
+        raise DrawStorageLimitExceeded(
+            "tournament", "fixtures", MAX_FIXTURES_PER_TOURNAMENT
+        )
+
+    if actor_id is None:
+        return
+    actor_revisions = await db.scalar(
+        select(func.count())
+        .select_from(TournamentDrawRevision)
+        .where(TournamentDrawRevision.created_by_account_id == actor_id)
+    )
+    if (actor_revisions or 0) >= MAX_REVISIONS_PER_ACTOR:
+        raise DrawStorageLimitExceeded(
+            "account", "draw revisions", MAX_REVISIONS_PER_ACTOR
+        )
+
+    actor_fixtures = await db.scalar(
+        select(func.count())
+        .select_from(TournamentFixture)
+        .join(
+            TournamentDrawRevision,
+            TournamentDrawRevision.id == TournamentFixture.draw_revision_id,
+        )
+        .where(TournamentDrawRevision.created_by_account_id == actor_id)
+        .execution_options(include_draw_history=True)
+    )
+    if (actor_fixtures or 0) + fixture_count > MAX_FIXTURES_PER_ACTOR:
+        raise DrawStorageLimitExceeded("account", "fixtures", MAX_FIXTURES_PER_ACTOR)
+
+
+async def lock_draw_actor(db: AsyncSession, actor_id: uuid.UUID) -> None:
+    """Serialize this actor's cuts before taking any tournament lock."""
+    await db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:actor, 1710))"),
+        {"actor": str(actor_id)},
+    )
+    # The revision's historical-actor FK must not take this lock after Tournament,
+    # where a concurrent Account merge already holding Account would invert it.
+    await db.execute(
+        select(Account.id)
+        .where(Account.id == actor_id)
+        .with_for_update(read=True, key_share=True)
+    )

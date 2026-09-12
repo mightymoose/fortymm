@@ -44,6 +44,7 @@ from app.draws import DrawError
 from app.models import ScheduleSolveTrigger, TournamentEvent, User
 from app.schedule_solves import request_solve, tournament_has_drawn_event
 from app.schemas.tournament import TournamentFixtureRead
+from app.tournament_draw_limits import lock_draw_actor
 from app.tournament_draws import (
     cut_draw,
     draw_has_play,
@@ -125,12 +126,13 @@ async def cut_event_draw(
     loader as the tournament detail page. A queue outage costs the solve rather
     than the cut. Domain errors remain transport-neutral for HTTP and MCP callers.
     """
+    await lock_draw_actor(db, actor.id)
     event = await _load_owned_event_for_draw(
         db, tournament_id=tournament_id, event_id=event_id, actor=actor
     )
     await _enforce_unplayed(db, event)
     try:
-        await cut_draw(db, event)
+        await cut_draw(db, event, actor_id=actor.id)
     except DrawError:
         # Configuration may already have been cloned or resized. Roll back
         # the entire attempted replacement before the adapter reports refusal.

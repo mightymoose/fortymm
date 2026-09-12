@@ -70,6 +70,7 @@ from app.models import (
 from app.models.draw_type import DRAW_TYPES_BY_ID
 from app.schemas.tournament import GroupRead, Reservation
 from app.tournament_draw_history import snapshot_draw_configuration
+from app.tournament_draw_limits import enforce_draw_storage
 from app.tournament_draw_settings import draw_settings_of
 from app.tournament_event_stages import GroupCountSource, archive_stage_configuration
 from app.tournament_queries import stage_ids_for_events
@@ -766,7 +767,9 @@ def _covers_the_field(
     )
 
 
-async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
+async def cut_draw(
+    db: AsyncSession, event: TournamentEvent, *, actor_id: uuid.UUID | None = None
+) -> None:
     """Create an event-wide revision from the current registered field.
 
     The caller holds the tournament lock and enforces the existing play guard.
@@ -816,6 +819,12 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
         await uncut_draw(db, [event.id])
         await db.refresh(event, attribute_names=["stages", "groups"])
     planned = strategy.plan_initial(draw_config(event), entrants)
+    await enforce_draw_storage(
+        db,
+        tournament_id=event.tournament_id,
+        fixture_count=len(planned),
+        actor_id=actor_id,
+    )
     # This event's stage ids keyed by ``position`` — what a planned fixture's
     # ``stage_id`` is resolved against below (ADR 20260815 decision 5's write seam).
     # Built from the already-eager ``TournamentEvent.stages`` collection
@@ -824,7 +833,9 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     # statement for a collection already in hand.
     stage_ids = {stage.position: stage.id for stage in event.stages}
     revision = TournamentDrawRevision(
-        event_id=event.id, configuration=snapshot_draw_configuration(event)
+        event_id=event.id,
+        configuration=snapshot_draw_configuration(event),
+        created_by_account_id=actor_id,
     )
     db.add(revision)
     await db.flush()
@@ -955,7 +966,10 @@ async def uncut_draw(db: AsyncSession, event_ids: Collection[uuid.UUID]) -> None
             TournamentFixture.stage_id.in_(stage_ids_for_events(event_ids)),
             TournamentFixture.retired_at.is_(None),
         )
-        .values(retired_at=func.clock_timestamp())
+        .values(
+            retired_at=func.clock_timestamp(),
+            updated_at=TournamentFixture.updated_at,
+        )
     )
 
     await db.execute(

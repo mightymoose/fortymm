@@ -425,3 +425,97 @@ async def test_group_move_ends_old_period_without_repointing_other_fixtures(
         )
     ).scalar_one()
     assert retained > 0
+
+
+@pytest_asyncio.fixture
+async def undrawn_registration(
+    db_session: AsyncSession, default_league: League
+) -> dict[str, uuid.UUID]:
+    owner = await make_user(db_session, "undrawn-registration-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament, groups=[])
+    tournament_id, event_id, owner_id = tournament.id, event.id, owner.id
+    entries = await _enter_field(db_session, event, 1, prefix="undrawn-registration")
+    entry_id = entries[0].id
+    registration_id = (
+        await db_session.execute(
+            text(
+                "INSERT INTO tournament_entry_registrations "
+                "(entry_id, registered_by_account_id) VALUES (:entry, :actor) "
+                "RETURNING id"
+            ),
+            {"entry": entry_id, "actor": owner_id},
+        )
+    ).scalar_one()
+    await db_session.commit()
+    return {
+        "entry_id": entry_id,
+        "registration_id": registration_id,
+        "event_id": event_id,
+        "tournament_id": tournament_id,
+    }
+
+
+async def test_entry_delete_cannot_erase_registration_before_a_draw_exists(
+    db_session: AsyncSession, undrawn_registration: dict[str, uuid.UUID]
+) -> None:
+    with pytest.raises(IntegrityError, match="entry history must be retained"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("DELETE FROM tournament_entries WHERE id = :id"),
+                {"id": undrawn_registration["entry_id"]},
+            )
+
+
+@pytest.mark.parametrize(
+    "parent_table,id_key",
+    [("tournament_events", "event_id"), ("tournaments", "tournament_id")],
+)
+async def test_unplayed_parent_delete_can_remove_undrawn_registration(
+    db_session: AsyncSession,
+    undrawn_registration: dict[str, uuid.UUID],
+    parent_table: str,
+    id_key: str,
+) -> None:
+    await db_session.execute(
+        text(f"DELETE FROM {parent_table} WHERE id = :id"),
+        {"id": undrawn_registration[id_key]},
+    )
+    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    retained = await db_session.scalar(
+        text("SELECT count(*) FROM tournament_entry_registrations WHERE id = :id"),
+        {"id": undrawn_registration["registration_id"]},
+    )
+    assert retained == 0
+
+
+async def test_retiring_fixture_cannot_rewrite_its_existing_draw_position(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID]
+) -> None:
+    with pytest.raises(IntegrityError, match="retired fixture history is immutable"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE tournament_fixtures SET retired_at = clock_timestamp(), "
+                    "round = round + 1 WHERE id = :id"
+                ),
+                {"id": drawn_history["fixture_id"]},
+            )
+
+
+async def test_uncut_changes_only_the_fixture_retirement_timestamp(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID]
+) -> None:
+    snapshot = text(
+        "SELECT to_jsonb(f) - 'retired_at' FROM tournament_fixtures f WHERE id = :id"
+    )
+    fixture_key = {"id": drawn_history["fixture_id"]}
+    before = await db_session.scalar(snapshot, fixture_key)
+    await _uncut(db_session, drawn_history)
+    after = await db_session.scalar(snapshot, fixture_key)
+    assert after == before
+    retired_at = await db_session.scalar(
+        text("SELECT retired_at FROM tournament_fixtures WHERE id = :id"),
+        fixture_key,
+    )
+    assert retired_at is not None

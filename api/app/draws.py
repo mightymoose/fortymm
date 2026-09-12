@@ -47,7 +47,7 @@ from collections import Counter, defaultdict
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import NewType, Protocol
+from typing import Literal, NewType, Protocol
 
 from app.group_finishing_order import (
     EntryTally,
@@ -117,6 +117,21 @@ class DrawError(Exception):
     empty plan — an un-cuttable draw is an *error*, and a silent empty draw would look
     exactly like a legitimately empty one.
     """
+
+
+class DrawStorageLimitExceeded(DrawError):
+    """The requested revision would exceed a durable draw-storage budget."""
+
+    def __init__(
+        self,
+        scope: Literal["cut", "tournament", "account"],
+        resource: Literal["fixtures", "draw revisions"],
+        limit: int,
+    ) -> None:
+        self.scope = scope
+        self.resource = resource
+        self.limit = limit
+        super().__init__("Draw storage limit exceeded")
 
 
 class UnsupportedDrawType(DrawError):
@@ -201,6 +216,12 @@ def draw_error_detail(error: DrawError) -> str:
     string.
     """
     match error:
+        case DrawStorageLimitExceeded():
+            detail = (
+                f"This draw would exceed the storage limit of {error.limit:,} "
+                f"{error.resource} per {error.scope}. Retained draw history counts "
+                "toward this limit. Use a smaller draw or contact support."
+            )
         case NonSinglesDraw():
             detail = (
                 f"A {error.event_format.value} event cannot be given a draw — only "

@@ -4022,6 +4022,7 @@ def upgrade() -> None:
         CREATE TABLE tournament_draw_revisions (
         id UUID DEFAULT gen_random_uuid() NOT NULL,
         event_id UUID NOT NULL,
+        created_by_account_id UUID REFERENCES accounts(id) ON DELETE RESTRICT,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT clock_timestamp() NOT NULL,
         retired_at TIMESTAMP WITH TIME ZONE,
         configuration JSONB DEFAULT '{}' ::jsonb NOT NULL,
@@ -4032,12 +4033,22 @@ def upgrade() -> None:
         FOREIGN KEY(event_id) REFERENCES tournament_events (id) ON DELETE CASCADE
         )
         """)
+    op.create_index(
+        "ix_tournament_draw_revisions_created_by_account_id",
+        "tournament_draw_revisions",
+        ["created_by_account_id"],
+    )
     op.execute("""
         CREATE UNIQUE INDEX uq_draw_revision_current_event ON tournament_draw_revisions
         (event_id) WHERE retired_at IS NULL
         """)
     op.add_column(
         "tournament_fixtures", sa.Column("draw_revision_id", sa.UUID(), nullable=False)
+    )
+    op.create_index(
+        "ix_tournament_fixtures_draw_revision_id",
+        "tournament_fixtures",
+        ["draw_revision_id"],
     )
     op.create_foreign_key(
         "fk_fixture_draw_revision",
@@ -4253,8 +4264,10 @@ def upgrade() -> None:
         END IF;
         RETURN OLD;
         END IF;
-        IF (NEW.id, NEW.event_id, NEW.created_at, NEW.configuration)
-        IS DISTINCT FROM (OLD.id, OLD.event_id, OLD.created_at, OLD.configuration)
+        IF (NEW.id, NEW.event_id, NEW.created_at, NEW.configuration,
+            NEW.created_by_account_id)
+        IS DISTINCT FROM (OLD.id, OLD.event_id, OLD.created_at, OLD.configuration,
+            OLD.created_by_account_id)
         OR (OLD.retired_at IS NOT NULL AND NEW IS DISTINCT FROM OLD)
         THEN
         RAISE EXCEPTION 'draw revision history is immutable' USING ERRCODE = '23514' ;
@@ -4308,6 +4321,13 @@ def upgrade() -> None:
         CREATE FUNCTION preserve_retired_fixture_history() RETURNS trigger
         LANGUAGE plpgsql AS $$
         BEGIN
+        IF TG_OP = 'UPDATE' AND OLD.retired_at IS NULL
+        AND NEW.retired_at IS NOT NULL AND
+        (to_jsonb(NEW) - 'retired_at') IS DISTINCT FROM
+        (to_jsonb(OLD) - 'retired_at') THEN
+        RAISE EXCEPTION 'retired fixture history is immutable'
+        USING ERRCODE = '23514';
+        END IF;
         IF OLD.retired_at IS NOT NULL THEN
         IF TG_OP = 'DELETE' THEN
         IF EXISTS (SELECT 1 FROM tournament_events WHERE id = OLD.scope_event_id) THEN

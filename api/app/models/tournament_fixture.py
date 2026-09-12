@@ -253,7 +253,7 @@ class TournamentFixture(Base):
         server_default=FetchedValue()
     )
     draw_revision_id: Mapped[uuid.UUID] = mapped_column(
-        nullable=False, server_default=FetchedValue()
+        nullable=False, server_default=FetchedValue(), index=True
     )
     retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

@@ -228,8 +228,10 @@ DRAW_HISTORY_INTEGRITY_DDL = (
         END IF;
         RETURN OLD;
         END IF;
-        IF (NEW.id, NEW.event_id, NEW.created_at, NEW.configuration)
-        IS DISTINCT FROM (OLD.id, OLD.event_id, OLD.created_at, OLD.configuration)
+        IF (NEW.id, NEW.event_id, NEW.created_at, NEW.configuration,
+            NEW.created_by_account_id)
+        IS DISTINCT FROM (OLD.id, OLD.event_id, OLD.created_at, OLD.configuration,
+            OLD.created_by_account_id)
         OR (OLD.retired_at IS NOT NULL AND NEW IS DISTINCT FROM OLD)
         THEN
         RAISE EXCEPTION 'draw revision history is immutable' USING ERRCODE = '23514' ;
@@ -283,6 +285,13 @@ DRAW_HISTORY_INTEGRITY_DDL = (
         CREATE FUNCTION preserve_retired_fixture_history() RETURNS trigger
         LANGUAGE plpgsql AS $$
         BEGIN
+        IF TG_OP = 'UPDATE' AND OLD.retired_at IS NULL
+        AND NEW.retired_at IS NOT NULL AND
+        (to_jsonb(NEW) - 'retired_at') IS DISTINCT FROM
+        (to_jsonb(OLD) - 'retired_at') THEN
+        RAISE EXCEPTION 'retired fixture history is immutable'
+        USING ERRCODE = '23514';
+        END IF;
         IF OLD.retired_at IS NOT NULL THEN
         IF TG_OP = 'DELETE' THEN
         IF EXISTS (SELECT 1 FROM tournament_events WHERE id = OLD.scope_event_id) THEN

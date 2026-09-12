@@ -6,9 +6,8 @@ never changes membership or rewrites any fixture's sporting identity.
 
 import uuid
 from collections.abc import Collection
-from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.tournament_entry import TournamentEntry
@@ -36,7 +35,7 @@ async def close_entry_participation(
             TournamentEntryParticipation.ended_at.is_(None),
         )
         .values(
-            ended_at=datetime.now(UTC),
+            ended_at=func.clock_timestamp(),
             ended_by_account_id=actor_account_id,
             end_reason=reason.value,
             end_explanation=explanation,
@@ -58,7 +57,7 @@ async def close_registration(
             TournamentEntryRegistration.withdrawn_at.is_(None),
         )
         .values(
-            withdrawn_at=datetime.now(UTC),
+            withdrawn_at=func.clock_timestamp(),
             withdrawn_by_account_id=actor_account_id,
             withdrawal_reason=reason.value,
             withdrawal_explanation=explanation,
@@ -114,7 +113,7 @@ async def withdraw_competition(
                 TournamentEntryParticipation.ended_at.is_(None),
             )
             .values(
-                ended_at=datetime.now(UTC),
+                ended_at=func.clock_timestamp(),
                 ended_by_account_id=actor_account_id,
                 end_reason=reason.value,
                 end_explanation=explanation,
@@ -132,7 +131,9 @@ async def restore_event_eligibility(
             TournamentEntryWithdrawal.stage_id.is_(None),
             TournamentEntryWithdrawal.restored_at.is_(None),
         )
-        .values(restored_at=datetime.now(UTC), restored_by_account_id=actor_account_id)
+        .values(
+            restored_at=func.clock_timestamp(), restored_by_account_id=actor_account_id
+        )
     )
 
 
@@ -147,5 +148,5 @@ async def complete_stage_participation(
             TournamentEntryParticipation.stage_id.in_(stage_ids),
             TournamentEntryParticipation.ended_at.is_(None),
         )
-        .values(ended_at=datetime.now(UTC), end_reason="stage_completed")
+        .values(ended_at=func.clock_timestamp(), end_reason="stage_completed")
     )

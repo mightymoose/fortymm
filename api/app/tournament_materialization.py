@@ -22,6 +22,7 @@ from collections.abc import Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.draws import (
     FixtureStage,
@@ -43,6 +44,7 @@ from app.models import (
     MatchStatus,
     Tournament,
     TournamentEntry,
+    TournamentEntryParticipation,
     TournamentEvent,
     TournamentFixture,
 )
@@ -108,6 +110,10 @@ async def materialize_event(
     onto its successor, #785) is materialized into a match in the **same** transaction.
     For round-robin the plan carries no side-fills at all (every pairing is known at the
     cut), so that step is a no-op and its behaviour is byte-identical.
+
+    A ready fixture only becomes a new match while both of its exact participation
+    periods remain active. Historical seats survive withdrawal or reconciliation;
+    that does not admit their contestants to new play. Existing matches are preserved.
 
     **The projection loads the fixtures' game counts — but only for the draw types that
     read them**, and that is load-bearing rather than defensive.
@@ -232,6 +238,14 @@ async def materialize_event(
     if not ready_fixture_rows:
         return
 
+    # Readiness describes the preserved bracket; participation grants admission to
+    # new play. A merge can end a bye seat while retaining its underway draw.
+    active_fixture_ids = await _actively_participating_fixture_ids(
+        db, ready_fixture_rows
+    )
+    ready_fixture_rows = [f for f in ready_fixture_rows if f.id in active_fixture_ids]
+    if not ready_fixture_rows:
+        return
     entry_users = await _entry_user_ids(db, ready_fixture_rows)
     settings = EventMatchSettings.model_validate(event.match_settings)
     built: list[tuple[TournamentFixture, Match]] = []
@@ -337,6 +351,30 @@ async def _fixtures_with_match_statuses(
         elif status is MatchStatus.voided:
             voided_match_ids.add(fixture.match_id)
     return fixtures, completed_match_ids, frozenset(voided_match_ids)
+
+
+async def _actively_participating_fixture_ids(
+    db: AsyncSession, fixtures: Sequence[TournamentFixture]
+) -> set[uuid.UUID]:
+    """Require the exact seated periods to remain active before creating a match.
+
+    The query autoflushes side fills first, so database-assigned participation
+    references for newly advanced contestants are included in the same check.
+    """
+    side_a = aliased(TournamentEntryParticipation)
+    side_b = aliased(TournamentEntryParticipation)
+    return set(
+        await db.scalars(
+            select(TournamentFixture.id)
+            .join(side_a, side_a.id == TournamentFixture.participation_a_id)
+            .join(side_b, side_b.id == TournamentFixture.participation_b_id)
+            .where(
+                TournamentFixture.id.in_([fixture.id for fixture in fixtures]),
+                side_a.ended_at.is_(None),
+                side_b.ended_at.is_(None),
+            )
+        )
+    )
 
 
 async def _entry_user_ids(

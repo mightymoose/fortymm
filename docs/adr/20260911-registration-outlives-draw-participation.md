@@ -49,7 +49,8 @@ explanation. Self-withdrawal explicitly names its Account; historical actors do 
 follow Account merges. Normal stage completion and draw replacement are distinct
 from withdrawal. Completion closes participation once all required fixtures are
 resolved, including configured future Swiss rounds; it creates no withdrawal ban. Periods retain their start and end history rather than being
-reactivated in place.
+reactivated in place. Interval endpoints use PostgreSQL time, matching their
+server-generated starts even when an API host clock is behind.
 
 ## Retained draw revisions
 
@@ -63,7 +64,8 @@ Only the current revision contributes to the event's operational draw, standings
 scheduling, materialization and advancement. Historical stage and group references
 must survive changes to the current draw configuration. Retained fixtures must not
 prevent an otherwise supported configuration edit after removing an unplayed draw.
-A refused replacement leaves the prior revision current and unchanged.
+A refused replacement leaves the prior revision current and unchanged. Retirement
+changes only the retirement marker; other fixture fields remain as last recorded.
 
 Removing a catalogue table referenced by a retired fixture retires the table from
 the current catalogue rather than deleting its identity. Historical placements
@@ -77,6 +79,29 @@ Retaining old draws does not authorize live redraws. Existing evidence-of-play
 guards on cut and removal remain. This decision expands #1685 to preserve replaced
 draw history; #1649 still owns new stale-draw messaging rather than this change
 claiming to deliver its UI.
+
+## Retained storage bounds
+
+Retained history makes repeated unplayed cuts a storage allocation, so director
+authority alone is insufficient. HTTP and MCP share hard limits: 150,000 fixtures
+per cut; 250,000 retained fixtures and 32 revisions per tournament; and 500,000
+retained fixtures and 128 revisions attributable to one Account across tournaments.
+Both current and retired revisions count. A full 512-entry round robin still fits
+one cut. A refused allocation preserves the standing draw and reports an actionable
+error. Existing explicit deletion of unplayed events and tournaments can release
+storage; reaching a limit never deletes history automatically.
+
+Each externally requested revision records its original acting Account, which does
+not change on ownership transfer or identity reconciliation. Account allocation is
+serialized before acquiring the tournament lock, so simultaneous requests against
+different tournaments cannot overrun the Account budget. Enforcement uses retained
+PostgreSQL state and does not depend on a fail-open Redis rate limiter.
+
+Explicit re-cuts remain supported even for apparently identical fields: withdrawal
+and re-entry can require new participation while preserving the same entry IDs.
+The hard allocation limits bound repeated calls without silently deduplicating
+sporting history. These bounds constrain storage amplification by one Account;
+they are not a substitute for deployment capacity monitoring or account admission.
 
 ## Identity reconciliation
 

@@ -39,6 +39,9 @@ class TournamentDrawRevision(Base):
     event_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("tournament_events.id", ondelete="CASCADE"), nullable=False
     )
+    created_by_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="RESTRICT"), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.clock_timestamp()
     )

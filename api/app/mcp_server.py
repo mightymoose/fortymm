@@ -63,8 +63,10 @@ from app.db import get_sessionmaker
 from app.draws import (
     DegenerateDraw,
     DrawError,
+    DrawStorageLimitExceeded,
     NonSinglesDraw,
     UnsupportedDrawType,
+    draw_error_detail,
 )
 from app.geocoding import AddressNotGeocodableError
 from app.geocoding.dependencies import get_geocoder
@@ -1905,6 +1907,8 @@ def _map_draw_refusal_tool_error(error: DrawError) -> ToolError:
       which invents a ``DrawError`` subclass carrying internals and asserts none of
       them reach the client."""
     match error:
+        case DrawStorageLimitExceeded():
+            return ToolError(draw_error_detail(error))
         case NonSinglesDraw():
             return ToolError(
                 f"A {error.event_format.value} event can't be given a draw — only "

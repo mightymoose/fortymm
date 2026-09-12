@@ -7168,7 +7168,7 @@ async def test_a_draw_error_nobody_wrote_copy_for_refuses_without_leaking_its_me
         """The DrawError of some slice that has not been written."""
 
     async def _raise_an_unknown_draw_error(
-        db: AsyncSession, event: TournamentEvent
+        db: AsyncSession, event: TournamentEvent, *, actor_id: uuid.UUID
     ) -> None:
         raise SwissRoundNotSettled(
             "tournament_fixtures.group_id='g-a' has a NULL seat at "
@@ -10216,6 +10216,80 @@ def _se_payload(**overrides: Any) -> dict[str, Any]:
             **overrides,
         }
     )
+
+
+@pytest.mark.parametrize("survivor_wins", [False, True])
+async def test_merge_ended_bye_participation_cannot_materialize_a_new_match(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    survivor_wins: bool,
+) -> None:
+    """A preserved bye seat is history, not permission to play after reconciliation."""
+    client, owner = authed_client
+    async with (
+        opponent_session(db_session, "se-duplicate-bye") as (_, guest),
+        opponent_session(db_session, "se-merge-opponent") as (
+            opponent_client,
+            opponent,
+        ),
+    ):
+        tournament_id, (event,) = await _tournament_with_events(client, _se_payload())
+        duplicate = await _enter(db_session, event["id"], guest, seed=1)
+        survivor = await _enter(db_session, event["id"], owner, seed=2)
+        other = await _enter(db_session, event["id"], opponent, seed=3)
+        await _cut_the_draw(client, tournament_id, event["id"])
+        await _set_status(db_session, tournament_id, TournamentStatus.published)
+        assert (await _go_live(client, tournament_id)).status_code == 201
+        fixtures = await _fixture_rows(db_session, event["id"])
+        semifinal = next(f for f in fixtures if f.round == 1)
+        final = next(f for f in fixtures if f.round == 2)
+        assert {semifinal.entry_a_id, semifinal.entry_b_id} == {survivor.id, other.id}
+        assert final.entry_a_id == duplicate.id and final.entry_b_id is None
+        assert final.match_id is None
+        semifinal_match_id = semifinal.match_id
+        assert semifinal_match_id is not None
+        await _call_fixtures(db_session, tournament_id, [semifinal])
+
+        # Recorded play keeps the survivor's entry and the underway draw at merge.
+        proposer, accepter = (
+            (client, opponent_client) if survivor_wins else (opponent_client, client)
+        )
+        proposal = await proposer.post(
+            f"/v1/matches/{semifinal_match_id}/results",
+            json={
+                "games": [
+                    {
+                        "game_number": n,
+                        "side_1_points": 11 if survivor_wins else 5,
+                        "side_2_points": 5 if survivor_wins else 11,
+                    }
+                    for n in (1, 2)
+                ]
+            },
+        )
+        assert proposal.status_code == 201, proposal.text
+        await merge_user(db_session, from_user_id=guest.id, to_user_id=owner.id)
+        await db_session.commit()
+        active = await _active_entries(db_session, event["id"])
+        assert {entry.id for entry in active} == {survivor.id, other.id}
+
+        # Acceptance advances the other contestant into the historical final seat.
+        await accept_standing_result(accepter, str(semifinal_match_id))
+        after = {
+            fixture.id: fixture
+            for fixture in await _fixture_rows(db_session, event["id"])
+        }
+        assert set(after) == {fixture.id for fixture in fixtures}
+        assert after[semifinal.id].match_id == semifinal_match_id
+        assert (
+            await _load_match(db_session, semifinal_match_id)
+        ).status is MatchStatus.completed
+        assert after[final.id].entry_a_id == duplicate.id
+        assert after[final.id].entry_b_id == (
+            survivor.id if survivor_wins else other.id
+        )
+        assert after[final.id].match_id is None
+        assert await _match_count(db_session) == 1
 
 
 @pytest.mark.parametrize("ownership_changes", [False, True])
