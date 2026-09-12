@@ -1352,6 +1352,12 @@ async def execute_pin_tick(
         if tournament is None or tournament.status is not TournamentStatus.live:
             return
 
+        # A service-state change also serializes on this row. Re-anchor the
+        # due and outage checks to the time after taking it: using the probe's
+        # older instant could ignore an outage committed while this tick waited.
+        now = _wall_now()
+        due_clauses = _due_fixture_clauses(tournament_id, now)
+
         fixtures: Sequence[TournamentFixture] = (
             (
                 await db.execute(

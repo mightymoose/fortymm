@@ -83,6 +83,7 @@ from app.tournament_entry_refusals import EntryRefusal
 from app.tournament_errors import EVENT_VERSION_CONFLICT_CODE
 from app.tournament_materialization import materialize_event, materialize_live_draw
 from app.tournament_queries import stage_ids_for_events
+from app.tournament_table_availability import mark_table_out_of_service, restore_table
 from app.tournaments import (
     TOURNAMENT_CREATE,
     create_tournament_transition,
@@ -9061,6 +9062,82 @@ async def test_table_outage_and_restore_preserve_membership_across_events(
     db_session.expire_all()
     await db_session.refresh(fixture)
     assert fixture.table_id == table_1
+
+
+async def test_opening_an_outage_waits_for_tournament_writers(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+) -> None:
+    """Outage transitions share the tournament lock with call and solve writers.
+
+    The outage's effective start is stamped only after the lock is acquired, so it
+    cannot appear to have begun before a call that committed while the transition
+    waited.
+    """
+    client, _ = authed_client
+    (
+        tournament_id,
+        _event_id,
+        _fixture,
+        table_1,
+        _table_2,
+    ) = await _tournament_with_a_placed_fixture(
+        client, db_session, prefix="outage-writer-lock"
+    )
+    tournament_uuid = uuid.UUID(tournament_id)
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def change_outage(*, restore: bool = False) -> datetime:
+        async with make_session() as session:
+            if restore:
+                outage = await restore_table(
+                    session,
+                    tournament_id=tournament_uuid,
+                    table_id=table_1,
+                )
+            else:
+                outage = await mark_table_out_of_service(
+                    session,
+                    tournament_id=tournament_uuid,
+                    table_id=table_1,
+                )
+            await session.commit()
+            if restore:
+                assert outage.effective_until is not None
+                return outage.effective_until
+            return outage.effective_from
+
+    async with make_session() as writer:
+        await writer.execute(
+            select(Tournament.id)
+            .where(Tournament.id == tournament_uuid)
+            .with_for_update()
+        )
+        opening = asyncio.create_task(change_outage())
+        await asyncio.sleep(0.25)
+        assert not opening.done(), "outage change bypassed the tournament writer lock"
+        await writer.commit()
+        unlocked_at = datetime.now(UTC)
+        effective_from = await opening
+
+    assert effective_from >= unlocked_at
+
+    async with make_session() as writer:
+        await writer.execute(
+            select(Tournament.id)
+            .where(Tournament.id == tournament_uuid)
+            .with_for_update()
+        )
+        restoring = asyncio.create_task(change_outage(restore=True))
+        await asyncio.sleep(0.25)
+        assert not restoring.done(), "restore bypassed the tournament writer lock"
+        await writer.commit()
+        unlocked_at = datetime.now(UTC)
+        effective_until = await restoring
+
+    assert effective_until is not None
+    assert effective_until >= unlocked_at
 
 
 async def test_a_live_manual_call_rejects_a_table_with_an_active_outage(

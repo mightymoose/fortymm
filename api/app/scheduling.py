@@ -693,8 +693,9 @@ def _aggregate_capacity(snapshot: ScheduleSnapshot) -> tuple[int, int]:
     directly — a solve only reaches this on a *built* model, so the snapshot's
     cross-references have already passed :func:`_validated`.
 
-    ``available_min`` is the union of the reservations' coverage, per table, not
-    their sum. **Reservations overlap**: reservations may share a table (per-table
+    ``available_min`` is the union of the reservations' coverage, per table, after
+    subtracting each table's outage intervals, not their sum. **Reservations overlap**:
+    reservations may share a table (per-table
     no-overlap is global, see :class:`ScheduleReservation`), and a snapshot builder may
     lay a whole-venue reservation over an event's own reservations — which is exactly
     what an rr-then-ko event carries, a reservation for its group stage and an
@@ -719,10 +720,22 @@ def _aggregate_capacity(snapshot: ScheduleSnapshot) -> tuple[int, int]:
             spans_by_table[table_id].append(
                 (reservation.window.start_min, reservation.window.end_min)
             )
+    outages_by_table: dict[TableId, list[tuple[int, int]]] = defaultdict(list)
+    for outage in snapshot.table_outages:
+        table_spans = spans_by_table.get(outage.table_id, [])
+        if not table_spans:
+            continue
+        outage_end = (
+            outage.end_min
+            if outage.end_min is not None
+            else max(end for _, end in table_spans)
+        )
+        if outage_end > outage.start_min:
+            outages_by_table[outage.table_id].append((outage.start_min, outage_end))
     available = sum(
         end - start
-        for spans in spans_by_table.values()
-        for start, end in _merge_spans(spans)
+        for table_id, spans in spans_by_table.items()
+        for start, end in _subtract_spans(spans, outages_by_table[table_id])
     )
     return required, available
 
@@ -857,6 +870,29 @@ def _merge_spans(spans: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
         else:
             merged.append((start, end))
     return merged
+
+
+def _subtract_spans(
+    spans: Iterable[tuple[int, int]], blocked_spans: Iterable[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """Return the parts of the first half-open span set outside the second."""
+    blocked = _merge_spans(blocked_spans)
+    available: list[tuple[int, int]] = []
+    for start, end in _merge_spans(spans):
+        cursor = start
+        for blocked_start, blocked_end in blocked:
+            if blocked_end <= cursor:
+                continue
+            if blocked_start >= end:
+                break
+            if blocked_start > cursor:
+                available.append((cursor, min(blocked_start, end)))
+            cursor = max(cursor, blocked_end)
+            if cursor >= end:
+                break
+        if cursor < end:
+            available.append((cursor, end))
+    return available
 
 
 def _overlapping_fixture_ids(

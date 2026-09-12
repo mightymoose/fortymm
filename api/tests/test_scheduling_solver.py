@@ -276,6 +276,26 @@ class TestDurations:
 
 
 class TestHardConstraints:
+    def test_outage_time_is_excluded_from_reported_venue_capacity(self) -> None:
+        """The infeasibility residual reports usable table-minutes after outages.
+
+        A table reserved for an hour but unavailable for that whole hour offers no
+        usable capacity, even though it remains part of the reservation's catalogue.
+        """
+        p1, p2 = _players(2)
+        snapshot = _one_reservation_snapshot(
+            (_fixture(1, p1, p2),), tables=1, window=(0, 60)
+        )
+        snapshot = dataclasses.replace(
+            snapshot,
+            table_outages=(TableOutage(TableId("T1"), 0, 60),),
+        )
+
+        result = solve(snapshot, time_cap_s=CAP)
+
+        assert result.verdict is Verdict.infeasible
+        assert result.reasons == (NoSingleCause(required_min=25, available_min=0),)
+
     def test_outage_blocks_a_table_for_its_time_interval(self) -> None:
         p1, p2 = _players(2)
         snapshot = _one_reservation_snapshot(

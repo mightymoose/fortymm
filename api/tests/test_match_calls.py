@@ -553,6 +553,37 @@ class TestApplyCallEvaluation:
 
 
 class TestPinTick:
+    async def test_tick_uses_post_lock_time_when_checking_outages(
+        self,
+        db_session: AsyncSession,
+        fake_notifications_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An outage that begins while the tick waits for the tournament lock
+        blocks the call once the tick reads availability under that lock."""
+        tournament_id, event_id = await _make_tournament(db_session)
+        start = BASE + timedelta(minutes=5)
+        await _place_fixture(db_session, event_id, table_id="t1", start=start)
+        db_session.add(
+            VenueTableOutage(
+                tournament_id=tournament_id,
+                table_id=await _table(db_session, event_id, "t1"),
+                effective_from=BASE + timedelta(minutes=1),
+            )
+        )
+        await db_session.commit()
+        wall_times = iter([BASE, BASE + timedelta(minutes=2)])
+        monkeypatch.setattr(match_calls, "_wall_now", lambda: next(wall_times))
+
+        run_pin_tick(str(tournament_id))
+
+        db_session.expire_all()
+        fixture = await _the_fixture(db_session, event_id)
+        assert fixture.call_notified_count == 0
+        assert fixture.pinned_at is None
+        assert await _call_notifications(db_session) == []
+        assert fake_notifications_queue.jobs == []
+
     async def test_tick_calls_an_imminent_fixture_exactly_once(
         self,
         db_session: AsyncSession,
