@@ -7,7 +7,6 @@ from datetime import UTC, datetime, timedelta
 from email.utils import parseaddr
 from typing import Annotated, NamedTuple
 
-import redis.exceptions
 from fastapi import (
     APIRouter,
     Cookie,
@@ -26,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import captcha as captcha_module
 from app import queue as queue_module
-from app.account_merge import merge_user
+from app.account_merge import EntryMergeConflict, merge_user
 from app.config import Settings, get_settings
 from app.db import get_session
 from app.email_credentials import (
@@ -49,6 +48,7 @@ from app.email_credentials import login_token_clause as _login_token_clause
 from app.email_credentials import (
     pending_email_token_clause as _pending_email_token_clause,
 )
+from app.email_merge_admission import admit_credential_merge
 from app.leagues import add_user_to_default_league
 from app.models import (
     EmailIntent,
@@ -65,7 +65,6 @@ from app.models import (
     UserRole,
 )
 from app.rate_limiting import RedisRateLimiter
-from app.ratings.jobs import RECOMPUTE_AFTER_MERGE_JOB
 from app.roles import grant_default_role
 from app.schemas.session import (
     AccountSwitchPreview,
@@ -175,7 +174,20 @@ async def _merge_guest_into(
         or guest.merged_into_user_id is not None
     ):
         return None
-    summary = await merge_user(db, from_user_id=guest.id, to_user_id=target.id)
+    try:
+        summary = await merge_user(db, from_user_id=guest.id, to_user_id=target.id)
+    except EntryMergeConflict as error:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "entry_merge_conflict",
+                "message": str(error),
+                "source_entry_id": str(error.source_entry_id),
+                "target_entry_id": str(error.target_entry_id),
+                "stage_id": str(error.stage_id),
+            },
+        ) from error
     return MergeSummary(matches_moved=summary.matches_moved)
 
 
@@ -328,18 +340,6 @@ async def _sign_in_after_merge(
         )
     )
     await db.commit()
-    # Enqueue on ANY merge, not only when matches_moved > 0. Two reasons the old
-    # `> 0` gate was too narrow: (1) a self-play collision VOIDS the guest's only
-    # rated match, so matches_moved is 0 yet the survivor's rating is still
-    # inflated by it and must be recomputed (ADR-0013); (2) even a zero-match
-    # merge can leave a stale survivor rating that the empty-timeline reset must
-    # rewrite. `merged is not None` is also the only gate expressible here: this
-    # `merged` is the response `MergeSummary`, which deliberately has no
-    # matches_voided count (adding one would drift the OpenAPI clients), so no
-    # void-aware condition is available at this layer. The recompute is a
-    # deterministic rewrite — enqueuing it on a true no-op merge is harmless.
-    if merged is not None:
-        _enqueue_rating_recompute_after_merge(user.player_id)
     _set_session_cookie(response, raw_session)
     return await _build_session_response(db, user, merged=merged)
 
@@ -978,33 +978,6 @@ def _enqueue_merge_email(to_email: str, raw_token: str, username: str) -> Job:
     )
 
 
-def _enqueue_rating_recompute_after_merge(user_id: uuid.UUID) -> None:
-    """Fire-and-forget the rating recompute for ``user_id`` after a merge.
-
-    Called after the merge has already committed — a Redis flap here can't
-    leave the DB inconsistent because the merge stands on its own. We
-    log+swallow enqueue failures rather than fail the sign-in: the recompute
-    is recoverable (re-run by admin tool or re-fire on next login), but a
-    failed sign-in here is user-visible breakage.
-
-    We catch only the Redis/connection failures we mean to tolerate — a
-    programmer error here (a signature mismatch in the recompute job, an
-    ImportError from a rename) should crash loudly in tests, not hide behind a
-    log line."""
-    try:
-        queue_module.get_ratings_queue().enqueue(
-            RECOMPUTE_AFTER_MERGE_JOB,
-            str(user_id),
-            result_ttl=60,
-            failure_ttl=86400,
-        )
-    except (redis.exceptions.RedisError, ConnectionError, TimeoutError):
-        log.exception(
-            "Failed to enqueue rating recompute after merge",
-            extra={"user_id": str(user_id)},
-        )
-
-
 async def _begin_account_merge(
     db: AsyncSession, guest: User, email: str
 ) -> SessionResponse:
@@ -1255,12 +1228,24 @@ async def confirm_email(
     into the account that owns the address and the caller is signed in as that
     account. See ``_confirm_account_merge``.
 
+    Confirmations that merge a guest account admit one attempt at a time and at most
+    five attempts per bearer per hour. A busy or exhausted credential returns
+    429 without consuming the link; unavailable retry-budget storage returns
+    503. Both responses include Retry-After. Ordinary confirmations keep their
+    existing availability.
+
     A link a newer resend replaced is distinguishable from every other dead
     link: it 400s with a structured ``{"code": "replaced", "message": ...}``
     detail (#1616), the confirm-flow counterpart of ``consume_login_token``'s
     coded reasons (#1466). Every other dead confirmation link keeps the plain
     string detail it has always returned.
     """
+    await admit_credential_merge(
+        db,
+        hash_token(payload.token),
+        hash_token(session_cookie) if session_cookie else None,
+        skip_merge=payload.skip_merge,
+    )
     await lock_credential_accounts(
         db,
         hash_token(payload.token),
@@ -1414,12 +1399,6 @@ async def confirm_email(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="That confirmation link is invalid or expired.",
         ) from None
-    # Enqueue on ANY merge — see the same gate in `_sign_in_after_merge` for why
-    # `matches_moved > 0` is too narrow (voided collisions and the empty-timeline
-    # reset both need a recompute at matches_moved == 0), and why this is the only
-    # gate expressible without drifting the response schema.
-    if merged is not None:
-        _enqueue_rating_recompute_after_merge(user.player_id)
     _set_session_cookie(response, raw_session)
     return await _build_session_response(db, user, merged=merged)
 
@@ -1658,7 +1637,19 @@ async def consume_login_token(
     on it, which makes it the third writer of that pair alongside
     ``confirm_email`` and ``auth0_provisioning._provision_user``. All three
     stamp them together, so the invariant holds: email set implies confirmed.
+    Login links that would merge a guest admit one attempt at a time and five
+    attempts per bearer per hour. Busy or exhausted credentials return 429;
+    unavailable retry storage returns 503. Both include Retry-After and leave
+    the link valid. Ordinary sign-in and explicit skip-merge keep their
+    existing availability.
     """
+    await admit_credential_merge(
+        db,
+        hash_token(payload.token),
+        hash_token(session_cookie) if session_cookie else None,
+        skip_merge=payload.skip_merge,
+        flow="login",
+    )
     await lock_credential_accounts(
         db,
         hash_token(payload.token),

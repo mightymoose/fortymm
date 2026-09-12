@@ -62,7 +62,7 @@ from app.tournament_lifecycle import (
     transition_tournament,
 )
 from app.tournament_queries import stage_ids_for_events
-from tests._entry_seeds import entry_with_members
+from tests._entry_seeds import entry_with_members, withdraw_entry_with_history
 from tests._helpers import (
     CountingGeocoder,
     assert_tournament_address_is_sql_null,
@@ -1256,7 +1256,7 @@ async def test_a_stale_draw_shrunk_below_two_entrants_is_undrawable_not_stale(
         .all()
     )
     for entry in entries[:3]:
-        entry.status = TournamentEntryStatus.withdrawn
+        await withdraw_entry_with_history(db_session, entry.id)
     await db_session.commit()
 
     with pytest.raises(TournamentNotReadyToGoLiveError) as exc_info:

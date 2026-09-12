@@ -30,7 +30,7 @@ from decimal import Decimal
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -453,12 +453,11 @@ async def test_deleting_the_event_takes_its_fixtures_with_it(
     )
     await db_session.commit()
 
-    stored_event = (
-        await db_session.execute(
-            select(TournamentEvent).where(TournamentEvent.id == event.id)
-        )
-    ).scalar_one()
-    await db_session.delete(stored_event)
+    # Delete the parent first, as the event service does, so its database cascade
+    # removes immutable participation history together with the owning event.
+    await db_session.execute(
+        delete(TournamentEvent).where(TournamentEvent.id == event.id)
+    )
     await db_session.commit()
 
     assert (await db_session.execute(select(TournamentFixture))).scalars().all() == []

@@ -15,16 +15,7 @@ before:
 * an absent tournament → :class:`TournamentNotFoundError` (404);
 * a non-owner → :class:`NotTournamentOwnerError` (403);
 * no event with a cut draw → :class:`NoDrawnEventsError` (422);
-* the enqueue could not be placed (Redis down) → :class:`ScheduleQueueUnavailableError`
-  (503).
-
-The last one is why this verb's return type is a **non-optional**
-:class:`~app.models.ScheduleSolve`, not the ``ScheduleSolve | None`` that
-:func:`~app.schedule_solves.request_solve` returns. ``request_solve`` catches the
-``RedisError`` itself, takes its just-inserted row back out, and returns ``None``;
-this verb turns that ``None`` into :class:`ScheduleQueueUnavailableError` so the
-caller gets a real ledger row or a refusal it can adapt, never an ambiguous ``None``
-that a router would have to re-interpret (make illegal states unrepresentable).
+Redis failure does not reject work accepted durably by PostgreSQL.
 
 The tournament is loaded through the same ``FOR UPDATE`` loader the edit and draw
 verbs use (``app.tournament_edit._load_tournament_for_update``): the lock is not
@@ -45,7 +36,6 @@ from app.schedule_solves import request_solve, tournament_has_drawn_event
 from app.tournament_edit import _load_owned_tournament_for_update
 from app.tournament_errors import (
     NoDrawnEventsError,
-    ScheduleQueueUnavailableError,
 )
 
 
@@ -78,10 +68,7 @@ async def request_schedule_solve(
     trigger funnels into (``request_solve``): a ``queued`` run absorbs this
     request and its row comes back; a ``running`` run gets its re-run flag set;
     only when neither exists is a fresh row inserted and the RQ job enqueued.
-    A ``None`` return from ``request_solve`` means the enqueue itself failed
-    (Redis down) and the row was taken back out — this verb raises
-    :class:`ScheduleQueueUnavailableError` rather than returning ``None``, so the
-    adapter maps it to the existing 503 and its return type stays non-optional.
+    The repair requirement commits atomically; dispatch follows commit.
 
     Commits and refreshes before returning: ``requested_at`` and the other server
     defaults were never round-tripped by the INSERT, so the row is re-read rather
@@ -92,11 +79,6 @@ async def request_schedule_solve(
     if not await tournament_has_drawn_event(db, tournament_id):
         raise NoDrawnEventsError()
     row = await request_solve(db, tournament_id, ScheduleSolveTrigger.manual)
-    if row is None:
-        # The enqueue failed (Redis down) and ``request_solve`` took its row back
-        # out — nothing was queued. Surface it as a refusal the adapter turns into
-        # a 503, rather than returning a ``None`` the caller must re-interpret.
-        raise ScheduleQueueUnavailableError()
     await db.commit()
     await db.refresh(row)
     return row

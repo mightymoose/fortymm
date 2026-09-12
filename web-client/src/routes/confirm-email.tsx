@@ -97,36 +97,20 @@ const CONFIRM_COPY: Partial<
   },
 }
 
-// `POST /v1/me/email/confirm`'s 400 body for a superseded link,
-// `{ detail: { code, message } }` (#1616) — declared on the route's OpenAPI
-// `responses=` as `ConfirmEmailErrorResponse`, but read off `ApiError.body`
-// (the raw response body) and parsed here rather than trusted: the same
-// status also carries the plain-string detail of every other dead link,
-// which the declared model does not describe. Shaped after
-// `login.verifying.tsx` (#1466): a code this client has no screen for, a
-// plain-string detail, or no body fails the parse and falls through to the
-// generic invalid/expired screen.
-const CONFIRM_ERROR_CODES = ['replaced'] as const
-type ConfirmErrorCode = (typeof CONFIRM_ERROR_CODES)[number]
-
 const confirmErrorSchema = z.object({
-  detail: z.object({ code: z.enum(CONFIRM_ERROR_CODES) }),
+  detail: z.object({ code: z.string(), message: z.string().optional() }),
 })
 
-/** The structured `code` a 4xx from `/v1/me/email/confirm` carries, or
- * `null` when the body doesn't parse as the coded shape. */
-function confirmErrorCode(err: unknown): ConfirmErrorCode | null {
+function confirmErrorDetail(err: unknown) {
   if (!(err instanceof ApiError)) return null
   const parsed = confirmErrorSchema.safeParse(err.body)
-  return parsed.success ? parsed.data.detail.code : null
+  return parsed.success ? parsed.data.detail : null
 }
 
-/** Whether `err` is a 4xx that actually rejects the token — the only kind of
- * failure whose copy may say the link is unusable. A transport failure or a
- * server-side 5xx answers nothing about the token, so it must not land on
- * the expired screen and its "send a fresh one" advice (#1616). */
+// Only a bad-request response declares the bearer dead. Conflicts and
+// temporary limits leave it usable after the underlying problem is resolved.
 function isRejectedConfirmError(err: unknown): boolean {
-  return err instanceof ApiError && err.status >= 400 && err.status < 500
+  return err instanceof ApiError && err.status === 400
 }
 
 function ConfirmEmailPage() {
@@ -143,6 +127,15 @@ function ConfirmEmailPage() {
   const preview = useMergePreview()
   const confirm = useConfirmEmail()
   const fired = useRef(false)
+  const [retryUntil, setRetryUntil] = useState<number | null>(null)
+  useEffect(() => {
+    if (retryUntil === null) return
+    const timer = window.setTimeout(
+      () => setRetryUntil(null),
+      Math.min(Math.max(0, retryUntil - Date.now()), 2_147_483_647),
+    )
+    return () => window.clearTimeout(timer)
+  }, [retryUntil])
   const [approvedSwitch, setApprovedSwitch] = useState<string | undefined>()
 
   // Fires after any successful confirm, passed as every call site's
@@ -176,11 +169,13 @@ function ConfirmEmailPage() {
   const confirming = useRef(false)
   const [skipMerge, setSkipMerge] = useState(false)
   const confirmWithToast = (input: FinalizeTokenInput) => {
-    if (confirming.current) return
+    if (confirming.current || (retryUntil !== null && retryUntil > Date.now())) return
+    setRetryUntil(null)
     confirming.current = true
     setSkipMerge(input.skipMerge ?? false)
     firedInput.current = input
     confirm.mutate(input, { onSuccess: showMergeToast, onError: (error) => {
+      if (error instanceof ApiError) setRetryUntil(error.retryAt)
       if (error instanceof SessionChangedError) void navigate({ to: '/dashboard', replace: true })
     }, onSettled: () => { confirming.current = false } })
   }
@@ -304,19 +299,20 @@ function ConfirmEmailPage() {
   const errorFooter = (
     <button
       type="button"
+      disabled={retryUntil !== null}
       style={{ ...btnPrimary, width: '100%' }}
       onClick={() => {
         const input = firedInput.current
         if (input !== null) confirmWithToast(input)
       }}
     >
-      Try again
+      {retryUntil !== null ? 'Please wait before retrying' : 'Try again'}
     </button>
   )
 
   // The six `LinkCheckPage` states this page maps onto (the merge gate above
   // is a separate render path). A coded `replaced` 4xx reaches its own screen;
-  // any other 4xx is a genuine rejection and lands on the invalid/expired
+  // a 400 rejection lands on the invalid/expired
   // screen; a transport failure or 5xx answers nothing about the token, so it
   // gets the retryable `error` screen instead of the "send a fresh one" copy
   // that would push the user into replacing a probably-live link (#1616).
@@ -327,7 +323,7 @@ function ConfirmEmailPage() {
         ? 'checking'
         : status === 'missing-token'
           ? 'missing'
-          : confirmErrorCode(confirm.error) === 'replaced'
+          : confirmErrorDetail(confirm.error)?.code === 'replaced'
             ? 'replaced'
             : isRejectedConfirmError(confirm.error)
               ? 'expired'
@@ -335,9 +331,26 @@ function ConfirmEmailPage() {
 
   // Each failure state's reason is stated once, in its own subtitle — the
   // API's sentence is deliberately not repeated under it (#1616).
-  const copy = linkState === 'success'
-    ? { ...CONFIRM_COPY.success, subtitle: `You're now signed in as ${confirm.data?.data.user.username}. Your email is verified.` }
-    : CONFIRM_COPY[linkState]
+  const detail = confirmErrorDetail(confirm.error)
+  const entryConflict = confirm.error instanceof ApiError
+    && confirm.error.status === 409 && detail?.code === 'entry_merge_conflict'
+  const temporarilyUnavailable = confirm.error instanceof ApiError
+    && [429, 503].includes(confirm.error.status) ? confirm.error : null
+  const copy = entryConflict
+    ? {
+        eyebrow: '● Tournament entry conflict',
+        title: 'Your entries need attention',
+        subtitle: detail?.message ?? 'Ask the tournament director to resolve the entry conflict, then try this confirmation again.',
+      }
+    : linkState === 'error' && temporarilyUnavailable
+      ? {
+          eyebrow: '● Please wait',
+          title: 'Confirmation is temporarily unavailable',
+          subtitle: temporarilyUnavailable.detail ?? detail?.message ?? 'Please wait a moment, then try this confirmation again.',
+        }
+      : linkState === 'success'
+        ? { ...CONFIRM_COPY.success, subtitle: `You're now signed in as ${confirm.data?.data.user.username}. Your email is verified.` }
+        : CONFIRM_COPY[linkState]
 
   // Intentionally NOT wrapped in <AppShell> — AppShell calls useSession()
   // on mount, and `GET /v1/session` auto-mints a guest for cookieless
@@ -349,6 +362,8 @@ function ConfirmEmailPage() {
   return (
     <LinkCheckPage
       state={linkState}
+      pillCode={linkState === 'error' && confirm.error instanceof ApiError && confirm.error.status > 0
+        ? String(confirm.error.status) : undefined}
       eyebrow={copy?.eyebrow}
       title={copy?.title}
       subtitle={copy?.subtitle}

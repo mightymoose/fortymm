@@ -41,7 +41,6 @@ from app.tournament_draws import cut_draw
 from app.tournament_errors import (
     NoDrawnEventsError,
     NotTournamentOwnerError,
-    ScheduleQueueUnavailableError,
     TournamentNotFoundError,
 )
 from app.tournament_event_stages import mint_stages
@@ -257,13 +256,10 @@ async def test_a_missing_tournament_is_refused(db_session: AsyncSession) -> None
         )
 
 
-async def test_queue_down_is_refused_and_no_row_survives(
+async def test_queue_down_is_accepted_and_the_queued_row_survives(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When the enqueue cannot be placed (Redis down), ``request_solve`` takes its
-    row back out and this verb raises :class:`ScheduleQueueUnavailableError` rather
-    than returning ``None`` — and nothing is left on the ledger (no zombie row that
-    would absorb every later trigger while no job ever runs)."""
+    """An accepted solve survives queue failure for database recovery."""
     tournament_id, owner = await _make_tournament(db_session)
 
     class _DeadQueue:
@@ -272,9 +268,10 @@ async def test_queue_down_is_refused_and_no_row_survives(
 
     monkeypatch.setattr(queue_module, "get_queue", lambda: _DeadQueue())
 
-    with pytest.raises(ScheduleQueueUnavailableError):
-        await request_schedule_solve(
-            db_session, tournament_id=tournament_id, actor=owner
-        )
-
-    assert await _solve_rows(db_session, tournament_id) == []
+    result = await request_schedule_solve(
+        db_session, tournament_id=tournament_id, actor=owner
+    )
+    assert result.status is ScheduleSolveStatus.queued
+    assert [row.id for row in await _solve_rows(db_session, tournament_id)] == [
+        result.id
+    ]

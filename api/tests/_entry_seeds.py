@@ -3,7 +3,7 @@
 import uuid
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
@@ -12,8 +12,10 @@ from app.models import (
     MatchSide,
     MatchSidePlayer,
     Player,
+    Tournament,
     TournamentEntry,
     TournamentEntryMember,
+    TournamentEntryStatus,
     TournamentEvent,
     TournamentFixture,
 )
@@ -63,3 +65,23 @@ async def seed_fixture_match_sides(
             ]
         )
     await db.flush()
+
+
+async def withdraw_entry_with_history(db: AsyncSession, entry_id: uuid.UUID) -> None:
+    """Seed a complete director withdrawal, leaving the caller to commit it."""
+    from app.tournament_participation import WithdrawalReason, close_registration
+
+    actor_id = (
+        await db.execute(
+            select(Tournament.owner_account_id)
+            .join(TournamentEvent, TournamentEvent.tournament_id == Tournament.id)
+            .join(TournamentEntry, TournamentEntry.event_id == TournamentEvent.id)
+            .where(TournamentEntry.id == entry_id)
+        )
+    ).scalar_one()
+    await close_registration(db, entry_id, actor_id, WithdrawalReason.director_removal)
+    await db.execute(
+        update(TournamentEntry)
+        .where(TournamentEntry.id == entry_id)
+        .values(status=TournamentEntryStatus.withdrawn)
+    )

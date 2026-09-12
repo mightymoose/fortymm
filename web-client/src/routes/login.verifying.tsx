@@ -73,6 +73,21 @@ const CODE_TO_VERIFY_ERROR: Record<LoginConsumeErrorCode, VerifyError> = {
   replaced: 'replaced',
 }
 
+const entryConflictSchema = z.object({
+  detail: z.object({ code: z.literal('entry_merge_conflict'), message: z.string() }),
+})
+
+function recoverableLoginError(error: unknown) {
+  if (!(error instanceof ApiError)) return null
+  const conflict = entryConflictSchema.safeParse(error.body)
+  return error.status === 409 && conflict.success
+    ? { error, title: 'Your entries need attention', message: conflict.data.detail.message }
+    : [429, 503].includes(error.status)
+      ? { error, title: 'Sign-in is temporarily unavailable',
+          message: error.detail ?? 'Please wait a moment, then try this sign-in again.' }
+      : null
+}
+
 export const Route = createFileRoute('/login/verifying')({
   head: () => ({
     meta: [{ title: pageTitle('Verifying') }],
@@ -112,9 +127,19 @@ function LoginVerifyingPage() {
 
   const chosenSkipMerge = useRef(false)
   const consuming = useRef(false)
+  const [retryUntil, setRetryUntil] = useState<number | null>(null)
+  useEffect(() => {
+    if (retryUntil === null) return
+    const timer = window.setTimeout(
+      () => setRetryUntil(null),
+      Math.min(Math.max(0, retryUntil - Date.now()), 2_147_483_647),
+    )
+    return () => window.clearTimeout(timer)
+  }, [retryUntil])
 
   const runConsume = (skipMerge: boolean, switchFromUserId?: string) => {
-    if (consuming.current) return
+    if (consuming.current || (retryUntil !== null && retryUntil > Date.now())) return
+    setRetryUntil(null)
     consuming.current = true
     chosenSkipMerge.current = skipMerge
     setGate(null)
@@ -139,6 +164,10 @@ function LoginVerifyingPage() {
             return
           }
           if (accountSwitchConflict(err)) return
+          if (recoverableLoginError(err)) {
+            if (err instanceof ApiError) setRetryUntil(err.retryAt)
+            return
+          }
           if (err instanceof ApiError && err.status >= 400 && err.status < 500) {
             const code = loginConsumeErrorCode(err)
             const nextError: VerifyError =
@@ -206,6 +235,25 @@ function LoginVerifyingPage() {
       </button>
     </div>
   )
+
+  const recovery = recoverableLoginError(consume.error)
+  if (recovery) {
+    return (
+      <LinkCheckPage
+        state="error"
+        pillCode={String(recovery.error.status)}
+        eyebrow="● Sign-in needs attention"
+        title={recovery.title}
+        subtitle={recovery.message}
+        footer={
+          <button type="button" disabled={retryUntil !== null} style={{ ...btnPrimary, width: '100%' }}
+            onClick={() => runConsume(consume.variables?.skipMerge ?? false, consume.variables?.switchFromUserId)}>
+            {retryUntil !== null ? 'Please wait before retrying' : 'Try again'}
+          </button>
+        }
+      />
+    )
+  }
 
   if (!token && !error) {
     return <LinkCheckPage state="missing" footer={sendNewLinkButton} />

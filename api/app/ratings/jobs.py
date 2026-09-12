@@ -8,10 +8,12 @@ wrapper that opens its own ``async_sessionmaker`` from ``app.db.get_engine``.
 import asyncio
 import logging
 import uuid
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, union
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app import required_repairs
 from app.db import get_engine
 from app.models import (
     LeagueMembership,
@@ -20,6 +22,7 @@ from app.models import (
     RatingInput,
     UserLeagueRating,
 )
+from app.ratings.inputs import canonical_player
 from app.ratings.recompute import recompute_league_ratings
 
 log = logging.getLogger(__name__)
@@ -32,7 +35,12 @@ def recompute_after_merge(user_id: str) -> None:
     asyncio.run(_recompute_after_merge(uuid.UUID(user_id)))
 
 
-async def _recompute_after_merge(user_id: uuid.UUID) -> None:
+async def _recompute_after_merge(
+    user_id: uuid.UUID,
+    *,
+    factory: async_sessionmaker[AsyncSession] | None = None,
+    ownership: required_repairs.Claim | None = None,
+) -> None:
     """Re-run and commit each affected league's rating cascade independently.
 
     Every query in ``recompute_league_ratings`` is scoped to a single
@@ -43,17 +51,19 @@ async def _recompute_after_merge(user_id: uuid.UUID) -> None:
     (issue #248).
 
     Failure policy: if a league's recompute raises, the leagues committed before
-    it stay committed and the exception propagates. RQ then marks the job failed
-    and a retry replays every league — harmless for the already-settled ones
+    it stay committed and the exception propagates to the durable repair worker.
+    That worker records the attempt and retry policy. A retry replays every league,
+    harmless for the already-settled ones
     because the recompute is idempotent (it rewrites state deterministically), so
     only the previously-failing league has real work left to do. Letting it
-    propagate (rather than log-and-continue) keeps RQ's failed-job registry
-    meaningful. The failing league's own uncommitted work is rolled back when the
+    propagate keeps the durable attempt record honest. The failing league's
+    uncommitted work is rolled back when the
     ``async with`` session context exits on the propagating exception, so the
     session is never reused after a partial statement.
     """
-    sessionmaker = async_sessionmaker(get_engine(), expire_on_commit=False)
+    sessionmaker = factory or async_sessionmaker(get_engine(), expire_on_commit=False)
     async with sessionmaker() as session:
+        user_id = await canonical_player(session, user_id)
         # Durable inputs and sporting membership still identify leagues when
         # every derived snapshot has been deleted. Retain snapshot discovery for
         # an empty league awaiting reset after its last match was voided.
@@ -75,13 +85,25 @@ async def _recompute_after_merge(user_id: uuid.UUID) -> None:
                 )
             )
         ).all()
-        if not league_ids:
-            return
+        await session.commit()
         # Commit per league so partial progress survives a mid-loop failure.
         # A stable acquisition order is belt-and-braces now: with a per-league
         # commit the job holds exactly one transaction-scoped advisory lock at a
         # time, so cross-job deadlock is impossible rather than merely
         # ordered-away. Kept for a deterministic, easy-to-reason-about order.
         for league_id in sorted(league_ids):
+            if ownership is not None:
+                row = await required_repairs.lock_claim(
+                    session, ownership, now=datetime.now(UTC)
+                )
+                if row is None:
+                    return
             await recompute_league_ratings(session, league_id, {user_id})
+            # The repair lock fences this entire league transaction. Renew while
+            # still holding it so a long replay doesn't expire its own lease.
+            if ownership is not None and row is not None:
+                row.lease_until = datetime.now(UTC) + timedelta(minutes=15)
+            await session.commit()
+        if ownership is not None:
+            await required_repairs.complete(session, ownership, now=datetime.now(UTC))
             await session.commit()

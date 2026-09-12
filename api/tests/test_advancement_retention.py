@@ -74,26 +74,50 @@ async def seed_unknown_draw(api_client, db):
     return event, target, {f.id for f in fixtures}
 
 
+@pytest.mark.parametrize("retired", [False, True])
 @pytest.mark.parametrize("method", ["delete", "post"])
 async def test_replace_or_remove_draw_preserves_unknown_advancement(
-    api_client, db_session, method
+    api_client, db_session, method, retired
 ):
     event, target, fixture_ids = await seed_unknown_draw(api_client, db_session)
+    if retired:
+        from app.tournament_draws import uncut_draw
+
+        await uncut_draw(db_session, [event.id])
+        await db_session.commit()
     response = await api_client.request(
         method, f"/v1/tournaments/{event.tournament_id}/events/{event.id}/draw"
     )
-    assert response.status_code == 409, response.text
-    assert "Advancement history must be preserved" in response.json()["detail"]
+    if method == "delete" and retired:
+        assert response.status_code == 204, response.text
+    else:
+        assert response.status_code == 409, response.text
+        assert "Advancement history must be preserved" in response.json()["detail"]
     (decision,) = await advancement_history(db_session, target.id, "a")
     assert decision.evidence_status == "unknown" and decision.current
-    assert set(await db_session.scalars(select(TournamentFixture.id))) == fixture_ids
+    assert (
+        set(
+            await db_session.scalars(
+                select(TournamentFixture.id).execution_options(
+                    include_draw_history=True
+                )
+            )
+        )
+        == fixture_ids
+    )
 
 
+@pytest.mark.parametrize("retired", [False, True])
 @pytest.mark.parametrize("parent", ["event", "tournament"])
 async def test_delete_parent_preserves_unknown_advancement(
-    api_client, db_session, parent
+    api_client, db_session, parent, retired
 ):
     event, target, fixture_ids = await seed_unknown_draw(api_client, db_session)
+    if retired:
+        from app.tournament_draws import uncut_draw
+
+        await uncut_draw(db_session, [event.id])
+        await db_session.commit()
     url = f"/v1/tournaments/{event.tournament_id}"
     if parent == "event":
         url += f"/events/{event.id}"
@@ -102,4 +126,13 @@ async def test_delete_parent_preserves_unknown_advancement(
     assert "Advancement history must be preserved" in response.json()["detail"]
     (decision,) = await advancement_history(db_session, target.id, "a")
     assert decision.evidence_status == "unknown" and decision.current
-    assert set(await db_session.scalars(select(TournamentFixture.id))) == fixture_ids
+    assert (
+        set(
+            await db_session.scalars(
+                select(TournamentFixture.id).execution_options(
+                    include_draw_history=True
+                )
+            )
+        )
+        == fixture_ids
+    )

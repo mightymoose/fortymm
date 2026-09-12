@@ -34,7 +34,8 @@ FIXTURE_INTEGRITY_DDL = (
     END $$
     """,
     """
-    CREATE TRIGGER fixture_scope BEFORE INSERT OR UPDATE ON tournament_fixtures
+    CREATE TRIGGER fixture_scope BEFORE INSERT OR UPDATE OF
+        stage_id, scope_event_id, scope_tournament_id ON tournament_fixtures
     FOR EACH ROW EXECUTE FUNCTION fixture_scope()
     """,
 )

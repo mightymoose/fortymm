@@ -28,7 +28,7 @@ from app.models import (
     User,
     UserRole,
 )
-from app.ratings.jobs import RECOMPUTE_AFTER_MERGE_JOB
+from app.required_repairs import for_player
 from app.schemas.session import USERNAME_MAX_LENGTH, USERNAME_PATTERN
 from app.sessions import (
     SESSION_COOKIE_NAME,
@@ -634,8 +634,9 @@ async def test_consume_enqueues_rating_recompute_when_matches_moved(
     jobs = fake_ratings_queue.get_jobs()
     assert len(jobs) == 1
     job = jobs[0]
-    assert job.func_name == RECOMPUTE_AFTER_MERGE_JOB
-    assert job.args == (str(rita.id),)
+    repair = await for_player(db_session, rita.player_id)
+    assert repair is not None
+    assert job.args == (str(repair.id),)
 
 
 async def test_consume_enqueues_recompute_even_when_no_matches_moved(
@@ -658,8 +659,9 @@ async def test_consume_enqueues_recompute_even_when_no_matches_moved(
 
     jobs = fake_ratings_queue.get_jobs()
     assert len(jobs) == 1
-    assert jobs[0].func_name == RECOMPUTE_AFTER_MERGE_JOB
-    assert jobs[0].args == (str(rita.id),)
+    repair = await for_player(db_session, rita.player_id)
+    assert repair is not None
+    assert jobs[0].args == (str(repair.id),)
 
 
 async def test_consume_enqueues_recompute_for_voided_self_play_collision(
@@ -695,8 +697,9 @@ async def test_consume_enqueues_recompute_for_voided_self_play_collision(
     # The recompute is STILL enqueued despite matches_moved == 0.
     jobs = fake_ratings_queue.get_jobs()
     assert len(jobs) == 1
-    assert jobs[0].func_name == RECOMPUTE_AFTER_MERGE_JOB
-    assert jobs[0].args == (str(rita.id),)
+    repair = await for_player(db_session, rita.player_id)
+    assert repair is not None
+    assert jobs[0].args == (str(repair.id),)
 
 
 async def test_consume_skips_recompute_when_no_prior_session(

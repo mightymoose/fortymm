@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import {
   RouterProvider,
   createMemoryHistory,
@@ -9,6 +9,7 @@ import {
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
+import { mockSession } from '@/mocks/handlers'
 import { server } from '@/mocks/server'
 import { Route as LoginVerifyingRoute } from './login.verifying'
 
@@ -234,5 +235,60 @@ describe('/login/verifying regressions the taxonomy change must not touch', () =
     renderAt('/login/verifying')
 
     await screen.findByRole('heading', { name: /this link is incomplete/i })
+  })
+})
+
+
+describe('recoverable login merges', () => {
+  it.each([429, 503])('respects Retry-After for %s and preserves declined merge consent on manual retry', async (status) => {
+    const requests: unknown[] = []
+    const message = 'Please wait before trying this sign-in again.'
+    server.use(
+      http.post('*/v1/merge/preview', () => HttpResponse.json({
+        is_merge: true, owner_username: 'rita', guest_username: null,
+        guest_matches_count: 2, adopts_guest_username: false,
+      })),
+      http.post('*/v1/login/consume', async ({ request }) => {
+        requests.push(await request.json())
+        return requests.length === 1
+          ? HttpResponse.json({ detail: message }, { status, headers: { 'Retry-After': '1' } })
+          : HttpResponse.json(mockSession)
+      }),
+    )
+    const { router } = renderAt('/login/verifying?token=limited-token')
+    ;(await screen.findByRole('button', { name: /not now — just sign me in/i })).click()
+    await screen.findByText(message)
+    const retry = screen.getByRole('button', { name: /please wait before retrying/i })
+    expect(retry).toBeDisabled()
+    expect(screen.queryByRole('button', { name: /send a new link/i })).not.toBeInTheDocument()
+    await waitFor(() => expect(retry).toBeEnabled(), { timeout: 2500 })
+    expect(requests).toHaveLength(1)
+    retry.click()
+    await waitFor(() => expect(router.state.location.pathname).toBe('/login/welcome'))
+    expect(requests).toEqual([
+      { token: 'limited-token', skip_merge: true },
+      { token: 'limited-token', skip_merge: true },
+    ])
+  })
+
+  it('shows the entry conflict and retries the retained bearer after director resolution', async () => {
+    const requests: unknown[] = []
+    const message = 'Ask the tournament director to resolve these entries before merging.'
+    server.use(http.post('*/v1/login/consume', async ({ request }) => {
+      requests.push(await request.json())
+      return requests.length === 1
+        ? HttpResponse.json({ detail: { code: 'entry_merge_conflict', message } }, { status: 409 })
+        : HttpResponse.json(mockSession)
+    }))
+    const { router } = renderAt('/login/verifying?token=conflicted-token')
+    await screen.findByText(message)
+    expect(screen.queryByRole('button', { name: /send a new link/i })).not.toBeInTheDocument()
+    expect(requests).toHaveLength(1)
+    screen.getByRole('button', { name: 'Try again' }).click()
+    await waitFor(() => expect(router.state.location.pathname).toBe('/login/welcome'))
+    expect(requests).toEqual([
+      { token: 'conflicted-token', skip_merge: false },
+      { token: 'conflicted-token', skip_merge: false },
+    ])
   })
 })

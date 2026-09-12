@@ -1,7 +1,7 @@
 """Combine same-person Players, transfer authority and tombstone the source Account.
 
 Historical actors retain their Account references. Sporting collisions use the
-existing reconciliation rules; callers enqueue rating recomputation after commit.
+existing reconciliation rules; rating repair commits atomically with the merge.
 Session tokens remain on the Account tombstone for session-ended detection.
 """
 
@@ -22,6 +22,9 @@ from app.models import (
     FirstSignInIntent,
     LeagueMembership,
     Match,
+    MatchGame,
+    MatchLineup,
+    MatchResult,
     MatchSide,
     MatchSidePlayer,
     Notification,
@@ -32,7 +35,9 @@ from app.models import (
     ScheduleSolveTrigger,
     Tournament,
     TournamentEntry,
+    TournamentEntryRegistration,
     TournamentEntryStatus,
+    TournamentEntryWithdrawal,
     TournamentEvent,
     TournamentEventStage,
     TournamentFixture,
@@ -40,9 +45,15 @@ from app.models import (
     UserLeagueRating,
     UserRole,
 )
+from app.models.tournament_entry_participation import WithdrawalReason
 from app.schedule_solves import request_solve, tournament_has_drawn_event
 from app.tournament_authority import lock_merge_tournaments, merge_authority
-from app.tournament_draws import draw_has_play, uncut_draw
+from app.tournament_draws import (
+    active_draw_entrants_by_event,
+    draw_has_play,
+    uncut_draw,
+)
+from app.tournament_participation import close_registration, restore_event_eligibility
 
 # Bind the active state from the enum in reconciliation queries. The database
 # independently enforces scoped participation through entry membership.
@@ -85,6 +96,24 @@ class _ConcurrentEntryCollision(Exception):
     """Re-run a merge whose initial entry scan missed a concurrent registration."""
 
 
+class EntryMergeConflict(ValueError):
+    """Duplicate sporting histories need resolution before identity reconciliation."""
+
+    def __init__(
+        self,
+        source_entry_id: uuid.UUID,
+        target_entry_id: uuid.UUID,
+        stage_id: uuid.UUID,
+    ) -> None:
+        self.source_entry_id = source_entry_id
+        self.target_entry_id = target_entry_id
+        self.stage_id = stage_id
+        super().__init__(
+            f"Entries {source_entry_id} and {target_entry_id} have recorded play "
+            f"in the same stage {stage_id}; director resolution is required."
+        )
+
+
 async def merge_user(
     db: AsyncSession,
     *,
@@ -120,6 +149,12 @@ async def merge_user(
     if len(source.player_grants) > 1:
         raise ValueError("Merging accounts that manage multiple players is not enabled")
     await lock_merge_tournaments(db, source_id=from_user_id, target_id=to_user_id)
+    # Lock the repair before any rating rows: workers take repair → ratings too.
+    from app.required_repairs import request_rating
+
+    repair_player = target_player if target_player is not None else source_player
+    if repair_player is not None:
+        await request_rating(db, repair_player.id)
     summary = MergeSummary(matches_moved=0, matches_voided=0)
     if (
         source_player is not None
@@ -144,6 +179,7 @@ async def merge_user(
                         db,
                         from_user_id=source_player_id,
                         to_user_id=target_player_id,
+                        actor_account_id=to_user_id,
                     )
                     # Registration may commit after collision discovery but before
                     # the Player update takes its event locks. Validate here while
@@ -204,6 +240,7 @@ async def _merge_players(
     *,
     from_user_id: uuid.UUID,
     to_user_id: uuid.UUID,
+    actor_account_id: uuid.UUID,
 ) -> MergeSummary:
     """Combine sporting records under the existing collision and rating rules."""
     # The caller holds the sorted union of sporting and authority tournaments.
@@ -216,7 +253,10 @@ async def _merge_players(
     )
 
     await _resolve_entry_collisions(
-        db, from_user_id=from_user_id, to_user_id=to_user_id
+        db,
+        from_user_id=from_user_id,
+        to_user_id=to_user_id,
+        actor_account_id=actor_account_id,
     )
     # Membership records retain the originally registered Player. The singles
     # projection resolves its explicit same-person merge chain after tombstoning.
@@ -318,8 +358,9 @@ async def _merge_players(
     # DELETE above (it is keyed on ``user_id == to_user_id``, and the cascade
     # skips a one-sided match), so ``void_match``'s by-``match_id`` delete is the
     # only thing that removes it. ``void_match`` does not commit.
+    collided_matches: list[Match] = []
     if collision.match_ids:
-        collided_matches = (
+        collided_matches = list(
             (await db.execute(select(Match).where(Match.id.in_(collision.match_ids))))
             .scalars()
             .all()
@@ -340,6 +381,13 @@ async def _merge_players(
         .where(Player.id == from_user_id)
         .values(merged_into_player_id=to_user_id, merged_at=datetime.now(UTC))
     )
+    # Advance only after the sporting identity is reconciled: a newly ready
+    # fixture must materialize against the merged Player, not the old identity.
+    if collided_matches:
+        from app.tournament_advancement import on_match_completed
+
+        for match in collided_matches:
+            await on_match_completed(db, match)
     # A voided rated collision was dropped by the belt-and-braces delete above
     # (its guest MatchSidePlayer was never re-pointed), so it got added into
     # `matches_moved`. But we just voided it — it no longer counts. Subtract the
@@ -538,22 +586,18 @@ async def _resolve_entry_collisions(
     *,
     from_user_id: uuid.UUID,
     to_user_id: uuid.UUID,
+    actor_account_id: uuid.UUID,
 ) -> None:
-    """Reconcile colliding singles entries without erasing membership history.
+    """Resolve duplicate entries while retaining their original sporting history.
 
-    The survivor inherits the earlier registration time and an absent seed from
-    the source. The source entry is withdrawn, whether or not its draw has play;
-    the recorded member Player stays intact and its singles projection follows
-    the explicit same-person merge chain.
+    Recorded play takes precedence over account destination. Duplicate play in
+    the same stage refuses the merge before the nested transaction can commit.
+    Supersession preserves original membership and closes registration and stage
+    participation with the acting Account's reconciliation provenance.
 
-    An unplayed draw is un-cut, not patched: it was seeded for a field that
-    double-counted one human, so replacing just the source fixture seats would
-    leave an invalid draw. A played draw remains unchanged. Self-play matches
-    exposed by reconciliation follow the existing transfer-and-void rules.
-
-    Only affected events are reconciled. Scheduling changes request at most one
-    solve per tournament under the existing tournament-row locks. This runs in
-    the caller's transaction, making withdrawal and draw reconciliation atomic.
+    A changed active field retires its unplayed draw; played draws and valid
+    draws unaffected by historical duplicates remain intact. Scheduling requests
+    coalesce per tournament under the caller's parent locks.
     """
     params: dict[str, Any] = {
         "from_id": from_user_id,
@@ -581,7 +625,7 @@ async def _resolve_entry_collisions(
                         FROM candidate_entries c
                         JOIN tournament_entries e ON e.id = c.entry_id
                         JOIN tournament_events ev ON ev.id = e.event_id
-                        WHERE e.status = :active
+                        WHERE e.superseded_by_entry_id IS NULL
                             AND NOT ev.allow_multiple_entries_per_player
                     )
                     SELECT guest.event_id, guest.id, survivor.id
@@ -601,25 +645,98 @@ async def _resolve_entry_collisions(
     collided_event_ids = {row[0] for row in collisions}
     if not collided_event_ids:
         return
+    played_stages: dict[uuid.UUID, set[uuid.UUID]] = {}
+    entry_ids = {entry_id for row in collisions for entry_id in row[1:]}
+    recorded_fixtures = (
+        (
+            await db.execute(
+                select(
+                    TournamentFixture.entry_a_id,
+                    TournamentFixture.entry_b_id,
+                    TournamentFixture.stage_id,
+                )
+                .execution_options(include_draw_history=True)
+                .where(
+                    TournamentFixture.scope_event_id.in_(collided_event_ids),
+                    # The side evidence indexes exclude all unplayed history before
+                    # checking whether a linked match actually contains recorded play.
+                    or_(
+                        TournamentFixture.winner_entry_id.is_not(None),
+                        TournamentFixture.match_id.is_not(None),
+                    ),
+                    or_(
+                        TournamentFixture.entry_a_id.in_(entry_ids),
+                        TournamentFixture.entry_b_id.in_(entry_ids),
+                    ),
+                    or_(
+                        TournamentFixture.winner_entry_id.is_not(None),
+                        exists(
+                            select(MatchLineup.id).where(
+                                MatchLineup.match_id == TournamentFixture.match_id
+                            )
+                        ),
+                        exists(
+                            select(MatchGame.id).where(
+                                MatchGame.match_id == TournamentFixture.match_id
+                            )
+                        ),
+                        exists(
+                            select(MatchResult.id).where(
+                                MatchResult.match_id == TournamentFixture.match_id
+                            )
+                        ),
+                    ),
+                )
+            )
+        )
+        .tuples()
+        .all()
+    )
+    for entry_a_id, entry_b_id, stage_id in recorded_fixtures:
+        for entry_id in (entry_a_id, entry_b_id):
+            if entry_id is not None:
+                played_stages.setdefault(entry_id, set()).add(stage_id)
+    for _, source_id, target_id in collisions:
+        common = played_stages.get(source_id, set()) & played_stages.get(
+            target_id, set()
+        )
+        if common:
+            raise EntryMergeConflict(source_id, target_id, min(common))
+    entries = {
+        entry.id: entry
+        for entry in await db.scalars(
+            select(TournamentEntry)
+            .where(TournamentEntry.id.in_(entry_ids))
+            .execution_options(populate_existing=True)
+        )
+    }
+    entries_by_event: dict[uuid.UUID, set[uuid.UUID]] = {}
+    for event_id, source_id, target_id in collisions:
+        entries_by_event.setdefault(event_id, set()).update((source_id, target_id))
+    # Preserve recorded play first, then current registration, then the existing
+    # target preference. Every historical duplicate has one permanent destination.
+    collisions = []
+    for event_id, candidates in entries_by_event.items():
+        retained_id = min(
+            candidates,
+            key=lambda entry_id: (
+                not bool(played_stages.get(entry_id)),
+                entries[entry_id].status is not TournamentEntryStatus.entered,
+                entries[entry_id].user_id != to_user_id,
+                entries[entry_id].created_at,
+                entry_id,
+            ),
+        )
+        collisions.extend(
+            (event_id, duplicate_id, retained_id)
+            for duplicate_id in sorted(candidates - {retained_id})
+        )
     source_entry_ids = {row[1] for row in collisions}
     params["source_entry_ids"] = list(source_entry_ids)
     params["target_entry_ids"] = list({row[2] for row in collisions})
 
-    # Every mutation below is a **scheduling input** changing (ADR "the schedule
-    # is solved; the call is pinned"): a withdrawal or an un-cut.
-    # ``request_solve``'s contract wants the
-    # tournament row lock held first, and the lock ORDER every writer follows is
-    # tournament → schedule_solves → tournament_fixtures — so the collided
-    # tournaments are locked HERE, before any entry mutation or draw un-cut
-    # takes downstream row locks. ``merge_user`` holds no tournament lock of its
-    # own here — the same situation ``on_match_completed`` is in, and the
-    # same remedy: take the lock yourself. Ordered by id so two concurrent
-    # merges touching the same pair of tournaments lock them in one order
-    # instead of deadlocking. (The ownership re-point earlier in ``merge_user``
-    # may already hold some of these rows — re-locking a row this transaction
-    # holds is a no-op, so no inversion is introduced within the merge itself.)
-    # The lock also makes the ``draw_has_play`` partition below read what the
-    # last committed writer wrote, exactly as the cut/un-cut routes read it.
+    # Parent locks serialize reconciliation with registration, draws and play.
+    # Re-locking the caller's ordered tournament set is harmless.
     event_tournament_ids: dict[uuid.UUID, uuid.UUID] = dict(
         (
             await db.execute(
@@ -638,21 +755,100 @@ async def _resolve_entry_collisions(
         .with_for_update()
     )
 
-    # Partition the collided events by evidence of play (a fixture with a ``match_id``
-    # or a ``winner_entry_id`` — the ``draw_has_play`` the cut/un-cut verbs gate on).
-    # An **unplayed** event's draw is regenerated (steps 1–3 below); a **played** one's
-    # cannot be — its matches exist and may carry scores — so its guest entry is
-    # withdrawn instead, and its self-play matches ride ``merge_user``'s ADR-0013 path.
-    played_event_ids = {
-        event_id for event_id in collided_event_ids if await draw_has_play(db, event_id)
+    # Registration can remain open after event-wide competition withdrawal.
+    # Only a duplicate in the same eligible field the initial cut reads can
+    # change that field when reconciliation supersedes it.
+    fields = await active_draw_entrants_by_event(db, sorted(collided_event_ids))
+    eligible_entry_ids = {
+        entrant.entry_id for field in fields.values() for entrant in field
     }
-    unplayed_event_ids = collided_event_ids - played_event_ids
+    changed_field_event_ids = {
+        event_id
+        for event_id, duplicate_id, _ in collisions
+        if duplicate_id in eligible_entry_ids
+    }
+    played_event_ids = {
+        event_id
+        for event_id in changed_field_event_ids
+        if await draw_has_play(db, event_id)
+    }
+    unplayed_event_ids = changed_field_event_ids - played_event_ids
 
     # Which tournaments this collision's mutations owe a re-solve. Filled by
     # both arms below, deduped so a merge that touches two events of one
     # tournament enqueues at most one solve for it (``request_solve`` would
     # coalesce the duplicate anyway; no reason to make it).
     solve_tournament_ids: set[uuid.UUID] = set()
+
+    # Recorded play chooses the durable survivor, not whether registration is
+    # still open. Carry an active duplicate's registration onto a withdrawn
+    # survivor with a new period; its ended participation remains unchanged.
+    # Do this before closing duplicates so priority can still
+    # follow their reconciled registration periods.
+    reactivated_entry_ids = {
+        retained_id
+        for _, duplicate_id, retained_id in collisions
+        if entries[retained_id].status is TournamentEntryStatus.withdrawn
+        and entries[duplicate_id].status is TournamentEntryStatus.entered
+    }
+    if reactivated_entry_ids:
+        db.add_all(
+            TournamentEntryRegistration(
+                entry_id=entry_id, registered_by_account_id=actor_account_id
+            )
+            for entry_id in sorted(reactivated_entry_ids)
+        )
+        await db.execute(
+            update(TournamentEntry)
+            .where(TournamentEntry.id.in_(reactivated_entry_ids))
+            .values(status=TournamentEntryStatus.entered)
+        )
+
+        # Transfer event eligibility only from an eligible active duplicate.
+        # Restoration closes the old ban's interval; it does not reopen any
+        # ended participation or grant admission to the standing draw.
+        blocked_duplicate_ids = set(
+            await db.scalars(
+                select(TournamentEntryWithdrawal.entry_id).where(
+                    TournamentEntryWithdrawal.entry_id.in_(source_entry_ids),
+                    TournamentEntryWithdrawal.stage_id.is_(None),
+                    TournamentEntryWithdrawal.restored_at.is_(None),
+                )
+            )
+        )
+        eligible_survivor_ids = {
+            retained_id
+            for _, duplicate_id, retained_id in collisions
+            if retained_id in reactivated_entry_ids
+            and entries[duplicate_id].status is TournamentEntryStatus.entered
+            and duplicate_id not in blocked_duplicate_ids
+        }
+        for entry_id in sorted(eligible_survivor_ids):
+            await restore_event_eligibility(db, entry_id, actor_account_id)
+
+    # (1) Copy metadata between the captured collision entries while both are
+    # still registered. A played source can survive its target duplicate; the
+    # withdrawal below must not erase that duplicate from this transfer.
+    await db.execute(
+        text(
+            """
+            UPDATE tournament_entries AS survivor
+            SET created_at = LEAST(survivor.created_at, guest.created_at),
+                seed = COALESCE(survivor.seed, guest.seed)
+            FROM tournament_entries AS guest
+            WHERE survivor.id = ANY(:target_entry_ids)
+              AND survivor.status = :active
+              AND guest.id = ANY(:source_entry_ids)
+              AND guest.status = :active
+              AND guest.event_id = survivor.event_id
+              AND guest.event_id IN (
+                SELECT id FROM tournament_events
+                WHERE NOT allow_multiple_entries_per_player
+              )
+            """
+        ),
+        params,
+    )
 
     if played_event_ids:
         # The withdrawal arm's solve gate, read while the guest's entries are
@@ -694,8 +890,7 @@ async def _resolve_entry_collisions(
             .scalars()
             .all()
         )
-        # Preserve played fixtures and original memberships. Withdrawal also
-        # removes these collisions from the unplayed-event self-joins below.
+        # Preserve played fixtures and original memberships.
         await db.execute(
             update(TournamentEntry)
             .where(
@@ -705,29 +900,6 @@ async def _resolve_entry_collisions(
             )
             .values(status=TournamentEntryStatus.withdrawn)
         )
-
-    # (1) Registration order and seed follow the earlier registration onto the
-    # survivor.
-    await db.execute(
-        text(
-            """
-            UPDATE tournament_entries AS survivor
-            SET created_at = LEAST(survivor.created_at, guest.created_at),
-                seed = COALESCE(survivor.seed, guest.seed)
-            FROM tournament_entries AS guest
-            WHERE survivor.id = ANY(:target_entry_ids)
-              AND survivor.status = :active
-              AND guest.id = ANY(:source_entry_ids)
-              AND guest.status = :active
-              AND guest.event_id = survivor.event_id
-              AND guest.event_id IN (
-                SELECT id FROM tournament_events
-                WHERE NOT allow_multiple_entries_per_player
-              )
-            """
-        ),
-        params,
-    )
 
     # Read which unplayed events had a draw before un-cutting it. Only a
     # removed draw owes a solve; an undrawn event has no schedule to change.
@@ -771,18 +943,25 @@ async def _resolve_entry_collisions(
         params,
     )
 
-    # (3) Un-cut the draws the double-counted field invalidated — the **unplayed** ones
-    # only. A played event's draw cannot be un-cut (the play guard, and it would delete
-    # the fixtures its matches hang off); its guest entry was withdrawn above instead.
-    # ``uncut_draw`` is the one place a draw is deleted (ADR-0786) — a hand-rolled
-    # DELETE here would be a second spelling of "this event has no draw" to keep in step
-    # with the first — and it no-ops on an empty set, so an all-played collision deletes
-    # nothing. It takes the ids straight: the events themselves are never needed, so
-    # loading them would be a SELECT run purely to read back the ids we already hold.
+    for _, duplicate_id, retained_id in collisions:
+        await close_registration(
+            db, duplicate_id, actor_account_id, WithdrawalReason.identity_reconciliation
+        )
+        await db.execute(
+            update(TournamentEntry)
+            .where(TournamentEntry.id == duplicate_id)
+            .values(
+                status=TournamentEntryStatus.withdrawn,
+                superseded_by_entry_id=retained_id,
+            )
+        )
+
+    # Retire only unplayed draws whose active field changed. The shared operation
+    # preserves the previous revision, fixtures and ended participation periods.
     await uncut_draw(db, unplayed_event_ids)
 
     # The uncut arm's solve gate, AFTER the un-cut — uncut_event_draw's
-    # doctrine: fixtures were deleted wholesale, which frees this event's
+    # doctrine: the former draw was retired, which frees this event's
     # tables and windows for whatever is still drawn, so a solve is owed only
     # where a drawn event SURVIVES (same helper, same reasoning: un-cutting the
     # tournament's only draw leaves nothing to place, and a solve row over an

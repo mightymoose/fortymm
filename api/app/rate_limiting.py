@@ -127,3 +127,28 @@ class RedisRateLimiter:
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                 detail="Too Many Requests",
             )
+
+
+class RateLimitUnavailable(Exception):
+    """A fail-closed admission budget cannot currently be checked."""
+
+
+async def check_expiring_budget(key: str, *, limit: int, seconds: int) -> bool:
+    """Charge a fixed-window budget without a process cache or permanent Redis key.
+
+    Callers validate credentials before allocating their bucket. Charging lives
+    outside their database transaction, so a domain rollback cannot refund work.
+    """
+    if _redis is None:
+        raise RateLimitUnavailable()
+    try:
+        count = await _redis.eval(
+            "local n = redis.call('INCR', KEYS[1]); "
+            "if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end; return n",
+            1,
+            key,
+            seconds,
+        )
+        return int(count) <= limit
+    except redis_asyncio.RedisError as error:
+        raise RateLimitUnavailable() from error

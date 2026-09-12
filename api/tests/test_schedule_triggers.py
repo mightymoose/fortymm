@@ -293,10 +293,7 @@ async def test_go_live_survives_a_dead_scheduling_queue(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Redis down at the go-live moment costs the solve, never the transition:
-    the tournament still goes live with its matches materialized, and no
-    zombie ``queued`` row is left to absorb every later trigger — the pin tick
-    or the Run-scheduler button recover the missing solve."""
+    """Go-live and its required solve both survive a Redis outage."""
     client, owner = authed_client
     tournament_id, event = await _make_tournament(db_session, owner)
     entrants = [await make_user(db_session, f"dead-{i}") for i in range(3)]
@@ -309,10 +306,9 @@ async def test_go_live_survives_a_dead_scheduling_queue(
     assert response.json()["status"] == "live"
     fixtures = await _fixtures_of(db_session, event.id)
     assert all(f.match_id is not None for f in fixtures)
-    assert await _solve_rows(db_session, tournament_id) == [], (
-        "the enqueue failed, so no row may survive — a zombie would absorb "
-        "every later trigger while no job ever runs"
-    )
+    assert [row.status for row in await _solve_rows(db_session, tournament_id)] == [
+        ScheduleSolveStatus.queued
+    ]
 
 
 # ----- completion --------------------------------------------------------------

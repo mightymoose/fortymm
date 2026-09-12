@@ -3,20 +3,9 @@ detail BFF's solve strip (``latest_schedule_solve`` + the fixtures' pin facts) �
 the owner-facing surface of ADR "the schedule is solved; the call is pinned".
 
 The route is exercised over real HTTP with the real permission and ownership
-gates (sessions via ``GET /v1/session``, CSRF hooks baked into the clients — the
-``tests/test_tournaments.py`` conventions). Two queue set-ups, exactly as in
-``tests/test_schedule_solve_service.py``:
-
-* Under conftest's autouse **synchronous** fake queue, the enqueued job runs
-  inline *before* the route's transaction commits, finds no committed ``queued``
-  row, and exits as stale — so the queued-row tests observe the row the route
-  answered with, still ``queued``, which is precisely what a real client would
-  see the instant the 202 lands.
-* The drain test swaps in an **async** record-only queue, commits through the
-  route, then runs the recorded job the way a worker would — and reads the
-  outcome back through the detail BFF, because the page is the contract: the
-  solve strip and the pin facts are worth nothing in the database if they do not
-  reach the payload the Schedule tab renders.
+gates (sessions via ``GET /v1/session``, CSRF hooks baked into the clients).
+The fake queue records work after commit. The drain test invokes the recorded
+worker and reads the outcome through the detail BFF that feeds the page.
 """
 
 import uuid
@@ -588,3 +577,20 @@ async def test_after_the_drained_job_the_solve_strip_and_pin_facts_reach_the_pag
         assert start + timedelta(minutes=MATCH_MINUTES) <= WINDOW_END
         assert fixture["pinned_at"] is None
         assert fixture["call_notified_count"] == 0
+
+
+async def test_schedule_request_is_accepted_when_redis_is_unavailable(
+    authed_client, db_session, monkeypatch
+):
+    from redis.exceptions import RedisError
+
+    client, owner = authed_client
+    tournament_id, _ = await _make_tournament(db_session, owner)
+
+    def unavailable():
+        raise RedisError("transport unavailable")
+
+    monkeypatch.setattr(queue_module, "get_queue", unavailable)
+    response = await client.post(_solves_url(tournament_id))
+    assert response.status_code == 202
+    assert response.json()["status"] == "queued"

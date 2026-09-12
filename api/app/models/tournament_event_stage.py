@@ -6,6 +6,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     UniqueConstraint,
     func,
@@ -41,7 +42,8 @@ class TournamentEventStage(Base):
     ``position`` is 0-based, mirroring ``tournament_event_stage_groups.position`` and
     ``tournament_tables.position``. Position 0 is the row the ADR calls "stage 1" — the
     one a director's groups hang off today, and the one that keeps its identity across a
-    draw-type change (decision 3).
+    draw-type change before its first draw. Once used in a draw, the row is retained
+    unchanged and a fresh configuration takes over when that draw is retired.
     """
 
     __tablename__ = "tournament_event_stages"
@@ -56,17 +58,19 @@ class TournamentEventStage(Base):
         UniqueConstraint(
             "event_id", "id", name="uq_tournament_event_stages_event_id_id"
         ),
-        # Two stages of one event never share a place in its order. NOT deferrable,
-        # unlike the sibling group/table position constraints: those are written as a
-        # client-ordered diff that can re-order and so needs the intermediate state
-        # tolerated. A stage's position never swaps — the re-mint in place only ever
-        # appends past the template's old length or truncates from the tail (ADR
-        # 20260815 decision 3) — so nothing here ever asks for an intermediate
-        # duplicate.
-        UniqueConstraint(
-            "event_id", "position", name="uq_tournament_event_stages_event_id_position"
+        # Retired draw configurations retain their positions; only the current
+        # configuration has one stage per event position. Archive updates flush
+        # before editable replacement stages are inserted.
+        Index(
+            "uq_tournament_event_stages_event_id_position",
+            "event_id",
+            "position",
+            unique=True,
+            postgresql_where=text("retired_at IS NULL"),
         ),
     )
+
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),

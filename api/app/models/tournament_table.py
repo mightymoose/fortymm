@@ -120,8 +120,8 @@ class VenueTable(Base):
     # beside the array it is derived from would be carrying a field and its own
     # derivation (api/CLAUDE.md).
     position: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    #: Explicit removal after a call retires the stable identity instead of erasing its
-    #: call history. Retired rows have no catalogue position and are omitted from reads.
+    #: Explicit removal after history exists retires the stable identity rather than
+    #: erasing it. Retired rows have no catalogue position and are omitted from reads.
     retired_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

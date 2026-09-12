@@ -27,8 +27,9 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.models import (
     Match,
@@ -297,36 +298,53 @@ async def apply_table_catalogue(
         unplaced_event_ids = await _unplace_or_refuse(
             db, removed, unplace=unplace_fixtures
         )
-
-    called_table_ids: set[str] = set()
-    if removed:
+        removed_ids = [str(table.id) for table in removed]
+        historical_table_ids = set(
+            await db.scalars(
+                select(TournamentFixture.table_id)
+                .where(
+                    TournamentFixture.table_id.in_(removed_ids),
+                    TournamentFixture.retired_at.is_not(None),
+                )
+                .execution_options(include_draw_history=True)
+            )
+        )
         called_table_ids = set(
             (
                 await db.scalars(
                     select(VenueTableCallHistory.table_id).where(
                         VenueTableCallHistory.tournament_id == tournament.id,
-                        VenueTableCallHistory.table_id.in_(
-                            [str(table.id) for table in removed]
-                        ),
+                        VenueTableCallHistory.table_id.in_(removed_ids),
                     )
                 )
             ).all()
         )
+        retired_ids = historical_table_ids | called_table_ids
+        retired = [table for table in removed if str(table.id) in retired_ids]
+    else:
+        retired_ids = set()
 
     retired_now = datetime.now(UTC)
-    for table in removed:
-        if str(table.id) not in called_table_ids:
-            continue
-        table.retired_at = retired_now
-        table.position = None
-        retired.append(table)
+    if retired_ids:
+        await db.execute(
+            update(VenueTable)
+            .where(VenueTable.id.in_(retired_ids))
+            .values(
+                retired_at=retired_now,
+                position=None,
+                updated_at=VenueTable.updated_at,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        for table in retired:
+            set_committed_value(table, "retired_at", retired_now)
+            set_committed_value(table, "position", None)
 
-    if called_table_ids:
         memberships = (
             await db.scalars(
                 select(TournamentEventReservationTable).where(
                     TournamentEventReservationTable.tournament_id == tournament.id,
-                    TournamentEventReservationTable.table_id.in_(called_table_ids),
+                    TournamentEventReservationTable.table_id.in_(retired_ids),
                     TournamentEventReservationTable.effective_until.is_(None),
                 )
             )
@@ -338,15 +356,20 @@ async def apply_table_catalogue(
             )
             membership.position = None
 
-    # Assigning the collection retains retired identities alongside the active rows.
-    # The active list order IS the catalogue order, so the read-back is in the order the
+        # A retired table is outside the active-only relationship. Detach it without
+        # triggering delete-orphan; the row itself and its retained references remain.
+        set_committed_value(
+            tournament,
+            "tables",
+            [table for table in tournament.tables if table not in retired],
+        )
+
+    # Assigning the active collection applies removals and reordering in one diff. The
+    # active list order IS the catalogue order, so the read-back is in the order the
     # director sent without waiting for a re-select.
     tournament.tables = [
-        *retired,
-        *(
-            _table_for(stored, entry, position)
-            for position, entry in enumerate(submitted)
-        ),
+        _table_for(stored, entry, position)
+        for position, entry in enumerate(submitted)
     ]
     return AppliedCatalogue(
         changed=bool(removed) or any(entry.id is None for entry in submitted),

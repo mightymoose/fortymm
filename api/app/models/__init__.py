@@ -50,8 +50,12 @@ from app.models.tournament_account_grant import (
     TournamentAccountRole,
     TournamentOwnershipTransfer,
 )
+from app.models.tournament_draw_revision import TournamentDrawRevision
 from app.models.tournament_entry import TournamentEntry, TournamentEntryStatus
 from app.models.tournament_entry_member import TournamentEntryMember
+from app.models.tournament_entry_participation import TournamentEntryParticipation
+from app.models.tournament_entry_registration import TournamentEntryRegistration
+from app.models.tournament_entry_withdrawal import TournamentEntryWithdrawal
 from app.models.tournament_event_draw_settings import TournamentEventDrawSettings
 from app.models.tournament_event_group_reservation import (
     TournamentEventGroupReservation,
@@ -121,6 +125,10 @@ __all__ = [
     "SolverVerdict",
     "Tournament",
     "TournamentEntry",
+    "TournamentEntryWithdrawal",
+    "TournamentDrawRevision",
+    "TournamentEntryParticipation",
+    "TournamentEntryRegistration",
     "TournamentEntryMember",
     "TournamentEntryStatus",
     "TournamentEvent",
@@ -147,4 +155,9 @@ __all__ = [
 ]
 
 from app.models import advancement_integrity as advancement_integrity
+from app.models import draw_visibility as draw_visibility
+from app.models import entry_supersession as entry_supersession
+from app.models import participation_integrity as participation_integrity
 from app.models.advancement_decision import AdvancementDecision, AdvancementEvidence
+from app.models.required_repair import RepairAttempt as RepairAttempt
+from app.models.required_repair import RequiredRepair as RequiredRepair

@@ -26,7 +26,7 @@ and its 500.
 import uuid
 from typing import assert_never
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.draws import DrawError, NonSinglesDraw, draw_error_detail, order_entrants
@@ -38,14 +38,13 @@ from app.models import (
     ScheduleSolveTrigger,
     Tournament,
     TournamentEvent,
-    TournamentFixture,
     TournamentStatus,
     User,
-    VenueTableCallHistory,
 )
 from app.schedule_solves import request_solve
 from app.schemas.tournament import TournamentCreate, named_list
 from app.tournament_authority import require_owner
+from app.tournament_draw_limits import lock_draw_actor
 from app.tournament_draws import (
     DrawCurrency,
     active_draw_entrants_by_event,
@@ -64,7 +63,6 @@ from app.tournament_errors import (
 )
 from app.tournament_geocoding import geocode_address
 from app.tournament_materialization import materialize_live_draw
-from app.tournament_queries import stage_ids_for_tournament
 from app.tournament_realtime import stage_tournament_entrant_hints
 from app.tournament_retention import require_no_recorded_play
 from app.tournament_tables import stored_tables
@@ -218,39 +216,18 @@ async def delete_tournament(
     Issues the ``DELETE`` and commits it. Never raises ``HTTPException`` — the caller
     adapts each domain exception to its transport.
 
-    It also **unplaces every fixture first**, and that one IS the mechanism. A
-    fixture's ``table_id`` is a foreign key with ``ON DELETE RESTRICT`` (ADR 20260801),
-    ``Tournament.tables`` is loaded, so SQLAlchemy issues the child ``DELETE`` of
-    ``tournament_tables`` **itself** — as its own statement, ahead of the
-    ``tournaments`` row whose cascade takes the fixtures. RESTRICT is checked
-    immediately and cannot be deferred, so at that moment the fixtures are still
-    there, still pointing at the tables, and the whole delete dies on a foreign-key
-    violation. Dropping the references first is not a policy decision sneaking in:
-    RESTRICT exists so a placement is not destroyed as a side effect of editing the
-    **venue**, and this is not a venue edit — the fixture is being deleted too, one
-    statement later, along with everything else the director asked to be rid of. The
-    refusal that ADR belongs to is the tournament PATCH's, over a table removed out
-    from under a fixture that survives it.
+    Delete the parent with database cascades so retained child history disappears
+    only as part of the explicitly requested tournament deletion.
     """
+    await lock_draw_actor(db, actor.id)
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
     await require_owner(db, tournament, actor.id)
     await require_no_recorded_play(db, tournament_id=tournament.id)
-    # ``event_id`` no longer lives on the fixture (ADR 20260815 decision 5); the event
-    # is reachable through the stage.
-    await db.execute(
-        update(TournamentFixture)
-        .where(TournamentFixture.stage_id.in_(stage_ids_for_tournament(tournament.id)))
-        .values(table_id=None)
-    )
-    # Table call history is RESTRICTed from physical table deletion; purge it only
-    # when its owning tournament is explicitly deleted as a whole.
-    await db.execute(
-        delete(VenueTableCallHistory).where(
-            VenueTableCallHistory.tournament_id == tournament.id
-        )
-    )
-    await db.delete(tournament)
-    await db.flush()
+    # Delete the parent in one database statement. ORM child deletes would run
+    # before the parent disappears, violating retained-history guards and table
+    # references. Deferred table-call integrity lets the explicit tournament delete
+    # cascade its own history and tables together.
+    await db.execute(delete(Tournament).where(Tournament.id == tournament.id))
     await db.commit()
 
 
@@ -531,6 +508,8 @@ async def transition_tournament(
     Runs the same orchestration the HTTP handler used to run inline, in the same
     order and under the same lock:
 
+    * Every transition first acquires the nonblocking actor gate, refusing
+      concurrent tournament operations before waiting for a tournament lock.
     * Loads under the tournament row lock via
       :func:`_load_owned_tournament_for_update` (the ``FOR UPDATE`` load, then the
       owner gate), so the refusals are judged **404 → 403 → 409**: an absent id raises
@@ -540,7 +519,8 @@ async def transition_tournament(
       cannot touch is in. The lock is essential: two identical requests racing here
       would otherwise both read the same ``from``, both find a legal edge, and both
       succeed, turning the "already in that status" conflict into a silent no-op. The
-      loser now blocks, re-reads the committed status, and gets the 409 it is owed.
+      loser receives a busy 409 while the winner is active, or re-reads the
+      committed status and receives the already-in-status 409 after it finishes.
     * **409** — the forward-only :data:`LEGAL_TRANSITIONS` table judges the edge. A
       re-asserted status raises :class:`TournamentAlreadyInStatusError` (its own
       single-ended sentence); any other illegal edge raises
@@ -571,6 +551,7 @@ async def transition_tournament(
     Commits and refreshes before returning. Never raises ``HTTPException`` — the
     caller adapts each domain exception to its transport.
     """
+    await lock_draw_actor(db, actor.id)
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
 
     if (tournament.status, to) not in LEGAL_TRANSITIONS:
