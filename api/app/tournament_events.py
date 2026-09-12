@@ -59,6 +59,7 @@ from app.schemas.tournament import (
     named_list,
     reservation_windows,
 )
+from app.tournament_draw_limits import lock_draw_actor
 from app.tournament_draw_settings import (
     draw_settings_of,
     draw_settings_value,
@@ -270,6 +271,7 @@ async def delete_event(
     Draw settings are inline event values and disappear with this row, including
     when the event is deleted by a database cascade.
     """
+    await lock_draw_actor(db, actor.id)
     await _load_owned_tournament_for_update(db, tournament_id, actor)
     event = await _load_event(db, tournament_id, event_id)
     await require_no_recorded_play(db, tournament_id=tournament_id, event_id=event.id)

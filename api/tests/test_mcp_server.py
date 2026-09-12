@@ -5385,7 +5385,9 @@ async def test_build_cut_storage_limit_raises_actionable_tool_error(
             await client.call_tool("build_cut", {"event_id": str(event.id)})
 
 
-@pytest.mark.parametrize("tool_name", ["build_cut", "uncut"])
+@pytest.mark.parametrize(
+    "tool_name", ["build_cut", "uncut", "delete_event", "delete_tournament"]
+)
 async def test_draw_change_busy_actor_returns_actionable_refusal(
     db_session: AsyncSession, engine, default_league: League, tool_name: str
 ) -> None:
@@ -5397,13 +5399,20 @@ async def test_draw_change_busy_actor_returns_actionable_refusal(
 
     owner = await make_user(db_session, "mcp-busy-draw-owner")
     raw = await _mint(db_session, owner)
-    _, event = await _seed_drawable_tournament(db_session, owner, default_league)
+    tournament, event = await _seed_drawable_tournament(
+        db_session, owner, default_league
+    )
     actor_id, event_id = owner.id, event.id
+    arguments = {"event_id": str(event_id)}
+    if tool_name in ("delete_event", "delete_tournament"):
+        arguments["tournament_id"] = str(tournament.id)
+    if tool_name == "delete_tournament":
+        arguments.pop("event_id")
     sessions = async_sessionmaker(engine)
     async with sessions() as gate:
         await lock_draw_actor(gate, actor_id)
         async with _mcp_client(raw) as client, client:
             async with asyncio.timeout(1):
                 with pytest.raises(ToolError, match="already in progress.*Retry"):
-                    await client.call_tool(tool_name, {"event_id": str(event_id)})
+                    await client.call_tool(tool_name, arguments)
         await gate.rollback()

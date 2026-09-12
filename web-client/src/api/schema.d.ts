@@ -1135,7 +1135,13 @@ export interface paths {
         get: operations["get_tournament_v1_tournaments__tournament_id__get"];
         put?: never;
         post?: never;
-        /** Delete Tournament */
+        /**
+         * Delete Tournament
+         * @description Delete the owned tournament.
+         *
+         *     Another retained-history operation for this account causes a prompt 409;
+         *     retry after it finishes.
+         */
         delete: operations["delete_tournament_v1_tournaments__tournament_id__delete"];
         options?: never;
         head?: never;
@@ -1239,7 +1245,13 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Delete Event */
+        /**
+         * Delete Event
+         * @description Delete the owned event.
+         *
+         *     Another retained-history operation for this account causes a prompt 409;
+         *     retry after it finishes.
+         */
         delete: operations["delete_event_v1_tournaments__tournament_id__events__event_id__delete"];
         options?: never;
         head?: never;

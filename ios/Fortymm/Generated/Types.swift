@@ -680,6 +680,11 @@ internal protocol APIProtocol: Sendable {
     func updateTournamentV1TournamentsTournamentIdPatch(_ input: Operations.UpdateTournamentV1TournamentsTournamentIdPatch.Input) async throws -> Operations.UpdateTournamentV1TournamentsTournamentIdPatch.Output
     /// Delete Tournament
     ///
+    /// Delete the owned tournament.
+    ///
+    /// Another retained-history operation for this account causes a prompt 409;
+    /// retry after it finishes.
+    ///
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/delete(delete_tournament_v1_tournaments__tournament_id__delete)`.
     func deleteTournamentV1TournamentsTournamentIdDelete(_ input: Operations.DeleteTournamentV1TournamentsTournamentIdDelete.Input) async throws -> Operations.DeleteTournamentV1TournamentsTournamentIdDelete.Output
@@ -772,6 +777,11 @@ internal protocol APIProtocol: Sendable {
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/patch(update_event_v1_tournaments__tournament_id__events__event_id__patch)`.
     func updateEventV1TournamentsTournamentIdEventsEventIdPatch(_ input: Operations.UpdateEventV1TournamentsTournamentIdEventsEventIdPatch.Input) async throws -> Operations.UpdateEventV1TournamentsTournamentIdEventsEventIdPatch.Output
     /// Delete Event
+    ///
+    /// Delete the owned event.
+    ///
+    /// Another retained-history operation for this account causes a prompt 409;
+    /// retry after it finishes.
     ///
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/events/{event_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/delete(delete_event_v1_tournaments__tournament_id__events__event_id__delete)`.
@@ -2255,6 +2265,11 @@ extension APIProtocol {
     }
     /// Delete Tournament
     ///
+    /// Delete the owned tournament.
+    ///
+    /// Another retained-history operation for this account causes a prompt 409;
+    /// retry after it finishes.
+    ///
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/delete(delete_tournament_v1_tournaments__tournament_id__delete)`.
     internal func deleteTournamentV1TournamentsTournamentIdDelete(
@@ -2385,6 +2400,11 @@ extension APIProtocol {
         ))
     }
     /// Delete Event
+    ///
+    /// Delete the owned event.
+    ///
+    /// Another retained-history operation for this account causes a prompt 409;
+    /// retry after it finishes.
     ///
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/events/{event_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/delete(delete_event_v1_tournaments__tournament_id__events__event_id__delete)`.
@@ -24510,6 +24530,11 @@ internal enum Operations {
     }
     /// Delete Tournament
     ///
+    /// Delete the owned tournament.
+    ///
+    /// Another retained-history operation for this account causes a prompt 409;
+    /// retry after it finishes.
+    ///
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/delete(delete_tournament_v1_tournaments__tournament_id__delete)`.
     internal enum DeleteTournamentV1TournamentsTournamentIdDelete {
@@ -25316,6 +25341,11 @@ internal enum Operations {
         }
     }
     /// Delete Event
+    ///
+    /// Delete the owned event.
+    ///
+    /// Another retained-history operation for this account causes a prompt 409;
+    /// retry after it finishes.
     ///
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/events/{event_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/events/{event_id}/delete(delete_event_v1_tournaments__tournament_id__events__event_id__delete)`.

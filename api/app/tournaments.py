@@ -603,6 +603,11 @@ async def delete_tournament(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> Response:
+    """Delete the owned tournament.
+
+    Another retained-history operation for this account causes a prompt 409;
+    retry after it finishes.
+    """
     # Thin adapter over the transport-neutral ``delete_tournament`` verb: it owns
     # the load-lock, the owner gate and the delete, and signals each refusal with a
     # domain exception. This handler maps each back to the exact status + body it
@@ -618,6 +623,8 @@ async def delete_tournament(
         # The shared arms: the 404 (absent) and the 403 (not the owner) map
         # identically across the owner-only writes.
         raise _map_tournament_write_error(exc) from exc
+    except DrawActorBusy as error:
+        raise _draw_refusal(error) from error
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -994,6 +1001,11 @@ async def delete_event(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> Response:
+    """Delete the owned event.
+
+    Another retained-history operation for this account causes a prompt 409;
+    retry after it finishes.
+    """
     # Thin adapter over the transport-neutral ``delete_event`` verb: it owns the
     # ``FOR UPDATE`` owner-load (404 tournament → 403 not-owner), the event load (404
     # event) and the delete, and signals each refusal with a domain exception. This
@@ -1010,6 +1022,8 @@ async def delete_event(
         )
     except _TOURNAMENT_WRITE_ERRORS as exc:
         raise _map_tournament_write_error(exc) from exc
+    except DrawActorBusy as error:
+        raise _draw_refusal(error) from error
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

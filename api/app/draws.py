@@ -222,7 +222,7 @@ def draw_error_detail(error: DrawError) -> str:
     match error:
         case DrawActorBusy():
             detail = (
-                "A draw change is already in progress for this account. "
+                "A tournament operation is already in progress for this account. "
                 "Retry after that operation finishes."
             )
         case DrawStorageLimitExceeded():

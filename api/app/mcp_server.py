@@ -1311,6 +1311,9 @@ async def delete_tournament(tournament_id: uuid.UUID) -> TournamentDeletionConfi
 
     Raises a ``ToolError`` when no tournament with that id exists, or when you are not
     the tournament's owner (only the creator may delete it).
+
+    Another retained-history operation for this account causes a ToolError;
+    retry after it finishes.
     """
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
@@ -1323,6 +1326,8 @@ async def delete_tournament(tournament_id: uuid.UUID) -> TournamentDeletionConfi
             raise _map_tournament_write_tool_error(
                 exc, tournament_id=tournament_id, owner_denial="delete"
             ) from exc
+        except DrawActorBusy as error:
+            raise _map_draw_refusal_tool_error(error) from error
         return TournamentDeletionConfirmation(tournament_id=tournament_id)
 
 
@@ -1598,6 +1603,9 @@ async def delete_event(
 
     Raises a ``ToolError`` when no tournament with that id exists, when you are not the
     tournament's owner, or when no event with that id exists under the tournament.
+
+    Another retained-history operation for this account causes a ToolError;
+    retry after it finishes.
     """
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
@@ -1615,6 +1623,8 @@ async def delete_event(
                 event_id=event_id,
                 owner_denial="delete events from",
             ) from exc
+        except DrawActorBusy as error:
+            raise _map_draw_refusal_tool_error(error) from error
         return EventDeletionConfirmation(tournament_id=tournament_id, event_id=event_id)
 
 
