@@ -171,7 +171,9 @@ def _enforce_table_exists(tournament: Tournament, table_id: str | None) -> None:
     """
     if table_id is None:
         return
-    if table_id not in {str(table.id) for table in tournament.tables}:
+    if table_id not in {
+        str(table.id) for table in tournament.tables if table.retired_at is None
+    }:
         raise PlacementTableNotFoundError(table_id)
 
 

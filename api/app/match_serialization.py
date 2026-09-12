@@ -896,7 +896,11 @@ async def tournament_context(
 
     table_label = (
         next(
-            (t.label for t in tournament.tables if str(t.id) == fixture.table_id),
+            (
+                t.label
+                for t in tournament.tables
+                if t.retired_at is None and str(t.id) == fixture.table_id
+            ),
             None,
         )
         if fixture.table_id is not None

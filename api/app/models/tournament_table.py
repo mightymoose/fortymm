@@ -43,7 +43,13 @@ class VenueTable(Base):
 
     __tablename__ = "tournament_tables"
     __table_args__ = (
-        CheckConstraint("position >= 0", name="ck_tournament_tables_position"),
+        CheckConstraint(
+            "position IS NULL OR position >= 0", name="ck_tournament_tables_position"
+        ),
+        CheckConstraint(
+            "(retired_at IS NULL) = (position IS NOT NULL)",
+            name="ck_tournament_tables_retirement_position",
+        ),
         # The catalogue's order is the director's order, so it is read (and deleted
         # against) by this index. It doubles as the index Postgres does NOT create for
         # a REFERENCING column: ``tournament_id`` is on the tournament-delete cascade
@@ -98,8 +104,9 @@ class VenueTable(Base):
     )
     label: Mapped[str] = mapped_column(String(255), nullable=False)
     court: Mapped[str] = mapped_column(String(255), nullable=False)
-    # Where this table sits in its tournament's catalogue: 0-based, contiguous,
-    # assigned by the server from the index the table arrived at.
+    # Where an active table sits in its tournament's catalogue: 0-based, contiguous,
+    # assigned by the server from the index the table arrived at. Retired rows clear
+    # this value so they no longer occupy an active catalogue position.
     #
     # It is not decoration. Under the random UUID primary key above, ordering the
     # catalogue by ``id`` is *arbitrary* and ordering it by ``created_at`` is worse than
@@ -112,7 +119,12 @@ class VenueTable(Base):
     # this column, and the write shape's order is what assigns it. Carrying the number
     # beside the array it is derived from would be carrying a field and its own
     # derivation (api/CLAUDE.md).
-    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    position: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Explicit removal after a call retires the stable identity instead of erasing its
+    #: call history. Retired rows have no catalogue position and are omitted from reads.
+    retired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

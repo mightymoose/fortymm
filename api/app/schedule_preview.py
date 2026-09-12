@@ -101,9 +101,10 @@ not in it at all.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from math import ceil, floor
 from typing import assert_never
 
 from app.draws import (
@@ -118,6 +119,7 @@ from app.draws import (
     seats_both_sides_at_cut,
 )
 from app.models.tournament import DrawType, Tournament, TournamentEvent
+from app.models.tournament_table_outage import VenueTableOutage
 from app.schedule_solves import (
     event_wide_reservation_key,
     group_reservation_ids,
@@ -134,6 +136,7 @@ from app.scheduling import (
     ScheduleReservation,
     ScheduleSnapshot,
     TableId,
+    TableOutage,
     Window,
 )
 from app.schemas.tournament import MatchSettings, Reservation, Slot, TournamentTable
@@ -412,6 +415,7 @@ def build_preview_snapshot(
     tournament: Tournament,
     *,
     count_overrides: Mapping[uuid.UUID, int] | None = None,
+    table_outages: Sequence[VenueTableOutage] = (),
     now: datetime | None = None,
 ) -> PreviewSnapshot:
     """Synthesize a :class:`PreviewSnapshot` from a *loaded* tournament's config.
@@ -479,7 +483,9 @@ def build_preview_snapshot(
     # already in the director's order. The solver's ``TableId`` stays a string, so a
     # table's UUID id crosses into it as its text.
     catalogue_tables = [
-        TournamentTable.model_validate(table) for table in tournament.tables
+        TournamentTable.model_validate(table)
+        for table in tournament.tables
+        if table.retired_at is None
     ]
     catalogue = tuple(TableId(str(table.id)) for table in catalogue_tables)
     catalogue_ids = set(catalogue)
@@ -641,6 +647,10 @@ def build_preview_snapshot(
     def to_min(moment: datetime) -> int:
         return int((moment - origin).total_seconds() // 60)
 
+    def outage_to_min(moment: datetime, *, round_up: bool) -> int:
+        minutes = (moment - origin).total_seconds() / 60
+        return ceil(minutes) if round_up else floor(minutes)
+
     # ``now_min`` is the real current instant's offset from the frame origin —
     # exactly how ``_load_solver_inputs`` derives the live solve's ``now`` (both
     # ``to_min(now)`` off the same earliest-window base), so the preview's verdict
@@ -652,6 +662,22 @@ def build_preview_snapshot(
     # frame is empty and ``now_min`` is a harmless 0 (``origin`` is naive there — a
     # ``to_min(now)`` on the aware ``now`` would be meaningless anyway).
     now_min = max(0, to_min(now)) if base is not None else 0
+    schedule_table_outages = (
+        tuple(
+            TableOutage(
+                table_id=TableId(outage.table_id),
+                start_min=outage_to_min(outage.effective_from, round_up=False),
+                end_min=(
+                    outage_to_min(outage.effective_until, round_up=True)
+                    if outage.effective_until is not None
+                    else None
+                ),
+            )
+            for outage in table_outages
+        )
+        if base is not None
+        else ()
+    )
 
     # Second pass: convert each planned event into pure snapshot value-objects.
     schedule_reservations: list[ScheduleReservation] = []
@@ -769,6 +795,7 @@ def build_preview_snapshot(
         events=tuple(event_settings),
         fixtures=tuple(schedule_fixtures),
         now_min=now_min,
+        table_outages=schedule_table_outages,
     )
     return PreviewSnapshot(
         snapshot=snapshot,

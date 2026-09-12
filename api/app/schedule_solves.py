@@ -217,6 +217,7 @@ from app.models import (
     TournamentEventStage,
     TournamentFixture,
     TournamentStatus,
+    VenueTableOutage,
 )
 from app.rq_async import run_async_db_job
 from app.scheduling import (
@@ -244,6 +245,7 @@ from app.scheduling import (
     SolveResult,
     TableConflict,
     TableId,
+    TableOutage,
     Window,
     WindowTooShortForMatch,
     coalesce_rest_shadows,
@@ -996,6 +998,14 @@ async def _load_solver_inputs(
     if tournament is None:
         return None
 
+    table_outage_rows = (
+        await db.scalars(
+            select(VenueTableOutage)
+            .where(VenueTableOutage.tournament_id == tournament_id)
+            .order_by(VenueTableOutage.effective_from, VenueTableOutage.id)
+        )
+    ).all()
+
     events = (
         (
             await db.execute(
@@ -1108,7 +1118,9 @@ async def _load_solver_inputs(
     # it as its text — the same text a reservation's ``table_ids`` and a fixture's
     # ``table_id`` hold.
     parsed_tables = [
-        TournamentTable.model_validate(table) for table in tournament.tables
+        TournamentTable.model_validate(table)
+        for table in tournament.tables
+        if table.retired_at is None
     ]
     catalogue = tuple(TableId(str(table.id)) for table in parsed_tables)
     # table_id → catalogue label: the DB-aware resolution a placement conflict's
@@ -1263,7 +1275,24 @@ async def _load_solver_inputs(
     def to_min(moment: datetime) -> int:
         return int((moment - base).total_seconds() // 60)
 
+    def outage_to_min(moment: datetime, *, round_up: bool) -> int:
+        minutes = (moment - base).total_seconds() / 60
+        return math.ceil(minutes) if round_up else math.floor(minutes)
+
     now_min = to_min(now)
+
+    table_outages = tuple(
+        TableOutage(
+            table_id=TableId(outage.table_id),
+            start_min=outage_to_min(outage.effective_from, round_up=False),
+            end_min=(
+                outage_to_min(outage.effective_until, round_up=True)
+                if outage.effective_until is not None
+                else None
+            ),
+        )
+        for outage in table_outage_rows
+    )
 
     schedule_reservations = tuple(
         ScheduleReservation(
@@ -1424,6 +1453,7 @@ async def _load_solver_inputs(
         in_progress=tuple(in_progress),
         previous_plan=tuple(previous_plan),
         rest_shadows=coalesce_rest_shadows(rest_shadows),
+        table_outages=table_outages,
         # Soft-window policy fact (ADR "the solver stops wedging"): once the
         # tournament is live, a reservation window's end is advisory so wall-clock
         # passing it makes the day "overrunning", not instantly infeasible.
@@ -1437,6 +1467,18 @@ async def _load_solver_inputs(
     # into ``_fingerprint`` and nowhere else.
     payload: dict[str, Any] = {
         "tables": [str(table_id) for table_id in catalogue],
+        "table_outages": [
+            {
+                "table_id": outage.table_id,
+                "effective_from": outage.effective_from.isoformat(),
+                "effective_until": (
+                    outage.effective_until.isoformat()
+                    if outage.effective_until is not None
+                    else None
+                ),
+            }
+            for outage in table_outage_rows
+        ],
         "events": [
             {
                 "id": str(event.id),
@@ -1831,8 +1873,17 @@ async def _apply_result(
                 # Whether the draw layer later voids or deletes the fixture is
                 # its business; here the placement and the pin are cleared.
                 voided_repairs: list[TournamentFixture] = []
+                cancelled_placements: dict[uuid.UUID, tuple[str, datetime]] = {}
                 for fixture_id in sorted(fresh.broken_pin_voids):
                     fixture = fresh.fixtures[fixture_id]
+                    if (
+                        fixture.table_id is not None
+                        and fixture.scheduled_start is not None
+                    ):
+                        cancelled_placements[fixture.id] = (
+                            fixture.table_id,
+                            fixture.scheduled_start,
+                        )
                     fixture.table_id = None
                     fixture.scheduled_start = None
                     fixture.pinned_at = None
@@ -1871,6 +1922,7 @@ async def _apply_result(
                     db,
                     tournament,
                     cancelled=voided_repairs,
+                    cancelled_placements=cancelled_placements,
                     withdrawn_entry_ids=fresh.withdrawn_entry_ids,
                     ingredients=ingredients,
                 )

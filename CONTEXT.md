@@ -852,14 +852,23 @@ an outcome, not a schedule cell).
 One physical playing surface at the **venue** — what a match is actually played on,
 identified by a label and the court it stands on. Tables belong to the **tournament**,
 not to any one **event**, and the tournament's whole set of them is its **catalogue**.
-A **reservation** *holds* a subset of the catalogue for its window; a **placement**
-*names* one. The venue changes under a running tournament — a table breaks, a table
-frees up — so a table can be removed from the catalogue mid-event: reservations that
-held it simply stop holding it, while a **placement** standing on it blocks the removal
-until the
-director unplaces it.
+A **reservation** holds a subset of the catalogue for its window; a **placement** names
+one. The table identity is stable. Releasing a reservation closes its membership period;
+adding it again opens a new period under the same id. An **outage** marks a table
+unavailable across every event and reservation without changing membership or placement.
+Only an explicit catalogue edit removes a table. An uncalled table may be deleted after
+the existing placement guard is satisfied; a table referenced by call history is
+retired, hidden from active catalogue reads, and kept with its identity and history.
 _Avoid_: court (a table *stands on* a court; several tables may share one), board,
 station, "table" for the database sense (say **catalogue** for the tournament's set).
+
+**Outage** (venue):
+A time interval when one **table** is unavailable across the tournament. An outage starts
+when the table is taken out of service and ends when it is restored. Reservation
+membership stays as it was; a table is available when an active reservation holds it
+and no outage overlaps the time in question. The **scheduler** blocks new placements
+for the interval while keeping called placements fixed.
+_Avoid_: removing a table (that is an explicit catalogue edit), releasing a reservation.
 
 **Pinned / free** (scheduler-era):
 Once the **scheduler** exists, a **placement** is **free** — the solver may move it —
@@ -884,6 +893,8 @@ only a backstop for a **Slot** window opening or a tournament's first matches.
 _Avoid_: pin (the call *causes* a pin, but a **manual placement** also pins without a
 call; the pin is the placement's fixedness, the call is the promise to the players),
 notify (the call includes a notification but is the whole state transition, not just it).
+The table and scheduled start named by each call, move, or cancellation are retained in
+call history. `pinned_at` remains the current scheduler promise and is not that history.
 
 **Solve**:
 One run of the **scheduler** over a tournament: the CP-SAT job that packs the

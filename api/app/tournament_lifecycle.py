@@ -26,7 +26,7 @@ and its 500.
 import uuid
 from typing import assert_never
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.draws import DrawError, NonSinglesDraw, draw_error_detail, order_entrants
@@ -41,6 +41,7 @@ from app.models import (
     TournamentFixture,
     TournamentStatus,
     User,
+    VenueTableCallHistory,
 )
 from app.schedule_solves import request_solve
 from app.schemas.tournament import TournamentCreate, named_list
@@ -240,6 +241,13 @@ async def delete_tournament(
         update(TournamentFixture)
         .where(TournamentFixture.stage_id.in_(stage_ids_for_tournament(tournament.id)))
         .values(table_id=None)
+    )
+    # Table call history is RESTRICTed from physical table deletion; purge it only
+    # when its owning tournament is explicitly deleted as a whole.
+    await db.execute(
+        delete(VenueTableCallHistory).where(
+            VenueTableCallHistory.tournament_id == tournament.id
+        )
     )
     await db.delete(tournament)
     await db.flush()

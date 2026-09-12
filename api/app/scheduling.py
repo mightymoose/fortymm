@@ -334,6 +334,15 @@ class RestShadow:
     completed_at_min: int
 
 
+@dataclass(frozen=True, slots=True)
+class TableOutage:
+    """A table-wide unavailable interval in the solve's minute frame."""
+
+    table_id: TableId
+    start_min: int
+    end_min: int | None
+
+
 def coalesce_rest_shadows(shadows: Iterable[RestShadow]) -> tuple[RestShadow, ...]:
     """One shadow per human, keeping the latest completion.
 
@@ -386,6 +395,7 @@ class ScheduleSnapshot:
     in_progress: tuple[InProgressMatch, ...] = ()
     previous_plan: tuple[PreviousPlacement, ...] = ()
     rest_shadows: tuple[RestShadow, ...] = ()
+    table_outages: tuple[TableOutage, ...] = ()
     is_live: bool = False
 
 
@@ -1270,6 +1280,17 @@ def _build_model(snapshot: ScheduleSnapshot) -> SolveResult | _SolverModel:
     table_fixed_spans: defaultdict[TableId, list[tuple[int, int]]] = defaultdict(list)
     for table_id, spans in table_occupancy.items():
         table_fixed_spans[table_id].extend((s, e) for s, e, _ in spans)
+    for outage in snapshot.table_outages:
+        outage_end = (
+            outage.end_min
+            if outage.end_min is not None
+            else max(
+                (effective_end(reservation) for reservation in reservations.values()),
+                default=outage.start_min,
+            )
+        )
+        if outage_end > outage.start_min:
+            table_fixed_spans[outage.table_id].append((outage.start_min, outage_end))
     pin_tables: dict[FixtureId, TableId] = {}
     pin_starts: dict[FixtureId, int] = {}
     pin_durations: dict[FixtureId, int] = {}

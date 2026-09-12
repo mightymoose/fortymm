@@ -3000,8 +3000,16 @@ def upgrade() -> None:
         sa.Column("tournament_id", sa.UUID(), nullable=False),
         sa.Column("label", sa.String(length=255), nullable=False),
         sa.Column("court", sa.String(length=255), nullable=False),
-        sa.Column("position", sa.Integer(), nullable=False),
-        sa.CheckConstraint("position >= 0", name="ck_tournament_tables_position"),
+        sa.Column("position", sa.Integer(), nullable=True),
+        sa.CheckConstraint(
+            "position IS NULL OR position >= 0",
+            name="ck_tournament_tables_position",
+        ),
+        sa.Column("retired_at", sa.DateTime(timezone=True), nullable=True),
+        sa.CheckConstraint(
+            "(retired_at IS NULL) = (position IS NOT NULL)",
+            name="ck_tournament_tables_retirement_position",
+        ),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
@@ -3033,6 +3041,45 @@ def upgrade() -> None:
         "ix_tournament_tables_tournament_id_position",
         "tournament_tables",
         ["tournament_id", "position"],
+        unique=False,
+    )
+    op.create_table(
+        "tournament_table_outages",
+        sa.Column(
+            "id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False
+        ),
+        sa.Column("tournament_id", sa.UUID(), nullable=False),
+        sa.Column("table_id", sa.UUID(as_uuid=False), nullable=False),
+        sa.Column(
+            "effective_from",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column("effective_until", sa.DateTime(timezone=True), nullable=True),
+        sa.CheckConstraint(
+            "effective_until IS NULL OR effective_until > effective_from",
+            name="ck_tournament_table_outages_effective_interval",
+        ),
+        sa.ForeignKeyConstraint(
+            ["tournament_id", "table_id"],
+            ["tournament_tables.tournament_id", "tournament_tables.id"],
+            name="fk_tournament_table_outages_tournament_id_table_id",
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        "uq_tournament_table_outages_active_table",
+        "tournament_table_outages",
+        ["tournament_id", "table_id"],
+        unique=True,
+        postgresql_where=sa.text("effective_until IS NULL"),
+    )
+    op.create_index(
+        "ix_tournament_table_outages_tournament_id_table_id",
+        "tournament_table_outages",
+        ["tournament_id", "table_id"],
         unique=False,
     )
     op.create_table(
@@ -3267,14 +3314,28 @@ def upgrade() -> None:
     )
     op.create_table(
         "tournament_event_reservation_tables",
+        sa.Column(
+            "id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False
+        ),
         sa.Column("tournament_id", sa.UUID(), nullable=False),
         sa.Column("event_id", sa.UUID(), nullable=False),
         sa.Column("reservation_id", sa.UUID(), nullable=False),
         sa.Column("table_id", sa.UUID(as_uuid=False), nullable=False),
-        sa.Column("position", sa.Integer(), nullable=False),
+        sa.Column("position", sa.Integer(), nullable=True),
         sa.CheckConstraint(
-            "position >= 0",
+            "position IS NULL OR position >= 0",
             name="ck_tournament_event_reservation_tables_position",
+        ),
+        sa.Column(
+            "effective_from",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.Column("effective_until", sa.DateTime(timezone=True), nullable=True),
+        sa.CheckConstraint(
+            "effective_until IS NULL OR effective_until > effective_from",
+            name="ck_tournament_event_reservation_tables_effective_interval",
         ),
         sa.Column(
             "created_at",
@@ -3309,12 +3370,7 @@ def upgrade() -> None:
             name="fk_tournament_event_reservation_tables_tournament_id_table_id",
             ondelete="CASCADE",
         ),
-        sa.PrimaryKeyConstraint(
-            "event_id",
-            "reservation_id",
-            "table_id",
-            name="pk_tournament_event_reservation_tables",
-        ),
+        sa.PrimaryKeyConstraint("id", name="pk_tournament_event_reservation_tables"),
         sa.UniqueConstraint(
             "event_id",
             "reservation_id",
@@ -3329,6 +3385,19 @@ def upgrade() -> None:
         "tournament_event_reservation_tables",
         ["tournament_id", "table_id"],
         unique=False,
+    )
+    op.create_index(
+        "ix_tournament_event_reservation_tables_event_id_reservation_id",
+        "tournament_event_reservation_tables",
+        ["event_id", "reservation_id"],
+        unique=False,
+    )
+    op.create_index(
+        "uq_tournament_event_reservation_tables_active_membership",
+        "tournament_event_reservation_tables",
+        ["event_id", "reservation_id", "table_id"],
+        unique=True,
+        postgresql_where=sa.text("effective_until IS NULL"),
     )
     op.create_table(
         "tournament_event_stage_groups",
@@ -3564,6 +3633,52 @@ def upgrade() -> None:
         "ix_tournament_fixtures_table_id",
         "tournament_fixtures",
         ["table_id"],
+        unique=False,
+    )
+    op.create_table(
+        "tournament_table_call_history",
+        sa.Column(
+            "id", sa.UUID(), server_default=sa.text("gen_random_uuid()"), nullable=False
+        ),
+        sa.Column("tournament_id", sa.UUID(), nullable=False),
+        sa.Column("table_id", sa.UUID(as_uuid=False), nullable=False),
+        sa.Column("fixture_id", sa.UUID(), nullable=True),
+        sa.Column("kind", sa.String(length=16), nullable=False),
+        sa.Column("scheduled_start", sa.DateTime(timezone=True), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
+        sa.CheckConstraint(
+            "kind IN ('called', 'moved', 'cancelled')",
+            name="ck_tournament_table_call_history_kind",
+        ),
+        sa.ForeignKeyConstraint(
+            ["fixture_id"], ["tournament_fixtures.id"], ondelete="SET NULL"
+        ),
+        sa.ForeignKeyConstraint(
+            ["tournament_id"], ["tournaments.id"], ondelete="CASCADE"
+        ),
+        sa.ForeignKeyConstraint(
+            ["tournament_id", "table_id"],
+            ["tournament_tables.tournament_id", "tournament_tables.id"],
+            name="fk_tournament_table_call_history_tournament_id_table_id",
+            ondelete="RESTRICT",
+        ),
+        sa.PrimaryKeyConstraint("id"),
+    )
+    op.create_index(
+        "ix_tournament_table_call_history_tournament_id_table_id",
+        "tournament_table_call_history",
+        ["tournament_id", "table_id"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_tournament_table_call_history_fixture_id_created_at",
+        "tournament_table_call_history",
+        ["fixture_id", "created_at"],
         unique=False,
     )
     # ### end Alembic commands ###
@@ -4744,6 +4859,15 @@ def downgrade() -> None:
     op.drop_table("match_lineups")
     op.drop_table("tournament_entry_members")
     # ### commands auto generated by Alembic - please adjust! ###
+    op.drop_index(
+        "ix_tournament_table_call_history_fixture_id_created_at",
+        table_name="tournament_table_call_history",
+    )
+    op.drop_index(
+        "ix_tournament_table_call_history_tournament_id_table_id",
+        table_name="tournament_table_call_history",
+    )
+    op.drop_table("tournament_table_call_history")
     op.drop_index("ix_tournament_fixtures_table_id", table_name="tournament_fixtures")
     op.drop_index("ix_tournament_fixtures_stage_id", table_name="tournament_fixtures")
     op.drop_index("ix_tournament_fixtures_match_id", table_name="tournament_fixtures")
@@ -4779,6 +4903,16 @@ def downgrade() -> None:
     )
     op.drop_table("match_side_players")
     op.drop_table("match_game_scores")
+    op.drop_index(
+        "ix_tournament_table_outages_tournament_id_table_id",
+        table_name="tournament_table_outages",
+    )
+    op.drop_index(
+        "uq_tournament_table_outages_active_table",
+        table_name="tournament_table_outages",
+        postgresql_where=sa.text("effective_until IS NULL"),
+    )
+    op.drop_table("tournament_table_outages")
     op.drop_index(
         "ix_tournament_tables_tournament_id_position", table_name="tournament_tables"
     )

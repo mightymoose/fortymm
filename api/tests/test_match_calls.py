@@ -63,6 +63,7 @@ from app.models import (
     TournamentStatus,
     User,
     VenueTable,
+    VenueTableCallHistory,
 )
 from app.schedule_solves import RUN_SCHEDULE_SOLVE_JOB, SUPERSEDED_ERROR, request_solve
 from app.schemas.notification import NotificationJob
@@ -345,6 +346,30 @@ async def _request_and_run_solve(
 
 
 class TestApplyCallEvaluation:
+    async def test_call_persists_the_table_identity_and_start_in_history(
+        self,
+        db_session: AsyncSession,
+        solver_queue: Queue,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        tournament_id, event_id = await _make_tournament(db_session)
+        _freeze_clocks(monkeypatch, BASE)
+
+        await _request_and_run_solve(db_session, solver_queue, tournament_id)
+
+        fixture = await _the_fixture(db_session, event_id)
+        history = (
+            await db_session.scalars(
+                select(VenueTableCallHistory).where(
+                    VenueTableCallHistory.fixture_id == fixture.id
+                )
+            )
+        ).all()
+        assert len(history) == 1
+        assert history[0].kind == "called"
+        assert history[0].table_id == fixture.table_id
+        assert history[0].scheduled_start == fixture.scheduled_start
+
     async def test_apply_calls_a_fixture_placed_inside_the_window(
         self,
         db_session: AsyncSession,
@@ -1808,6 +1833,16 @@ class TestBrokenPinRepair:
         assert rows[0].title == "Your match was cancelled"
         assert "your opponent withdrew" in rows[0].body
         assert usernames[withdrawn_user] in rows[0].body
+        history = (
+            await db_session.scalars(
+                select(VenueTableCallHistory).where(
+                    VenueTableCallHistory.fixture_id == fixture.id
+                )
+            )
+        ).all()
+        assert [(row.kind, row.table_id) for row in history] == [
+            ("cancelled", await _table(db_session, event_id, "t1"))
+        ]
         jobs = _fanout_jobs(fake_notifications_queue)
         assert [job.user_id for job in jobs] == [remaining_user]
 
@@ -2128,6 +2163,50 @@ class TestClearRevertsMatchToPending:
 
 
 class TestManualPlacementPin:
+    async def test_live_manual_call_move_and_cancel_keep_each_table_reference(
+        self, db_session: AsyncSession
+    ) -> None:
+        tournament_id, event_id = await _make_tournament(
+            db_session, tables=("t1", "t2")
+        )
+        tournament = await db_session.get(Tournament, tournament_id)
+        assert tournament is not None
+        fixture = await _the_fixture(db_session, event_id)
+        table_1 = await _table(db_session, event_id, "t1")
+        table_2 = await _table(db_session, event_id, "t2")
+
+        for table_id, minute in ((table_1, 0), (table_2, 30)):
+            await match_calls.apply_manual_placement(
+                db_session,
+                tournament,
+                fixture,
+                table_id=table_id,
+                scheduled_start=(BASE + timedelta(minutes=minute)).replace(tzinfo=None),
+                event_timezone="America/Chicago",
+            )
+        await match_calls.apply_manual_placement(
+            db_session,
+            tournament,
+            fixture,
+            table_id=None,
+            scheduled_start=None,
+            event_timezone="America/Chicago",
+        )
+        await db_session.commit()
+
+        history = (
+            await db_session.scalars(
+                select(VenueTableCallHistory)
+                .where(VenueTableCallHistory.fixture_id == fixture.id)
+                .order_by(VenueTableCallHistory.created_at, VenueTableCallHistory.id)
+            )
+        ).all()
+        assert {(row.kind, row.table_id) for row in history} == {
+            ("called", table_1),
+            ("moved", table_2),
+            ("cancelled", table_2),
+        }
+
     async def test_the_next_solve_schedules_around_a_manual_placement_pin(
         self,
         db_session: AsyncSession,

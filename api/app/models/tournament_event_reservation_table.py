@@ -11,6 +11,7 @@ from sqlalchemy import (
     PrimaryKeyConstraint,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -62,34 +63,28 @@ class TournamentEventReservationTable(Base):
     columns and the *pair* is what carries the claim. Reservations needed nothing extra
     for their half: ``(event_id, id)`` is already their own composite-FK target.
 
-    **All three delete rules are CASCADE, and one of them is the ADR's asymmetry.**
-    Removing a table that a fixture is *placed at* is refused (``ON DELETE RESTRICT`` on
-    ``tournament_fixtures.table_id``) and the director says yes on purpose; removing a
-    table that a reservation merely *holds* is silent, and this CASCADE is what makes it
-    true rather than merely tolerated — the row disappears with the table instead of
-    lingering as a string naming nothing (ADR 20260801, "a placement names a real
-    table"). A reservation's tables likewise go with the reservation, and an event's
-    with the event, so no delete path has to learn about this table.
+    **The delete rules are CASCADE.** Reservation and event deletion remove their
+    membership history with their parent. A physical table deletion also cascades these
+    rows, but application-level catalogue removal first closes active periods and
+    retires any table with call history; only an uncalled table can be hard-deleted.
+    Placed fixtures remain protected by ``ON DELETE RESTRICT`` on
+    ``tournament_fixtures.table_id`` (ADR 20260801).
     """
 
     __tablename__ = "tournament_event_reservation_tables"
     __table_args__ = (
         CheckConstraint(
-            "position >= 0",
+            "position IS NULL OR position >= 0",
             name="ck_tournament_event_reservation_tables_position",
         ),
-        # A reservation holds a table at most once. ``event_id`` leads for the reason it
-        # leads on ``tournament_event_reservations``: every read is "the tables of this
-        # reservation", and the key's own index answers that shape, the reservation
-        # leg's referential check, and the event-delete cascade's lookup — all three,
-        # which is what the reservation-era version needed a second index to do once its
-        # reservation leg pointed at a stage instead.
-        PrimaryKeyConstraint(
-            "event_id",
-            "reservation_id",
-            "table_id",
-            name="pk_tournament_event_reservation_tables",
+        CheckConstraint(
+            "effective_until IS NULL OR effective_until > effective_from",
+            name="ck_tournament_event_reservation_tables_effective_interval",
         ),
+        # A surrogate id preserves each membership period across release and re-add.
+        # This read/FK index therefore covers the reservation's active and historical
+        # rows; the primary key no longer doubles as the reservation lookup index.
+        PrimaryKeyConstraint("id", name="pk_tournament_event_reservation_tables"),
         # "My reservation is my own event's reservation" — the leg that replaces the
         # reservation-era ``(stage_id, reservation_id)`` one, pointing at the pair a
         # reservation is keyed on.
@@ -119,9 +114,8 @@ class TournamentEventReservationTable(Base):
             name="fk_tournament_event_reservation_tables_tournament_id_event_id",
             ondelete="CASCADE",
         ),
-        # Two tables of one reservation never share a place in its order — the guarantee
-        # ``app.tournament_reservations`` makes by construction (it stamps
-        # ``range(len(...))``) said here as a constraint.
+        # Active table memberships have distinct positions. A closed membership has no
+        # current position, so historical rows do not compete with the live ordering.
         #
         # DEFERRABLE INITIALLY DEFERRED for the reason every sibling ``position``
         # constraint is: the tables of a reservation are written as a diff keyed on the
@@ -137,16 +131,25 @@ class TournamentEventReservationTable(Base):
             deferrable=True,
             initially="DEFERRED",
         ),
-        # The index Postgres does NOT create for a REFERENCING pair, on the leg that
-        # needs it most: removing a venue table cascades through this FK, and unindexed
-        # that check is a sequential scan of every reservation table on the platform per
-        # table removed. The primary key covers both legs that lead with ``event_id``;
-        # this pair leads with ``tournament_id``, which no other index here does.
-        #
-        # There is no second ``ix_`` here, unlike the reservation-era table: its
-        # reservation leg led with ``stage_id``, which was not a primary-key column at
-        # all and so rode no index. This row's reservation leg leads with ``event_id``,
-        # a prefix of the primary key, so it rides the key's own index for free again.
+        # One reservation cannot actively hold one table twice. Closed periods remain
+        # alongside a later re-addition of the same table.
+        Index(
+            "uq_tournament_event_reservation_tables_active_membership",
+            "event_id",
+            "reservation_id",
+            "table_id",
+            unique=True,
+            postgresql_where=text("effective_until IS NULL"),
+        ),
+        # Postgres does not index referencing FK columns itself. This index supports
+        # tournament-scoped table reads and the table-delete cascade's lookup; it is
+        # separate from the event/reservation-leading index above because the surrogate
+        # primary key has no useful parent prefix.
+        Index(
+            "ix_tournament_event_reservation_tables_event_id_reservation_id",
+            "event_id",
+            "reservation_id",
+        ),
         Index(
             "ix_tournament_event_reservation_tables_tournament_id_table_id",
             "tournament_id",
@@ -179,6 +182,11 @@ class TournamentEventReservationTable(Base):
     reservation_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), nullable=False
     )
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        server_default=text("gen_random_uuid()"),
+    )
     #: The held table. ``UUID(as_uuid=False)`` — a real ``uuid`` column typed as ``str``
     #: in Python, exactly as ``TournamentFixture.table_id`` is, because a table id
     #: crosses this codebase as its canonical text: here, on a placement, and as the
@@ -196,7 +204,17 @@ class TournamentEventReservationTable(Base):
     #: Deliberately not on the wire: the read shape is the array whose order this is,
     #: and carrying the number beside it would be carrying a field and its own
     #: derivation (api/CLAUDE.md).
-    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    position: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Start of this reservation-membership period. Release closes the period rather
+    #: than deleting it; a later re-add creates a new row under the same table id.
+    effective_from: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    #: ``NULL`` means this is the one active membership period. Closed history has no
+    #: live position and cannot be read back as a currently reserved table.
+    effective_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
