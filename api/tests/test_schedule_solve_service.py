@@ -45,7 +45,6 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import selectinload
 from sqlalchemy.pool import NullPool
 from sqlalchemy.sql import Executable
 
@@ -57,8 +56,6 @@ from app.models import (
     DrawType,
     EventFormat,
     Match,
-    MatchGame,
-    MatchGameScore,
     MatchSettings,
     MatchStatus,
     Notification,
@@ -78,6 +75,7 @@ from app.models import (
     TournamentStatus,
     User,
 )
+from app.result_proposal import propose_result
 from app.schedule_solves import (
     JOB_TIMEOUT_MARGIN_S,
     RUN_SCHEDULE_SOLVE_JOB,
@@ -103,6 +101,7 @@ from app.scheduling import (
     Window,
     WindowTooShortForMatch,
 )
+from app.schemas.match import MatchResultsGameWrite
 from app.schemas.notification import NotificationJob
 from app.schemas.schedule_solve import (
     NoSingleCauseRead,
@@ -116,7 +115,6 @@ from app.schemas.schedule_solve import (
     parse_placement_conflicts,
 )
 from app.schemas.tournament import ScheduleSolveRead
-from app.tournament_advancement import on_match_completed
 from app.tournament_draws import cut_draw
 from app.tournament_event_stages import mint_stages
 from app.tournament_materialization import materialize_event
@@ -2571,48 +2569,33 @@ def _assert_confined_to_its_group(
 async def _score_and_complete(
     db: AsyncSession, fixture: TournamentFixture, *, winner_entry_id: uuid.UUID
 ) -> None:
-    """Play ``fixture``'s match out 2-0 for ``winner_entry_id`` and run it through
-    the completion seam a real result acceptance runs
-    (:func:`app.tournament_advancement.on_match_completed`) — which writes the
-    winner back, advances the draw, materializes whatever the result made ready,
-    and requests the re-solve this test is about.
+    """Record a real director result so qualification retains official evidence.
 
-    The board is real games with real scores, not a bare ``winner_entry_id``: a
-    groups-then-knockout draw seats its qualifiers from the **games** each side
-    won (ADR 20260727's tiebreak chain), so a scoreless completion would leave
-    the group unfinished — or refused outright.
-
-    ``completed_at`` stays ``None`` on purpose. A stamped completion casts a
-    ``REST_MIN`` shadow on both players, and these seeds are dated 2030 while the
-    suite runs today, so every shadow would still be open and would push the
-    knockout around for reasons that have nothing to do with the reservation
-    under test.
+    Completion uses today's timestamp, before the 2030 schedule window, so its
+    player-rest interval does not affect the reservation behavior under test.
     """
     assert fixture.match_id is not None
-    match = (
-        await db.execute(
-            select(Match)
-            .options(selectinload(Match.sides))
-            .where(Match.id == fixture.match_id)
-        )
-    ).scalar_one()
+    match = await db.get(Match, fixture.match_id)
+    assert match is not None
+    tournament = await db.get(Tournament, fixture.scope_tournament_id)
+    assert tournament is not None
+    match.status = MatchStatus.in_progress
+    await db.flush()
     side_1_wins = winner_entry_id == fixture.entry_a_id
-    for number in (1, 2):
-        game = MatchGame(match_id=match.id, game_number=number)
-        db.add(game)
-        await db.flush()
-        db.add(
-            MatchGameScore(
-                match_game_id=game.id,
+    await propose_result(
+        db,
+        match.id,
+        tournament.owner_account_id,
+        games=[
+            MatchResultsGameWrite(
+                game_number=number,
                 side_1_points=11 if side_1_wins else 5,
                 side_2_points=5 if side_1_wins else 11,
             )
-        )
-    for side in match.sides:
-        side.won = (side.side_number == 1) == side_1_wins
-    match.status = MatchStatus.completed
-    await db.flush()
-    await on_match_completed(db, match)
+            for number in (1, 2)
+        ],
+        supersedes_result_id=None,
+    )
 
 
 async def _play_out_the_groups(db: AsyncSession, event_id: uuid.UUID) -> None:

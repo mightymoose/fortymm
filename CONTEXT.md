@@ -650,6 +650,21 @@ working as intended, not a failure of the rule.
 _Avoid_: seed (a **seed** is an *input* to the draw; a qualifier is what playing
 it produces), advancer, survivor, winner (that is one side of one **match**).
 
+**Advancement decision**:
+The retained explanation for an entry receiving one side of a downstream fixture,
+from a knockout result or group qualification. It names the source, selected entry,
+destination, rule and official-result revisions used. Each destination side has
+at most one **current advancement decision**, which governs its existing seat.
+Replacing that decision appends history rather than overwriting it.
+
+**Stale advancement evidence**:
+An advancement decision whose supporting official revision has been superseded,
+or whose supporting match has been voided. It does not establish that the selected
+entry is wrong. The decision remains current and its participant stays seated
+until explicit replacement; recorded downstream play cannot be rewritten.
+Unknown provenance is a separate, explicitly recorded absence of evidence.
+See [advancement provenance](docs/adr/20260912-advancement-decisions-retain-their-result-evidence.md).
+
 **Structural setting**:
 One of the four numbers or choices that decide the shape of a
 round-robin-then-knockout **draw**: **group count**, **group size**,

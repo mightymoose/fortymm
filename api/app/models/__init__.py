@@ -76,6 +76,8 @@ __all__ = [
     "AuthorityChangeReason",
     "TournamentAccountGrant",
     "TournamentAccountRole",
+    "AdvancementDecision",
+    "AdvancementEvidence",
     "Account",
     "LoginIdentity",
     "AccountPlayer",
@@ -139,3 +141,6 @@ __all__ = [
     "VenueTable",
     "VerificationPolicy",
 ]
+
+from app.models import advancement_integrity as advancement_integrity
+from app.models.advancement_decision import AdvancementDecision, AdvancementEvidence
