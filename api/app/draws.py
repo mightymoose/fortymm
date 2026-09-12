@@ -120,7 +120,7 @@ class DrawError(Exception):
 
 
 class DrawActorBusy(DrawError):
-    """This account already has an in-flight draw cut."""
+    """This account already has an in-flight draw change."""
 
 
 class DrawStorageLimitExceeded(DrawError):
@@ -222,7 +222,7 @@ def draw_error_detail(error: DrawError) -> str:
     match error:
         case DrawActorBusy():
             detail = (
-                "A draw is already being cut for this account. "
+                "A draw change is already in progress for this account. "
                 "Retry after that operation finishes."
             )
         case DrawStorageLimitExceeded():

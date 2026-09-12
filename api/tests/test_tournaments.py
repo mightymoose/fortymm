@@ -10715,6 +10715,73 @@ async def test_the_detail_bff_surfaces_live_standings_then_a_champion(
     )
 
 
+@pytest.mark.parametrize("draw_type", ["round-robin", "swiss"])
+async def test_reopened_match_keeps_stage_participation_open_despite_retained_winner(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession, draw_type: str
+) -> None:
+    from app.models import TournamentEntryParticipation
+    from app.official_results import void_official_match
+
+    client, owner = authed_client
+    settings = {"rounds": 1} if draw_type == "swiss" else {}
+    tournament_id, (event,) = await _tournament_with_events(
+        client,
+        _rr_payload(
+            RESERVATION_A,
+            draw_type=draw_type,
+            predicates=[],
+            match_settings={"rated": False, "length_games": 3},
+            **settings,
+        ),
+    )
+    entries = await _seed_field(db_session, event["id"], 4)
+    entry_ids = {entry.id for entry in entries}
+    await _cut_the_draw(client, tournament_id, event["id"])
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    assert (await _go_live(client, tournament_id)).status_code == 201
+    fixtures = await _fixture_rows(db_session, event["id"])
+    await _call_fixtures(db_session, tournament_id, fixtures)
+    first, *others = fixtures
+    assert first.match_id is not None and others
+    board = {
+        "games": [
+            {"game_number": n, "side_1_points": 11, "side_2_points": 5} for n in (1, 2)
+        ]
+    }
+    # A legacy correction can retain its fixture winner while its linked match
+    # is unresolved. New official results cannot be reopened at commit, so seed
+    # this supported historical state without inventing an official result.
+    reopened = await _load_match(db_session, first.match_id)
+    assert reopened.status is MatchStatus.in_progress
+    assert reopened.current_official_result_id is None
+    first.winner_entry_id = first.entry_a_id
+    await db_session.commit()
+    for fixture in others:
+        response = await client.post(
+            f"/v1/matches/{fixture.match_id}/results", json=board
+        )
+        assert response.status_code == 201, response.text
+    periods_query = (
+        select(TournamentEntryParticipation)
+        .where(TournamentEntryParticipation.entry_id.in_(entry_ids))
+        .execution_options(populate_existing=True)
+    )
+    periods = list(await db_session.scalars(periods_query))
+    assert len(periods) == 4
+    assert all(period.ended_at is None for period in periods)
+
+    await void_official_match(
+        db_session,
+        first.match_id,
+        owner.id,
+        reason="Resolve the reopened result as void",
+    )
+    await db_session.commit()
+    periods = list(await db_session.scalars(periods_query))
+    assert all(period.ended_at is not None for period in periods)
+    assert {period.end_reason for period in periods} == {"stage_completed"}
+
+
 async def test_matchless_winner_counts_toward_stage_completion(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,

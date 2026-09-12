@@ -5385,8 +5385,9 @@ async def test_build_cut_storage_limit_raises_actionable_tool_error(
             await client.call_tool("build_cut", {"event_id": str(event.id)})
 
 
-async def test_build_cut_busy_actor_returns_actionable_refusal(
-    db_session: AsyncSession, engine, default_league: League
+@pytest.mark.parametrize("tool_name", ["build_cut", "uncut"])
+async def test_draw_change_busy_actor_returns_actionable_refusal(
+    db_session: AsyncSession, engine, default_league: League, tool_name: str
 ) -> None:
     import asyncio
 
@@ -5403,6 +5404,6 @@ async def test_build_cut_busy_actor_returns_actionable_refusal(
         await lock_draw_actor(gate, actor_id)
         async with _mcp_client(raw) as client, client:
             async with asyncio.timeout(1):
-                with pytest.raises(ToolError, match="already being cut.*Retry"):
-                    await client.call_tool("build_cut", {"event_id": str(event_id)})
+                with pytest.raises(ToolError, match="already in progress.*Retry"):
+                    await client.call_tool(tool_name, {"event_id": str(event_id)})
         await gate.rollback()

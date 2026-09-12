@@ -538,12 +538,14 @@ def _stage_is_complete(
             if len(seated) < swiss_pairable_rows(len(rows), len(seated), field_size):
                 return False
             if not all(
-                row.winner_entry_id is not None or row.match_id in decided_matches
+                (row.match_id is None and row.winner_entry_id is not None)
+                or row.match_id in decided_matches
                 for row in seated
             ):
                 return False
         return True
     return all(
-        row.winner_entry_id is not None or row.match_id in decided_matches
+        (row.match_id is None and row.winner_entry_id is not None)
+        or row.match_id in decided_matches
         for row in fixtures
     )

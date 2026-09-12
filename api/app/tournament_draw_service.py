@@ -167,6 +167,7 @@ async def uncut_event_draw(
     absent draw remains idempotent. A real removal requests a settings solve only
     when another current draw remains in the tournament, then commits.
     """
+    await lock_draw_actor(db, actor.id)
     event = await _load_owned_event_for_draw(
         db, tournament_id=tournament_id, event_id=event_id, actor=actor
     )

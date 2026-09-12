@@ -1941,8 +1941,8 @@ async def build_cut(event_id: uuid.UUID) -> list[TournamentFixtureRead]:
     fixtures in **group → round → position** order — the same ``TournamentFixtureRead``
     the detail page and ``get_schedule`` carry.
 
-    Raises a ``ToolError`` while another cut for this account is in flight (retry
-    after it finishes), when no event has that id, when you are not the owner of the
+    Raises a ``ToolError`` while another draw change for this account is in flight
+    (retry after it finishes), when no event has that id, when you do not own the
     event's tournament, when the draw already shows evidence of play (a fixture with a
     recorded winner or a linked match — it can no longer be cut), or when the event
     cannot produce a draw at all: it is not a singles event, it has no groups configured
@@ -1984,7 +1984,8 @@ async def uncut(event_id: uuid.UUID) -> DrawUncutConfirmation:
     draw is already in the state this asks for**, so un-cutting a never-cut draw deletes
     nothing and is still a success (``fixtures_remaining`` = ``0``) — it is idempotent.
 
-    Raises a ``ToolError`` when no event has that id, when you are not the owner of the
+    Raises a ``ToolError`` while another draw change for this account is in flight
+    (retry after it finishes), when no event has that id, when you do not own the
     event's tournament, or when the draw already shows evidence of play (a fixture with
     a recorded winner or a linked match — it can no longer be removed)."""
     user_id = _authenticated_user_id()
@@ -1999,8 +2000,10 @@ async def uncut(event_id: uuid.UUID) -> DrawUncutConfirmation:
             )
         except _DRAW_WRITE_ERRORS as exc:
             raise _map_draw_write_tool_error(exc, event_id) from exc
-        # A successful ``uncut_event_draw`` deleted the draw wholesale (or there was
-        # never one), so the event provably has no fixtures — ``fixtures_remaining``
+        except DrawError as error:
+            raise _map_draw_refusal_tool_error(error) from error
+        # A successful ``uncut_event_draw`` retired the draw (or there was
+        # never one), so the event has no current fixtures. ``fixtures_remaining``
         # is ``0`` by construction, no confirming re-read of ``fixtures_by_event``
         # needed. The idempotent un-cut of a never-cut draw lands here too, and it is
         # ``0`` for it as well (ADR-0786).

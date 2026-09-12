@@ -437,7 +437,7 @@ async def test_busy_actor_cut_refuses_promptly_and_can_retry(
         async with asyncio.timeout(1):
             refused = await client.post(url)
         assert refused.status_code == 409, refused.text
-        assert "already being cut" in refused.json()["detail"]
+        assert "already in progress" in refused.json()["detail"]
         assert "Retry" in refused.json()["detail"]
         assert (
             await db_session.scalar(
@@ -447,3 +447,42 @@ async def test_busy_actor_cut_refuses_promptly_and_can_retry(
         )
         await gate.rollback()
     assert (await client.post(url)).status_code == 201
+
+
+async def test_busy_actor_uncut_refuses_before_tournament_lock_and_retries_idempotently(
+    authed_client, db_session, engine, default_league
+):
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.models import Tournament
+
+    client, owner = authed_client
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    await _enter_field(db_session, event, 4, prefix="busy-uncut")
+    actor_id, tournament_id, event_id = owner.id, tournament.id, event.id
+    url = f"/v1/tournaments/{tournament_id}/events/{event_id}/draw"
+    assert (await client.post(url)).status_code == 201
+    sessions = async_sessionmaker(engine)
+    async with sessions() as gate:
+        await limits.lock_draw_actor(gate, actor_id)
+        await gate.execute(
+            select(Tournament.id)
+            .where(Tournament.id == tournament_id)
+            .with_for_update()
+        )
+        async with asyncio.timeout(1):
+            refused = await client.delete(url)
+        assert refused.status_code == 409, refused.text
+        assert "Retry" in refused.json()["detail"]
+        await gate.rollback()
+    assert (await client.delete(url)).status_code == 204
+    assert (await client.delete(url)).status_code == 204
+    assert (
+        await db_session.scalar(
+            select(func.count()).select_from(TournamentDrawRevision)
+        )
+        == 1
+    )

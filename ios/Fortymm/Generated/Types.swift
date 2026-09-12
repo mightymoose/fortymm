@@ -874,8 +874,8 @@ internal protocol APIProtocol: Sendable {
     /// Entrants are ordered by **seed** ascending where one is set, then by **registration
     /// order**. Nothing is random, so the same field always cuts the same draw.
     ///
-    /// Refused with a `409` while another draw is being cut for this account; retry
-    /// after that operation finishes. Also refused once the draw shows any **evidence
+    /// Refused with a `409` while another draw change is in progress for this account;
+    /// retry after that operation finishes. Also refused once the draw shows any **evidence
     /// of play** — any fixture with a recorded winner, or any fixture that has become
     /// a real match. A re-cut would throw
     /// those away, and a draw must never silently eat a score.
@@ -911,6 +911,9 @@ internal protocol APIProtocol: Sendable {
     ///
     /// An event with **no draw is already in the state this asks for**, so removing a draw
     /// that was never cut is a `204`, not a `404`: this is a DELETE, and it is idempotent.
+    ///
+    /// Refused with a `409` while another draw change for this account is in progress.
+    /// Retry after that operation finishes.
     ///
     /// Owner-only.
     ///
@@ -2510,8 +2513,8 @@ extension APIProtocol {
     /// Entrants are ordered by **seed** ascending where one is set, then by **registration
     /// order**. Nothing is random, so the same field always cuts the same draw.
     ///
-    /// Refused with a `409` while another draw is being cut for this account; retry
-    /// after that operation finishes. Also refused once the draw shows any **evidence
+    /// Refused with a `409` while another draw change is in progress for this account;
+    /// retry after that operation finishes. Also refused once the draw shows any **evidence
     /// of play** — any fixture with a recorded winner, or any fixture that has become
     /// a real match. A re-cut would throw
     /// those away, and a draw must never silently eat a score.
@@ -2555,6 +2558,9 @@ extension APIProtocol {
     ///
     /// An event with **no draw is already in the state this asks for**, so removing a draw
     /// that was never cut is a `204`, not a `404`: this is a DELETE, and it is idempotent.
+    ///
+    /// Refused with a `409` while another draw change for this account is in progress.
+    /// Retry after that operation finishes.
     ///
     /// Owner-only.
     ///
@@ -25955,8 +25961,8 @@ internal enum Operations {
     /// Entrants are ordered by **seed** ascending where one is set, then by **registration
     /// order**. Nothing is random, so the same field always cuts the same draw.
     ///
-    /// Refused with a `409` while another draw is being cut for this account; retry
-    /// after that operation finishes. Also refused once the draw shows any **evidence
+    /// Refused with a `409` while another draw change is in progress for this account;
+    /// retry after that operation finishes. Also refused once the draw shows any **evidence
     /// of play** — any fixture with a recorded winner, or any fixture that has become
     /// a real match. A re-cut would throw
     /// those away, and a draw must never silently eat a score.
@@ -26173,6 +26179,9 @@ internal enum Operations {
     ///
     /// An event with **no draw is already in the state this asks for**, so removing a draw
     /// that was never cut is a `204`, not a `404`: this is a DELETE, and it is idempotent.
+    ///
+    /// Refused with a `409` while another draw change for this account is in progress.
+    /// Retry after that operation finishes.
     ///
     /// Owner-only.
     ///
