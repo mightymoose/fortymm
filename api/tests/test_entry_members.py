@@ -2370,7 +2370,7 @@ async def test_fixture_link_refuses_inverted_parent_lock_order(
         # fixture row. Correct behavior is a retryable refusal, not this timeout.
         await linking.execute(text("SET LOCAL lock_timeout = '200ms'"))
         with pytest.raises(
-            DBAPIError, match="draw history requires parent locks before write; retry"
+            DBAPIError, match="fixture link requires parent locks before update; retry"
         ) as exc:
             await linking.execute(
                 text("UPDATE tournament_fixtures SET match_id = :match WHERE id = :id"),
