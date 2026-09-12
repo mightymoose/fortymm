@@ -975,6 +975,18 @@ const noDrawnEventsBodySchema = z.object({
   detail: z.object({ code: z.literal('no_drawn_events') }),
 })
 
+/** The queue adapter's one definite 503 refusal. Other infrastructure can mint
+ * the same status after the API accepted the run, so status alone is not proof
+ * that nothing was queued. */
+const queueUnavailableBodySchema = z.object({
+  detail: z.literal(
+    'The scheduling queue is unavailable, so the solve was not queued. Try again in a moment.',
+  ),
+})
+
+const isQueueUnavailableRefusal = (error: ApiError): boolean =>
+  error.status === 503 && queueUnavailableBodySchema.safeParse(error.body).success
+
 /** What a refused run looks like to the director, inline on the strip. */
 export interface RunSchedulerNotice {
   title: string
@@ -988,8 +1000,9 @@ export interface RunSchedulerNotice {
  *   error in any real sense: the page simply got ahead of the draws.
  * - **403** — not the owner. The button is not offered to a non-owner, so this is
  *   a stale or forged view; say who may, not what went wrong.
- * - **503** — the queue was unreachable, nothing was queued, retrying is safe —
- *   which is exactly what the notice says.
+ * - **the queue-unavailable 503 body** — the queue was unreachable, nothing was
+ *   queued, retrying is safe — which is exactly what the notice says. An
+ *   unrecognized 503 takes the generic path because a proxy can mint it.
  * - **status 0** — the network, per the repo's taxonomy: the server was never
  *   reached, and the copy must not claim otherwise.
  * - anything else — the honest generic, retry included.
@@ -1012,7 +1025,7 @@ export function runSchedulerNotice(error: unknown): RunSchedulerNotice {
         description: 'Only the tournament owner can run the scheduler.',
       }
     }
-    if (error.status === 503) {
+    if (isQueueUnavailableRefusal(error)) {
       return {
         title: 'The scheduler is unavailable right now',
         description:
@@ -1030,4 +1043,38 @@ export function runSchedulerNotice(error: unknown): RunSchedulerNotice {
     title: "Couldn't run the scheduler",
     description: 'Something went wrong on our side. Try again in a moment.',
   }
+}
+
+/**
+ * Whether a failed run request leaves the outcome **unknown** — the server may
+ * have accepted and queued the run even though this client saw the failure.
+ *
+ * The route commits the run before it answers, so the response and the
+ * acceptance can be separated by an outage: a lost transport (status 0) and a
+ * 5xx minted by a proxy between the client and the API both say "the answer was
+ * lost", not "the run was refused". Acting on the pre-click placements while a
+ * queue may be replacing them is the hazard (#1614), so the consumer holds its
+ * provisional gate shut across the ambiguity — until a successful detail read
+ * (which reads the solve and its placements together) reconciles it.
+ *
+ * A **definite** refusal is one the server *answered*: any 4xx (the documented
+ * 422 "cut a draw first", the 403) — it read the request and refused, nothing
+ * was queued. The application's **queue-unavailable 503 body** is definite by
+ * contract too: the queue was unreachable, nothing was queued
+ * (`runSchedulerNotice` says exactly that). An unrecognized 503 may come from an
+ * intermediary after acceptance and remains ambiguous.
+ * Anything that is not an `ApiError` never got an answer, so it is ambiguous.
+ *
+ * Pure — unit-tested next to `runSchedulerNotice`, whose copy already spells
+ * each case (`./solve.test.ts`).
+ */
+export function runOutcomeAmbiguous(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return true
+  // Only the documented queue-unavailable body proves nothing was queued. A
+  // proxy can mint an arbitrary 503 after the upstream accepted the run.
+  if (isQueueUnavailableRefusal(error)) return false
+  // Any 4xx the server answered is a definite refusal; status 0 (the
+  // transport) and any other 5xx (a proxy after the upstream committed) are
+  // ambiguous.
+  return !(error.status >= 400 && error.status < 500)
 }

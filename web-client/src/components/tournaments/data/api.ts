@@ -29,7 +29,9 @@ import { parseStages } from './stages'
 import {
   parseLatestScheduleSolve,
   parseScheduleSolve,
+  runOutcomeAmbiguous,
   scheduleRefetchInterval,
+  solveInFlight,
   type ScheduleSolve,
 } from './solve'
 import type { LifecycleEdge } from './lifecycle'
@@ -1371,8 +1373,30 @@ export function usePlaceFixture(tournamentId: string) {
  * awaits this through `mutateAsync` and renders every refusal **inline, on the
  * strip**, in the words `./solve` owns (`runSchedulerNotice`) — the 422 "cut a draw
  * first" is a designed state there, not an error channel's business.
- */
-export function useRequestScheduleSolve(tournamentId: string) {
+ *
+ * **An in-flight 202 row is cached on arrival, before the refetch** (#1614): the
+ * POST resolves to the ledger row the queue just accepted, and `onSettled`'s
+ * invalidation re-reads the tournament only at the network's speed. Left alone,
+ * everything this page derives from `latestScheduleSolve` — the strip's state, the
+ * in-flight poll cadence, and the Schedule tab's placement gate — would keep the
+ * PREVIOUS terminal (or null) solve across that gap, leaving Place/Move live on
+ * data the just-accepted run may replace. So a `queued`/`running` row is written
+ * into the detail cache entry the moment the server accepts; the settle refetch
+ * (and the poll it arms, now that the cached row is in flight) replaces it with
+ * the same row or a later one, and a failed refetch leaves it as last-good — an
+ * honest snapshot of the server's own acceptance, never a guess.
+ *
+ * A **terminal** row is not cached (#1614 review): the queue can finish a small
+ * solve — or answer an absorbed request with its just-finished run — before the
+ * response serializes, and merging that row would set a solved ledger beside the
+ * entry's PRE-solve fixtures, a pair no server read ever produced. The Schedule
+ * tab's placement gate would open on it the moment `isPending` cleared. The row
+ * and its placements travel together only by the detail refetch, and the tab
+ * holds a local gate shut until that payload lands. */
+export function useRequestScheduleSolve(
+  tournamentId: string,
+  onReconciliationRequired: (detailUpdatedAtAtSettlement: number) => void = () => {},
+) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (): Promise<ScheduleSolve> => {
@@ -1385,8 +1409,49 @@ export function useRequestScheduleSolve(tournamentId: string) {
       // The response is untrusted like every other payload — parse it, don't cast it.
       return parseScheduleSolve(row)
     },
-    // Reconcile on BOTH paths — see the note above.
-    onSettled: () => invalidateTournament(qc, tournamentId),
+    // The bridge between the 202 and the refetch (`onSettled` below): every
+    // consumer of the detail entry — the Schedule tab's placement gate, the
+    // strip, the fast-poll interval — reads the accepted row from the moment
+    // the server accepted it. The refetch overwrites it with the same row or a
+    // later one; nothing else is trusted.
+    //
+    // Only an in-flight row merges (see the doc note above): a terminal row
+    // would sit beside this entry's pre-solve fixtures, so it travels only by
+    // the refetch, which reads solve and fixtures together.
+    onSuccess: (solve) => {
+      if (!solveInFlight(solve)) return
+      qc.setQueryData<TournamentDetail>(
+        tournamentKey(tournamentId),
+        (detail) =>
+          detail === undefined
+            ? detail
+            : {
+                ...detail,
+                tournament: { ...detail.tournament, latestScheduleSolve: solve },
+              },
+      )
+    },
+    // Reconcile on BOTH paths — see the note above. A terminal response is not
+    // cached, and an ambiguous failure may conceal an accepted run, so arm the
+    // caller's placement gate synchronously after the POST settles but BEFORE
+    // invalidation. `invalidateQueries` cancels an older overlapping refetch by
+    // default and starts a new one; only that post-settlement read may retire
+    // the marker the caller records here.
+    onSettled: (solve, error) => {
+      const needsPlacementReconciliation =
+        (solve !== undefined && !solveInFlight(solve)) ||
+        (solve === undefined && runOutcomeAmbiguous(error))
+      if (needsPlacementReconciliation) {
+        // Read the marker from TanStack at the settlement boundary, not from a
+        // React prop/ref that may still be waiting to commit an overlapping
+        // detail completion. Only a successful read started by the invalidation
+        // below may advance beyond this snapshot and retire the caller's latch.
+        const detailUpdatedAtAtSettlement =
+          qc.getQueryState(tournamentKey(tournamentId))?.dataUpdatedAt ?? 0
+        onReconciliationRequired(detailUpdatedAtAtSettlement)
+      }
+      invalidateTournament(qc, tournamentId)
+    },
   })
 }
 
