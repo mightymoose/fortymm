@@ -13,8 +13,7 @@ asserts against ``NotificationService.list_feed`` / ``unread_count`` — proving
 ticket asks to keep it honest against."""
 
 import uuid
-from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
+from datetime import timedelta
 
 from rq import Queue
 from sqlalchemy import select
@@ -108,6 +107,7 @@ async def _standing_doubles_match(
         league=league,
         created_by_user_id=side1[0].id,
         status=MatchStatus.in_progress,
+        results=[],
     )
     match_side1 = MatchSide(match=match, side_number=1)
     for user in side1:
@@ -121,13 +121,15 @@ async def _standing_doubles_match(
         )
     game = MatchGame(match=match, game_number=1)
     game.score = MatchGameScore(side_1_points=11, side_2_points=4)
+    db.add(match)
+    await db.flush()
     result = MatchResult(
         match=match,
         submitted_for_player_id=side1[0].id,
         submitted_by_user_id=side1[0].id,
-        games=[],
+        games=[{"game_number": 1, "side_1_points": 11, "side_2_points": 4}],
     )
-    db.add(match)
+    db.add(result)
     await db.commit()
     return match, result, side1, side2
 
@@ -271,18 +273,14 @@ async def test_review_prompt_hides_after_retirement_auto_accept(
     await _deliver_pending_jobs(notifications, fake_notifications_queue)
     assert await _titles(notifications, opponent.id) != []
 
-    # Advance the worker's clock past the immutable proposal's deadline.
+    # Use a lapsed deadline on both application and database clocks.
     # The real job reloads by id, not by holding onto these objects.
     match_id, standing_id, opponent_id = match.id, standing.id, opponent.id
-    match.match_settings.retirement_window = timedelta(days=7)
+    match.match_settings.retirement_window = timedelta(microseconds=1)
     await db_session.commit()
     db_session.expire_all()
 
-    with patch("app.retirement_jobs.datetime", wraps=datetime) as clock:
-        clock.now.return_value = datetime.now(UTC) + timedelta(days=8)
-        outcome = await retire_if_lapsed(
-            db_session, match_id, standing_id, notifications
-        )
+    outcome = await retire_if_lapsed(db_session, match_id, standing_id, notifications)
 
     assert outcome is RetirementOutcome.retired
 

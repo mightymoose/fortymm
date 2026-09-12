@@ -59,3 +59,15 @@ pytest
 # or, against a local Postgres:
 TEST_DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/fortymm_test" pytest
 ```
+
+The suite creates and migrates a disposable database on that server. Its login
+needs `CREATEDB` and permission to set `session_replication_role` (the default
+testcontainers `postgres` superuser already has both). For a dedicated test role,
+an administrator can grant the latter with
+`GRANT SET ON PARAMETER session_replication_role TO your_test_role`.
+
+Between tests, cleanup deletes rows with retention and foreign-key triggers
+bypassed only inside the cleanup transaction. The setting is restored on commit
+or rollback; tests still exercise the real migrated constraints and can commit
+across multiple connections. This avoids the table/index storage rewrites from
+truncating the entire schema after every test.

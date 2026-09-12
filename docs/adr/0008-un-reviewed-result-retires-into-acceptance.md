@@ -1,5 +1,8 @@
 # An un-reviewed result auto-accepts at the retirement deadline
 
+> Amended by [Official results have immutable revisions](20260911-official-results-have-immutable-revisions.md).
+> Finalization provenance is separate from recorded participant acceptance.
+
 The two-verb propose/accept model
 (`docs/designs/match-result-model.md`) deliberately has **no timeout, deadline,
 or auto-resolution** — its load-bearing claim is that "a match can never get

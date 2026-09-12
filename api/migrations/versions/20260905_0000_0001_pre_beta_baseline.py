@@ -2192,6 +2192,12 @@ def upgrade() -> None:
         sa.Column("submitted_by_user_id", sa.UUID(), nullable=False),
         sa.Column("submitted_for_player_id", sa.UUID(), nullable=True),
         sa.Column(
+            "participant_authorized",
+            sa.Boolean(),
+            nullable=False,
+            server_default=sa.text("false"),
+        ),
+        sa.Column(
             "submitted_at",
             sa.DateTime(timezone=True),
             server_default=sa.text("now()"),
@@ -2252,6 +2258,13 @@ def upgrade() -> None:
             -- A real row version (not just FOR UPDATE) also makes stale
             -- REPEATABLE READ / SERIALIZABLE writers fail with 40001.
             UPDATE matches SET id = id WHERE id = NEW.match_id;
+            IF EXISTS (
+                SELECT 1 FROM matches WHERE id = NEW.match_id
+                AND (current_official_result_id IS NOT NULL OR status = 'voided')
+            ) THEN
+                RAISE EXCEPTION 'closed matches cannot receive proposals'
+                    USING ERRCODE = '23514';
+            END IF;
             IF NEW.submitted_for_player_id IS NOT NULL THEN
                 -- Bump the Player version as well as locking it: a merge
                 -- using an older Repeatable Read snapshot must retry rather
@@ -2264,6 +2277,24 @@ def upgrade() -> None:
                         USING ERRCODE = '23514';
                 END IF;
             END IF;
+            -- Derive immutable origin evidence; caller-supplied booleans cannot
+            -- turn an unauthorized proposal into an official timeout later.
+            BEGIN
+                PERFORM ap.account_id FROM account_players ap
+                JOIN accounts a ON a.id = ap.account_id
+                WHERE ap.account_id = NEW.submitted_by_user_id
+                  AND ap.player_id = NEW.submitted_for_player_id
+                FOR SHARE OF ap, a NOWAIT;
+            EXCEPTION WHEN lock_not_available THEN
+                RAISE EXCEPTION 'proposal authority changed; retry' USING ERRCODE = '40001';
+            END;
+            NEW.participant_authorized := EXISTS (
+                SELECT 1 FROM account_players ap JOIN accounts a ON a.id = ap.account_id
+                JOIN match_side_players p ON p.user_id = ap.player_id
+                WHERE ap.account_id = NEW.submitted_by_user_id
+                  AND ap.player_id = NEW.submitted_for_player_id AND ap.is_primary
+                  AND a.merged_at IS NULL AND p.match_id = NEW.match_id
+            );
             -- A non-deferrable FK alone checks at statement end, permitting
             -- circular multi-row INSERTs. Require an already inserted parent.
             IF NEW.supersedes_result_id IS NOT NULL AND NOT EXISTS (
@@ -2287,10 +2318,10 @@ def upgrade() -> None:
         LANGUAGE plpgsql AS $$
         BEGIN
             IF ROW(NEW.id, NEW.match_id, NEW.supersedes_result_id, NEW.games,
-                   NEW.submitted_by_user_id, NEW.submitted_at)
+                   NEW.submitted_by_user_id, NEW.submitted_at, NEW.participant_authorized)
                 IS DISTINCT FROM
                ROW(OLD.id, OLD.match_id, OLD.supersedes_result_id, OLD.games,
-                   OLD.submitted_by_user_id, OLD.submitted_at) THEN
+                   OLD.submitted_by_user_id, OLD.submitted_at, OLD.participant_authorized) THEN
                 RAISE EXCEPTION 'proposal snapshot and links are immutable'
                     USING ERRCODE = '23514';
             END IF;
@@ -2320,6 +2351,13 @@ def upgrade() -> None:
             IF OLD.accepted_by_user_id IS NULL AND
                NEW.accepted_by_user_id IS NOT NULL THEN
                 UPDATE matches SET id = id WHERE id = OLD.match_id;
+                IF EXISTS (
+                    SELECT 1 FROM matches WHERE id = OLD.match_id
+                    AND (current_official_result_id IS NOT NULL OR status = 'voided')
+                ) THEN
+                    RAISE EXCEPTION 'closed matches cannot receive participant consent'
+                        USING ERRCODE = '23514';
+                END IF;
                 IF EXISTS (
                     SELECT 1 FROM match_results WHERE supersedes_result_id = OLD.id
                 ) THEN
@@ -4489,6 +4527,413 @@ def upgrade() -> None:
     for statement in ENTRY_INTEGRITY_DDL:
         op.execute(statement)
 
+    op.execute("""
+        CREATE TABLE match_official_results (
+            id uuid PRIMARY KEY,
+            match_id uuid NOT NULL REFERENCES matches(id) ON DELETE RESTRICT,
+            revision integer NOT NULL,
+            predecessor_id uuid,
+            restored_from_id uuid,
+            proposal_id uuid,
+            resolution_method varchar NOT NULL,
+            actor_account_id uuid REFERENCES accounts(id) ON DELETE RESTRICT,
+            recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            games jsonb NOT NULL,
+            timeout_deadline timestamptz,
+            timeout_policy varchar,
+            reason varchar,
+            tournament_id uuid REFERENCES tournaments(id) ON DELETE RESTRICT,
+            owner_revision integer,
+            director_grant_id uuid REFERENCES tournament_account_grants(id) ON DELETE RESTRICT,
+            CONSTRAINT ck_official_results_method CHECK (resolution_method IN ('opponent_acceptance', 'timeout', 'administrator_ruling', 'immediate_finalization')),
+            CONSTRAINT ck_official_results_actor CHECK ((resolution_method = 'timeout' AND actor_account_id IS NULL) OR (resolution_method <> 'timeout' AND actor_account_id IS NOT NULL)),
+            CONSTRAINT ck_official_results_single_source CHECK (proposal_id IS NULL OR restored_from_id IS NULL),
+            CONSTRAINT ck_official_results_source CHECK (resolution_method = 'administrator_ruling' OR (proposal_id IS NOT NULL AND predecessor_id IS NULL AND restored_from_id IS NULL)),
+            CONSTRAINT ck_official_results_authority CHECK ((resolution_method = 'administrator_ruling' AND tournament_id IS NOT NULL AND reason IS NOT NULL AND reason ~ '[^[:space:]]' AND ((owner_revision IS NOT NULL AND owner_revision >= 0 AND director_grant_id IS NULL) OR (owner_revision IS NULL AND director_grant_id IS NOT NULL))) OR (resolution_method <> 'administrator_ruling' AND tournament_id IS NULL AND reason IS NULL AND owner_revision IS NULL AND director_grant_id IS NULL)),
+            CONSTRAINT ck_official_results_timeout CHECK ((resolution_method = 'timeout' AND timeout_deadline IS NOT NULL AND timeout_policy IS NOT NULL AND timeout_policy = 'retirement_window_v1' AND recorded_at >= timeout_deadline) OR (resolution_method <> 'timeout' AND timeout_deadline IS NULL AND timeout_policy IS NULL)),
+            CONSTRAINT ck_official_results_games CHECK (jsonb_typeof(games) = 'array' AND jsonb_array_length(games) > 0),
+            CONSTRAINT uq_official_results_id_match UNIQUE(id, match_id),
+            CONSTRAINT uq_official_results_revision UNIQUE(match_id, revision),
+            CONSTRAINT uq_official_results_successor UNIQUE(predecessor_id),
+            CONSTRAINT ck_official_results_root_number CHECK ((revision = 1 AND predecessor_id IS NULL) OR (revision > 1 AND predecessor_id IS NOT NULL)),
+            CONSTRAINT ck_official_results_not_self CHECK (id <> predecessor_id),
+            CONSTRAINT fk_official_results_predecessor FOREIGN KEY (predecessor_id, match_id) REFERENCES match_official_results(id, match_id) ON DELETE RESTRICT,
+            CONSTRAINT fk_official_results_restored FOREIGN KEY (restored_from_id, match_id) REFERENCES match_official_results(id, match_id) ON DELETE RESTRICT,
+            CONSTRAINT fk_official_results_proposal FOREIGN KEY (proposal_id, match_id) REFERENCES match_results(id, match_id) ON DELETE RESTRICT
+        )
+    """)
+    op.add_column(
+        "matches", sa.Column("current_official_result_id", sa.UUID(), nullable=True)
+    )
+
+    op.create_foreign_key(
+        "fk_matches_current_official",
+        "matches",
+        "match_official_results",
+        ["current_official_result_id", "id"],
+        ["id", "match_id"],
+    )
+
+    op.execute("""
+        CREATE FUNCTION preserve_official_result() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            RAISE EXCEPTION 'official result history is immutable' USING ERRCODE = '23514';
+        END; $$
+    """)
+    op.execute("""
+        CREATE TRIGGER preserve_official_result BEFORE UPDATE OR DELETE ON match_official_results
+        FOR EACH ROW EXECUTE FUNCTION preserve_official_result()
+    """)
+    op.execute("""
+        CREATE FUNCTION guard_current_official_result() RETURNS trigger LANGUAGE plpgsql AS $$
+        DECLARE latest uuid;
+        BEGIN
+            SELECT id INTO latest FROM match_official_results
+              WHERE match_id = NEW.id ORDER BY revision DESC LIMIT 1;
+            IF NEW.current_official_result_id IS DISTINCT FROM latest THEN
+                RAISE EXCEPTION 'current official result must be the latest revision'
+                  USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END; $$
+    """)
+    op.execute("""
+        CREATE TRIGGER guard_current_official_result BEFORE UPDATE OF current_official_result_id ON matches
+        FOR EACH ROW EXECUTE FUNCTION guard_current_official_result()
+    """)
+
+    op.execute(
+        "CREATE UNIQUE INDEX uq_official_results_root ON match_official_results(match_id) WHERE predecessor_id IS NULL"
+    )
+    op.execute("""
+        CREATE FUNCTION append_official_result() RETURNS trigger LANGUAGE plpgsql AS $$
+        DECLARE current_id uuid; prior match_official_results;
+            parent matches; settings match_settings; proposal match_results;
+            tournament tournaments; game jsonb; n integer := 0;
+            a integer; b integer; wins_a integer := 0; wins_b integer := 0; target integer;
+        BEGIN
+            -- Same parent ordering as backend transitions; NOWAIT avoids inverted
+            -- locks held by arbitrary SQL callers and yields an explicit retry.
+            BEGIN
+                PERFORM id FROM accounts WHERE id = NEW.actor_account_id FOR KEY SHARE NOWAIT;
+                SELECT t.* INTO tournament FROM tournaments t
+                    JOIN tournament_events e ON e.tournament_id = t.id
+                    JOIN tournament_event_stages s ON s.event_id = e.id
+                    JOIN tournament_fixtures f ON f.stage_id = s.id
+                    WHERE f.match_id = NEW.match_id FOR SHARE OF t NOWAIT;
+                PERFORM e.id FROM tournament_events e
+                    JOIN tournament_event_stages s ON s.event_id = e.id
+                    JOIN tournament_fixtures f ON f.stage_id = s.id
+                    WHERE f.match_id = NEW.match_id FOR UPDATE OF e NOWAIT;
+                -- A grant can change without a new tournament row version.
+                -- Lock its row so stale Repeatable Read snapshots fail too.
+                PERFORM id FROM tournament_account_grants
+                    WHERE id = NEW.director_grant_id FOR SHARE NOWAIT;
+            EXCEPTION WHEN lock_not_available THEN
+                RAISE EXCEPTION 'official result requires parent locks; retry' USING ERRCODE = '40001';
+            END;
+            UPDATE matches SET id = id WHERE id = NEW.match_id RETURNING * INTO parent;
+            current_id := parent.current_official_result_id;
+            IF parent.id IS NULL OR parent.status = 'voided' THEN
+                RAISE EXCEPTION 'official result requires a non-voided match' USING ERRCODE = '23514';
+            END IF;
+            NEW.recorded_at := clock_timestamp();
+            IF NEW.actor_account_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM accounts WHERE id = NEW.actor_account_id AND merged_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'official actor must be active' USING ERRCODE = '23514';
+            END IF;
+            IF NEW.resolution_method = 'administrator_ruling' THEN
+                IF tournament.id IS NULL OR NEW.tournament_id IS DISTINCT FROM tournament.id
+                    OR NOT tournament_can_direct(tournament.id, NEW.actor_account_id) THEN
+                    RAISE EXCEPTION 'ruling requires tournament authority' USING ERRCODE = '23514';
+                END IF;
+                IF NEW.owner_revision IS NOT NULL AND (
+                    NEW.owner_revision <> tournament.ownership_revision
+                    OR NEW.actor_account_id IS DISTINCT FROM tournament.owner_account_id
+                ) THEN
+                    RAISE EXCEPTION 'ruling ownership evidence is stale' USING ERRCODE = '23514';
+                END IF;
+                IF NEW.director_grant_id IS NOT NULL AND NOT EXISTS (
+                    SELECT 1 FROM tournament_account_grants WHERE id = NEW.director_grant_id
+                    AND tournament_id = tournament.id AND account_id = NEW.actor_account_id
+                    AND role = 'director' AND revoked_at IS NULL
+                ) THEN
+                    RAISE EXCEPTION 'ruling grant evidence is invalid' USING ERRCODE = '23514';
+                END IF;
+            END IF;
+            SELECT * INTO settings FROM match_settings WHERE id = parent.match_settings_id;
+            IF NEW.proposal_id IS NOT NULL THEN
+                SELECT * INTO proposal FROM match_results WHERE id = NEW.proposal_id AND match_id = NEW.match_id;
+                IF NOT FOUND OR NEW.games IS DISTINCT FROM proposal.games THEN
+                    RAISE EXCEPTION 'adopted proposal must match its snapshot' USING ERRCODE = '23514';
+                END IF;
+            END IF;
+            IF NEW.restored_from_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM match_official_results WHERE id = NEW.restored_from_id
+                  AND match_id = NEW.match_id AND games = NEW.games
+            ) THEN
+                RAISE EXCEPTION 'restoration must copy an existing same-match score' USING ERRCODE = '23514';
+            END IF;
+            IF NEW.resolution_method <> 'administrator_ruling' THEN
+                IF NOT proposal.participant_authorized THEN
+                    RAISE EXCEPTION 'official result requires participant authority at submission'
+                        USING ERRCODE = '23514';
+                END IF;
+                IF EXISTS (SELECT 1 FROM match_results WHERE supersedes_result_id = NEW.proposal_id) THEN
+                    RAISE EXCEPTION 'only the proposal head may finalize' USING ERRCODE = '23514';
+                END IF;
+                IF NEW.resolution_method = 'opponent_acceptance' AND (
+                    NEW.actor_account_id = proposal.submitted_by_user_id
+                    OR proposal.accepted_by_user_id IS DISTINCT FROM NEW.actor_account_id
+                    OR proposal.accepted_at IS NULL OR NOT EXISTS (
+                        SELECT 1 FROM account_players ap JOIN match_side_players p ON p.user_id = ap.player_id
+                        JOIN match_side_players submitter ON submitter.match_id = p.match_id
+                        WHERE ap.account_id = NEW.actor_account_id AND ap.is_primary
+                          AND p.match_id = NEW.match_id
+                          AND submitter.user_id = proposal.submitted_for_player_id
+                          AND p.match_side_id <> submitter.match_side_id
+                    )
+                ) THEN
+                    RAISE EXCEPTION 'opponent acceptance requires recorded opposing consent' USING ERRCODE = '23514';
+                END IF;
+                IF NEW.resolution_method IN ('timeout', 'immediate_finalization') AND proposal.accepted_at IS NOT NULL THEN
+                    RAISE EXCEPTION 'automatic finalization cannot record human acceptance' USING ERRCODE = '23514';
+                END IF;
+                IF NEW.resolution_method = 'immediate_finalization' AND NOT EXISTS (
+                    SELECT 1 FROM account_players ap
+                    JOIN match_side_players p ON p.user_id = ap.player_id
+                    WHERE ap.account_id = NEW.actor_account_id
+                      AND ap.player_id = proposal.submitted_for_player_id
+                      AND p.match_id = NEW.match_id
+                ) THEN
+                    RAISE EXCEPTION 'immediate finalization requires a managed participant'
+                        USING ERRCODE = '23514';
+                END IF;
+                IF NEW.resolution_method = 'immediate_finalization' AND (
+                    NEW.actor_account_id IS DISTINCT FROM proposal.submitted_by_user_id
+                    OR proposal.submitted_for_player_id IS NULL
+                    OR (settings.affects_rating AND (SELECT count(DISTINCT match_side_id) FROM match_side_players WHERE match_id = NEW.match_id) >= 2)
+                ) THEN
+                    RAISE EXCEPTION 'immediate finalization requires the existing solo or unrated rule' USING ERRCODE = '23514';
+                END IF;
+                IF NEW.resolution_method = 'timeout' AND (
+                    NOT settings.affects_rating OR
+                    (SELECT count(DISTINCT match_side_id) FROM match_side_players WHERE match_id = NEW.match_id) < 2 OR
+                    settings.retirement_window IS NULL OR
+                    NEW.timeout_deadline IS DISTINCT FROM proposal.submitted_at + settings.retirement_window
+                ) THEN
+                    RAISE EXCEPTION 'timeout deadline must follow the proposal policy' USING ERRCODE = '23514';
+                END IF;
+            END IF;
+            -- Parse the complete score snapshot before it can become immutable.
+            target := settings.best_of / 2 + 1;
+            IF jsonb_typeof(NEW.games) IS DISTINCT FROM 'array' OR jsonb_array_length(NEW.games) = 0 THEN
+                RAISE EXCEPTION 'official score requires games' USING ERRCODE = '23514';
+            END IF;
+            FOR game IN SELECT value FROM jsonb_array_elements(NEW.games) LOOP
+                n := n + 1;
+                IF jsonb_typeof(game) IS DISTINCT FROM 'object'
+                    OR NOT (game ?& ARRAY['game_number','side_1_points','side_2_points'])
+                    OR game - ARRAY['game_number','side_1_points','side_2_points'] <> '{}'::jsonb
+                    OR (game->>'game_number') !~ '^[0-9]+$'
+                    OR (game->>'side_1_points') !~ '^[0-9]+$'
+                    OR (game->>'side_2_points') !~ '^[0-9]+$'
+                    OR jsonb_typeof(game->'game_number') <> 'number'
+                    OR jsonb_typeof(game->'side_1_points') <> 'number'
+                    OR jsonb_typeof(game->'side_2_points') <> 'number'
+                    OR game->'game_number' = 'null'::jsonb
+                    OR game->'side_1_points' = 'null'::jsonb
+                    OR game->'side_2_points' = 'null'::jsonb THEN
+                    RAISE EXCEPTION 'invalid official game shape' USING ERRCODE = '23514';
+                END IF;
+                BEGIN
+                    a := (game->>'side_1_points')::integer;
+                    b := (game->>'side_2_points')::integer;
+                    IF (game->>'game_number')::integer <> n OR n > settings.best_of
+                        OR wins_a >= target OR wins_b >= target
+                        OR NOT ((greatest(a,b) = 11 AND least(a,b) <= 9)
+                            OR (greatest(a,b) > 11 AND abs(a-b) = 2)) THEN
+                        RAISE EXCEPTION 'invalid official score' USING ERRCODE = '23514';
+                    END IF;
+                EXCEPTION WHEN numeric_value_out_of_range THEN
+                    RAISE EXCEPTION 'official score out of range' USING ERRCODE = '23514';
+                END;
+                IF a > b THEN wins_a := wins_a + 1; ELSE wins_b := wins_b + 1; END IF;
+            END LOOP;
+            IF greatest(wins_a, wins_b) <> target THEN
+                RAISE EXCEPTION 'official score must decide the match' USING ERRCODE = '23514';
+            END IF;
+            IF NEW.predecessor_id IS DISTINCT FROM current_id THEN
+                RAISE EXCEPTION 'stale official result predecessor' USING ERRCODE = '23514';
+            END IF;
+            IF NEW.predecessor_id IS NOT NULL THEN
+                SELECT * INTO prior FROM match_official_results WHERE id = NEW.predecessor_id AND match_id = NEW.match_id;
+                IF NOT FOUND OR NEW.revision <> prior.revision + 1 THEN
+                    RAISE EXCEPTION 'official predecessor must already exist in sequence' USING ERRCODE = '23514';
+                END IF;
+            END IF;
+            RETURN NEW;
+        END; $$
+    """)
+    op.execute("""
+        CREATE TRIGGER append_official_result BEFORE INSERT ON match_official_results
+        FOR EACH ROW EXECUTE FUNCTION append_official_result()
+    """)
+    op.execute("""
+        CREATE FUNCTION advance_official_result() RETURNS trigger LANGUAGE plpgsql AS $$
+        DECLARE game jsonb; game_id uuid; wins_a integer := 0; wins_b integer := 0;
+        BEGIN
+            -- Official appends change every public score representation in this
+            -- same statement, including when the caller bypasses the service.
+            DELETE FROM match_games WHERE match_id = NEW.match_id
+                AND game_number > jsonb_array_length(NEW.games);
+            FOR game IN SELECT value FROM jsonb_array_elements(NEW.games) LOOP
+                INSERT INTO match_games (match_id, game_number)
+                VALUES (NEW.match_id, (game->>'game_number')::integer)
+                ON CONFLICT (match_id, game_number) DO UPDATE SET updated_at = clock_timestamp()
+                RETURNING id INTO game_id;
+                INSERT INTO match_game_scores (match_game_id, side_1_points, side_2_points)
+                VALUES (game_id, (game->>'side_1_points')::integer, (game->>'side_2_points')::integer)
+                ON CONFLICT (match_game_id) DO UPDATE SET
+                    side_1_points = EXCLUDED.side_1_points,
+                    side_2_points = EXCLUDED.side_2_points,
+                    version = match_game_scores.version + 1,
+                    updated_at = clock_timestamp()
+                WHERE (match_game_scores.side_1_points, match_game_scores.side_2_points)
+                    IS DISTINCT FROM (EXCLUDED.side_1_points, EXCLUDED.side_2_points);
+                IF (game->>'side_1_points')::integer > (game->>'side_2_points')::integer THEN
+                    wins_a := wins_a + 1;
+                ELSE
+                    wins_b := wins_b + 1;
+                END IF;
+            END LOOP;
+            UPDATE match_sides SET
+                score = CASE WHEN side_number = 1 THEN wins_a ELSE wins_b END,
+                won = CASE WHEN side_number = 1 THEN wins_a > wins_b ELSE wins_b > wins_a END
+                WHERE match_id = NEW.match_id;
+            UPDATE matches SET current_official_result_id = NEW.id WHERE id = NEW.match_id;
+            RETURN NEW;
+        END; $$
+    """)
+    op.execute("""
+        CREATE TRIGGER advance_official_result AFTER INSERT ON match_official_results
+        FOR EACH ROW EXECUTE FUNCTION advance_official_result()
+    """)
+
+    op.execute("""
+        CREATE FUNCTION require_official_completion() RETURNS trigger LANGUAGE plpgsql AS $$
+        DECLARE target_id uuid; parent matches;
+        BEGIN
+            IF TG_TABLE_NAME = 'matches' THEN target_id := NEW.id;
+            ELSE target_id := NEW.match_id;
+            END IF;
+            SELECT * INTO parent FROM matches WHERE id = target_id;
+            IF parent.current_official_result_id IS NOT NULL AND
+                (parent.status NOT IN ('completed', 'voided') OR parent.completed_at IS NULL) THEN
+                RAISE EXCEPTION 'official result requires a completed match by commit'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NULL;
+        END; $$
+    """)
+    op.execute("""
+        CREATE CONSTRAINT TRIGGER require_official_completion
+        AFTER INSERT ON match_official_results DEFERRABLE INITIALLY DEFERRED
+        FOR EACH ROW EXECUTE FUNCTION require_official_completion()
+    """)
+    op.execute("""
+        CREATE CONSTRAINT TRIGGER preserve_official_completion
+        AFTER UPDATE ON matches DEFERRABLE INITIALLY DEFERRED
+        FOR EACH ROW EXECUTE FUNCTION require_official_completion()
+    """)
+
+    op.execute("""
+        CREATE TABLE match_void_actions (
+            id uuid PRIMARY KEY,
+            match_id uuid NOT NULL REFERENCES matches(id) ON DELETE RESTRICT,
+            official_result_id uuid,
+            actor_account_id uuid NOT NULL REFERENCES accounts(id) ON DELETE RESTRICT,
+            reason varchar NOT NULL,
+            tournament_id uuid NOT NULL REFERENCES tournaments(id) ON DELETE RESTRICT,
+            owner_revision integer,
+            director_grant_id uuid REFERENCES tournament_account_grants(id) ON DELETE RESTRICT,
+            recorded_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+            CONSTRAINT uq_match_void_actions_match UNIQUE(match_id),
+            CONSTRAINT fk_match_void_actions_result FOREIGN KEY (official_result_id, match_id) REFERENCES match_official_results(id, match_id) ON DELETE RESTRICT,
+            CONSTRAINT ck_match_void_actions_reason CHECK (reason ~ '[^[:space:]]'),
+            CONSTRAINT ck_match_void_actions_authority CHECK ((owner_revision IS NOT NULL AND owner_revision >= 0 AND director_grant_id IS NULL) OR (owner_revision IS NULL AND director_grant_id IS NOT NULL))
+        )
+    """)
+    op.execute("""
+        CREATE TRIGGER preserve_void_action BEFORE UPDATE OR DELETE ON match_void_actions
+        FOR EACH ROW EXECUTE FUNCTION preserve_official_result()
+    """)
+
+    op.execute("""
+        CREATE FUNCTION guard_administrator_void() RETURNS trigger LANGUAGE plpgsql AS $$
+        DECLARE parent matches; tournament tournaments;
+        BEGIN
+            BEGIN
+                PERFORM id FROM accounts WHERE id = NEW.actor_account_id FOR KEY SHARE NOWAIT;
+                SELECT t.* INTO tournament FROM tournaments t
+                    JOIN tournament_events e ON e.tournament_id = t.id
+                    JOIN tournament_event_stages s ON s.event_id = e.id
+                    JOIN tournament_fixtures f ON f.stage_id = s.id
+                    WHERE f.match_id = NEW.match_id FOR SHARE OF t NOWAIT;
+                PERFORM e.id FROM tournament_events e
+                    JOIN tournament_event_stages s ON s.event_id = e.id
+                    JOIN tournament_fixtures f ON f.stage_id = s.id
+                    WHERE f.match_id = NEW.match_id FOR UPDATE OF e NOWAIT;
+                -- A grant can change without a new tournament row version.
+                -- Lock its row so stale Repeatable Read snapshots fail too.
+                PERFORM id FROM tournament_account_grants
+                    WHERE id = NEW.director_grant_id FOR SHARE NOWAIT;
+            EXCEPTION WHEN lock_not_available THEN
+                RAISE EXCEPTION 'void action requires parent locks; retry' USING ERRCODE = '40001';
+            END;
+            UPDATE matches SET id = id WHERE id = NEW.match_id RETURNING * INTO parent;
+            IF parent.id IS NULL OR parent.status = 'voided'
+                OR NEW.official_result_id IS DISTINCT FROM parent.current_official_result_id
+                OR tournament.id IS NULL OR NEW.tournament_id IS DISTINCT FROM tournament.id
+                OR NOT tournament_can_direct(tournament.id, NEW.actor_account_id) THEN
+                RAISE EXCEPTION 'void requires current match and tournament authority' USING ERRCODE = '23514';
+            END IF;
+            IF NEW.owner_revision IS NOT NULL AND (
+                NEW.owner_revision <> tournament.ownership_revision
+                OR NEW.actor_account_id IS DISTINCT FROM tournament.owner_account_id
+            ) THEN
+                RAISE EXCEPTION 'void ownership evidence is stale' USING ERRCODE = '23514';
+            END IF;
+            IF NEW.director_grant_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM tournament_account_grants WHERE id = NEW.director_grant_id
+                AND tournament_id = tournament.id AND account_id = NEW.actor_account_id
+                AND role = 'director' AND revoked_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'void grant evidence is invalid' USING ERRCODE = '23514';
+            END IF;
+            NEW.recorded_at := clock_timestamp();
+            RETURN NEW;
+        END; $$
+    """)
+    op.execute("""
+        CREATE TRIGGER guard_administrator_void BEFORE INSERT ON match_void_actions
+        FOR EACH ROW EXECUTE FUNCTION guard_administrator_void()
+    """)
+    op.execute("""
+        CREATE FUNCTION apply_administrator_void() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            UPDATE matches SET status = 'voided' WHERE id = NEW.match_id;
+            UPDATE match_sides SET won = NULL WHERE match_id = NEW.match_id;
+            DELETE FROM rating_history WHERE match_id = NEW.match_id;
+            RETURN NEW;
+        END; $$
+    """)
+    op.execute("""
+        CREATE TRIGGER apply_administrator_void AFTER INSERT ON match_void_actions
+        FOR EACH ROW EXECUTE FUNCTION apply_administrator_void()
+    """)
+
 
 def downgrade() -> None:
     # Drop draw history integrity.
@@ -4524,6 +4969,17 @@ def downgrade() -> None:
     )
     op.drop_table("tournament_entry_participations")
     op.drop_table("tournament_entry_registrations")
+    op.execute("DROP FUNCTION require_official_completion() CASCADE")
+    op.execute("DROP FUNCTION guard_administrator_void() CASCADE")
+    op.execute("DROP FUNCTION apply_administrator_void() CASCADE")
+    op.drop_table("match_void_actions")
+    op.execute("DROP FUNCTION append_official_result() CASCADE")
+    op.execute("DROP FUNCTION advance_official_result() CASCADE")
+    op.execute("DROP FUNCTION preserve_official_result() CASCADE")
+    op.execute("DROP FUNCTION guard_current_official_result() CASCADE")
+    op.drop_constraint("fk_matches_current_official", "matches", type_="foreignkey")
+    op.drop_column("matches", "current_official_result_id")
+    op.drop_table("match_official_results")
     op.execute("DROP FUNCTION prepare_tournament_transfer() CASCADE")
     op.execute("DROP FUNCTION apply_tournament_transfer() CASCADE")
     op.execute("DROP FUNCTION tournament_can_direct(uuid, uuid) CASCADE")

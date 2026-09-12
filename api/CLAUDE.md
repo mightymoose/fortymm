@@ -44,7 +44,11 @@ registering on `Base.metadata`. New model files must be re-exported from
 `app/models/__init__.py` or autogenerate will miss them.
 
 **Tests** use async pytest (`asyncio_mode = "auto"`, session-scoped loop) and
-the `db_session` fixture, which truncates all tables after each test.
+the `db_session` fixture. After each test, `tests/_database_reset.py` deletes
+committed rows with `session_replication_role` set locally to `replica` in a
+separate cleanup transaction. Commit or rollback restores all triggers before
+the connection returns to the pool. Keep the real Alembic schema and normal
+commit behavior during tests; see `README.md` for test-role permissions.
 
 ## Datetimes are timezone-aware, always
 

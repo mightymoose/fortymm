@@ -57,6 +57,19 @@ is recorded once on the head and retained even if a future proposal follows it.
 See [proposal history](docs/adr/20260906-proposals-form-an-immutable-linear-history.md)
 for the database invariants and the same-person Player merge exception.
 
+**Official result**:
+The decisive score that currently counts for a match, retained as an immutable
+revision separate from participant proposals. Resolution records opponent
+acceptance, timeout, immediate finalization or an administrator ruling honestly.
+The current revision is always the end of one linear history.
+
+**Administrator correction**:
+A new official result revision issued by the tournament owner or an active
+director, with a reason and retained authority evidence. It always supersedes the
+latest official revision. Restoring an older score copies it into a new ruling;
+it never rewinds the chain or copies the old actor's attribution.
+See [official revisions](docs/adr/20260911-official-results-have-immutable-revisions.md).
+
 **Standing result**:
 The current result on the table — the one a participant can accept or counter.
 There is at most one per match at any time.
@@ -79,17 +92,17 @@ remove, or change games, so long as the outcome is again a decided board.
 _Avoid_: dispute, edit, amendment.
 
 **Retirement**:
-The auto-acceptance of a **standing result** when the side that owes a response
+The automatic finalization of a **standing result** when the side that owes a response
 lets its **retirement window** lapse. Silence resolves the negotiation in favour
-of the standing result: it becomes accepted and the match completes, exactly as
-a manual **accept** would. Named for the racket-sport walkover — the
+of the standing result: it becomes official and the match completes. This records
+a timeout resolution with its deadline and policy version, never human acceptance. Named for the racket-sport walkover — the
 non-responding side forfeits its turn by not taking it — and deliberately
 distinct from the injury sense of "retire" (a player stopping mid-play).
 _Avoid_: timeout, expiry, forfeit, walkover, auto-confirm.
 
 **Retirement window**:
 The span a side has to accept or counter the standing result before
-**retirement** auto-accepts it. Measured from the moment the standing result was
+**retirement** finalizes it. Measured from the moment the standing result was
 proposed — a **correction** or any supersede starts a fresh window against
 whichever side then owes the review. Configured on the match's settings so a
 tournament or club template can shorten, lengthen, or disable it; a disabled

@@ -40,6 +40,7 @@ from app.notifications.taxonomy import (
 from app.notifications.taxonomy import NotificationChannel as ChannelEnum
 from app.roles import DEFAULT_ROLE_DESCRIPTION, DEFAULT_ROLE_NAME
 from app.stream import SessionFactory, get_stream_session_factory
+from tests._database_reset import reset_database
 from tests._helpers import CSRF_EVENT_HOOKS
 from tests._migration_database import migrated_database
 
@@ -248,15 +249,7 @@ async def db_session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
             yield session
         finally:
             await session.rollback()
-    async with engine.begin() as conn:
-        # Reset this disposable test database, not through domain DELETE verbs:
-        # immutable history now rejects row deletion immediately. Name every
-        # metadata table explicitly; no CASCADE into unrelated tables/schemas.
-        tables = ", ".join(
-            conn.dialect.identifier_preparer.format_table(table)
-            for table in Base.metadata.sorted_tables
-        )
-        await conn.execute(text(f"TRUNCATE TABLE {tables}"))
+    await reset_database(engine, Base.metadata.sorted_tables)
 
 
 GLICKO2_STATE_SCHEMA = {

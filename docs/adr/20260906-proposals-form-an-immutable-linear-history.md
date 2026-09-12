@@ -1,5 +1,8 @@
 # Proposals form an immutable linear history
 
+> Amended by [Official results have immutable revisions](20260911-official-results-have-immutable-revisions.md).
+> Finalization provenance is separate from recorded participant acceptance.
+
 Status: Accepted. Implements #1676, following the design interview.
 
 A match with proposals has one root and one chain. Every predecessor belongs
