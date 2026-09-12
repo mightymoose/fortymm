@@ -109,6 +109,7 @@ const DEFAULT_COPY: Record<
 
 export interface LinkCheckPageProps {
   state: LinkCheckState
+  pillCode?: string
   eyebrow?: ReactNode
   title?: ReactNode
   subtitle?: ReactNode
@@ -128,6 +129,7 @@ export interface LinkCheckPageProps {
  */
 export function LinkCheckPage({
   state,
+  pillCode,
   eyebrow,
   title,
   subtitle,
@@ -155,7 +157,7 @@ export function LinkCheckPage({
       <header className="fmm-linkcheck__header">
         <Wordmark size={22} />
         <span className="fmm-linkcheck__pill" style={{ color: accent }}>
-          {PILL_CODE[state]} · LINK
+          {pillCode ?? PILL_CODE[state]} · LINK
         </span>
       </header>
 

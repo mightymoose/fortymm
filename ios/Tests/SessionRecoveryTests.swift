@@ -186,5 +186,48 @@ struct UnwritableSessionKeychain: SessionKeychain {
             precondition(change?.fromUsername == "charlie")
         }
         print("PASS: native link flows preserve account-switch previews and conflicts")
+        SessionTransport.status = 409
+        SessionTransport.body = #"{"detail":{"code":"entry_merge_conflict","message":"Withdraw the conflicting tournament entry before confirming."}}"#
+        do {
+            _ = try await ProfileService(client: client).confirmEmail(token: "still-valid-link")
+            fatalError("Conflicting entries must block confirmation")
+        } catch LoginConsumeError.retryable(let message) {
+            precondition(message == "Withdraw the conflicting tournament entry before confirming.")
+        }
+        print("PASS: confirmation conflicts preserve the server's recovery guidance")
+        await tokens.update("retained-session")
+        for (status, detail) in [
+            (429, "Another account merge is in progress. Please try again shortly."),
+            (429, "Too many account merges. Try again in an hour."),
+            (503, "Account merge limits are temporarily unavailable. Please try again.")
+        ] {
+            SessionTransport.status = status
+            SessionTransport.body = String(data: try JSONSerialization.data(withJSONObject: ["detail": detail]), encoding: .utf8)!
+            do {
+                _ = try await ProfileService(client: client).confirmEmail(token: "still-valid-link")
+                fatalError("A temporary merge failure must remain retryable")
+            } catch LoginConsumeError.retryable(let message) {
+                precondition(message == detail)
+            }
+            let retainedToken = await tokens.token()
+            precondition(retainedToken == "retained-session", "Merge failures must preserve the caller's session")
+        }
+        SessionTransport.status = 200
+        SessionTransport.body = #"{"data":{"user":{"id":"00000000-0000-0000-0000-000000000001","username":"confirmed","permissions":[]}}}"#
+        let confirmed = try await ProfileService(client: client).confirmEmail(token: "still-valid-link")
+        precondition(confirmed.data.user.username == "confirmed")
+        print("PASS: throttled and unavailable confirmation can retry with the same link and session")
+        SessionTransport.status = 400
+        SessionTransport.body = #"{"detail":"Invalid or expired confirmation link"}"#
+        do {
+            _ = try await ProfileService(client: client).confirmEmail(token: "dead-link")
+            fatalError("A dead link must remain rejected")
+        } catch LoginConsumeError.rejected { }
+        SessionTransport.body = #"{"detail":{"code":"replaced","message":"Open the newest email."}}"#
+        do {
+            _ = try await ProfileService(client: client).confirmEmail(token: "replaced-link")
+            fatalError("A replaced link must retain its distinct recovery flow")
+        } catch LoginConsumeError.replaced { }
+        print("PASS: dead and replaced confirmation links retain their terminal handling")
     }
 }

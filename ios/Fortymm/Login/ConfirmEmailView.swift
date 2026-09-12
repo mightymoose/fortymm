@@ -30,6 +30,7 @@ struct ConfirmEmailView: View {
         case expired
         case replaced
         case unreachable
+        case retryable(String)
     }
     @State private var phase: Phase = .verifying
     @State private var approvedSwitch: String?
@@ -72,6 +73,7 @@ struct ConfirmEmailView: View {
         case .expired: expired
         case .replaced: replaced
         case .unreachable: unreachable
+        case let .retryable(message): confirmationBlocked(message)
         }
     }
 
@@ -253,6 +255,26 @@ struct ConfirmEmailView: View {
         }
     }
 
+    private func confirmationBlocked(_ message: String) -> some View {
+        LoginScaffold(
+            eyebrow: "Confirming email",
+            eyebrowColor: FMColor.loss,
+            line1: "One more step.",
+            line2: "Try again.",
+            accent: FMColor.loss,
+            stepNo: "03",
+            stepLabel: "Confirmation · blocked",
+            title: "Couldn't confirm your email",
+            subtitle: message
+        ) {
+            HStack(spacing: 10) {
+                LoginButton(title: "Retry") { Task { await start() } }
+                    .accessibilityIdentifier("confirm-email-retry")
+                LoginButton(title: "Close", kind: .ghost, fullWidth: false) { close() }
+            }
+        }
+    }
+
     // MARK: Confirm
 
     /// Preview the link first; a merge that would carry matches over waits at
@@ -296,6 +318,8 @@ struct ConfirmEmailView: View {
             // A newer resend superseded this link — opening the most recent
             // email is the fix; resending would kill that newer link (#1616).
             phase = .replaced
+        } catch LoginConsumeError.retryable(let message) {
+            phase = .retryable(message)
         } catch LoginConsumeError.rejected {
             // Invalid / expired / already-used link — terminal.
             phase = .expired

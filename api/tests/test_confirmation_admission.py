@@ -2,6 +2,7 @@
 
 import hashlib
 
+import pytest
 from sqlalchemy import select
 
 from app.models import EmailPurpose, EmailToken
@@ -15,7 +16,7 @@ from tests.test_account_merge import (
 )
 
 
-async def _conflicting_confirmation(api_client, db_session):
+async def _conflicting_confirmation(api_client, db_session, purpose=EmailPurpose.merge):
     guest = await start_session(api_client, db_session)
     survivor = await _make_verified(db_session, "confirmation-conflict@example.com")
     event = await _make_rr_event(db_session, survivor)
@@ -29,19 +30,27 @@ async def _conflicting_confirmation(api_client, db_session):
     fixture.match_id = match.id
     raw = "recoverable-confirmation-conflict"
     token = EmailToken(
-        user_id=guest.id,
-        target_account_id=survivor.id,
-        purpose=EmailPurpose.merge,
+        user_id=guest.id if purpose is EmailPurpose.merge else survivor.id,
+        target_account_id=survivor.id if purpose is EmailPurpose.merge else None,
+        purpose=purpose,
         token=hashlib.sha256(raw.encode()).digest(),
-        sent_to=survivor.email,
+        sent_to=(
+            survivor.email
+            if purpose is EmailPurpose.merge
+            else "changed-confirmation@example.com"
+        ),
+        prior_email=survivor.email if purpose is EmailPurpose.change else None,
     )
     db_session.add(token)
     await db_session.commit()
     return raw, token.id
 
 
-async def test_merge_conflict_retry_budget_preserves_credential(api_client, db_session):
-    raw, token_id = await _conflicting_confirmation(api_client, db_session)
+@pytest.mark.parametrize("purpose", [EmailPurpose.merge, EmailPurpose.change])
+async def test_merge_conflict_retry_budget_preserves_credential(
+    api_client, db_session, purpose
+):
+    raw, token_id = await _conflicting_confirmation(api_client, db_session, purpose)
     for _ in range(5):
         response = await api_client.post("/v1/me/email/confirm", json={"token": raw})
         assert response.status_code == 409, response.text
@@ -54,8 +63,9 @@ async def test_merge_conflict_retry_budget_preserves_credential(api_client, db_s
     )
 
 
+@pytest.mark.parametrize("purpose", [EmailPurpose.merge, EmailPurpose.change])
 async def test_parallel_confirmation_refuses_before_account_locks(
-    api_client, db_session, engine
+    api_client, db_session, engine, purpose
 ):
     import asyncio
 
@@ -65,8 +75,9 @@ async def test_parallel_confirmation_refuses_before_account_locks(
     from app.email_confirmation_admission import admit_merge_confirmation
     from app.main import app
     from app.models import User
+    from app.sessions import SESSION_COOKIE_NAME
 
-    raw, token_id = await _conflicting_confirmation(api_client, db_session)
+    raw, token_id = await _conflicting_confirmation(api_client, db_session, purpose)
     token_hash = hashlib.sha256(raw.encode()).digest()
     sessions = async_sessionmaker(engine)
 
@@ -76,7 +87,11 @@ async def test_parallel_confirmation_refuses_before_account_locks(
 
     app.dependency_overrides[get_session] = independent_session
     async with sessions() as gate:
-        await admit_merge_confirmation(gate, token_hash)
+        await admit_merge_confirmation(
+            gate,
+            token_hash,
+            hashlib.sha256(api_client.cookies[SESSION_COOKIE_NAME].encode()).digest(),
+        )
         await gate.execute(select(User.id).with_for_update())
         async with asyncio.timeout(1):
             responses = await asyncio.gather(
@@ -144,3 +159,21 @@ async def test_ordinary_confirmation_still_works_without_retry_storage(
     monkeypatch.setattr(rate_limiting, "_redis", None)
     response = await api_client.post("/v1/me/email/confirm", json={"token": raw})
     assert response.status_code == 200, response.text
+
+
+async def test_change_confirmation_skip_merge_remains_available_without_retry_store(
+    api_client, db_session, monkeypatch
+):
+    from app import rate_limiting
+
+    raw, _ = await _conflicting_confirmation(
+        api_client, db_session, EmailPurpose.change
+    )
+    monkeypatch.setattr(rate_limiting, "_redis", None)
+    response = await api_client.post(
+        "/v1/me/email/confirm", json={"token": raw, "skip_merge": True}
+    )
+    assert response.status_code == 200, response.text
+    assert (
+        response.json()["data"]["user"]["email"] == "changed-confirmation@example.com"
+    )

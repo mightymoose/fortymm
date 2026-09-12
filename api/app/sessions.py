@@ -1269,7 +1269,7 @@ async def confirm_email(
     into the account that owns the address and the caller is signed in as that
     account. See ``_confirm_account_merge``.
 
-    Live account-merge confirmations admit one attempt at a time and at most
+    Confirmations that merge a guest account admit one attempt at a time and at most
     five attempts per bearer per hour. A busy or exhausted credential returns
     429 without consuming the link; unavailable retry-budget storage returns
     503. Both responses include Retry-After. Ordinary confirmations keep their
@@ -1281,7 +1281,12 @@ async def confirm_email(
     coded reasons (#1466). Every other dead confirmation link keeps the plain
     string detail it has always returned.
     """
-    await admit_merge_confirmation(db, hash_token(payload.token))
+    await admit_merge_confirmation(
+        db,
+        hash_token(payload.token),
+        hash_token(session_cookie) if session_cookie else None,
+        skip_merge=payload.skip_merge,
+    )
     await lock_credential_accounts(
         db,
         hash_token(payload.token),

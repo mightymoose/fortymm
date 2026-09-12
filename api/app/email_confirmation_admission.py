@@ -3,16 +3,22 @@
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
-from sqlalchemy import select, text
+from sqlalchemy import and_, exists, literal, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.email_credentials import EMAIL_CONFIRM_TOKEN_LIFETIME
-from app.models import EmailPurpose, EmailToken
+from app.models import EmailPurpose, EmailToken, SessionToken, User
 from app.rate_limiting import RateLimitUnavailable, check_expiring_budget
 
 
-async def admit_merge_confirmation(db: AsyncSession, token_hash: bytes) -> None:
-    """Only live merge bearers allocate expiring retry budgets.
+async def admit_merge_confirmation(
+    db: AsyncSession,
+    token_hash: bytes,
+    session_hash: bytes | None = None,
+    *,
+    skip_merge: bool = False,
+) -> None:
+    """Live confirmations that can fold a guest allocate expiring retry budgets.
 
     Ordinary confirmations retain their existing availability. This unlocked,
     indexed peek grants no authority: confirmation reloads and validates the
@@ -21,7 +27,23 @@ async def admit_merge_confirmation(db: AsyncSession, token_hash: bytes) -> None:
     token_id = await db.scalar(
         select(EmailToken.id).where(
             EmailToken.token == token_hash,
-            EmailToken.purpose == EmailPurpose.merge,
+            or_(
+                EmailToken.purpose == EmailPurpose.merge,
+                and_(
+                    literal(not skip_merge),
+                    EmailToken.purpose == EmailPurpose.change,
+                    exists(
+                        select(SessionToken.id)
+                        .join(User, User.id == SessionToken.user_id)
+                        .where(
+                            SessionToken.token == session_hash,
+                            User.id != EmailToken.user_id,
+                            User.confirmed_at.is_(None),
+                            User.merged_into_user_id.is_(None),
+                        )
+                    ),
+                ),
+            ),
             EmailToken.replaced_at.is_(None),
             EmailToken.created_at >= datetime.now(UTC) - EMAIL_CONFIRM_TOKEN_LIFETIME,
         )

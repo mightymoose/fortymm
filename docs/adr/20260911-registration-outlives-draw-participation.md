@@ -182,10 +182,15 @@ resolution; no resolution workflow is added here. Conflict lookups use indexed
 fixture-side evidence within the colliding events, including archived play.
 Confirmation credentials remain recoverable after a merge conflict, but repeated
 attempts are bounded before taking account or tournament locks: live merge
-credentials allow one in-flight attempt and five attempts per hour. Concurrent or
+credentials allow one in-flight attempt and five attempts per hour. The same guard
+applies when a change-email confirmation will merge a distinct browser guest;
+explicitly skipping that guest merge retains ordinary confirmation behavior. Concurrent or
 exhausted attempts return 429; unavailable retry-budget storage returns 503 with
 retry guidance. An expiring Redis counter survives database rollback. Invalid and
-ordinary confirmation links allocate no counter and retain their existing behavior. A merge grants no new stage
+ordinary confirmation links allocate no counter and retain their existing behavior.
+Web and iOS distinguish recoverable merge conflicts, retry limits, and temporary
+unavailability from dead links, preserving the bearer and showing actionable
+server details for a later retry. A merge grants no new stage
 admission. Event-format rules still determine whether multiple entries are actually
 duplicates; the explicit team-event exception remains.
 

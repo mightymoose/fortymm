@@ -82,6 +82,8 @@ enum LoginConsumeError: Error {
     /// The server couldn't be reached (5xx / timeout / offline). Retrying the
     /// same still-valid link may succeed.
     case unreachable
+    /// Confirmation was blocked without consuming the link; show the server guidance.
+    case retryable(String)
 }
 
 /// 202 body for the link-request endpoint — just the echoed address.
