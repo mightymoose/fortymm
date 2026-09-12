@@ -2113,3 +2113,43 @@ async def test_cut_draw_rejects_changed_match_rules(
                 }
             ),
         )
+
+
+@pytest.mark.parametrize("new_format", ["doubles", "teams"])
+async def test_cut_draw_rejects_changed_event_format(
+    db_session: AsyncSession, default_league: League, new_format: str
+) -> None:
+    owner = await make_user(db_session, "frozen-format-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_cut_event(db_session, tournament)
+    with pytest.raises(MatchRulesFrozenError, match="Uncut the draw first"):
+        await update_event(
+            db_session,
+            tournament_id=tournament.id,
+            event_id=event.id,
+            actor=owner,
+            updates=TournamentEventUpdate.model_validate(
+                {"lock_version": event.lock_version, "format": new_format}
+            ),
+        )
+
+
+@pytest.mark.parametrize("cut", [False, True], ids=["pre-cut-change", "cut-unchanged"])
+async def test_event_format_edits_preserve_compatible_behavior(
+    db_session: AsyncSession, default_league: League, cut: bool
+) -> None:
+    owner = await make_user(db_session, "compatible-format-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await (_add_cut_event if cut else _add_event)(db_session, tournament)
+    new_format = "singles" if cut else "doubles"
+    await update_event(
+        db_session,
+        tournament_id=tournament.id,
+        event_id=event.id,
+        actor=owner,
+        updates=TournamentEventUpdate.model_validate(
+            {"lock_version": event.lock_version, "format": new_format}
+        ),
+    )
+    await db_session.refresh(event)
+    assert event.format.value == new_format

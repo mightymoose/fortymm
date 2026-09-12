@@ -1335,3 +1335,59 @@ async def test_surviving_materialized_match_blocks_event_deletion_with_domain_er
     await db_session.commit()
     with pytest.raises(RecordedPlayDeletionError, match="rule history"):
         await delete_event(db_session, tournament_id=tid, event_id=eid, actor=owner)
+
+
+@pytest.mark.parametrize("uncut_first", [False, True], ids=["recut", "uncut-recut"])
+async def test_empty_rule_revision_can_be_replaced(
+    db_session: AsyncSession, default_league: League, uncut_first: bool
+) -> None:
+    owner = await make_user(db_session, "empty-rules-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    tid, eid = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="empty-rules-field")
+    old_revision = await db_session.scalar(
+        text(
+            "INSERT INTO tournament_draw_revisions(event_id) VALUES (:id) RETURNING id"
+        ),
+        {"id": eid},
+    )
+    await db_session.commit()
+    if uncut_first:
+        await uncut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+        bindings = (
+            await db_session.scalars(
+                text(
+                    "SELECT rule_revision_id FROM tournament_event_stages "
+                    "WHERE event_id=:id AND retired_at IS NULL"
+                ),
+                {"id": eid},
+            )
+        ).all()
+        assert bindings and all(binding is None for binding in bindings)
+    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    revisions = (
+        await db_session.execute(
+            text(
+                "SELECT id, retired_at FROM tournament_draw_revisions "
+                "WHERE event_id=:id"
+            ),
+            {"id": eid},
+        )
+    ).all()
+    assert len(revisions) == 2
+    assert (
+        next(row for row in revisions if row.id == old_revision).retired_at is not None
+    )
+    current = next(row.id for row in revisions if row.retired_at is None)
+    assert current != old_revision
+    bindings = (
+        await db_session.scalars(
+            text(
+                "SELECT rule_revision_id FROM tournament_event_stages "
+                "WHERE event_id=:id AND retired_at IS NULL"
+            ),
+            {"id": eid},
+        )
+    ).all()
+    assert bindings and all(binding == current for binding in bindings)

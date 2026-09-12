@@ -1097,3 +1097,44 @@ async def test_preview_snapshot_is_solver_ready(
     # every synthetic fixture is placed.
     assert result.verdict in (scheduling.Verdict.optimal, scheduling.Verdict.feasible)
     assert len(result.placements) == 6
+
+
+@pytest.mark.parametrize("planning_change", ["draw_type", "match_settings"])
+async def test_cut_event_preview_uses_frozen_rules_after_planning_changes(
+    db_session: AsyncSession, default_league: League, planning_change: str
+) -> None:
+    from sqlalchemy import text
+
+    from app.tournament_draw_service import cut_event_draw
+    from tests.test_tournament_draw_service import _enter_field
+
+    owner = await make_user(db_session, "preview-frozen-rules")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_event(db_session, tournament, max_players=6, length_games=5)
+    tid, eid = tournament.id, event.id
+    await _enter_field(db_session, event, 6, prefix="preview-frozen-field")
+    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    now = datetime(2026, 6, 13, tzinfo=UTC)
+    original = build_preview_snapshot(await _load(db_session, tid), now=now)
+    if planning_change == "draw_type":
+        await db_session.execute(
+            text(
+                "UPDATE tournament_events SET draw_type_id="
+                "(SELECT id FROM draw_types WHERE key='single-elim'), "
+                "draw_settings='{}' "
+                "WHERE id=:id"
+            ),
+            {"id": eid},
+        )
+    else:
+        await db_session.execute(
+            text(
+                "UPDATE tournament_events SET match_settings=CAST(:settings AS jsonb) "
+                "WHERE id=:id"
+            ),
+            {"id": eid, "settings": '{"rated":false,"length_games":1}'},
+        )
+    await db_session.commit()
+    db_session.expire_all()
+    changed = build_preview_snapshot(await _load(db_session, tid), now=now)
+    assert changed.snapshot == original.snapshot

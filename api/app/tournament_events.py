@@ -1077,6 +1077,19 @@ async def update_event(
     # refusal writes nothing at all.
     await _enforce_group_set_frozen(db, event, updates)
     await _enforce_draw_settings_frozen(db, event, updates)
+    # Read ONCE, under the row lock, for the two gates below (the materialisation and
+    # the re-solve trigger): a draw is cut or removed only under this same lock, so
+    # the answer cannot move between here and the commit.
+    has_draw = await event_has_draw(db, event.id)
+    if has_draw and (
+        (updates.format is not None and updates.format != event.format)
+        or (
+            updates.match_settings is not None
+            and updates.match_settings
+            != MatchSettings.model_validate(event.match_settings)
+        )
+    ):
+        raise MatchRulesFrozenError()
     await _enforce_entry_format(db, event, updates.format)
     # The reservation cap (#1482) is judged after both freezes: the freeze is the
     # refusal a director can act on, so a cut event over the cap answers the 409 that
@@ -1086,16 +1099,6 @@ async def update_event(
     # so a cut event over the cap still answers the cap's 422 first, and a cut event
     # at all still answers a freeze's 409 first.
     _enforce_reservation_containment(event, updates)
-    # Read ONCE, under the row lock, for the two gates below (the materialisation and
-    # the re-solve trigger): a draw is cut or removed only under this same lock, so
-    # the answer cannot move between here and the commit.
-    has_draw = await event_has_draw(db, event.id)
-    if (
-        has_draw
-        and updates.match_settings is not None
-        and updates.match_settings != MatchSettings.model_validate(event.match_settings)
-    ):
-        raise MatchRulesFrozenError()
     facts_before = _event_scheduling_facts(event)
     # Captured BEFORE the setattr loop overwrites it: a timezone edit preserves the
     # wall-clock of already-placed fixtures, which needs the zone they were placed IN to

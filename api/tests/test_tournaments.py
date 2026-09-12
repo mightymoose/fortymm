@@ -12694,3 +12694,26 @@ async def test_tournament_eligibility_reads_primary_player_rating(
     )
     (event,) = await _events_of(client, tournament_id)
     assert event["entry_state"] == _ineligible("pr-cap", 1875.0)
+
+
+@pytest.mark.parametrize("event_format", ["doubles", "teams"])
+async def test_cut_event_format_patch_requires_uncut(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    event_format: str,
+) -> None:
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
+    await _seed_field(db_session, event["id"], 4)
+    assert (await client.post(_draw_url(tournament_id, event["id"]))).status_code == 201
+    response = await patch_event(
+        client, tournament_id, event["id"], {"format": event_format}
+    )
+    assert response.status_code == 409, response.text
+    assert "Uncut the draw first" in response.json()["detail"]
+    unchanged = await patch_event(
+        client, tournament_id, event["id"], {"format": "singles"}
+    )
+    assert unchanged.status_code == 200, unchanged.text

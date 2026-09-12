@@ -20,10 +20,10 @@ that failed to implement its declared version. Unknown versions are refused,
 not interpreted using the latest implementation.
 
 Names, descriptions, venue windows, table assignments and other scheduling
-configuration retain their existing edit policies. Scheduling reads the effective
-frozen match length for a cut competition. These rules do not freeze actual
-scores, calculated standings or results: corrections still affect outcomes under
-the original rule interpretation.
+configuration retain their existing edit policies. Scheduling and schedule previews
+use the effective frozen format and match length for a cut competition. These rules
+do not freeze actual scores, calculated standings or results: corrections still
+affect outcomes under the original rule interpretation.
 
 ## Revisions and editing
 
@@ -35,10 +35,10 @@ their materialized-match and advancement-history restrictions; this does not
 introduce a mid-competition rules-change operation.
 
 The event's inline draw and match settings remain its owned planning values.
-The API refuses actual best-of or rated changes while a draw exists, with a 409
-explaining that the draw must first be removed. Unchanged values remain accepted
-so saving an unrelated edit still works. Existing draw-format restrictions
-continue. This tighter match-settings edit rule is an intentional compatibility
+The API refuses actual event format, best-of or rated changes while a draw exists,
+with a 409 explaining that the draw must first be removed. Unchanged values remain
+accepted so saving an unrelated edit still works. Existing draw-format restrictions
+continue. This tighter rules-edit policy is an intentional compatibility
 change; silently accepting an edit that cannot affect the competition would
 misrepresent a successful save.
 
