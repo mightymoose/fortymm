@@ -37,6 +37,7 @@ from app.models import (
     TournamentEntry,
     TournamentEntryRegistration,
     TournamentEntryStatus,
+    TournamentEntryWithdrawal,
     TournamentEvent,
     TournamentEventStage,
     TournamentFixture,
@@ -48,7 +49,7 @@ from app.models.tournament_entry_participation import WithdrawalReason
 from app.schedule_solves import request_solve, tournament_has_drawn_event
 from app.tournament_authority import lock_merge_tournaments, merge_authority
 from app.tournament_draws import draw_has_play, uncut_draw
-from app.tournament_participation import close_registration
+from app.tournament_participation import close_registration, restore_event_eligibility
 
 # Bind the active state from the enum in reconciliation queries. The database
 # independently enforces scoped participation through entry membership.
@@ -758,8 +759,8 @@ async def _resolve_entry_collisions(
 
     # Recorded play chooses the durable survivor, not whether registration is
     # still open. Carry an active duplicate's registration onto a withdrawn
-    # survivor with a new period; its ended participation and withdrawal history
-    # remain unchanged. Do this before closing duplicates so priority can still
+    # survivor with a new period; its ended participation remains unchanged.
+    # Do this before closing duplicates so priority can still
     # follow their reconciled registration periods.
     reactivated_entry_ids = {
         retained_id
@@ -779,6 +780,28 @@ async def _resolve_entry_collisions(
             .where(TournamentEntry.id.in_(reactivated_entry_ids))
             .values(status=TournamentEntryStatus.entered)
         )
+
+        # Transfer event eligibility only from an eligible active duplicate.
+        # Restoration closes the old ban's interval; it does not reopen any
+        # ended participation or grant admission to the standing draw.
+        blocked_duplicate_ids = set(
+            await db.scalars(
+                select(TournamentEntryWithdrawal.entry_id).where(
+                    TournamentEntryWithdrawal.entry_id.in_(source_entry_ids),
+                    TournamentEntryWithdrawal.stage_id.is_(None),
+                    TournamentEntryWithdrawal.restored_at.is_(None),
+                )
+            )
+        )
+        eligible_survivor_ids = {
+            retained_id
+            for _, duplicate_id, retained_id in collisions
+            if retained_id in reactivated_entry_ids
+            and entries[duplicate_id].status is TournamentEntryStatus.entered
+            and duplicate_id not in blocked_duplicate_ids
+        }
+        for entry_id in sorted(eligible_survivor_ids):
+            await restore_event_eligibility(db, entry_id, actor_account_id)
 
     # (1) Copy metadata between the captured collision entries while both are
     # still registered. A played source can survive its target duplicate; the

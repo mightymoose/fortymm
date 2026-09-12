@@ -164,7 +164,9 @@ registration to the survivor. A superseded entry cannot be reactivated.
 If only one competing entry has recorded play, that entry survives regardless of
 which Account remains. If that survivor is withdrawn and the duplicate is
 registered, reconciliation preserves active registration on the survivor through a
-new registration period. It does not revive ended participation. If both have
+new registration period. If the active duplicate is eligible for the event, the
+survivor also regains event eligibility, recording restoration on its withdrawal
+history. This does not revive ended participation or override stage withdrawals. If both have
 recorded play in the same stage, refuse the
 Player merge atomically and identify the conflicting entries for director
 resolution; no resolution workflow is added here. A merge grants no new stage
