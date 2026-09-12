@@ -608,6 +608,19 @@ async def test_migration_creates_the_tournament_event_stages_table(
     assert await _stage_unique_constraint_columns(
         migrated_database_url, "uq_tournament_event_stages_event_id_id"
     ) == {"event_id", "id"}
-    assert await _stage_unique_constraint_columns(
-        migrated_database_url, "uq_tournament_event_stages_event_id_position"
-    ) == {"event_id", "position"}
+    engine = create_async_engine(migrated_database_url)
+    try:
+        async with engine.connect() as connection:
+            definition = await connection.scalar(
+                sa.text(
+                    "SELECT indexdef FROM pg_indexes WHERE tablename = "
+                    "'tournament_event_stages' AND indexname = "
+                    "'uq_tournament_event_stages_event_id_position'"
+                )
+            )
+        assert definition is not None
+        assert "CREATE UNIQUE INDEX" in definition
+        assert "(event_id, position)" in definition.replace('"', "")
+        assert "WHERE (retired_at IS NULL)" in definition
+    finally:
+        await engine.dispose()

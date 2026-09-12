@@ -2021,7 +2021,8 @@ async def test_re_sending_a_reservation_keeps_its_row_and_re_orders_the_rest(
 # Current Account/director authority is reread after the tournament row lock (1).
 # Keeping that query after the lock makes revocation win before a waiting write;
 # projecting authority in the original SELECT can read grants before it blocks.
-EXPECTED_RESERVATION_WRITE_STATEMENTS = 21
+# Nonblocking actor admission and Account key-share precede the parent lock (2).
+EXPECTED_RESERVATION_WRITE_STATEMENTS = 23
 
 
 async def test_reservation_write_statement_count_does_not_drift(

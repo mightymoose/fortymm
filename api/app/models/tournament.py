@@ -245,6 +245,10 @@ class Tournament(Base):
     # ``delete-orphan`` is what the catalogue *write* leans on — a table dropped from
     # the submitted list is removed by taking it out of this collection.
     tables: Mapped[list["VenueTable"]] = relationship(
+        primaryjoin=(
+            "and_(Tournament.id == VenueTable.tournament_id, "
+            "VenueTable.retired_at.is_(None))"
+        ),
         back_populates="tournament",
         cascade="all, delete-orphan",
         passive_deletes=True,
@@ -499,7 +503,8 @@ class TournamentEvent(Base):
     # LIMIT/OFFSET could not survive.
     groups: Mapped[list["TournamentEventStageGroup"]] = relationship(
         secondary="tournament_event_stages",
-        primaryjoin="TournamentEvent.id == TournamentEventStage.event_id",
+        primaryjoin="and_(TournamentEvent.id == TournamentEventStage.event_id, "
+        "TournamentEventStage.retired_at.is_(None))",
         secondaryjoin="TournamentEventStage.id == TournamentEventStageGroup.stage_id",
         viewonly=True,
         lazy="selectin",

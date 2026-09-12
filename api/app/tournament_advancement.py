@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     Match,
+    MatchStatus,
     ScheduleSolveTrigger,
     Tournament,
     TournamentEvent,
@@ -115,7 +116,13 @@ async def on_match_completed(db: AsyncSession, match: Match) -> None:
         )
     ).scalar_one()
 
-    winning_side = next((side for side in match.sides if side.won is True), None)
+    # Voids are terminal too, but cannot carry a winner. Merge callers do not
+    # need to load the match's sides just to advance its stage completion.
+    winning_side = (
+        next((side for side in match.sides if side.won is True), None)
+        if match.status is MatchStatus.completed
+        else None
+    )
     if winning_side is not None:
         fixture.winner_entry_id = (
             fixture.entry_a_id if winning_side.side_number == 1 else fixture.entry_b_id

@@ -258,9 +258,9 @@ async def attach_match_to_director_tournament(
     )
     db_session.add(fixture)
     await db_session.flush()
-    if (
-        await db_session.scalar(select(Match.status).where(Match.id == match_id))
-        == MatchStatus.completed
+    if await db_session.scalar(select(Match.status).where(Match.id == match_id)) in (
+        MatchStatus.completed,
+        MatchStatus.voided,
     ):
         from app.event_lifecycle import reconcile_event
 

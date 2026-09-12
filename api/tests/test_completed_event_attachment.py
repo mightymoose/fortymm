@@ -49,9 +49,7 @@ async def test_completed_attachment_requires_current_reconciliation(
         "UPDATE tournament_fixtures SET match_id=:match WHERE id=:fixture"
     )
     parameters = {"match": match.id, "fixture": fixture.id}
-    with pytest.raises(
-        IntegrityError, match="attachment requires event reconciliation"
-    ):
+    with pytest.raises(IntegrityError, match="requires event reconciliation"):
         async with db_session.begin_nested():
             # An assertion made before the changed inputs must not authorize them.
             await reconcile_event(db_session, event_id)
@@ -69,9 +67,7 @@ async def test_completed_attachment_requires_current_reconciliation(
             )
             await db_session.execute(attachment, parameters)
             await db_session.execute(
-                text(
-                    "SET CONSTRAINTS require_attachment_event_reconciliation IMMEDIATE"
-                )
+                text("SET CONSTRAINTS require_event_reconciliation IMMEDIATE")
             )
     await db_session.execute(attachment, parameters)
     await reconcile_event(db_session, event_id)

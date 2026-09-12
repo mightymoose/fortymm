@@ -24,7 +24,7 @@ from typing import Any
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.draws import _swiss_seated_pairings
@@ -34,6 +34,7 @@ from app.models import (
     MatchStatus,
     Tournament,
     TournamentEntry,
+    TournamentEntryParticipation,
     TournamentEntryStatus,
     TournamentEvent,
     TournamentFixture,
@@ -52,6 +53,7 @@ from app.tournament_materialization import materialize_event
 from app.tournament_queries import stage_ids_for_events
 from app.tournament_serialization import _field_input, _seated_pairings
 from app.tournaments import TOURNAMENT_CREATE
+from tests._entry_seeds import withdraw_entry_with_history
 from tests._helpers import (
     counted_statements,
     grant_permissions,
@@ -903,6 +905,127 @@ async def test_a_byed_entrant_is_credited_with_a_win_worth_zero_games(
         }, "round 2 seats the byed entrant, and the bye passes to the seed without one"
 
 
+async def test_a_matchless_swiss_final_round_completes_participation(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    client, _ = authed_client
+    tournament_id, event_id, entries = await _field(client, db_session, 2, rounds=1)
+    assert (await _cut(client, tournament_id, event_id)).status_code == 201
+    (fixture,) = await _fixtures(db_session, event_id)
+    fixture.winner_entry_id = fixture.entry_a_id
+    await db_session.commit()
+    await _set_status(db_session, tournament_id, TournamentStatus.published)
+    assert (await _go_live(client, tournament_id)).status_code == 201
+
+    periods = list(
+        await db_session.scalars(
+            select(TournamentEntryParticipation)
+            .where(TournamentEntryParticipation.stage_id == fixture.stage_id)
+            .execution_options(populate_existing=True)
+        )
+    )
+    assert {period.entry_id for period in periods} == {entry.id for entry in entries}
+    assert all(period.ended_at is not None for period in periods)
+    assert {period.end_reason for period in periods} == {"stage_completed"}
+    await db_session.refresh(fixture)
+    assert fixture.match_id is None
+    assert fixture.winner_entry_id == fixture.entry_a_id
+
+
+async def test_swiss_advances_only_the_current_stages_admitted_field(
+    authed_client: tuple[AsyncClient, User], db_session: AsyncSession
+) -> None:
+    from app.tournament_participation import WithdrawalReason, withdraw_competition
+
+    client, owner = authed_client
+    async with (
+        opponent_session(db_session, "swiss-admitted-two") as (client_2, user_2),
+        opponent_session(db_session, "swiss-admitted-three") as (client_3, user_3),
+        opponent_session(db_session, "swiss-admitted-four") as (client_4, user_4),
+    ):
+        tournament_id = await _tournament(client)
+        event_id = (await _create_event(client, tournament_id)).json()["id"]
+        entries = [
+            await _enter(db_session, event_id, user, seed=seed, minutes=seed)
+            for seed, user in enumerate((owner, user_2, user_3, user_4), start=1)
+        ]
+        entry_ids = [entry.id for entry in entries]
+        clients = dict(
+            zip(entry_ids, [client, client_2, client_3, client_4], strict=True)
+        )
+        assert (await _cut(client, tournament_id, event_id)).status_code == 201
+        await _set_status(db_session, tournament_id, TournamentStatus.published)
+        assert (await _go_live(client, tournament_id)).status_code == 201
+        stage_id = (await _fixtures(db_session, event_id))[0].stage_id
+        await withdraw_competition(
+            db_session,
+            entry_ids[3],
+            owner.id,
+            WithdrawalReason.director_removal,
+            stage_id=stage_id,
+        )
+        await db_session.commit()
+        late = await _enter(
+            db_session,
+            event_id,
+            await make_user(db_session, "swiss-not-admitted"),
+            seed=5,
+            minutes=5,
+        )
+        late_id = late.id
+        still_registered = set(
+            await db_session.scalars(
+                select(TournamentEntry.id).where(
+                    TournamentEntry.event_id == uuid.UUID(event_id),
+                    TournamentEntry.status == TournamentEntryStatus.entered,
+                )
+            )
+        )
+        assert still_registered == {*entry_ids, late_id}
+
+        for round_number in (1, 2, 3):
+            db_session.expire_all()
+            rows = [
+                fixture
+                for fixture in await _fixtures(db_session, event_id)
+                if fixture.round == round_number and fixture.match_id is not None
+            ]
+            assert len(rows) == (2 if round_number == 1 else 1)
+            if round_number > 1:
+                assert all(
+                    {row.entry_a_id, row.entry_b_id} <= set(entry_ids[:3])
+                    for row in rows
+                )
+            await _call_fixtures(db_session, tournament_id, rows)
+            for row in rows:
+                assert row.entry_a_id is not None
+                await _win_fixture_match(
+                    row,
+                    clients_by_entry=clients,
+                    winner_entry_id=row.entry_a_id,
+                    rated=False,
+                )
+
+        periods = list(
+            await db_session.scalars(
+                select(TournamentEntryParticipation)
+                .where(TournamentEntryParticipation.stage_id == stage_id)
+                .execution_options(populate_existing=True)
+            )
+        )
+        assert {period.entry_id for period in periods} == set(entry_ids)
+        assert all(period.ended_at is not None for period in periods)
+        assert {
+            period.end_reason for period in periods if period.entry_id in entry_ids[:3]
+        } == {"stage_completed"}
+        assert (
+            next(
+                period for period in periods if period.entry_id == entry_ids[3]
+            ).end_reason
+            == "director_removal"
+        )
+
+
 async def test_a_field_that_shrinks_mid_event_still_plays_out_and_finishes(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:
@@ -927,14 +1050,10 @@ async def test_a_field_that_shrinks_mid_event_still_plays_out_and_finishes(
     The table reads 1, 3, 2, seed 2 takes the bye, and the two left have already met:
     the documented last resort, which pairs them again rather than stranding the round.
 
-    **The withdrawal is written as the statement that causes it in production.** The
-    ordinary withdrawal endpoint is window-gated and answers 409 on a live event, so
-    nothing here could reach the pairing code through it. ``app.account_merge`` can and
-    does: when a guest who is already playing claims a verified account that is also
-    entered, the merge flips the colliding entry to ``withdrawn`` — deliberately, rather
-    than deleting it, *because* the row seats fixtures that have been played. This is
-    that ``UPDATE``. Driving ``merge_user`` itself would add a re-pointed user, a voided
-    self-play match and a re-solve without adding anything this asserts.
+    The ordinary withdrawal endpoint is window-gated on a live event. Seed the
+    complete withdrawal lifecycle through the shared core, as reconciliation can
+    while live, so the registration and stage participation close together. Identity
+    transfer and self-play voiding are separate behaviors from the shrinking field.
     """
     client, owner = authed_client
     async with (
@@ -956,11 +1075,7 @@ async def test_a_field_that_shrinks_mid_event_still_plays_out_and_finishes(
             zip(entry_ids, [client, client_2, client_3, client_4], strict=True)
         )
 
-        await db_session.execute(
-            update(TournamentEntry)
-            .where(TournamentEntry.id == entry_ids[3])
-            .values(status=TournamentEntryStatus.withdrawn)
-        )
+        await withdraw_entry_with_history(db_session, entry_ids[3])
         await db_session.commit()
 
         async def play(round_number: int, winner_index: int) -> None:
@@ -1012,9 +1127,26 @@ async def test_a_field_that_shrinks_mid_event_still_plays_out_and_finishes(
             "stalled the walk for good, leaving the event unplayable from here"
         )
 
+        participation_query = select(TournamentEntryParticipation).where(
+            TournamentEntryParticipation.event_id == uuid.UUID(event_id),
+            TournamentEntryParticipation.entry_id.in_(entry_ids[:3]),
+        )
+        before_final = (await db_session.scalars(participation_query)).all()
+        assert len(before_final) == 3
+        assert all(period.ended_at is None for period in before_final), (
+            "the next pairable round is still owed, even with surplus empty rows"
+        )
+
         await play(3, winner_index=0)
 
         db_session.expire_all()
+        completed_periods = (await db_session.scalars(participation_query)).all()
+        assert all(period.ended_at is not None for period in completed_periods), (
+            "permanently unpairable rows must not keep stage participation open"
+        )
+        assert {period.end_reason for period in completed_periods} == {
+            "stage_completed"
+        }
         results = (await _event_read(client, tournament_id))["results"]
 
         assert results["complete"] is True, (
@@ -1079,6 +1211,10 @@ async def test_advancing_a_swiss_event_costs_three_statements(
     match = await db_session.get(Match, played.match_id)
     assert match is not None
     match.status = MatchStatus.completed
+    await db_session.flush()
+    from app.event_lifecycle import reconcile_match_event
+
+    await reconcile_match_event(db_session, match.id)
     await db_session.commit()
 
     async with counted_statements(engine) as (session, statements):

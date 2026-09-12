@@ -253,6 +253,12 @@ async def void_official_match(
                 {player.user_id for side in match.sides for player in side.players},
             )
         match = await load_match_for_write(db, match_id, actor_account_id, lock=False)
+        from app.tournament_advancement import on_match_completed
+
+        # A void is terminal for its stage, just like a completed match. The
+        # reloaded sides have no winner, so this advances completion without
+        # inventing a result or restoring the preserved score's decision.
+        await on_match_completed(db, match)
         await _stage_ruling_hints(db, match)
         await db.flush()
         return action

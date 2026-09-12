@@ -996,7 +996,7 @@ class ReservationWrite(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=255)
     slot: WellFormedSlot
     table_ids: list[str]
 
@@ -1057,6 +1057,8 @@ class Reservation(ReservationWrite):
     no default, because there is no id a literal reservation could sensibly default
     to."""
 
+    # Reads preserve existing names; the write boundary limits new storage.
+    name: str = Field(min_length=1)
     id: uuid.UUID
     position: ReservationPosition = 0
     # Overrides the inherited ``WellFormedSlot`` back to a bare ``Slot`` (#1501).

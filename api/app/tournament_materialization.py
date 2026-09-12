@@ -17,10 +17,13 @@ domain imports it, so the completion seam (#789) can import *this* without a cyc
 """
 
 import uuid
+from collections import defaultdict
 from collections.abc import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import any_, exists, literal, or_, select, tuple_
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.advancement_decisions import record_side_fill
 from app.draws import (
@@ -32,8 +35,10 @@ from app.draws import (
     reads_entrants,
     reads_fixture_games,
     ready_fixtures,
+    swiss_pairable_rows,
 )
 from app.models import (
+    DrawType,
     Match,
     MatchSettings,
     MatchSide,
@@ -41,17 +46,21 @@ from app.models import (
     MatchStatus,
     Tournament,
     TournamentEntry,
+    TournamentEntryParticipation,
+    TournamentEntryStatus,
+    TournamentEntryWithdrawal,
     TournamentEvent,
     TournamentFixture,
 )
 from app.models.tournament import EventLifecycleState
 from app.schemas.tournament import MatchSettings as EventMatchSettings
 from app.tournament_draws import (
-    active_draw_entrants,
     fixture_state,
     group_order,
+    participating_draw_entrants,
     strategy_for_event,
 )
+from app.tournament_participation import complete_stage_participation
 from app.tournament_queries import game_counts_by_match, stage_ids_for_events
 
 
@@ -107,6 +116,10 @@ async def materialize_event(
     For round-robin the plan carries no side-fills at all (every pairing is known at the
     cut), so that step is a no-op and its behaviour is byte-identical.
 
+    A ready fixture only becomes a new match while both of its exact participation
+    periods remain active. Historical seats survive withdrawal or reconciliation;
+    that does not admit their contestants to new play. Existing matches are preserved.
+
     **The projection loads the fixtures' game counts — but only for the draw types that
     read them**, and that is load-bearing rather than defensive.
     ``FixtureState.games`` is what a groups-then-knockout draw picks its
@@ -132,9 +145,9 @@ async def materialize_event(
     **The event's entrants are loaded the same way, behind the same kind of gate**
     (``app.draws.reads_entrants``). ``advance()`` takes the field as well as the
     fixtures because for swiss the two are not the same thing: a bye is the absence of a
-    fixture row, so its byed entrant — and a latecomer the currency check tolerates —
-    is in no row at all, and a next round paired from the rows would leave them out of
-    the event permanently. Only swiss declares it, so the other three still cost exactly
+    fixture row, so its admitted byed entrant is in no row at all, and a next round
+    paired from the rows would leave them out of the event permanently. Only swiss
+    declares it, so the other three still cost exactly
     the one fixture statement they always cost.
     """
     if event.lifecycle_state is EventLifecycleState.cancelled:
@@ -172,17 +185,17 @@ async def materialize_event(
         stage.id: FixtureStage(position=stage.position, draw_type=stage.draw_type)
         for stage in event.stages
     }
-    # The **field**, beside the fixtures, for the one draw type that cannot recover it
-    # from them: a swiss bye is the absence of a fixture row, so pairing the next round
-    # from the seated set alone would drop the byed entrant out of the event. Read
-    # through the same pair the cut reads it through — ``active_draw_entrants`` then
-    # ``order_entrants`` — so the field a draw is advanced against is the field it was
-    # cut from, by construction rather than by two loaders agreeing. Gated exactly as
-    # the game counts are, and for the same reason: on the completion seam this is a
-    # round trip per result submission, and three of the four draw types would discard
-    # it (``app.draws.reads_entrants``).
+    # Swiss needs its admitted field as well as fixtures: byes have no seated
+    # row, stage withdrawals can remain registered, and late registrations do
+    # not join an underway stage. The same field size governs completion below.
     entrants: Sequence[OrderedEntrant] = (
-        order_entrants(await active_draw_entrants(db, event.id))
+        order_entrants(
+            await participating_draw_entrants(
+                db,
+                stage_id=fixtures[0].stage_id,
+                draw_revision_id=fixtures[0].draw_revision_id,
+            )
+        )
         if reads_entrants(event.draw_settings.draw_type)
         else ()
     )
@@ -200,7 +213,7 @@ async def materialize_event(
     # keeps the whole advance idempotent; round-robin plans no fills, so this loop does
     # nothing and its materialization is unchanged.
     fixtures_by_id = {fixture.id: fixture for fixture in fixtures}
-    for fill in plan.side_fills:
+    for fill in await _eligible_side_fills(db, plan.side_fills):
         await record_side_fill(db, fill)
         _apply_side_fill(fixtures_by_id[fill.fixture_id], fill)
     # Readiness is decided by ``ready_fixtures`` — the shared helper ``advance()``
@@ -217,10 +230,30 @@ async def materialize_event(
             ]
         )
     )
+    decided_matches = set(completed_match_ids) | set(voided_match_ids)
+    stage_fixtures: dict[uuid.UUID, list[TournamentFixture]] = defaultdict(list)
+    for fixture in fixtures:
+        stage_fixtures[fixture.stage_id].append(fixture)
+    completed_stages = {
+        stage_id
+        for stage_id, rows in stage_fixtures.items()
+        if _stage_is_complete(
+            rows, stages[stage_id].draw_type, len(entrants), decided_matches
+        )
+    }
+    await complete_stage_participation(db, completed_stages)
     ready_fixture_rows = [f for f in fixtures if f.id in ready]
     if not ready_fixture_rows:
         return
 
+    # Readiness describes the preserved bracket; participation grants admission to
+    # new play. A merge can end a bye seat while retaining its underway draw.
+    active_fixture_ids = await _actively_participating_fixture_ids(
+        db, ready_fixture_rows
+    )
+    ready_fixture_rows = [f for f in ready_fixture_rows if f.id in active_fixture_ids]
+    if not ready_fixture_rows:
+        return
     entry_users = await _entry_user_ids(db, ready_fixture_rows)
     settings = EventMatchSettings.model_validate(event.match_settings)
     built: list[tuple[TournamentFixture, Match]] = []
@@ -328,6 +361,76 @@ async def _fixtures_with_match_statuses(
     return fixtures, completed_match_ids, frozenset(voided_match_ids)
 
 
+async def _eligible_side_fills(
+    db: AsyncSession, fills: Sequence[SideFill]
+) -> list[SideFill]:
+    """Check destination admission before recording a decision or changing its seat.
+
+    Qualification can still name a historical entry superseded during play. Even a
+    half-filled fixture writes participation, so eligibility cannot wait until the
+    fixture is ready to become a match.
+    """
+    if not fills:
+        return []
+    eligible = set(
+        (
+            await db.execute(
+                select(TournamentFixture.id, TournamentEntry.id)
+                .join(
+                    TournamentEntry,
+                    TournamentEntry.event_id == TournamentFixture.scope_event_id,
+                )
+                .where(
+                    tuple_(TournamentFixture.id, TournamentEntry.id).in_(
+                        [(fill.fixture_id, fill.entry_id) for fill in fills]
+                    ),
+                    TournamentEntry.status == TournamentEntryStatus.entered,
+                    TournamentEntry.superseded_by_entry_id.is_(None),
+                    ~exists(
+                        select(TournamentEntryWithdrawal.id).where(
+                            TournamentEntryWithdrawal.entry_id == TournamentEntry.id,
+                            TournamentEntryWithdrawal.restored_at.is_(None),
+                            or_(
+                                TournamentEntryWithdrawal.stage_id.is_(None),
+                                TournamentEntryWithdrawal.stage_id
+                                == TournamentFixture.stage_id,
+                            ),
+                        )
+                    ),
+                )
+            )
+        ).tuples()
+    )
+    return [fill for fill in fills if (fill.fixture_id, fill.entry_id) in eligible]
+
+
+async def _actively_participating_fixture_ids(
+    db: AsyncSession, fixtures: Sequence[TournamentFixture]
+) -> set[uuid.UUID]:
+    """Require the exact seated periods to remain active before creating a match.
+
+    The query autoflushes side fills first, so database-assigned participation
+    references for newly advanced contestants are included in the same check.
+    """
+    side_a = aliased(TournamentEntryParticipation)
+    side_b = aliased(TournamentEntryParticipation)
+    return set(
+        await db.scalars(
+            select(TournamentFixture.id)
+            .join(side_a, side_a.id == TournamentFixture.participation_a_id)
+            .join(side_b, side_b.id == TournamentFixture.participation_b_id)
+            .where(
+                TournamentFixture.id
+                == any_(
+                    literal([fixture.id for fixture in fixtures], type_=ARRAY(UUID))
+                ),
+                side_a.ended_at.is_(None),
+                side_b.ended_at.is_(None),
+            )
+        )
+    )
+
+
 async def _entry_user_ids(
     db: AsyncSession, fixtures: Sequence[TournamentFixture]
 ) -> dict[uuid.UUID, uuid.UUID]:
@@ -420,3 +523,36 @@ def _add_side(match: Match, *, side_number: int, user_id: uuid.UUID) -> None:
     """
     side = MatchSide(match=match, side_number=side_number)
     side.players.append(MatchSidePlayer(match=match, user_id=user_id))
+
+
+def _stage_is_complete(
+    fixtures: Sequence[TournamentFixture],
+    draw_type: DrawType,
+    field_size: int,
+    decided_matches: set[uuid.UUID],
+) -> bool:
+    """A Swiss field shrink leaves surplus rows that can never need a result."""
+    if draw_type is DrawType.swiss:
+        by_round: dict[int, list[TournamentFixture]] = defaultdict(list)
+        for fixture in fixtures:
+            by_round[fixture.round].append(fixture)
+        for rows in by_round.values():
+            seated = [
+                row
+                for row in rows
+                if row.entry_a_id is not None and row.entry_b_id is not None
+            ]
+            if len(seated) < swiss_pairable_rows(len(rows), len(seated), field_size):
+                return False
+            if not all(
+                (row.match_id is None and row.winner_entry_id is not None)
+                or row.match_id in decided_matches
+                for row in seated
+            ):
+                return False
+        return True
+    return all(
+        (row.match_id is None and row.winner_entry_id is not None)
+        or row.match_id in decided_matches
+        for row in fixtures
+    )

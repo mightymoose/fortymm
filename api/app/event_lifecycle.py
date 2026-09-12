@@ -79,9 +79,14 @@ async def _record_reconciliation(db: AsyncSession, event: TournamentEvent) -> No
     await db.execute(
         text("""
             INSERT INTO tournament_event_reconciliations
-                (event_id, lifecycle_state, lifecycle_version, transaction_id)
-            SELECT :event, :state, :version, pg_current_xact_id()::text::bigint
+                (event_id, lifecycle_state, lifecycle_version,
+                 transaction_id, reconciled)
+            SELECT :event, :state, :version, pg_current_xact_id()::text::bigint, true
             WHERE :version > 0 OR EXISTS (
+                SELECT 1 FROM tournament_event_reconciliations r
+                WHERE r.event_id=:event
+                  AND r.transaction_id=pg_current_xact_id()::text::bigint
+            ) OR EXISTS (
                 SELECT 1 FROM tournament_fixtures f
                 JOIN matches m ON m.id=f.match_id
                 WHERE f.scope_event_id=:event AND
@@ -91,7 +96,8 @@ async def _record_reconciliation(db: AsyncSession, event: TournamentEvent) -> No
             )
             ON CONFLICT (event_id, transaction_id) DO UPDATE SET
                 lifecycle_state=EXCLUDED.lifecycle_state,
-                lifecycle_version=EXCLUDED.lifecycle_version
+                lifecycle_version=EXCLUDED.lifecycle_version,
+                reconciled=true
         """),
         {
             "event": event.id,
@@ -103,9 +109,9 @@ async def _record_reconciliation(db: AsyncSession, event: TournamentEvent) -> No
 
 async def reconcile_match_event(db: AsyncSession, match_id: uuid.UUID) -> None:
     event_id = await db.scalar(
-        select(TournamentFixture.scope_event_id).where(
-            TournamentFixture.match_id == match_id
-        )
+        select(TournamentFixture.scope_event_id)
+        .where(TournamentFixture.match_id == match_id)
+        .execution_options(include_draw_history=True)
     )
     if event_id is not None:
         await reconcile_event(db, event_id)
@@ -141,6 +147,7 @@ async def cancel_event(
         .values(lifecycle_state=EventLifecycleState.cancelled)
     )
     await db.refresh(event)
+    await _record_reconciliation(db, event)
 
 
 async def require_game_recording_allowed(

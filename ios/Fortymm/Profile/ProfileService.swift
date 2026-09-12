@@ -67,11 +67,11 @@ struct ProfileService {
     /// one coded 400 (`{"detail": {"code": "replaced", ...}}`, a link a newer
     /// resend superseded) surfaces as `.replaced` rather than `.rejected`,
     /// because its fix is opening the most recent email, not resending — a
-    /// resend would kill the newer live link (#1616). Every other `4xx` is a
-    /// rejected token (invalid, expired, already used) and terminal; anything
-    /// else is transient and worth a retry. Keeping that boundary-typing in the
-    /// service, not the view, is the convention the rest of the API layer
-    /// follows.
+    /// resend would kill the newer live link (#1616). Other 400 responses reject
+    /// a dead link. Merge conflicts, throttling, and unavailable merge budgets
+    /// preserve the link and surface the server guidance with a retry. Keeping
+    /// that boundary-typing in the service, not the view, follows the API layer
+    /// convention.
     func confirmEmail(token: String, skipMerge: Bool = false, switchFromUserId: String? = nil) async throws -> SessionResponse {
         let result: Result<SessionResponse, LinkCodedError>
         do {
@@ -80,10 +80,14 @@ struct ProfileService {
                 "/v1/me/email/confirm",
                 body: ConfirmEmailBody(token: token, skipMerge: skipMerge, switchFromUserId: switchFromUserId)
             )
-        } catch let APIError.http(status, _) where (400..<500).contains(status) {
-            // A 4xx whose body isn't the coded shape — the plain-string
+        } catch let APIError.http(status, _) where status == 400 {
+            // A 400 whose body isn't the coded shape — the plain-string
             // "invalid or expired" detail every other dead link carries.
             throw LoginConsumeError.rejected
+        } catch let APIError.http(_, detail) {
+            throw LoginConsumeError.retryable(
+                detail ?? "Email confirmation is temporarily blocked. Please try again."
+            )
         } catch {
             throw LoginConsumeError.unreachable
         }
@@ -94,9 +98,10 @@ struct ProfileService {
             throw LoginConsumeError.accountSwitchRequired(coded.detail.accountSwitch)
         case let .failure(coded) where coded.detail.code == "replaced":
             throw LoginConsumeError.replaced
-        case .failure:
-            // A coded 400 this client has no screen for is still a rejection.
-            throw LoginConsumeError.rejected
+        case let .failure(coded):
+            throw LoginConsumeError.retryable(
+                coded.detail.message ?? "Email confirmation is temporarily blocked. Please try again."
+            )
         }
     }
 }

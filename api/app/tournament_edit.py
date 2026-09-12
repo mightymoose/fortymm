@@ -34,6 +34,7 @@ from app.schemas.tournament import (
     TournamentUpdate,
 )
 from app.tournament_authority import can_direct
+from app.tournament_draw_limits import lock_draw_actor
 from app.tournament_errors import (
     LeagueNotEditableError,
     LeagueNotFoundError,
@@ -80,11 +81,15 @@ async def _load_tournament_for_update(
 async def _load_owned_tournament_for_update(
     db: AsyncSession, tournament_id: uuid.UUID, actor: User
 ) -> Tournament:
-    """Lock before checking the Account's current owner or director authority.
+    """Admit one actor operation, then lock and check current director authority.
+
+    The nonblocking actor gate prevents request connections from queuing behind
+    long tournament operations. Re-entering it in one transaction is safe.
 
     The compatibility helper name predates delegated grants. Tournament deletion
     additionally requires ownership; operational callers use this director gate.
     """
+    await lock_draw_actor(db, actor.id)
     tournament = await _load_tournament_for_update(db, tournament_id)
     if not await can_direct(db, tournament, actor.id):
         raise NotTournamentOwnerError()

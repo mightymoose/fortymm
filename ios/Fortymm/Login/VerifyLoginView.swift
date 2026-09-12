@@ -24,6 +24,7 @@ struct VerifyLoginView: View {
         case success(SessionResponse)
         case expired
         case unreachable
+        case retryable(String)
     }
     @State private var phase: Phase = .verifying
     @State private var approvedSwitch: String?
@@ -51,6 +52,7 @@ struct VerifyLoginView: View {
             case let .success(response): success(response)
             case .expired: expired
             case .unreachable: unreachable
+            case let .retryable(message): signInBlocked(message)
             }
         }
         .task { await start() }
@@ -201,6 +203,26 @@ struct VerifyLoginView: View {
         }
     }
 
+    private func signInBlocked(_ message: String) -> some View {
+        LoginScaffold(
+            eyebrow: "Signing in",
+            eyebrowColor: FMColor.loss,
+            line1: "One more step.",
+            line2: "Try again.",
+            accent: FMColor.loss,
+            stepNo: "03",
+            stepLabel: "Sign-in · blocked",
+            title: "Couldn't sign you in",
+            subtitle: message
+        ) {
+            HStack(spacing: 10) {
+                LoginButton(title: "Retry") { Task { await start() } }
+                    .accessibilityIdentifier("login-retry")
+                LoginButton(title: "Close", kind: .ghost, fullWidth: false) { onClose() }
+            }
+        }
+    }
+
     // MARK: Consume
 
     /// Preview the link first; a merge that would carry matches over waits at
@@ -240,6 +262,8 @@ struct VerifyLoginView: View {
         } catch LoginConsumeError.accountSwitchRequired(let change) {
             approvedSwitch = nil
             phase = .accountSwitch(change)
+        } catch LoginConsumeError.retryable(let message) {
+            phase = .retryable(message)
         } catch LoginConsumeError.rejected {
             phase = .expired
         } catch {

@@ -31,6 +31,7 @@ from app.models import (
     TournamentStatus,
 )
 from app.tournament_authority import transfer_ownership
+from app.tournament_participation import WithdrawalReason, close_entry_participation
 from tests._helpers import make_user, start_session
 from tests.test_tournament_entries import _entries_url, _make_event
 from tests.test_tournament_fixtures import _make_event as make_drawn_event
@@ -958,7 +959,10 @@ async def test_lineup_cannot_use_entries_from_another_event(db_session):
     other_event = await make_drawn_event(db_session)
     with pytest.raises(
         IntegrityError,
-        match="fixture entries must belong to its event|fk_fixture_event_entry_",
+        match=(
+            "fixture entries must belong to its event|fk_fixture_event_entry_|"
+            "new fixture requires a current stage and revision"
+        ),
     ):
         async with db_session.begin_nested():
             await db_session.execute(
@@ -1456,7 +1460,12 @@ async def test_recorded_match_cannot_lose_its_fixture(db_session, action, eviden
             "WHERE id = :id"
         ),
     }[action]
-    with pytest.raises(IntegrityError, match="recorded match fixture must be retained"):
+    expected_error = (
+        "fixture entries must belong to its event"
+        if action == "stage"
+        else "recorded match fixture must be retained"
+    )
+    with pytest.raises(IntegrityError, match=expected_error):
         async with db_session.begin_nested():
             await db_session.execute(
                 text(statement),
@@ -1642,6 +1651,9 @@ async def test_entry_update_refuses_inverted_parent_lock_order(
         await writer.execute(
             text("UPDATE tournament_entries SET status = 'withdrawn' WHERE id = :id"),
             {"id": entries[0].id},
+        )
+        await close_entry_participation(
+            writer, entries[0].id, players[0].id, WithdrawalReason.self_withdrawal
         )
         await writer.commit()
 
@@ -2092,6 +2104,9 @@ async def test_entry_withdrawal_does_not_relock_unchanged_adder(db_session, engi
             text("UPDATE tournament_entries SET status = 'withdrawn' WHERE id = :id"),
             {"id": entries[0].id},
         )
+        await close_entry_participation(
+            withdrawing, entries[0].id, players[0].id, WithdrawalReason.self_withdrawal
+        )
         await withdrawing.commit()
         assert (
             await withdrawing.scalar(
@@ -2366,7 +2381,7 @@ async def test_fixture_link_refuses_inverted_parent_lock_order(
         # fixture row. Correct behavior is a retryable refusal, not this timeout.
         await linking.execute(text("SET LOCAL lock_timeout = '200ms'"))
         with pytest.raises(
-            DBAPIError, match="fixture link requires parent locks"
+            DBAPIError, match="fixture link requires parent locks before update; retry"
         ) as exc:
             await linking.execute(
                 text("UPDATE tournament_fixtures SET match_id = :match WHERE id = :id"),
@@ -2720,6 +2735,9 @@ async def test_direct_entry_deletion_cannot_erase_membership_history(
         await db_session.execute(
             text("UPDATE tournament_entries SET status = 'withdrawn' WHERE id = :id"),
             {"id": entries[0].id},
+        )
+        await close_entry_participation(
+            db_session, entries[0].id, players[0].id, WithdrawalReason.self_withdrawal
         )
         await db_session.commit()
     original_members = set(
@@ -3234,6 +3252,9 @@ async def test_clearing_completed_walkover_captures_actual_lineup(db_session, ev
         ),
         {"id": match.id},
     )
+    from app.event_lifecycle import reconcile_match_event
+
+    await reconcile_match_event(db_session, match.id)
     await db_session.commit()
     assert await db_session.scalar(text("SELECT count(*) FROM match_lineups")) == 0
     await db_session.execute(
@@ -3289,6 +3310,9 @@ async def test_walkover_rejects_later_score_evidence(db_session, evidence):
         ),
         {"id": match.id},
     )
+    from app.event_lifecycle import reconcile_match_event
+
+    await reconcile_match_event(db_session, match.id)
     await db_session.commit()
     with pytest.raises(IntegrityError, match="ending contradicts recorded play"):
         async with db_session.begin_nested():
@@ -3323,6 +3347,10 @@ async def test_special_ending_distinguishes_played_participants(
         {"id": match.id, "ending": ending},
     )
     fixture.winner_entry_id = entries[1].id
+    await db_session.flush()
+    from app.event_lifecycle import reconcile_match_event
+
+    await reconcile_match_event(db_session, match.id)
     await db_session.commit()
     count = await db_session.scalar(
         text(

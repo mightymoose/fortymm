@@ -585,15 +585,12 @@ async def test_a_withdrawn_player_may_enter_again_through_the_route(
     assert first.status_code == 201
 
     withdrawn_id = uuid.UUID(first.json()["id"])
-    entry = await db_session.get(TournamentEntry, withdrawn_id)
-    assert entry is not None
-    entry.status = TournamentEntryStatus.withdrawn
-    await db_session.commit()
+    assert (await client.delete(_entry_url(event, withdrawn_id))).status_code == 204
 
     second = await client.post(url)
 
     assert second.status_code == 201, second.text
-    assert second.json()["id"] != str(withdrawn_id)
+    assert second.json()["id"] == str(withdrawn_id)
     # Soft-delete, so both rows survive — but only the new one is active.
     active = await _active_entries(db_session, event_id)
     assert [str(e.id) for e in active] == [second.json()["id"]]
@@ -853,12 +850,11 @@ async def test_enter_withdraw_then_enter_again_all_succeed_through_the_routes(
 
     assert second_response.status_code == 201, second_response.text
     second = uuid.UUID(second_response.json()["id"])
-    assert second != first
+    assert second == first
 
     rows = await _entries_of(db_session, event_id, user_id)
     assert [(r.id, r.status) for r in rows] == [
-        (first, TournamentEntryStatus.withdrawn),
-        (second, TournamentEntryStatus.entered),
+        (first, TournamentEntryStatus.entered),
     ]
 
 
@@ -1483,7 +1479,9 @@ async def test_an_uncapped_event_takes_no_capacity_count(
         )
 
     assert not any(
-        "count(" in statement.lower() and "tournament_entries" in statement
+        "select count(" in statement.lower()
+        and "from tournament_entries" in statement.lower()
+        and "tournament_entry_members" not in statement.lower()
         for statement in statements
     ), statements
     # The lock is still taken, though: an uncapped event is not an unlocked one. The
@@ -2954,5 +2952,130 @@ async def test_withdraw_verb_frees_the_player_to_enter_the_same_event_again(
     # Exactly one ACTIVE entry (the new one), and the withdrawn row still on file.
     active = await _active_entries(db_session, event_id)
     assert [e.user_id for e in active] == [entrant.id]
-    assert active[0].id != entry_id
-    assert len(await _all_entries(db_session, event_id)) == 2
+    assert active[0].id == entry_id
+    assert len(await _all_entries(db_session, event_id)) == 1
+
+
+async def test_registration_periods_preserve_self_withdrawal_provenance(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    event: TournamentEvent,
+) -> None:
+    client, actor = entrant_client
+    actor_id = actor.id
+    entry_id = await _enter(client, event)
+    assert (await client.delete(_entry_url(event, entry_id))).status_code == 204
+    assert (await client.post(_entries_url(event))).status_code == 201
+    periods = (
+        await db_session.execute(
+            text(
+                "SELECT registered_by_account_id, withdrawn_by_account_id, "
+                "withdrawal_reason, registered_at, withdrawn_at "
+                "FROM tournament_entry_registrations WHERE entry_id = :entry_id "
+                "ORDER BY registered_at"
+            ),
+            {"entry_id": entry_id},
+        )
+    ).all()
+    assert len(periods) == 2
+    first, current = periods
+    assert first.registered_by_account_id == actor_id
+    assert first.withdrawn_by_account_id == actor_id
+    assert first.withdrawal_reason == "self_withdrawal"
+    assert first.registered_at <= first.withdrawn_at <= current.registered_at
+    assert current.registered_by_account_id == actor_id
+    assert current.withdrawn_at is None
+
+
+async def test_registration_history_cannot_be_rewritten_with_sql(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    event: TournamentEvent,
+) -> None:
+    client, _ = entrant_client
+    entry_id = await _enter(client, event)
+    assert (await client.delete(_entry_url(event, entry_id))).status_code == 204
+    with pytest.raises(IntegrityError):
+        await db_session.execute(
+            text(
+                "UPDATE tournament_entry_registrations SET withdrawal_reason = "
+                "'director_removal' "
+                "WHERE entry_id = :entry_id"
+            ),
+            {"entry_id": entry_id},
+        )
+        await db_session.commit()
+    await db_session.rollback()
+
+
+async def test_registration_withdrawal_records_event_wide_competition_withdrawal(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    event: TournamentEvent,
+) -> None:
+    client, actor = entrant_client
+    actor_id = actor.id
+    entry_id = await _enter(client, event)
+    assert (await client.delete(_entry_url(event, entry_id))).status_code == 204
+    withdrawal = (
+        await db_session.execute(
+            text(
+                "SELECT stage_id, actor_account_id, reason FROM "
+                "tournament_entry_withdrawals "
+                "WHERE entry_id = :entry_id AND restored_at IS NULL"
+            ),
+            {"entry_id": entry_id},
+        )
+    ).one()
+    assert withdrawal.stage_id is None
+    assert withdrawal.actor_account_id == actor_id
+    assert withdrawal.reason == "self_withdrawal"
+
+
+async def test_reregistration_uses_new_registration_order_for_draw_seeding(
+    db_session: AsyncSession,
+) -> None:
+    from app.draws import order_entrants
+    from app.tournament_draws import active_draw_entrants
+
+    first = await make_user(db_session, "order-first")
+    second = await make_user(db_session, "order-second")
+    event = await _make_event(db_session)
+    tournament_id, event_id = event.tournament_id, event.id
+    first_entry = await enter_event_verb(
+        db_session,
+        tournament_id=tournament_id,
+        event_id=event_id,
+        actor=first,
+        user_id=None,
+    )
+    await db_session.refresh(second)
+    second_entry = await enter_event_verb(
+        db_session,
+        tournament_id=tournament_id,
+        event_id=event_id,
+        actor=second,
+        user_id=None,
+    )
+    await db_session.refresh(first)
+    await withdraw_from_event_verb(
+        db_session,
+        tournament_id=tournament_id,
+        event_id=event_id,
+        entry_id=first_entry.id,
+        actor=first,
+    )
+    await db_session.refresh(first)
+    returned = await enter_event_verb(
+        db_session,
+        tournament_id=tournament_id,
+        event_id=event_id,
+        actor=first,
+        user_id=None,
+    )
+    ordered = order_entrants(await active_draw_entrants(db_session, event_id))
+    assert returned.id == first_entry.id
+    assert [entrant.entry_id for entrant in ordered] == [
+        second_entry.id,
+        first_entry.id,
+    ]

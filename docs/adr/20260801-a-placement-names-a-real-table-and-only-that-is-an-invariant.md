@@ -5,6 +5,11 @@ worktrees; see `scripts/check-adr-numbering.sh`)
 
 ## Status
 
+Amended by [Registration outlives draw participation](20260911-registration-outlives-draw-participation.md)
+for #1685: a removed catalogue table referenced by a retired fixture is retained
+outside the current catalogue. Historical placements keep their real table IDs;
+current placements retain the existing unplace-or-refuse policy.
+
 Accepted. **Supersedes one narrow clause of ADR-0790** ("a called match holds its
 table and slides later") and the corresponding sentence of `CONTEXT.md`'s
 **Placement** entry. Everything else in ADR-0790 stands. Decided during the grill
@@ -98,3 +103,7 @@ placement is still a prediction rather than a promise; a match beginning earlier
 or later is still normal; a pool edit that outranges a placement is still a flag.
 The one thing that changes is that the table it names is now guaranteed to be a
 table.
+
+The September 11 registration/history decision changes the placement foreign key to
+deferred `NO ACTION`. Surviving fixtures must still reference a real table at commit;
+whole-tournament deletion can cascade without clearing historical placements first.

@@ -6,6 +6,10 @@ Status: Accepted for #1677, on the entry-members model in #1672.
 extends retention to cancelled events, archived tournaments and lifecycle history,
 including histories without play. Its first-score start rule does not change the
 provisional lineup's call/uncall semantics below.
+Amended by [Registration outlives draw participation](20260911-registration-outlives-draw-participation.md)
+for #1685: retiring a draw preserves even unplayed fixtures, and historical
+contestants retain their specific participation periods. Ownership and recorded-play
+constraints remain in force.
 
 ## Scope
 

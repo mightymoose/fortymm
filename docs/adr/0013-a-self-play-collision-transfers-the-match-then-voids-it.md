@@ -9,6 +9,11 @@ status: accepted
 
 # A self-play collision transfers the match to the claimed account, then voids it (#750)
 
+Amended by [Registration outlives draw participation](20260911-registration-outlives-draw-participation.md)
+for #1685: duplicate event entries with recorded play in the same stage block
+Player reconciliation before any transfer or void. The ordinary standalone
+self-play policy below remains; "never blocks" does not override this tournament guard.
+
 Amended by [Rating inputs outlive rebuildable projections](20260911-rating-inputs-outlive-rebuildable-projections.md):
 collision voids delete calculated projections, while original rating inputs and
 their attribution survive Player reconciliation.

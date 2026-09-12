@@ -5,6 +5,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from app.models import TournamentEntry, TournamentEntryStatus
+from app.tournament_participation import WithdrawalReason, close_entry_participation
 from tests.test_entry_members import entry_schema as entry_schema
 from tests.test_entry_members import postgres_url as postgres_url
 from tests.test_entry_members import seed_doubles_match
@@ -130,6 +131,9 @@ async def test_recorded_play_freezes_fixture_ownership(db_session, change):
     await db_session.execute(
         text("UPDATE matches SET status = 'voided' WHERE id = :id"), {"id": match.id}
     )
+    from app.event_lifecycle import reconcile_match_event
+
+    await reconcile_match_event(db_session, match.id)
     await db_session.commit()
     with pytest.raises(IntegrityError, match="recorded match fixture must be retained"):
         async with db_session.begin_nested():
@@ -228,7 +232,7 @@ async def test_undecided_fixtures_allow_tbd_sides(db_session, known_sides):
 
 @pytest.mark.parametrize("winner", ["entry_a_id", "entry_b_id"])
 async def test_walkover_can_name_a_withdrawn_winner_without_a_match(db_session, winner):
-    _, _, entries, _, fixture = await seed_doubles_match(db_session)
+    _, players, entries, _, fixture = await seed_doubles_match(db_session)
     await db_session.execute(
         text("UPDATE tournament_entries SET status = 'withdrawn' WHERE id = :id"),
         {"id": entries[0].id},
@@ -240,6 +244,9 @@ async def test_walkover_can_name_a_withdrawn_winner_without_a_match(db_session, 
             "WHERE id = :id"
         ),
         {"id": fixture.id},
+    )
+    await close_entry_participation(
+        db_session, entries[0].id, players[0].id, WithdrawalReason.self_withdrawal
     )
     await db_session.commit()
     assert await db_session.scalar(

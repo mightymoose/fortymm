@@ -275,6 +275,50 @@ describe('/confirm-email failure copy (#1616)', () => {
 })
 
 describe('/confirm-email transient failures (#1616)', () => {
+  it('shows a recoverable entry conflict and retries the retained confirmation after resolution', async () => {
+    const bodies: unknown[] = []
+    const message = 'Ask the tournament director to resolve these entries before merging.'
+    server.use(http.post('*/v1/me/email/confirm', async ({ request }) => {
+      bodies.push(await request.json())
+      return bodies.length === 1
+        ? HttpResponse.json({ detail: { code: 'entry_merge_conflict', message } }, { status: 409 })
+        : HttpResponse.json(mockSession)
+    }))
+    const { router } = renderAt('/confirm-email?token=conflicted-token')
+    await screen.findByText(message)
+    expect(screen.getByText('409 · LINK')).toBeInTheDocument()
+    expect(screen.queryByText(/send a fresh one/i)).not.toBeInTheDocument()
+    await waitFor(() => expect(router.state.location.search).not.toHaveProperty('token', 'conflicted-token'))
+    expect(bodies).toHaveLength(1)
+    screen.getByRole('button', { name: /try again/i }).click()
+    await screen.findByText(/you’re in\./i)
+    expect(bodies).toEqual([
+      { token: 'conflicted-token', skip_merge: false },
+      { token: 'conflicted-token', skip_merge: false },
+    ])
+  })
+
+  it.each([429, 503])('shows the server retry guidance for %s and waits for Retry-After without resubmitting', async (status) => {
+    let calls = 0
+    const message = 'Confirmation is temporarily unavailable. Try again shortly.'
+    server.use(http.post('*/v1/me/email/confirm', () => {
+      calls += 1
+      return calls === 1
+        ? HttpResponse.json({ detail: message }, { status, headers: { 'Retry-After': '1' } })
+        : HttpResponse.json(mockSession)
+    }))
+    renderAt('/confirm-email?token=limited-token')
+    await screen.findByText(message)
+    const retry = screen.getByRole('button', { name: /please wait before retrying/i })
+    expect(retry).toBeDisabled()
+    expect(screen.queryByText(/send a fresh one/i)).not.toBeInTheDocument()
+    await waitFor(() => expect(retry).toBeEnabled(), { timeout: 2500 })
+    expect(calls).toBe(1)
+    retry.click()
+    await screen.findByText(/you’re in\./i)
+    expect(calls).toBe(2)
+  })
+
   it('sends a 5xx to the retryable error screen, not the expired screen', async () => {
     // A server-side failure says nothing about the token — telling the user
     // the link can't be used and to send a fresh one would replace a link

@@ -64,16 +64,12 @@ async def test_removing_completed_walkover_requires_reconciliation(
     parameters = {"match": replacement_id, "fixture": fixture.id}
     if removal == "delete":
         statement = text("DELETE FROM tournament_fixtures WHERE id=:fixture")
-    with pytest.raises(
-        IntegrityError, match="attachment requires event reconciliation"
-    ):
+    with pytest.raises(IntegrityError, match="requires event reconciliation"):
         async with db_session.begin_nested():
             await reconcile_event(db_session, event_id)
             await db_session.execute(statement, parameters)
             await db_session.execute(
-                text(
-                    "SET CONSTRAINTS require_attachment_event_reconciliation IMMEDIATE"
-                )
+                text("SET CONSTRAINTS require_event_reconciliation IMMEDIATE")
             )
     await db_session.execute(statement, parameters)
     await reconcile_event(db_session, event_id)

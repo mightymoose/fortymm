@@ -23,7 +23,7 @@ import uuid
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -39,6 +39,7 @@ from app.models import (
     TournamentEventReservation,
     TournamentFixture,
     User,
+    VenueTable,
 )
 from app.schedule_preview import preview_field_size
 from app.schedule_solves import request_solve
@@ -58,6 +59,7 @@ from app.schemas.tournament import (
     named_list,
     reservation_windows,
 )
+from app.tournament_draw_limits import lock_draw_actor
 from app.tournament_draw_settings import (
     draw_settings_of,
     draw_settings_value,
@@ -270,10 +272,26 @@ async def delete_event(
     Draw settings are inline event values and disappear with this row, including
     when the event is deleted by a database cascade.
     """
+    await lock_draw_actor(db, actor.id)
     await _load_owned_tournament_for_update(db, tournament_id, actor)
     event = await _load_event(db, tournament_id, event_id)
     await require_no_recorded_play(db, tournament_id=tournament_id, event_id=event.id)
-    await db.delete(event)
+    # The explicit parent deletion owns its entire history. Let database cascades
+    # remove children after the event disappears, even when ORM collections are loaded.
+    await db.execute(delete(TournamentEvent).where(TournamentEvent.id == event.id))
+    # Retired catalogue rows exist only to keep historical fixture references valid.
+    # Once the last referencing event is deleted, reclaim those hidden rows.
+    await db.execute(
+        delete(VenueTable)
+        .where(
+            VenueTable.tournament_id == tournament_id,
+            VenueTable.retired_at.is_not(None),
+            ~select(TournamentFixture.id)
+            .where(TournamentFixture.table_id == VenueTable.id)
+            .exists(),
+        )
+        .execution_options(include_draw_history=True)
+    )
     await db.commit()
 
 

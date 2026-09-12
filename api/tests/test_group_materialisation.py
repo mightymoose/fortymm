@@ -40,6 +40,7 @@ from app.tournament_event_stages import GroupCountSource
 from app.tournament_queries import stage_ids_for_events
 from app.tournament_reservations import group_count_for
 from app.tournaments import TOURNAMENT_CREATE
+from tests._entry_seeds import withdraw_entry_with_history
 from tests._helpers import (
     grant_permissions,
     make_user,
@@ -671,9 +672,9 @@ async def test_a_re_cut_re_derives_and_an_uncut_keeps_the_cut_time_count(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:
     """The intended oscillation: cut at 2 groups from 10 registrants, re-cut at 3 once
-    four more register (the two rows survive), uncut (writes no group row — the count
-    stays 3), then any event write returns the event to the 8 the cap derives, and
-    the next cut to 3 again."""
+    four more register (the former rows remain in history), uncut (clones the
+    editable configuration with count 3), then any event write returns the event
+    to the 8 the cap derives, and the next cut to 3 again."""
     client, _ = authed_client
     tournament_id = await _tournament(client)
     event = await _create_event(client, tournament_id)
@@ -686,19 +687,21 @@ async def test_a_re_cut_re_derives_and_an_uncut_keeps_the_cut_time_count(
     assert (await client.post(_draw_url(tournament_id, event["id"]))).status_code == 201
     three = await _stored_group_ids(db_session, event["id"])
     assert len(three) == 3
-    assert three[:2] == two
+    assert set(three).isdisjoint(two)
 
     uncut = await client.delete(_draw_url(tournament_id, event["id"]))
     assert uncut.status_code == 204, uncut.text
-    assert await _stored_group_ids(db_session, event["id"]) == three
+    editable = await _stored_group_ids(db_session, event["id"])
+    assert len(editable) == 3
+    assert set(editable).isdisjoint(three)
 
     renamed = await _patch(client, tournament_id, event["id"], name="Renamed")
     assert renamed.status_code == 200, renamed.text
     assert len(_groups(renamed.json())) == 8
-    assert (await _stored_group_ids(db_session, event["id"]))[:3] == three
+    assert (await _stored_group_ids(db_session, event["id"]))[:3] == editable
 
     assert (await client.post(_draw_url(tournament_id, event["id"]))).status_code == 201
-    assert await _stored_group_ids(db_session, event["id"]) == three
+    assert await _stored_group_ids(db_session, event["id"]) == editable
 
 
 async def test_a_refused_re_cut_that_moves_the_count_leaves_the_standing_draw_untouched(
@@ -724,14 +727,15 @@ async def test_a_refused_re_cut_that_moves_the_count_leaves_the_standing_draw_un
     tournament_id = await _tournament(client)
     event = await _create_event(client, tournament_id)
     entries = await _seed_field(db_session, event["id"], 10)
+    withdrawn_ids = [entry.id for entry in entries[5:]]
     assert (await client.post(_draw_url(tournament_id, event["id"]))).status_code == 201
     groups_before = await _stored_group_ids(db_session, event["id"])
     assert len(groups_before) == 2
     fixtures_before = _snapshot(await _fixtures(db_session, event["id"]))
     assert fixtures_before
 
-    for entry in entries[5:]:
-        entry.status = TournamentEntryStatus.withdrawn
+    for entry_id in withdrawn_ids:
+        await withdraw_entry_with_history(db_session, entry_id)
     await db_session.commit()
 
     response = await client.post(_draw_url(tournament_id, event["id"]))

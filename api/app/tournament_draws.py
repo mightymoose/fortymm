@@ -30,10 +30,14 @@ that field must not be separated by another writer's entry (see the route).
 import enum
 import uuid
 from collections.abc import Collection, Mapping, Sequence
+from dataclasses import replace
+from datetime import datetime
+from itertools import batched
 from types import MappingProxyType
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import ColumnElement, exists, func, insert, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.draws import (
     DrawConfig,
@@ -57,16 +61,28 @@ from app.models import (
     AdvancementDecision,
     DrawType,
     EventFormat,
+    TournamentDrawRevision,
     TournamentEntry,
+    TournamentEntryParticipation,
+    TournamentEntryRegistration,
     TournamentEntryStatus,
+    TournamentEntryWithdrawal,
     TournamentEvent,
     TournamentEventStage,
     TournamentFixture,
 )
 from app.models.draw_type import DRAW_TYPES_BY_ID
 from app.schemas.tournament import GroupRead, Reservation
+from app.tournament_draw_history import (
+    bind_draw_configuration,
+    preview_draw_configuration,
+)
+from app.tournament_draw_limits import (
+    enforce_draw_configuration_size,
+    enforce_draw_storage,
+)
 from app.tournament_draw_settings import draw_settings_of
-from app.tournament_event_stages import GroupCountSource
+from app.tournament_event_stages import GroupCountSource, archive_stage_configuration
 from app.tournament_queries import stage_ids_for_events
 from app.tournament_reservations import (
     group_count_for,
@@ -75,6 +91,53 @@ from app.tournament_reservations import (
     ordered_reservations,
     reservation_read,
 )
+
+
+def _registration_order() -> ColumnElement[datetime]:
+    """Current registration priority, including identities reconciled during it.
+
+    A same-person merge retains the earlier registration without rewriting either
+    period. A later reentry starts after that reconciliation and therefore does
+    not inherit its priority. Entry creation is the fallback for direct seed rows.
+    """
+    current_period = (
+        select(TournamentEntryRegistration.registered_at)
+        .where(
+            TournamentEntryRegistration.entry_id == TournamentEntry.id,
+            TournamentEntryRegistration.withdrawn_at.is_(None),
+        )
+        .correlate(TournamentEntry)
+        .scalar_subquery()
+    )
+    current_order = func.coalesce(current_period, TournamentEntry.created_at)
+    reconciled_period = aliased(TournamentEntryRegistration)
+    former_entry = aliased(TournamentEntry)
+    reconciled_order = (
+        select(func.min(reconciled_period.registered_at))
+        .join(former_entry, former_entry.id == reconciled_period.entry_id)
+        .where(
+            former_entry.event_id == TournamentEntry.event_id,
+            former_entry.superseded_by_entry_id.is_not(None),
+            func.entry_single_player(former_entry.id)
+            == func.entry_single_player(TournamentEntry.id),
+            reconciled_period.withdrawal_reason == "identity_reconciliation",
+            reconciled_period.withdrawn_at >= current_order,
+        )
+        .correlate(TournamentEntry)
+        .scalar_subquery()
+    )
+    return func.least(current_order, reconciled_order)
+
+
+def _eligible_for_initial_draw() -> ColumnElement[bool]:
+    """Registration and event-wide eligibility determine a new draw's field."""
+    return (TournamentEntry.status == TournamentEntryStatus.entered) & ~exists(
+        select(TournamentEntryWithdrawal.id).where(
+            TournamentEntryWithdrawal.entry_id == TournamentEntry.id,
+            TournamentEntryWithdrawal.stage_id.is_(None),
+            TournamentEntryWithdrawal.restored_at.is_(None),
+        )
+    )
 
 
 async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[Entrant]:
@@ -98,10 +161,40 @@ async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[En
             select(
                 TournamentEntry.id,
                 TournamentEntry.seed,
-                TournamentEntry.created_at,
+                _registration_order(),
             ).where(
                 TournamentEntry.event_id == event_id,
+                _eligible_for_initial_draw(),
+            )
+        )
+    ).all()
+    return [
+        Entrant(entry_id=EntryId(entry_id), seed=seed, created_at=created_at)
+        for entry_id, seed, created_at in rows
+    ]
+
+
+async def participating_draw_entrants(
+    db: AsyncSession, *, stage_id: uuid.UUID, draw_revision_id: uuid.UUID
+) -> list[Entrant]:
+    """The admitted field for advancing one stage of its current draw revision.
+
+    Stage withdrawal ends admission without closing event registration. Conversely,
+    registering after the cut does not admit an entry to an already underway stage.
+    Byed entrants remain in this field even though no fixture seats them yet.
+    """
+    rows = (
+        await db.execute(
+            select(TournamentEntry.id, TournamentEntry.seed, _registration_order())
+            .join(
+                TournamentEntryParticipation,
+                TournamentEntryParticipation.entry_id == TournamentEntry.id,
+            )
+            .where(
                 TournamentEntry.status == TournamentEntryStatus.entered,
+                TournamentEntryParticipation.stage_id == stage_id,
+                TournamentEntryParticipation.draw_revision_id == draw_revision_id,
+                TournamentEntryParticipation.ended_at.is_(None),
             )
         )
     ).all()
@@ -141,10 +234,10 @@ async def active_draw_entrants_by_event(
                 TournamentEntry.event_id,
                 TournamentEntry.id,
                 TournamentEntry.seed,
-                TournamentEntry.created_at,
+                _registration_order(),
             ).where(
                 TournamentEntry.event_id.in_(event_ids),
-                TournamentEntry.status == TournamentEntryStatus.entered,
+                _eligible_for_initial_draw(),
             )
         )
     ).all()
@@ -471,17 +564,19 @@ async def event_has_draw(db: AsyncSession, event_id: uuid.UUID) -> bool:
     played, so the play guard would wave the change through, and every fixture would
     still be orphaned.
 
-    A ``COUNT``, not a load: the answer is a yes/no, and a 200-fixture round-robin
-    should not be pulled into memory to learn it.
+    The current revision's transactionally maintained count bounds this lookup.
     """
-    fixtures = (
-        await db.execute(
-            select(func.count())
-            .select_from(TournamentFixture)
-            .where(TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])))
+    return bool(
+        await db.scalar(
+            select(TournamentDrawRevision.id)
+            .where(
+                TournamentDrawRevision.event_id == event_id,
+                TournamentDrawRevision.retired_at.is_(None),
+                TournamentDrawRevision.retained_fixture_count > 0,
+            )
+            .limit(1)
         )
-    ).scalar_one()
-    return fixtures > 0
+    )
 
 
 def event_groups(event: TournamentEvent) -> list[GroupRead]:
@@ -534,12 +629,9 @@ async def draw_has_advancement_history(db: AsyncSession, event_id: uuid.UUID) ->
     return bool(
         await db.scalar(
             select(AdvancementDecision.id)
-            .join(
-                TournamentFixture,
-                TournamentFixture.id == AdvancementDecision.fixture_id,
-            )
-            .where(TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])))
+            .where(AdvancementDecision.event_id == event_id)
             .limit(1)
+            .execution_options(include_draw_history=True)
         )
     )
 
@@ -562,28 +654,22 @@ async def draw_has_play(db: AsyncSession, event_id: uuid.UUID) -> bool:
     strict is a director who linked a match by accident having to unlink it; the cost of
     being lax is a player's recorded result vanishing.
 
-    A ``COUNT`` rather than a load of the fixtures: the guard's answer is a yes/no, and
-    loading a 200-fixture round-robin to learn it would grow with the draw it is
-    guarding. It is read inside the tournament's row lock, so what it sees is what the
-    last committed writer wrote.
+    A partial event index contains only fixtures with evidence. Negative checks
+    never visit retained unplayed fixtures. The caller holds the tournament lock.
     """
-    played = (
-        await db.execute(
-            select(func.count())
-            .select_from(TournamentFixture)
-            .where(
-                TournamentFixture.stage_id.in_(stage_ids_for_events([event_id])),
-                or_(
-                    TournamentFixture.winner_entry_id.is_not(None),
-                    TournamentFixture.match_id.is_not(None),
-                    select(AdvancementDecision.id)
-                    .where(AdvancementDecision.fixture_id == TournamentFixture.id)
-                    .exists(),
-                ),
-            )
+    played = await db.scalar(
+        select(TournamentFixture.id)
+        .where(
+            TournamentFixture.scope_event_id == event_id,
+            or_(
+                TournamentFixture.winner_entry_id.is_not(None),
+                TournamentFixture.match_id.is_not(None),
+            ),
         )
-    ).scalar_one()
-    return played > 0
+        .limit(1)
+        .execution_options(include_draw_history=True)
+    )
+    return bool(played) or await draw_has_advancement_history(db, event_id)
 
 
 class DrawCurrency(enum.Enum):
@@ -611,68 +697,16 @@ class DrawCurrency(enum.Enum):
 async def draw_currency_by_event(
     db: AsyncSession, event_ids: Sequence[uuid.UUID]
 ) -> dict[uuid.UUID, DrawCurrency]:
-    """Where every event in ``event_ids`` stands, keyed by event id.
+    """Compare registration and participation in each event's current revision.
 
-    **A set comparison, never a count.** Currency is "these fixtures seat exactly
-    these entrants", so the active entry ids are compared against the entry ids the
-    event's fixtures actually reference. Comparing *sizes* would look like the same
-    rule and pass the same happy-path test, while waving through the one case that
-    matters most: one player withdraws and another enters between the cut and
-    go-live. Same count, a different field, and a draw that seats a player who has
-    left while the player who replaced them is seated nowhere — a tournament that
-    starts with a match nobody can play
-    (``test_a_swap_between_the_cut_and_go_live_is_stale``).
+    Stable entry IDs alone cannot establish currency: withdrawal closes the old
+    participation even when the same entry registers again. Any withdrawn period
+    in the current revision makes it stale, including an unseated Swiss bye.
+    A group-change period stops making it stale once no current seat uses it.
+    The registered field must also match the seated field subject to each draw
+    type's bye allowance. An event without current fixtures is uncut.
 
-    Both halves of the comparison are **entry ids**, not user ids, because an entry
-    is what a fixture holds and what a withdrawal soft-deletes: a player who
-    withdraws and re-enters gets a *new* entry, so their old id leaves the active
-    set — and correctly makes the draw stale, since the fixtures still seat the
-    entry they left by.
-
-    A ``NULL`` side counts as nothing: it means TBD (a KO round whose feeder is
-    undecided), never a bye and never an absent player. The seated set is therefore
-    the union of the non-NULL ``entry_a_id`` / ``entry_b_id`` refs.
-
-    **That set is the field itself for three draw types, and one short of it for a
-    swiss draw over an odd field.** It used to be assumed exactly equal, on the strength
-    of every strategy then designed seating its byed entrants somewhere — a round-robin
-    bye sits out one round of a schedule that seats it in the others, a single-elim bye
-    is seated onto its round-2 side at the cut. Swiss breaks that: it emits ``⌊n/2⌋``
-    fixtures a round, and a bye is the *absence* of a row, so an odd field leaves one
-    entrant referenced nowhere. Under the plain equality such a draw read ``stale`` the
-    moment it was cut and go-live refused it with a 409 no re-cut could clear.
-
-    So the comparison is now: **nobody seated has left** (``seated <= active``, which is
-    what a withdrawal breaks) **and no more entrants are unseated than this draw type's
-    byes can account for** (:func:`~app.draws.unseated_entrant_allowance`, which is
-    ``0`` for the three and the field's parity for swiss). For every draw type but
-    swiss the pair is exactly the old equality, so the check they are protected by has
-    not moved: an entry that lands after the cut is still ``stale``, by name, on the
-    same 409. See that function for what the swiss allowance can and cannot tell apart.
-
-    ``uncut`` is decided on the fixtures EXISTING, not on the seated set being
-    empty. The two come apart on the event nobody has entered: no entrants and no
-    fixtures compare equal (∅ == ∅) and would report ``current`` — an event with no
-    draw at all, called ready to start. Such an event cannot even *be* cut (the
-    strategy refuses a field that small), so the empty comparison would be pure
-    fiction, and it would be the fiction that carried an unplayable event into
-    ``live``.
-
-    AT MOST THREE statements for the whole batch, whatever the number of events (none
-    at all when there are none), for the same reason every other loader here is
-    batched: this runs on the go-live path with the tournament's row lock held, and a
-    per-event set of queries would hold that lock for a time that grows with the
-    tournament. The third is the draw types, which the allowance above turns on; it is
-    read here rather than off ``TournamentEvent.draw_settings`` because this loader is
-    handed **ids**, not rows, and a relationship walk would be the per-event query this
-    function exists not to issue.
-
-    That third statement asks only about the events that are **cut**, and is not issued
-    at all when none of them is. The allowance is reached from one arm of the answer
-    below — the arm an uncut event never takes — so every draw type read for an uncut
-    event is a row fetched and thrown away. Uncut is not the rare case here: it is the
-    state of every event of every tournament that has not had its draws cut yet, and
-    those tournaments reach this loader on the same locked go-live path as the rest.
+    Queries are batched over all requested events and use current-draw visibility.
     """
     if not event_ids:
         return {}
@@ -685,6 +719,7 @@ async def draw_currency_by_event(
     # Whether a draw exists AT ALL is its own fact, read off the rows rather than
     # inferred from ``seated`` being empty — see the docstring.
     cut: set[uuid.UUID] = set()
+    withdrawn_seats: set[uuid.UUID] = set()
 
     entries = (
         await db.execute(
@@ -693,7 +728,7 @@ async def draw_currency_by_event(
                 # Withdrawn entries are not entrants (ADR-0016), so a draw is not stale
                 # merely for failing to seat somebody who has left — it is stale for
                 # *still* seating them, which is what the comparison below catches.
-                TournamentEntry.status == TournamentEntryStatus.entered,
+                _eligible_for_initial_draw(),
             )
         )
     ).all()
@@ -710,6 +745,21 @@ async def draw_currency_by_event(
                 TournamentEventStage.event_id,
                 TournamentFixture.entry_a_id,
                 TournamentFixture.entry_b_id,
+                exists(
+                    select(TournamentEntryParticipation.id).where(
+                        TournamentEntryParticipation.draw_revision_id
+                        == TournamentFixture.draw_revision_id,
+                        TournamentEntryParticipation.ended_at.is_not(None),
+                        TournamentEntryParticipation.end_reason != "stage_completed",
+                        or_(
+                            TournamentEntryParticipation.end_reason != "group_changed",
+                            TournamentEntryParticipation.id
+                            == TournamentFixture.participation_a_id,
+                            TournamentEntryParticipation.id
+                            == TournamentFixture.participation_b_id,
+                        ),
+                    )
+                ),
             )
             .join(
                 TournamentEventStage,
@@ -718,7 +768,9 @@ async def draw_currency_by_event(
             .where(TournamentEventStage.event_id.in_(seated.keys()))
         )
     ).all()
-    for event_id, entry_a_id, entry_b_id in fixtures:
+    for event_id, entry_a_id, entry_b_id, withdrawn_seat in fixtures:
+        if withdrawn_seat:
+            withdrawn_seats.add(event_id)
         cut.add(event_id)
         seated[event_id].update(
             entry_id for entry_id in (entry_a_id, entry_b_id) if entry_id is not None
@@ -745,7 +797,8 @@ async def draw_currency_by_event(
             DrawCurrency.uncut
             if event_id not in cut
             else DrawCurrency.current
-            if _covers_the_field(
+            if event_id not in withdrawn_seats
+            and _covers_the_field(
                 draw_types[event_id],
                 active=active[event_id],
                 seated=seated[event_id],
@@ -785,83 +838,20 @@ def _covers_the_field(
     )
 
 
-async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
-    """Cut (or re-cut) this event's draw: plan the fixtures its draw type prescribes for
-    its active field, and make them the event's fixtures — **all of them, and only
-    them**.
+async def cut_draw(
+    db: AsyncSession, event: TournamentEvent, *, actor_id: uuid.UUID | None = None
+) -> None:
+    """Create an event-wide revision from the current registered field.
 
-    A re-cut **replaces wholesale**, and it does so by deleting first and inserting
-    second, in the caller's single transaction. It is deliberately not a reconcile:
-    placement is frozen at the cut (ADR-0786), so the fixtures of the *previous* draw
-    are not something to be patched into agreement with the new field — they are a plan
-    that was made against a field that no longer exists, and every one of them may have
-    moved. Matching on ``(group, round, position)`` and updating the sides in place
-    would keep the old rows' ids while silently changing who they seat, which is the
-    same thing with a worse audit trail.
+    The caller holds the tournament lock and enforces the existing play guard.
+    Retirement preserves previous fixtures and closes their participation; stage
+    configuration is archived and fresh current stages/groups are used for the
+    replacement plan. The revision snapshots the draw settings and reservations.
+    Every initial entrant receives participation, including byes. Future stages
+    receive participation only when a qualifier is actually seated.
 
-    One transaction is what makes "wholesale" true rather than aspirational: the DELETE
-    and the INSERTs commit together, so there is no instant in which the event holds
-    half of one draw and half of another. Which is why neither this function nor
-    ``uncut_draw`` commits — a helpful ``await db.commit()`` inside the DELETE would
-    open exactly that window.
-
-    Raises :class:`~app.draws.DrawError` — the base the route turns into a 422 — and
-    writes nothing when it does. The format is judged *first*, so a non-singles event is
-    refused before the field is even read: there is no arrangement of entrants that
-    would make a doubles draw cuttable. And the whole plan is made *before* the DELETE,
-    so a refused re-cut cannot leave a director with the draw they had thrown away and
-    none of the one they could not have.
-
-    That last property has **two** locks on it when the group count holds, and it is
-    worth knowing that they are two, because a test can only ever see one of them
-    fail: the ordering here, and the transaction itself (the route rolls back on a
-    ``DrawError``, and nothing on that path has committed). Reordering these two lines
-    would not break ``test_a_refused_re_cut_leaves_the_standing_draw_untouched`` — the
-    rollback would still save it — so do not read that test's green as permission to.
-    The ordering is the one that survives somebody deciding a service function ought
-    to commit.
-
-    **The cut re-derives an ``rr-then-ko`` event's group-stage count from the real
-    field** (#1387 decision 1). The rows were materialised against the preview field —
-    the cap, or 16 — and the snake judges a group's size against the entrants actually
-    registered; the two numbers never meet, and a 40-cap event with ten registrants
-    would otherwise deal ten players across eight groups and be refused as
-    ``DegenerateDraw``. So, for that draw type only, the count is derived again here
-    from ``len(entrants)`` and the rows re-materialised (keeping the lowest positions,
-    and the mapping re-read as ``position % reservation count``) **only when the
-    derived count differs from the stored one**. **Compared against the group
-    stage's own rows, never ``len(event.groups)``** (#1484): once every stage holds
-    groups, an event-wide length would count the knockout stage's own group too, so
-    the comparison would never hold and every ``rr-then-ko`` cut would delete and
-    re-mint needlessly. When it holds — every first cut of a correctly sized event,
-    every re-cut whose field did not cross a group boundary — nothing is written and
-    the plan-before-delete ordering above stands. That skip is not an optimization
-    with a hole in it: the mapping cannot move while the count holds, because a
-    reservation changes only through an event write and every event write
-    re-materialises.
-
-    When the count moves on a **re-cut**, both orderings cannot hold: a fixture
-    foreign-keys its group, so the old fixtures have to go before a group row can.
-    That branch deletes first, re-materialises, flushes (a fresh group's id is the
-    database's and the snake needs it), then plans, and the transaction rollback is
-    the only lock on a refused plan. After it the identities and the mapping freeze,
-    as they do after any cut (decision 3); ``uncut_draw`` writes no group row, so an
-    uncut event keeps its cut-time count until the next event write re-materialises
-    it from the preview field.
-
-    **The caller must hold the tournament's row lock**, and must commit. The field this
-    reads is the field the fixtures are derived from, and an entry that lands between
-    the two would produce a draw that never matched any real field of players.
-
-    Refuses a **non-singles** event with :class:`~app.draws.NonSinglesDraw` (the route
-    turns it into a 422), *before* the field is read or anything is deleted. A doubles
-    or teams event cannot be materialized — a fixture seats one entry per side, a match
-    seats that entry's single user (ADR-0788) — so a draw that could never become
-    playable is refused at the cut, the earliest and clearest point, rather than at
-    go-live. Checked here, before ``strategy_for`` picks a strategy, so the refusal
-    lands without reading the field of an event that has no business being cut. It is
-    the only "this event cannot be cut" refusal left at this seam — ``strategy_for`` is
-    total now that the enum holds only what runs (ADR 20260726), so it refuses nothing.
+    This function does not commit. Planning and all history changes share the
+    caller's transaction, so a refused plan preserves the standing draw.
     """
     if event.format is not EventFormat.singles:
         raise NonSinglesDraw(event.format)
@@ -883,22 +873,53 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     ).draw_type is DrawType.rr_then_ko and group_count_for(
         GroupCountSource.structural, field_size=len(entrants)
     ) != len(_stage_groups(event, 0))
+    preview = preview_draw_configuration(
+        event, materialise_field_size=len(entrants) if re_materialised else None
+    )
+    stage_positions = {stage.id: stage.position for stage in preview.stages}
+    group_slots = {
+        group.id: (stage_positions[group.stage_id], group.position)
+        for group in preview.groups
+    }
+    group_ids_by_stage = {
+        position: tuple(
+            GroupId(group.id)
+            for group in sorted(preview.groups, key=lambda group: group.position)
+            if stage_positions[group.stage_id] == position
+        )
+        for position in stage_positions.values()
+    }
+    knockout_groups = group_ids_by_stage.get(1, ())
+    planned = strategy.plan_initial(
+        DrawConfig(
+            group_ids=group_ids_by_stage.get(0, ()),
+            knockout_group_id=knockout_groups[0] if len(knockout_groups) == 1 else None,
+        ),
+        entrants,
+    )
+    await enforce_draw_storage(
+        db,
+        tournament_id=event.tournament_id,
+        fixture_count=len(planned),
+        actor_id=actor_id,
+    )
+    await enforce_draw_configuration_size(db, preview.model_dump(mode="json"))
+    # Every refusal above is read-only. Only an accepted plan may retire history.
+    await uncut_draw(db, [event.id])
+    await db.refresh(event, attribute_names=["stages", "groups"])
     if re_materialised:
-        # Delete-first, the one branch where the wholesale ordering below cannot be
-        # kept: a fixture names its group, so a group row cannot go while a fixture of
-        # the standing draw still points at it.
-        await uncut_draw(db, [event.id])
         await materialise_event_groups(db, event, field_size=len(entrants))
-        # A fresh group's ``id`` is ``gen_random_uuid()``, minted by the INSERT;
-        # ``draw_config`` hands those ids to the snake, so the rows have to exist
-        # before it reads them. Then ``event.groups`` — a VIEWONLY association the
-        # materialisation cannot write through, loaded when the caller loaded the
-        # event — is re-read so it reflects the rows just written.
         await db.flush()
         await db.refresh(event, attribute_names=["groups"])
-    planned = strategy.plan_initial(draw_config(event), entrants)
-    if not re_materialised:
-        await uncut_draw(db, [event.id])
+    actual_stage_positions = {stage.id: stage.position for stage in event.stages}
+    actual_groups = {
+        (actual_stage_positions[group.stage_id], group.position): GroupId(group.id)
+        for group in event.groups
+    }
+    planned = [
+        replace(fixture, group_id=actual_groups[group_slots[_group_id_of(fixture)]])
+        for fixture in planned
+    ]
     # This event's stage ids keyed by ``position`` — what a planned fixture's
     # ``stage_id`` is resolved against below (ADR 20260815 decision 5's write seam).
     # Built from the already-eager ``TournamentEvent.stages`` collection
@@ -906,6 +927,14 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     # ``event`` with its stages, so re-selecting them here would be a second
     # statement for a collection already in hand.
     stage_ids = {stage.position: stage.id for stage in event.stages}
+    configuration = bind_draw_configuration(preview, event)
+    revision = TournamentDrawRevision(
+        event_id=event.id,
+        configuration=configuration,
+        created_by_account_id=actor_id,
+    )
+    db.add(revision)
+    await db.flush()
     # A planned fixture's STAGE (ADR 20260815 decision 5) — taken from the fixture
     # itself (``PlannedFixture.stage``, the same :class:`~app.draws.FixtureStage`
     # projection the read side carries), never re-derived here.
@@ -918,19 +947,68 @@ async def cut_draw(db: AsyncSession, event: TournamentEvent) -> None:
     # dealt it into, so it says so, and this seam stops guessing. #1484, which gives an
     # rr-then-ko knockout stage groups of its own, would have silently sent every
     # knockout fixture to stage 0 under the old inference.
-    db.add_all(
-        [
-            TournamentFixture(
-                stage_id=_stage_id_at(stage_ids, fixture.stage.position),
-                group_id=_group_id_of(fixture),
-                round=fixture.round,
-                position=fixture.position,
-                entry_a_id=fixture.entry_a_id,
-                entry_b_id=fixture.entry_b_id,
+    seats = {
+        (entry_id, _stage_id_at(stage_ids, fixture.stage.position)): _group_id_of(
+            fixture
+        )
+        for fixture in planned
+        for entry_id in (fixture.entry_a_id, fixture.entry_b_id)
+        if entry_id is not None
+    }
+    initial_stage_id = _stage_id_at(stage_ids, 0)
+    initial_groups = _stage_groups(event, 0)
+    if not initial_groups:
+        raise ValueError("The initial stage requires a group")
+    initial_group_id = GroupId(initial_groups[0].id)
+    for entrant in entrants:
+        seats.setdefault((entrant.entry_id, initial_stage_id), initial_group_id)
+    participation_by_seat = {
+        (entry_id, stage_id): TournamentEntryParticipation(
+            draw_revision_id=revision.id,
+            event_id=event.id,
+            entry_id=entry_id,
+            stage_id=stage_id,
+            group_id=group_id,
+        )
+        for (entry_id, stage_id), group_id in seats.items()
+    }
+    db.add_all(participation_by_seat.values())
+    await db.flush()
+
+    def participation_id(
+        entry_id: EntryId | None, stage_id: uuid.UUID
+    ) -> uuid.UUID | None:
+        if entry_id is None:
+            return None
+        return participation_by_seat[(entry_id, stage_id)].id
+
+    # Explicit multi-VALUES statements keep transition-table validation batched.
+    # ORM insert ordering otherwise emits one statement for each generated UUID.
+    for batch in batched(planned, 500, strict=False):
+        await db.execute(
+            insert(TournamentFixture).values(
+                [
+                    {
+                        "draw_revision_id": revision.id,
+                        "stage_id": _stage_id_at(stage_ids, fixture.stage.position),
+                        "group_id": _group_id_of(fixture),
+                        "round": fixture.round,
+                        "position": fixture.position,
+                        "entry_a_id": fixture.entry_a_id,
+                        "entry_b_id": fixture.entry_b_id,
+                        "participation_a_id": participation_id(
+                            fixture.entry_a_id,
+                            _stage_id_at(stage_ids, fixture.stage.position),
+                        ),
+                        "participation_b_id": participation_id(
+                            fixture.entry_b_id,
+                            _stage_id_at(stage_ids, fixture.stage.position),
+                        ),
+                    }
+                    for fixture in batch
+                ]
             )
-            for fixture in planned
-        ]
-    )
+        )
 
 
 def _stage_id_at(stage_ids: Mapping[int, uuid.UUID], position: int) -> uuid.UUID:
@@ -984,39 +1062,45 @@ def _group_id_of(fixture: PlannedFixture) -> uuid.UUID:
 
 
 async def uncut_draw(db: AsyncSession, event_ids: Collection[uuid.UUID]) -> None:
-    """Un-cut these events' draws: delete their fixtures, so they have no draw again.
+    """Retire current event-wide draw revisions, retaining their sporting history.
 
-    Takes **ids, not events**, and takes a collection of them, because the fixtures are
-    addressed by ``event_id`` and nothing else about an event is read. The account-merge
-    path (:func:`app.account_merge._resolve_entry_collisions`) knows only the ids of the
-    events a double-counted human invalidated, and would otherwise have to SELECT whole
-    ``TournamentEvent`` rows purely to hand them back one attribute apiece — and then
-    issue a DELETE per event where one suffices. Unordered, because a DELETE ... IN has
-    no order to respect.
-
-    The fixtures are addressed by ``stage_id`` now, not ``event_id`` (ADR 20260815
-    decision 5), so the ``event_id.in_(...)`` filter this docstring's title still
-    describes is a ``stage_id.in_(subquery)`` against :func:`_stage_ids` underneath —
-    mechanical, not a change of what this deletes.
-
-    A bulk DELETE rather than ``event.fixtures.clear()`` on the ``delete-orphan``
-    relationship: the collection would have to be loaded first (a SELECT of every
-    fixture, then one DELETE apiece), and this is the statement that runs before every
-    re-cut of a full round-robin. The relationship's cascade still stands for the paths
-    that *do* go through the ORM — deleting the event itself.
-
-    Deleting nothing is not an error, and neither is being given nothing to delete. An
-    event whose draw was never cut is already in the state this asks for, which is why
-    the un-cut route answers 204 either way: it is a DELETE, and asking for a state the
-    resource already holds is a success.
-
-    Does not commit — the caller owns the transaction, because on the re-cut path this
-    DELETE and the INSERTs that follow it are one atomic replacement.
+    Close active participation as draw retirement, retire the fixtures and revision,
+    and archive their stage/group configuration. Ordinary operational reads then
+    see no current draw. Historical fixture IDs and participation references remain.
+    A never-cut event is a no-op. The caller owns the transaction and play guard.
     """
     if not event_ids:
         return
     await db.execute(
-        delete(TournamentFixture).where(
-            TournamentFixture.stage_id.in_(stage_ids_for_events(event_ids))
+        update(TournamentEntryParticipation)
+        .where(
+            TournamentEntryParticipation.event_id.in_(event_ids),
+            TournamentEntryParticipation.ended_at.is_(None),
+        )
+        .values(ended_at=func.clock_timestamp(), end_reason="draw_retired")
+    )
+    await db.execute(
+        update(TournamentFixture)
+        .where(
+            TournamentFixture.stage_id.in_(stage_ids_for_events(event_ids)),
+            TournamentFixture.retired_at.is_(None),
+        )
+        .values(
+            retired_at=func.clock_timestamp(),
+            updated_at=TournamentFixture.updated_at,
         )
     )
+
+    await db.execute(
+        update(TournamentDrawRevision)
+        .where(
+            TournamentDrawRevision.event_id.in_(event_ids),
+            TournamentDrawRevision.retired_at.is_(None),
+        )
+        .values(retired_at=func.clock_timestamp())
+    )
+    await archive_stage_configuration(db, event_ids)
+    from app.event_lifecycle import reconcile_event
+
+    for event_id in sorted(event_ids):
+        await reconcile_event(db, event_id)

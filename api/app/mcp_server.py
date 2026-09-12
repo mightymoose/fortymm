@@ -62,9 +62,12 @@ from app.config import get_settings
 from app.db import get_sessionmaker
 from app.draws import (
     DegenerateDraw,
+    DrawActorBusy,
     DrawError,
+    DrawStorageLimitExceeded,
     NonSinglesDraw,
     UnsupportedDrawType,
+    draw_error_detail,
 )
 from app.geocoding import AddressNotGeocodableError
 from app.geocoding.dependencies import get_geocoder
@@ -1032,6 +1035,7 @@ async def list_my_tournaments() -> list[TournamentDetailRead]:
 # league 404, the two draw freezes, the entry refusal, the placement freeze — stay
 # inline in their tool, because each is one tool's alone.
 _TOURNAMENT_WRITE_TOOL_ERRORS = (
+    DrawActorBusy,
     EventFormatMembershipError,
     RecordedPlayDeletionError,
     TournamentNotFoundError,
@@ -1064,6 +1068,8 @@ def _map_tournament_write_tool_error(
     ``withdraw_from_event`` has no owner arm at all — its owner-ish refusal is the
     separate ``NotAllowedToWithdrawError``, mapped in the tool — so it passes neither,
     routing only its two not-found arms through here."""
+    if isinstance(exc, DrawActorBusy):
+        return ToolError(draw_error_detail(exc))
     if isinstance(exc, TournamentNotFoundError):
         return ToolError(f"No tournament found with id {tournament_id}.")
     if isinstance(exc, EventNotFoundError):
@@ -1308,6 +1314,9 @@ async def delete_tournament(tournament_id: uuid.UUID) -> TournamentDeletionConfi
 
     Raises a ``ToolError`` when no tournament with that id exists, or when you are not
     the tournament's owner (only the creator may delete it).
+
+    Another retained-history operation for this account causes a ToolError;
+    retry after it finishes.
     """
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
@@ -1320,6 +1329,8 @@ async def delete_tournament(tournament_id: uuid.UUID) -> TournamentDeletionConfi
             raise _map_tournament_write_tool_error(
                 exc, tournament_id=tournament_id, owner_denial="delete"
             ) from exc
+        except DrawActorBusy as error:
+            raise _map_draw_refusal_tool_error(error) from error
         return TournamentDeletionConfirmation(tournament_id=tournament_id)
 
 
@@ -1343,6 +1354,9 @@ async def transition_tournament(
     ``archived`` (archive). Anything else is refused — walking backwards, skipping a
     stage, moving out of the terminal ``archived``, and re-asserting the status the
     tournament already holds (a stale request, not a no-op).
+
+    Every status transition is refused while another tournament operation by this
+    account is in progress. Retry after that operation finishes.
 
     **Going live has a precondition** (ADR-0786): the tournament must have at least one
     event, and every event must have a **draw** whose fixtures seat exactly its current
@@ -1370,6 +1384,8 @@ async def transition_tournament(
             tournament = await transition_tournament_core(
                 db, tournament_id=tournament_id, actor=actor, to=to
             )
+        except DrawActorBusy as error:
+            raise _map_draw_refusal_tool_error(error) from error
         except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
             raise _map_tournament_write_tool_error(
                 exc, tournament_id=tournament_id, owner_denial="transition"
@@ -1595,6 +1611,9 @@ async def delete_event(
 
     Raises a ``ToolError`` when no tournament with that id exists, when you are not the
     tournament's owner, or when no event with that id exists under the tournament.
+
+    Another retained-history operation for this account causes a ToolError;
+    retry after it finishes.
     """
     user_id = _authenticated_user_id()
     async with mcp_session() as db:
@@ -1612,6 +1631,8 @@ async def delete_event(
                 event_id=event_id,
                 owner_denial="delete events from",
             ) from exc
+        except DrawActorBusy as error:
+            raise _map_draw_refusal_tool_error(error) from error
         return EventDeletionConfirmation(tournament_id=tournament_id, event_id=event_id)
 
 
@@ -1830,7 +1851,7 @@ class DrawUncutConfirmation(BaseModel):
 
     An MCP tool should answer with a meaningful value, so this names *what* was un-cut
     (the resolved ``tournament_id`` + the ``event_id``) and asserts the outcome:
-    ``fixtures_remaining`` is ``0`` after a successful un-cut — the core deleted the
+    ``fixtures_remaining`` is ``0`` after a successful un-cut — the core retired the
     draw wholesale, so the event provably has no fixtures left. Un-cutting a never-cut
     draw is an idempotent success too — it deletes nothing and still confirms ``0``
     remaining (ADR-0786).
@@ -1905,6 +1926,8 @@ def _map_draw_refusal_tool_error(error: DrawError) -> ToolError:
       which invents a ``DrawError`` subclass carrying internals and asserts none of
       them reach the client."""
     match error:
+        case DrawActorBusy() | DrawStorageLimitExceeded():
+            return ToolError(draw_error_detail(error))
         case NonSinglesDraw():
             return ToolError(
                 f"A {error.event_format.value} event can't be given a draw — only "
@@ -1930,13 +1953,14 @@ async def build_cut(event_id: uuid.UUID) -> list[TournamentFixtureRead]:
     owning tournament is resolved from it. Cutting is owner-gated (only the
     tournament's creator may cut), and it is NOT tied to status — a draw may be cut and
     re-cut freely while a director inspects the groups and the seeding. **Re-cutting
-    replaces the draw wholesale**: the previous fixtures are deleted and a fresh set is
-    planned from the event's current active entrants (their ids do not survive).
+    creates a new event-wide revision**: previous fixtures and participation remain
+    as retired history. The new draw uses the current registered field.
     Returns the created
     fixtures in **group → round → position** order — the same ``TournamentFixtureRead``
     the detail page and ``get_schedule`` carry.
 
-    Raises a ``ToolError`` when no event has that id, when you are not the owner of the
+    Raises a ``ToolError`` while another draw change for this account is in flight
+    (retry after it finishes), when no event has that id, when you do not own the
     event's tournament, when the draw already shows evidence of play (a fixture with a
     recorded winner or a linked match — it can no longer be cut), or when the event
     cannot produce a draw at all: it is not a singles event, it has no groups configured
@@ -1963,8 +1987,9 @@ async def build_cut(event_id: uuid.UUID) -> list[TournamentFixtureRead]:
 
 @mcp.tool
 async def uncut(event_id: uuid.UUID) -> DrawUncutConfirmation:
-    """Un-cut an event's DRAW as the authenticated MCP caller: delete its
-    fixtures, leaving the event with no draw. Returns a confirmation carrying the
+    """Un-cut an event's DRAW as the authenticated MCP caller: retire its current
+    revision, preserving its fixtures and participation as history. Returns a
+    confirmation carrying the
     resolved tournament, the event, and the fixtures now remaining (``0`` on success).
 
     Mirrors ``DELETE /v1/tournaments/{tournament_id}/events/{event_id}/draw`` (which
@@ -1977,7 +2002,8 @@ async def uncut(event_id: uuid.UUID) -> DrawUncutConfirmation:
     draw is already in the state this asks for**, so un-cutting a never-cut draw deletes
     nothing and is still a success (``fixtures_remaining`` = ``0``) — it is idempotent.
 
-    Raises a ``ToolError`` when no event has that id, when you are not the owner of the
+    Raises a ``ToolError`` while another draw change for this account is in flight
+    (retry after it finishes), when no event has that id, when you do not own the
     event's tournament, or when the draw already shows evidence of play (a fixture with
     a recorded winner or a linked match — it can no longer be removed)."""
     user_id = _authenticated_user_id()
@@ -1992,8 +2018,10 @@ async def uncut(event_id: uuid.UUID) -> DrawUncutConfirmation:
             )
         except _DRAW_WRITE_ERRORS as exc:
             raise _map_draw_write_tool_error(exc, event_id) from exc
-        # A successful ``uncut_event_draw`` deleted the draw wholesale (or there was
-        # never one), so the event provably has no fixtures — ``fixtures_remaining``
+        except DrawError as error:
+            raise _map_draw_refusal_tool_error(error) from error
+        # A successful ``uncut_event_draw`` retired the draw (or there was
+        # never one), so the event has no current fixtures. ``fixtures_remaining``
         # is ``0`` by construction, no confirming re-read of ``fixtures_by_event``
         # needed. The idempotent un-cut of a never-cut draw lands here too, and it is
         # ``0`` for it as well (ADR-0786).
@@ -2143,6 +2171,8 @@ async def request_schedule_solve(tournament_id: uuid.UUID) -> ScheduleSolveRead:
             row = await request_schedule_solve_core(
                 db, tournament_id=tournament_id, actor=actor
             )
+        except DrawActorBusy as exc:
+            raise ToolError(draw_error_detail(exc)) from exc
         except TournamentNotFoundError as exc:
             raise ToolError(f"No tournament found with id {tournament_id}.") from exc
         except NotTournamentOwnerError as exc:

@@ -106,7 +106,8 @@ async def require_no_recorded_play(
     if await db.scalar(query) is not None:
         raise RecordedPlayDeletionError()
     # Direct score/result writers can record evidence before a status change
-    # captures a lineup. Pending status alone never makes that history disposable.
+    # captures a lineup. A matchless winner is recorded play too; neither an
+    # absent match nor pending status makes that history disposable.
     evidence = (
         select(TournamentFixture.id)
         .join(
@@ -115,6 +116,7 @@ async def require_no_recorded_play(
         .where(
             TournamentEventStage.event_id.in_(event_ids),
             or_(
+                TournamentFixture.winner_entry_id.is_not(None),
                 select(MatchGame.id)
                 .where(MatchGame.match_id == TournamentFixture.match_id)
                 .exists(),
@@ -125,7 +127,10 @@ async def require_no_recorded_play(
         )
         .limit(1)
     )
-    if await db.scalar(evidence) is not None:
+    if (
+        await db.scalar(evidence.execution_options(include_draw_history=True))
+        is not None
+    ):
         raise RecordedPlayDeletionError()
 
     # Imported history need not have a match, lineup, or official result. Its
@@ -141,7 +146,10 @@ async def require_no_recorded_play(
         .where(TournamentEventStage.event_id.in_(event_ids))
         .limit(1)
     )
-    if await db.scalar(advancement) is not None:
+    if (
+        await db.scalar(advancement.execution_options(include_draw_history=True))
+        is not None
+    ):
         raise RecordedPlayDeletionError(
             "Advancement history must be preserved. "
             "This event or tournament cannot be deleted."

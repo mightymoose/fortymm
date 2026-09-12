@@ -28,7 +28,9 @@ dedicated lifecycle version and appends retained history. A subsequent finish
 records a new transition rather than overwriting the earlier finish. Publication,
 archival and an unrelated event's state do not determine these transitions.
 Archiving does not prevent otherwise supported result corrections from changing
-event progress.
+event progress. Results use the current draw; internal retirement of completed
+draw history also reconciles progress without erasing earlier play or transitions.
+Public draw replacement retains its existing refusal once play is recorded.
 
 An event can move directly from `unstarted` to `finished` when valid results
 establish completion without play, such as a future walkover-only event. It has
@@ -43,13 +45,15 @@ otherwise retain explicit unknowns. Seeded history follows the same rule, with
 no guessed legacy start or finish times. Version order remains authoritative
 even when timestamps are equal.
 
-An administrator void, or attaching, removing, or replacing an already completed
-match, must commit with an explicit reconciliation assertion for each affected
-event's resulting state and version. Deferred database guards reject these writes without a current
-assertion; changing those inputs invalidates an earlier assertion in the same
+An administrator void, a match transition into or out of a completed or voided
+state, or attaching, removing, replacing, or retiring such a match must commit
+with an explicit reconciliation assertion for each affected event's resulting
+state and version. Deferred database guards reject these writes without a current
+assertion. Each mutation retains its affected event before associations can
+change; changing those inputs invalidates an earlier assertion in the same
 transaction. Committed assertions are retained. Application writers use the
-existing results strategy through `reconcile_event`; SQL maintenance must reconcile and assert its
-result before committing. The database does not duplicate the draw strategies.
+existing results strategy through `reconcile_event`; SQL maintenance must
+reconcile and assert its result before committing. The database does not duplicate the draw strategies.
 
 ## Cancellation, archive and registration
 
