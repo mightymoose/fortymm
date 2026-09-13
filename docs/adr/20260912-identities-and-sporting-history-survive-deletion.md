@@ -63,15 +63,16 @@ membership history, match results, and rating inputs. Retired and merged Players
 are excluded from discovery, new-participant selection, active roster listings,
 and current leaderboards. Historical results remain resolvable. Retirement alone
 does not alter results or trigger a rating reset, or suppress historical-match
-notifications to its active managing Accounts. Restoration applies normal
+notifications to its active managing Accounts. Active Accounts still resolve their
+retired primary Player for existing-match scoring, proposals, acceptance, and reads;
+retirement is checked at new-participation admission. Restoration applies normal
 listing and leaderboard eligibility and does not re-enter withdrawn competitions
 or recreate revoked access. Restoring a merged Player requires separate merge
 reconciliation; it is not ordinary restoration. The event response separates the
 visible `entrants` roster from `retained_entrants`, a lookup for hidden identities
 referenced by fixtures and results. Clients resolve historical names through both
 lists, preserve the server's current-period `registration_order` (the same priority
-used for draw seeding), and use the server's
-`entered` count for held registrations and capacity. Current-player membership and
+used for draw seeding), and use the server's `entered` count for held registrations and capacity. Current-player membership and
 withdrawal use both lists; hiding a roster row never cancels its held seat.
 The server reports a `retired` entry refusal so withdrawing a held seat does not
 make an ineligible Player appear able to enter again. SQL match-side admission also

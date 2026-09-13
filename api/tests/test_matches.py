@@ -5671,3 +5671,49 @@ async def test_void_leaves_sides_and_players_intact(
         .all()
     )
     assert {p.user_id for p in players} == {winner.id, loser.id}
+
+
+async def test_retired_players_can_finish_existing_match_without_new_admission(
+    api_client, db_session
+):
+    from app.identity_lifecycle import retire_player
+
+    creator = await start_session(api_client, db_session)
+    async with opponent_session(db_session, "retired-existing-opponent") as (
+        opponent_client,
+        opponent,
+    ):
+        match = await _create_match(api_client, opponent.id, best_of=1)
+        await retire_player(db_session, creator.player_id)
+        await retire_player(db_session, opponent.player_id)
+        await db_session.commit()
+        detail = await api_client.get(f"/v1/matches/{match['id']}")
+        assert detail.status_code == 200
+        assert detail.json()["can_score"] is True
+        scored = await api_client.post(
+            f"/v1/matches/{match['id']}/games/1/scores/new",
+            json={"side_1_points": 11, "side_2_points": 5},
+        )
+        assert scored.status_code == 201, scored.text
+        assert scored.json()["can_finalize"] is True
+        proposed = await api_client.post(
+            f"/v1/matches/{match['id']}/results",
+            json={
+                "games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 5}]
+            },
+        )
+        assert proposed.status_code == 201, proposed.text
+        completed = await accept_standing_result(opponent_client, match["id"])
+        assert completed["status"] == "completed"
+        result = await db_session.scalar(
+            select(MatchResult).where(MatchResult.match_id == uuid.UUID(match["id"]))
+        )
+        assert result is not None
+        assert result.submitted_for_player_id == creator.player_id
+        assert result.accepted_by_user_id == opponent.id
+        listing = await api_client.get("/v1/matches")
+        assert match["id"] in {row["id"] for row in listing.json()["items"]}
+        refused = await api_client.post(
+            "/v1/matches", json={"best_of": 1, "rated": False}
+        )
+        assert refused.status_code == 409, refused.text

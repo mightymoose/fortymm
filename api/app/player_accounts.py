@@ -52,7 +52,11 @@ async def primary_player_id(
 
 
 def primary_player_reference(account_id: uuid.UUID) -> ScalarSelect[uuid.UUID]:
-    """Embed primary-player resolution in a read without adding a round trip."""
+    """Resolve identity for existing participation, including retired Players.
+
+    Retirement blocks new admission through require_player and entrant checks;
+    it does not remove authority to finish already-held matches or entries.
+    """
     return (
         select(AccountPlayer.player_id)
         .join(Account)
@@ -62,7 +66,6 @@ def primary_player_reference(account_id: uuid.UUID) -> ScalarSelect[uuid.UUID]:
             AccountPlayer.is_primary,
             Account.is_active,
             Player.merged_into_player_id.is_(None),
-            Player.retired_at.is_(None),
         )
         .scalar_subquery()
     )
