@@ -81,9 +81,12 @@ async def _build_standing_match(
     side1.players.append(MatchSidePlayer(match=match, user=poster.primary_player))
     side2 = MatchSide(match=match, side_number=2)
     side2.players.append(MatchSidePlayer(match=match, user=opponent.primary_player))
+    # Persist the complete sides before saving the first sporting evidence.
+    db.add(match)
+    await db.flush()
     game = MatchGame(match=match, game_number=1)
     game.score = MatchGameScore(side_1_points=11, side_2_points=4)
-    db.add(match)
+    db.add(game)
     await db.flush()
     if actor_id is not None:
         # The acting Account explicitly manages this Player as its primary.

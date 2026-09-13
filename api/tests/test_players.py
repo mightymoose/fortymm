@@ -439,11 +439,16 @@ async def _record_match_with_winner(
         created_at=created_at,
         updated_at=created_at,
         completed_at=created_at if completed else None,
+        games=[],
+        results=[],
     )
     side1 = MatchSide(match=match, side_number=1, won=True if completed else None)
     side1.players.append(MatchSidePlayer(match=match, user=winner.primary_player))
     side2 = MatchSide(match=match, side_number=2, won=False if completed else None)
     side2.players.append(MatchSidePlayer(match=match, user=loser.primary_player))
+    # Capture first-play subjects only after the complete sides are stored.
+    db_session.add(match)
+    await db_session.flush()
     for game_number, (winner_points, loser_points) in enumerate(games or [], start=1):
         game = MatchGame(match=match, game_number=game_number)
         game.score = MatchGameScore(
@@ -452,13 +457,14 @@ async def _record_match_with_winner(
         match.games.append(game)
     if signed_by is not None:
         result = MatchResult(
-            submitted_for_player_id=signed_by.id,
+            submitted_for_player_id=signed_by.player_id,
             submitted_by_user_id=signed_by.id,
             games=[],
         )
         match.results.append(result)
     db_session.add(match)
     await db_session.commit()
+    db_session.expire(match, ["games"])
     return match
 
 
