@@ -1568,7 +1568,6 @@ IDENTITY_RETENTION_DDL = (
     """CREATE CONSTRAINT TRIGGER check_erased_account_credentials
     AFTER INSERT OR UPDATE ON accounts DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION check_erased_account_credentials()""",
-
     """
     CREATE FUNCTION guard_erased_account_credential() RETURNS trigger
     LANGUAGE plpgsql AS $$
@@ -1610,6 +1609,58 @@ IDENTITY_RETENTION_DDL = (
     """CREATE TRIGGER guard_erased_account_credential BEFORE INSERT OR UPDATE
     ON device_tokens FOR EACH ROW
     EXECUTE FUNCTION guard_erased_account_credential('user_id')""",
+    """
+    CREATE FUNCTION guard_retired_player_admission() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    DECLARE player_row record;
+    BEGIN
+        IF NEW.left_at IS NOT NULL THEN RETURN NEW; END IF;
+        IF TG_OP='UPDATE' AND (NEW.entry_id, NEW.player_id, NEW.left_at)
+            IS NOT DISTINCT FROM (OLD.entry_id, OLD.player_id, OLD.left_at)
+        THEN RETURN NEW; END IF;
+        IF NOT EXISTS (SELECT 1 FROM tournament_entries
+            WHERE id=NEW.entry_id AND status='entered') THEN RETURN NEW; END IF;
+        FOR player_row IN SELECT id, retired_at FROM players
+            WHERE id IN (NEW.player_id, entry_canonical_player(NEW.player_id))
+            ORDER BY id FOR SHARE
+        LOOP
+            IF player_row.retired_at IS NOT NULL THEN
+                RAISE EXCEPTION 'retired Player cannot be admitted'
+                    USING ERRCODE='23514';
+            END IF;
+        END LOOP;
+        RETURN NEW;
+    END $$
+    """,
+    """CREATE TRIGGER guard_retired_player_admission BEFORE INSERT OR UPDATE
+    ON tournament_entry_members FOR EACH ROW
+    EXECUTE FUNCTION guard_retired_player_admission()""",
+
+    """
+    CREATE FUNCTION guard_retired_registration() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    DECLARE player_row record;
+    BEGIN
+        -- Closing an existing registration never admits a Player.
+        IF NEW.withdrawn_at IS NOT NULL THEN RETURN NEW; END IF;
+        FOR player_row IN SELECT p.id, p.retired_at FROM players p
+            WHERE p.id IN (
+                SELECT entry_canonical_player(m.player_id)
+                FROM tournament_entry_members m
+                WHERE m.entry_id=NEW.entry_id AND m.left_at IS NULL
+            ) ORDER BY p.id FOR SHARE
+        LOOP
+            IF player_row.retired_at IS NOT NULL THEN
+                RAISE EXCEPTION 'retired Player cannot be admitted'
+                    USING ERRCODE='23514';
+            END IF;
+        END LOOP;
+        RETURN NEW;
+    END $$
+    """,
+    """CREATE TRIGGER guard_retired_registration BEFORE INSERT
+    ON tournament_entry_registrations FOR EACH ROW
+    EXECUTE FUNCTION guard_retired_registration()""",
 
 )
 
@@ -6583,6 +6634,8 @@ def downgrade() -> None:
         "preserve_account_erasure",
         "check_erased_account_credentials",
         "guard_erased_account_credential",
+        "guard_retired_player_admission",
+        "guard_retired_registration",
         "preserve_recorded_score_identity",
         "preserve_published_tournament",
         "retain_match_play",

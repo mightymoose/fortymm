@@ -27,6 +27,8 @@ async def require_player(
             AccountPlayer.account_id == account_id,
             AccountPlayer.player_id == player_id,
         )
+        .with_for_update(read=True, of=Player)
+        .execution_options(populate_existing=True)
     )
     if player is None:
         raise PlayerAccessDenied

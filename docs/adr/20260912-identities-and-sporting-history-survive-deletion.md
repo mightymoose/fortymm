@@ -15,7 +15,9 @@ same Account, subject to its current authority: revoked grants stay revoked and
 transferred ownership stays transferred. Deactivation does not retire a Player,
 withdraw an entry, transfer tournament ownership, or disable another manager.
 An inactive owning Account retains its reference but cannot exercise authority.
-Outstanding login links cannot mint a session during deactivation.
+Deactivation revokes outstanding login and email-confirmation credentials,
+including merge confirmations targeting the Account. Confirmation endpoints
+must recheck Account activity before changing identity or minting a session.
 
 Account erasure removes identifying Account data and credentials while retaining
 an inert identity for historical attribution. It is distinct from reversible
@@ -38,7 +40,9 @@ or recreate revoked access. Restoring a merged Player requires separate merge
 reconciliation; it is not ordinary restoration. The event response separates the
 visible `entrants` roster from `retained_entrants`, a lookup for hidden identities
 referenced by fixtures and results. Clients resolve historical names through both
-lists and use the server's `entered` count for held registrations and capacity.
+lists, preserve the server's derived `registration_order`, and use the server's
+`entered` count for held registrations and capacity. Current-player membership and
+withdrawal use both lists; hiding a roster row never cancels its held seat.
 
 The explicit Account/Player merge rules remain in force: retained attribution and
 membership identify their original subjects, while current sporting identity

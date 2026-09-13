@@ -21,7 +21,7 @@ struct TournamentsListView: View {
     private var tournaments: [TournamentDTO] {
         (store.value ?? []).filter { tournament in
             (filter == nil || tournament.status == filter) &&
-            (!mine || tournament.canEdit || tournament.events.contains { $0.entrants.contains { $0.userId == session.user?.id } }) &&
+            (!mine || tournament.canEdit || tournament.events.contains { $0.entry(for: session.user?.id) != nil }) &&
             (query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || tournament.name.localizedStandardContains(query.trimmingCharacters(in: .whitespacesAndNewlines)))
         }
     }

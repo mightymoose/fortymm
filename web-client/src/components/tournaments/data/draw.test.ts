@@ -453,6 +453,20 @@ describe('drawState', () => {
   // A withdrawal removes the entry from `entrants` and leaves the cut draw naming it —
   // which is exactly what a STALE draw is. The side says so; it never goes blank, and it
   // never falls back to the raw entry id.
+  it('preserves an early unseeded player’s historical group order after retirement', () => {
+    const original = buildDrawnEvent()
+    const entrants = original.entrants.map((entrant, registrationOrder) => ({
+      ...entrant, seed: null, registrationOrder,
+    }))
+    const before = buildDrawnEvent({ entrants })
+    const after = buildDrawnEvent({
+      entrants: entrants.slice(1),
+      retainedEntrants: entrants.slice(0, 1),
+    })
+
+    expect(drawn(drawState(after)).groups).toEqual(drawn(drawState(before)).groups)
+  })
+
   it('names retained players in fixtures and group membership without restoring the roster', () => {
     const original = buildDrawnEvent()
     const retained = original.entrants.find((entrant) => entrant.id === 'entry-4')!

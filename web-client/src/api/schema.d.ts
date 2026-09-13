@@ -5370,6 +5370,8 @@ export interface components {
             user_id: string;
             /** Username */
             username: string;
+            /** Registration Order */
+            registration_order?: number | null;
             /** Seed */
             seed: number | null;
             /** Rating */

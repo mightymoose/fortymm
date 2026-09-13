@@ -105,6 +105,11 @@ describe('entryControlState', () => {
     })
   })
 
+  it('offers withdrawal for my retained held entry', () => {
+    expect(state({ event: buildEvent({ entrants: [], retainedEntrants: [myEntry] }) }))
+      .toEqual({ kind: 'withdraw', entryId: 'entry-me' })
+  })
+
   // Facts about the CALLER, decided before the window: they render nothing, and
   // they do so in every status — a viewer whose session is still in flight is
   // told nothing about a registration window it cannot yet judge (and an

@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import Account, Player
 from app.models.device_token import DeviceToken
 from app.models.email_intent import EmailIntent, FirstSignInIntent
-from app.models.user_token import EmailPurpose, EmailToken, SessionToken
+from app.models.user_token import EmailToken, SessionToken
 
 
 class IdentityLifecycleError(ValueError):
@@ -43,8 +43,18 @@ async def deactivate_account(db: AsyncSession, account_id: uuid.UUID) -> None:
     await db.execute(delete(SessionToken).where(SessionToken.user_id == account_id))
     await db.execute(
         delete(EmailToken).where(
-            EmailToken.user_id == account_id,
-            EmailToken.purpose.in_((EmailPurpose.login, EmailPurpose.first_sign_in)),
+            or_(
+                EmailToken.user_id == account_id,
+                EmailToken.target_account_id == account_id,
+            ),
+        )
+    )
+    await db.execute(
+        delete(EmailIntent).where(
+            or_(
+                EmailIntent.user_id == account_id,
+                EmailIntent.target_account_id == account_id,
+            )
         )
     )
     await db.execute(

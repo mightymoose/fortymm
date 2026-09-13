@@ -42,10 +42,13 @@ async def _resolve_live_user_by_email(db: AsyncSession, email: str) -> User | No
     carry the same canonical form.
     """
     result = await db.execute(
-        select(User).where(
+        select(User)
+        .where(
             User.email == email,
             User.merged_into_user_id.is_(None),
         )
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     return result.scalar_one_or_none()
 
@@ -142,7 +145,8 @@ async def resolve_or_provision_user(
                 winner = await resolve_linked_user(db, sub)
                 if winner is not None:
                     return winner
-                return await _resolve_live_user_by_email(db, email)
+                winner = await _resolve_live_user_by_email(db, email)
+                return winner if winner is not None and winner.is_active else None
             return matched
         # A *different* Auth0 identity claims an already-linked email — the same
         # ``sub`` would already have returned at step 1 (``resolve_linked_user``),
@@ -195,5 +199,6 @@ async def _provision_user(db: AsyncSession, sub: str, email: str) -> User | None
         winner = await resolve_linked_user(db, sub)
         if winner is not None:
             return winner
-        return await _resolve_live_user_by_email(db, email)
+        winner = await _resolve_live_user_by_email(db, email)
+        return winner if winner is not None and winner.is_active else None
     return user

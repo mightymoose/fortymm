@@ -110,6 +110,15 @@ export function apiToEntryState(s: ApiEntryState): EventEntryState {
 
 // ----- adapters: API (snake_case) <-> prototype (camelCase) ----------------
 
+const entrantSchema = z.object({
+  id: z.string(),
+  user_id: z.string(),
+  username: z.string(),
+  seed: z.number().int().nullable(),
+  rating: z.number().int().nullable(),
+  registration_order: z.number().int().nonnegative().nullable().optional(),
+})
+
 /** Map an API entrant to the prototype's `Entrant`.
  *
  * `rating` is carried across **unchanged, `null` included**: it is the entrant's
@@ -117,8 +126,10 @@ export function apiToEntryState(s: ApiEntryState): EventEntryState {
  * `null` means unrated — not "missing", not "0", and emphatically not a value to
  * coalesce. Defaulting it to a number here would erase the one fact this field
  * exists to carry. */
-export function apiToEntrant(e: TournamentEntrantRead): Entrant {
+export function apiToEntrant(payload: TournamentEntrantRead): Entrant {
+  const e = entrantSchema.parse(payload)
   return {
+    ...(e.registration_order === undefined ? {} : { registrationOrder: e.registration_order }),
     id: e.id,
     userId: e.user_id,
     username: e.username,
@@ -128,13 +139,7 @@ export function apiToEntrant(e: TournamentEntrantRead): Entrant {
 }
 
 const retainedEntrantsSchema = z.object({
-  retained_entrants: z.array(z.object({
-    id: z.string(),
-    user_id: z.string(),
-    username: z.string(),
-    seed: z.number().int().nullable(),
-    rating: z.number().int().nullable(),
-  })).default([]),
+  retained_entrants: z.array(entrantSchema).default([]),
 })
 
 /** Map an API event payload to the prototype's `TournamentEvent`. `entered`

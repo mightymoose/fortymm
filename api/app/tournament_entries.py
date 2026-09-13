@@ -157,11 +157,14 @@ async def _load_entrant(db: AsyncSession, user_id: uuid.UUID) -> Player:
     """
     user = (
         await db.execute(
-            select(Player).where(
+            select(Player)
+            .where(
                 Player.id == user_id,
                 Player.merged_into_player_id.is_(None),
                 Player.retired_at.is_(None),
             )
+            .with_for_update(read=True)
+            .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
     if user is None:

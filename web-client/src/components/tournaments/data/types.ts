@@ -614,6 +614,8 @@ export type EventResults =
  * `id` is the ENTRY's id, not the player's: it's the address a withdrawal is
  * sent to, so an entrant you can see is an entrant you can act on. */
 export interface Entrant {
+  /** Original registration position before visible and retained entries are partitioned. */
+  registrationOrder?: number | null
   id: string
   userId: string
   username: string

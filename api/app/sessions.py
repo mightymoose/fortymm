@@ -167,11 +167,13 @@ async def _merge_guest_into(
 
     The single guard used by every merge path: token-bound sign-in/confirm and
     the browser-bound prior-session fold."""
+    if guest is not None:
+        await lock_accounts(db, {guest.id, target.id})
     if (
         guest is None
         or guest.id == target.id
         or guest.confirmed_at is not None
-        or guest.merged_into_user_id is not None
+        or not guest.is_active
     ):
         return None
     try:
@@ -203,7 +205,7 @@ async def _automatic_login_destination(
         guest is not None
         and guest.id != target.id
         and guest.confirmed_at is None
-        and guest.merged_into_user_id is None
+        and guest.is_active
         and await _guest_match_count(db, guest.id) == 0
     ):
         return guest.username
@@ -1319,6 +1321,14 @@ async def confirm_email(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="That confirmation link is invalid or expired.",
         )
+    if not await email_action_is_valid(db, token_row):
+        await db.delete(token_row)
+        await _sweep_replaced_email_tokens(db, token_row.user_id)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That confirmation link is invalid or expired.",
+        )
     if token_row.purpose == EmailPurpose.merge:
         return await _confirm_account_merge(
             db,
@@ -1331,7 +1341,7 @@ async def confirm_email(
     user = (
         await db.execute(select(User).where(User.id == token_row.user_id))
     ).scalar_one_or_none()
-    if user is None or user.merged_into_user_id is not None:
+    if user is None or not user.is_active:
         # The live token is burned without confirming, so its replaced
         # siblings can never be reported again either — sweep them (#1616).
         await db.delete(token_row)
@@ -1435,7 +1445,7 @@ async def _confirm_account_merge(
     # email or is itself tombstoned — surfacing the opaque error so nothing leaks.
     if (
         target is None
-        or target.merged_into_user_id is not None
+        or not target.is_active
         or target.email != token_row.sent_to
     ):
         # The live merge token is burned without confirming, so its replaced
@@ -1927,7 +1937,7 @@ async def preview_merge(
         or guest is None
         or guest.id == owner.id
         or guest.confirmed_at is not None
-        or guest.merged_into_user_id is not None
+        or not guest.is_active
     ):
         return MergePreview(
             is_merge=False,

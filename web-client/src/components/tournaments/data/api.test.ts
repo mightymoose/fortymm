@@ -126,6 +126,17 @@ describe('apiToEvent', () => {
     expect(nameByEntryId(event).get('retired-entry')).toBe('retired.player')
   })
 
+  it('carries original registration order across both entrant lists', () => {
+    const event = apiToEvent({
+      ...buildTournamentEventRead(),
+      entrants: [{ ...buildTournamentEntrantRead(), registration_order: 1 }],
+      retained_entrants: [{ ...buildTournamentEntrantRead(), registration_order: 0 }],
+    })
+
+    expect(event.entrants[0].registrationOrder).toBe(1)
+    expect(event.retainedEntrants[0].registrationOrder).toBe(0)
+  })
+
   it('maps an event nobody has entered to an empty list and a zero count', () => {
     const event = apiToEvent(buildTournamentEventRead({ entrants: [] }))
 

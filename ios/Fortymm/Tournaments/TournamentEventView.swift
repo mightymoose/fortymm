@@ -78,7 +78,7 @@ struct TournamentEventView: View {
                     Button("Cancel", role: .cancel) { }
                 } message: { Text("This replaces all existing pairings and removes their schedule placements. This cannot be undone.") }
                 .confirmationDialog("Withdraw from \(event.name)?", isPresented: $confirmingWithdrawal, titleVisibility: .visible) {
-                    if let entry = event.entrants.first(where: { $0.userId == session.user?.id }) {
+                    if let entry = event.entry(for: session.user?.id) {
                         Button("Withdraw", role: .destructive) { mutate { try await service.withdraw(tournament.id, event: event.id, entry: entry.id) } }
                     }
                 } message: { Text("Your place will be released. You can enter again while registration is open, if space remains.") }
@@ -104,7 +104,7 @@ struct TournamentEventView: View {
             if tournament.status != .published {
                 Text(tournament.status == .draft ? "Registration has not opened yet." : "Registration is closed.")
                     .font(FMFont.ui(14)).foregroundStyle(FMColor.fg3)
-            } else if event.entrants.contains(where: { $0.userId == session.user?.id }) {
+            } else if event.entry(for: session.user?.id) != nil {
                 HStack {
                     Label("You're entered", systemImage: "checkmark.circle.fill").foregroundStyle(FMColor.serve500)
                     Spacer()

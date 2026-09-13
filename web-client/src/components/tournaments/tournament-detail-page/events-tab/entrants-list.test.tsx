@@ -25,8 +25,9 @@ describe('EntrantsList', () => {
     expect(page.getEntrantItems(EVENT)).toHaveLength(2)
   })
 
-  it('omits retained players from the active roster', () => {
+  it('omits retained players from the active roster even when it is my own entry', () => {
     page.render({
+      username: 'retired.player',
       event: buildEvent({
         name: EVENT,
         entrants: [buildEntrant({ username: 'active.player' })],

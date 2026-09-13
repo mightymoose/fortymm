@@ -10153,12 +10153,14 @@ async def _active_entries(
     )
 
 
+@pytest.mark.parametrize("retire_entrant", [False, True])
 @pytest.mark.parametrize(("rated", "length_games"), [(True, 5), (False, 3)])
 async def test_going_live_materializes_the_whole_group(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
     rated: bool,
     length_games: int,
+    retire_entrant: bool,
 ) -> None:
     """Going live turns **every** ready fixture of a round-robin group into a real
     ``pending`` (scheduled) match in one stroke (ADR-0788, amended by the "born
@@ -10190,6 +10192,12 @@ async def test_going_live_materializes_the_whole_group(
     entries = await _seed_field(db_session, event["id"], 3)
     await _cut_the_draw(client, tournament_id, event["id"])
     await _set_status(db_session, tournament_id, TournamentStatus.published)
+
+    if retire_entrant:
+        from app.identity_lifecycle import retire_player
+
+        await retire_player(db_session, entries[0].user_id)
+        await db_session.commit()
 
     response = await _go_live(client, tournament_id)
     assert response.status_code == 201, response.text
@@ -11411,6 +11419,11 @@ async def test_the_detail_bff_surfaces_live_standings_then_a_champion(
             for entrant in read["entrants"] + read["retained_entrants"]
         }
         assert names == original_names
+        ordered = sorted(
+            read["entrants"] + read["retained_entrants"],
+            key=lambda entrant: entrant["registration_order"],
+        )
+        assert [entrant["id"] for entrant in ordered] == list(original_names)
         assert read["results"] == original_results
         for fixture in read["fixtures"]:
             assert fixture["entry_a_id"] in names

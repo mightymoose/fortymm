@@ -139,7 +139,12 @@ struct TournamentEventDTO: Decodable, Identifiable {
     private let entered: Int?
     var entryCount: Int { entered ?? historicalEntrants.count }
     private let retainedEntrants: [Entrant]?
-    var historicalEntrants: [Entrant] { entrants + (retainedEntrants ?? []) }
+    var historicalEntrants: [Entrant] {
+        (entrants + (retainedEntrants ?? [])).enumerated().sorted {
+            ($0.element.registrationOrder ?? Int.max, $0.offset) <
+            ($1.element.registrationOrder ?? Int.max, $1.offset)
+        }.map(\.element)
+    }
     let entryState: EntryState
     let fixtures: [Fixture]
     let stages: [Stage]
@@ -154,6 +159,7 @@ struct TournamentEventDTO: Decodable, Identifiable {
         let username: String
         let seed: Int?
         let rating: Double?
+        let registrationOrder: Int?
     }
     struct EntryState: Decodable {
         let state: Kind
@@ -224,6 +230,9 @@ struct TournamentEventDTO: Decodable, Identifiable {
     }
     var formatLabel: String { drawType.replacingOccurrences(of: "-", with: " ").capitalized }
     var capacityLabel: String { maxPlayers.map { "\(entryCount)/\($0) players" } ?? TournamentCopy.count(entryCount, "player") }
+    func entry(for userId: UUID?) -> Entrant? {
+        historicalEntrants.first { $0.userId == userId }
+    }
     func player(_ id: UUID?) -> String {
         guard let id else { return "TBD" }
         return historicalEntrants.first { $0.id == id }?.username ?? "Withdrawn"

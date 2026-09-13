@@ -1358,6 +1358,7 @@ class TournamentEntrantRead(BaseModel):
     id: uuid.UUID
     user_id: uuid.UUID
     username: str
+    registration_order: int | None = None
     seed: int | None
     # This player's rating on the TOURNAMENT's ladder (its ``league_id``, ADR-0783) —
     # the same number, from the same ladder, that the event's rules judged them by. It

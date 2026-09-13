@@ -11423,6 +11423,8 @@ internal enum Components {
             internal var userId: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentEntrantRead/username`.
             internal var username: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentEntrantRead/registration_order`.
+            internal var registrationOrder: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEntrantRead/seed`.
             internal var seed: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEntrantRead/rating`.
@@ -11433,18 +11435,21 @@ internal enum Components {
             ///   - id:
             ///   - userId:
             ///   - username:
+            ///   - registrationOrder:
             ///   - seed:
             ///   - rating:
             internal init(
                 id: Swift.String,
                 userId: Swift.String,
                 username: Swift.String,
+                registrationOrder: Swift.Int? = nil,
                 seed: Swift.Int? = nil,
                 rating: Swift.Double? = nil
             ) {
                 self.id = id
                 self.userId = userId
                 self.username = username
+                self.registrationOrder = registrationOrder
                 self.seed = seed
                 self.rating = rating
             }
@@ -11452,6 +11457,7 @@ internal enum Components {
                 case id
                 case userId = "user_id"
                 case username
+                case registrationOrder = "registration_order"
                 case seed
                 case rating
             }
