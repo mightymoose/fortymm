@@ -349,11 +349,9 @@ async def enter_event(
             await _enforce_entry_rate_limit(client_ip)
 
     # Registration provenance references the actor even for self-registration.
-    # Account merge locks Account before Tournament; take the same order here.
+    # Hold actor activity stable before Tournament, matching Account merge order.
     await db.execute(
-        select(User.id)
-        .where(User.id == actor.id)
-        .with_for_update(read=True, key_share=True)
+        select(User.id).where(User.id == actor.id).with_for_update(read=True)
     )
 
     # Load first, then decide — the 404-before-anything-else ordering. The tournament is
@@ -589,11 +587,9 @@ async def withdraw_from_event(
     opens another period on the same entry without restoring prior draw seats.
     Commits before returning. The caller adapts domain exceptions to its transport.
     """
-    # Secure the historical actor FK before Tournament, matching Account merge.
-    await db.execute(
-        select(User.id)
-        .where(User.id == actor.id)
-        .with_for_update(read=True, key_share=True)
+    # Read current actor activity under lock before Tournament, matching merges.
+    actor_is_active = await db.scalar(
+        select(User.is_active).where(User.id == actor.id).with_for_update(read=True)
     )
     # Load-then-authorize, as everywhere else here: the tournament (locked),
     # the event under it, and the entry under that event must all exist before ownership
@@ -602,6 +598,8 @@ async def withdraw_from_event(
     tournament = await _load_tournament_for_update(db, tournament_id)
     event = await _load_event(db, tournament_id, event_id)
     entry = await _load_entry(db, event.id, entry_id)
+    if not actor_is_active:
+        raise NotAllowedToWithdrawError()
 
     # The same fork the enter verb makes, read off the ENTRY rather than off a body:
     # this is the caller's own entry, or it is somebody's the owner is removing

@@ -191,7 +191,7 @@ async def _lock_accounts(
             select(Account)
             .where(Account.id.in_(account_ids))
             .order_by(Account.id)
-            .with_for_update(read=True, key_share=True)
+            .with_for_update(read=True)
             .execution_options(populate_existing=True)
         )
     )

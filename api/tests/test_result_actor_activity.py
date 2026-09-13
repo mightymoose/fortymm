@@ -228,3 +228,114 @@ async def test_existing_sql_consent_survives_acceptor_lifecycle(db_session, eras
     await db_session.refresh(proposal)
     assert proposal.accepted_by_user_id == acceptor.id
     assert proposal.accepted_at == original_consent
+
+
+async def test_sql_void_retries_concurrent_director_deactivation(db_session):
+    from sqlalchemy.exc import DBAPIError
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from tests._helpers import directed_tournament_match
+
+    match, director = await directed_tournament_match(db_session, tag="void-activity")
+    tournament_id = await db_session.scalar(
+        text("SELECT scope_tournament_id FROM tournament_fixtures WHERE match_id=:id"),
+        {"id": match.id},
+    )
+    await db_session.commit()
+    sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    async with sessions() as lifecycle:
+        await lifecycle.execute(
+            text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"),
+            {"id": director.id},
+        )
+        try:
+            with pytest.raises(
+                DBAPIError, match="void action requires parent locks"
+            ) as error:
+                async with db_session.begin_nested():
+                    await db_session.execute(
+                        text(
+                            "INSERT INTO match_void_actions "
+                            "(id, match_id, actor_account_id, reason, "
+                            "tournament_id, owner_revision) "
+                            "VALUES (gen_random_uuid(), :match, :actor, 'Void', "
+                            ":tournament, 0)"
+                        ),
+                        {
+                            "match": match.id,
+                            "actor": director.id,
+                            "tournament": tournament_id,
+                        },
+                    )
+            assert error.value.orig.sqlstate == "40001"
+        finally:
+            await lifecycle.rollback()
+
+
+@pytest.mark.parametrize("action", ["match", "draw"])
+async def test_write_admission_holds_account_activity_stable(db_session, action):
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.match_scoring import lock_match_for_transition
+    from app.tournament_draw_limits import lock_draw_actor
+
+    actor, match, _ = await solo_proposal(db_session)
+    await db_session.commit()
+    sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    async with sessions() as writer, sessions() as lifecycle:
+        if action == "match":
+            await lock_match_for_transition(writer, match.id, actor_id=actor.id)
+        else:
+            await lock_draw_actor(writer, actor.id)
+        writer_pid = await writer.scalar(text("SELECT pg_backend_pid()"))
+        lifecycle_pid = await lifecycle.scalar(text("SELECT pg_backend_pid()"))
+        pending = asyncio.create_task(
+            lifecycle.execute(
+                text(
+                    "UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"
+                ),
+                {"id": actor.id},
+            )
+        )
+        try:
+            async with asyncio.timeout(5):
+                while writer_pid not in await writer.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": lifecycle_pid}
+                ):
+                    assert not pending.done(), "deactivation bypassed admitted writer"
+                    await asyncio.sleep(0.01)
+        finally:
+            await writer.rollback()
+            await pending
+            await lifecycle.rollback()
+
+
+async def test_inactive_cached_actor_cannot_withdraw_held_entry(db_session):
+    from app.tournament_entries import enter_event, withdraw_from_event
+    from app.tournament_errors import NotAllowedToWithdrawError
+    from tests.test_tournament_entries import _make_event
+
+    actor = await make_user(db_session, "inactive-withdraw")
+    event = await _make_event(db_session)
+    entry = await enter_event(
+        db_session,
+        tournament_id=event.tournament_id,
+        event_id=event.id,
+        actor=actor,
+        user_id=None,
+    )
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"),
+        {"id": actor.id},
+    )
+    await db_session.commit()
+    with pytest.raises(NotAllowedToWithdrawError):
+        await withdraw_from_event(
+            db_session,
+            tournament_id=event.tournament_id,
+            event_id=event.id,
+            entry_id=entry.id,
+            actor=actor,
+        )

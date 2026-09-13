@@ -111,6 +111,8 @@ async def lock_match_for_transition(
     *legitimate* acceptor that must wait, re-read, and proceed."""
     stmt = select(Match.id).where(Match.id == match_id).with_for_update(nowait=nowait)
     try:
+        # Keep the acting Account live through the transition. Lock the complete
+        # actor set together to preserve sorted ordering against identity merges.
         await db.execute(
             text(
                 "SELECT id FROM accounts WHERE id IN ("
@@ -122,7 +124,7 @@ async def lock_match_for_transition(
                 "UNION SELECT ap.account_id FROM account_players ap "
                 "JOIN match_side_players p ON p.user_id = ap.player_id "
                 "WHERE p.match_id = :match"
-                ") ORDER BY id FOR KEY SHARE"
+                ") ORDER BY id FOR SHARE"
             ),
             {"actor": actor_id, "match": match_id},
         )

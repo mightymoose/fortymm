@@ -161,7 +161,7 @@ async def create_tournament(
     live_actor = await db.scalar(
         select(User)
         .where(User.id == actor.id)
-        .with_for_update(read=True, key_share=True)
+        .with_for_update(read=True)
         .execution_options(populate_existing=True)
     )
     if live_actor is None or not live_actor.is_active:

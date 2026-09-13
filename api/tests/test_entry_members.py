@@ -2002,7 +2002,10 @@ async def test_direct_member_delete_refuses_without_waiting_on_event(
 
 
 @pytest.mark.parametrize("action", ["join", "depart"])
-async def test_roster_actor_lock_precedes_tournament_lock(db_session, engine, action):
+@pytest.mark.parametrize("lifecycle_update", [False, True])
+async def test_roster_actor_lock_precedes_tournament_lock(
+    db_session, engine, action, lifecycle_update
+):
     from sqlalchemy.exc import DBAPIError
 
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
@@ -2027,7 +2030,11 @@ async def test_roster_actor_lock_precedes_tournament_lock(db_session, engine, ac
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with sessions() as merging, sessions() as roster:
         await merging.execute(
-            text("SELECT id FROM accounts WHERE id = :id FOR UPDATE"),
+            text(
+                "UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"
+                if lifecycle_update
+                else "SELECT id FROM accounts WHERE id = :id FOR UPDATE"
+            ),
             {"id": tournament.owner_account_id},
         )
         await roster.execute(text("SET LOCAL lock_timeout = '200ms'"))
@@ -2263,7 +2270,10 @@ async def test_pending_evidence_preserves_seated_membership(db_session, evidence
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
 
-async def test_lineup_correction_actor_lock_precedes_event_lock(db_session, engine):
+@pytest.mark.parametrize("lifecycle_update", [False, True])
+async def test_lineup_correction_actor_lock_precedes_event_lock(
+    db_session, engine, lifecycle_update
+):
     from sqlalchemy.exc import DBAPIError
 
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
@@ -2279,7 +2289,11 @@ async def test_lineup_correction_actor_lock_precedes_event_lock(db_session, engi
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with sessions() as merging, sessions() as correcting:
         await merging.execute(
-            text("SELECT id FROM accounts WHERE id = :id FOR UPDATE"),
+            text(
+                "UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"
+                if lifecycle_update
+                else "SELECT id FROM accounts WHERE id = :id FOR UPDATE"
+            ),
             {"id": match.created_by_user_id},
         )
         await correcting.execute(text("SET LOCAL lock_timeout = '200ms'"))

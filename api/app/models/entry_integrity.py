@@ -100,7 +100,7 @@ ENTRY_INTEGRITY_DDL = (
         BEGIN
             PERFORM id FROM accounts
             WHERE id IN (NEW.joined_by_account_id, NEW.left_by_account_id)
-            ORDER BY id FOR KEY SHARE NOWAIT;
+            ORDER BY id FOR SHARE NOWAIT;
         EXCEPTION WHEN lock_not_available THEN
             RAISE EXCEPTION 'roster actor requires account locks before parents; retry'
                 USING ERRCODE = '40001';
@@ -518,7 +518,7 @@ ENTRY_INTEGRITY_DDL = (
             END IF;
             BEGIN
                 PERFORM id FROM accounts WHERE id = NEW.recorded_by_account_id
-                FOR KEY SHARE NOWAIT;
+                FOR SHARE NOWAIT;
             EXCEPTION WHEN lock_not_available THEN
                 RAISE EXCEPTION 'lineup actor requires account locks; retry'
                     USING ERRCODE = '40001';

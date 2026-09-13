@@ -1061,3 +1061,137 @@ async def test_former_grantor_merge_does_not_block_current_grant_changes(
         )
         assert inherited.account_id == recipient_target.id
         assert inherited.granted_by_account_id is None
+
+
+@pytest.mark.parametrize("operation", ["create", "transfer", "grant"])
+@pytest.mark.parametrize("interface", ["sql", "service"])
+@pytest.mark.parametrize("first", ["authority", "deactivation"])
+async def test_authority_admission_serializes_with_sql_deactivation(
+    db_session, engine, default_league, monkeypatch, operation, interface, first
+):
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.exc import DBAPIError
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.models import Account
+    from app.tournament_authority import grant_director, transfer_ownership
+    from app.tournament_errors import InactiveTournamentActorError
+    from app.tournament_lifecycle import create_tournament
+    from tests.test_proposal_history import wait_for_blocked
+    from tests.test_tournament_lifecycle import _GEOCODER, _payload
+
+    owner = await make_user(db_session, "sql-lifecycle-authority-owner")
+    recipient = await make_user(db_session, "sql-lifecycle-authority-recipient")
+    tournament = Tournament(
+        name="Authority race", league_id=default_league.id, created_by_user_id=owner.id
+    )
+    db_session.add(tournament)
+    await db_session.commit()
+    target_id = owner.id if operation == "create" else recipient.id
+    params = {
+        "owner": owner.id,
+        "target": target_id,
+        "tournament": tournament.id,
+        "league": default_league.id,
+    }
+    statements = {
+        "create": "INSERT INTO tournaments(name,league_id,created_by_user_id) "
+        "VALUES('Racing create',:league,:target)",
+        "transfer": "INSERT INTO tournament_ownership_transfers(id,tournament_id,"
+        "previous_owner_account_id,new_owner_account_id,actor_account_id,reason) "
+        "VALUES(gen_random_uuid(),:tournament,:owner,:target,:owner,'explicit')",
+        "grant": "INSERT INTO tournament_account_grants"
+        "(id,role,reason,tournament_id,account_id,granted_by_account_id) "
+        "VALUES(gen_random_uuid(),'director','explicit',:tournament,:target,:owner)",
+    }
+    async with (
+        async_sessionmaker(engine, expire_on_commit=False)() as writer,
+        async_sessionmaker(engine, expire_on_commit=False)() as lifecycle,
+    ):
+        writer_pid = await writer.scalar(text("SELECT pg_backend_pid()"))
+        lifecycle_pid = await lifecycle.scalar(text("SELECT pg_backend_pid()"))
+        written, commit_allowed = asyncio.Event(), asyncio.Event()
+        original_commit = writer.commit
+
+        async def gated_commit():
+            written.set()
+            await commit_allowed.wait()
+            await original_commit()
+
+        monkeypatch.setattr(writer, "commit", gated_commit)
+
+        async def authority():
+            if interface == "sql":
+                await writer.execute(text(statements[operation]), params)
+            elif operation == "create":
+                actor = await writer.get(Account, owner.id)
+                await create_tournament(
+                    writer, actor=actor, payload=_payload(), geocoder=_GEOCODER
+                )
+                return
+            elif operation == "transfer":
+                await transfer_ownership(
+                    writer, tournament.id, actor_id=owner.id, account_id=target_id
+                )
+            else:
+                await grant_director(
+                    writer, tournament.id, actor_id=owner.id, account_id=target_id
+                )
+            await writer.commit()
+
+        async def deactivate():
+            await lifecycle.execute(
+                text(
+                    "UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"
+                ),
+                {"id": target_id},
+            )
+
+        if first == "authority":
+            pending = asyncio.create_task(authority())
+            suspension = None
+            try:
+                gate = asyncio.create_task(written.wait())
+                try:
+                    await asyncio.wait(
+                        {gate, pending}, timeout=2, return_when=asyncio.FIRST_COMPLETED
+                    )
+                    if pending.done():
+                        await pending
+                    assert gate.done(), "authority write did not reach commit"
+                finally:
+                    if not gate.done():
+                        gate.cancel()
+                        await asyncio.gather(gate, return_exceptions=True)
+                suspension = asyncio.create_task(deactivate())
+                await wait_for_blocked(writer, lifecycle_pid, suspension)
+                commit_allowed.set()
+                await pending
+                await suspension
+                await lifecycle.commit()
+            finally:
+                commit_allowed.set()
+                for task in (pending, suspension):
+                    if task is not None and not task.done():
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+        else:
+            await deactivate()
+            pending = asyncio.create_task(authority())
+            try:
+                if interface == "sql":
+                    with pytest.raises(DBAPIError) as refused:
+                        await asyncio.wait_for(pending, 2)
+                    assert refused.value.orig.sqlstate == "40001"
+                else:
+                    await wait_for_blocked(lifecycle, writer_pid, pending)
+                    await lifecycle.commit()
+                    with pytest.raises((InactiveTournamentActorError, ValueError)):
+                        await pending
+            finally:
+                commit_allowed.set()
+                if not pending.done():
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)

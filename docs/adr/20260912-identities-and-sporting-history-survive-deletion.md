@@ -29,7 +29,10 @@ enqueueing. RBAC changes lock acting and target Accounts together in a stable or
 so suspension cannot be followed by an already-started role grant.
 SQL result submission authority, new consent, and official-result actors require
 active Accounts. New consent locks both actors in stable order; concurrent lifecycle
-changes produce a retryable conflict. Existing consent remains immutable historical
+changes produce a retryable conflict. Activity checks use `FOR SHARE` or stronger
+Account locks: `FOR KEY SHARE` does not block direct SQL updates to lifecycle
+columns. This applies to tournament ownership/grants and roster/correction authority
+as well as result actors. Existing consent remains immutable historical
 evidence through suspension and erasure.
 Player-authorized writes hold the Account lock through the action so suspension
 and admission have a deterministic order. A foreign login's guest reference grants no access to the
