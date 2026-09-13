@@ -9,8 +9,10 @@ Docker-on-macOS action (e.g. Colima-based) exists but is unofficial and
 adds a fragile dependency to CI.
 
 Instead, the `ios.yml` XCUITest job starts the API as native processes on the
-runner: Postgres via Homebrew (already present on GitHub's macOS images), the
-API run directly with `uvicorn` against it. This mirrors the escape hatch
+runner: Postgres and Redis via Homebrew, with the API run directly using
+`uvicorn`. Redis binds to loopback and must answer a readiness check before
+the API starts: anonymous guest admission refuses creation when its Redis
+budget is unavailable. This mirrors the escape hatch
 `api/CLAUDE.md` already documents for skipping testcontainers
 (`TEST_DATABASE_URL` against an existing Postgres) — same real-API-no-mocks
 philosophy, just without a container layer. Local runs and this project's
