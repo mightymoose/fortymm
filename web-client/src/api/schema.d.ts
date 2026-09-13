@@ -5496,6 +5496,11 @@ export interface components {
             updated_at: string;
             /** Entrants */
             entrants: components["schemas"]["TournamentEntrantRead"][];
+            /**
+             * Retained Entrants
+             * @description Retired or merged entrants retained for historical fixture and result names.
+             */
+            retained_entrants?: components["schemas"]["TournamentEntrantRead"][];
             /** Entry State */
             entry_state: components["schemas"]["EventEntryOpen"] | components["schemas"]["EventEntryFull"] | components["schemas"]["EventEntryRatingIneligible"];
             /** Fixtures */

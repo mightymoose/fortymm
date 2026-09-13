@@ -491,6 +491,7 @@ export function emptyEvent(t: Tournament): TournamentEvent {
     // A draft event nobody has entered: no entrants, so the derived count is 0.
     entered: 0,
     entrants: [],
+    retainedEntrants: [],
     // Nothing about an unsaved event refuses anybody: it has room (nobody is in
     // it) and no rules yet. The server will send the real judgement the moment the
     // event exists — this is a placeholder for a payload that has not happened.

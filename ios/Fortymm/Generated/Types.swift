@@ -11709,6 +11709,10 @@ internal enum Components {
             internal var updatedAt: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entrants`.
             internal var entrants: [Components.Schemas.TournamentEntrantRead]
+            /// Retired or merged entrants retained for historical fixture and result names.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/retained_entrants`.
+            internal var retainedEntrants: [Components.Schemas.TournamentEntrantRead]?
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_state`.
             internal enum EntryStatePayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_state/EventEntryFull`.
@@ -11834,6 +11838,7 @@ internal enum Components {
             ///   - createdAt:
             ///   - updatedAt:
             ///   - entrants:
+            ///   - retainedEntrants: Retired or merged entrants retained for historical fixture and result names.
             ///   - entryState:
             ///   - fixtures:
             ///   - results:
@@ -11859,6 +11864,7 @@ internal enum Components {
                 createdAt: Foundation.Date,
                 updatedAt: Foundation.Date,
                 entrants: [Components.Schemas.TournamentEntrantRead],
+                retainedEntrants: [Components.Schemas.TournamentEntrantRead]? = nil,
                 entryState: Components.Schemas.TournamentEventRead.EntryStatePayload,
                 fixtures: [Components.Schemas.TournamentFixtureRead],
                 results: Components.Schemas.TournamentEventRead.ResultsPayload? = nil,
@@ -11884,6 +11890,7 @@ internal enum Components {
                 self.createdAt = createdAt
                 self.updatedAt = updatedAt
                 self.entrants = entrants
+                self.retainedEntrants = retainedEntrants
                 self.entryState = entryState
                 self.fixtures = fixtures
                 self.results = results
@@ -11910,6 +11917,7 @@ internal enum Components {
                 case createdAt = "created_at"
                 case updatedAt = "updated_at"
                 case entrants
+                case retainedEntrants = "retained_entrants"
                 case entryState = "entry_state"
                 case fixtures
                 case results

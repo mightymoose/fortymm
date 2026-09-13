@@ -2037,6 +2037,13 @@ class TournamentEventRead(BaseModel):
     updated_at: datetime
     # The event's active entrants, oldest entry first.
     entrants: list[TournamentEntrantRead]
+    retained_entrants: list[TournamentEntrantRead] = Field(
+        default_factory=list,
+        description=(
+            "Retired or merged entrants retained for historical "
+            "fixture and result names."
+        ),
+    )
     # Current-user-aware: this is the CALLER's answer to "may I enter this event?",
     # decided server-side against the two facts only the server holds — the event's
     # live entry count against its ``max_players``, and the caller's rating on the
@@ -2081,13 +2088,11 @@ class TournamentEventRead(BaseModel):
     # tournament-detail page, not a second round-trip.
     results: EventResultsRead | None
 
-    _hidden_entrants: int = PrivateAttr(default=0)
-
     @computed_field  # type: ignore[prop-decorator]  # pydantic wraps the property
     @property
     def entered(self) -> int:
         """Held registrations, including identities hidden from the active roster."""
-        return len(self.entrants) + self._hidden_entrants
+        return len(self.entrants) + len(self.retained_entrants)
 
 
 class DrawTypeRead(BaseModel):

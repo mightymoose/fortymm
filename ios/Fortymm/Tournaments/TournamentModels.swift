@@ -92,7 +92,7 @@ struct TournamentDTO: Decodable, Identifiable {
         let key, name, description: String
         var id: String { key }
     }
-    var entryCount: Int { events.reduce(0) { $0 + $1.entrants.count } }
+    var entryCount: Int { events.reduce(0) { $0 + $1.entryCount } }
 }
 
 struct TournamentEventDTO: Decodable, Identifiable {
@@ -136,6 +136,10 @@ struct TournamentEventDTO: Decodable, Identifiable {
     let entryFee: Double
     let slot: Slot
     let entrants: [Entrant]
+    private let entered: Int?
+    var entryCount: Int { entered ?? historicalEntrants.count }
+    private let retainedEntrants: [Entrant]?
+    var historicalEntrants: [Entrant] { entrants + (retainedEntrants ?? []) }
     let entryState: EntryState
     let fixtures: [Fixture]
     let stages: [Stage]
@@ -219,10 +223,10 @@ struct TournamentEventDTO: Decodable, Identifiable {
         canEdit && !fixtures.contains { $0.winnerEntryId != nil || $0.matchId != nil }
     }
     var formatLabel: String { drawType.replacingOccurrences(of: "-", with: " ").capitalized }
-    var capacityLabel: String { maxPlayers.map { "\(entrants.count)/\($0) players" } ?? TournamentCopy.count(entrants.count, "player") }
+    var capacityLabel: String { maxPlayers.map { "\(entryCount)/\($0) players" } ?? TournamentCopy.count(entryCount, "player") }
     func player(_ id: UUID?) -> String {
         guard let id else { return "TBD" }
-        return entrants.first { $0.id == id }?.username ?? "Withdrawn"
+        return historicalEntrants.first { $0.id == id }?.username ?? "Withdrawn"
     }
     var ineligibilityMessage: String {
         let rule = predicates?.first { $0.id == entryState.predicateId }?.label ?? "Your rating does not meet this event’s eligibility rules"
@@ -302,7 +306,7 @@ struct TournamentPlayerSchedule {
         var usersByFixture: [UUID: Set<UUID>] = [:]
         for event in events {
             var userByEntry: [UUID: UUID] = [:]
-            for entrant in event.entrants {
+            for entrant in event.historicalEntrants {
                 userByEntry[entrant.id] = entrant.userId
                 if playersByUser[entrant.userId] == nil { playersByUser[entrant.userId] = entrant }
             }

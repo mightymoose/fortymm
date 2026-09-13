@@ -20,6 +20,7 @@ import {
   tournamentToUpdateBody,
 } from './api'
 import { blankAddress } from './helpers'
+import { nameByEntryId } from './entrant-names'
 import { addedReservation, keepReservations } from './reservation-entries'
 import { asEditedEvent } from './seed.factory'
 import { addTable, keepTables } from './table-catalogue'
@@ -110,6 +111,19 @@ describe('apiToEvent', () => {
     expect(event.entrants).toEqual([
       { id: 'entry-9', userId: 'u-7', username: 'rita.kovac', seed: 3, rating: 1450 },
     ])
+  })
+
+  it('keeps retained players out of the roster but names their historical entries', () => {
+    const payload = {
+      ...buildTournamentEventRead({ entrants: [] }),
+      entered: 1,
+      retained_entrants: [buildTournamentEntrantRead({ id: 'retired-entry', username: 'retired.player' })],
+    }
+    const event = apiToEvent(payload)
+
+    expect(event.entrants).toEqual([])
+    expect(event.entered).toBe(1)
+    expect(nameByEntryId(event).get('retired-entry')).toBe('retired.player')
   })
 
   it('maps an event nobody has entered to an empty list and a zero count', () => {
@@ -866,6 +880,7 @@ const event: TournamentEvent = {
   // the same fact, and a fixture that disagreed with itself would be a lie the
   // server cannot tell.
   entered: 2,
+  retainedEntrants: [],
   // One rated, one UNRATED (`rating: null` — they hold no rating on the
   // tournament's ladder, ADR-0783 §3). The round-trip below therefore proves the
   // null survives the mapping, which is the whole reason the field is on the wire.

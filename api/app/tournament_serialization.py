@@ -849,7 +849,9 @@ def serialize_event(
     # Capacity and results above include every held registration. Retirement
     # changes roster visibility without withdrawing a seat or rewriting results.
     result.entrants = [entrant for entrant in entrants if entrant._visible_on_roster]
-    result._hidden_entrants = len(entrants) - len(result.entrants)
+    result.retained_entrants = [
+        entrant for entrant in entrants if not entrant._visible_on_roster
+    ]
     return result
 
 

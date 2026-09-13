@@ -3121,6 +3121,10 @@ async def test_retirement_hides_roster_without_freeing_registration(db_session):
     )
     assert response.entrants == []
     assert response.entered == 1
+    assert [entrant.user_id for entrant in response.retained_entrants] == [
+        player.player_id
+    ]
+    assert response.retained_entrants[0].username == "roster-entrant"
     await restore_player(db_session, player.player_id)
     await db_session.commit()
     response = await shape_event_read(

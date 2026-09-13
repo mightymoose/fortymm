@@ -89,6 +89,20 @@ async def postgres_url(postgres_url, entry_schema):
         await admin.dispose()
 
 
+@pytest_asyncio.fixture(scope="session")
+async def engine(postgres_url):
+    """Keep the schema-specific engine separate from the shared session fixture.
+
+    Reusing the inherited engine fixture caches this module's overridden URL
+    for later modules even after DATABASE_URL returns to the ordinary test DB.
+    """
+    schema_engine = create_async_engine(postgres_url)
+    try:
+        yield schema_engine
+    finally:
+        await schema_engine.dispose()
+
+
 async def test_singles_registration_stores_a_player_member(api_client, db_session):
     player = await start_session(api_client, db_session)
     event = await _make_event(db_session)

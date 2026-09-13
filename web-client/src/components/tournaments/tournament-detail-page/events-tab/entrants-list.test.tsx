@@ -25,6 +25,20 @@ describe('EntrantsList', () => {
     expect(page.getEntrantItems(EVENT)).toHaveLength(2)
   })
 
+  it('omits retained players from the active roster', () => {
+    page.render({
+      event: buildEvent({
+        name: EVENT,
+        entrants: [buildEntrant({ username: 'active.player' })],
+        retainedEntrants: [buildEntrant({ id: 'retired-entry', username: 'retired.player' })],
+      }),
+    })
+
+    expect(page.queryEntrant(EVENT, 'active.player')).toBeInTheDocument()
+    expect(page.queryEntrant(EVENT, 'retired.player')).not.toBeInTheDocument()
+    expect(page.getEntrantItems(EVENT)).toHaveLength(1)
+  })
+
   it('renders the roster as a real list, named for its event', () => {
     // Semantics, not looks: a screen reader announces "Entrants in Open
     // Singles, list, 2 items" — and the per-event name keeps one card's roster

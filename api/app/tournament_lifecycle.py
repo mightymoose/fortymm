@@ -163,7 +163,7 @@ async def create_tournament(
         .with_for_update(read=True, key_share=True)
         .execution_options(populate_existing=True)
     )
-    if live_actor is None or live_actor.merged_at is not None:
+    if live_actor is None or not live_actor.is_active:
         raise InactiveTournamentActorError()
     actor = live_actor
     league = await _resolve_league_strict(db, payload.league_id)

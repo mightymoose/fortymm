@@ -246,6 +246,15 @@ describe('drawState', () => {
    * and nothing here invents a fixture for them.
    */
   describe('swissByes', () => {
+    it('keeps a retained player in the field when resolving historical byes', () => {
+      const original = buildSwissOddDrawnEvent()
+      const event = buildSwissOddDrawnEvent({
+        entrants: original.entrants.slice(0, -1),
+        retainedEntrants: original.entrants.slice(-1),
+      })
+      expect(drawn(drawState(event)).swissByes).toEqual(drawn(drawState(original)).swissByes)
+    })
+
     /** Round 1 of a seven-entrant cut seats six; `entry-7` is in no fixture, so they are
      * the bye — named, in draw order, as an entrant rather than as a bare id. */
     it('names the entrant an odd field leaves out of a paired round', () => {
@@ -444,6 +453,20 @@ describe('drawState', () => {
   // A withdrawal removes the entry from `entrants` and leaves the cut draw naming it —
   // which is exactly what a STALE draw is. The side says so; it never goes blank, and it
   // never falls back to the raw entry id.
+  it('names retained players in fixtures and group membership without restoring the roster', () => {
+    const original = buildDrawnEvent()
+    const retained = original.entrants.find((entrant) => entrant.id === 'entry-4')!
+    const event = buildDrawnEvent({
+      entrants: original.entrants.filter((entrant) => entrant.id !== retained.id),
+      retainedEntrants: [retained],
+    })
+    const state = drawn(drawState(event))
+
+    expect(event.entrants).not.toContainEqual(retained)
+    expect(vsLines(state.groups[0].rounds)[0].lines).toContain('player.1 vs player.4')
+    expect(state.groups[0].entrants).toContainEqual(retained)
+  })
+
   it('names a side whose entry the event no longer lists as withdrawn — never as a uuid', () => {
     const event = buildDrawnEvent({
       // player.4 withdrew; their fixtures survive the withdrawal.

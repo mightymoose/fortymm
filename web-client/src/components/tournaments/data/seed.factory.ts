@@ -252,6 +252,7 @@ export function buildEvent(
     entryFee: 45,
     timezone: 'America/Chicago',
     entrants: buildEntrants(52),
+    retainedEntrants: [],
     entryState: { state: 'open' },
     slot: { date: '2026-06-13', start: '09:00', end: '18:00' },
     predicates: [],
@@ -302,10 +303,10 @@ export function buildEvent(
   // entrant, and a card test seeded from it would then be asserting the bug.
   const entryState: EventEntryState =
     overrides.entryState ??
-    (event.maxPlayers !== null && event.entrants.length >= event.maxPlayers
+    (event.maxPlayers !== null && event.entrants.length + event.retainedEntrants.length >= event.maxPlayers
       ? { state: 'event_full' }
       : { state: 'open' })
-  return { ...event, entryState, entered: event.entrants.length }
+  return { ...event, entryState, entered: event.entrants.length + event.retainedEntrants.length }
 }
 
 /**

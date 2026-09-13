@@ -404,3 +404,25 @@ async def test_uncut_retains_cancelled_call_history_and_still_blocks_parent_dele
         await delete_event(
             db_session, tournament_id=tournament.id, event_id=event.id, actor=owner
         )
+
+
+@pytest.mark.parametrize(
+    "status",
+    [TournamentStatus.published, TournamentStatus.live, TournamentStatus.archived],
+)
+async def test_publication_cannot_be_erased_by_resetting_status_before_delete(
+    db_session, default_league, status
+):
+    owner = await make_user(db_session, "publication-reset-owner")
+    tournament = await _make_tournament_at(
+        db_session, owner=owner, league=default_league, status=status, with_event=False
+    )
+    with pytest.raises(IntegrityError, match="publication history"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("UPDATE tournaments SET status='draft' WHERE id=:id"),
+                {"id": tournament.id},
+            )
+            await db_session.execute(
+                text("DELETE FROM tournaments WHERE id=:id"), {"id": tournament.id}
+            )

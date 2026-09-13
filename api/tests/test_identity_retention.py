@@ -321,3 +321,228 @@ async def test_retired_username_cannot_be_released_by_renaming(db_session):
     assert (
         await db_session.get(Player, player_id)
     ).username == "reserved-through-retirement"
+
+
+async def test_tournament_creation_rejects_actor_deactivated_since_authentication(
+    db_session,
+):
+    from app.identity_lifecycle import deactivate_account
+    from app.tournament_errors import InactiveTournamentActorError
+    from app.tournament_lifecycle import create_tournament
+    from tests._helpers import make_user
+    from tests.test_tournament_lifecycle import _GEOCODER, _payload
+
+    actor = await make_user(db_session, "inactive-create-owner")
+    await deactivate_account(db_session, actor.id)
+    await db_session.commit()
+    with pytest.raises(InactiveTournamentActorError):
+        await create_tournament(
+            db_session, actor=actor, payload=_payload(), geocoder=_GEOCODER
+        )
+
+
+async def test_normal_login_link_cannot_authenticate_an_inactive_account(
+    api_client, db_session
+):
+    from app.identity_lifecycle import reactivate_account
+    from tests._helpers import make_user
+    from tests.test_login import _issue_login_token
+
+    account = await make_user(db_session, "inactive-email-login")
+    account.email = "inactive-login@example.com"
+    await _issue_login_token(db_session, account, "inactive-old-link")
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"),
+        {"id": account.id},
+    )
+    await db_session.commit()
+    denied = await api_client.post(
+        "/v1/login/consume", json={"token": "inactive-old-link"}
+    )
+    assert denied.status_code == 400, denied.text
+    await reactivate_account(db_session, account.id)
+    await db_session.commit()
+    denied = await api_client.post(
+        "/v1/login/consume", json={"token": "inactive-old-link"}
+    )
+    assert denied.status_code == 400, denied.text
+
+
+async def test_erasure_cannot_retain_a_session_credential_at_commit(db_session):
+    from app.models.user_token import SessionToken
+
+    account = Account()
+    db_session.add(account)
+    await db_session.flush()
+    db_session.add(SessionToken(user_id=account.id, token=b"retained-erased-session"))
+    await db_session.commit()
+    with pytest.raises(IntegrityError, match="erased account credentials"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE accounts SET erased_at=clock_timestamp(), "
+                    "deactivated_at=clock_timestamp(), display_name='Erased account' "
+                    "WHERE id=:id"
+                ),
+                {"id": account.id},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("operation", ["insert", "reparent"])
+@pytest.mark.parametrize(
+    "table,column,columns,values",
+    [
+        (
+            "login_identities",
+            "account_id",
+            "id,account_id,issuer,provider,subject",
+            "gen_random_uuid(),:account,'retention','auth0','subject'",
+        ),
+        (
+            "account_session_tokens",
+            "user_id",
+            "id,user_id,token",
+            "gen_random_uuid(),:account,decode('abcd','hex')",
+        ),
+        (
+            "account_email_tokens",
+            "user_id",
+            "id,user_id,purpose,token,sent_to",
+            "gen_random_uuid(),:account,'login',decode('abcd','hex'),'person@example.com'",
+        ),
+        (
+            "account_email_tokens",
+            "target_account_id",
+            "id,user_id,target_account_id,purpose,token,sent_to",
+            "gen_random_uuid(),:other,:account,'merge',decode('abcd','hex'),'person@example.com'",
+        ),
+        (
+            "account_email_tokens",
+            "guest_account_id",
+            "id,user_id,guest_account_id,purpose,token,sent_to",
+            "gen_random_uuid(),:other,:account,'login',decode('abcd','hex'),'person@example.com'",
+        ),
+        (
+            "account_email_intents",
+            "user_id",
+            "user_id,purpose,sent_to",
+            ":account,'change','person@example.com'",
+        ),
+        (
+            "account_email_intents",
+            "target_account_id",
+            "user_id,target_account_id,purpose,sent_to",
+            ":other,:account,'merge','person@example.com'",
+        ),
+        (
+            "account_first_sign_in_intents",
+            "user_id",
+            "user_id,email",
+            ":account,'person@example.com'",
+        ),
+        (
+            "device_tokens",
+            "user_id",
+            "id,user_id,token,platform,environment",
+            "gen_random_uuid(),:account,'device','ios','sandbox'",
+        ),
+    ],
+)
+async def test_credentials_cannot_reference_erased_accounts(
+    db_session, operation, table, column, columns, values
+):
+    from app.identity_lifecycle import erase_account
+
+    erased, active, other = Account(), Account(), Account()
+    db_session.add_all([erased, active, other])
+    await db_session.commit()
+    await erase_account(db_session, erased.id)
+    await db_session.commit()
+    insert = text(f"INSERT INTO {table} ({columns}) VALUES ({values})")
+    if operation == "reparent":
+        await db_session.execute(insert, {"account": active.id, "other": other.id})
+        await db_session.commit()
+    with pytest.raises(IntegrityError, match="erased account credentials"):
+        async with db_session.begin_nested():
+            if operation == "insert":
+                await db_session.execute(
+                    insert, {"account": erased.id, "other": other.id}
+                )
+            else:
+                await db_session.execute(
+                    text(f"UPDATE {table} SET {column}=:erased WHERE {column}=:active"),
+                    {"erased": erased.id, "active": active.id},
+                )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("first", ["erasure", "credential"])
+async def test_erasure_serializes_with_concurrent_credential_attachment(
+    db_session, engine, first
+):
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    account = Account()
+    db_session.add(account)
+    await db_session.commit()
+    account_id = account.id
+    sessions = async_sessionmaker(engine)
+    async with sessions() as eraser, sessions() as issuer:
+        erase_pid = await eraser.scalar(text("SELECT pg_backend_pid()"))
+        issue_pid = await issuer.scalar(text("SELECT pg_backend_pid()"))
+        erase = text(
+            "UPDATE accounts SET erased_at=clock_timestamp(), "
+            "deactivated_at=clock_timestamp(), display_name='Erased account' "
+            "WHERE id=:id"
+        )
+        issue = text(
+            "INSERT INTO account_session_tokens(id,user_id,token) "
+            "VALUES(gen_random_uuid(),:id,decode('abef','hex'))"
+        )
+        if first == "erasure":
+            await eraser.execute(erase, {"id": account_id})
+            waiting = asyncio.create_task(issuer.execute(issue, {"id": account_id}))
+            blocker, blocked = erase_pid, issue_pid
+        else:
+            await issuer.execute(issue, {"id": account_id})
+            waiting = asyncio.create_task(eraser.execute(erase, {"id": account_id}))
+            blocker, blocked = issue_pid, erase_pid
+        try:
+            async with asyncio.timeout(5):
+                while blocker not in (
+                    await db_session.scalar(
+                        text("SELECT pg_blocking_pids(:pid)"), {"pid": blocked}
+                    )
+                ):
+                    if waiting.done():
+                        await waiting
+                        pytest.fail(
+                            "credential attachment and erasure did not serialize"
+                        )
+                    await asyncio.sleep(0.01)
+            if first == "erasure":
+                await eraser.commit()
+                with pytest.raises(IntegrityError, match="erased account credentials"):
+                    await waiting
+                await issuer.rollback()
+            else:
+                await issuer.commit()
+                await waiting
+                with pytest.raises(IntegrityError, match="erased account credentials"):
+                    await eraser.commit()
+                await eraser.rollback()
+        finally:
+            if not waiting.done():
+                waiting.cancel()
+                await asyncio.gather(waiting, return_exceptions=True)
+    assert await db_session.scalar(
+        text("SELECT count(*) FROM account_session_tokens WHERE user_id=:id"),
+        {"id": account_id},
+    ) == (0 if first == "erasure" else 1)
+    assert await db_session.scalar(
+        text("SELECT erased_at IS NOT NULL FROM accounts WHERE id=:id"),
+        {"id": account_id},
+    ) == (first == "erasure")

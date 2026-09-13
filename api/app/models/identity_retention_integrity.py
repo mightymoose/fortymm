@@ -48,6 +48,72 @@ IDENTITY_RETENTION_DDL = (
     """,
     """CREATE TRIGGER preserve_account_erasure BEFORE INSERT OR UPDATE ON accounts
     FOR EACH ROW EXECUTE FUNCTION preserve_account_erasure()""",
+    """
+    CREATE FUNCTION check_erased_account_credentials() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        IF EXISTS (SELECT 1 FROM accounts WHERE id=NEW.id AND erased_at IS NOT NULL)
+            AND (
+                EXISTS (SELECT 1 FROM login_identities WHERE account_id=NEW.id)
+                OR EXISTS (SELECT 1 FROM account_session_tokens WHERE user_id=NEW.id)
+                OR EXISTS (SELECT 1 FROM account_email_tokens WHERE user_id=NEW.id
+                    OR target_account_id=NEW.id OR guest_account_id=NEW.id)
+                OR EXISTS (SELECT 1 FROM account_email_intents WHERE user_id=NEW.id
+                    OR target_account_id=NEW.id)
+                OR EXISTS (SELECT 1 FROM account_first_sign_in_intents
+                    WHERE user_id=NEW.id)
+                OR EXISTS (SELECT 1 FROM device_tokens WHERE user_id=NEW.id)
+            ) THEN
+            RAISE EXCEPTION 'erased account credentials must be removed'
+                USING ERRCODE='23514';
+        END IF;
+        RETURN NULL;
+    END $$
+    """,
+    """CREATE CONSTRAINT TRIGGER check_erased_account_credentials
+    AFTER INSERT OR UPDATE ON accounts DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION check_erased_account_credentials()""",
+    """
+    CREATE FUNCTION guard_erased_account_credential() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    DECLARE account_row record;
+    BEGIN
+        -- SHARE conflicts with erasure's non-key UPDATE as well as its service
+        -- FOR UPDATE lock. Ordinary FK KEY SHARE would allow the race.
+        FOR account_row IN
+            SELECT a.id, a.erased_at FROM accounts a
+            WHERE a.id IN (
+                SELECT (to_jsonb(NEW)->>column_name)::uuid
+                FROM unnest(TG_ARGV) AS column_name
+            ) ORDER BY a.id FOR SHARE
+        LOOP
+            IF account_row.erased_at IS NOT NULL THEN
+                RAISE EXCEPTION 'erased account credentials cannot be attached'
+                    USING ERRCODE='23514';
+            END IF;
+        END LOOP;
+        RETURN NEW;
+    END $$
+    """,
+    """CREATE TRIGGER guard_erased_account_credential BEFORE INSERT OR UPDATE
+    ON login_identities FOR EACH ROW
+    EXECUTE FUNCTION guard_erased_account_credential('account_id')""",
+    """CREATE TRIGGER guard_erased_account_credential BEFORE INSERT OR UPDATE
+    ON account_session_tokens FOR EACH ROW
+    EXECUTE FUNCTION guard_erased_account_credential('user_id')""",
+    """CREATE TRIGGER guard_erased_account_credential BEFORE INSERT OR UPDATE
+    ON account_email_tokens FOR EACH ROW
+    EXECUTE FUNCTION guard_erased_account_credential(
+        'user_id', 'target_account_id', 'guest_account_id')""",
+    """CREATE TRIGGER guard_erased_account_credential BEFORE INSERT OR UPDATE
+    ON account_email_intents FOR EACH ROW
+    EXECUTE FUNCTION guard_erased_account_credential('user_id', 'target_account_id')""",
+    """CREATE TRIGGER guard_erased_account_credential BEFORE INSERT OR UPDATE
+    ON account_first_sign_in_intents FOR EACH ROW
+    EXECUTE FUNCTION guard_erased_account_credential('user_id')""",
+    """CREATE TRIGGER guard_erased_account_credential BEFORE INSERT OR UPDATE
+    ON device_tokens FOR EACH ROW
+    EXECUTE FUNCTION guard_erased_account_credential('user_id')""",
 )
 
 

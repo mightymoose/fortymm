@@ -735,11 +735,11 @@ export interface TournamentEvent {
    * `slot` times are in. The server does all timezone arithmetic; the client only
    * carries the name and shows it. */
   timezone: string
-  /** The registration count. Server-derived from the active entries — it is
-   * `entrants.length`, never a stored counter, so the count and the list it
-   * counts cannot disagree. Read it; never write it. */
+  /** Server-derived held registration count, including retained entrants. */
   entered: number
   entrants: Entrant[]
+  /** Still-entered players hidden from the active roster; retained for historical joins. */
+  retainedEntrants: Entrant[]
   /** What this event says about *the signed-in caller* entering it — server-
    * computed, never re-derived here (ADR-0783). Read it; never write it. */
   entryState: EventEntryState

@@ -1,3 +1,4 @@
+import { buildTimelineBoard } from './timeline'
 import {
   buildBracketDrawnEvent,
   buildDrawnEvent,
@@ -22,6 +23,23 @@ import {
 const at = (time: string) => `2026-06-13T${time}:00`
 
 describe('buildSchedule', () => {
+  it('names retained opponents in the schedule and player timeline', () => {
+    const original = buildDrawnEvent()
+    const retained = original.entrants.find((entrant) => entrant.id === 'entry-4')!
+    const event = buildDrawnEvent({
+      entrants: original.entrants.filter((entrant) => entrant.id !== retained.id),
+      retainedEntrants: [retained],
+      fixtures: [buildFixture({ entryAId: 'entry-1', entryBId: retained.id, tableId: 't1', scheduledStart: at('09:00') })],
+    })
+    const tournament = buildTournament({ events: [event] })
+    const schedule = buildSchedule(tournament, buildTables())
+    expect(schedule.tables[0].matches[0].b).toEqual({ kind: 'entrant', name: retained.username })
+    const board = buildTimelineBoard(tournament, buildTables())
+    expect(board.players.find((player) => player.username === 'player.1')!.bars[0].opponent)
+      .toBe(retained.username)
+    expect(board.players.map((player) => player.username)).toContain(retained.username)
+  })
+
   it('groups placed matches under their table, in predicted-time order', () => {
     const tournament = buildTournament({
       events: [

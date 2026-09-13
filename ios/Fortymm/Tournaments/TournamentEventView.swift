@@ -50,7 +50,7 @@ struct TournamentEventView: View {
                                     confirmingRecut = true
                                 }
                             }
-                                .buttonStyle(.borderedProminent).disabled(busy || event.entrants.count < 2)
+                                .buttonStyle(.borderedProminent).disabled(busy || event.entryCount < 2)
                         }
                         ForEach(event.stages.sorted { $0.position < $1.position }) { stage in
                             Text("Stage \(stage.position + 1) · \(stage.drawType.replacingOccurrences(of: "-", with: " ").capitalized)")

@@ -68,6 +68,27 @@ private final class TestLocationManager: CLLocationManager {
         precondition(tournaments[0].schedulePollSeconds == nil)
         print("PASS: near-me query, distances, eligibility rules, reservations, match settings and Swiss tiebreaks")
         let event = tournaments[0].events[0]
+        var retainedPayload = payload
+        var retainedEvent = eventPayload
+        retainedEvent["retained_entrants"] = retainedEvent["entrants"]
+        retainedEvent["entrants"] = [] as [[String: Any]]
+        retainedEvent["entered"] = 1
+        retainedEvent["max_players"] = 2
+        retainedPayload[0]["events"] = [retainedEvent]
+        let activeBody = TournamentTransport.body
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: retainedPayload), encoding: .utf8)!
+        let retainedTournament = try await service.list()[0]
+        let retained = retainedTournament.events[0]
+        precondition(retained.entrants.isEmpty, "Hidden players must stay out of the active roster")
+        precondition(retained.player(retained.fixtures[0].entryAId) == "alex", "Retained fixture participants must not be labelled withdrawn")
+        precondition(retained.player(retained.results?.rows?.first?.entryId) == "alex", "Results must retain historical player names")
+        precondition(retainedTournament.entryCount == 1, "Tournament counts must include retained registrations")
+        precondition(retained.capacityLabel == "1/2 players", "Capacity must use the server entered count")
+        let retainedSchedule = TournamentPlayerSchedule(events: [retained], fixtureOrder: retained.fixtures.map(\.id))
+        precondition(retainedSchedule.players.first?.username == "alex", "Player schedule sections must preserve retained participants")
+        precondition(retainedSchedule.fixturesByUser[event.entrants[0].userId] == retained.fixtures.map(\.id))
+        TournamentTransport.body = activeBody
+        print("PASS: hidden players retain fixture and results names without appearing in the roster")
         var roundTwoFailures: [String] = []
         if event.fixtureHeading(event.fixtures[0]) != "Round 1" { roundTwoFailures.append("Swiss fixtures show a structural group") }
         if TournamentCopy.entryFee("45.005", locale: Locale(identifier: "en_US")) != nil { roundTwoFailures.append("sub-cent fee admitted") }

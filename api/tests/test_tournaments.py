@@ -11328,9 +11328,11 @@ async def test_going_live_materializes_a_both_byes_round_two_fixture(
     )
 
 
+@pytest.mark.parametrize("retire_champion", [False, True])
 async def test_the_detail_bff_surfaces_live_standings_then_a_champion(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
+    retire_champion: bool,
 ) -> None:
     """The tournament-detail BFF carries each round-robin event's standings, derived
     live from its fixtures' completed matches (ADR-0788):
@@ -11390,6 +11392,29 @@ async def test_the_detail_bff_surfaces_live_standings_then_a_champion(
             rated=True,
         )
         (read,) = await _events_of(client, tournament_id)
+
+    if retire_champion:
+        from app.identity_lifecycle import retire_player
+
+        original_names = {
+            entrant["id"]: entrant["username"] for entrant in read["entrants"]
+        }
+        original_results = read["results"]
+        await retire_player(db_session, owner.player_id)
+        await db_session.commit()
+        (read,) = await _events_of(client, tournament_id)
+        assert read["entered"] == 3
+        assert len(read["entrants"]) == 2
+        assert [entrant["id"] for entrant in read["retained_entrants"]] == [str(e1.id)]
+        names = {
+            entrant["id"]: entrant["username"]
+            for entrant in read["entrants"] + read["retained_entrants"]
+        }
+        assert names == original_names
+        assert read["results"] == original_results
+        for fixture in read["fixtures"]:
+            assert fixture["entry_a_id"] in names
+            assert fixture["entry_b_id"] in names
 
     results = read["results"]
     assert results["kind"] == "standings"

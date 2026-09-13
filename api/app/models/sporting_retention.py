@@ -68,6 +68,13 @@ SPORTING_RETENTION_DDL = (
     CREATE FUNCTION preserve_published_tournament() RETURNS trigger
     LANGUAGE plpgsql AS $$
     BEGIN
+        IF TG_OP = 'UPDATE' THEN
+            IF OLD.status <> 'draft' AND NEW.status = 'draft' THEN
+                RAISE EXCEPTION 'tournament publication history must be retained'
+                    USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END IF;
         IF OLD.status <> 'draft' THEN
             RAISE EXCEPTION 'only unused draft tournaments can be deleted'
                 USING ERRCODE='23514';
@@ -75,7 +82,8 @@ SPORTING_RETENTION_DDL = (
         RETURN OLD;
     END $$
     """,
-    """CREATE TRIGGER preserve_published_tournament BEFORE DELETE ON tournaments
+    """CREATE TRIGGER preserve_published_tournament
+    BEFORE DELETE OR UPDATE OF status ON tournaments
     FOR EACH ROW EXECUTE FUNCTION preserve_published_tournament()""",
     """
     CREATE FUNCTION retain_match_play() RETURNS trigger LANGUAGE plpgsql AS $$

@@ -15,6 +15,7 @@ same Account, subject to its current authority: revoked grants stay revoked and
 transferred ownership stays transferred. Deactivation does not retire a Player,
 withdraw an entry, transfer tournament ownership, or disable another manager.
 An inactive owning Account retains its reference but cannot exercise authority.
+Outstanding login links cannot mint a session during deactivation.
 
 Account erasure removes identifying Account data and credentials while retaining
 an inert identity for historical attribution. It is distinct from reversible
@@ -23,7 +24,9 @@ cannot use ordinary reactivation. A later sign-in using the same email does not
 automatically reclaim the old Player, permissions, or ownership. Verified recovery
 is a separate workflow. This decision does not establish a legal retention period
 or claim that retaining an Account ID makes all related sporting data anonymous.
-Player personal-data handling remains distinct from Account erasure.
+Player personal-data handling remains distinct from Account erasure. Database
+validation covers credential child rows as well as Account columns, so direct SQL
+cannot retain or attach login identities, tokens, or sign-in intents to an erased Account.
 
 Player retirement is reversible and keeps the same identity, reserved username,
 membership history, match results, and rating inputs. Retired and merged Players
@@ -32,7 +35,10 @@ and current leaderboards. Historical results remain resolvable. Retirement alone
 does not alter results or trigger a rating reset. Restoration applies normal
 listing and leaderboard eligibility and does not re-enter withdrawn competitions
 or recreate revoked access. Restoring a merged Player requires separate merge
-reconciliation; it is not ordinary restoration.
+reconciliation; it is not ordinary restoration. The event response separates the
+visible `entrants` roster from `retained_entrants`, a lookup for hidden identities
+referenced by fixtures and results. Clients resolve historical names through both
+lists and use the server's `entered` count for held registrations and capacity.
 
 The explicit Account/Player merge rules remain in force: retained attribution and
 membership identify their original subjects, while current sporting identity
@@ -44,7 +50,8 @@ the review of every foreign-key delete action.
 
 ## Sporting and aggregate retention
 
-Only an unused draft tournament may be hard-deleted. A registration, including a
+Only an unused draft tournament may be hard-deleted. Direct SQL cannot roll a
+previously published tournament back to draft to evade retention. A registration, including a
 withdrawn registration, protects its event and tournament even without play.
 Every persisted table call, move, or cancellation protects its tournament,
 including a pristine call cancelled before scoring. Recorded play, proposals,
@@ -85,7 +92,7 @@ the same retention rule when integrated.
 ## Scope and verification
 
 Use database constraints and triggers plus the minimum compatible backend
-operations and read filters. No new public lifecycle endpoints, UI, deployments,
+operations and read filters. No new public lifecycle endpoints, lifecycle UI, deployments,
 automatic identity verification, or competition eligibility policy is introduced.
 A follow-up will let competition owners choose identity requirements, including
 how to handle a new competitive identity after erasure. Retaining sporting inputs

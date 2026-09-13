@@ -1723,6 +1723,11 @@ async def consume_login_token(
         await db.commit()
         raise _invalid_or_expired_exception()
 
+    if not user.is_active:
+        await discard_login_action(db, user.id)
+        await db.commit()
+        raise _invalid_or_expired_exception()
+
     first_sign_in = token_row.purpose == EmailPurpose.first_sign_in
     if first_sign_in:
         if not await email_action_is_valid(db, token_row):

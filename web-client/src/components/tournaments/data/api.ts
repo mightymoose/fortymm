@@ -127,9 +127,19 @@ export function apiToEntrant(e: TournamentEntrantRead): Entrant {
   }
 }
 
+const retainedEntrantsSchema = z.object({
+  retained_entrants: z.array(z.object({
+    id: z.string(),
+    user_id: z.string(),
+    username: z.string(),
+    seed: z.number().int().nullable(),
+    rating: z.number().int().nullable(),
+  })).default([]),
+})
+
 /** Map an API event payload to the prototype's `TournamentEvent`. `entered`
- * comes straight off the wire: the server derives it from the same active
- * entries it lists in `entrants`, so the two always agree. So does
+ * comes straight off the wire, including held registrations hidden from the
+ * active roster. So does
  * `entry_state` — whether this event has room for the caller, and whether their
  * rating satisfies its rules, is the server's judgement and never the client's
  * (ADR-0783). */
@@ -160,6 +170,7 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
     timezone: e.timezone,
     entered: e.entered,
     entrants: e.entrants.map(apiToEntrant),
+    retainedEntrants: retainedEntrantsSchema.parse(e).retained_entrants.map(apiToEntrant),
     entryState: apiToEntryState(e.entry_state),
     slot: e.slot,
     predicates: e.predicates.map(apiToPredicate),
