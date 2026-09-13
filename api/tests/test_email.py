@@ -1904,14 +1904,18 @@ async def test_rate_limit_key_hashes_session_cookie(
     def _decode(value: object) -> str:
         return value.decode() if isinstance(value, bytes) else str(value)
 
-    # pyrate-limiter stores per-identifier state as ZSET members under the
-    # bucket_key. Scan both the keys themselves and every ZSET member so
-    # a cookie that landed in either surface fails the test.
+    # Scan keys, pyrate-limiter ZSET members, and expiring admission counters
+    # so a cookie stored on any of these surfaces fails the test.
     keys = [_decode(k) for k in await rate_limiter_fakeredis.keys("*")]
     members: list[str] = []
     for key in keys:
-        for member in await rate_limiter_fakeredis.zrange(key, 0, -1):
-            members.append(_decode(member))
+        value_type = _decode(await rate_limiter_fakeredis.type(key))
+        if value_type == "zset":
+            for member in await rate_limiter_fakeredis.zrange(key, 0, -1):
+                members.append(_decode(member))
+        else:
+            assert value_type == "string", f"Uninspected Redis value type: {value_type}"
+            members.append(_decode(await rate_limiter_fakeredis.get(key)))
 
     for token in keys + members:
         assert raw_cookie not in token, (
