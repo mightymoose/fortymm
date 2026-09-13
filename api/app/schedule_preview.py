@@ -107,6 +107,7 @@ from datetime import UTC, datetime
 from math import ceil, floor
 from typing import assert_never
 
+from app.competition_rules import effective_draw_settings, effective_match_settings
 from app.draws import (
     DegenerateDraw,
     DrawError,
@@ -497,11 +498,9 @@ def build_preview_snapshot(
     next_entrant = 1
     plans: list[_EventPlan | _SkippedEvent] = []
     for event in tournament.events:
-        # Off the event's ``draw_settings`` row — the one home of the draw type
-        # (ADR "an event's draw configuration is a row, not a column") — bound once
-        # so the exhaustive ``match`` below narrows a name rather than re-deriving it
-        # per branch.
-        draw_type = event.draw_settings.draw_type
+        # A cut event previews the same interpretation as its retained rule snapshot.
+        # Before cut, both strategy and duration still use editable planning settings.
+        draw_type = effective_draw_settings(event).draw_type
         match draw_type:
             case DrawType.round_robin | DrawType.rr_then_ko:
                 # The real draw, dispatched exactly as production's ``cut_draw`` does.
@@ -526,7 +525,7 @@ def build_preview_snapshot(
                     planned = _EventPlan(
                         event=event,
                         reservations=event_reservations(event),
-                        settings=MatchSettings.model_validate(event.match_settings),
+                        settings=effective_match_settings(event),
                         fixtures=strategy_for_event(event).plan_initial(
                             draw_config(event), ordered_entrants
                         ),

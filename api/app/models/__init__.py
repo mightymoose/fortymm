@@ -155,6 +155,7 @@ __all__ = [
 ]
 
 from app.models import advancement_integrity as advancement_integrity
+from app.models import competition_rule_integrity as competition_rule_integrity
 from app.models import draw_visibility as draw_visibility
 from app.models import entry_supersession as entry_supersession
 from app.models import identity_retention_integrity as identity_retention_integrity

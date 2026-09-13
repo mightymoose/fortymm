@@ -494,10 +494,13 @@ async def _stage_column(
         await engine.dispose()
 
 
-async def _stage_fk(url: str, column_name: str) -> sa.Row[tuple[str, str, str]] | None:
+async def _stage_fk(
+    url: str, column_name: str, target_table: str
+) -> sa.Row[tuple[str, str, str]] | None:
     """The foreign key on the migrated database's ``tournament_event_stages
     .<column_name>`` column — the table and column it targets, and its delete rule —
-    mirroring ``_draw_type_id_fk`` above for the stages table's own two FKs."""
+    scoped to its target table because ``event_id`` also participates in the
+    composite rules-revision foreign key."""
     engine = create_async_engine(url)
     try:
         async with engine.connect() as conn:
@@ -518,8 +521,9 @@ async def _stage_fk(url: str, column_name: str) -> sa.Row[tuple[str, str, str]] 
                         " WHERE tc.table_name = 'tournament_event_stages'"
                         "   AND tc.constraint_type = 'FOREIGN KEY'"
                         "   AND kcu.column_name = :column_name"
+                        "   AND ccu.table_name = :target_table"
                     ),
-                    {"column_name": column_name},
+                    {"column_name": column_name, "target_table": target_table},
                 )
             ).one_or_none()
     finally:
@@ -589,7 +593,7 @@ async def test_migration_creates_the_tournament_event_stages_table(
     assert draw_type_id.data_type == "uuid", draw_type_id
     assert draw_type_id.is_nullable == "NO", draw_type_id
 
-    event_fk = await _stage_fk(migrated_database_url, "event_id")
+    event_fk = await _stage_fk(migrated_database_url, "event_id", "tournament_events")
     assert event_fk is not None, (
         "migrated database has no foreign key on tournament_event_stages.event_id"
     )
@@ -597,7 +601,7 @@ async def test_migration_creates_the_tournament_event_stages_table(
     assert event_fk.column_name == "id", event_fk
     assert event_fk.delete_rule == "CASCADE", event_fk
 
-    draw_type_fk = await _stage_fk(migrated_database_url, "draw_type_id")
+    draw_type_fk = await _stage_fk(migrated_database_url, "draw_type_id", "draw_types")
     assert draw_type_fk is not None, (
         "migrated database has no foreign key on tournament_event_stages.draw_type_id"
     )

@@ -4829,23 +4829,17 @@ async def test_currency_of_no_events_is_an_empty_answer_and_no_query(
     assert statements == [], statements
 
 
-def _draw_type_reads(statements: list[str]) -> list[str]:
-    """The statements that read the events' draw types — the third one, by the only
-    column that is unique to it: ``draw_type_id`` is the column this statement
-    selects directly (``draw_currency_by_event`` maps the id to a ``DrawType`` in
-    Python via ``app.models.draw_type.DRAW_TYPES_BY_ID``, not by joining onto
-    ``draw_types`` — ADR 20260815 retired that join), and no other statement in
-    this loader's batch names the column at all."""
-    return [statement for statement in statements if "draw_type_id" in statement]
+def _format_rule_reads(statements: list[str]) -> list[str]:
+    """Identify the batched frozen-rule lookup used for entrant allowance."""
+    return [statement for statement in statements if "format_rules" in statement]
 
 
-async def test_currency_asks_for_draw_types_only_where_a_draw_was_cut(
+async def test_currency_asks_for_format_rules_only_where_a_draw_was_cut(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
     engine: AsyncEngine,
 ) -> None:
-    """The draw-type statement is issued for the events that are **cut**, and not at all
-    when none of them is.
+    """Read frozen rules only for cut events, and skip the query when none is cut.
 
     The draw type is read for one purpose —
     :func:`~app.draws.unseated_entrant_allowance` — which only the ``current``/``stale``
@@ -4874,7 +4868,7 @@ async def test_currency_asks_for_draw_types_only_where_a_draw_was_cut(
         before_any_cut = await draw_currency_by_event(session, event_ids)
 
     assert before_any_cut == dict.fromkeys(event_ids, DrawCurrency.uncut)
-    assert _draw_type_reads(statements) == [], statements
+    assert _format_rule_reads(statements) == [], statements
     assert len(statements) == 2, statements
 
     await _cut_the_draw(client, tournament_id, first)
@@ -4890,8 +4884,8 @@ async def test_currency_asks_for_draw_types_only_where_a_draw_was_cut(
     # The expanded ``IN`` renders one bind placeholder per id, so the placeholders are
     # what the loader asked about: one, the event that is cut, and not the uncut one
     # sitting beside it in the same batch.
-    (draw_type_read,) = _draw_type_reads(statements)
-    assert draw_type_read.count("::UUID") == 1, draw_type_read
+    (format_rule_read,) = _format_rule_reads(statements)
+    assert format_rule_read.count("::UUID") == 1, format_rule_read
 
 
 # ----- the league a tournament is judged on (ADR-0783) ----------------------
@@ -6650,7 +6644,7 @@ async def _make_match(db_session: AsyncSession, creator: User, league: League) -
     broken.
     """
     match = Match(
-        match_settings=MatchSettings(team_size=1, best_of=5, affects_rating=False),
+        match_settings=MatchSettings(team_size=1, best_of=5, affects_rating=True),
         league_id=league.id,
         created_by_user_id=creator.id,
     )
@@ -12726,7 +12720,7 @@ async def _call_fixture_directly(
     tournament = await db_session.get(Tournament, uuid.UUID(tournament_id))
     assert tournament is not None
     match = Match(
-        match_settings=MatchSettings(team_size=1, best_of=1, affects_rating=False),
+        match_settings=MatchSettings(team_size=1, best_of=5, affects_rating=True),
         league_id=tournament.league_id,
         created_by_user_id=tournament.created_by_user_id,
         status=MatchStatus.in_progress,
@@ -13356,3 +13350,26 @@ async def test_tournament_eligibility_reads_primary_player_rating(
     )
     (event,) = await _events_of(client, tournament_id)
     assert event["entry_state"] == _ineligible("pr-cap", 1875.0)
+
+
+@pytest.mark.parametrize("event_format", ["doubles", "teams"])
+async def test_cut_event_format_patch_requires_uncut(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    event_format: str,
+) -> None:
+    client, _ = authed_client
+    tournament_id, (event,) = await _tournament_with_events(
+        client, _rr_payload(RESERVATION_A)
+    )
+    await _seed_field(db_session, event["id"], 4)
+    assert (await client.post(_draw_url(tournament_id, event["id"]))).status_code == 201
+    response = await patch_event(
+        client, tournament_id, event["id"], {"format": event_format}
+    )
+    assert response.status_code == 409, response.text
+    assert "Uncut the draw first" in response.json()["detail"]
+    unchanged = await patch_event(
+        client, tournament_id, event["id"], {"format": "singles"}
+    )
+    assert unchanged.status_code == 200, unchanged.text

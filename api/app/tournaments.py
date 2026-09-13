@@ -78,6 +78,7 @@ from app.tournament_errors import (
     InactiveTournamentActorError,
     LeagueNotEditableError,
     LeagueNotFoundError,
+    MatchRulesFrozenError,
     NoDefaultLeagueError,
     NoDrawnEventsError,
     NonSinglesEntryError,
@@ -969,7 +970,7 @@ async def update_event(
         # words rather than to nothing). Same shape as the structured 401s and the
         # score-write conflict — one status, told apart by a code, never by prose.
         raise _event_version_conflict(exc) from exc
-    except (GroupSetFrozenError, DrawTypeFrozenError) as exc:
+    except (GroupSetFrozenError, DrawTypeFrozenError, MatchRulesFrozenError) as exc:
         # Both freezes carry the exact 409 sentence the handler used to compose inline —
         # rebuilt verbatim with ``str(exc)``.
         raise HTTPException(status_code=409, detail=str(exc)) from exc

@@ -1745,6 +1745,287 @@ SPORTING_RETENTION_DDL = (
     ON match_recorded_play FOR EACH ROW EXECUTE FUNCTION preserve_match_play()""",
 )
 
+COMPETITION_RULE_INTEGRITY_DDL = (
+    """
+    CREATE FUNCTION bind_competition_stage_rules() RETURNS trigger LANGUAGE plpgsql
+            AS $$
+    BEGIN
+        UPDATE tournament_event_stages SET rule_revision_id=NEW.id
+            WHERE event_id=NEW.event_id AND retired_at IS NULL;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER bind_competition_stage_rules AFTER INSERT ON
+            tournament_draw_revisions
+    FOR EACH ROW EXECUTE FUNCTION bind_competition_stage_rules()
+    """,
+    """
+    CREATE FUNCTION match_rules_agree(settings match_settings, rules jsonb)
+    RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+        SELECT (settings.rule_version, settings.team_size, settings.best_of,
+            settings.affects_rating,
+                settings.verification_policy::text, settings.retirement_window)
+        IS NOT DISTINCT FROM
+            ((rules->>'rule_version')::smallint, (rules->>'team_size')::smallint,
+            (rules->>'best_of')::smallint,
+             (rules->>'affects_rating')::boolean, rules->>'verification_policy',
+             (rules->>'retirement_window')::interval)
+    $$
+    """,
+    """
+    CREATE FUNCTION check_match_rule_source() RETURNS trigger LANGUAGE plpgsql AS $$
+    DECLARE rules jsonb;
+    BEGIN
+        IF NEW.source_rule_revision_id IS NOT NULL THEN
+            SELECT match_rules INTO STRICT rules FROM tournament_draw_revisions
+                WHERE id=NEW.source_rule_revision_id;
+            IF NOT match_rules_agree(NEW, rules) THEN
+                RAISE EXCEPTION 'match rules must agree with their source revision'
+                    USING ERRCODE='23514';
+            END IF;
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER check_match_rule_source BEFORE INSERT ON match_settings
+    FOR EACH ROW EXECUTE FUNCTION check_match_rule_source()
+    """,
+    """
+    CREATE FUNCTION check_fixture_rules() RETURNS trigger LANGUAGE plpgsql AS $$
+    DECLARE settings match_settings; rules jsonb; stage_revision uuid;
+    BEGIN
+        SELECT rule_revision_id INTO STRICT stage_revision FROM tournament_event_stages
+            WHERE id=NEW.stage_id;
+        IF stage_revision IS DISTINCT FROM NEW.draw_revision_id THEN
+            RAISE EXCEPTION 'fixture stage rules must agree with its draw revision'
+                USING ERRCODE='23514';
+        END IF;
+        IF NEW.match_id IS NOT NULL THEN
+            SELECT ms.* INTO STRICT settings FROM match_settings ms
+                JOIN matches m ON m.match_settings_id=ms.id WHERE m.id=NEW.match_id;
+            SELECT match_rules INTO STRICT rules FROM tournament_draw_revisions
+                WHERE id=NEW.draw_revision_id;
+            IF NOT match_rules_agree(settings, rules) OR
+                (settings.source_rule_revision_id IS NOT NULL AND
+                 settings.source_rule_revision_id <> NEW.draw_revision_id) THEN
+                RAISE EXCEPTION 'fixture match rules must agree with its draw revision'
+                    USING ERRCODE='23514';
+            END IF;
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER check_fixture_rules AFTER INSERT OR UPDATE OF match_id,
+            draw_revision_id, stage_id
+    ON tournament_fixtures FOR EACH ROW EXECUTE FUNCTION check_fixture_rules()
+    """,
+    """
+    CREATE FUNCTION check_match_rule_fixture() RETURNS trigger LANGUAGE plpgsql AS $$
+    DECLARE source_revision uuid; target_match uuid;
+    BEGIN
+        IF TG_TABLE_NAME = 'matches' THEN
+            target_match := NEW.id;
+        ELSE
+            target_match := OLD.match_id;
+        END IF;
+        SELECT ms.source_rule_revision_id INTO source_revision
+            FROM matches m JOIN match_settings ms ON ms.id=m.match_settings_id
+            WHERE m.id=target_match FOR UPDATE OF m;
+        IF source_revision IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM tournament_fixtures
+            WHERE match_id=target_match AND draw_revision_id=source_revision
+        ) THEN
+            RAISE EXCEPTION 'match source revision requires its fixture'
+                USING ERRCODE='23514';
+        END IF;
+        RETURN NULL;
+    END $$
+    """,
+    """
+    CREATE CONSTRAINT TRIGGER match_rule_fixture_owner
+    AFTER INSERT OR UPDATE OF id, match_settings_id ON matches
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+    EXECUTE FUNCTION check_match_rule_fixture()
+    """,
+    """
+    CREATE CONSTRAINT TRIGGER preserve_fixture_rule_owner
+    AFTER DELETE OR UPDATE OF match_id, draw_revision_id ON tournament_fixtures
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+    EXECUTE FUNCTION check_match_rule_fixture()
+    """,
+    """
+    CREATE FUNCTION preserve_rule_sources_on_truncate() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        IF EXISTS (
+            SELECT 1 FROM matches m JOIN match_settings ms ON ms.id=m.match_settings_id
+            WHERE ms.source_rule_revision_id IS NOT NULL
+        ) THEN
+            RAISE EXCEPTION 'match source revision requires its fixture'
+                USING ERRCODE='23514';
+        END IF;
+        RETURN NULL;
+    END $$
+    """,
+    """
+    CREATE TRIGGER preserve_rule_sources_on_truncate AFTER TRUNCATE
+    ON tournament_fixtures FOR EACH STATEMENT
+    EXECUTE FUNCTION preserve_rule_sources_on_truncate()
+    """,
+    """
+    CREATE FUNCTION preserve_stage_rules() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        IF OLD.rule_revision_id IS NOT NULL AND
+            (NEW.rule_revision_id, NEW.event_id, NEW.draw_type_id, NEW.position)
+            IS DISTINCT FROM (OLD.rule_revision_id, OLD.event_id, OLD.draw_type_id,
+            OLD.position)
+        THEN
+            RAISE EXCEPTION 'stage rules binding is immutable' USING ERRCODE='23514';
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER preserve_stage_rules BEFORE UPDATE ON tournament_event_stages
+    FOR EACH ROW EXECUTE FUNCTION preserve_stage_rules()
+    """,
+    """
+    CREATE FUNCTION preserve_match_rule_reference() RETURNS trigger LANGUAGE plpgsql
+            AS $$
+    BEGIN
+        IF NEW.match_settings_id IS DISTINCT FROM OLD.match_settings_id THEN
+            RAISE EXCEPTION 'match rules reference is immutable' USING ERRCODE='23514';
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER immutable_match_rule_reference BEFORE UPDATE OF match_settings_id
+            ON matches
+    FOR EACH ROW EXECUTE FUNCTION preserve_match_rule_reference()
+    """,
+    """
+    CREATE FUNCTION capture_competition_rules() RETURNS trigger LANGUAGE plpgsql AS $$
+    DECLARE event_row tournament_events; draw_key text;
+    BEGIN
+        SELECT * INTO STRICT event_row FROM tournament_events WHERE id=NEW.event_id;
+        SELECT key INTO STRICT draw_key FROM draw_types WHERE id=event_row.draw_type_id;
+        IF event_row.format = 'teams' THEN
+            RAISE EXCEPTION 'team competition rules are not supported' USING
+            ERRCODE='23514';
+        END IF;
+        IF NEW.match_rules IS NULL THEN
+            NEW.match_rules := jsonb_build_object(
+                'rule_version', 1, 'team_size', CASE WHEN event_row.format='doubles'
+            THEN 2 ELSE 1 END,
+                'best_of', event_row.match_settings->'length_games',
+                'affects_rating', event_row.match_settings->'rated',
+                'verification_policy', 'none', 'retirement_window', 'P7D');
+        END IF;
+        IF NEW.format_rules IS NULL THEN
+            NEW.format_rules := jsonb_build_object('version', 1,
+                'draw_type', draw_key, 'settings', event_row.draw_settings);
+        END IF;
+        IF (jsonb_typeof(NEW.match_rules) = 'object'
+            AND NEW.match_rules ?& ARRAY['rule_version','team_size','best_of',
+            'affects_rating','verification_policy','retirement_window']
+            AND NEW.match_rules - ARRAY['rule_version','team_size','best_of',
+            'affects_rating','verification_policy','retirement_window'] = '{}'::jsonb
+            AND NEW.match_rules->'rule_version' = '1'::jsonb
+            AND NEW.match_rules->'team_size' IN ('1'::jsonb, '2'::jsonb)
+            AND jsonb_typeof(NEW.match_rules->'best_of') = 'number'
+            AND NEW.match_rules->'best_of' IN ('1'::jsonb, '3'::jsonb,
+                '5'::jsonb, '7'::jsonb)
+            AND jsonb_typeof(NEW.match_rules->'affects_rating') = 'boolean'
+            AND NEW.match_rules->>'verification_policy' IN ('none','self_report',
+            'opponent_confirms','all_players_confirm')
+            AND jsonb_typeof(NEW.match_rules->'retirement_window') IN ('null',
+            'string')) IS NOT TRUE THEN
+            RAISE EXCEPTION 'invalid match rule snapshot' USING ERRCODE='23514';
+        END IF;
+        IF NEW.match_rules->'team_size' IS DISTINCT FROM
+            to_jsonb(CASE WHEN event_row.format='doubles' THEN 2 ELSE 1 END) OR
+            NEW.match_rules->'best_of' IS DISTINCT FROM
+                event_row.match_settings->'length_games' OR
+            NEW.match_rules->'affects_rating' IS DISTINCT FROM
+                event_row.match_settings->'rated' THEN
+            RAISE EXCEPTION 'match rules must agree with the event' USING
+            ERRCODE='23514';
+        END IF;
+        IF NEW.match_rules->'retirement_window' <> 'null'::jsonb AND
+            (NEW.match_rules->>'retirement_window') !~
+            '^P([0-9]+D)?(T([0-9]+H)?([0-9]+M)?([0-9]+([.][0-9]+)?S)?)?$' THEN
+            RAISE EXCEPTION 'invalid match rule duration' USING ERRCODE='23514';
+        END IF;
+        IF (NEW.match_rules->>'best_of')::integer % 2 <> 1 OR
+            ((NEW.match_rules->>'retirement_window')::interval <= interval '0') THEN
+            RAISE EXCEPTION 'invalid match rule values' USING ERRCODE='23514';
+        END IF;
+        IF (jsonb_typeof(NEW.format_rules) = 'object'
+            AND NEW.format_rules ?& ARRAY['version','draw_type','settings']
+            AND NEW.format_rules - ARRAY['version','draw_type','settings'] = '{}'::jsonb
+            AND NEW.format_rules->'version' = '1'::jsonb
+            AND NEW.format_rules->>'draw_type' IN ('round-robin','single-elim',
+            'rr-then-ko','swiss')
+            AND jsonb_typeof(NEW.format_rules->'settings') = 'object') IS NOT TRUE THEN
+            RAISE EXCEPTION 'invalid format rule snapshot' USING ERRCODE='23514';
+        END IF;
+        IF NEW.format_rules->>'draw_type' IS DISTINCT FROM draw_key OR
+            NEW.format_rules->'settings' IS DISTINCT FROM event_row.draw_settings THEN
+            RAISE EXCEPTION 'format rules must agree with the event' USING
+            ERRCODE='23514';
+        END IF;
+        IF (CASE NEW.format_rules->>'draw_type'
+            WHEN 'round-robin' THEN NEW.format_rules->'settings' = '{}'::jsonb
+            WHEN 'single-elim' THEN NEW.format_rules->'settings' = '{}'::jsonb
+            WHEN 'rr-then-ko' THEN
+                ((NEW.format_rules->'settings') - 'qualifiers_per_group' = '{}'::jsonb
+                 AND jsonb_typeof(NEW.format_rules->'settings'->
+                     'qualifiers_per_group') = 'number'
+                 AND NEW.format_rules->'settings'->>'qualifiers_per_group' ~
+            '^[1-9][0-9]*$')
+            WHEN 'swiss' THEN
+                ((NEW.format_rules->'settings') - 'rounds' = '{}'::jsonb
+                 AND jsonb_typeof(NEW.format_rules->'settings'->'rounds') = 'number'
+                 AND NEW.format_rules->'settings'->>'rounds' ~ '^[1-9][0-9]*$')
+            ELSE false END) IS NOT TRUE THEN
+            RAISE EXCEPTION 'invalid format rule settings' USING ERRCODE='23514';
+        END IF;
+        IF NEW.format_rules->>'draw_type' = 'swiss' AND
+            (NEW.format_rules->'settings'->>'rounds')::integer > 32 THEN
+            RAISE EXCEPTION 'invalid format rule rounds' USING ERRCODE='23514';
+        END IF;
+        IF NEW.format_rules->>'draw_type' = 'rr-then-ko' AND
+            (NEW.format_rules->'settings'->>'qualifiers_per_group')::integer > 1000 THEN
+            RAISE EXCEPTION 'invalid format rule qualifiers' USING ERRCODE='23514';
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER capture_competition_rules BEFORE INSERT ON tournament_draw_revisions
+    FOR EACH ROW EXECUTE FUNCTION capture_competition_rules()
+    """,
+    """
+    CREATE FUNCTION preserve_match_rules() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        IF NEW IS DISTINCT FROM OLD THEN
+            RAISE EXCEPTION 'match rules are immutable' USING ERRCODE='23514';
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """
+    CREATE TRIGGER preserve_match_rules BEFORE UPDATE ON match_settings
+    FOR EACH ROW EXECUTE FUNCTION preserve_match_rules()
+    """,
+)
+
+
+
 def upgrade() -> None:
     # ### commands auto generated by Alembic - please adjust! ###
     op.create_table(
@@ -4740,6 +5021,8 @@ def upgrade() -> None:
         created_at TIMESTAMP WITH TIME ZONE DEFAULT clock_timestamp() NOT NULL,
         retired_at TIMESTAMP WITH TIME ZONE,
         retained_fixture_count BIGINT DEFAULT 0 NOT NULL,
+        match_rules JSONB NOT NULL,
+        format_rules JSONB NOT NULL,
         configuration JSONB DEFAULT '{}' ::jsonb NOT NULL,
         PRIMARY KEY (id),
         CONSTRAINT ck_draw_revision_fixture_count CHECK (retained_fixture_count >= 0),
@@ -4989,9 +5272,9 @@ def upgrade() -> None:
         RETURN OLD;
         END IF;
         IF (NEW.id, NEW.event_id, NEW.created_at, NEW.configuration,
-            NEW.created_by_account_id)
+            NEW.created_by_account_id, NEW.match_rules, NEW.format_rules)
         IS DISTINCT FROM (OLD.id, OLD.event_id, OLD.created_at, OLD.configuration,
-            OLD.created_by_account_id)
+            OLD.created_by_account_id, OLD.match_rules, OLD.format_rules)
         OR (OLD.retired_at IS NOT NULL AND
         (to_jsonb(NEW) - 'retained_fixture_count') IS DISTINCT FROM
         (to_jsonb(OLD) - 'retained_fixture_count'))
@@ -6322,6 +6605,57 @@ def upgrade() -> None:
     )
     op.create_index("ix_required_repair_attempts_repair_id", "required_repair_attempts", ["repair_id"])
 
+    op.add_column(
+        "tournament_event_stages",
+        sa.Column("rule_revision_id", sa.UUID(), nullable=True),
+    )
+    op.create_index(
+        "ix_tournament_event_stages_rule_revision_id",
+        "tournament_event_stages",
+        ["rule_revision_id"],
+    )
+    op.create_foreign_key(
+        "fk_stage_owned_rule_revision",
+        "tournament_event_stages",
+        "tournament_draw_revisions",
+        ["event_id", "rule_revision_id"],
+        ["event_id", "id"],
+        ondelete="RESTRICT",
+    )
+    op.add_column(
+        "match_settings", sa.Column("source_rule_revision_id", sa.UUID(), nullable=True)
+    )
+    op.create_index(
+        "ix_match_settings_source_rule_revision_id",
+        "match_settings",
+        ["source_rule_revision_id"],
+    )
+    op.create_foreign_key(
+        "fk_match_settings_source_rule_revision",
+        "match_settings",
+        "tournament_draw_revisions",
+        ["source_rule_revision_id"],
+        ["id"],
+        ondelete="CASCADE",
+    )
+    op.add_column(
+        "match_settings",
+        sa.Column(
+            "rule_version",
+            sa.SmallInteger(),
+            nullable=False,
+            server_default=sa.text("1"),
+        ),
+    )
+    op.create_check_constraint(
+        "ck_match_settings_rule_version", "match_settings", "rule_version = 1"
+    )
+    op.create_unique_constraint(
+        "uq_matches_match_settings_id", "matches", ["match_settings_id"]
+    )
+    for statement in COMPETITION_RULE_INTEGRITY_DDL:
+        op.execute(statement)
+
 
     op.create_table(
         "match_recorded_play",
@@ -6345,6 +6679,18 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_table("match_recorded_participants")
     op.drop_table("match_recorded_play")
+    op.execute("DROP FUNCTION bind_competition_stage_rules() CASCADE")
+    op.execute("DROP FUNCTION check_fixture_rules() CASCADE")
+    op.execute("DROP FUNCTION check_match_rule_source() CASCADE")
+    op.execute("DROP FUNCTION check_match_rule_fixture() CASCADE")
+    op.execute("DROP FUNCTION preserve_rule_sources_on_truncate() CASCADE")
+    op.execute("DROP FUNCTION match_rules_agree(match_settings,jsonb) CASCADE")
+    op.execute("DROP FUNCTION preserve_stage_rules() CASCADE")
+    op.execute("DROP FUNCTION preserve_match_rule_reference() CASCADE")
+    op.drop_column("match_settings", "source_rule_revision_id")
+    op.drop_column("tournament_event_stages", "rule_revision_id")
+    op.execute("DROP FUNCTION capture_competition_rules() CASCADE")
+    op.execute("DROP FUNCTION preserve_match_rules() CASCADE")
     op.drop_table("required_repair_attempts")
     op.drop_table("required_repairs")
     postgresql.ENUM(name="repair_state").drop(op.get_bind(), checkfirst=True)

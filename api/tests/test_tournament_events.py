@@ -46,6 +46,7 @@ from app.tournament_errors import (
     EventNotFoundError,
     EventReservationCapExceededError,
     GroupSetFrozenError,
+    MatchRulesFrozenError,
     NotTournamentOwnerError,
     TournamentNotFoundError,
 )
@@ -2091,3 +2092,101 @@ async def test_reservation_write_statement_count_does_not_drift(
 
     selects = [s for s in statements if s.strip().upper().startswith("SELECT")]
     assert len(selects) == EXPECTED_RESERVATION_WRITE_STATEMENTS, selects
+
+
+async def test_cut_draw_rejects_changed_match_rules(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    owner = await make_user(db_session, "frozen-match-rules-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_cut_event(db_session, tournament)
+    with pytest.raises(MatchRulesFrozenError, match="Uncut the draw first"):
+        await update_event(
+            db_session,
+            tournament_id=tournament.id,
+            event_id=event.id,
+            actor=owner,
+            updates=TournamentEventUpdate.model_validate(
+                {
+                    "lock_version": event.lock_version,
+                    "match_settings": {"rated": True, "length_games": 5},
+                }
+            ),
+        )
+
+
+@pytest.mark.parametrize("new_format", ["doubles", "teams"])
+async def test_cut_draw_rejects_changed_event_format(
+    db_session: AsyncSession, default_league: League, new_format: str
+) -> None:
+    owner = await make_user(db_session, "frozen-format-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_cut_event(db_session, tournament)
+    with pytest.raises(MatchRulesFrozenError, match="Uncut the draw first"):
+        await update_event(
+            db_session,
+            tournament_id=tournament.id,
+            event_id=event.id,
+            actor=owner,
+            updates=TournamentEventUpdate.model_validate(
+                {"lock_version": event.lock_version, "format": new_format}
+            ),
+        )
+
+
+@pytest.mark.parametrize("cut", [False, True], ids=["pre-cut-change", "cut-unchanged"])
+async def test_event_format_edits_preserve_compatible_behavior(
+    db_session: AsyncSession, default_league: League, cut: bool
+) -> None:
+    owner = await make_user(db_session, "compatible-format-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await (_add_cut_event if cut else _add_event)(db_session, tournament)
+    new_format = "singles" if cut else "doubles"
+    await update_event(
+        db_session,
+        tournament_id=tournament.id,
+        event_id=event.id,
+        actor=owner,
+        updates=TournamentEventUpdate.model_validate(
+            {"lock_version": event.lock_version, "format": new_format}
+        ),
+    )
+    await db_session.refresh(event)
+    assert event.format.value == new_format
+
+
+@pytest.mark.parametrize(
+    ("changes", "error"),
+    [
+        ({"format": "teams"}, MatchRulesFrozenError),
+        ({"match_settings": {"rated": True, "length_games": 5}}, MatchRulesFrozenError),
+        ({"draw_type": "single-elim"}, DrawTypeFrozenError),
+        ({"reservations": [_reservation("New reservation")]}, GroupSetFrozenError),
+    ],
+)
+async def test_empty_active_revision_freezes_rule_and_stage_edits(
+    db_session: AsyncSession,
+    default_league: League,
+    changes: dict,
+    error: type[Exception],
+) -> None:
+    from sqlalchemy import text
+
+    owner = await make_user(db_session, "empty-revision-edit-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _add_event(db_session, tournament)
+    await db_session.execute(
+        text("INSERT INTO tournament_draw_revisions(event_id) VALUES (:id)"),
+        {"id": event.id},
+    )
+    await db_session.commit()
+    with pytest.raises(error):
+        await update_event(
+            db_session,
+            tournament_id=tournament.id,
+            event_id=event.id,
+            actor=owner,
+            updates=TournamentEventUpdate.model_validate(
+                {"lock_version": event.lock_version, **changes}
+            ),
+        )

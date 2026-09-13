@@ -13,6 +13,7 @@ reset is not an application deletion operation.
 | Event Entry, including team Entries | Withdraw or supersede; never erase a registration or its parent | Competing identity, membership intervals, original actors |
 | Registration, participation and withdrawal periods | Close or explicitly restore through lifecycle operations; retain original periods | Historical registration priority, competition eligibility, seats and acting Accounts |
 | Draw revision | Retire on removal or replacement; retain fixtures and cut-time configuration | Original field, stages, groups, placements and configuration snapshots |
+| Competition and Match rules | Immutable snapshots; retain source revision while a surviving Match requires it | Cut-time rules, stage binding and materialized Match provenance |
 | Entry member | Close interval or append replacement under existing roster rules | Original Player and membership provenance; lineup references survive |
 | Fixture and stage/group ancestors | Disposable only without protected references | Recorded lineup/play, advancement and call evidence protect their required parents |
 | Untouched standalone Match | May be discarded | No saved score or result exists |
@@ -48,6 +49,8 @@ Review rationale:
   referenced evidence is never a disposable draft child.
 - **Owned setup:** cascades remove only owned data when its parent is legitimately
   deletable. Registration, call, play and lifecycle guards protect retained parents.
+  A Match's restrictive settings reference and rule-source checks also prevent a
+  draw revision cascade from removing rules required by a surviving Match.
 - **Current/delivery state:** explicit cleanup is permitted; it does not remove the
   sporting fact. Identity deletion cascades are unreachable in normal operation.
 - **Projection:** calculated data can be rebuilt; retained inputs and matches block
@@ -108,6 +111,7 @@ Review rationale:
 | `match_results` | `submitted_by_user_id` → `accounts.id` | RESTRICT | Immediate | Identity |
 | `match_results` | `submitted_for_player_id` → `players.id` | RESTRICT | Immediate | Identity |
 | `match_results` | `supersedes_result_id, match_id` → `match_results.id, match_results.match_id` | RESTRICT | Immediate | Evidence |
+| `match_settings` | `source_rule_revision_id` → `tournament_draw_revisions.id` | CASCADE | Immediate | Owned setup |
 | `match_side_players` | `match_id` → `matches.id` | CASCADE | Immediate | Owned setup |
 | `match_side_players` | `match_side_id, match_id` → `match_sides.id, match_sides.match_id` | CASCADE | Immediate | Owned setup |
 | `match_side_players` | `user_id` → `players.id` | RESTRICT | Immediate | Identity |
@@ -185,6 +189,7 @@ Review rationale:
 | `tournament_event_stage_groups` | `stage_id` → `tournament_event_stages.id` | CASCADE | Immediate | Owned setup |
 | `tournament_event_stages` | `draw_type_id` → `draw_types.id` | RESTRICT | Immediate | Evidence |
 | `tournament_event_stages` | `event_id` → `tournament_events.id` | CASCADE | Immediate | Owned setup |
+| `tournament_event_stages` | `event_id, rule_revision_id` → `tournament_draw_revisions.event_id, tournament_draw_revisions.id` | RESTRICT | Immediate | Evidence |
 | `tournament_events` | `draw_type_id` → `draw_types.id` | RESTRICT | Immediate | Evidence |
 | `tournament_events` | `tournament_id` → `tournaments.id` | CASCADE | Immediate | Owned setup |
 | `tournament_fixtures` | `entry_a_id` → `tournament_entries.id` | NO ACTION | Deferred | Placement |
@@ -219,5 +224,5 @@ Review rationale:
 | `user_roles` | `role_id` → `roles.id` | CASCADE | Immediate | Current/delivery state |
 | `user_roles` | `user_id` → `accounts.id` | CASCADE | Immediate | Identity |
 
-Reviewed 159 foreign keys. Regenerate this inventory when adding references,
+Reviewed 161 foreign keys. Regenerate this inventory when adding references,
 and review their ownership and historical meaning rather than copying a delete action.

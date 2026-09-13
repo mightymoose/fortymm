@@ -851,3 +851,566 @@ async def test_competition_withdrawal_scope_controls_recut_field(
         db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
     )
     assert len(restored) == 3
+
+
+async def test_materialization_uses_rules_at_cut_after_planning_values_change(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    from app.models import Match
+    from app.tournament_materialization import materialize_event
+
+    owner = await make_user(db_session, "rules-materialize-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    tid, eid = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="rules-field")
+    await db_session.refresh(owner)
+    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    event = (
+        await db_session.scalars(
+            select(TournamentEvent).where(TournamentEvent.id == eid)
+        )
+    ).one()
+    tournament = (
+        await db_session.scalars(select(Tournament).where(Tournament.id == tid))
+    ).one()
+    event.match_settings = {"rated": False, "length_games": 1}
+    await db_session.flush()
+    await materialize_event(db_session, tournament, event)
+    await db_session.flush()
+    matches = (await db_session.scalars(select(Match))).all()
+    assert matches
+    for match in matches:
+        await db_session.refresh(match, attribute_names=["match_settings"])
+        assert match.match_settings.best_of == 5
+        assert match.match_settings.affects_rating is True
+
+
+async def test_sql_cannot_rewrite_frozen_competition_rules(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    owner = await make_user(db_session, "rules-integrity-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    tid, eid = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="rules-integrity-field")
+    await db_session.refresh(owner)
+    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    with pytest.raises(IntegrityError, match="immutable"):
+        await db_session.execute(
+            text(
+                "UPDATE tournament_draw_revisions SET match_rules = "
+                "jsonb_set(match_rules, '{best_of}', '1') WHERE event_id=:id"
+            ),
+            {"id": eid},
+        )
+
+
+async def test_cut_draw_keeps_format_interpretation_after_planning_change(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    from app.tournament_serialization import event_results
+
+    owner = await make_user(db_session, "rules-format-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    tid, eid = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="rules-format-field")
+    await db_session.refresh(owner)
+    fixtures = await cut_event_draw(
+        db_session, tournament_id=tid, event_id=eid, actor=owner
+    )
+    event = (
+        await db_session.scalars(
+            select(TournamentEvent).where(TournamentEvent.id == eid)
+        )
+    ).one()
+    event.draw_settings = TournamentEventDrawSettings.for_draw_type(
+        DrawType.single_elim
+    )
+    result = event_results(
+        event,
+        entrants=[],
+        fixtures=fixtures,
+        game_counts={},
+        stage_draw_types={stage.id: stage.draw_type for stage in event.stages},
+    )
+    assert result is not None
+    assert result.kind == "standings"
+
+
+async def test_every_stage_and_materialized_match_references_its_draw_rules(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    from app.tournament_materialization import materialize_event
+
+    owner = await make_user(db_session, "rules-provenance-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    tid, eid = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="rules-provenance-field")
+    await db_session.refresh(owner)
+    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    event = (
+        await db_session.scalars(
+            select(TournamentEvent).where(TournamentEvent.id == eid)
+        )
+    ).one()
+    tournament = (
+        await db_session.scalars(select(Tournament).where(Tournament.id == tid))
+    ).one()
+    await materialize_event(db_session, tournament, event)
+    await db_session.flush()
+    rows = (
+        await db_session.execute(
+            text("""
+        SELECT s.rule_revision_id, f.draw_revision_id, ms.source_rule_revision_id
+        FROM tournament_fixtures f JOIN tournament_event_stages s ON s.id=f.stage_id
+        JOIN matches m ON m.id=f.match_id
+        JOIN match_settings ms ON ms.id=m.match_settings_id
+        WHERE s.event_id=:id
+    """),
+            {"id": eid},
+        )
+    ).all()
+    assert rows
+    assert all(stage == fixture == match for stage, fixture, match in rows)
+
+
+async def test_sql_cannot_detach_stage_from_frozen_rules(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    owner = await make_user(db_session, "rules-stage-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    tid, eid = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="rules-stage-field")
+    await db_session.refresh(owner)
+    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    with pytest.raises(IntegrityError, match="immutable"):
+        await db_session.execute(
+            text(
+                "UPDATE tournament_event_stages SET rule_revision_id=NULL WHERE "
+                "event_id=:id"
+            ),
+            {"id": eid},
+        )
+
+
+async def test_sql_cannot_claim_rule_provenance_for_different_match_values(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models import MatchSettings
+
+    owner = await make_user(db_session, "rules-forged-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    tid, eid = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="rules-forged-field")
+    await db_session.refresh(owner)
+    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    revision_id = await db_session.scalar(
+        text(
+            "SELECT id FROM tournament_draw_revisions WHERE event_id=:id AND "
+            "retired_at IS NULL"
+        ),
+        {"id": eid},
+    )
+    db_session.add(
+        MatchSettings(team_size=1, best_of=1, source_rule_revision_id=revision_id)
+    )
+    with pytest.raises(IntegrityError, match="match rules must agree"):
+        await db_session.flush()
+
+
+async def test_attached_standalone_match_must_obey_frozen_competition_rules(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models import Match, MatchSettings
+    from tests._entry_seeds import seed_fixture_match_sides
+
+    owner = await make_user(db_session, "rules-attach-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    tid, eid, oid, lid = tournament.id, event.id, owner.id, default_league.id
+    await _enter_field(db_session, event, 4, prefix="rules-attach-field")
+    await db_session.refresh(owner)
+    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    fixture = (await _fixture_rows(db_session, eid))[0]
+    match = Match(
+        match_settings=MatchSettings(team_size=1, best_of=1),
+        league_id=lid,
+        created_by_user_id=oid,
+    )
+    db_session.add(match)
+    await db_session.flush()
+    await seed_fixture_match_sides(db_session, fixture, match)
+    fixture.match_id = match.id
+    with pytest.raises(IntegrityError, match="fixture match rules"):
+        await db_session.flush()
+
+
+@pytest.mark.parametrize(
+    "column,payload",
+    [
+        ("match_rules", "{}"),
+        ("match_rules", "[]"),
+        (
+            "match_rules",
+            '{"rule_version":1,"team_size":1,"best_of":9,'
+            '"affects_rating":true,"verification_policy":"none",'
+            '"retirement_window":"P7D"}',
+        ),
+        (
+            "match_rules",
+            '{"rule_version":1,"team_size":1,"best_of":3,'
+            '"affects_rating":true,"verification_policy":"none",'
+            '"retirement_window":"7 days"}',
+        ),
+        ("format_rules", '{"version":1,"draw_type":"swiss","settings":{"rounds":"2"}}'),
+        ("format_rules", '{"version":1,"draw_type":"swiss","settings":{"rounds":33}}'),
+        ("format_rules", "{}"),
+        ("format_rules", '{"version": 99, "draw_type":"round-robin", "settings":{}}'),
+    ],
+)
+async def test_sql_refuses_uninterpretable_rule_revisions(
+    db_session: AsyncSession, default_league: League, column: str, payload: str
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    owner = await make_user(db_session, "rules-malformed-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    with pytest.raises(IntegrityError, match="rule"):
+        await db_session.execute(
+            text(
+                f"INSERT INTO tournament_draw_revisions(event_id, {column}) "
+                "VALUES (:id, CAST(:payload AS jsonb))"
+            ),
+            {"id": event.id, "payload": payload},
+        )
+
+
+async def test_sql_draw_creation_binds_all_current_stages_atomically(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    owner = await make_user(db_session, "rules-sql-stage-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    revision_id = await db_session.scalar(
+        text(
+            "INSERT INTO tournament_draw_revisions(event_id) VALUES (:id) RETURNING id"
+        ),
+        {"id": event.id},
+    )
+    bindings = (
+        await db_session.scalars(
+            text(
+                "SELECT rule_revision_id FROM tournament_event_stages WHERE "
+                "event_id=:id AND retired_at IS NULL"
+            ),
+            {"id": event.id},
+        )
+    ).all()
+    assert bindings and all(value == revision_id for value in bindings)
+
+
+async def test_schedule_duration_uses_frozen_match_rules(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    from app.competition_rules import effective_match_settings
+
+    owner = await make_user(db_session, "rules-duration-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    tid, eid = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="rules-duration-field")
+    await db_session.refresh(owner)
+    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    event = (
+        await db_session.scalars(
+            select(TournamentEvent).where(TournamentEvent.id == eid)
+        )
+    ).one()
+    event.match_settings = {"rated": False, "length_games": 1}
+    assert effective_match_settings(event).length_games == 5
+
+
+async def test_sql_fixture_cannot_use_a_stage_without_its_rule_revision(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models import TournamentEventStage, TournamentEventStageGroup
+
+    owner = await make_user(db_session, "rules-stage-scope-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    tid, eid = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="rules-stage-scope-field")
+    await db_session.refresh(owner)
+    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    extra_stage = TournamentEventStage(
+        event_id=eid, position=1, draw_type=DrawType.round_robin
+    )
+    extra_group = TournamentEventStageGroup(position=0)
+    extra_stage.groups = [extra_group]
+    db_session.add(extra_stage)
+    await db_session.flush()
+    db_session.add(
+        TournamentFixture(
+            stage_id=extra_stage.id, group_id=extra_group.id, round=1, position=1
+        )
+    )
+    with pytest.raises(IntegrityError, match="fixture stage rules"):
+        await db_session.flush()
+
+
+async def test_recut_keeps_rule_history_until_permitted_event_deletion(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    from app.tournament_events import delete_event
+
+    owner = await make_user(db_session, "rules-retention-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    tid, eid = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="rules-retention-field")
+    await db_session.refresh(owner)
+    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    original = (
+        await db_session.execute(
+            text(
+                "SELECT id, match_rules, format_rules FROM "
+                "tournament_draw_revisions WHERE event_id=:id"
+            ),
+            {"id": eid},
+        )
+    ).one()
+    await uncut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    await db_session.refresh(event)
+    assert event.current_rule_revision is None
+    assert all(stage.rule_revision_id is None for stage in event.stages)
+    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    revisions = (
+        await db_session.execute(
+            text(
+                "SELECT id, match_rules, format_rules FROM "
+                "tournament_draw_revisions WHERE event_id=:id ORDER BY created_at"
+            ),
+            {"id": eid},
+        )
+    ).all()
+    assert len(revisions) == 2
+    assert revisions[0] == original
+    assert revisions[1].id != original.id
+    assert revisions[1].match_rules == original.match_rules
+    await uncut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    await db_session.refresh(event)
+    event.match_settings = {"rated": False, "length_games": 1}
+    await db_session.commit()
+    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    await db_session.refresh(event)
+    assert event.current_rule_revision.match_rules["best_of"] == 1
+    assert event.current_rule_revision.match_rules["affects_rating"] is False
+    retained = (
+        await db_session.execute(
+            text(
+                "SELECT id, match_rules, format_rules FROM tournament_draw_revisions "
+                "WHERE id=:id"
+            ),
+            {"id": original.id},
+        )
+    ).one()
+    assert retained == original
+    await delete_event(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    assert (
+        await db_session.scalar(
+            text("SELECT count(*) FROM tournament_draw_revisions WHERE event_id=:id"),
+            {"id": eid},
+        )
+        == 0
+    )
+
+
+async def test_qualification_count_is_frozen_before_any_group_finishes(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    from app.draws import DrawConfig, Entrant, EntryId, GroupId, order_entrants
+    from app.tournament_draws import strategy_for_event
+    from app.tournament_events import create_event
+    from tests.test_tournament_events import _event_payload
+
+    owner = await make_user(db_session, "rules-qualification-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    tid = tournament.id
+    event, _ = await create_event(
+        db_session,
+        tournament_id=tid,
+        actor=owner,
+        payload=_event_payload(
+            draw_type="rr-then-ko", qualifiers_per_group=2, predicates=[]
+        ),
+    )
+    eid = event.id
+    entries = await _enter_field(db_session, event, 4, prefix="rules-qualifier")
+    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    await db_session.refresh(event)
+    event.draw_settings = TournamentEventDrawSettings.for_draw_type(
+        DrawType.rr_then_ko, settings={"qualifiers_per_group": 1}
+    )
+    stages = {stage.position: stage.id for stage in event.stages}
+    initial = tuple(
+        GroupId(group.id) for group in event.groups if group.stage_id == stages[0]
+    )
+    knockout_group = next(
+        GroupId(group.id) for group in event.groups if group.stage_id == stages[1]
+    )
+    from datetime import UTC, datetime
+
+    planned = strategy_for_event(event).plan_initial(
+        DrawConfig(group_ids=initial, knockout_group_id=knockout_group),
+        order_entrants(
+            [
+                Entrant(
+                    entry_id=EntryId(entry.id),
+                    seed=n + 1,
+                    created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                )
+                for n, entry in enumerate(entries)
+            ]
+        ),
+    )
+    # The original two qualifiers still produce their final, despite planning K=1.
+    assert len([fixture for fixture in planned if fixture.stage.position == 1]) == 1
+
+
+async def test_unused_match_snapshot_does_not_prevent_permitted_event_deletion(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    from app.models import MatchSettings
+    from app.tournament_events import delete_event
+
+    owner = await make_user(db_session, "rules-unused-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    tid, eid = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="rules-unused-field")
+    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    await db_session.refresh(event)
+    db_session.add(
+        MatchSettings(
+            team_size=1,
+            best_of=5,
+            source_rule_revision_id=event.current_rule_revision.id,
+        )
+    )
+    await db_session.commit()
+    await delete_event(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    assert await db_session.scalar(text("SELECT count(*) FROM match_settings")) == 0
+
+
+async def test_surviving_materialized_match_blocks_event_deletion_with_domain_error(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    from app.tournament_errors import RecordedPlayDeletionError
+    from app.tournament_events import delete_event
+    from app.tournament_materialization import materialize_event
+
+    owner = await make_user(db_session, "rules-surviving-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    tid, eid = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="rules-surviving-field")
+    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    await materialize_event(db_session, tournament, event)
+    await db_session.commit()
+    with pytest.raises(RecordedPlayDeletionError, match="rule history"):
+        await delete_event(db_session, tournament_id=tid, event_id=eid, actor=owner)
+
+
+@pytest.mark.parametrize("uncut_first", [False, True], ids=["recut", "uncut-recut"])
+async def test_empty_rule_revision_can_be_replaced(
+    db_session: AsyncSession, default_league: League, uncut_first: bool
+) -> None:
+    owner = await make_user(db_session, "empty-rules-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    tid, eid = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="empty-rules-field")
+    old_revision = await db_session.scalar(
+        text(
+            "INSERT INTO tournament_draw_revisions(event_id) VALUES (:id) RETURNING id"
+        ),
+        {"id": eid},
+    )
+    await db_session.commit()
+    if uncut_first:
+        await uncut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+        bindings = (
+            await db_session.scalars(
+                text(
+                    "SELECT rule_revision_id FROM tournament_event_stages "
+                    "WHERE event_id=:id AND retired_at IS NULL"
+                ),
+                {"id": eid},
+            )
+        ).all()
+        assert bindings and all(binding is None for binding in bindings)
+    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    revisions = (
+        await db_session.execute(
+            text(
+                "SELECT id, retired_at FROM tournament_draw_revisions "
+                "WHERE event_id=:id"
+            ),
+            {"id": eid},
+        )
+    ).all()
+    assert len(revisions) == 2
+    assert (
+        next(row for row in revisions if row.id == old_revision).retired_at is not None
+    )
+    current = next(row.id for row in revisions if row.retired_at is None)
+    assert current != old_revision
+    bindings = (
+        await db_session.scalars(
+            text(
+                "SELECT rule_revision_id FROM tournament_event_stages "
+                "WHERE event_id=:id AND retired_at IS NULL"
+            ),
+            {"id": eid},
+        )
+    ).all()
+    assert bindings and all(binding == current for binding in bindings)
+
+
+async def test_draw_currency_uses_frozen_unseated_allowance(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    from app.tournament_draws import DrawCurrency, draw_currency_by_event
+
+    owner = await make_user(db_session, "currency-frozen-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    tid, eid = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="currency-frozen-field")
+    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    await _enter_field(db_session, event, 1, prefix="currency-frozen-new")
+    await db_session.execute(
+        text(
+            "UPDATE tournament_events SET draw_type_id="
+            "(SELECT id FROM draw_types WHERE key='swiss'), "
+            "draw_settings=CAST(:settings AS jsonb) WHERE id=:id"
+        ),
+        {"id": eid, "settings": '{"rounds":3}'},
+    )
+    assert (await draw_currency_by_event(db_session, [eid]))[eid] is DrawCurrency.stale

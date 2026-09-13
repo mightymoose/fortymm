@@ -20,7 +20,15 @@ from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import Match, MatchResult, MatchStatus
+from app.models import (
+    League,
+    Match,
+    MatchResult,
+    MatchSettings,
+    MatchSide,
+    MatchSidePlayer,
+    MatchStatus,
+)
 from app.notifications.service import NotificationService
 from app.realtime import EventKind, RealtimeBroker
 from app.retirement_jobs import RetirementOutcome, retire_if_lapsed
@@ -131,6 +139,7 @@ async def test_finalize_by_the_retirement_sweep_hints_both_participants(
     api_client: AsyncClient,
     db_session: AsyncSession,
     realtime_broker: RealtimeBroker,
+    default_league: League,
 ) -> None:
     """The worker path needs no hook of its own.
 
@@ -144,17 +153,26 @@ async def test_finalize_by_the_retirement_sweep_hints_both_participants(
         bystander_client = make_client()
         try:
             bystander = await start_session(bystander_client, db_session)
-            created = await _create_match(api_client, no_show.id, rated=True)
-            await _post_decisive_result(api_client, created["id"])
-
-            match_id = uuid.UUID(created["id"])
-            match = (
-                await db_session.execute(select(Match).where(Match.id == match_id))
-            ).scalar_one()
-            standing = await _standing_result(db_session, match_id)
-            # Make the deadline lapse on both application and database clocks.
-            match.match_settings.retirement_window = timedelta(microseconds=1)
+            # Start with a short immutable window so both clocks see it lapse.
+            match = Match(
+                match_settings=MatchSettings(
+                    team_size=1,
+                    best_of=1,
+                    affects_rating=True,
+                    retirement_window=timedelta(microseconds=1),
+                ),
+                created_by_user_id=poster.id,
+                league_id=default_league.id,
+                status=MatchStatus.in_progress,
+            )
+            for number, player in enumerate((poster, no_show), start=1):
+                side = MatchSide(match=match, side_number=number)
+                side.players = [MatchSidePlayer(match=match, user_id=player.id)]
+            db_session.add(match)
             await db_session.commit()
+            match_id = match.id
+            await _post_decisive_result(api_client, str(match_id))
+            standing = await _standing_result(db_session, match_id)
 
             async with watch_hints(
                 realtime_broker, poster.id, no_show.id, bystander.id

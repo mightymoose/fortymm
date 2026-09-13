@@ -83,11 +83,14 @@ async def _record_match(
     creator: User,
     *players: User,
     affects_rating: bool = False,
+    best_of: int = 5,
 ) -> Match:
     """A completed match. ``affects_rating=True`` makes it rated, so a self-play
     collision on it exercises the void path rather than the unrated prune."""
     league = await get_default_league(db)
-    settings = MatchSettings(team_size=1, best_of=5, affects_rating=affects_rating)
+    settings = MatchSettings(
+        team_size=1, best_of=best_of, affects_rating=affects_rating
+    )
     match = Match(
         match_settings=settings,
         league=league,
@@ -1411,6 +1414,7 @@ async def test_merge_refuses_duplicate_recorded_play_in_same_stage_atomically(
             survivor,
             accounts[fixture.entry_a_id],
             accounts[fixture.entry_b_id],
+            affects_rating=True,
         )
         fixture.match_id = match.id
         await db_session.commit()
@@ -1478,6 +1482,7 @@ async def test_merge_keeps_the_entry_with_recorded_play_when_guest_account_is_re
             survivor,
             accounts[fixture.entry_a_id],
             accounts[fixture.entry_b_id],
+            affects_rating=True,
         )
         fixture.match_id = match.id
         await db_session.commit()
@@ -1524,7 +1529,11 @@ async def test_merge_preserves_registration_on_a_withdrawn_played_survivor(
     (fixture,) = await _cut(db_session, event)
     accounts = {played_entry.id: played_user, other_entry.id: opponent}
     match = await _record_match(
-        db_session, survivor, accounts[fixture.entry_a_id], accounts[fixture.entry_b_id]
+        db_session,
+        survivor,
+        accounts[fixture.entry_a_id],
+        accounts[fixture.entry_b_id],
+        affects_rating=True,
     )
     fixture.match_id = match.id
     await db_session.commit()
@@ -1624,7 +1633,11 @@ async def test_login_reports_entry_merge_conflict_without_consuming_credentials(
     (fixture,) = await _cut(db_session, event)
     accounts = {guest_entry.id: guest, survivor_entry.id: survivor}
     match = await _record_match(
-        db_session, survivor, accounts[fixture.entry_a_id], accounts[fixture.entry_b_id]
+        db_session,
+        survivor,
+        accounts[fixture.entry_a_id],
+        accounts[fixture.entry_b_id],
+        affects_rating=True,
     )
     fixture.match_id = match.id
     raw_token = "entry-conflict-login-token"
