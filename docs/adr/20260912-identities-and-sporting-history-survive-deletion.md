@@ -88,6 +88,8 @@ through immutable sourced rules; it does not require that historical owner to ac
 again. Null system draw and participation actions remain supported.
 Every sourced match must attribute its tournament owner at insertion, under an
 ownership lock. Neither active nor inactive unrelated creators are permitted.
+The original Match creator is immutable after insertion, including before first
+play; updating attribution cannot circumvent creator admission.
 Rated match creation holds an active opponent manager Account and its primary grant
 through admission. Existing consent remains immutable historical evidence through
 suspension and erasure.

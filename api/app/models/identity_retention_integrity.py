@@ -11,6 +11,12 @@ IDENTITY_RETENTION_DDL = (
     LANGUAGE plpgsql AS $$
     DECLARE actor accounts%ROWTYPE; source_revision uuid; source_owner uuid;
     BEGIN
+        IF TG_OP='UPDATE' THEN
+            IF NEW.created_by_user_id IS DISTINCT FROM OLD.created_by_user_id THEN
+                RAISE EXCEPTION 'match creator is immutable' USING ERRCODE='23514';
+            END IF;
+            RETURN NEW;
+        END IF;
         SELECT source_rule_revision_id INTO source_revision FROM match_settings
             WHERE id=NEW.match_settings_id;
         IF source_revision IS NULL THEN
@@ -46,7 +52,8 @@ IDENTITY_RETENTION_DDL = (
             USING ERRCODE='40001';
     END $$
     """,
-    """CREATE TRIGGER guard_standalone_match_creator BEFORE INSERT ON matches
+    """CREATE TRIGGER guard_standalone_match_creator
+    BEFORE INSERT OR UPDATE OF created_by_user_id ON matches
     FOR EACH ROW EXECUTE FUNCTION guard_standalone_match_creator()""",
     """
     CREATE FUNCTION preserve_retired_username() RETURNS trigger LANGUAGE plpgsql AS $$

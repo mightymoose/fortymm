@@ -238,6 +238,32 @@ async def _insert_sourced_match(db, fixture_id, rules_id, league_id, actor_id):
     await db.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
 
+@pytest.mark.parametrize("inactive", [False, True])
+async def test_sourced_match_creator_cannot_be_reassigned_after_admission(
+    db_session, default_league, inactive
+):
+    owner, _, fixture, rules = await _sourced_fixture(db_session, default_league)
+    other = await make_user(db_session, "replacement-match-creator")
+    if inactive:
+        await deactivate_account(db_session, other.id)
+    await _insert_sourced_match(
+        db_session, fixture.id, rules.id, default_league.id, owner.id
+    )
+    await db_session.commit()
+    with pytest.raises(IntegrityError, match="match creator is immutable"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("UPDATE matches SET created_by_user_id=:actor"),
+                {"actor": other.id},
+            )
+    await deactivate_account(db_session, owner.id)
+    await db_session.commit()
+    await db_session.execute(
+        text("UPDATE matches SET created_by_user_id=created_by_user_id")
+    )
+    await db_session.commit()
+
+
 @pytest.mark.parametrize("lifecycle", [None, deactivate_account, erase_account])
 async def test_sourced_sql_match_cannot_impersonate_unrelated_creator(
     db_session, default_league, lifecycle
