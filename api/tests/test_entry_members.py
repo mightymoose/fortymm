@@ -794,6 +794,7 @@ async def test_membership_history_rejects_overlapping_intervals(
 async def seed_doubles_match(db_session):
     event = await make_drawn_event(db_session)
     event.format = EventFormat.doubles
+    event.match_settings = {"rated": False, "length_games": 5}
     players = [await make_user(db_session, f"lineup-{n}") for n in range(5)]
     entries = [
         TournamentEntry(
@@ -996,9 +997,7 @@ async def test_played_lineup_keeps_its_match_topology(db_session, change):
         if change == "team_size"
         else "UPDATE matches SET match_settings_id = :replacement WHERE id = :match"
     )
-    with pytest.raises(
-        IntegrityError, match="recorded match topology must be retained"
-    ):
+    with pytest.raises(IntegrityError, match="match rules.*immutable"):
         async with db_session.begin_nested():
             await db_session.execute(
                 text(statement),
@@ -1051,7 +1050,9 @@ async def test_a_match_can_belong_to_only_one_fixture(db_session):
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
 
-async def test_team_size_edit_cannot_overtake_first_lineup(db_session, engine):
+async def test_team_size_is_immutable_while_first_lineup_is_captured(
+    db_session, engine
+):
     from sqlalchemy.exc import DBAPIError
 
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
@@ -1063,14 +1064,12 @@ async def test_team_size_edit_cannot_overtake_first_lineup(db_session, engine):
         )
         await capture.execute(text("SET CONSTRAINTS capture_match_lineup IMMEDIATE"))
         await settings.execute(text("SET LOCAL lock_timeout = '200ms'"))
-        with pytest.raises(
-            DBAPIError, match="match topology requires match lock"
-        ) as exc:
+        with pytest.raises(DBAPIError, match="match rules are immutable") as exc:
             await settings.execute(
                 text("UPDATE match_settings SET team_size = 1 WHERE id = :id"),
                 {"id": match.match_settings_id},
             )
-        assert exc.value.orig.sqlstate == "40001"
+        assert exc.value.orig.sqlstate == "23514"
         await settings.rollback()
         await capture.commit()
         assert (
@@ -1079,7 +1078,9 @@ async def test_team_size_edit_cannot_overtake_first_lineup(db_session, engine):
         )
 
 
-async def test_settings_reassignment_waits_for_direct_lineup(db_session, engine):
+async def test_settings_reassignment_waits_then_refuses_without_lineup(
+    db_session, engine
+):
     from sqlalchemy.exc import DBAPIError
 
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
@@ -1103,14 +1104,15 @@ async def test_settings_reassignment_waits_for_direct_lineup(db_session, engine)
             await settings.execute(statement, params)
         await settings.rollback()
         await capture.rollback()
-        await settings.execute(statement, params)
-        await settings.commit()
+        with pytest.raises(IntegrityError, match="match rules reference is immutable"):
+            await settings.execute(statement, params)
+        await settings.rollback()
         assert (
             await settings.scalar(
                 text("SELECT match_settings_id FROM matches WHERE id = :id"),
                 {"id": match.id},
             )
-            == replacement.id
+            == match.match_settings_id
         )
 
 
@@ -2266,8 +2268,10 @@ async def test_evidence_write_aborts_when_fixture_link_changes_first(
     db_session.add(replacement)
     stage = await db_session.scalar(
         text(
-            "INSERT INTO tournament_event_stages (event_id, position, draw_type_id) "
-            "SELECT event_id, 100, draw_type_id FROM tournament_event_stages "
+            "INSERT INTO tournament_event_stages "
+            "(event_id, position, draw_type_id, rule_revision_id) "
+            "SELECT event_id, 100, draw_type_id, rule_revision_id "
+            "FROM tournament_event_stages "
             "WHERE id = :id RETURNING id"
         ),
         {"id": fixture.stage_id},
@@ -2554,12 +2558,8 @@ async def test_old_lineup_rejects_appends_when_transaction_status_is_unavailable
 ):
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
     event.format = EventFormat.teams
-    alternates = [entry.members[1] for entry in entries]
-    match.match_settings.team_size = 1
-    await db_session.execute(
-        text("DELETE FROM match_side_players WHERE user_id IN (:first, :second)"),
-        {"first": players[1].player_id, "second": players[3].player_id},
-    )
+    alternate = TournamentEntryMember(player_id=players[4].player_id)
+    entries[0].members.append(alternate)
     await db_session.commit()
     match.status = MatchStatus.in_progress
     await db_session.commit()
@@ -2587,14 +2587,12 @@ async def test_old_lineup_rejects_appends_when_transaction_status_is_unavailable
                     text(
                         "INSERT INTO match_lineup_players "
                         "(lineup_id, side_number, entry_member_id, player_id) "
-                        "SELECT :lineup, CASE WHEN id = :first THEN 1 ELSE 2 END, "
-                        "id, player_id FROM tournament_entry_members "
-                        "WHERE id IN (:first, :second)"
+                        "SELECT :lineup, 1, id, player_id "
+                        "FROM tournament_entry_members WHERE id = :member"
                     ),
                     {
                         "lineup": lineup,
-                        "first": alternates[0].id,
-                        "second": alternates[1].id,
+                        "member": alternate.id,
                     },
                 )
                 await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))

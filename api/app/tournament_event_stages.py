@@ -54,7 +54,6 @@ from app.models import (
     TournamentEvent,
     TournamentEventStage,
     TournamentEventStageGroup,
-    TournamentFixture,
 )
 from app.models.tournament_event_group_reservation import (
     TournamentEventGroupReservation,
@@ -212,10 +211,9 @@ async def archive_stage_configuration(
     any already-loaded event stage/group collections before planning a new draw.
     The tournament row lock and caller's transaction serialize the replacement.
     """
-    drawn_events = (
-        select(TournamentEventStage.event_id)
-        .join(TournamentFixture, TournamentFixture.stage_id == TournamentEventStage.id)
-        .where(TournamentEventStage.retired_at.is_(None))
+    drawn_events = select(TournamentEventStage.event_id).where(
+        TournamentEventStage.rule_revision_id.is_not(None),
+        TournamentEventStage.retired_at.is_(None),
     )
     stages = list(
         (

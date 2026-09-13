@@ -2532,26 +2532,27 @@ async def test_details_negotiation_carries_retirement_deadline(
 
 
 async def test_details_negotiation_retirement_deadline_none_when_window_null(
-    api_client: AsyncClient, db_session: AsyncSession
+    api_client: AsyncClient, db_session: AsyncSession, default_league: League
 ):
     """A standing result whose settings carry no retirement window (NULL) never
     auto-finalizes, so the deadline is ``None`` even though a result stands."""
-    await start_session(api_client, db_session)
+    me = await start_session(api_client, db_session)
     async with opponent_session(db_session, "rival") as (opp_client, opp):
-        match = await _create_match(api_client, opp.id, best_of=1)
-        await _post_bo1_result(opp_client, match["id"])
-
-        settings = (
-            await db_session.execute(
-                select(MatchSettings)
-                .join(Match, Match.match_settings_id == MatchSettings.id)
-                .where(Match.id == uuid.UUID(match["id"]))
-            )
-        ).scalar_one()
-        settings.retirement_window = None
+        match = Match(
+            match_settings=MatchSettings(
+                team_size=1, best_of=1, affects_rating=True, retirement_window=None
+            ),
+            created_by_user_id=me.id,
+            league_id=default_league.id,
+            status=MatchStatus.in_progress,
+        )
+        for number, player in enumerate((me, opp), start=1):
+            side = MatchSide(match=match, side_number=number)
+            side.players = [MatchSidePlayer(match=match, user_id=player.id)]
+        db_session.add(match)
         await db_session.commit()
-
-        neg = (await api_client.get(f"/v1/matches/{match['id']}")).json()["negotiation"]
+        await _post_bo1_result(opp_client, str(match.id))
+        neg = (await api_client.get(f"/v1/matches/{match.id}")).json()["negotiation"]
 
     assert neg["standing_result"] is not None
     assert neg["retirement_deadline"] is None

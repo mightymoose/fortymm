@@ -7,10 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import (
     AdvancementDecision,
+    Match,
     MatchGame,
     MatchLineup,
     MatchLineupPlayer,
     MatchResult,
+    MatchSettings,
+    TournamentDrawRevision,
     TournamentEntry,
     TournamentEntryMember,
     TournamentEvent,
@@ -109,5 +112,21 @@ async def require_no_recorded_play(
     ):
         raise RecordedPlayDeletionError(
             "Advancement history must be preserved. "
+            "This event or tournament cannot be deleted."
+        )
+
+    source_match = (
+        select(Match.id)
+        .join(MatchSettings, MatchSettings.id == Match.match_settings_id)
+        .join(
+            TournamentDrawRevision,
+            TournamentDrawRevision.id == MatchSettings.source_rule_revision_id,
+        )
+        .where(TournamentDrawRevision.event_id.in_(event_ids))
+        .limit(1)
+    )
+    if await db.scalar(source_match) is not None:
+        raise RecordedPlayDeletionError(
+            "A surviving match requires this competition's rule history. "
             "This event or tournament cannot be deleted."
         )

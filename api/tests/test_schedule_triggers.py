@@ -710,12 +710,11 @@ async def test_a_name_only_event_patch_requests_no_settings_solve(
     assert await _solve_rows(db_session, tournament_id) == []
 
 
-async def test_a_length_games_change_requests_a_settings_solve(
+async def test_a_length_games_change_after_cut_is_refused_without_a_settings_solve(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
-    """``length_games`` is the solver's duration input: best-of-3 → best-of-5
-    on a drawn event owes a re-solve."""
+    """Frozen duration rules cannot change or enqueue a spurious re-solve."""
     client, owner = authed_client
     tournament_id, event = await _make_tournament(db_session, owner)
     entrants = [await make_user(db_session, f"lg-{i}") for i in range(3)]
@@ -728,8 +727,9 @@ async def test_a_length_games_change_requests_a_settings_solve(
         {"match_settings": {"rated": False, "length_games": 5}},
     )
 
-    assert response.status_code == 200, response.text
-    await _assert_one_settings_row(db_session, tournament_id)
+    assert response.status_code == 409, response.text
+    assert "Uncut the draw first" in response.json()["detail"]
+    assert await _solve_rows(db_session, tournament_id) == []
 
 
 async def test_withdrawing_a_seated_entrant_requests_a_settings_solve(

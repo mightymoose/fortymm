@@ -38,7 +38,15 @@ from types import MappingProxyType
 from sqlalchemy import ColumnElement, exists, func, insert, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
+from sqlalchemy.orm.attributes import set_committed_value
 
+from app.competition_rules import (
+    FrozenFormatRules,
+    effective_draw_settings,
+    format_rule_version,
+    snapshot_format_rules,
+    snapshot_match_rules,
+)
 from app.draws import (
     DrawConfig,
     DrawStrategy,
@@ -71,7 +79,6 @@ from app.models import (
     TournamentEventStage,
     TournamentFixture,
 )
-from app.models.draw_type import DRAW_TYPES_BY_ID
 from app.schemas.tournament import GroupRead, Reservation
 from app.tournament_draw_history import (
     bind_draw_configuration,
@@ -483,7 +490,7 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
     group id.
 
     It does **not** carry the event's ``draw_type``, though it once did. The draw type
-    is what ``cut_draw`` picks the *strategy* with (``strategy_for_event(event)``), and
+    is what ``cut_draw`` picks the *strategy* from in the planning settings, and
     it does so before this config exists; copying it in here as well gave the domain
     a second place to learn a fact it had already acted on — one that no strategy read,
     and that a future one could read and be lied to by. See :class:`DrawConfig`.
@@ -542,29 +549,32 @@ def draw_config(event: TournamentEvent) -> DrawConfig:
 
 
 def strategy_for_event(event: TournamentEvent) -> DrawStrategy:
-    """Parse this event's owned configuration and select its draw strategy."""
-    return strategy_for(draw_settings_of(event.draw_settings))
+    """Select the strategy from frozen rules, or planning settings before the cut."""
+    return strategy_for(
+        effective_draw_settings(event), version=format_rule_version(event)
+    )
+
+
+async def event_has_rule_revision(db: AsyncSession, event_id: uuid.UUID) -> bool:
+    """Rules are frozen by an active revision even when it has no fixtures."""
+    return bool(
+        await db.scalar(
+            select(TournamentDrawRevision.id)
+            .where(
+                TournamentDrawRevision.event_id == event_id,
+                TournamentDrawRevision.retired_at.is_(None),
+            )
+            .limit(1)
+        )
+    )
 
 
 async def event_has_draw(db: AsyncSession, event_id: uuid.UUID) -> bool:
-    """Whether this event has a draw at all — whether the cut has happened.
+    """Whether the active draw retains fixtures that affect scheduling.
 
-    The question the **group-set freeze** turns on (ADR-0786). Nothing in the database
-    stops a ``PATCH`` from *adding* a group to an event whose draw was dealt across the
-    groups it had at the cut — the removal half is a foreign-key violation now
-    (ADR 20260801), but an empty new group breaks no constraint, and the removal's
-    violation is a deferred 500 rather than something a director can act on. This is the
-    read both halves of that refusal are built on.
-
-    Deliberately **not** ``draw_has_play``. Play is the gate on *destroying* a draw
-    (re-cutting, un-cutting); the mere *existence* of one is the gate on moving the
-    groups under it. The two are different questions with different answers, and a draw
-    that has been cut but not yet played — the ordinary state of a tournament on the
-    morning of — is exactly where the group-set freeze does its work: nothing has been
-    played, so the play guard would wave the change through, and every fixture would
-    still be orphaned.
-
-    The current revision's transactionally maintained count bounds this lookup.
+    This uses the revision's transactionally maintained fixture count. An active
+    revision with no fixtures still freezes rules via ``event_has_rule_revision``;
+    it does not contribute fixtures to scheduling or materialization.
     """
     return bool(
         await db.scalar(
@@ -777,17 +787,20 @@ async def draw_currency_by_event(
         )
 
     # The draw type of each cut event determines how many entrants may remain
-    # unseated. Read the event FK directly; the seed/enum tests pin its mapping.
+    # unseated. Interpret the active revision, independent of editable planning.
     draw_types: dict[uuid.UUID, DrawType] = {}
     if cut:
         draw_types = {
-            event_id: DRAW_TYPES_BY_ID[draw_type_id]
-            for event_id, draw_type_id in (
+            event_id: FrozenFormatRules.model_validate(rules).draw_type
+            for event_id, rules in (
                 await db.execute(
                     select(
-                        TournamentEvent.id,
-                        TournamentEvent.draw_type_id,
-                    ).where(TournamentEvent.id.in_(cut))
+                        TournamentDrawRevision.event_id,
+                        TournamentDrawRevision.format_rules,
+                    ).where(
+                        TournamentDrawRevision.event_id.in_(cut),
+                        TournamentDrawRevision.retired_at.is_(None),
+                    )
                 )
             ).all()
         }
@@ -855,7 +868,7 @@ async def cut_draw(
     """
     if event.format is not EventFormat.singles:
         raise NonSinglesDraw(event.format)
-    strategy = strategy_for_event(event)
+    strategy = strategy_for(draw_settings_of(event.draw_settings))
     entrants = order_entrants(await active_draw_entrants(db, event.id))
     # The real-field re-derivation (see the docstring). ``group_count_for`` answers
     # ``1`` for every draw type but ``rr-then-ko``'s group stage (#1483's floor), and
@@ -931,10 +944,16 @@ async def cut_draw(
     revision = TournamentDrawRevision(
         event_id=event.id,
         configuration=configuration,
+        match_rules=snapshot_match_rules(event),
+        format_rules=snapshot_format_rules(event),
         created_by_account_id=actor_id,
     )
     db.add(revision)
     await db.flush()
+    event.current_rule_revision = revision
+    for stage in event.stages:
+        # The revision INSERT trigger already bound this persisted stage.
+        set_committed_value(stage, "rule_revision_id", revision.id)
     # A planned fixture's STAGE (ADR 20260815 decision 5) — taken from the fixture
     # itself (``PlannedFixture.stage``, the same :class:`~app.draws.FixtureStage`
     # projection the read side carries), never re-derived here.

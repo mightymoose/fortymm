@@ -12,10 +12,8 @@ from tests.test_official_results import board
 @pytest.mark.parametrize("action", ["correct", "void"])
 async def test_unrated_ruling_ignores_unsupported_rating_strategy(db_session, action):
     match, director = await directed_tournament_match(
-        db_session, tag=f"unrated-{action}", best_of=1
+        db_session, tag=f"unrated-{action}", best_of=1, rated=False
     )
-    match.match_settings.affects_rating = False
-    await db_session.commit()
     await propose_result(
         db_session, match.id, director.id, games=board(), supersedes_result_id=None
     )

@@ -84,10 +84,11 @@ async def test_timeout_records_policy_and_deadline_without_inventing_acceptance(
     from tests._helpers import FakeSender, directed_tournament_match
 
     match, _ = await directed_tournament_match(
-        db_session, tag="official-timeout", best_of=1
+        db_session,
+        tag="official-timeout",
+        best_of=1,
+        retirement_window=timedelta(microseconds=1),
     )
-    match.match_settings.retirement_window = timedelta(microseconds=1)
-    await db_session.commit()
     player = min(match.sides, key=lambda s: s.side_number).players[0].user_id
     outcome = await propose_result(
         db_session, match.id, player, games=board(), supersedes_result_id=None
@@ -678,10 +679,11 @@ async def test_voided_pending_proposal_never_retires(db_session):
     from tests._helpers import FakeSender, directed_tournament_match
 
     match, owner = await directed_tournament_match(
-        db_session, tag="official-void-pending", best_of=1
+        db_session,
+        tag="official-void-pending",
+        best_of=1,
+        retirement_window=timedelta(microseconds=1),
     )
-    match.match_settings.retirement_window = timedelta(microseconds=1)
-    await db_session.commit()
     player = min(match.sides, key=lambda s: s.side_number).players[0].user_id
     outcome = await propose_result(
         db_session, match.id, player, games=board(), supersedes_result_id=None
@@ -1002,10 +1004,11 @@ async def test_timeout_uses_database_clock_when_application_clock_is_ahead(
     from tests._helpers import FakeSender, directed_tournament_match
 
     match, _ = await directed_tournament_match(
-        db_session, tag="timeout-clock", best_of=1
+        db_session,
+        tag="timeout-clock",
+        best_of=1,
+        retirement_window=timedelta(days=1),
     )
-    match.match_settings.retirement_window = timedelta(days=1)
-    await db_session.commit()
     player = min(match.sides, key=lambda s: s.side_number).players[0].user_id
     outcome = await propose_result(
         db_session, match.id, player, games=board(), supersedes_result_id=None
@@ -1040,10 +1043,11 @@ async def test_timeout_finalizes_after_both_participants_lose_managing_accounts(
     from tests._helpers import FakeSender, directed_tournament_match
 
     match, _ = await directed_tournament_match(
-        db_session, tag="timeout-unmanaged", best_of=1
+        db_session,
+        tag="timeout-unmanaged",
+        best_of=1,
+        retirement_window=timedelta(microseconds=1),
     )
-    match.match_settings.retirement_window = timedelta(microseconds=1)
-    await db_session.commit()
     sides = sorted(match.sides, key=lambda side: side.side_number)
     outcome = await propose_result(
         db_session,
@@ -1087,9 +1091,12 @@ async def test_sweep_uses_database_clock_when_application_clock_is_behind(
     from app.retirement_jobs import RetirementOutcome, sweep_lapsed_retirements
     from tests._helpers import FakeSender, directed_tournament_match
 
-    match, _ = await directed_tournament_match(db_session, tag="sweep-clock", best_of=1)
-    match.match_settings.retirement_window = timedelta(microseconds=1)
-    await db_session.commit()
+    match, _ = await directed_tournament_match(
+        db_session,
+        tag="sweep-clock",
+        best_of=1,
+        retirement_window=timedelta(microseconds=1),
+    )
     player = min(match.sides, key=lambda s: s.side_number).players[0].user_id
     await propose_result(
         db_session, match.id, player, games=board(), supersedes_result_id=None

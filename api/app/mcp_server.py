@@ -171,6 +171,7 @@ from app.tournament_errors import (
     InactiveTournamentActorError,
     LeagueNotEditableError,
     LeagueNotFoundError,
+    MatchRulesFrozenError,
     NoDefaultLeagueError,
     NoDrawnEventsError,
     NonSinglesEntryError,
@@ -1543,7 +1544,7 @@ async def update_event(
                 f"{exc} (it is now at lock_version {exc.current_version}; read the "
                 "event again and send that version if you still want this edit)."
             ) from exc
-        except (GroupSetFrozenError, DrawTypeFrozenError) as exc:
+        except (GroupSetFrozenError, DrawTypeFrozenError, MatchRulesFrozenError) as exc:
             # Both freezes carry the exact, domain-authored 409 sentence — surfaced as
             # the ``ToolError`` prose verbatim, so the agent is told how to get unstuck
             # (remove the draw, edit, cut again).

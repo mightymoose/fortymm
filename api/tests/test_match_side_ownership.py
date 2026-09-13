@@ -6,7 +6,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.db import Base
 from app.match_creation import create_match
-from app.models import Account, Player
+from app.models import Account, Match, MatchSettings, MatchSide, MatchSidePlayer, Player
 from tests._database_reset import reset_database
 from tests._migration_database import empty_database, migrated_database
 
@@ -144,11 +144,23 @@ async def test_sql_rejects_duplicate_player_in_match(db_session, matches, side_i
     "shape", [(1, 0), (1, 1), (2, 2)], ids=["solo", "singles", "doubles"]
 )
 async def test_sql_accepts_valid_match_participation(db_session, matches, shape):
-    match = matches[0]
-    await db_session.execute(
-        text("UPDATE match_settings SET team_size = :size WHERE id = :id"),
-        {"size": max(shape), "id": match.match_settings_id},
+    original = matches[0]
+    match = Match(
+        match_settings=MatchSettings(
+            team_size=max(shape), best_of=3, affects_rating=False
+        ),
+        created_by_user_id=original.created_by_user_id,
+        league_id=original.league_id,
     )
+    for number in (1, 2):
+        side = MatchSide(match=match, side_number=number)
+        side.players = (
+            [MatchSidePlayer(match=match, user_id=original.sides[0].players[0].user_id)]
+            if number == 1
+            else []
+        )
+    db_session.add(match)
+    await db_session.flush()
     for side_index, size in enumerate(shape):
         existing = 1 if side_index == 0 else 0
         for position in range(existing, size):

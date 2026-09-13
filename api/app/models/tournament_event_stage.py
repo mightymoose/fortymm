@@ -6,6 +6,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     UniqueConstraint,
@@ -48,6 +49,12 @@ class TournamentEventStage(Base):
 
     __tablename__ = "tournament_event_stages"
     __table_args__ = (
+        ForeignKeyConstraint(
+            ["event_id", "rule_revision_id"],
+            ["tournament_draw_revisions.event_id", "tournament_draw_revisions.id"],
+            name="fk_stage_owned_rule_revision",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint("position >= 0", name="ck_tournament_event_stages_position"),
         # The target of a later composite FK — "things attached to a stage" (groups,
         # eventually) will foreign-key ``(event_id, id)``, exactly as
@@ -70,6 +77,7 @@ class TournamentEventStage(Base):
         ),
     )
 
+    rule_revision_id: Mapped[uuid.UUID | None] = mapped_column(index=True)
     retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     id: Mapped[uuid.UUID] = mapped_column(
