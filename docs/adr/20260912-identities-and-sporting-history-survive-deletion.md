@@ -21,7 +21,9 @@ must recheck Account activity before changing identity or minting a session.
 The database also revokes credentials on direct SQL deactivation and rejects new
 credentials owned by or targeting an inactive Account. Reactivation cannot revive
 old cookies or links. Existing linked login identities survive suspension, but SQL
-cannot attach, reassign, or change a login credential while its Account is inactive.
+cannot attach, reassign, or change a login credential while either its existing or
+new Account is inactive. Linked-token verification and profile changes also lock
+and refresh the Account before accepting authority.
 Player-authorized writes hold the Account lock through the action so suspension
 and admission have a deterministic order. A foreign login's guest reference grants no access to the
 inactive guest and may remain so the active destination can still sign in.
@@ -92,6 +94,9 @@ can reconcile those sides without deleting the original evidence. First evidence
 requires valid participant topology; the established solo-match opponent sentinel
 remains supported. Later writes cannot silently add missing original subjects;
 same-person reconciliation and explicitly recorded lineup corrections remain valid.
+Deleting or reparenting a recorded current participant must leave an equivalent
+canonical participant, or the complete latest audited replacement lineup, so current
+match, career, head-to-head and rating queries cannot silently lose that result.
 Untouched standalone matches remain disposable.
 
 Tables retain their separate reservation, outage, and catalogue lifecycles.

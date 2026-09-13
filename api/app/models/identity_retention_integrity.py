@@ -103,6 +103,9 @@ IDENTITY_RETENTION_DDL = (
             WHERE a.id IN (
                 SELECT (to_jsonb(NEW)->>column_name)::uuid
                 FROM unnest(TG_ARGV) AS column_name
+                UNION
+                SELECT (to_jsonb(OLD)->>'account_id')::uuid
+                WHERE TG_TABLE_NAME='login_identities' AND TG_OP='UPDATE'
             ) ORDER BY a.id FOR SHARE
         LOOP
             IF account_row.erased_at IS NOT NULL THEN

@@ -882,6 +882,11 @@ async def update_current_user(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> SessionResponse:
+    await lock_accounts(db, {current_user.id})
+    if current_user.merged_into_user_id is not None:
+        raise await _merged_session_exception(db, current_user)
+    if not current_user.is_active:
+        raise _session_ended_exception()
     if current_user.primary_player is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

@@ -759,3 +759,66 @@ async def test_first_snapshot_uses_transaction_final_participant_assignment(db_s
             {"id": match.id},
         )
     ) == {owner.player_id, opponent.player_id}
+
+
+@pytest.mark.parametrize("recording", ["score", "proposal"])
+@pytest.mark.parametrize("mutation", ["delete", "reparent"])
+async def test_recorded_current_participant_cannot_be_deleted(
+    db_session, recording, mutation
+):
+    from app.match_creation import create_match
+    from app.match_scoring import enter_game_score
+    from tests.test_proposal_history import append
+
+    owner = await make_user(db_session, "delete-subject-owner")
+    opponent = await make_user(db_session, "delete-subject-opponent")
+    match = await create_match(
+        db_session,
+        creator=owner,
+        opponent_user_id=opponent.id,
+        league_id=None,
+        best_of=3,
+        rated=False,
+    )
+    if recording == "proposal":
+        await append(db_session, (match.id, owner.id, owner.player_id))
+        await db_session.commit()
+    else:
+        await enter_game_score(
+            db_session,
+            match.id,
+            owner.id,
+            game_number=1,
+            side_1_points=11,
+            side_2_points=5,
+        )
+    destination = await create_match(
+        db_session,
+        creator=owner,
+        opponent_user_id=None,
+        league_id=None,
+        best_of=3,
+        rated=False,
+    )
+    destination_side = await db_session.scalar(
+        text("SELECT id FROM match_sides WHERE match_id=:match AND side_number=2"),
+        {"match": destination.id},
+    )
+    statement = (
+        "DELETE FROM match_side_players WHERE match_id=:match AND user_id=:player"
+        if mutation == "delete"
+        else "UPDATE match_side_players SET match_id=:destination, "
+        "match_side_id=:side WHERE match_id=:match AND user_id=:player"
+    )
+    with pytest.raises(IntegrityError, match="recorded participants"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(statement),
+                {
+                    "match": match.id,
+                    "player": opponent.player_id,
+                    "destination": destination.id,
+                    "side": destination_side,
+                },
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))

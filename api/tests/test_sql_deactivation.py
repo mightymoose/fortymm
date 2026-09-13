@@ -287,3 +287,24 @@ async def test_suspended_login_identity_is_retained_but_cannot_change_credential
         )
         == "auth0|existing"
     )
+
+
+async def test_sql_cannot_move_login_identity_out_of_suspended_account(db_session):
+    source, destination = Account(auth0_sub="auth0|suspended-source"), Account()
+    db_session.add_all([source, destination])
+    await db_session.commit()
+    source_id, destination_id = source.id, destination.id
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"),
+        {"id": source_id},
+    )
+    await db_session.commit()
+    with pytest.raises(IntegrityError, match="inactive account credentials"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE login_identities SET account_id=:destination "
+                    "WHERE account_id=:source"
+                ),
+                {"source": source_id, "destination": destination_id},
+            )

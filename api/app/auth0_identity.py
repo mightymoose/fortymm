@@ -32,9 +32,9 @@ async def resolve_linked_user(db: AsyncSession, sub: str) -> User | None:
     ``sub`` and nobody otherwise.
     """
     result = await db.execute(
-        select(User).where(
-            User.auth0_sub == sub,
-            User.is_active,
-        )
+        select(User)
+        .where(User.auth0_sub == sub, User.is_active)
+        .with_for_update(read=True, of=User)
+        .execution_options(populate_existing=True)
     )
     return result.scalar_one_or_none()
