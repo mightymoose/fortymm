@@ -1,3 +1,4 @@
+import { historicalEntrants } from './entrants'
 // What a tournament's **schedule** looks like to a reader (ADR-0790) — the pure
 // derivation behind the Schedule tab.
 //
@@ -260,7 +261,7 @@ export function buildSchedule(
 
   const matches: ScheduleMatch[] = []
   for (const event of tournament.events) {
-    const byId = new Map(event.entrants.map((e) => [e.id, e]))
+    const byId = new Map(historicalEntrants(event).map((e) => [e.id, e]))
     const drawIndex = buildDrawIndex(event)
     for (const fixture of event.fixtures) {
       matches.push(toScheduleMatch(fixture, event, byId, drawIndex, tournament.tableIds))

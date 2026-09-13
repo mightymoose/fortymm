@@ -124,10 +124,14 @@ async def create_match(
             raise SelfMatchError
         opponent = (
             await db.execute(
-                select(Player).where(
+                select(Player)
+                .where(
                     Player.id == opponent_user_id,
                     Player.merged_into_player_id.is_(None),
+                    Player.retired_at.is_(None),
                 )
+                .with_for_update(read=True)
+                .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
         # Rated casual opponents must be able to contest a proposed result.
@@ -140,7 +144,7 @@ async def create_match(
             .where(
                 AccountPlayer.player_id == opponent.id,
                 AccountPlayer.is_primary.is_(True),
-                Account.merged_into_user_id.is_(None),
+                Account.is_active,
             )
             .limit(1)
         ):

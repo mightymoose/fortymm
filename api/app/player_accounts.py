@@ -16,16 +16,27 @@ class PlayerAccessDenied(Exception):
 async def require_player(
     db: AsyncSession, account_id: uuid.UUID, player_id: uuid.UUID
 ) -> Player:
+    # Lifecycle and identity merges take Account before Player. Keep the
+    # author's Account stable until the caller commits its authorized action.
+    await db.execute(
+        select(Account.id)
+        .where(Account.id == account_id)
+        .order_by(Account.id)
+        .with_for_update(read=True)
+    )
     player = await db.scalar(
         select(Player)
         .join(AccountPlayer)
         .join(Account)
         .where(
-            Account.merged_into_user_id.is_(None),
+            Account.is_active,
             Player.merged_into_player_id.is_(None),
+            Player.retired_at.is_(None),
             AccountPlayer.account_id == account_id,
             AccountPlayer.player_id == player_id,
         )
+        .with_for_update(read=True, of=Player)
+        .execution_options(populate_existing=True)
     )
     if player is None:
         raise PlayerAccessDenied
@@ -49,8 +60,9 @@ def primary_player_reference(account_id: uuid.UUID) -> ScalarSelect[uuid.UUID]:
         .where(
             AccountPlayer.account_id == account_id,
             AccountPlayer.is_primary,
-            Account.merged_into_user_id.is_(None),
+            Account.is_active,
             Player.merged_into_player_id.is_(None),
+            Player.retired_at.is_(None),
         )
         .scalar_subquery()
     )
@@ -70,8 +82,9 @@ async def managing_account_ids(
             .join(Player)
             .where(
                 AccountPlayer.player_id.in_(player_ids),
-                Account.merged_into_user_id.is_(None),
+                Account.is_active,
                 Player.merged_into_player_id.is_(None),
+                Player.retired_at.is_(None),
             )
             .distinct()
             .order_by(Account.id)

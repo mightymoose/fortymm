@@ -24,4 +24,8 @@ def is_listed_player() -> ColumnElement[bool]:
     never-active guest's own profile, tournament entry and match creation must
     keep working.
     """
-    return Player.last_seen_at.is_not(None)
+    return (
+        Player.last_seen_at.is_not(None)
+        & Player.retired_at.is_(None)
+        & Player.merged_at.is_(None)
+    )

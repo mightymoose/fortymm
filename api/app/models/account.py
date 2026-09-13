@@ -104,6 +104,26 @@ class Account(Base):
     merged_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    deactivated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    erased_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    @hybrid_property
+    def is_active(self) -> bool:
+        return (
+            self.merged_at is None
+            and self.deactivated_at is None
+            and self.erased_at is None
+        )
+
+    @is_active.inplace.expression
+    @classmethod
+    def _active_expression(cls) -> SQLColumnExpression[bool]:
+        return (
+            cls.merged_at.is_(None)
+            & cls.deactivated_at.is_(None)
+            & cls.erased_at.is_(None)
+        )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

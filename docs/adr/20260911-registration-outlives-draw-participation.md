@@ -1,5 +1,7 @@
 # Registration outlives draw participation
 
+[Identity and sporting retention](20260912-identities-and-sporting-history-survive-deletion.md) supersedes the unplayed parent-deletion and storage-reclamation allowances below once a registration exists. Withdrawal and draw retirement preserve history; reaching a retained-storage limit does not authorize deleting registrations or their parents.
+
 Status: Accepted for #1685 after the design interview.
 
 ## Durable entry and registration

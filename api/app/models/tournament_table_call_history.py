@@ -39,7 +39,7 @@ class VenueTableCallHistory(Base):
             ["tournament_id", "fixture_id"],
             ["tournament_fixtures.scope_tournament_id", "tournament_fixtures.id"],
             name="fk_tournament_table_call_history_tournament_id_fixture_id",
-            ondelete="SET NULL (fixture_id)",
+            ondelete="NO ACTION",
             deferrable=True,
             initially="DEFERRED",
         ),

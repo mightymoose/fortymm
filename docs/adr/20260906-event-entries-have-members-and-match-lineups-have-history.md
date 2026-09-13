@@ -1,5 +1,7 @@
 # Event entries have members; actual match lineups have history
 
+[Identity and sporting retention](20260912-identities-and-sporting-history-survive-deletion.md) supersedes parent cleanup once any registration exists and the deletion allowance after a cancelled pristine call. Provisional lineup cleanup during uncall remains valid; registration and call history remain retained.
+
 Status: Accepted for #1672, building on the Account/Player separation in #1671.
 
 Amended by [Registration outlives draw participation](20260911-registration-outlives-draw-participation.md)

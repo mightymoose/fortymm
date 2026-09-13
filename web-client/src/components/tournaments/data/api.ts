@@ -91,6 +91,7 @@ export function apiToEntryState(s: ApiEntryState): EventEntryState {
   switch (s.state) {
     case 'open':
     case 'event_full':
+    case 'retired':
       return { state: s.state }
     case 'rating_ineligible':
       return {
@@ -110,6 +111,15 @@ export function apiToEntryState(s: ApiEntryState): EventEntryState {
 
 // ----- adapters: API (snake_case) <-> prototype (camelCase) ----------------
 
+const entrantSchema = z.object({
+  id: z.string(),
+  user_id: z.string(),
+  username: z.string(),
+  seed: z.number().int().nullable(),
+  rating: z.number().nullable(),
+  registration_order: z.number().int().nonnegative().nullable().optional(),
+})
+
 /** Map an API entrant to the prototype's `Entrant`.
  *
  * `rating` is carried across **unchanged, `null` included**: it is the entrant's
@@ -117,8 +127,10 @@ export function apiToEntryState(s: ApiEntryState): EventEntryState {
  * `null` means unrated — not "missing", not "0", and emphatically not a value to
  * coalesce. Defaulting it to a number here would erase the one fact this field
  * exists to carry. */
-export function apiToEntrant(e: TournamentEntrantRead): Entrant {
+export function apiToEntrant(payload: TournamentEntrantRead): Entrant {
+  const e = entrantSchema.parse(payload)
   return {
+    ...(e.registration_order === undefined ? {} : { registrationOrder: e.registration_order }),
     id: e.id,
     userId: e.user_id,
     username: e.username,
@@ -127,9 +139,13 @@ export function apiToEntrant(e: TournamentEntrantRead): Entrant {
   }
 }
 
+const retainedEntrantsSchema = z.object({
+  retained_entrants: z.array(entrantSchema).default([]),
+})
+
 /** Map an API event payload to the prototype's `TournamentEvent`. `entered`
- * comes straight off the wire: the server derives it from the same active
- * entries it lists in `entrants`, so the two always agree. So does
+ * comes straight off the wire, including held registrations hidden from the
+ * active roster. So does
  * `entry_state` — whether this event has room for the caller, and whether their
  * rating satisfies its rules, is the server's judgement and never the client's
  * (ADR-0783). */
@@ -160,6 +176,7 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
     timezone: e.timezone,
     entered: e.entered,
     entrants: e.entrants.map(apiToEntrant),
+    retainedEntrants: retainedEntrantsSchema.parse(e).retained_entrants.map(apiToEntrant),
     entryState: apiToEntryState(e.entry_state),
     slot: e.slot,
     predicates: e.predicates.map(apiToPredicate),

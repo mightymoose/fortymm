@@ -97,7 +97,13 @@ class TournamentAccountGrant(Base):
         Enum(AuthorityChangeReason, name="authority_change_reason"), nullable=True
     )
     inherited_from_grant_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("tournament_account_grants.id", ondelete="RESTRICT"), nullable=True
+        ForeignKey(
+            "tournament_account_grants.id",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=True,
     )
     revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

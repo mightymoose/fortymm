@@ -612,20 +612,7 @@ DRAW_HISTORY_INTEGRITY_DDL = (
         CREATE FUNCTION preserve_table_call_history() RETURNS trigger
         LANGUAGE plpgsql AS $$
         BEGIN
-        IF TG_OP = 'DELETE' THEN
-        IF pg_trigger_depth() <= 1 THEN
-        RAISE EXCEPTION 'table call history is append-only' USING ERRCODE = '23514';
-        END IF;
-        RETURN OLD;
-        END IF;
-        IF (to_jsonb(NEW) - 'fixture_id') IS DISTINCT FROM
-        (to_jsonb(OLD) - 'fixture_id') OR
-        (NEW.fixture_id IS DISTINCT FROM OLD.fixture_id AND
-        (OLD.fixture_id IS NULL OR NEW.fixture_id IS NOT NULL OR
-        pg_trigger_depth() <= 1)) THEN
-        RAISE EXCEPTION 'table call history is append-only' USING ERRCODE = '23514';
-        END IF;
-        RETURN NEW;
+        RAISE EXCEPTION 'table call history is append-only' USING ERRCODE='23514';
         END $$
         """,
     """

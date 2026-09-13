@@ -1,7 +1,7 @@
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 
-import { isUnrated, myEntrant } from '../../data/helpers'
+import { isUnrated } from '../../data/helpers'
 import { FORMAT_OPTIONS } from '../../data/options'
 import type { Entrant, TournamentEvent } from '../../data/types'
 import { LeadReason } from './lead-reason'
@@ -77,6 +77,7 @@ type RosterState =
       myEntryId: string | null
     }
   | { kind: 'empty' }
+  | { kind: 'hidden-entries' }
   | { kind: 'entry-closed'; formatLabel: string }
 
 function rosterState(
@@ -87,7 +88,7 @@ function rosterState(
   // it. A non-singles event cannot accrue entrants *today*, but if director-entry
   // (#784) ever puts people in one, listing them beats insisting it is closed.
   if (event.entrants.length > 0) {
-    const mine = myEntrant(event, username)
+    const mine = event.entrants.find((entrant) => entrant.username === username)
     // The signed-in player's own chip is PINNED to the front of the visible slice
     // (#781). The server lists entrants oldest-entry-first, so entering an event
     // that already has `MAX_VISIBLE` people appends you past the truncation
@@ -112,6 +113,7 @@ function rosterState(
       myEntryId: mine?.id ?? null,
     }
   }
+  if (event.entered > 0) return { kind: 'hidden-entries' }
   if (event.format !== 'singles') {
     const formatLabel =
       FORMAT_OPTIONS.find((f) => f.value === event.format)?.label ?? event.format
@@ -253,6 +255,13 @@ const RosterBody = ({
             </li>
           )}
         </ul>
+      )
+
+    case 'hidden-entries':
+      return (
+        <p className="mt-1.5 text-[12px] text-[color:var(--fg-3)]">
+          No active players to display.
+        </p>
       )
 
     case 'empty':

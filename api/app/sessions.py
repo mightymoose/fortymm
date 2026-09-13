@@ -167,11 +167,13 @@ async def _merge_guest_into(
 
     The single guard used by every merge path: token-bound sign-in/confirm and
     the browser-bound prior-session fold."""
+    if guest is not None:
+        await lock_accounts(db, {guest.id, target.id})
     if (
         guest is None
         or guest.id == target.id
         or guest.confirmed_at is not None
-        or guest.merged_into_user_id is not None
+        or not guest.is_active
     ):
         return None
     try:
@@ -203,7 +205,7 @@ async def _automatic_login_destination(
         guest is not None
         and guest.id != target.id
         and guest.confirmed_at is None
-        and guest.merged_into_user_id is None
+        and guest.is_active
         and await _guest_match_count(db, guest.id) == 0
     ):
         return guest.username
@@ -475,7 +477,13 @@ async def _find_session_user(db: AsyncSession, raw_token: str) -> User | None:
     token = result.scalar_one_or_none()
     if token is None:
         return None
-    user_result = await db.execute(select(User).where(User.id == token.user_id))
+    user_result = await db.execute(
+        select(User).where(
+            User.id == token.user_id,
+            User.deactivated_at.is_(None),
+            User.erased_at.is_(None),
+        )
+    )
     return user_result.scalar_one_or_none()
 
 
@@ -874,6 +882,11 @@ async def update_current_user(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> SessionResponse:
+    await lock_accounts(db, {current_user.id})
+    if current_user.merged_into_user_id is not None:
+        raise await _merged_session_exception(db, current_user)
+    if not current_user.is_active:
+        raise _session_ended_exception()
     if current_user.primary_player is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -979,7 +992,7 @@ def _enqueue_merge_email(to_email: str, raw_token: str, username: str) -> Job:
 
 
 async def _begin_account_merge(
-    db: AsyncSession, guest: User, email: str
+    db: AsyncSession, guest: User, email: str, locked_target_id: uuid.UUID | None
 ) -> SessionResponse:
     """Issue a merge token for an ephemeral ``guest`` who entered an address
     owned by an existing account, and email that account a sign-in link.
@@ -991,9 +1004,14 @@ async def _begin_account_merge(
     target = (
         await db.execute(select(User).where(User.email == email))
     ).scalar_one_or_none()
-    if target is None or target.id == guest.id:
+    if (
+        target is None
+        or target.id != locked_target_id
+        or target.id == guest.id
+        or not target.is_active
+    ):
         # Lost the race (the owner just changed their address out from under
-        # us) or, impossibly, our own row — nothing to merge into.
+        # us), became inactive, or is our own row — nothing to merge into.
         return await _build_session_response(db, guest)
 
     raw_token = await _issue_confirmation_token(
@@ -1043,10 +1061,18 @@ async def set_email(
 
     await _verify_captcha_or_400(payload.captcha_token)
 
-    await lock_accounts(db, {current_user.id})
+    email = payload.email.lower()
+    # Resolve the possible destination before taking any Account lock. Opposed
+    # merge requests must acquire the same complete lock set in UUID order.
+    target_id = await db.scalar(select(User.id).where(User.email == email))
+    account_ids = {current_user.id}
+    if target_id is not None:
+        account_ids.add(target_id)
+    await lock_accounts(db, account_ids)
     if current_user.merged_into_user_id is not None:
         raise await _merged_session_exception(db, current_user)
-    email = payload.email.lower()
+    if not current_user.is_active:
+        raise _session_ended_exception()
     old_email = current_user.email
     if old_email == email and current_user.confirmed_at is not None:
         return await _build_session_response(db, current_user)
@@ -1066,7 +1092,7 @@ async def set_email(
         # not merging — silently absorbing their account into someone else's
         # would be data loss, so keep the enumeration-safe no-op for them.
         if current_user.confirmed_at is None:
-            return await _begin_account_merge(db, current_user, email)
+            return await _begin_account_merge(db, current_user, email, target_id)
         return await _build_session_response(db, current_user)
 
     raw_token = await _issue_confirmation_token(
@@ -1313,6 +1339,15 @@ async def confirm_email(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="That confirmation link is invalid or expired.",
         )
+    credential_owner = await db.get(User, token_row.user_id)
+    if credential_owner is None or not credential_owner.is_active:
+        await db.delete(token_row)
+        await _sweep_replaced_email_tokens(db, token_row.user_id)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That confirmation link is invalid or expired.",
+        )
     if token_row.purpose == EmailPurpose.merge:
         return await _confirm_account_merge(
             db,
@@ -1325,7 +1360,7 @@ async def confirm_email(
     user = (
         await db.execute(select(User).where(User.id == token_row.user_id))
     ).scalar_one_or_none()
-    if user is None or user.merged_into_user_id is not None:
+    if user is None or not user.is_active:
         # The live token is burned without confirming, so its replaced
         # siblings can never be reported again either — sweep them (#1616).
         await db.delete(token_row)
@@ -1427,11 +1462,7 @@ async def _confirm_account_merge(
     # The token is only trustworthy while the target still owns the address it
     # was cut against. Reject (and burn the token) if the owner changed their
     # email or is itself tombstoned — surfacing the opaque error so nothing leaks.
-    if (
-        target is None
-        or target.merged_into_user_id is not None
-        or target.email != token_row.sent_to
-    ):
+    if target is None or not target.is_active or target.email != token_row.sent_to:
         # The live merge token is burned without confirming, so its replaced
         # siblings can never be reported again either — sweep them (#1616).
         await db.delete(token_row)
@@ -1544,6 +1575,8 @@ async def request_login_email(
     await _verify_captcha_or_400(payload.captcha_token)
 
     user, first_sign_in = await resolve_login_recipient(db, email)
+    if not user.is_active:
+        return LoginRequestAccepted(email=email)
     guest_id = await _requesting_guest_id(db, session_cookie, target=user)
     await _issue_and_send_login_email(
         db,
@@ -1712,6 +1745,11 @@ async def consume_login_token(
     ).scalar_one_or_none()
     if user is None:
         await db.delete(token_row)
+        await db.commit()
+        raise _invalid_or_expired_exception()
+
+    if not user.is_active:
+        await discard_login_action(db, user.id)
         await db.commit()
         raise _invalid_or_expired_exception()
 
@@ -1914,7 +1952,7 @@ async def preview_merge(
         or guest is None
         or guest.id == owner.id
         or guest.confirmed_at is not None
-        or guest.merged_into_user_id is not None
+        or not guest.is_active
     ):
         return MergePreview(
             is_merge=False,

@@ -19,6 +19,7 @@ from app.models import (
     TournamentEvent,
     TournamentEventStage,
     TournamentFixture,
+    VenueTableCallHistory,
 )
 from app.models.event_reconciliation import EventReconciliation
 from app.models.tournament_archive import TournamentArchiveHistory
@@ -155,6 +156,36 @@ async def require_no_recorded_play(
     ):
         raise RecordedPlayDeletionError(
             "Advancement history must be preserved. "
+            "This event or tournament cannot be deleted."
+        )
+
+    if (
+        await db.scalar(
+            select(TournamentEntry.id)
+            .where(TournamentEntry.event_id.in_(event_ids))
+            .limit(1)
+        )
+        is not None
+    ):
+        raise RecordedPlayDeletionError(
+            "Registration history must be preserved. "
+            "This event or tournament cannot be deleted."
+        )
+
+    calls = select(VenueTableCallHistory.id).where(
+        VenueTableCallHistory.tournament_id == tournament_id
+    )
+    if event_id is not None:
+        calls = calls.join(
+            TournamentFixture,
+            TournamentFixture.id == VenueTableCallHistory.fixture_id,
+        ).where(TournamentFixture.scope_event_id == event_id)
+    if (
+        await db.scalar(calls.limit(1).execution_options(include_draw_history=True))
+        is not None
+    ):
+        raise RecordedPlayDeletionError(
+            "Table call history must be preserved. "
             "This event or tournament cannot be deleted."
         )
 

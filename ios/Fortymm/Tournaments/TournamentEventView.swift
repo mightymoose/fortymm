@@ -28,7 +28,7 @@ struct TournamentEventView: View {
                     switch section {
                     case .players:
                         Text(event.capacityLabel).font(FMFont.ui(14, weight: .semibold))
-                        if event.entrants.isEmpty { TournamentNotice(message: "No players entered yet.") }
+                        if let message = event.rosterEmptyMessage { TournamentNotice(message: message) }
                         ForEach(event.entrants) { entrant in
                             FMCard {
                                 HStack {
@@ -50,7 +50,7 @@ struct TournamentEventView: View {
                                     confirmingRecut = true
                                 }
                             }
-                                .buttonStyle(.borderedProminent).disabled(busy || event.entrants.count < 2)
+                                .buttonStyle(.borderedProminent).disabled(busy || event.entryCount < 2)
                         }
                         ForEach(event.stages.sorted { $0.position < $1.position }) { stage in
                             Text("Stage \(stage.position + 1) · \(stage.drawType.replacingOccurrences(of: "-", with: " ").capitalized)")
@@ -78,7 +78,7 @@ struct TournamentEventView: View {
                     Button("Cancel", role: .cancel) { }
                 } message: { Text("This replaces all existing pairings and removes their schedule placements. This cannot be undone.") }
                 .confirmationDialog("Withdraw from \(event.name)?", isPresented: $confirmingWithdrawal, titleVisibility: .visible) {
-                    if let entry = event.entrants.first(where: { $0.userId == session.user?.id }) {
+                    if let entry = event.entry(for: session.user?.id) {
                         Button("Withdraw", role: .destructive) { mutate { try await service.withdraw(tournament.id, event: event.id, entry: entry.id) } }
                     }
                 } message: { Text("Your place will be released. You can enter again while registration is open, if space remains.") }
@@ -104,7 +104,7 @@ struct TournamentEventView: View {
             if tournament.status != .published {
                 Text(tournament.status == .draft ? "Registration has not opened yet." : "Registration is closed.")
                     .font(FMFont.ui(14)).foregroundStyle(FMColor.fg3)
-            } else if event.entrants.contains(where: { $0.userId == session.user?.id }) {
+            } else if event.entry(for: session.user?.id) != nil {
                 HStack {
                     Label("You're entered", systemImage: "checkmark.circle.fill").foregroundStyle(FMColor.serve500)
                     Spacer()
@@ -117,6 +117,7 @@ struct TournamentEventView: View {
                         .buttonStyle(.borderedProminent).disabled(busy)
                 case .full: TournamentNotice(message: "This event is full. A place may open if another player withdraws.")
                 case .ineligible: TournamentNotice(message: event.ineligibilityMessage)
+                case .retired: TournamentNotice(message: "This player is retired.")
                 case .unknown: TournamentNotice(message: "Entry is currently unavailable. Refresh to check again.")
                 }
             }

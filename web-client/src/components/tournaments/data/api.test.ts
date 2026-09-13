@@ -20,6 +20,7 @@ import {
   tournamentToUpdateBody,
 } from './api'
 import { blankAddress } from './helpers'
+import { nameByEntryId } from './entrant-names'
 import { addedReservation, keepReservations } from './reservation-entries'
 import { asEditedEvent } from './seed.factory'
 import { addTable, keepTables } from './table-catalogue'
@@ -40,7 +41,7 @@ describe('apiToEntryState', () => {
   // The tags cross the boundary UNCHANGED, and that is the contract: they are the
   // entry refusal codes (ADR-0968), so the reason the page load gives and the
   // reason a 409 gives read out of one copy table. Renaming them here would fork it.
-  it.each(['open', 'event_full'] as const)('carries %s across unchanged', (state) => {
+  it.each(['open', 'event_full', 'retired'] as const)('carries %s across unchanged', (state) => {
     expect(apiToEntryState({ state })).toEqual({ state })
   })
 
@@ -110,6 +111,40 @@ describe('apiToEvent', () => {
     expect(event.entrants).toEqual([
       { id: 'entry-9', userId: 'u-7', username: 'rita.kovac', seed: 3, rating: 1450 },
     ])
+  })
+
+  it('keeps retained players out of the roster but names their historical entries', () => {
+    const payload = {
+      ...buildTournamentEventRead({ entrants: [] }),
+      entered: 1,
+      retained_entrants: [buildTournamentEntrantRead({ id: 'retired-entry', username: 'retired.player' })],
+    }
+    const event = apiToEvent(payload)
+
+    expect(event.entrants).toEqual([])
+    expect(event.entered).toBe(1)
+    expect(nameByEntryId(event).get('retired-entry')).toBe('retired.player')
+  })
+
+  it('preserves fractional ratings for visible and retained entrants after rated matches', () => {
+    const event = apiToEvent(buildTournamentEventRead({
+      entrants: [buildTournamentEntrantRead({ rating: 1515.2637 })],
+      retained_entrants: [buildTournamentEntrantRead({ rating: 1484.7363 })],
+    }))
+
+    expect(event.entrants[0].rating).toBe(1515.2637)
+    expect(event.retainedEntrants[0].rating).toBe(1484.7363)
+  })
+
+  it('carries original registration order across both entrant lists', () => {
+    const event = apiToEvent({
+      ...buildTournamentEventRead(),
+      entrants: [{ ...buildTournamentEntrantRead(), registration_order: 1 }],
+      retained_entrants: [{ ...buildTournamentEntrantRead(), registration_order: 0 }],
+    })
+
+    expect(event.entrants[0].registrationOrder).toBe(1)
+    expect(event.retainedEntrants[0].registrationOrder).toBe(0)
   })
 
   it('maps an event nobody has entered to an empty list and a zero count', () => {
@@ -866,6 +901,7 @@ const event: TournamentEvent = {
   // the same fact, and a fixture that disagreed with itself would be a lie the
   // server cannot tell.
   entered: 2,
+  retainedEntrants: [],
   // One rated, one UNRATED (`rating: null` — they hold no rating on the
   // tournament's ladder, ADR-0783 §3). The round-trip below therefore proves the
   // null survives the mapping, which is the whole reason the field is on the wire.

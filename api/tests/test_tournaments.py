@@ -993,7 +993,7 @@ async def test_call_history_cannot_reference_a_fixture_from_another_tournament(
             )
 
 
-async def test_deleting_fixture_clears_only_its_call_history_fixture_reference(
+async def test_call_history_preserves_its_fixture_reference_on_delete(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:
     client, _ = authed_client
@@ -1010,16 +1010,20 @@ async def test_deleting_fixture_clears_only_its_call_history_fixture_reference(
     db_session.add(history)
     await db_session.flush()
 
-    await db_session.execute(
-        text("DELETE FROM tournament_fixtures WHERE id = :id"), {"id": fixture.id}
-    )
+    with pytest.raises(IntegrityError, match="fk_tournament_table_call_history"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("DELETE FROM tournament_fixtures WHERE id = :id"),
+                {"id": fixture.id},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
     fixture_reference = await db_session.scalar(
         select(VenueTableCallHistory.fixture_id).where(
             VenueTableCallHistory.id == history.id
         )
     )
 
-    assert fixture_reference is None
+    assert fixture_reference == fixture.id
 
 
 @pytest.mark.parametrize(
@@ -1060,7 +1064,7 @@ async def test_reservation_membership_activity_matches_its_position(
             )
 
 
-async def test_delete_tournament_removes_its_call_history_before_table_cascade(
+async def test_delete_tournament_preserves_its_call_history(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
@@ -1087,14 +1091,14 @@ async def test_delete_tournament_removes_its_call_history_before_table_cascade(
 
     response = await client.delete(f"/v1/tournaments/{tournament_id}")
 
-    assert response.status_code == 204, response.text
+    assert response.status_code == 409, response.text
     assert (
         await db_session.scalar(
             select(func.count())
             .select_from(VenueTableCallHistory)
             .where(VenueTableCallHistory.tournament_id == uuid.UUID(tournament_id))
         )
-        == 0
+        == 1
     )
 
 
@@ -3145,9 +3149,10 @@ async def test_patch_event_answers_with_its_existing_entrants(
 # batched load of every event's stages
 # (``TournamentEvent.stages``, ``lazy="selectin"`` too now, ADR 20260815 — the list is
 # no longer a special case that skips them, it just never asked for a separate batch).
-# Eleven, whatever the number of tournaments, tables, events, groups, reservations and
-# stages.
-EXPECTED_TOURNAMENT_LIST_STATEMENTS = 11
+# One additional flat query reads the caller's primary Player retirement.
+# Twelve, whatever the number of tournaments, tables, events, groups, reservations
+# and stages.
+EXPECTED_TOURNAMENT_LIST_STATEMENTS = 12
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -5889,16 +5894,17 @@ async def test_the_tournaments_list_does_not_carry_the_draw_type_catalogue(
 # load of every event's STAGES (``selectinload(TournamentEvent.stages)`` at the
 # ``tournament_detail`` read site — ADR 20260815 — riding
 # ``TournamentEventStage.draw_type_option``'s own ``lazy="joined"`` along on that same
-# statement). Thirteen, whatever the number of
+# statement), plus one flat primary Player retirement read. Fourteen, whatever the
+# number of
 # events, whatever the number of entrants in them, whatever the size of their draws,
 # whatever the size of the venue, whatever the number of stages, and whatever the
 # length of the day's solve ledger.
 #
-# Two of the thirteen are deliberate flat reads that grow with nothing: the draw-type
+# Two of the fourteen are deliberate flat reads that grow with nothing: the draw-type
 # catalogue is global reference data with nothing to key off the page, and the venue
 # tables are one batched read per *page*, not per card — which is exactly what the
 # parametrized cases below check by measuring the same number at one event and at four.
-EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 13
+EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 14
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -9435,11 +9441,11 @@ async def test_removing_a_catalogue_table_a_fixture_is_placed_at_is_a_409_naming
     assert fixture.pinned_at is not None
 
 
-@pytest.mark.parametrize("delete_event_first", [False, True])
+@pytest.mark.parametrize("attempt_event_deletion", [False, True])
 async def test_removing_table_after_uncut_preserves_historical_placement(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
-    delete_event_first: bool,
+    attempt_event_deletion: bool,
 ) -> None:
     client, _ = authed_client
     (
@@ -9477,28 +9483,25 @@ async def test_removing_table_after_uncut_preserves_historical_placement(
         event for event in reread.json()["events"] if event["id"] == event_id
     )
     assert [row["table_ids"] for row in event_read["reservations"]] == [[table_2]]
-    if delete_event_first:
+    if attempt_event_deletion:
         removed_event = await client.delete(
             f"/v1/tournaments/{tournament_id}/events/{event_id}"
         )
-        assert removed_event.status_code == 204, removed_event.text
-        assert (
-            await db_session.scalar(
-                select(VenueTable.id)
-                .where(VenueTable.id == table_1)
-                .execution_options(include_draw_history=True)
-            )
-            is None
-        )
+        assert removed_event.status_code == 409, removed_event.text
+        assert await db_session.scalar(
+            select(VenueTable.id)
+            .where(VenueTable.id == table_1)
+            .execution_options(include_draw_history=True)
+        ) == uuid.UUID(table_1)
         assert await db_session.scalar(
             select(VenueTable.id).where(VenueTable.id == table_2)
         ) == uuid.UUID(table_2)
 
     removed = await client.delete(f"/v1/tournaments/{tournament_id}")
-    assert removed.status_code == 204, removed.text
+    assert removed.status_code == 409, removed.text
 
 
-async def test_retired_table_survives_until_its_last_event_is_deleted(
+async def test_retired_table_survives_refused_event_deletions(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:
     client, _ = authed_client
@@ -9562,13 +9565,13 @@ async def test_retired_table_survives_until_its_last_event_is_deleted(
     first_deleted = await client.delete(
         f"/v1/tournaments/{tournament_id}/events/{first_event_id}"
     )
-    assert first_deleted.status_code == 204, first_deleted.text
+    assert first_deleted.status_code == 409, first_deleted.text
     assert await db_session.scalar(table_query) == uuid.UUID(table_1)
     second_deleted = await client.delete(
         f"/v1/tournaments/{tournament_id}/events/{second_event_id}"
     )
-    assert second_deleted.status_code == 204, second_deleted.text
-    assert await db_session.scalar(table_query) is None
+    assert second_deleted.status_code == 409, second_deleted.text
+    assert await db_session.scalar(table_query) == uuid.UUID(table_1)
 
 
 async def test_the_opt_in_removes_the_catalogue_table_and_leaves_its_fixtures_unplaced(
@@ -10150,12 +10153,14 @@ async def _active_entries(
     )
 
 
+@pytest.mark.parametrize("retire_entrant", [False, True])
 @pytest.mark.parametrize(("rated", "length_games"), [(True, 5), (False, 3)])
 async def test_going_live_materializes_the_whole_group(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
     rated: bool,
     length_games: int,
+    retire_entrant: bool,
 ) -> None:
     """Going live turns **every** ready fixture of a round-robin group into a real
     ``pending`` (scheduled) match in one stroke (ADR-0788, amended by the "born
@@ -10187,6 +10192,12 @@ async def test_going_live_materializes_the_whole_group(
     entries = await _seed_field(db_session, event["id"], 3)
     await _cut_the_draw(client, tournament_id, event["id"])
     await _set_status(db_session, tournament_id, TournamentStatus.published)
+
+    if retire_entrant:
+        from app.identity_lifecycle import retire_player
+
+        await retire_player(db_session, entries[0].user_id)
+        await db_session.commit()
 
     response = await _go_live(client, tournament_id)
     assert response.status_code == 201, response.text
@@ -11329,9 +11340,11 @@ async def test_going_live_materializes_a_both_byes_round_two_fixture(
     )
 
 
+@pytest.mark.parametrize("retire_champion", [False, True])
 async def test_the_detail_bff_surfaces_live_standings_then_a_champion(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
+    retire_champion: bool,
 ) -> None:
     """The tournament-detail BFF carries each round-robin event's standings, derived
     live from its fixtures' completed matches (ADR-0788):
@@ -11391,6 +11404,34 @@ async def test_the_detail_bff_surfaces_live_standings_then_a_champion(
             rated=True,
         )
         (read,) = await _events_of(client, tournament_id)
+
+    if retire_champion:
+        from app.identity_lifecycle import retire_player
+
+        original_names = {
+            entrant["id"]: entrant["username"] for entrant in read["entrants"]
+        }
+        original_results = read["results"]
+        await retire_player(db_session, owner.player_id)
+        await db_session.commit()
+        (read,) = await _events_of(client, tournament_id)
+        assert read["entered"] == 3
+        assert len(read["entrants"]) == 2
+        assert [entrant["id"] for entrant in read["retained_entrants"]] == [str(e1.id)]
+        names = {
+            entrant["id"]: entrant["username"]
+            for entrant in read["entrants"] + read["retained_entrants"]
+        }
+        assert names == original_names
+        ordered = sorted(
+            read["entrants"] + read["retained_entrants"],
+            key=lambda entrant: entrant["registration_order"],
+        )
+        assert [entrant["id"] for entrant in ordered] == list(original_names)
+        assert read["results"] == original_results
+        for fixture in read["fixtures"]:
+            assert fixture["entry_a_id"] in names
+            assert fixture["entry_b_id"] in names
 
     results = read["results"]
     assert results["kind"] == "standings"

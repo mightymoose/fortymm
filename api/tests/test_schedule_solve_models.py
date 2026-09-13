@@ -22,7 +22,7 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
-from sqlalchemy.exc import StatementError
+from sqlalchemy.exc import IntegrityError, StatementError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.leagues import get_default_league
@@ -49,7 +49,9 @@ from app.tournament_event_stages import mint_stages
 from tests._helpers import event_groups, make_user, venue_tables
 
 
-async def _make_tournament(db_session: AsyncSession) -> Tournament:
+async def _make_tournament(
+    db_session: AsyncSession, *, status: TournamentStatus = TournamentStatus.published
+) -> Tournament:
     """A published tournament owned by a throwaway director, written straight to
     the database — nothing here is about who may create one, and the solver
     routes don't exist yet."""
@@ -59,7 +61,7 @@ async def _make_tournament(db_session: AsyncSession) -> Tournament:
 
     tournament = Tournament(
         name="Autumn Open",
-        status=TournamentStatus.published,
+        status=status,
         address={
             "venue": "Berkeley TT Club",
             "street": "1 Shattuck Ave",
@@ -242,22 +244,26 @@ async def test_schedule_solve_read_refuses_an_unknown_enum_value(
         ScheduleSolveRead.model_validate(payload)
 
 
-async def test_schedule_solve_rows_die_with_their_tournament(
-    db_session: AsyncSession,
+@pytest.mark.parametrize("status", [TournamentStatus.draft, TournamentStatus.published])
+async def test_solve_ledger_cleanup_requires_a_deletable_tournament(
+    db_session: AsyncSession, status: TournamentStatus
 ) -> None:
-    """The ledger is *of* a tournament: deleting the tournament cascades to its
-    solve rows (ondelete CASCADE), leaving no orphaned history."""
-    tournament = await _make_tournament(db_session)
+    """Operational rows cascade only when their tournament is an unused draft."""
+    tournament = await _make_tournament(db_session, status=status)
     db_session.add(
         ScheduleSolve(tournament_id=tournament.id, trigger=ScheduleSolveTrigger.manual)
     )
     await db_session.commit()
-
-    await db_session.delete(tournament)
-    await db_session.commit()
-
+    if status == TournamentStatus.draft:
+        await db_session.delete(tournament)
+        await db_session.commit()
+    else:
+        with pytest.raises(IntegrityError, match="draft"):
+            async with db_session.begin_nested():
+                await db_session.delete(tournament)
+                await db_session.flush()
     remaining = (await db_session.execute(select(ScheduleSolve))).scalars().all()
-    assert remaining == []
+    assert len(remaining) == (0 if status == TournamentStatus.draft else 1)
 
 
 # ----- the pin facts on a fixture (schedule_solve chore 1a, same ADR) ---------

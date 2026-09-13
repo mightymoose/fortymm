@@ -25,6 +25,36 @@ describe('EntrantsList', () => {
     expect(page.getEntrantItems(EVENT)).toHaveLength(2)
   })
 
+  it('omits retained players from the active roster even when it is my own entry', () => {
+    page.render({
+      username: 'retired.player',
+      event: buildEvent({
+        name: EVENT,
+        entrants: [buildEntrant({ username: 'active.player' })],
+        retainedEntrants: [buildEntrant({ id: 'retired-entry', username: 'retired.player' })],
+      }),
+    })
+
+    expect(page.queryEntrant(EVENT, 'active.player')).toBeInTheDocument()
+    expect(page.queryEntrant(EVENT, 'retired.player')).not.toBeInTheDocument()
+    expect(page.getEntrantItems(EVENT)).toHaveLength(1)
+  })
+
+  it('distinguishes hidden held entries from an event nobody has entered', () => {
+    page.render({
+      event: buildEvent({
+        name: EVENT,
+        entrants: [],
+        retainedEntrants: [buildEntrant({ username: 'retired.player' })],
+      }),
+    })
+
+    expect(document.body).toHaveTextContent('No active players to display.')
+    expect(document.body).not.toHaveTextContent(NO_ENTRANTS_COPY)
+    expect(document.body).not.toHaveTextContent('retired.player')
+    expect(page.queryEntrantsList(EVENT)).toBeNull()
+  })
+
   it('renders the roster as a real list, named for its event', () => {
     // Semantics, not looks: a screen reader announces "Entrants in Open
     // Singles, list, 2 items" — and the per-event name keeps one card's roster

@@ -5128,6 +5128,27 @@ internal enum Components {
                 case rating
             }
         }
+        /// The caller's Player is retired and cannot enter new events.
+        ///
+        /// - Remark: Generated from `#/components/schemas/EventEntryRetired`.
+        internal struct EventEntryRetired: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/EventEntryRetired/state`.
+            internal enum StatePayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case retired = "retired"
+            }
+            /// - Remark: Generated from `#/components/schemas/EventEntryRetired/state`.
+            internal var state: Components.Schemas.EventEntryRetired.StatePayload?
+            /// Creates a new `EventEntryRetired`.
+            ///
+            /// - Parameters:
+            ///   - state:
+            internal init(state: Components.Schemas.EventEntryRetired.StatePayload? = nil) {
+                self.state = state
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case state
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/EventFormat`.
         internal enum EventFormat: String, Codable, Hashable, Sendable, CaseIterable {
             case singles = "singles"
@@ -11423,6 +11444,8 @@ internal enum Components {
             internal var userId: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentEntrantRead/username`.
             internal var username: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentEntrantRead/registration_order`.
+            internal var registrationOrder: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEntrantRead/seed`.
             internal var seed: Swift.Int?
             /// - Remark: Generated from `#/components/schemas/TournamentEntrantRead/rating`.
@@ -11433,18 +11456,21 @@ internal enum Components {
             ///   - id:
             ///   - userId:
             ///   - username:
+            ///   - registrationOrder:
             ///   - seed:
             ///   - rating:
             internal init(
                 id: Swift.String,
                 userId: Swift.String,
                 username: Swift.String,
+                registrationOrder: Swift.Int? = nil,
                 seed: Swift.Int? = nil,
                 rating: Swift.Double? = nil
             ) {
                 self.id = id
                 self.userId = userId
                 self.username = username
+                self.registrationOrder = registrationOrder
                 self.seed = seed
                 self.rating = rating
             }
@@ -11452,6 +11478,7 @@ internal enum Components {
                 case id
                 case userId = "user_id"
                 case username
+                case registrationOrder = "registration_order"
                 case seed
                 case rating
             }
@@ -11709,6 +11736,10 @@ internal enum Components {
             internal var updatedAt: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entrants`.
             internal var entrants: [Components.Schemas.TournamentEntrantRead]
+            /// Retired or merged entrants retained for historical fixture and result names.
+            ///
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/retained_entrants`.
+            internal var retainedEntrants: [Components.Schemas.TournamentEntrantRead]?
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_state`.
             internal enum EntryStatePayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_state/EventEntryFull`.
@@ -11717,6 +11748,8 @@ internal enum Components {
                 case open(Components.Schemas.EventEntryOpen)
                 /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_state/EventEntryRatingIneligible`.
                 case ratingIneligible(Components.Schemas.EventEntryRatingIneligible)
+                /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_state/EventEntryRetired`.
+                case retired(Components.Schemas.EventEntryRetired)
                 internal enum CodingKeys: String, CodingKey {
                     case state
                 }
@@ -11733,6 +11766,8 @@ internal enum Components {
                         self = .open(try .init(from: decoder))
                     case "rating_ineligible":
                         self = .ratingIneligible(try .init(from: decoder))
+                    case "retired":
+                        self = .retired(try .init(from: decoder))
                     default:
                         throw Swift.DecodingError.unknownOneOfDiscriminator(
                             discriminatorKey: CodingKeys.state,
@@ -11748,6 +11783,8 @@ internal enum Components {
                     case let .open(value):
                         try value.encode(to: encoder)
                     case let .ratingIneligible(value):
+                        try value.encode(to: encoder)
+                    case let .retired(value):
                         try value.encode(to: encoder)
                     }
                 }
@@ -11807,11 +11844,7 @@ internal enum Components {
             }
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/results`.
             internal var results: Components.Schemas.TournamentEventRead.ResultsPayload?
-            /// The registration count. Derived — there is no stored counter (ADR-0016).
-            ///
-            /// It is ``len(entrants)`` rather than a field of its own precisely so the
-            /// count and the list it counts cannot disagree: an event that says it has
-            /// 52 entrants but lists 51 is not a representable state.
+            /// Held registrations, including identities hidden from the active roster.
             ///
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entered`.
             internal var entered: Swift.Int
@@ -11838,10 +11871,11 @@ internal enum Components {
             ///   - createdAt:
             ///   - updatedAt:
             ///   - entrants:
+            ///   - retainedEntrants: Retired or merged entrants retained for historical fixture and result names.
             ///   - entryState:
             ///   - fixtures:
             ///   - results:
-            ///   - entered: The registration count. Derived — there is no stored counter (ADR-0016).
+            ///   - entered: Held registrations, including identities hidden from the active roster.
             internal init(
                 id: Swift.String,
                 tournamentId: Swift.String,
@@ -11863,6 +11897,7 @@ internal enum Components {
                 createdAt: Foundation.Date,
                 updatedAt: Foundation.Date,
                 entrants: [Components.Schemas.TournamentEntrantRead],
+                retainedEntrants: [Components.Schemas.TournamentEntrantRead]? = nil,
                 entryState: Components.Schemas.TournamentEventRead.EntryStatePayload,
                 fixtures: [Components.Schemas.TournamentFixtureRead],
                 results: Components.Schemas.TournamentEventRead.ResultsPayload? = nil,
@@ -11888,6 +11923,7 @@ internal enum Components {
                 self.createdAt = createdAt
                 self.updatedAt = updatedAt
                 self.entrants = entrants
+                self.retainedEntrants = retainedEntrants
                 self.entryState = entryState
                 self.fixtures = fixtures
                 self.results = results
@@ -11914,6 +11950,7 @@ internal enum Components {
                 case createdAt = "created_at"
                 case updatedAt = "updated_at"
                 case entrants
+                case retainedEntrants = "retained_entrants"
                 case entryState = "entry_state"
                 case fixtures
                 case results

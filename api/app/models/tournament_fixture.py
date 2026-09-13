@@ -320,31 +320,42 @@ class TournamentFixture(Base):
     position: Mapped[int] = mapped_column(Integer, nullable=False)
     #: ``NULL`` = TBD, never a bye (byes are the absence of a row).
     #:
-    #: ``CASCADE``, not ``RESTRICT``, because of the **event-delete** path:
-    #: ``DELETE /tournaments/{id}/events/{id}`` deletes the event with
-    #: ``passive_deletes``, so the database cascades to ``tournament_entries`` and
-    #: ``tournament_fixtures`` in one statement. ``RESTRICT`` is checked immediately
-    #: (it cannot be deferred), so it would make that delete depend on the order
-    #: Postgres happens to fire the two cascades in.
+    #: Deferred NO ACTION preserves contestant references while allowing unused
+    #: draft setup to be removed transactionally in either cascade order.
     #:
     #: Registration withdrawal and identity reconciliation retain these entry IDs.
     #: Each contestant also names its exact historical participation period, so
     #: re-registration or a replacement draw cannot reactivate an old seat.
     entry_a_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("tournament_entries.id", ondelete="CASCADE"),
+        ForeignKey(
+            "tournament_entries.id",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         nullable=True,
     )
     entry_b_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("tournament_entries.id", ondelete="CASCADE"),
+        ForeignKey(
+            "tournament_entries.id",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         nullable=True,
     )
     #: Written back when this fixture's match completes (a later slice); until then the
     #: fixture is pending or ready, never decided.
     winner_entry_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
-        ForeignKey("tournament_entries.id", ondelete="CASCADE"),
+        ForeignKey(
+            "tournament_entries.id",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         nullable=True,
     )
     #: Set when the fixture materializes into a real match — which only happens once
@@ -390,7 +401,12 @@ class TournamentFixture(Base):
     #: apart.
     table_id: Mapped[str | None] = mapped_column(
         UUID(as_uuid=False),
-        ForeignKey("tournament_tables.id", deferrable=True, initially="DEFERRED"),
+        ForeignKey(
+            "tournament_tables.id",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         nullable=True,
     )
     #: A **placement**'s predicted start — a ``timestamptz`` **instant**

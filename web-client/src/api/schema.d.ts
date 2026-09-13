@@ -2711,6 +2711,17 @@ export interface components {
             rating: number;
         };
         /**
+         * EventEntryRetired
+         * @description The caller's Player is retired and cannot enter new events.
+         */
+        EventEntryRetired: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            state: "retired";
+        };
+        /**
          * EventFormat
          * @enum {string}
          */
@@ -5370,6 +5381,8 @@ export interface components {
             user_id: string;
             /** Username */
             username: string;
+            /** Registration Order */
+            registration_order?: number | null;
             /** Seed */
             seed: number | null;
             /** Rating */
@@ -5496,19 +5509,20 @@ export interface components {
             updated_at: string;
             /** Entrants */
             entrants: components["schemas"]["TournamentEntrantRead"][];
+            /**
+             * Retained Entrants
+             * @description Retired or merged entrants retained for historical fixture and result names.
+             */
+            retained_entrants?: components["schemas"]["TournamentEntrantRead"][];
             /** Entry State */
-            entry_state: components["schemas"]["EventEntryOpen"] | components["schemas"]["EventEntryFull"] | components["schemas"]["EventEntryRatingIneligible"];
+            entry_state: components["schemas"]["EventEntryOpen"] | components["schemas"]["EventEntryFull"] | components["schemas"]["EventEntryRatingIneligible"] | components["schemas"]["EventEntryRetired"];
             /** Fixtures */
             fixtures: components["schemas"]["TournamentFixtureRead"][];
             /** Results */
             results: (components["schemas"]["StandingsResultsRead"] | components["schemas"]["FinishesResultsRead"] | components["schemas"]["StandingsThenFinishesResultsRead"] | components["schemas"]["SwissStandingsResultsRead"]) | null;
             /**
              * Entered
-             * @description The registration count. Derived — there is no stored counter (ADR-0016).
-             *
-             *     It is ``len(entrants)`` rather than a field of its own precisely so the
-             *     count and the list it counts cannot disagree: an event that says it has
-             *     52 entrants but lists 51 is not a representable state.
+             * @description Held registrations, including identities hidden from the active roster.
              */
             readonly entered: number;
         };

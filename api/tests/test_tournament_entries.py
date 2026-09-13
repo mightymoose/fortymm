@@ -367,18 +367,18 @@ async def test_two_players_may_both_enter_the_same_event(
     assert len(await _active_entries(db_session, event.id)) == 2
 
 
-async def test_deleting_an_event_cascades_its_entries_away(
+async def test_deleting_an_event_retains_its_entries(
     db_session: AsyncSession, event: TournamentEvent, player: User
 ) -> None:
-    """A Core ``DELETE`` (not ``session.delete``) so this proves the database's
-    ``ON DELETE CASCADE``, not SQLAlchemy's ORM-side cascade."""
+    """A direct parent DELETE cannot erase registration history through a cascade."""
     db_session.add(TournamentEntry(event_id=event.id, user_id=player.id))
     await db_session.commit()
 
-    await db_session.execute(
-        delete(TournamentEvent).where(TournamentEvent.id == event.id)
-    )
-    await db_session.commit()
+    with pytest.raises(IntegrityError, match="entry history must be retained"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                delete(TournamentEvent).where(TournamentEvent.id == event.id)
+            )
 
     remaining = (
         (
@@ -389,7 +389,7 @@ async def test_deleting_an_event_cascades_its_entries_away(
         .scalars()
         .all()
     )
-    assert remaining == []
+    assert len(remaining) == 1
 
 
 async def test_deleting_a_player_with_an_entry_is_restricted(
@@ -3081,3 +3081,56 @@ async def test_reregistration_uses_new_registration_order_for_draw_seeding(
         second_entry.id,
         first_entry.id,
     ]
+
+
+async def test_retired_player_is_not_enterable_by_director(db_session):
+    from app.identity_lifecycle import retire_player
+
+    owner = await make_user(db_session, "retirement-director")
+    player = await make_user(db_session, "retirement-entrant")
+    event = await _make_event(db_session, owner=owner)
+    await retire_player(db_session, player.player_id)
+    await db_session.commit()
+    with pytest.raises(PlayerNotFoundError):
+        await enter_event_verb(
+            db_session,
+            tournament_id=event.tournament_id,
+            event_id=event.id,
+            actor=owner,
+            user_id=player.player_id,
+        )
+
+
+async def test_retirement_hides_roster_without_freeing_registration(db_session):
+    from app.identity_lifecycle import restore_player, retire_player
+    from app.tournament_serialization import shape_event_read
+
+    owner = await make_user(db_session, "roster-director")
+    player = await make_user(db_session, "roster-entrant")
+    event = await _make_event(db_session, owner=owner, max_players=1)
+    await enter_event_verb(
+        db_session,
+        tournament_id=event.tournament_id,
+        event_id=event.id,
+        actor=owner,
+        user_id=player.player_id,
+    )
+    tournament = await db_session.get(Tournament, event.tournament_id)
+    await retire_player(db_session, player.player_id)
+    await db_session.commit()
+    response = await shape_event_read(
+        db_session, event=event, league_id=tournament.league_id, viewer_id=owner.id
+    )
+    assert response.entrants == []
+    assert response.entered == 1
+    assert [entrant.user_id for entrant in response.retained_entrants] == [
+        player.player_id
+    ]
+    assert response.retained_entrants[0].username == "roster-entrant"
+    await restore_player(db_session, player.player_id)
+    await db_session.commit()
+    response = await shape_event_read(
+        db_session, event=event, league_id=tournament.league_id, viewer_id=owner.id
+    )
+    assert len(response.entrants) == 1
+    assert response.entered == 1

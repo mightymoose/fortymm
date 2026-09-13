@@ -89,6 +89,20 @@ async def postgres_url(postgres_url, entry_schema):
         await admin.dispose()
 
 
+@pytest_asyncio.fixture(scope="session")
+async def engine(postgres_url):
+    """Keep the schema-specific engine separate from the shared session fixture.
+
+    Reusing the inherited engine fixture caches this module's overridden URL
+    for later modules even after DATABASE_URL returns to the ordinary test DB.
+    """
+    schema_engine = create_async_engine(postgres_url)
+    try:
+        yield schema_engine
+    finally:
+        await schema_engine.dispose()
+
+
 async def test_singles_registration_stores_a_player_member(api_client, db_session):
     player = await start_session(api_client, db_session)
     event = await _make_event(db_session)
@@ -1183,6 +1197,7 @@ async def test_cancelling_an_untouched_call_resets_its_provisional_lineup(
 ):
     from app.match_calls import apply_manual_placement
     from app.models import User
+    from app.tournament_errors import RecordedPlayDeletionError
     from app.tournament_events import delete_event
     from app.tournament_retention import require_no_recorded_play
 
@@ -1205,11 +1220,14 @@ async def test_cancelling_an_untouched_call_resets_its_provisional_lineup(
     await db_session.commit()
     assert match.status is MatchStatus.pending
     assert await db_session.scalar(text("SELECT count(*) FROM match_lineups")) == 0
-    await require_no_recorded_play(db_session, tournament_id=tournament.id)
+    with pytest.raises(RecordedPlayDeletionError, match="Registration history"):
+        await require_no_recorded_play(db_session, tournament_id=tournament.id)
     owner = await db_session.get(User, tournament.owner_account_id)
-    await delete_event(
-        db_session, tournament_id=tournament.id, event_id=event.id, actor=owner
-    )
+    with pytest.raises(RecordedPlayDeletionError, match="Registration history"):
+        await delete_event(
+            db_session, tournament_id=tournament.id, event_id=event.id, actor=owner
+        )
+    assert await db_session.scalar(text("SELECT count(*) FROM tournament_entries")) == 2
 
 
 @pytest.mark.parametrize("commit_cancellation", [False, True])
@@ -1497,6 +1515,14 @@ async def test_evidence_cannot_be_reassigned_to_another_match(
         status=MatchStatus.pending,
         match_settings=MatchSettings(team_size=2, best_of=5, affects_rating=False),
     )
+    # A proposal is recorded play even for a pending standalone match, so its
+    # original subjects must exist before this test attempts to move the evidence.
+    for number in (1, 2):
+        side = MatchSide(match=other, side_number=number)
+        side.players = [
+            MatchSidePlayer(match=other, user_id=player.player_id)
+            for player in players[(number - 1) * 2 : number * 2]
+        ]
     db_session.add(other)
     await db_session.commit()
     original, destination = (
@@ -1528,12 +1554,13 @@ async def test_evidence_cannot_be_reassigned_to_another_match(
 
 @pytest.mark.parametrize("evidence", ["game", "result", "status"])
 @pytest.mark.parametrize("target", ["event", "tournament"])
-async def test_evidence_write_aborts_when_deletion_commits_first(
+async def test_evidence_write_survives_refused_parent_deletion(
     db_session, engine, evidence, target
 ):
     from sqlalchemy.exc import DBAPIError
 
     from app.models import MatchGame, MatchResult, User
+    from app.tournament_errors import RecordedPlayDeletionError
     from app.tournament_events import delete_event
     from app.tournament_lifecycle import delete_tournament
 
@@ -1587,31 +1614,56 @@ async def test_evidence_write_aborts_when_deletion_commits_first(
                 await writer.rollback()
             else:
                 await asyncio.wait_for(wait_for_block(), timeout=5)
-            if target == "event":
-                await delete_event(
-                    deletion,
-                    tournament_id=event.tournament_id,
-                    event_id=event.id,
-                    actor=actor,
-                )
-            else:
-                await delete_tournament(
-                    deletion, tournament_id=event.tournament_id, actor=actor
-                )
+            with pytest.raises(RecordedPlayDeletionError, match="Registration history"):
+                if target == "event":
+                    await delete_event(
+                        deletion,
+                        tournament_id=event.tournament_id,
+                        event_id=event.id,
+                        actor=actor,
+                    )
+                else:
+                    await delete_tournament(
+                        deletion, tournament_id=event.tournament_id, actor=actor
+                    )
+            await deletion.rollback()
             if evidence != "status":
-                with pytest.raises(
-                    DBAPIError, match="tournament association was deleted"
-                ) as exc:
-                    await asyncio.wait_for(write_task, timeout=5)
-                assert exc.value.orig.sqlstate == "40001"
+                await asyncio.wait_for(write_task, timeout=5)
+                table = "match_games" if evidence == "game" else "match_results"
+                assert (
+                    await db_session.scalar(
+                        text(f"SELECT count(*) FROM {table} WHERE match_id = :id"),
+                        {"id": match.id},
+                    )
+                    == 1
+                )
             else:
+                # Status writes fail fast on inverted parent locks. After the
+                # refused delete releases them, the writer can retry normally.
+                await asyncio.wait_for(write_evidence(), timeout=5)
                 assert (
                     await db_session.scalar(
                         text("SELECT status FROM matches WHERE id = :id"),
                         {"id": match.id},
                     )
-                    == "pending"
+                    == "in_progress"
                 )
+            assert (
+                await db_session.scalar(
+                    text("SELECT count(*) FROM tournament_fixtures WHERE id = :id"),
+                    {"id": fixture.id},
+                )
+                == 1
+            )
+            assert (
+                await db_session.scalar(
+                    text(
+                        "SELECT count(*) FROM tournament_entries WHERE event_id = :id"
+                    ),
+                    {"id": event.id},
+                )
+                == 2
+            )
         finally:
             if not write_task.done():
                 write_task.cancel()
@@ -2632,11 +2684,11 @@ async def test_deleting_a_parent_cannot_cascade_away_recorded_membership(
         "event": ("DELETE FROM tournament_events WHERE id = :id", event.id),
         "tournament": ("DELETE FROM tournaments WHERE id = :id", event.tournament_id),
     }[parent]
-    refusal = (
-        "entry history must be retained"
-        if parent == "entry"
-        else "recorded match fixture must be retained"
-    )
+    refusal = {
+        "entry": "entry history must be retained",
+        "event": "entry history must be retained",
+        "tournament": "only unused draft tournaments can be deleted",
+    }[parent]
     with pytest.raises(IntegrityError, match=refusal):
         async with db_session.begin_nested():
             await db_session.execute(text(statement), {"id": parent_id})

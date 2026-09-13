@@ -157,10 +157,14 @@ async def _load_entrant(db: AsyncSession, user_id: uuid.UUID) -> Player:
     """
     user = (
         await db.execute(
-            select(Player).where(
+            select(Player)
+            .where(
                 Player.id == user_id,
                 Player.merged_into_player_id.is_(None),
+                Player.retired_at.is_(None),
             )
+            .with_for_update(read=True)
+            .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
     if user is None:
@@ -466,13 +470,16 @@ async def _load_entry(
     by tournament: an entry that exists but hangs off a *different* event is not
     addressable through this URL, so the mismatch is a not-found rather than a
     withdrawal from the event the caller did not name. The FastAPI-free twin of the
-    router's ``_get_entry_or_404``; never an ``HTTPException``."""
+    router's ``_get_entry_or_404``; never an ``HTTPException``. Refresh the
+    computed canonical Player identity after any intervening same-person merge."""
     entry = (
         await db.execute(
-            select(TournamentEntry).where(
+            select(TournamentEntry)
+            .where(
                 TournamentEntry.id == entry_id,
                 TournamentEntry.event_id == event_id,
             )
+            .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
     if entry is None:
