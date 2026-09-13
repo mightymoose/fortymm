@@ -87,7 +87,7 @@ async def test_profile_change_rejects_stale_authority_after_deactivation(
     assert actor.username == "profile-before-suspension"
 
 
-async def test_profile_change_that_wins_finishes_before_deactivation(
+async def test_profile_change_persists_when_suspension_wins_before_response(
     db_session, engine, monkeypatch
 ):
     from app import sessions
@@ -116,13 +116,22 @@ async def test_profile_change_that_wins_finishes_before_deactivation(
             )
         )
         await asyncio.wait_for(checked.wait(), 5)
-        suspending = asyncio.create_task(deactivate_account(lifecycle, actor_id))
+
+        async def suspend_and_commit():
+            await deactivate_account(lifecycle, actor_id)
+            await lifecycle.commit()
+
+        suspending = asyncio.create_task(suspend_and_commit())
         try:
             await wait_for_blocked(writer, lifecycle_pid, suspending)
             proceed.set()
-            await writing
+            # The mutation commits before suspension can take its Account lock.
+            # Response construction rechecks activity after that commit and must
+            # wait for the independent suspension transaction to finish.
+            with pytest.raises(HTTPException) as rejected:
+                await writing
+            assert rejected.value.status_code == 401
             await suspending
-            await lifecycle.commit()
         finally:
             proceed.set()
             for pending in (writing, suspending):
