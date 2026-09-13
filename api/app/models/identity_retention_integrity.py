@@ -74,14 +74,32 @@ IDENTITY_RETENTION_DDL = (
     AFTER INSERT OR UPDATE ON accounts DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION check_erased_account_credentials()""",
     """
+    CREATE FUNCTION revoke_deactivated_account_credentials() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        DELETE FROM account_session_tokens WHERE user_id=NEW.id;
+        DELETE FROM account_email_tokens
+            WHERE user_id=NEW.id OR target_account_id=NEW.id;
+        DELETE FROM account_email_intents
+            WHERE user_id=NEW.id OR target_account_id=NEW.id;
+        DELETE FROM account_first_sign_in_intents WHERE user_id=NEW.id;
+        RETURN NULL;
+    END $$
+    """,
+    """CREATE TRIGGER revoke_deactivated_account_credentials
+    AFTER UPDATE OF deactivated_at ON accounts
+    FOR EACH ROW WHEN (OLD.deactivated_at IS NULL AND NEW.deactivated_at IS NOT NULL
+        AND NEW.erased_at IS NULL)
+    EXECUTE FUNCTION revoke_deactivated_account_credentials()""",
+    """
     CREATE FUNCTION guard_erased_account_credential() RETURNS trigger
     LANGUAGE plpgsql AS $$
     DECLARE account_row record;
     BEGIN
-        -- SHARE conflicts with erasure's non-key UPDATE as well as its service
+        -- SHARE conflicts with lifecycle non-key UPDATEs as well as the service
         -- FOR UPDATE lock. Ordinary FK KEY SHARE would allow the race.
         FOR account_row IN
-            SELECT a.id, a.erased_at FROM accounts a
+            SELECT a.id, a.erased_at, a.deactivated_at FROM accounts a
             WHERE a.id IN (
                 SELECT (to_jsonb(NEW)->>column_name)::uuid
                 FROM unnest(TG_ARGV) AS column_name
@@ -89,6 +107,19 @@ IDENTITY_RETENTION_DDL = (
         LOOP
             IF account_row.erased_at IS NOT NULL THEN
                 RAISE EXCEPTION 'erased account credentials cannot be attached'
+                    USING ERRCODE='23514';
+            END IF;
+            -- A foreign guest reference does not grant access to that guest.
+            -- Login identities and device registrations survive deactivation.
+            IF account_row.deactivated_at IS NOT NULL
+                AND TG_TABLE_NAME IN ('account_session_tokens',
+                    'account_email_tokens', 'account_email_intents',
+                    'account_first_sign_in_intents')
+                AND account_row.id IN (
+                    (to_jsonb(NEW)->>'user_id')::uuid,
+                    (to_jsonb(NEW)->>'target_account_id')::uuid
+                ) THEN
+                RAISE EXCEPTION 'inactive account credentials cannot be attached'
                     USING ERRCODE='23514';
             END IF;
         END LOOP;

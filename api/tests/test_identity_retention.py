@@ -58,17 +58,21 @@ async def test_deactivated_account_cannot_authenticate_with_auth0(db_session):
 
 
 async def test_deactivation_denies_existing_sessions_and_email_actions(db_session):
-    from datetime import UTC, datetime
-
     from app.email_credentials import email_action_is_valid
     from app.models.user_token import EmailPurpose, EmailToken, SessionToken
     from app.sessions import get_optional_user, hash_token
 
-    account = Account(email="offline@example.com", deactivated_at=datetime.now(UTC))
+    account = Account(email="offline@example.com")
     db_session.add(account)
     await db_session.flush()
     db_session.add(SessionToken(user_id=account.id, token=hash_token("old-cookie")))
     await db_session.commit()
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"),
+        {"id": account.id},
+    )
+    await db_session.commit()
+    await db_session.refresh(account)
     assert await get_optional_user(session_cookie="old-cookie", db=db_session) is None
     assert not await email_action_is_valid(
         db_session,
@@ -752,6 +756,9 @@ async def test_retired_player_can_withdraw_but_sql_cannot_reenter(
     await db_session.commit()
     withdrawn = await api_client.delete(f"{_entries_url(event)}/{entry_id}")
     assert withdrawn.status_code == 204, withdrawn.text
+    detail = await api_client.get(f"/v1/tournaments/{event.tournament_id}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["events"][0]["entry_state"] == {"state": "retired"}
     with pytest.raises(IntegrityError, match="retired Player cannot be admitted"):
         async with db_session.begin_nested():
             await db_session.execute(

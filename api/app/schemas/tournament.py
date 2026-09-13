@@ -1277,6 +1277,12 @@ class EventEntryOpen(BaseModel):
     state: Literal["open"] = "open"
 
 
+class EventEntryRetired(BaseModel):
+    """The caller's Player is retired and cannot enter new events."""
+
+    state: Literal["retired"] = "retired"
+
+
 class EventEntryFull(BaseModel):
     """The event holds ``max_players`` active entrants already, so nobody may enter it
     — the one arm of this union that says nothing about who is asking.
@@ -1322,7 +1328,7 @@ class EventEntryRatingIneligible(BaseModel):
 
 
 EventEntryState = Annotated[
-    EventEntryOpen | EventEntryFull | EventEntryRatingIneligible,
+    EventEntryOpen | EventEntryFull | EventEntryRatingIneligible | EventEntryRetired,
     Field(discriminator="state"),
 ]
 """Whether the CALLING user may enter this event — a sum type, not a bag of booleans.
@@ -1334,7 +1340,9 @@ something). ``full: bool`` + ``ineligible: bool`` + ``reason: str | None`` would
 constructible; here they are not (api/CLAUDE.md, "no tri-state booleans for what is
 really a sum type").
 
-The state names are the entry route's **refusal codes** (``EntryRefusal``,
+Retirement is reported independently of held registrations so withdrawal cannot
+make a retired Player appear eligible again. Other state names are the entry
+route's **refusal codes** (``EntryRefusal``,
 ADR-0968) — the same word for the same fact, so a client can hold one copy table for
 "why you cannot enter" whether it learned it from this read or from a 409 it got back
 from ``POST …/entries``.

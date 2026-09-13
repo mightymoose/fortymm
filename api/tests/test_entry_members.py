@@ -1511,6 +1511,14 @@ async def test_evidence_cannot_be_reassigned_to_another_match(
         status=MatchStatus.pending,
         match_settings=MatchSettings(team_size=2, best_of=5, affects_rating=False),
     )
+    # A proposal is recorded play even for a pending standalone match, so its
+    # original subjects must exist before this test attempts to move the evidence.
+    for number in (1, 2):
+        side = MatchSide(match=other, side_number=number)
+        side.players = [
+            MatchSidePlayer(match=other, user_id=player.player_id)
+            for player in players[(number - 1) * 2 : number * 2]
+        ]
     db_session.add(other)
     await db_session.commit()
     original, destination = (

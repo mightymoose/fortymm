@@ -117,6 +117,7 @@ struct TournamentEventView: View {
                         .buttonStyle(.borderedProminent).disabled(busy)
                 case .full: TournamentNotice(message: "This event is full. A place may open if another player withdraws.")
                 case .ineligible: TournamentNotice(message: event.ineligibilityMessage)
+                case .retired: TournamentNotice(message: "This player is retired.")
                 case .unknown: TournamentNotice(message: "Entry is currently unavailable. Refresh to check again.")
                 }
             }

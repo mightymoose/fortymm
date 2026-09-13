@@ -64,6 +64,7 @@ from app.schemas.tournament import (
     EventEntryFull,
     EventEntryOpen,
     EventEntryRatingIneligible,
+    EventEntryRetired,
     EventEntryState,
     EventResultsRead,
     EventStageRead,
@@ -93,6 +94,7 @@ from app.tournament_eligibility import (
 from app.tournament_queries import (
     active_entrants_by_event,
     completed_match_ids,
+    entrant_is_retired,
     entrant_rating,
     fixtures_by_event,
     game_counts_by_match,
@@ -172,6 +174,7 @@ def _entry_state(
     *,
     entered: int,
     rating: float | None,
+    retired: bool = False,
 ) -> EventEntryState:
     """Whether THIS caller may enter THIS event — the read-path twin of the guards
     the entry route raises 409s from, computed from facts already in hand.
@@ -218,6 +221,8 @@ def _entry_state(
     for it, rather than falling through to ``open`` — a read must not fail in the
     reassuring direction any more than a guard may fail in the permissive one.
     """
+    if retired:
+        return EventEntryRetired()
     decision = evaluate_rating_eligibility(rating=rating, predicates=e.predicates)
     match decision:
         case RatingIneligible():
@@ -733,6 +738,7 @@ def serialize_event(
     fixtures: list[TournamentFixtureRead],
     rating: float | None,
     game_counts: dict[uuid.UUID, tuple[int, int]] | None,
+    retired: bool = False,
 ) -> TournamentEventRead:
     # ``entrants`` is not on the ORM row in the shape the read model wants (it
     # needs the entrant's username, and only the *active* entries), so the fields
@@ -823,7 +829,9 @@ def serialize_event(
             "created_at": e.created_at,
             "updated_at": e.updated_at,
             "entrants": entrants,
-            "entry_state": _entry_state(e, entered=len(entrants), rating=rating),
+            "entry_state": _entry_state(
+                e, entered=len(entrants), rating=rating, retired=retired
+            ),
             "fixtures": fixtures,
             # The results, projected here from the fixtures' completed matches plus
             # the page's one batched game load — standings for a round-robin, finishes
@@ -916,6 +924,7 @@ def serialize_detail(
     latest_schedule_solve: ScheduleSolve | None,
     draw_type_catalogue: list[DrawTypeRead] | None,
     distance_miles: float | None = None,
+    retired: bool = False,
 ) -> TournamentDetailRead:
     # The full aggregate: tournament fields plus its events (each event's JSONB
     # value-objects validate into Pydantic models here, at this single boundary).
@@ -958,6 +967,7 @@ def serialize_detail(
                     entrants=entrants_by_event[e.id],
                     fixtures=fixtures_by_event[e.id],
                     rating=rating,
+                    retired=retired,
                     game_counts=game_counts,
                 )
                 for e in events
@@ -990,8 +1000,9 @@ async def shape_created_event_read(
     ``serialize_event`` reads real rows off ``event.stages`` with no query of its own
     here."""
     rating = await entrant_rating(db, league_id, primary_player_reference(viewer_id))
+    retired = await entrant_is_retired(db, viewer_id)
     return serialize_event(
-        event, entrants=[], fixtures=[], rating=rating, game_counts={}
+        event, entrants=[], fixtures=[], rating=rating, game_counts={}, retired=retired
     )
 
 
@@ -1019,6 +1030,7 @@ async def shape_event_read(
     fixtures = event_fixtures[event.id]
     game_counts = await game_counts_by_match(db, completed_match_ids(event_fixtures))
     rating = await entrant_rating(db, league_id, primary_player_reference(viewer_id))
+    retired = await entrant_is_retired(db, viewer_id)
     # Its stages ride along for free, same as ``shape_created_event_read`` above:
     # ``update_event``'s own ``db.refresh(event)`` repopulates the ``lazy="selectin"``
     # collection, so ``serialize_event`` reads real rows off ``event.stages`` — and
@@ -1030,4 +1042,5 @@ async def shape_event_read(
         fixtures=fixtures,
         rating=rating,
         game_counts=game_counts,
+        retired=retired,
     )

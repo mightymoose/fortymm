@@ -91,6 +91,7 @@ export function apiToEntryState(s: ApiEntryState): EventEntryState {
   switch (s.state) {
     case 'open':
     case 'event_full':
+    case 'retired':
       return { state: s.state }
     case 'rating_ineligible':
       return {

@@ -920,3 +920,15 @@ async def creator_username(db: AsyncSession, tournament: Tournament) -> str:
             select(Account.username).where(Account.id == tournament.created_by_user_id)
         )
     ).scalar_one()
+
+
+async def entrant_is_retired(db: AsyncSession, account_id: uuid.UUID) -> bool:
+    from app.models.account import AccountPlayer
+
+    return bool(
+        await db.scalar(
+            select(Player.retired_at.is_not(None))
+            .join(AccountPlayer, AccountPlayer.player_id == Player.id)
+            .where(AccountPlayer.account_id == account_id, AccountPlayer.is_primary)
+        )
+    )

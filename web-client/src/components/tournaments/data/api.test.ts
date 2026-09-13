@@ -41,7 +41,7 @@ describe('apiToEntryState', () => {
   // The tags cross the boundary UNCHANGED, and that is the contract: they are the
   // entry refusal codes (ADR-0968), so the reason the page load gives and the
   // reason a 409 gives read out of one copy table. Renaming them here would fork it.
-  it.each(['open', 'event_full'] as const)('carries %s across unchanged', (state) => {
+  it.each(['open', 'event_full', 'retired'] as const)('carries %s across unchanged', (state) => {
     expect(apiToEntryState({ state })).toEqual({ state })
   })
 

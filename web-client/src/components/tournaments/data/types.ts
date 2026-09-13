@@ -659,6 +659,8 @@ export interface Entrant {
  * word and they share one copy table. Two tables would drift.
  */
 export type EventEntryState =
+  /** Retirement blocks new entries, but an existing held entry can still be withdrawn. */
+  | { state: 'retired' }
   /** Room, and your rating passes every rule. (An *unrated* player passes every
    * rule — ADR-0783 §3.) */
   | { state: 'open' }

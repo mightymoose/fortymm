@@ -133,6 +133,28 @@ private final class TestLocationManager: CLLocationManager {
         precondition(empty.rosterEmptyMessage == "No players entered yet.")
         TournamentTransport.body = activeBody
         print("PASS: empty roster copy distinguishes held hidden registrations from no entries")
+        var retiredEventPayload = emptyEvent
+        retiredEventPayload["entry_state"] = ["state": "retired"]
+        retainedPayload[0]["events"] = [retiredEventPayload]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: retainedPayload), encoding: .utf8)!
+        let retiredWithoutEntry = try await service.list()[0].events[0]
+        precondition(retiredWithoutEntry.entryState.state.rawValue == "retired", "Retired players without a held entry need the explicit retirement refusal")
+        precondition(retiredWithoutEntry.entry(for: event.entrants[0].userId) == nil)
+        retiredEventPayload = retainedEvent
+        retiredEventPayload["entry_state"] = ["state": "retired"]
+        retainedPayload[0]["events"] = [retiredEventPayload]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: retainedPayload), encoding: .utf8)!
+        let retiredWithEntry = try await service.list()[0].events[0]
+        precondition(retiredWithEntry.entryState.state.rawValue == "retired")
+        let retiredHeldEntry = retiredWithEntry.entry(for: event.entrants[0].userId)
+        precondition(retiredHeldEntry?.id == event.entrants[0].id, "Retirement refusal must not remove held-entry withdrawal")
+        TournamentTransport.status = 204
+        TournamentTransport.body = ""
+        try await service.withdraw(retainedTournament.id, event: retiredWithEntry.id, entry: retiredHeldEntry!.id)
+        precondition(TournamentTransport.request?.url?.path.hasSuffix("/entries/\(event.entrants[0].id)") == true)
+        TournamentTransport.status = 200
+        TournamentTransport.body = activeBody
+        print("PASS: retirement refuses new entry while preserving held registration withdrawal")
         var roundTwoFailures: [String] = []
         if event.fixtureHeading(event.fixtures[0]) != "Round 1" { roundTwoFailures.append("Swiss fixtures show a structural group") }
         if TournamentCopy.entryFee("45.005", locale: Locale(identifier: "en_US")) != nil { roundTwoFailures.append("sub-cent fee admitted") }

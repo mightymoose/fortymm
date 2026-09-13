@@ -166,7 +166,7 @@ struct TournamentEventDTO: Decodable, Identifiable {
         let predicateId: String?
         let rating: Double?
         enum Kind: String, LenientRawDecodable {
-            case open, full = "event_full", ineligible = "rating_ineligible", unknown
+            case open, full = "event_full", ineligible = "rating_ineligible", retired, unknown
         }
     }
     struct Stage: Decodable, Identifiable { let id: UUID; let position: Int; let drawType: String }

@@ -426,3 +426,336 @@ async def test_publication_cannot_be_erased_by_resetting_status_before_delete(
             await db_session.execute(
                 text("DELETE FROM tournaments WHERE id=:id"), {"id": tournament.id}
             )
+
+
+@pytest.mark.parametrize("recording", ["score", "proposal"])
+async def test_first_evidence_cannot_precede_an_imported_opponent(
+    db_session, recording
+):
+    from app.match_creation import create_match
+    from tests.test_proposal_history import append
+
+    owner = await make_user(db_session, "early-score-owner")
+    opponent = await make_user(db_session, "early-score-opponent")
+    match = await create_match(
+        db_session,
+        creator=owner,
+        opponent_user_id=opponent.id,
+        league_id=None,
+        best_of=3,
+        rated=False,
+    )
+    side_id = await db_session.scalar(
+        text(
+            "SELECT match_side_id FROM match_side_players WHERE "
+            "match_id=:match AND user_id=:player"
+        ),
+        {"match": match.id, "player": opponent.player_id},
+    )
+    with pytest.raises(IntegrityError, match="recorded participants"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "DELETE FROM match_side_players WHERE match_id=:match AND "
+                    "user_id=:player"
+                ),
+                {"match": match.id, "player": opponent.player_id},
+            )
+            if recording == "proposal":
+                await append(db_session, (match.id, owner.id, owner.player_id))
+            else:
+                game_id = await db_session.scalar(
+                    text(
+                        "INSERT INTO match_games(match_id,game_number) "
+                        "VALUES(:match,1) RETURNING id"
+                    ),
+                    {"match": match.id},
+                )
+                await db_session.execute(
+                    text(
+                        "INSERT INTO "
+                        "match_game_scores(match_game_id,side_1_points,side_2_points) "
+                        "VALUES(:game,11,5)"
+                    ),
+                    {"game": game_id},
+                )
+            await db_session.execute(
+                text(
+                    "INSERT INTO "
+                    "match_side_players(match_id,match_side_id,user_id) "
+                    "VALUES(:match,:side,:player)"
+                ),
+                {"match": match.id, "side": side_id, "player": opponent.player_id},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_first_score_requires_a_known_participant(db_session):
+    from app.match_creation import create_match
+
+    owner = await make_user(db_session, "empty-score-owner")
+    match = await create_match(
+        db_session,
+        creator=owner,
+        opponent_user_id=None,
+        league_id=None,
+        best_of=3,
+        rated=False,
+    )
+    with pytest.raises(IntegrityError, match="recorded play requires"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("DELETE FROM match_side_players WHERE match_id=:match"),
+                {"match": match.id},
+            )
+            game_id = await db_session.scalar(
+                text(
+                    "INSERT INTO match_games(match_id,game_number) "
+                    "VALUES(:match,1) RETURNING id"
+                ),
+                {"match": match.id},
+            )
+            await db_session.execute(
+                text(
+                    "INSERT INTO "
+                    "match_game_scores(match_game_id,side_1_points,side_2_points) "
+                    "VALUES(:game,11,5)"
+                ),
+                {"game": game_id},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_first_score_keeps_the_supported_solo_participant(db_session):
+    from app.match_creation import create_match
+    from app.match_scoring import enter_game_score
+
+    owner = await make_user(db_session, "retained-solo")
+    match = await create_match(
+        db_session,
+        creator=owner,
+        opponent_user_id=None,
+        league_id=None,
+        best_of=3,
+        rated=False,
+    )
+    await enter_game_score(
+        db_session, match.id, owner.id, game_number=1, side_1_points=11, side_2_points=5
+    )
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT player_id FROM match_recorded_participants WHERE match_id=:id"
+            ),
+            {"id": match.id},
+        )
+        == owner.player_id
+    )
+
+
+async def test_team_first_score_requires_both_complete_sides(db_session):
+    from app.leagues import get_default_league
+    from app.models import Match, MatchSettings, MatchSide, MatchSidePlayer
+
+    players = [await make_user(db_session, f"retained-team-{n}") for n in range(4)]
+    league = await get_default_league(db_session)
+    match = Match(
+        league_id=league.id,
+        created_by_user_id=players[0].id,
+        match_settings=MatchSettings(team_size=2, best_of=3, affects_rating=False),
+    )
+    for number, player in enumerate(players[:2], 1):
+        side = MatchSide(match=match, side_number=number)
+        side.players = [MatchSidePlayer(match=match, user_id=player.player_id)]
+    db_session.add(match)
+    await db_session.flush()
+    game_id = await db_session.scalar(
+        text(
+            "INSERT INTO match_games(match_id,game_number) VALUES(:id,1) RETURNING id"
+        ),
+        {"id": match.id},
+    )
+    await db_session.commit()
+    with pytest.raises(IntegrityError, match="recorded play requires"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "INSERT INTO "
+                    "match_game_scores(match_game_id,side_1_points,side_2_points)"
+                    " VALUES(:game,11,5)"
+                ),
+                {"game": game_id},
+            )
+    for side_number, player in enumerate(players[2:], 1):
+        await db_session.execute(
+            text(
+                "INSERT INTO "
+                "match_side_players(match_id,match_side_id,user_id) SELECT "
+                ":match,id,:player FROM match_sides WHERE match_id=:match AND"
+                " side_number=:side"
+            ),
+            {"match": match.id, "player": player.player_id, "side": side_number},
+        )
+    await db_session.execute(
+        text(
+            "INSERT INTO "
+            "match_game_scores(match_game_id,side_1_points,side_2_points)"
+            " VALUES(:game,11,5)"
+        ),
+        {"game": game_id},
+    )
+    await db_session.commit()
+    assert set(
+        await db_session.scalars(
+            text(
+                "SELECT player_id FROM match_recorded_participants WHERE match_id=:id"
+            ),
+            {"id": match.id},
+        )
+    ) == {player.player_id for player in players}
+
+
+@pytest.mark.parametrize("first", ["participant", "score"])
+async def test_first_score_serializes_with_participant_admission(
+    db_session, engine, first
+):
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.match_creation import create_match
+    from tests.test_proposal_history import wait_for_blocked
+
+    owner = await make_user(db_session, "snapshot-race-owner")
+    opponent = await make_user(db_session, "snapshot-race-opponent")
+    match = await create_match(
+        db_session,
+        creator=owner,
+        opponent_user_id=None,
+        league_id=None,
+        best_of=3,
+        rated=False,
+    )
+    game = await db_session.scalar(
+        text(
+            "INSERT INTO match_games(match_id,game_number) VALUES(:id,1) RETURNING id"
+        ),
+        {"id": match.id},
+    )
+    await db_session.commit()
+    async with (
+        async_sessionmaker(engine)() as scorer,
+        async_sessionmaker(engine)() as writer,
+    ):
+        scorer_pid = await scorer.scalar(text("SELECT pg_backend_pid()"))
+        writer_pid = await writer.scalar(text("SELECT pg_backend_pid()"))
+
+        async def add_participant():
+            await writer.execute(
+                text(
+                    "INSERT INTO "
+                    "match_side_players(match_id,match_side_id,user_id) SELECT "
+                    ":match,id,:player FROM match_sides WHERE match_id=:match AND"
+                    " side_number=2"
+                ),
+                {"match": match.id, "player": opponent.player_id},
+            )
+
+        async def record_score():
+            await scorer.execute(
+                text(
+                    "INSERT INTO "
+                    "match_game_scores(match_game_id,side_1_points,side_2_points)"
+                    " VALUES(:game,11,5)"
+                ),
+                {"game": game},
+            )
+
+        if first == "participant":
+            await add_participant()
+            attempt = asyncio.create_task(record_score())
+            observer, blocked_pid = writer, scorer_pid
+        else:
+            await record_score()
+            attempt = asyncio.create_task(add_participant())
+            observer, blocked_pid = scorer, writer_pid
+        try:
+            await wait_for_blocked(observer, blocked_pid, attempt)
+            await observer.commit()
+            await attempt
+            if first == "participant":
+                await scorer.commit()
+            else:
+                with pytest.raises(IntegrityError, match="recorded participants"):
+                    await writer.commit()
+        finally:
+            if not attempt.done():
+                attempt.cancel()
+                await asyncio.gather(attempt, return_exceptions=True)
+    actual = set(
+        await db_session.scalars(
+            text(
+                "SELECT player_id FROM match_recorded_participants WHERE "
+                "match_id=:match"
+            ),
+            {"match": match.id},
+        )
+    )
+    expected = (
+        {owner.player_id, opponent.player_id}
+        if first == "participant"
+        else {owner.player_id}
+    )
+    assert actual == expected
+
+
+async def test_first_snapshot_uses_transaction_final_participant_assignment(db_session):
+    from app.match_creation import create_match
+
+    owner = await make_user(db_session, "final-snapshot-owner")
+    temporary = await make_user(db_session, "final-snapshot-temporary")
+    opponent = await make_user(db_session, "final-snapshot-opponent")
+    match = await create_match(
+        db_session,
+        creator=owner,
+        opponent_user_id=None,
+        league_id=None,
+        best_of=3,
+        rated=False,
+    )
+    participant_id = await db_session.scalar(
+        text(
+            "INSERT INTO "
+            "match_side_players(match_id,match_side_id,user_id) SELECT "
+            ":match,id,:player FROM match_sides WHERE match_id=:match AND"
+            " side_number=2 RETURNING id"
+        ),
+        {"match": match.id, "player": temporary.player_id},
+    )
+    await db_session.execute(
+        text("UPDATE match_side_players SET user_id=:player WHERE id=:id"),
+        {"player": opponent.player_id, "id": participant_id},
+    )
+    game = await db_session.scalar(
+        text(
+            "INSERT INTO match_games(match_id,game_number) VALUES(:id,1) RETURNING id"
+        ),
+        {"id": match.id},
+    )
+    await db_session.execute(
+        text(
+            "INSERT INTO "
+            "match_game_scores(match_game_id,side_1_points,side_2_points)"
+            " VALUES(:game,11,5)"
+        ),
+        {"game": game},
+    )
+    await db_session.commit()
+    assert set(
+        await db_session.scalars(
+            text(
+                "SELECT player_id FROM match_recorded_participants WHERE match_id=:id"
+            ),
+            {"id": match.id},
+        )
+    ) == {owner.player_id, opponent.player_id}

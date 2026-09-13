@@ -18,6 +18,10 @@ An inactive owning Account retains its reference but cannot exercise authority.
 Deactivation revokes outstanding login and email-confirmation credentials,
 including merge confirmations targeting the Account. Confirmation endpoints
 must recheck Account activity before changing identity or minting a session.
+The database also revokes credentials on direct SQL deactivation and rejects new
+credentials owned by or targeting an inactive Account. Reactivation cannot revive
+old cookies or links. A foreign login's guest reference grants no access to the
+inactive guest and may remain so the active destination can still sign in.
 
 Account erasure removes identifying Account data and credentials while retaining
 an inert identity for historical attribution. It is distinct from reversible
@@ -43,6 +47,8 @@ referenced by fixtures and results. Clients resolve historical names through bot
 lists, preserve the server's derived `registration_order`, and use the server's
 `entered` count for held registrations and capacity. Current-player membership and
 withdrawal use both lists; hiding a roster row never cancels its held seat.
+The server reports a `retired` entry refusal so withdrawing a held seat does not
+make an ineligible Player appear able to enter again.
 
 The explicit Account/Player merge rules remain in force: retained attribution and
 membership identify their original subjects, while current sporting identity
@@ -76,9 +82,11 @@ been recorded. Clearing the scratchpad, correcting a result, or voiding a match
 does not make that match disposable again. Its identity and participant evidence
 remain available. The first saved score or proposal captures immutable original
 participant identities independently of editable current match sides, so merges
-can reconcile those sides without deleting the original evidence. Existing
-authorized correction and same-person collision
-reconciliation still apply. Untouched standalone matches remain disposable.
+can reconcile those sides without deleting the original evidence. First evidence
+requires valid participant topology; the established solo-match opponent sentinel
+remains supported. Later writes cannot silently add missing original subjects;
+same-person reconciliation and explicitly recorded lineup corrections remain valid.
+Untouched standalone matches remain disposable.
 
 Tables retain their separate reservation, outage, and catalogue lifecycles.
 Releasing a reservation preserves its membership interval. A table with call

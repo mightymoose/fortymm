@@ -3149,9 +3149,10 @@ async def test_patch_event_answers_with_its_existing_entrants(
 # batched load of every event's stages
 # (``TournamentEvent.stages``, ``lazy="selectin"`` too now, ADR 20260815 — the list is
 # no longer a special case that skips them, it just never asked for a separate batch).
-# Eleven, whatever the number of tournaments, tables, events, groups, reservations and
-# stages.
-EXPECTED_TOURNAMENT_LIST_STATEMENTS = 11
+# One additional flat query reads the caller's primary Player retirement.
+# Twelve, whatever the number of tournaments, tables, events, groups, reservations
+# and stages.
+EXPECTED_TOURNAMENT_LIST_STATEMENTS = 12
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -5893,16 +5894,17 @@ async def test_the_tournaments_list_does_not_carry_the_draw_type_catalogue(
 # load of every event's STAGES (``selectinload(TournamentEvent.stages)`` at the
 # ``tournament_detail`` read site — ADR 20260815 — riding
 # ``TournamentEventStage.draw_type_option``'s own ``lazy="joined"`` along on that same
-# statement). Thirteen, whatever the number of
+# statement), plus one flat primary Player retirement read. Fourteen, whatever the
+# number of
 # events, whatever the number of entrants in them, whatever the size of their draws,
 # whatever the size of the venue, whatever the number of stages, and whatever the
 # length of the day's solve ledger.
 #
-# Two of the thirteen are deliberate flat reads that grow with nothing: the draw-type
+# Two of the fourteen are deliberate flat reads that grow with nothing: the draw-type
 # catalogue is global reference data with nothing to key off the page, and the venue
 # tables are one batched read per *page*, not per card — which is exactly what the
 # parametrized cases below check by measuring the same number at one event and at four.
-EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 13
+EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 14
 
 
 @pytest.mark.parametrize("event_count", [1, 4])

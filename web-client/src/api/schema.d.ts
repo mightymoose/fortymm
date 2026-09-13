@@ -2711,6 +2711,17 @@ export interface components {
             rating: number;
         };
         /**
+         * EventEntryRetired
+         * @description The caller's Player is retired and cannot enter new events.
+         */
+        EventEntryRetired: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            state: "retired";
+        };
+        /**
          * EventFormat
          * @enum {string}
          */
@@ -5504,7 +5515,7 @@ export interface components {
              */
             retained_entrants?: components["schemas"]["TournamentEntrantRead"][];
             /** Entry State */
-            entry_state: components["schemas"]["EventEntryOpen"] | components["schemas"]["EventEntryFull"] | components["schemas"]["EventEntryRatingIneligible"];
+            entry_state: components["schemas"]["EventEntryOpen"] | components["schemas"]["EventEntryFull"] | components["schemas"]["EventEntryRatingIneligible"] | components["schemas"]["EventEntryRetired"];
             /** Fixtures */
             fixtures: components["schemas"]["TournamentFixtureRead"][];
             /** Results */

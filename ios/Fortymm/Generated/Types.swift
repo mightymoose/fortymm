@@ -5128,6 +5128,27 @@ internal enum Components {
                 case rating
             }
         }
+        /// The caller's Player is retired and cannot enter new events.
+        ///
+        /// - Remark: Generated from `#/components/schemas/EventEntryRetired`.
+        internal struct EventEntryRetired: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/EventEntryRetired/state`.
+            internal enum StatePayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case retired = "retired"
+            }
+            /// - Remark: Generated from `#/components/schemas/EventEntryRetired/state`.
+            internal var state: Components.Schemas.EventEntryRetired.StatePayload?
+            /// Creates a new `EventEntryRetired`.
+            ///
+            /// - Parameters:
+            ///   - state:
+            internal init(state: Components.Schemas.EventEntryRetired.StatePayload? = nil) {
+                self.state = state
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case state
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/EventFormat`.
         internal enum EventFormat: String, Codable, Hashable, Sendable, CaseIterable {
             case singles = "singles"
@@ -11727,6 +11748,8 @@ internal enum Components {
                 case open(Components.Schemas.EventEntryOpen)
                 /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_state/EventEntryRatingIneligible`.
                 case ratingIneligible(Components.Schemas.EventEntryRatingIneligible)
+                /// - Remark: Generated from `#/components/schemas/TournamentEventRead/entry_state/EventEntryRetired`.
+                case retired(Components.Schemas.EventEntryRetired)
                 internal enum CodingKeys: String, CodingKey {
                     case state
                 }
@@ -11743,6 +11766,8 @@ internal enum Components {
                         self = .open(try .init(from: decoder))
                     case "rating_ineligible":
                         self = .ratingIneligible(try .init(from: decoder))
+                    case "retired":
+                        self = .retired(try .init(from: decoder))
                     default:
                         throw Swift.DecodingError.unknownOneOfDiscriminator(
                             discriminatorKey: CodingKeys.state,
@@ -11758,6 +11783,8 @@ internal enum Components {
                     case let .open(value):
                         try value.encode(to: encoder)
                     case let .ratingIneligible(value):
+                        try value.encode(to: encoder)
+                    case let .retired(value):
                         try value.encode(to: encoder)
                     }
                 }
