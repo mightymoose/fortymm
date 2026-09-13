@@ -1321,7 +1321,8 @@ async def confirm_email(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="That confirmation link is invalid or expired.",
         )
-    if not await email_action_is_valid(db, token_row):
+    credential_owner = await db.get(User, token_row.user_id)
+    if credential_owner is None or not credential_owner.is_active:
         await db.delete(token_row)
         await _sweep_replaced_email_tokens(db, token_row.user_id)
         await db.commit()

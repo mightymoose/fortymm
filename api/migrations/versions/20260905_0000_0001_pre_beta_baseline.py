@@ -1635,7 +1635,6 @@ IDENTITY_RETENTION_DDL = (
     """CREATE TRIGGER guard_retired_player_admission BEFORE INSERT OR UPDATE
     ON tournament_entry_members FOR EACH ROW
     EXECUTE FUNCTION guard_retired_player_admission()""",
-
     """
     CREATE FUNCTION guard_retired_registration() RETURNS trigger
     LANGUAGE plpgsql AS $$
@@ -1661,7 +1660,6 @@ IDENTITY_RETENTION_DDL = (
     """CREATE TRIGGER guard_retired_registration BEFORE INSERT
     ON tournament_entry_registrations FOR EACH ROW
     EXECUTE FUNCTION guard_retired_registration()""",
-
 )
 
 SPORTING_RETENTION_DDL = (
@@ -2023,7 +2021,6 @@ COMPETITION_RULE_INTEGRITY_DDL = (
     FOR EACH ROW EXECUTE FUNCTION preserve_match_rules()
     """,
 )
-
 
 
 def upgrade() -> None:
@@ -4184,8 +4181,20 @@ def upgrade() -> None:
             server_default=sa.text("now()"),
             nullable=False,
         ),
-        sa.ForeignKeyConstraint(['entry_a_id'], ['tournament_entries.id'], ondelete='NO ACTION', deferrable=True, initially='DEFERRED'),
-        sa.ForeignKeyConstraint(['entry_b_id'], ['tournament_entries.id'], ondelete='NO ACTION', deferrable=True, initially='DEFERRED'),
+        sa.ForeignKeyConstraint(
+            ["entry_a_id"],
+            ["tournament_entries.id"],
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        sa.ForeignKeyConstraint(
+            ["entry_b_id"],
+            ["tournament_entries.id"],
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         sa.ForeignKeyConstraint(["match_id"], ["matches.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(
             ["stage_id", "group_id"],
@@ -4197,8 +4206,20 @@ def upgrade() -> None:
             initially="DEFERRED",
             deferrable=True,
         ),
-        sa.ForeignKeyConstraint(['table_id'], ['tournament_tables.id'], ondelete='NO ACTION', deferrable=True, initially='DEFERRED'),
-        sa.ForeignKeyConstraint(['winner_entry_id'], ['tournament_entries.id'], ondelete='NO ACTION', deferrable=True, initially='DEFERRED'),
+        sa.ForeignKeyConstraint(
+            ["table_id"],
+            ["tournament_tables.id"],
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        sa.ForeignKeyConstraint(
+            ["winner_entry_id"],
+            ["tournament_entries.id"],
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         sa.ForeignKeyConstraint(
             ["scope_event_id", "stage_id"],
             ["tournament_event_stages.event_id", "tournament_event_stages.id"],
@@ -4286,7 +4307,14 @@ def upgrade() -> None:
             "kind IN ('called', 'moved', 'cancelled')",
             name="ck_tournament_table_call_history_kind",
         ),
-        sa.ForeignKeyConstraint(['tournament_id', 'fixture_id'], ['tournament_fixtures.scope_tournament_id', 'tournament_fixtures.id'], name='fk_tournament_table_call_history_tournament_id_fixture_id', ondelete='NO ACTION', deferrable=True, initially='DEFERRED'),
+        sa.ForeignKeyConstraint(
+            ["tournament_id", "fixture_id"],
+            ["tournament_fixtures.scope_tournament_id", "tournament_fixtures.id"],
+            name="fk_tournament_table_call_history_tournament_id_fixture_id",
+            ondelete="NO ACTION",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
         sa.ForeignKeyConstraint(
             ["tournament_id"], ["tournaments.id"], ondelete="CASCADE"
         ),
@@ -4741,7 +4769,12 @@ def upgrade() -> None:
         sa.Column(
             "inherited_from_grant_id",
             sa.UUID(),
-            sa.ForeignKey('tournament_account_grants.id', ondelete='NO ACTION', deferrable=True, initially='DEFERRED'),
+            sa.ForeignKey(
+                "tournament_account_grants.id",
+                ondelete="NO ACTION",
+                deferrable=True,
+                initially="DEFERRED",
+            ),
             nullable=True,
         ),
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
@@ -6564,46 +6597,106 @@ def upgrade() -> None:
     for statement in (*ADVANCEMENT_TABLE_DDL, *ADVANCEMENT_INTEGRITY_DDL):
         op.execute(statement)
 
-
     op.create_table(
         "required_repairs",
-        sa.Column("dispatch_after", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-        sa.Column("available_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+        sa.Column(
+            "dispatch_after",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
+        sa.Column(
+            "available_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("now()"),
+        ),
         sa.Column("failures", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("last_error", sa.Text()),
         sa.CheckConstraint("failures >= 0", name="ck_required_repairs_failures"),
-        sa.Column("state", sa.Enum("pending", "running", "completed", "failed", name="repair_state"), nullable=False, server_default="pending"),
+        sa.Column(
+            "state",
+            sa.Enum("pending", "running", "completed", "failed", name="repair_state"),
+            nullable=False,
+            server_default="pending",
+        ),
         sa.Column("claim_token", sa.UUID()),
         sa.Column("lease_until", sa.DateTime(timezone=True)),
         sa.Column("completed_at", sa.DateTime(timezone=True)),
-        sa.CheckConstraint("(state = 'running') = (claim_token IS NOT NULL AND lease_until IS NOT NULL) AND ((claim_token IS NULL) = (lease_until IS NULL))", name="ck_required_repairs_lease"),
-        sa.CheckConstraint("(state = 'completed') = (requested_generation = completed_generation) AND ((state = 'completed') = (completed_at IS NOT NULL))", name="ck_required_repairs_completion"),
-        sa.Column("id", sa.UUID(), primary_key=True, server_default=sa.text("gen_random_uuid()")),
-        sa.Column("player_id", sa.UUID(), sa.ForeignKey("players.id", ondelete="RESTRICT")),
-        sa.Column("tournament_id", sa.UUID(), sa.ForeignKey("tournaments.id", ondelete="CASCADE")),
-        sa.Column("requested_generation", sa.Integer(), nullable=False, server_default="1"),
-        sa.Column("completed_generation", sa.Integer(), nullable=False, server_default="0"),
-        sa.CheckConstraint("num_nonnulls(player_id, tournament_id) = 1", name="ck_required_repairs_target"),
-        sa.CheckConstraint("requested_generation > 0 AND completed_generation >= 0 AND completed_generation <= requested_generation", name="ck_required_repairs_generations"),
+        sa.CheckConstraint(
+            "(state = 'running') = (claim_token IS NOT NULL AND lease_until IS NOT NULL) AND ((claim_token IS NULL) = (lease_until IS NULL))",
+            name="ck_required_repairs_lease",
+        ),
+        sa.CheckConstraint(
+            "(state = 'completed') = (requested_generation = completed_generation) AND ((state = 'completed') = (completed_at IS NOT NULL))",
+            name="ck_required_repairs_completion",
+        ),
+        sa.Column(
+            "id",
+            sa.UUID(),
+            primary_key=True,
+            server_default=sa.text("gen_random_uuid()"),
+        ),
+        sa.Column(
+            "player_id", sa.UUID(), sa.ForeignKey("players.id", ondelete="RESTRICT")
+        ),
+        sa.Column(
+            "tournament_id",
+            sa.UUID(),
+            sa.ForeignKey("tournaments.id", ondelete="CASCADE"),
+        ),
+        sa.Column(
+            "requested_generation", sa.Integer(), nullable=False, server_default="1"
+        ),
+        sa.Column(
+            "completed_generation", sa.Integer(), nullable=False, server_default="0"
+        ),
+        sa.CheckConstraint(
+            "num_nonnulls(player_id, tournament_id) = 1",
+            name="ck_required_repairs_target",
+        ),
+        sa.CheckConstraint(
+            "requested_generation > 0 AND completed_generation >= 0 AND completed_generation <= requested_generation",
+            name="ck_required_repairs_generations",
+        ),
         sa.UniqueConstraint("player_id", name="uq_required_repairs_player"),
         sa.UniqueConstraint("tournament_id", name="uq_required_repairs_tournament"),
     )
 
-    op.create_index("ix_required_repairs_recovery", "required_repairs", ["state", "dispatch_after"])
+    op.create_index(
+        "ix_required_repairs_recovery", "required_repairs", ["state", "dispatch_after"]
+    )
     op.create_table(
         "required_repair_attempts",
         sa.Column("id", sa.UUID(), primary_key=True),
-        sa.Column("repair_id", sa.UUID(), sa.ForeignKey("required_repairs.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "repair_id",
+            sa.UUID(),
+            sa.ForeignKey("required_repairs.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column("generation", sa.Integer(), nullable=False),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("finished_at", sa.DateTime(timezone=True)),
         sa.Column("outcome", sa.Text(), nullable=False, server_default="running"),
         sa.Column("error", sa.Text()),
-        sa.CheckConstraint("generation > 0", name="ck_required_repair_attempts_generation"),
-        sa.CheckConstraint("outcome IN ('running', 'completed', 'expired', 'transient', 'permanent')", name="ck_required_repair_attempts_outcome"),
-        sa.CheckConstraint("(outcome = 'running') = (finished_at IS NULL)", name="ck_required_repair_attempts_finished"),
+        sa.CheckConstraint(
+            "generation > 0", name="ck_required_repair_attempts_generation"
+        ),
+        sa.CheckConstraint(
+            "outcome IN ('running', 'completed', 'expired', 'transient', 'permanent')",
+            name="ck_required_repair_attempts_outcome",
+        ),
+        sa.CheckConstraint(
+            "(outcome = 'running') = (finished_at IS NULL)",
+            name="ck_required_repair_attempts_finished",
+        ),
     )
-    op.create_index("ix_required_repair_attempts_repair_id", "required_repair_attempts", ["repair_id"])
+    op.create_index(
+        "ix_required_repair_attempts_repair_id",
+        "required_repair_attempts",
+        ["repair_id"],
+    )
 
     op.add_column(
         "tournament_event_stages",
@@ -6656,12 +6749,15 @@ def upgrade() -> None:
     for statement in COMPETITION_RULE_INTEGRITY_DDL:
         op.execute(statement)
 
-
     op.create_table(
         "match_recorded_play",
         sa.Column("match_id", sa.UUID(), primary_key=True),
-        sa.Column("recorded_at", sa.DateTime(timezone=True), nullable=False,
-                  server_default=sa.text("clock_timestamp()")),
+        sa.Column(
+            "recorded_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("clock_timestamp()"),
+        ),
         sa.ForeignKeyConstraint(["match_id"], ["matches.id"], ondelete="RESTRICT"),
     )
     op.create_table(
@@ -6669,12 +6765,17 @@ def upgrade() -> None:
         sa.Column("match_id", sa.UUID(), primary_key=True),
         sa.Column("side_number", sa.SmallInteger(), primary_key=True),
         sa.Column("player_id", sa.UUID(), primary_key=True),
-        sa.CheckConstraint("side_number IN (1, 2)", name="ck_recorded_participant_side"),
-        sa.ForeignKeyConstraint(["match_id"], ["match_recorded_play.match_id"], ondelete="RESTRICT"),
+        sa.CheckConstraint(
+            "side_number IN (1, 2)", name="ck_recorded_participant_side"
+        ),
+        sa.ForeignKeyConstraint(
+            ["match_id"], ["match_recorded_play.match_id"], ondelete="RESTRICT"
+        ),
         sa.ForeignKeyConstraint(["player_id"], ["players.id"], ondelete="RESTRICT"),
     )
     for statement in IDENTITY_RETENTION_DDL + SPORTING_RETENTION_DDL:
         op.execute(statement)
+
 
 def downgrade() -> None:
     op.drop_table("match_recorded_participants")

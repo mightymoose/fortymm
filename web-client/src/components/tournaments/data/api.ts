@@ -115,7 +115,7 @@ const entrantSchema = z.object({
   user_id: z.string(),
   username: z.string(),
   seed: z.number().int().nullable(),
-  rating: z.number().int().nullable(),
+  rating: z.number().nullable(),
   registration_order: z.number().int().nonnegative().nullable().optional(),
 })
 

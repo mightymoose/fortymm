@@ -126,6 +126,16 @@ describe('apiToEvent', () => {
     expect(nameByEntryId(event).get('retired-entry')).toBe('retired.player')
   })
 
+  it('preserves fractional ratings for visible and retained entrants after rated matches', () => {
+    const event = apiToEvent(buildTournamentEventRead({
+      entrants: [buildTournamentEntrantRead({ rating: 1515.2637 })],
+      retained_entrants: [buildTournamentEntrantRead({ rating: 1484.7363 })],
+    }))
+
+    expect(event.entrants[0].rating).toBe(1515.2637)
+    expect(event.retainedEntrants[0].rating).toBe(1484.7363)
+  })
+
   it('carries original registration order across both entrant lists', () => {
     const event = apiToEvent({
       ...buildTournamentEventRead(),
