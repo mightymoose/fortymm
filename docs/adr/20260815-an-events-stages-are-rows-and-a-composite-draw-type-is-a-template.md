@@ -5,6 +5,10 @@ worktrees; see `scripts/check-adr-numbering.sh`)
 
 ## Status
 
+[Competition rules freeze at draw-cut](20260912-competition-rules-freeze-at-draw-cut.md)
+refines decisions 6 and 7: execution and qualification use the draw revision's
+frozen rule interpretation and settings.
+
 Accepted. Decided during the design pass for #1348, a follow-up to #1338.
 Supersedes one part of ADR 20260726 ("a draw type is a seeded row"): the slug
 stops being the primary key of `draw_types`. Everything else in that ADR

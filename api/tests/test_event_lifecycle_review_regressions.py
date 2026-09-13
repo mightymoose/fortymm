@@ -46,30 +46,14 @@ async def test_sql_void_cannot_commit_without_reconciling_finished_event(
     from sqlalchemy import text
     from sqlalchemy.exc import IntegrityError
 
+    from app.models import DrawType
     from app.official_results import official_history
     from app.result_proposal import propose_result
     from tests._helpers import directed_tournament_match
     from tests.test_official_results import board
 
     match, director = await directed_tournament_match(
-        db_session, tag="void-reconciliation", best_of=1
-    )
-    await db_session.execute(
-        text(
-            "UPDATE tournament_events SET draw_type_id=(SELECT id FROM draw_types "
-            "WHERE key='single-elim') WHERE id=(SELECT scope_event_id FROM "
-            "tournament_fixtures WHERE match_id=:id)"
-        ),
-        {"id": match.id},
-    )
-    await db_session.execute(
-        text(
-            "UPDATE tournament_event_stages SET draw_type_id=(SELECT id "
-            "FROM draw_types "
-            "WHERE key='single-elim') WHERE id=(SELECT stage_id FROM "
-            "tournament_fixtures WHERE match_id=:id)"
-        ),
-        {"id": match.id},
+        db_session, tag="void-reconciliation", best_of=1, draw_type=DrawType.single_elim
     )
     await propose_result(
         db_session, match.id, director.id, games=board(), supersedes_result_id=None

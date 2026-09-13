@@ -29,12 +29,16 @@ async def test_completed_attachment_requires_current_reconciliation(
         creator=player,
         opponent_user_id=entry_b.user_id,
         league_id=None,
-        best_of=1,
+        best_of=3,
         rated=False,
     )
     if with_scores:
         await propose_result(
-            db_session, match.id, player.id, games=board(), supersedes_result_id=None
+            db_session,
+            match.id,
+            player.id,
+            games=[*board(), board()[0].model_copy(update={"game_number": 2})],
+            supersedes_result_id=None,
         )
     else:
         await db_session.execute(

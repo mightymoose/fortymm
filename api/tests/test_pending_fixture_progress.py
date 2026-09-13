@@ -29,7 +29,7 @@ async def test_pending_swiss_fixture_change_requires_reconciliation(
         creator=player,
         opponent_user_id=player_by_entry[played.entry_b_id],
         league_id=None,
-        best_of=1,
+        best_of=3,
         rated=False,
     )
     await db_session.execute(

@@ -24,7 +24,7 @@ async def test_cancelled_event_rejects_new_scoreless_terminal_attachment(
         creator=player,
         opponent_user_id=b.user_id,
         league_id=None,
-        best_of=1,
+        best_of=3,
         rated=False,
     )
     await db_session.execute(

@@ -59,6 +59,8 @@ class TournamentDrawRevision(Base):
     retained_fixture_count: Mapped[int] = mapped_column(
         BigInteger, nullable=False, server_default=text("0")
     )
+    format_rules: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
+    match_rules: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
     configuration: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )

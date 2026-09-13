@@ -43,7 +43,14 @@ async def test_tournament_result_write_waits_for_parent_writer(
     db_session, engine, parent, operation
 ):
     match, director = await directed_tournament_match(
-        db_session, tag="accept-parent-lock", best_of=1
+        db_session,
+        tag="accept-parent-lock",
+        best_of=1,
+        retirement_window=(
+            timedelta(microseconds=1)
+            if operation == "retirement"
+            else timedelta(days=7)
+        ),
     )
     sides = sorted(match.sides, key=lambda side: side.side_number)
     proposal = None
@@ -57,8 +64,6 @@ async def test_tournament_result_write_waits_for_parent_writer(
         )
         proposal = standing_result(outcome.match)
         assert proposal is not None
-        if operation == "retirement":
-            match.match_settings.retirement_window = timedelta(microseconds=1)
     event = (
         await db_session.execute(
             text(

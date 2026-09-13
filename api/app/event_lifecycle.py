@@ -31,7 +31,7 @@ async def reconcile_event(db: AsyncSession, event_id: uuid.UUID) -> None:
     event = await db.scalar(
         select(TournamentEvent)
         .where(TournamentEvent.id == event_id)
-        .with_for_update()
+        .with_for_update(of=TournamentEvent)
         .execution_options(populate_existing=True)
     )
     if event is None:
@@ -131,7 +131,7 @@ async def cancel_event(
             TournamentEvent.id == event_id,
             TournamentEvent.tournament_id == tournament_id,
         )
-        .with_for_update()
+        .with_for_update(of=TournamentEvent)
         .execution_options(populate_existing=True)
     )
     if event is None:

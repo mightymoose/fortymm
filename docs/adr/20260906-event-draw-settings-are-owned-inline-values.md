@@ -7,6 +7,11 @@ Date: 2026-09-06
 Accepted for #1678. Supersedes the separate settings-row ownership and storage
 choice in `20260726-an-events-draw-configuration-is-a-row-not-a-column.md`.
 
+[Competition rules freeze at draw-cut](20260912-competition-rules-freeze-at-draw-cut.md)
+extends this decision with immutable rules owned by retained draw revisions.
+Inline settings remain planning values; best-of and rated edits are now refused
+while a draw exists.
+
 The JSON representation and validation split from
 `20260805-a-draw-types-settings-are-one-not-null-json-object.md` remain accepted;
 only the table and column location change. The surrogate draw-type ID decision

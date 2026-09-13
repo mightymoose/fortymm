@@ -1094,7 +1094,7 @@ async def test_group_completion_does_not_advance_a_superseded_qualifier(
             for f in await _fixtures(db_session, event_id)
             if _is_knockout(f) and f.round == 1
         )
-        recorded = await _record_match(db_session, target, target, opponent)
+        recorded = await _record_match(db_session, target, target, opponent, best_of=3)
         await _record_result(db_session, recorded, submitted_by=target)
         knockout.entry_a_id, knockout.entry_b_id = target_id, opponent_entry.id
         knockout.match_id = recorded.id

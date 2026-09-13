@@ -27,7 +27,7 @@ async def test_removing_completed_walkover_requires_reconciliation(
         creator=player,
         opponent_user_id=entry_b.user_id,
         league_id=None,
-        best_of=1,
+        best_of=3,
         rated=False,
     )
     await db_session.execute(
@@ -54,7 +54,7 @@ async def test_removing_completed_walkover_requires_reconciliation(
             creator=player,
             opponent_user_id=entry_b.user_id,
             league_id=None,
-            best_of=1,
+            best_of=3,
             rated=False,
         )
         replacement.status = MatchStatus.pending

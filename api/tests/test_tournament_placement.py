@@ -335,7 +335,7 @@ async def test_a_played_out_fixture_refuses_the_placement(
     )
     fixture_id = fixture.id
     match = Match(
-        match_settings=MatchSettings(team_size=1, best_of=5, affects_rating=False),
+        match_settings=MatchSettings(team_size=1, best_of=5, affects_rating=True),
         league_id=default_league.id,
         created_by_user_id=owner.id,
     )

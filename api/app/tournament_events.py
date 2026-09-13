@@ -70,6 +70,7 @@ from app.tournament_draw_settings import (
 from app.tournament_draws import (
     event_groups,
     event_has_draw,
+    event_has_rule_revision,
     event_reservations,
     group_stage_ids,
 )
@@ -81,6 +82,7 @@ from app.tournament_errors import (
     EventNotFoundError,
     EventVersionConflictError,
     GroupSetFrozenError,
+    MatchRulesFrozenError,
     TournamentArchivedError,
 )
 from app.tournament_event_stages import mint_stages, remint_stages_in_place
@@ -536,7 +538,7 @@ async def _enforce_group_set_frozen(
     # The freeze turns on the draw EXISTING, not on it having been played: an unplayed
     # draw is the ordinary state of a tournament that has not started, and it is just as
     # orphanable as a played one.
-    if not await event_has_draw(db, event.id):
+    if not await event_has_rule_revision(db, event.id):
         return
     # The reservations the event holds, in their stored order (``event.reservations``
     # is eager).
@@ -656,11 +658,9 @@ async def _enforce_draw_settings_frozen(
         return
     current = stored.draw_type
     # Only now the query — and only for a payload that really moves the configuration.
-    # It is the same ``event_has_draw`` the group freeze asks; a payload that changes
-    # both
-    # asks it twice — two COUNTs on an indexed column under a lock we hold, in exchange
-    # for two guards that each read as one rule.
-    if not await event_has_draw(db, event.id):
+    # Both configuration guards ask for an active revision under the parent lock.
+    # Fixture counts remain a separate scheduling concern.
+    if not await event_has_rule_revision(db, event.id):
         return
     # The draw type is named first when both moved: it is the bigger claim, and the
     # qualifier-count sentence would be describing a bracket the event is no longer
@@ -1088,6 +1088,19 @@ async def update_event(
     # refusal writes nothing at all.
     await _enforce_group_set_frozen(db, event, updates)
     await _enforce_draw_settings_frozen(db, event, updates)
+    # Read ONCE, under the row lock, for the two gates below (the materialisation and
+    # the re-solve trigger): a draw is cut or removed only under this same lock, so
+    # the answer cannot move between here and the commit.
+    has_draw = await event_has_draw(db, event.id)
+    if event.current_rule_revision is not None and (
+        (updates.format is not None and updates.format != event.format)
+        or (
+            updates.match_settings is not None
+            and updates.match_settings
+            != MatchSettings.model_validate(event.match_settings)
+        )
+    ):
+        raise MatchRulesFrozenError()
     await _enforce_entry_format(db, event, updates.format)
     # The reservation cap (#1482) is judged after both freezes: the freeze is the
     # refusal a director can act on, so a cut event over the cap answers the 409 that
@@ -1097,10 +1110,6 @@ async def update_event(
     # so a cut event over the cap still answers the cap's 422 first, and a cut event
     # at all still answers a freeze's 409 first.
     _enforce_reservation_containment(event, updates)
-    # Read ONCE, under the row lock, for the two gates below (the materialisation and
-    # the re-solve trigger): a draw is cut or removed only under this same lock, so
-    # the answer cannot move between here and the commit.
-    has_draw = await event_has_draw(db, event.id)
     facts_before = _event_scheduling_facts(event)
     # Captured BEFORE the setattr loop overwrites it: a timezone edit preserves the
     # wall-clock of already-placed fixtures, which needs the zone they were placed IN to

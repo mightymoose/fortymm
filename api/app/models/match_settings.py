@@ -8,6 +8,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Enum,
+    ForeignKey,
     Interval,
     SmallInteger,
     func,
@@ -33,13 +34,15 @@ class MatchSettings(Base):
     """Rules and policies for a single match.
 
     Each match owns its own row; rows are never shared between matches.
-    Future templates (tournament events, club ladders) will hold their own
-    rows that get copied at match-creation time — including the
-    ``retirement_window`` copied from the template.
+    Values and references are immutable from creation. Tournament materialization
+    copies every effective value from its retained draw revision and records that
+    revision as provenance. Standalone matches record the same versioned snapshot
+    without a tournament source.
     """
 
     __tablename__ = "match_settings"
     __table_args__ = (
+        CheckConstraint("rule_version = 1", name="ck_match_settings_rule_version"),
         CheckConstraint("team_size IN (1, 2)", name="ck_match_settings_team_size"),
         CheckConstraint(
             "best_of >= 1 AND best_of % 2 = 1", name="ck_match_settings_best_of"
@@ -55,6 +58,12 @@ class MatchSettings(Base):
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
+    rule_version: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, server_default=text("1")
+    )
+    source_rule_revision_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("tournament_draw_revisions.id", ondelete="CASCADE"), index=True
+    )
     team_size: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     best_of: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     affects_rating: Mapped[bool] = mapped_column(
@@ -66,7 +75,7 @@ class MatchSettings(Base):
         server_default=VerificationPolicy.none.value,
     )
     retirement_window: Mapped[timedelta | None] = mapped_column(
-        Interval, nullable=True, server_default=text("'7 days'")
+        Interval().evaluates_none(), nullable=True, server_default=text("'7 days'")
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

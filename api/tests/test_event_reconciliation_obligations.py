@@ -30,7 +30,7 @@ async def test_void_then_detach_still_requires_captured_event_reconciliation(
         creator=player,
         opponent_user_id=b.user_id,
         league_id=None,
-        best_of=1,
+        best_of=3,
         rated=False,
     )
     await db_session.execute(
@@ -141,7 +141,7 @@ async def test_terminal_match_status_change_requires_reconciliation(
         creator=player,
         opponent_user_id=b.user_id,
         league_id=None,
-        best_of=1,
+        best_of=3,
         rated=False,
     )
     await db_session.execute(

@@ -319,6 +319,17 @@ class SwissStandings:
 
 def results_for(
     draw_type: DrawType,
+    *,
+    version: int = 1,
+) -> RoundRobinResults | SingleElimResults | RrThenKoResults | SwissResults:
+    """Dispatch historical standings and finishes by their declared interpretation."""
+    if version != 1:
+        raise ValueError(f"Unsupported result rule version: {version}")
+    return _results_for_v1(draw_type)
+
+
+def _results_for_v1(
+    draw_type: DrawType,
 ) -> RoundRobinResults | SingleElimResults | RrThenKoResults | SwissResults:
     """The results strategy for this draw type.
 

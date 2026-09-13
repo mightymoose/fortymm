@@ -26,7 +26,7 @@ async def test_withdrawal_reconciles_swiss_with_historical_result(
         creator=player,
         opponent_user_id=player_by_entry[played.entry_b_id],
         league_id=None,
-        best_of=1,
+        best_of=3,
         rated=False,
     )
     await db_session.execute(

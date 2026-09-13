@@ -132,33 +132,18 @@ async def test_lifecycle_transition_is_versioned_and_history_cannot_be_rewritten
 
 
 async def test_final_result_finishes_event_and_void_reopens_with_history(db_session):
+    from app.models import DrawType
     from app.official_results import void_official_match
     from app.result_proposal import propose_result
     from tests._helpers import directed_tournament_match
     from tests.test_official_results import board
 
     match, director = await directed_tournament_match(
-        db_session, tag="lifecycle-finish", best_of=1
+        db_session, tag="lifecycle-finish", best_of=1, draw_type=DrawType.single_elim
     )
     event_id = await db_session.scalar(
         text("SELECT scope_event_id FROM tournament_fixtures WHERE match_id=:id"),
         {"id": match.id},
-    )
-    # A voided RR pairing is excluded by the existing completeness rules; a
-    # knockout final instead becomes incomplete, so it is the reopening case.
-    await db_session.execute(
-        text(
-            "UPDATE tournament_events SET draw_type_id=(SELECT id FROM "
-            "draw_types WHERE key='single-elim') WHERE id=:id"
-        ),
-        {"id": event_id},
-    )
-    await db_session.execute(
-        text(
-            "UPDATE tournament_event_stages SET draw_type_id=(SELECT id FROM "
-            "draw_types WHERE key='single-elim') WHERE event_id=:id"
-        ),
-        {"id": event_id},
     )
     await propose_result(
         db_session, match.id, director.id, games=board(), supersedes_result_id=None

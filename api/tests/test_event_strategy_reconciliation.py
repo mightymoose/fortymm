@@ -11,7 +11,7 @@ from tests.test_match_calls import _make_tournament, _the_fixture
 
 
 @pytest.mark.parametrize("scope", ["event", "stage"])
-async def test_result_strategy_change_requires_reconciliation(db_session, scope):
+async def test_frozen_rules_preserve_results_across_planning_changes(db_session, scope):
     _, event_id = await _make_tournament(db_session)
     fixture = await _the_fixture(db_session, event_id)
     entry_a = await db_session.get(TournamentEntry, fixture.entry_a_id)
@@ -24,7 +24,7 @@ async def test_result_strategy_change_requires_reconciliation(db_session, scope)
         creator=player,
         opponent_user_id=entry_b.user_id,
         league_id=None,
-        best_of=1,
+        best_of=3,
         rated=False,
     )
     await db_session.execute(
@@ -56,17 +56,24 @@ async def test_result_strategy_change_requires_reconciliation(db_session, scope)
             "(SELECT id FROM draw_types WHERE key='single-elim') WHERE id=:id"
         )
         target = fixture.stage_id
-    with pytest.raises(IntegrityError, match="requires event reconciliation"):
-        async with db_session.begin_nested():
-            await db_session.execute(statement, {"id": target})
-            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
-    await db_session.execute(statement, {"id": target})
-    await reconcile_event(db_session, event_id)
-    await db_session.commit()
+    if scope == "stage":
+        with pytest.raises(IntegrityError, match="stage rules binding is immutable"):
+            async with db_session.begin_nested():
+                await db_session.execute(statement, {"id": target})
+    else:
+        with pytest.raises(IntegrityError, match="requires event reconciliation"):
+            async with db_session.begin_nested():
+                await db_session.execute(statement, {"id": target})
+                await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        await db_session.execute(statement, {"id": target})
+        await reconcile_event(db_session, event_id)
+        await db_session.commit()
+    # The current competition still interprets its completed pairing under the
+    # round-robin rules captured at cut, regardless of editable planning values.
     assert (
         await db_session.scalar(
             text("SELECT lifecycle_state FROM tournament_events WHERE id=:id"),
             {"id": event_id},
         )
-        == "in_progress"
+        == "finished"
     )

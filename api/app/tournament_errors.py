@@ -785,3 +785,10 @@ class EventCancelledError(Exception):
 
     def __init__(self) -> None:
         super().__init__("A cancelled event cannot be edited.")
+
+
+class MatchRulesFrozenError(Exception):
+    """A cut draw fixes every effective match policy."""
+
+    def __init__(self) -> None:
+        super().__init__("Match rules are frozen. Uncut the draw first to change them.")
