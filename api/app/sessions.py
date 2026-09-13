@@ -1443,11 +1443,7 @@ async def _confirm_account_merge(
     # The token is only trustworthy while the target still owns the address it
     # was cut against. Reject (and burn the token) if the owner changed their
     # email or is itself tombstoned — surfacing the opaque error so nothing leaks.
-    if (
-        target is None
-        or not target.is_active
-        or target.email != token_row.sent_to
-    ):
+    if target is None or not target.is_active or target.email != token_row.sent_to:
         # The live merge token is burned without confirming, so its replaced
         # siblings can never be reported again either — sweep them (#1616).
         await db.delete(token_row)
