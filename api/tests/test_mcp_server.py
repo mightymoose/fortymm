@@ -5546,3 +5546,105 @@ async def test_guest_budget_caps_fresh_auth0_but_preserves_existing_bind(
 
     monkeypatch.setattr(rate_limiting, "_redis", None)
     assert await verifier.verify_token(token) is not None
+
+
+@pytest.mark.parametrize("fresh", [False, True])
+async def test_auth0_verifier_rechecks_suspension_after_identity_commit(
+    db_session, monkeypatch, fresh
+):
+    from sqlalchemy import text
+
+    from app.identity_lifecycle import reactivate_account
+
+    email = "post-commit-auth0@example.com"
+    if not fresh:
+        owner = await make_user(db_session, "post-commit-auth0")
+        owner.email = email
+        await db_session.commit()
+        await _grant_mcp_access(db_session, owner)
+    original = mcp_server.resolve_or_provision_user
+    resolved_ids = []
+
+    async def suspend_after_commit(*args, **kwargs):
+        user = await original(*args, **kwargs)
+        assert user is not None
+        resolved_ids.append(user.id)
+        if fresh:
+            await _grant_mcp_access(db_session, user)
+        await db_session.execute(
+            text("UPDATE accounts SET deactivated_at=now() WHERE id=:id"),
+            {"id": user.id},
+        )
+        await db_session.commit()
+        return user
+
+    monkeypatch.setattr(mcp_server, "resolve_or_provision_user", suspend_after_commit)
+    token = _sign_token(
+        sub="auth0|" + uuid.uuid4().hex,
+        extra_claims={AUTH0_EMAIL_CLAIM: email, AUTH0_EMAIL_VERIFIED_CLAIM: True},
+    )
+    verifier = _email_verifier()
+    assert await verifier.verify_token(token) is None
+    await reactivate_account(db_session, resolved_ids[0])
+    await db_session.commit()
+    access = await verifier.verify_token(token)
+    assert access is not None
+    assert access.claims["user_id"] == str(resolved_ids[0])
+
+
+async def test_auth0_issuance_holds_bound_account_through_authorization(
+    db_session, engine, monkeypatch
+):
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    owner = await make_user(db_session, "held-auth0-issuance")
+    owner.email = "held-auth0-issuance@example.com"
+    await db_session.commit()
+    await _grant_mcp_access(db_session, owner)
+    account_id = owner.id
+    token = _sign_token(
+        sub="auth0|" + uuid.uuid4().hex,
+        extra_claims={
+            AUTH0_EMAIL_CLAIM: owner.email,
+            AUTH0_EMAIL_VERIFIED_CLAIM: True,
+        },
+    )
+    original = mcp_server.user_has_permission
+    suspension = None
+    async with async_sessionmaker(engine)() as suspender:
+        suspend_pid = await suspender.scalar(text("SELECT pg_backend_pid()"))
+
+        async def suspend_during_authorization(db, user_id, permission):
+            nonlocal suspension
+            allowed = await original(db, user_id, permission)
+            issuer_pid = await db.scalar(text("SELECT pg_backend_pid()"))
+            suspension = asyncio.create_task(
+                suspender.execute(
+                    text("UPDATE accounts SET deactivated_at=now() WHERE id=:id"),
+                    {"id": account_id},
+                )
+            )
+            async with asyncio.timeout(5):
+                while issuer_pid not in await db_session.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": suspend_pid}
+                ):
+                    if suspension.done():
+                        await suspension
+                        pytest.fail("suspension passed the final authorization gate")
+                    await asyncio.sleep(0.01)
+            return allowed
+
+        monkeypatch.setattr(
+            mcp_server, "user_has_permission", suspend_during_authorization
+        )
+        try:
+            access = await _email_verifier().verify_token(token)
+            assert access is not None
+        finally:
+            if suspension is not None:
+                await suspension
+        await suspender.commit()
+    assert await _email_verifier().verify_token(token) is None

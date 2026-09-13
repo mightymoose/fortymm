@@ -855,9 +855,11 @@ ENTRY_INTEGRITY_DDL = (
             END IF;
         END IF;
         IF TG_TABLE_NAME = 'tournament_entries' THEN
-            IF TG_OP = 'INSERT' OR (TG_OP = 'UPDATE' AND
-                NEW.added_by_user_id IS DISTINCT FROM OLD.added_by_user_id
-            ) THEN
+            IF TG_OP = 'UPDATE' AND
+                NEW.added_by_user_id IS DISTINCT FROM OLD.added_by_user_id THEN
+                RAISE EXCEPTION 'entry creator is immutable' USING ERRCODE='23514';
+            END IF;
+            IF TG_OP = 'INSERT' THEN
                 BEGIN
                     PERFORM id FROM accounts WHERE id = NEW.added_by_user_id
                     FOR SHARE NOWAIT;

@@ -441,6 +441,13 @@ class FortymmAuth0TokenVerifier(JWTVerifier):
                 )
                 if user is None:
                     return None
+                # Binding/provisioning may commit (including convergence after
+                # a uniqueness race). Resolve the actual subject again, with a
+                # fresh Account activity check and lifecycle-conflicting lock,
+                # before using any cached authorization state.
+                user = await resolve_linked_user(db, sub)
+                if user is None:
+                    return None
             # The player's own revocation, checked *after* resolution so it holds
             # against a token that is still perfectly valid and a ``sub`` that
             # (re-)bound to this account: a revoked user is refused whatever the
@@ -451,14 +458,14 @@ class FortymmAuth0TokenVerifier(JWTVerifier):
             if not await user_has_permission(db, user.id, MCP_ACCESS_PERMISSION):
                 return None
             user_id = str(user.id)
-        return AccessToken(
-            token=token,
-            client_id=user_id,
-            subject=user_id,
-            scopes=access.scopes,
-            expires_at=access.expires_at,
-            claims={**access.claims, "user_id": user_id},
-        )
+            return AccessToken(
+                token=token,
+                client_id=user_id,
+                subject=user_id,
+                scopes=access.scopes,
+                expires_at=access.expires_at,
+                claims={**access.claims, "user_id": user_id},
+            )
 
 
 def _build_mcp_auth() -> RemoteAuthProvider:

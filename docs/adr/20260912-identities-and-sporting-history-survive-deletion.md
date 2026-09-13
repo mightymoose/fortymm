@@ -8,6 +8,9 @@ Accounts and Players cannot be hard-deleted during normal operation, including
 unused identities. Historical Account references continue to name the original
 actor. Erasure must not turn a director-added entry into self-registration or
 fabricate participant consent by clearing an actor reference.
+An entry's original `added_by_user_id` is immutable after insertion, including
+its initial null value for system attribution; later actor replacement is not
+an authorized correction.
 
 Public identity creation must pass a shared expiring, per-client budget before
 allocating an Account or Player. Anonymous session bootstrap and login-email
@@ -36,6 +39,8 @@ login identities survive suspension, but SQL
 cannot attach, reassign, or change a login credential while either its existing or
 new Account is inactive. Linked-token verification, profile changes, and
 agent-access mutations lock and refresh the Account before accepting authority.
+Auth0 binding and provisioning re-resolve the linked Account under its lifecycle
+lock after internal commits, through the final token-authorization decision.
 Authenticated reads hold a lifecycle-conflicting Account lock and revalidate the
 session token after waiting. Activity timestamps refresh under an update lock,
 then read authentication reacquires its protection after the timestamp commit.

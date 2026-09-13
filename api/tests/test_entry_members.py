@@ -2155,31 +2155,33 @@ async def test_entry_adder_lock_precedes_parent_locks(db_session, engine, lifecy
 
 
 async def test_entry_withdrawal_does_not_relock_unchanged_adder(db_session, engine):
-    event, players, entries, match, fixture = await seed_doubles_match(db_session)
-    await db_session.execute(
-        text("UPDATE tournament_entries SET added_by_user_id = :actor WHERE id = :id"),
-        {"actor": match.created_by_user_id, "id": entries[0].id},
+    actor = await make_user(db_session, "unchanged-entry-adder")
+    player = await make_user(db_session, "unchanged-entry-player")
+    event = await _make_event(db_session)
+    entry = TournamentEntry(
+        event_id=event.id, user_id=player.player_id, added_by_user_id=actor.id
     )
+    db_session.add(entry)
     await db_session.commit()
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with sessions() as merging, sessions() as withdrawing:
         await merging.execute(
             text("SELECT id FROM accounts WHERE id = :id FOR UPDATE"),
-            {"id": match.created_by_user_id},
+            {"id": actor.id},
         )
         await withdrawing.execute(text("SET LOCAL lock_timeout = '200ms'"))
         await withdrawing.execute(
             text("UPDATE tournament_entries SET status = 'withdrawn' WHERE id = :id"),
-            {"id": entries[0].id},
+            {"id": entry.id},
         )
         await close_entry_participation(
-            withdrawing, entries[0].id, players[0].id, WithdrawalReason.self_withdrawal
+            withdrawing, entry.id, player.id, WithdrawalReason.self_withdrawal
         )
         await withdrawing.commit()
         assert (
             await withdrawing.scalar(
                 text("SELECT status FROM tournament_entries WHERE id = :id"),
-                {"id": entries[0].id},
+                {"id": entry.id},
             )
             == "withdrawn"
         )
@@ -3576,7 +3578,12 @@ async def test_new_entry_attribution_requires_active_actor(db_session, mutation)
     if mutation == "change":
         db_session.add(existing)
         await db_session.commit()
-    with pytest.raises(IntegrityError, match="entry actor must be active"):
+    with pytest.raises(
+        IntegrityError,
+        match="entry actor must be active"
+        if mutation == "insert"
+        else "entry creator is immutable",
+    ):
         async with db_session.begin_nested():
             existing.added_by_user_id = actor.id
             if mutation == "insert":
