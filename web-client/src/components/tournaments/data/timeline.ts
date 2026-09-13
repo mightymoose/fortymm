@@ -1,3 +1,4 @@
+import { historicalEntrants } from './entrants'
 // The **schedule board** derivation (ADR "the schedule is solved; the call is
 // pinned"): the pure reduction behind the Schedule tab's Gantt and player-timeline
 // views. A tournament + its table catalogue in, one `TimelineBoard` out — rows of
@@ -452,7 +453,7 @@ export function buildTimelineBoard(
   // Every fixture, joined to its event once.
   const all: EventFixture[] = []
   for (const event of tournament.events) {
-    const entrantById = new Map(event.entrants.map((e) => [e.id, e]))
+    const entrantById = new Map(historicalEntrants(event).map((e) => [e.id, e]))
     const drawIndex = buildDrawIndex(event)
     for (const fixture of event.fixtures) {
       all.push({ fixture, event, entrantById, drawIndex })

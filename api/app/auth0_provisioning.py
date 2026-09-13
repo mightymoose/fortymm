@@ -42,10 +42,13 @@ async def _resolve_live_user_by_email(db: AsyncSession, email: str) -> User | No
     carry the same canonical form.
     """
     result = await db.execute(
-        select(User).where(
+        select(User)
+        .where(
             User.email == email,
             User.merged_into_user_id.is_(None),
         )
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     return result.scalar_one_or_none()
 
@@ -57,6 +60,7 @@ async def resolve_or_provision_user(
     email_verified: bool,
     *,
     may_write: Callable[[], Awaitable[bool]] | None = None,
+    may_create: Callable[[], Awaitable[bool]] | None = None,
 ) -> User | None:
     """Turn a verified Auth0 token into the fortymm ``User`` it acts as.
 
@@ -76,6 +80,9 @@ async def resolve_or_provision_user(
 
     Writes on the first token for a new identity (a bind, or an INSERT); every
     later token resolves via step 1 with no write.
+
+    ``may_create`` gates only fresh allocation, after verified-email resolution;
+    existing binds and linked accounts do not consume its creation budget.
 
     ``may_write`` is an optional gate the caller supplies, awaited **immediately
     before** the bind or the INSERT and never on a path that only reads. The MCP
@@ -106,7 +113,7 @@ async def resolve_or_provision_user(
     email = email.lower()
     matched = await _resolve_live_user_by_email(db, email)
     if matched is not None:
-        if matched.agent_access_revoked_at is not None:
+        if not matched.is_active or matched.agent_access_revoked_at is not None:
             # The player switched agent access off. Matching must not bind here,
             # or a disconnected account would silently re-acquire an
             # ``auth0_sub`` on the agent's very next request and the database
@@ -142,7 +149,8 @@ async def resolve_or_provision_user(
                 winner = await resolve_linked_user(db, sub)
                 if winner is not None:
                     return winner
-                return await _resolve_live_user_by_email(db, email)
+                winner = await _resolve_live_user_by_email(db, email)
+                return winner if winner is not None and winner.is_active else None
             return matched
         # A *different* Auth0 identity claims an already-linked email — the same
         # ``sub`` would already have returned at step 1 (``resolve_linked_user``),
@@ -155,6 +163,8 @@ async def resolve_or_provision_user(
     # No account holds the email → provision a fresh registered account. This is
     # the account-creation case the caller's gate exists for.
     if may_write is not None and not await may_write():
+        return None
+    if may_create is not None and not await may_create():
         return None
     return await _provision_user(db, sub, email)
 
@@ -195,5 +205,6 @@ async def _provision_user(db: AsyncSession, sub: str, email: str) -> User | None
         winner = await resolve_linked_user(db, sub)
         if winner is not None:
             return winner
-        return await _resolve_live_user_by_email(db, email)
+        winner = await _resolve_live_user_by_email(db, email)
+        return winner if winner is not None and winner.is_active else None
     return user

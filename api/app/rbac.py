@@ -1,12 +1,13 @@
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
+from app.email_credentials import lock_accounts
 from app.leagues import add_user_to_default_league
 from app.models import Permission, Player, Role, RolePermission, User, UserRole
 from app.roles import DEFAULT_ROLE_NAME, get_default_role, grant_default_role
@@ -57,19 +58,39 @@ async def user_has_permission(db: AsyncSession, user_id: uuid.UUID, name: str) -
     return result.first() is not None
 
 
-def require_permission(name: str) -> Callable[..., Awaitable[User]]:
+def require_permission(
+    name: str, *, target_account_parameter: str | None = None
+) -> Callable[..., Awaitable[User]]:
     async def dep(
+        request: Request,
         user: User = Depends(get_current_user),
         db: AsyncSession = Depends(get_session),
     ) -> User:
-        if not await user_has_permission(db, user.id, name):
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            account_ids = {user.id}
+            target_id = (
+                request.path_params.get(target_account_parameter)
+                if target_account_parameter is not None
+                else None
+            )
+            if target_id is not None:
+                try:
+                    account_ids.add(uuid.UUID(str(target_id)))
+                except ValueError:
+                    # FastAPI reports an invalid path ID after authorization.
+                    pass
+            # Hold the actor through the mutation, including queued delivery.
+            # Actor and target use one order for opposing administrators.
+            await lock_accounts(db, account_ids)
+        if not user.is_active or not await user_has_permission(db, user.id, name):
             raise HTTPException(status_code=403, detail="Forbidden.")
         return user
 
     return dep
 
 
-_require_rbac = require_permission(RBAC_PERMISSION)
+_require_rbac = require_permission(RBAC_PERMISSION, target_account_parameter="user_id")
+
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(_require_rbac)])
 
@@ -540,17 +561,8 @@ async def delete_user(
         raise HTTPException(
             status_code=400, detail="You cannot delete your own account."
         )
-    user = await _get_user_or_404(db, user_id)
-    await db.delete(user)
-    try:
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "This user has activity (matches, results, or tournaments) "
-                "and cannot be deleted."
-            ),
-        ) from None
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    await _get_user_or_404(db, user_id)
+    raise HTTPException(
+        status_code=409,
+        detail="Account identities must be retained and cannot be deleted.",
+    )

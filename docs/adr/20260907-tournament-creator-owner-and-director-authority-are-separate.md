@@ -1,5 +1,7 @@
 # Tournament creator, owner and director authority are separate
 
+[Identity and sporting retention](20260912-identities-and-sporting-history-survive-deletion.md) limits whole-tournament cleanup to unused drafts and defines inactive ownership without transferring authority. Existing grants survive deactivation but cannot authorize the inactive Account.
+
 Status: Accepted for #1681, following the design interview. Part of #1669;
 the disposable pre-beta baseline freezes at #1670.
 

@@ -34,6 +34,7 @@ from app.tournament_queries import (
     active_entrants_by_event,
     completed_match_ids,
     draw_type_catalogue,
+    entrant_is_retired,
     entrant_rating,
     entrant_ratings_by_league,
     fixtures_by_event,
@@ -254,6 +255,7 @@ async def list_tournament_details(
         list({tournament.league_id for tournament, _ in rows}),
         primary_player_reference(current_user_id),
     )
+    retired = await entrant_is_retired(db, current_user_id)
     return [
         serialize_detail(
             tournament,
@@ -264,6 +266,7 @@ async def list_tournament_details(
             fixtures_by_event=event_fixtures,
             game_counts=None,
             rating=ratings[tournament.league_id],
+            retired=retired,
             # The list projects no solve strip, for the same reason it projects no
             # standings (``game_counts=None`` above): its cards never render one, so
             # it skips the ledger read rather than paying a query for a field every
@@ -296,7 +299,7 @@ async def tournament_detail(
     not-found itself, since the HTTP route and the MCP tool 404/refuse
     differently) and hands it in with its creator's ``created_by_username``; this
     reader runs the shared batched composition both surfaces used to run inline —
-    EIGHT statements, no N+1 whatever the number of events, entrants, fixtures,
+    NINE statements, no N+1 whatever the number of events, entrants, fixtures,
     stages or solves:
 
     1. the tournament's events, in creation order;
@@ -304,7 +307,7 @@ async def tournament_detail(
     3. those events' fixtures — their draws (one batch, ADR-0786);
     4. the games of every **completed** match on the page — the standings' raw
        material (one batch; **no statement at all** until something is played, so an
-       unplayed tournament costs seven here, a played one eight);
+       unplayed tournament costs eight here, a played one nine);
     5. the caller's rating on the tournament's one league (ADR-0783);
     6. the newest row of the solve ledger (the Schedule tab's solve strip);
     7. the selectable draw formats (the event form's picker, ADR "a draw type is a
@@ -313,6 +316,7 @@ async def tournament_detail(
     8. those events' stages — ``TournamentEvent.stages`` is ``lazy="selectin"``
        (ADR 20260815 decisions 1/3), so this batches automatically off the events
        query above, never a statement per event.
+    9. the caller's primary Player retirement status, once for the entire aggregate.
 
     Then the shared ``serialize_detail`` projects it from ``current_user_id``'s
     perspective (``can_edit``, per-event ``entry_state``, ladder ``rating``). The
@@ -340,6 +344,7 @@ async def tournament_detail(
     )
     latest_schedule_solve = await latest_solve(db, tournament.id)
     catalogue = await draw_type_catalogue(db)
+    retired = await entrant_is_retired(db, current_user_id)
     return serialize_detail(
         tournament,
         created_by_username=created_by_username,
@@ -349,6 +354,7 @@ async def tournament_detail(
         fixtures_by_event=event_fixtures,
         game_counts=game_counts,
         rating=rating,
+        retired=retired,
         latest_schedule_solve=latest_schedule_solve,
         draw_type_catalogue=catalogue,
     )

@@ -1,5 +1,7 @@
 # Table membership, outages, and removal have separate lifecycles
 
+[Identity and sporting retention](20260912-identities-and-sporting-history-survive-deletion.md) makes call history immutable and prevents deleting its tournament, including when a call was cancelled before play.
+
 Date: 2026-09-12 (date-numbered — sequential numbers collide across concurrent
 worktrees; see `scripts/check-adr-numbering.sh`)
 

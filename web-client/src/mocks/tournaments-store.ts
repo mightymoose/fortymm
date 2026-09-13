@@ -1386,7 +1386,7 @@ function readEvent(event: StoredEvent): TournamentEventRead {
   return {
     ...wire,
     groups: groupsForEvent(event),
-    entered: event.entrants.length,
+    entered: event.entrants.length + (event.retained_entrants?.length ?? 0),
     entry_state: entryState(event),
   }
 }

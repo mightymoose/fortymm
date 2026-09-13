@@ -183,6 +183,7 @@ def is_rated_member() -> ColumnElement[bool]:
         .where(
             Player.id == UserLeagueRating.user_id,
             Player.merged_into_player_id.is_(None),
+            Player.retired_at.is_(None),
         )
         .correlate(UserLeagueRating)
         .exists(),

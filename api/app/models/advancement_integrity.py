@@ -161,6 +161,22 @@ ADVANCEMENT_INTEGRITY_DDL = (
     CREATE FUNCTION append_advancement() RETURNS trigger LANGUAGE plpgsql AS $$
     DECLARE previous fixture_advancement_decisions;
     BEGIN
+        -- Automatic root evidence has no new human decision to authorize.
+        IF NEW.predecessor_id IS NOT NULL THEN
+            BEGIN
+                PERFORM id FROM accounts WHERE id = NEW.actor_account_id
+                    FOR SHARE NOWAIT;
+            EXCEPTION WHEN lock_not_available THEN
+                RAISE EXCEPTION 'advancement actor is changing; retry'
+                    USING ERRCODE = '40001';
+            END;
+            IF NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.actor_account_id
+                AND merged_at IS NULL AND deactivated_at IS NULL
+                AND erased_at IS NULL) THEN
+                RAISE EXCEPTION 'advancement actor must be active'
+                    USING ERRCODE = '23514';
+            END IF;
+        END IF;
         BEGIN
             PERFORM id FROM tournament_fixtures WHERE id = NEW.fixture_id FOR UPDATE
                 NOWAIT;

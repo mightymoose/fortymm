@@ -472,22 +472,24 @@ async def test_entry_delete_cannot_erase_registration_before_a_draw_exists(
     "parent_table,id_key",
     [("tournament_events", "event_id"), ("tournaments", "tournament_id")],
 )
-async def test_unplayed_parent_delete_can_remove_undrawn_registration(
+async def test_unplayed_parent_delete_preserves_undrawn_registration(
     db_session: AsyncSession,
     undrawn_registration: dict[str, uuid.UUID],
     parent_table: str,
     id_key: str,
 ) -> None:
-    await db_session.execute(
-        text(f"DELETE FROM {parent_table} WHERE id = :id"),
-        {"id": undrawn_registration[id_key]},
-    )
+    with pytest.raises(IntegrityError, match="entry history must be retained"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(f"DELETE FROM {parent_table} WHERE id = :id"),
+                {"id": undrawn_registration[id_key]},
+            )
     await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
     retained = await db_session.scalar(
         text("SELECT count(*) FROM tournament_entry_registrations WHERE id = :id"),
         {"id": undrawn_registration["registration_id"]},
     )
-    assert retained == 0
+    assert retained == 1
 
 
 async def test_retiring_fixture_cannot_rewrite_its_existing_draw_position(
@@ -558,7 +560,7 @@ async def test_retired_stage_configuration_cannot_be_rewritten(
     "parent_table,id_key",
     [("tournament_events", "event_id"), ("tournaments", "tournament_id")],
 )
-async def test_parent_delete_removes_superseded_entries_together(
+async def test_parent_delete_preserves_superseded_entries_together(
     db_session: AsyncSession,
     undrawn_registration: dict[str, uuid.UUID],
     parent_table: str,
@@ -578,23 +580,25 @@ async def test_parent_delete_removes_superseded_entries_together(
         {"survivor": undrawn_registration["entry_id"], "duplicate": duplicate_id},
     )
     await db_session.commit()
-    await db_session.execute(
-        text(f"DELETE FROM {parent_table} WHERE id = :id"),
-        {"id": undrawn_registration[id_key]},
-    )
+    with pytest.raises(IntegrityError, match="entry history must be retained"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(f"DELETE FROM {parent_table} WHERE id = :id"),
+                {"id": undrawn_registration[id_key]},
+            )
     await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
     retained = await db_session.scalar(
         text("SELECT count(*) FROM tournament_entries WHERE event_id = :id"),
         {"id": undrawn_registration["event_id"]},
     )
-    assert retained == 0
+    assert retained == 2
 
 
 @pytest.mark.parametrize(
     "parent_table,id_key",
     [("tournament_events", "event_id"), ("tournaments", "tournament_id")],
 )
-async def test_uncut_preserves_stage_metadata_until_its_parent_is_deleted(
+async def test_uncut_preserves_stage_metadata_after_refused_parent_deletion(
     db_session: AsyncSession,
     drawn_history: dict[str, uuid.UUID],
     parent_table: str,
@@ -618,16 +622,18 @@ async def test_uncut_preserves_stage_metadata_until_its_parent_is_deleted(
         stage_key,
     )
     assert retired_at is not None
-    await db_session.execute(
-        text(f"DELETE FROM {parent_table} WHERE id = :id"),
-        {"id": drawn_history[id_key]},
-    )
+    with pytest.raises(IntegrityError, match="entry history must be retained"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(f"DELETE FROM {parent_table} WHERE id = :id"),
+                {"id": drawn_history[id_key]},
+            )
     await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
     retained = await db_session.scalar(
         text("SELECT count(*) FROM tournament_event_stages WHERE id = :id"),
         stage_key,
     )
-    assert retained == 0
+    assert retained == 1
 
 
 @pytest_asyncio.fixture
@@ -979,7 +985,7 @@ async def test_restoring_withdrawal_before_constraint_flush_uses_final_state(
     "parent_table,id_key",
     [("tournaments", "tournament_id"), ("tournament_events", "event_id")],
 )
-async def test_parent_cascade_can_remove_pending_withdrawal_and_participation(
+async def test_refused_parent_cascade_preserves_pending_withdrawal_checks(
     db_session: AsyncSession,
     drawn_history: dict[str, uuid.UUID],
     parent_table: str,
@@ -988,17 +994,30 @@ async def test_parent_cascade_can_remove_pending_withdrawal_and_participation(
     withdrawal_id = await _insert_active_withdrawal(
         db_session, drawn_history, stage_scoped=True
     )
-    await db_session.execute(
-        text(f"DELETE FROM {parent_table} WHERE id=:id"),
-        {"id": drawn_history[id_key]},
-    )
-    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    with pytest.raises(IntegrityError, match="entry history must be retained"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(f"DELETE FROM {parent_table} WHERE id=:id"),
+                {"id": drawn_history[id_key]},
+            )
+    with pytest.raises(
+        IntegrityError, match="withdrawal requires participation to end"
+    ):
+        await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await db_session.rollback()
     assert (
         await db_session.scalar(
             text("SELECT count(*) FROM tournament_entry_withdrawals WHERE id=:id"),
             {"id": withdrawal_id},
         )
         == 0
+    )
+
+    assert await db_session.scalar(
+        text(
+            "SELECT ended_at IS NULL FROM tournament_entry_participations WHERE id=:id"
+        ),
+        {"id": drawn_history["participation_id"]},
     )
 
 
@@ -1251,7 +1270,7 @@ async def test_registration_reentry_checks_final_transaction_state(
     "parent_table,id_key",
     [("tournament_events", "event_id"), ("tournaments", "tournament_id")],
 )
-async def test_parent_delete_discards_pending_entry_lifecycle_checks(
+async def test_refused_parent_delete_preserves_pending_entry_lifecycle_checks(
     db_session: AsyncSession,
     undrawn_registration: dict[str, uuid.UUID],
     parent_table: str,
@@ -1261,11 +1280,24 @@ async def test_parent_delete_discards_pending_entry_lifecycle_checks(
         text("UPDATE tournament_entries SET status='withdrawn' WHERE id=:id"),
         {"id": undrawn_registration["entry_id"]},
     )
-    await db_session.execute(
-        text(f"DELETE FROM {parent_table} WHERE id=:id"),
-        {"id": undrawn_registration[id_key]},
+    with pytest.raises(IntegrityError, match="entry history must be retained"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(f"DELETE FROM {parent_table} WHERE id=:id"),
+                {"id": undrawn_registration[id_key]},
+            )
+    with pytest.raises(
+        IntegrityError, match="withdrawn entry requires closed registration"
+    ):
+        await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+    await db_session.rollback()
+    assert (
+        await db_session.scalar(
+            text("SELECT status FROM tournament_entries WHERE id=:id"),
+            {"id": undrawn_registration["entry_id"]},
+        )
+        == "entered"
     )
-    await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
 
 async def _retire_fixture_revision_without_stage(
@@ -1331,3 +1363,175 @@ async def test_complete_sql_draw_retirement_freezes_referenced_configuration(
                 ),
                 {"id": drawn_history["fixture_id"]},
             )
+
+
+@pytest.mark.parametrize("lifecycle", ["deactivate", "erase"])
+async def test_draw_revision_insert_requires_an_active_creator_but_preserves_history(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID], lifecycle: str
+) -> None:
+    from app.identity_lifecycle import deactivate_account, erase_account
+
+    await _uncut(db_session, drawn_history)
+    transition = deactivate_account if lifecycle == "deactivate" else erase_account
+    await transition(db_session, drawn_history["owner_id"])
+    await db_session.commit()
+    with pytest.raises(IntegrityError, match="draw revision creator must be active"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "INSERT INTO tournament_draw_revisions"
+                    "(event_id, created_by_account_id) "
+                    "VALUES (:event, :actor)"
+                ),
+                {
+                    "event": drawn_history["event_id"],
+                    "actor": drawn_history["owner_id"],
+                },
+            )
+    # Creator attribution remains immutable history, even once inactive.
+    await db_session.execute(
+        text(
+            "UPDATE tournament_draw_revisions SET created_by_account_id="
+            "created_by_account_id WHERE id=:id"
+        ),
+        {"id": drawn_history["revision_id"]},
+    )
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT created_by_account_id FROM tournament_draw_revisions "
+                "WHERE id=:id"
+            ),
+            {"id": drawn_history["revision_id"]},
+        )
+        == drawn_history["owner_id"]
+    )
+    # Automatic capture has no human creator and remains valid.
+    revision = await db_session.scalar(
+        text(
+            "INSERT INTO tournament_draw_revisions(event_id) "
+            "VALUES (:event) RETURNING id"
+        ),
+        {"event": drawn_history["event_id"]},
+    )
+    await db_session.commit()
+    assert revision is not None
+
+
+@pytest.mark.parametrize("lifecycle", ["deactivate", "erase"])
+async def test_draw_revision_creator_lock_precedes_parent_locks(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID], lifecycle: str
+) -> None:
+    from sqlalchemy.exc import DBAPIError
+
+    from app.identity_lifecycle import deactivate_account, erase_account
+
+    await _uncut(db_session, drawn_history)
+    await db_session.commit()
+    transition = deactivate_account if lifecycle == "deactivate" else erase_account
+    async with (
+        AsyncSession(bind=db_session.bind) as lifecycle_writer,
+        AsyncSession(bind=db_session.bind) as parent_writer,
+    ):
+        await transition(lifecycle_writer, drawn_history["owner_id"])
+        await lifecycle_writer.flush()
+        await parent_writer.execute(
+            text("SELECT id FROM tournaments WHERE id=:id FOR UPDATE"),
+            {"id": drawn_history["tournament_id"]},
+        )
+        with pytest.raises(
+            DBAPIError, match="creator requires account lock"
+        ) as refusal:
+            async with db_session.begin_nested():
+                await db_session.execute(
+                    text(
+                        "INSERT INTO tournament_draw_revisions"
+                        "(event_id,created_by_account_id) VALUES (:event,:actor)"
+                    ),
+                    {
+                        "event": drawn_history["event_id"],
+                        "actor": drawn_history["owner_id"],
+                    },
+                )
+        assert refusal.value.orig.sqlstate == "40001"
+        await lifecycle_writer.commit()
+        await parent_writer.rollback()
+        with pytest.raises(
+            IntegrityError, match="draw revision creator must be active"
+        ):
+            async with db_session.begin_nested():
+                await db_session.execute(
+                    text(
+                        "INSERT INTO tournament_draw_revisions"
+                        "(event_id,created_by_account_id) VALUES (:event,:actor)"
+                    ),
+                    {
+                        "event": drawn_history["event_id"],
+                        "actor": drawn_history["owner_id"],
+                    },
+                )
+
+
+@pytest.mark.parametrize("lifecycle", ["deactivate", "erase"])
+async def test_draw_revision_insert_serializes_lifecycle_and_retains_creator(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID], lifecycle: str
+) -> None:
+    import asyncio
+    from contextlib import suppress
+
+    await _uncut(db_session, drawn_history)
+    await db_session.commit()
+    assignments = "deactivated_at=clock_timestamp()"
+    if lifecycle == "erase":
+        assignments += (
+            ", erased_at=clock_timestamp(), email=NULL, display_name='Erased account',"
+            " confirmed_at=NULL, last_seen_at=NULL, agent_access_linked_at=NULL,"
+            " agent_access_revoked_at=NULL"
+        )
+    async with (
+        AsyncSession(bind=db_session.bind) as draw_writer,
+        AsyncSession(bind=db_session.bind) as lifecycle_writer,
+    ):
+        draw_pid = await draw_writer.scalar(text("SELECT pg_backend_pid()"))
+        lifecycle_pid = await lifecycle_writer.scalar(text("SELECT pg_backend_pid()"))
+        revision = await draw_writer.scalar(
+            text(
+                "INSERT INTO tournament_draw_revisions(event_id,created_by_account_id) "
+                "VALUES (:event,:actor) RETURNING id"
+            ),
+            {"event": drawn_history["event_id"], "actor": drawn_history["owner_id"]},
+        )
+        changing = asyncio.create_task(
+            lifecycle_writer.execute(
+                text(f"UPDATE accounts SET {assignments} WHERE id=:id"),
+                {"id": drawn_history["owner_id"]},
+            )
+        )
+        try:
+            async with asyncio.timeout(5):
+                while draw_pid not in (
+                    await db_session.scalar(
+                        text("SELECT pg_blocking_pids(:pid)"), {"pid": lifecycle_pid}
+                    )
+                ):
+                    if changing.done():
+                        await changing
+                        pytest.fail("Lifecycle change bypassed the draw creator lock")
+                    await asyncio.sleep(0.01)
+                await draw_writer.commit()
+                await changing
+                await lifecycle_writer.commit()
+        finally:
+            changing.cancel()
+            with suppress(asyncio.CancelledError):
+                await changing
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT created_by_account_id FROM tournament_draw_revisions "
+                "WHERE id=:id"
+            ),
+            {"id": revision},
+        )
+        == drawn_history["owner_id"]
+    )

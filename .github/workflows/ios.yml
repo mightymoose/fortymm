@@ -40,7 +40,7 @@ jobs:
   # the root e2e/ Playwright suite. GitHub-hosted macos-latest runners cannot
   # run Docker (no nested virtualization), so unlike every other e2e suite in
   # this repo this job cannot boot docker-compose.dev.yml -- it stands the API
-  # up as native processes instead: Postgres via Homebrew, then `uvicorn`
+  # up as native processes instead: Postgres and Redis via Homebrew, then `uvicorn`
   # directly against it. See
   # docs/adr/20260802-ios-e2e-ci-runs-the-backend-as-native-processes-not-docker.md.
   ui-tests:
@@ -52,6 +52,7 @@ jobs:
       # api/app/db.py's own DEFAULT_DATABASE_URL, so it needs no override
       # there, but it's spelled out for the alembic/uvicorn steps below.
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/fortymm
+      REDIS_URL: redis://127.0.0.1:6379/0
       # Ask for the deterministic, network-free FakeGeocoder BY NAME (same
       # reasoning as scripts/ensure-api-up.sh and openapi-schema.yml): the
       # default geocoder is `google`, and Settings() raises at construction
@@ -116,6 +117,20 @@ jobs:
             || psql -d postgres -c "CREATE ROLE postgres WITH LOGIN SUPERUSER PASSWORD 'postgres';"
           psql -d postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'fortymm'" | grep -q 1 \
             || psql -d postgres -c "CREATE DATABASE fortymm OWNER postgres;"
+
+      - name: Install and start Redis (Homebrew)
+        run: |
+          set -euo pipefail
+          brew install redis
+          redis-server --bind 127.0.0.1 --port 6379 --daemonize yes \
+            --save '' --appendonly no --logfile /tmp/fortymm-redis.log
+          for _ in $(seq 1 30); do
+            if [ "$(redis-cli -h 127.0.0.1 ping)" = PONG ]; then exit 0; fi
+            sleep 1
+          done
+          echo "::error::Redis did not become ready for guest admission"
+          cat /tmp/fortymm-redis.log
+          exit 1
 
       - name: Install API dependencies
         working-directory: api

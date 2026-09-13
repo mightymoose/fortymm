@@ -1,5 +1,7 @@
 # Accounts authorize durable Players
 
+[Identity and sporting retention](20260912-identities-and-sporting-history-survive-deletion.md) extends this decision with Account deactivation and erasure, Player retirement and restoration, and a prohibition on ordinary identity hard deletion.
+
 The rating-history reconciliation clauses below are superseded by
 [Rating inputs outlive rebuildable projections](20260911-rating-inputs-outlive-rebuildable-projections.md):
 original inputs retain their Player and Account attribution through merges;

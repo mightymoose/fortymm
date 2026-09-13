@@ -515,6 +515,12 @@ export function entryControlState({
         lead: notice.event_full.title,
         reason: notice.event_full.description,
       }
+    case 'retired':
+      return {
+        kind: 'ineligible',
+        lead: 'This player is retired.',
+        reason: 'Retired players cannot enter events.',
+      }
     case 'rating_ineligible':
       return {
         kind: 'ineligible',

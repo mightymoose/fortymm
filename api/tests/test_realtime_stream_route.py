@@ -24,7 +24,7 @@ assertion.
 
 import asyncio
 import hashlib
-from collections.abc import AsyncIterator, Callable, Iterable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -63,6 +63,10 @@ STREAM_TIMEOUT_S = 10.0
 # fake event sources
 
 
+async def _authorized() -> bool:
+    return True
+
+
 async def _never() -> AsyncIterator[RealtimeEvent]:
     """An attachment that never delivers — the idle stream."""
     await asyncio.Event().wait()
@@ -97,7 +101,7 @@ async def _take(
     events: AsyncIterator[RealtimeEvent], count: int
 ) -> list[ServerSentEvent]:
     """Pull exactly ``count`` frames off the route generator, then close it."""
-    gen = stream(events=events)
+    gen = stream(events=events, is_authorized=_authorized)
     frames: list[ServerSentEvent] = []
     try:
         async with asyncio.timeout(STREAM_TIMEOUT_S):
@@ -125,7 +129,7 @@ async def _drain(events: AsyncIterator[RealtimeEvent]) -> list[ServerSentEvent]:
     frames: list[ServerSentEvent] = []
     try:
         async with asyncio.timeout(STREAM_TIMEOUT_S):
-            async for frame in stream(events=events):
+            async for frame in stream(events=events, is_authorized=_authorized):
                 frames.append(frame)
     except TimeoutError:
         raise AssertionError(
@@ -174,7 +178,13 @@ class DrivenStream:
     frames: list[bytes] = field(default_factory=list)
 
 
-async def drive_stream(cookie: str, *, take: int, timeline: list[str]) -> DrivenStream:
+async def drive_stream(
+    cookie: str,
+    *,
+    take: int,
+    timeline: list[str],
+    after_frame: Callable[[int], Awaitable[None]] | None = None,
+) -> DrivenStream:
     """Run one ``GET /v1/stream`` against the real ASGI app, take ``take`` body
     chunks, then hang up like a browser closing the tab.
 
@@ -209,6 +219,8 @@ async def drive_stream(cookie: str, *, take: int, timeline: list[str]) -> Driven
             if body:
                 timeline.append(f"frame:{len(result.frames)}")
                 result.frames.append(body)
+                if after_frame is not None:
+                    await after_frame(len(result.frames))
                 if len(result.frames) >= take:
                     hung_up.set()
 
@@ -516,7 +528,7 @@ async def test_a_published_hint_reaches_the_stream_through_the_broker(
     user = await make_user(db_session, "stream-subscriber")
 
     async with realtime_broker.subscribe(user_id=user.id) as events:
-        gen = stream(events=events)
+        gen = stream(events=events, is_authorized=_authorized)
         try:
             async with asyncio.timeout(STREAM_TIMEOUT_S):
                 await anext(gen)  # retry
@@ -617,7 +629,7 @@ async def test_get_session_is_not_in_the_stream_route_dependency_graph() -> None
     )
 
 
-async def test_the_stream_opens_one_session_and_closes_it_before_the_first_frame(
+async def test_the_stream_closes_authentication_sessions_before_the_first_frame(
     api_client: AsyncClient, db_session: AsyncSession, realtime_broker: RealtimeBroker
 ) -> None:
     """The runtime half of the guard above, over the real ASGI app so FastAPI's
@@ -659,9 +671,16 @@ async def test_the_stream_opens_one_session_and_closes_it_before_the_first_frame
     assert driven.headers["cache-control"] == "no-cache"
     assert driven.headers["x-accel-buffering"] == "no"
 
-    # Exactly one session, opened and closed, and both before any byte went out.
-    assert (factory.opened, factory.closed) == (1, 1)
-    assert timeline == ["session.open", "session.close", "frame:0", "frame:1"]
+    # Initial authentication and preamble revalidation both close before any byte.
+    assert (factory.opened, factory.closed) == (2, 2)
+    assert timeline == [
+        "session.open",
+        "session.close",
+        "session.open",
+        "session.close",
+        "frame:0",
+        "frame:1",
+    ]
 
     # ...and the frames themselves are the documented preamble, on the wire.
     assert driven.frames[0].startswith(b"retry: ")
@@ -750,3 +769,130 @@ async def test_a_connect_at_the_cap_displaces_the_oldest_instead_of_429ing(
         assert realtime_broker.attachment_count(user.id) == (
             DEFAULT_MAX_CONNECTIONS_PER_USER - 1
         )
+
+
+@pytest.mark.parametrize(
+    ("revocation", "emit_hint"),
+    [
+        (kind, emit)
+        for kind in ("service", "sql", "credential")
+        for emit in (True, False)
+    ]
+    + [("none", True)],
+)
+async def test_stream_revalidates_credentials_without_pinning_database_sessions(
+    api_client, db_session, engine, realtime_broker, monkeypatch, revocation, emit_hint
+):
+    from sqlalchemy import delete, text
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.identity_lifecycle import deactivate_account
+    from app.models import SessionToken
+
+    monkeypatch.setenv("REALTIME_MAX_STREAM_SECONDS", "1")
+    monkeypatch.setattr("app.stream.STREAM_AUTH_CHECK_SECONDS", 0.05, raising=False)
+    user = await start_session(api_client, db_session)
+    user_id = user.id
+    cookie = api_client.cookies[SESSION_COOKIE_NAME]
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+    active = 0
+    checked = 0
+
+    @asynccontextmanager
+    async def short_session():
+        nonlocal active, checked
+        checked += 1
+        active += 1
+        try:
+            async with make_session() as db:
+                yield db
+        finally:
+            active -= 1
+
+    async def factory():
+        return short_session
+
+    async def revoke_after_preamble(frame_count):
+        assert active == 0, "SSE must release database sessions before sending frames"
+        if frame_count != 2:
+            return
+        if revocation == "none":
+            # Several idle checks must leave the same broker read alive and
+            # return every connection before the next hint arrives.
+            await asyncio.sleep(0.2)
+            assert active == 0
+            assert checked >= 4
+            assert publish_event(user_id, EventKind.dashboard_changed)
+            return
+        async with make_session() as db:
+            if revocation == "service":
+                await deactivate_account(db, user_id)
+            elif revocation == "sql":
+                await db.execute(
+                    text(
+                        "UPDATE accounts SET deactivated_at=clock_timestamp() "
+                        "WHERE id=:id"
+                    ),
+                    {"id": user_id},
+                )
+            else:
+                await db.execute(
+                    delete(SessionToken).where(SessionToken.user_id == user_id)
+                )
+            await db.commit()
+        if emit_hint:
+            assert publish_event(user_id, EventKind.dashboard_changed)
+
+    fastapi_app.dependency_overrides[get_stream_session_factory] = factory
+    try:
+        started = asyncio.get_running_loop().time()
+        driven = await drive_stream(
+            cookie, take=3, timeline=[], after_frame=revoke_after_preamble
+        )
+        elapsed = asyncio.get_running_loop().time() - started
+    finally:
+        fastapi_app.dependency_overrides.pop(get_stream_session_factory, None)
+    assert driven.status == 200
+    assert len(driven.frames) == (3 if revocation == "none" else 2), (
+        "Only a still-authorized stream may deliver dashboard.changed"
+    )
+    assert active == 0
+    assert elapsed < 0.8, (
+        "Idle revoked streams must close at the auth check, not max lifetime"
+    )
+    assert realtime_broker.attachment_count(user_id) == 0
+
+
+async def test_revocation_during_attachment_prevents_the_initial_resync(
+    api_client, db_session, engine, realtime_broker, monkeypatch
+):
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.identity_lifecycle import deactivate_account
+
+    user = await start_session(api_client, db_session)
+    user_id = user.id
+    cookie = api_client.cookies[SESSION_COOKIE_NAME]
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def factory():
+        return make_session
+
+    subscribe = realtime_broker.subscribe
+
+    @asynccontextmanager
+    async def revoke_during_attach(*, user_id):
+        async with subscribe(user_id=user_id) as events:
+            async with make_session() as db:
+                await deactivate_account(db, user_id)
+                await db.commit()
+            yield events
+
+    monkeypatch.setattr(realtime_broker, "subscribe", revoke_during_attach)
+    fastapi_app.dependency_overrides[get_stream_session_factory] = factory
+    try:
+        driven = await drive_stream(cookie, take=1, timeline=[])
+    finally:
+        fastapi_app.dependency_overrides.pop(get_stream_session_factory, None)
+    assert driven.frames == [], "A principal revoked during attach must get no preamble"
+    assert realtime_broker.attachment_count(user_id) == 0

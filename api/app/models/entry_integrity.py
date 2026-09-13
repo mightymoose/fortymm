@@ -87,7 +87,7 @@ ENTRY_INTEGRITY_DDL = (
     """
     CREATE OR REPLACE FUNCTION authorize_entry_membership() RETURNS trigger
     LANGUAGE plpgsql AS $$
-    DECLARE tournament_uuid uuid; actor_uuid uuid;
+    DECLARE tournament_uuid uuid; actor_uuid uuid; actor_row record;
     BEGIN
         IF NEW.joined_at > clock_timestamp() THEN
             RAISE EXCEPTION 'membership cannot start in the future'
@@ -98,9 +98,20 @@ ENTRY_INTEGRITY_DDL = (
                 USING ERRCODE = '23514';
         END IF;
         BEGIN
-            PERFORM id FROM accounts
-            WHERE id IN (NEW.joined_by_account_id, NEW.left_by_account_id)
-            ORDER BY id FOR KEY SHARE NOWAIT;
+            FOR actor_row IN SELECT id, merged_at, deactivated_at, erased_at
+            FROM accounts WHERE id IN (
+                CASE WHEN TG_OP='INSERT' THEN NEW.joined_by_account_id END,
+                CASE WHEN NEW.left_at IS NOT NULL
+                    AND (TG_OP='INSERT' OR OLD.left_at IS NULL)
+                    THEN NEW.left_by_account_id END
+            ) ORDER BY id FOR SHARE NOWAIT
+            LOOP
+                IF actor_row.merged_at IS NOT NULL
+                    OR actor_row.deactivated_at IS NOT NULL
+                    OR actor_row.erased_at IS NOT NULL THEN
+                    RAISE EXCEPTION 'roster actor must be active' USING ERRCODE='23514';
+                END IF;
+            END LOOP;
         EXCEPTION WHEN lock_not_available THEN
             RAISE EXCEPTION 'roster actor requires account locks before parents; retry'
                 USING ERRCODE = '40001';
@@ -518,11 +529,18 @@ ENTRY_INTEGRITY_DDL = (
             END IF;
             BEGIN
                 PERFORM id FROM accounts WHERE id = NEW.recorded_by_account_id
-                FOR KEY SHARE NOWAIT;
+                FOR SHARE NOWAIT;
             EXCEPTION WHEN lock_not_available THEN
                 RAISE EXCEPTION 'lineup actor requires account locks; retry'
                     USING ERRCODE = '40001';
             END;
+            IF NEW.recorded_by_account_id IS NOT NULL AND NOT EXISTS (
+                SELECT 1 FROM accounts WHERE id=NEW.recorded_by_account_id
+                    AND merged_at IS NULL AND deactivated_at IS NULL
+                    AND erased_at IS NULL
+            ) THEN
+                RAISE EXCEPTION 'lineup actor must be active' USING ERRCODE='23514';
+            END IF;
             BEGIN
                 PERFORM id FROM matches WHERE id = NEW.match_id FOR UPDATE NOWAIT;
             EXCEPTION WHEN lock_not_available THEN
@@ -543,20 +561,27 @@ ENTRY_INTEGRITY_DDL = (
             END IF;
         END IF;
         IF TG_TABLE_NAME = 'tournament_entries' THEN
-            IF TG_OP = 'INSERT' OR (TG_OP = 'UPDATE' AND
-                NEW.added_by_user_id IS DISTINCT FROM OLD.added_by_user_id
-            ) THEN
+            IF TG_OP = 'UPDATE' AND
+                NEW.added_by_user_id IS DISTINCT FROM OLD.added_by_user_id THEN
+                RAISE EXCEPTION 'entry creator is immutable' USING ERRCODE='23514';
+            END IF;
+            IF TG_OP = 'INSERT' THEN
                 BEGIN
                     PERFORM id FROM accounts WHERE id = NEW.added_by_user_id
-                    FOR KEY SHARE NOWAIT;
+                    FOR SHARE NOWAIT;
                 EXCEPTION WHEN lock_not_available THEN
                     RAISE EXCEPTION 'entry actor requires account locks; retry'
                         USING ERRCODE = '40001';
                 END;
+                IF NEW.added_by_user_id IS NOT NULL AND NOT EXISTS (
+                    SELECT 1 FROM accounts WHERE id=NEW.added_by_user_id
+                        AND merged_at IS NULL AND deactivated_at IS NULL
+                        AND erased_at IS NULL
+                ) THEN
+                    RAISE EXCEPTION 'entry actor must be active' USING ERRCODE='23514';
+                END IF;
             END IF;
-            IF TG_OP = 'DELETE' AND EXISTS (
-                SELECT 1 FROM tournament_events WHERE id = OLD.event_id
-            ) THEN
+            IF TG_OP = 'DELETE' THEN
                 RAISE EXCEPTION 'entry history must be retained; withdraw the entry'
                     USING ERRCODE = '23514';
             END IF;

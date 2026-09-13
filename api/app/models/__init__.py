@@ -159,7 +159,9 @@ from app.models import competition_rule_integrity as competition_rule_integrity
 from app.models import draw_visibility as draw_visibility
 from app.models import entry_supersession as entry_supersession
 from app.models import event_lifecycle_integrity as event_lifecycle_integrity
+from app.models import identity_retention_integrity as identity_retention_integrity
 from app.models import participation_integrity as participation_integrity
+from app.models import sporting_retention as sporting_retention
 from app.models import tournament_archive_integrity as tournament_archive_integrity
 from app.models.advancement_decision import AdvancementDecision, AdvancementEvidence
 from app.models.event_lifecycle import EventLifecycleHistory as EventLifecycleHistory

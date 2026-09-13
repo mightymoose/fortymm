@@ -1,3 +1,4 @@
+import { historicalEntrants } from './entrants'
 // What an event's **draw** looks like to a reader (ADR-0786) — the pure derivation
 // behind the Events tab's draw panel, and the copy behind its refusals.
 //
@@ -507,7 +508,8 @@ function swissByesOf(
 ): SwissByes {
   const byes = new Map<number, Entrant[]>()
   if (shape !== 'swiss-rounds') return byes
-  if (event.entrants.length % 2 === 0) return byes
+  const entrants = historicalEntrants(event)
+  if (entrants.length % 2 === 0) return byes
 
   const seatedByRound = new Map<number, Set<string>>()
   for (const fixture of ungrouped) {
@@ -517,7 +519,7 @@ function swissByesOf(
     seatedByRound.set(fixture.round, seated)
   }
 
-  const inDrawOrder = drawOrder(event.entrants)
+  const inDrawOrder = drawOrder(entrants)
   for (const [round, seated] of seatedByRound) {
     // Nobody seated at all — the round is cut but not yet paired. Gate 3.
     if (seated.size === 0) continue
@@ -585,7 +587,7 @@ const drawIsUnderWay = (event: TournamentEvent): boolean =>
 export function drawState(event: TournamentEvent): DrawState {
   if (!hasDraw(event)) return { kind: 'undrawn' }
 
-  const byId = new Map(event.entrants.map((e) => [e.id, e]))
+  const byId = new Map(historicalEntrants(event).map((e) => [e.id, e]))
   const groupIds = new Set(event.groups.map((g) => g.id))
   const stagesById = new Map(event.stages.map((s): [string, Stage] => [s.id, s]))
   const byGroup = new Map<string, Fixture[]>()
@@ -650,7 +652,7 @@ export function drawState(event: TournamentEvent): DrawState {
       {
         id: group.id,
         label: groupLabel(group),
-        entrants: drawOrder(event.entrants.filter((e) => memberIds.has(e.id))),
+        entrants: drawOrder(historicalEntrants(event).filter((e) => memberIds.has(e.id))),
         rounds: roundsOf(fixtures, byId),
       },
     ]

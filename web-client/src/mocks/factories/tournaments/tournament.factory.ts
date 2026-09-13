@@ -1287,10 +1287,10 @@ export function buildStandingsThenFinishesResultsRead(
  * factories says `event_full`, whatever the caller forgot to pass.
  */
 export function entryStateFor(
-  event: Pick<TournamentEventRead, 'entrants' | 'max_players'>,
+  event: Pick<TournamentEventRead, 'entrants' | 'retained_entrants' | 'max_players'>,
 ): TournamentEventRead['entry_state'] {
   if (event.max_players === null) return { state: 'open' }
-  return event.entrants.length >= event.max_players
+  return event.entrants.length + (event.retained_entrants?.length ?? 0) >= event.max_players
     ? { state: 'event_full' }
     : { state: 'open' }
 }
@@ -1301,8 +1301,7 @@ export function entryStateFor(
  * bare call is a meaningful row.
  *
  * `entered` is NOT an override: like the server (ADR-0016) it is derived from
- * `entrants`, so this factory cannot mint an event whose count disagrees with
- * its list. Want an event with 22 entries? Give it 22 `entrants`.
+ * held registrations: visible `entrants` plus hidden `retained_entrants`.
  *
  * `entry_state` IS an override — the server computes it per caller (ADR-0783), and
  * `rating_ineligible` cannot be derived from an event's own fields — but it
@@ -1350,6 +1349,7 @@ export function buildTournamentEventRead(
     entry_fee: 45,
     timezone: 'America/Chicago',
     entrants: [],
+    retained_entrants: [],
     entry_state: { state: 'open' },
     fixtures: [],
     slot: { date: '2026-06-13', start: '09:00', end: '18:00' },
@@ -1403,7 +1403,7 @@ export function buildTournamentEventRead(
   return {
     ...event,
     entry_state: overrides.entry_state ?? entryStateFor(event),
-    entered: event.entrants.length,
+    entered: event.entrants.length + (event.retained_entrants?.length ?? 0),
   }
 }
 

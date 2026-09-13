@@ -307,8 +307,12 @@ async def test_match_binds_again_once_the_revocation_is_cleared(
 
 async def test_provision_creates_confirmed_user_with_default_role(
     db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sub = _sub()
+    monkeypatch.setattr(
+        "app.usernames.generate_slug", lambda words: "refreshing-jaybird"
+    )
 
     resolved = await resolve_or_provision_user(
         db_session, sub, "fresh@example.com", True
@@ -320,8 +324,9 @@ async def test_provision_creates_confirmed_user_with_default_role(
     assert resolved.confirmed_at is not None
     # A ``DateTime(timezone=True)`` column must yield an aware datetime.
     assert resolved.confirmed_at.tzinfo is not None
-    assert resolved.username  # a coolname slug, not derived from the email
-    assert "fresh" not in resolved.username
+    # Random slugs may share an email substring; provisioning uses the generated
+    # slug itself, without deriving the username from that email.
+    assert resolved.username == "refreshing-jaybird"
     assert await _holds_default_role(db_session, resolved.id)
 
 

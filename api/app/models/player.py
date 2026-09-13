@@ -36,4 +36,5 @@ class Player(Base):
         UUID(as_uuid=True), ForeignKey("players.id", ondelete="RESTRICT"), index=True
     )
     merged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

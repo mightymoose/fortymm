@@ -68,6 +68,93 @@ private final class TestLocationManager: CLLocationManager {
         precondition(tournaments[0].schedulePollSeconds == nil)
         print("PASS: near-me query, distances, eligibility rules, reservations, match settings and Swiss tiebreaks")
         let event = tournaments[0].events[0]
+        var retainedPayload = payload
+        var retainedEvent = eventPayload
+        retainedEvent["retained_entrants"] = retainedEvent["entrants"]
+        retainedEvent["entrants"] = [] as [[String: Any]]
+        retainedEvent["entered"] = 1
+        retainedEvent["max_players"] = 2
+        retainedPayload[0]["events"] = [retainedEvent]
+        let activeBody = TournamentTransport.body
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: retainedPayload), encoding: .utf8)!
+        let retainedTournament = try await service.list()[0]
+        let retained = retainedTournament.events[0]
+        precondition(retained.entrants.isEmpty, "Hidden players must stay out of the active roster")
+        precondition(retained.player(retained.fixtures[0].entryAId) == "alex", "Retained fixture participants must not be labelled withdrawn")
+        precondition(retained.player(retained.results?.rows?.first?.entryId) == "alex", "Results must retain historical player names")
+        precondition(retainedTournament.entryCount == 1, "Tournament counts must include retained registrations")
+        precondition(retained.capacityLabel == "1/2 players", "Capacity must use the server entered count")
+        let heldEntry = retained.entry(for: event.entrants[0].userId)
+        precondition(heldEntry != nil, "A hidden held registration must offer withdrawal instead of entry")
+        TournamentTransport.status = 204
+        TournamentTransport.body = ""
+        try await service.withdraw(retainedTournament.id, event: retained.id, entry: heldEntry!.id)
+        precondition(TournamentTransport.request?.httpMethod == "DELETE")
+        precondition(TournamentTransport.request?.url?.path.hasSuffix("/entries/\(event.entrants[0].id)") == true, "Withdrawal must target the retained registration ID")
+        TournamentTransport.status = 200
+        let retainedSchedule = TournamentPlayerSchedule(events: [retained], fixtureOrder: retained.fixtures.map(\.id))
+        precondition(retainedSchedule.players.first?.username == "alex", "Player schedule sections must preserve retained participants")
+        precondition(retainedSchedule.fixturesByUser[event.entrants[0].userId] == retained.fixtures.map(\.id))
+        TournamentTransport.body = activeBody
+        print("PASS: hidden players retain fixture and results names without appearing in the roster")
+        var orderedEvent = retainedEvent
+        var earlier = (retainedEvent["retained_entrants"] as! [[String: Any]])[0]
+        earlier["registration_order"] = 0
+        var later = earlier
+        later["id"] = UUID().uuidString
+        later["user_id"] = UUID().uuidString
+        later["username"] = "later"
+        later["registration_order"] = 1
+        orderedEvent["entrants"] = [later]
+        orderedEvent["retained_entrants"] = [earlier]
+        retainedPayload[0]["events"] = [orderedEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: retainedPayload), encoding: .utf8)!
+        let ordered = try await service.list()[0].events[0]
+        precondition(ordered.historicalEntrants.map(\.username) == ["alex", "later"], "Roster partitioning must not reorder historical registrations")
+        precondition(ordered.entrants.map(\.username) == ["later"])
+        earlier.removeValue(forKey: "registration_order")
+        later.removeValue(forKey: "registration_order")
+        orderedEvent["entrants"] = [later]
+        orderedEvent["retained_entrants"] = [earlier]
+        retainedPayload[0]["events"] = [orderedEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: retainedPayload), encoding: .utf8)!
+        let legacyOrdered = try await service.list()[0].events[0]
+        precondition(legacyOrdered.historicalEntrants.map(\.username) == ["later", "alex"], "Legacy responses must preserve their existing stable order")
+        TournamentTransport.body = activeBody
+        print("PASS: retained self-entry withdrawal and stable historical registration order")
+        precondition(retained.rosterEmptyMessage == "No active players to display.", "Hidden held registrations must not be described as zero entries")
+        precondition(event.rosterEmptyMessage == nil, "A visible roster needs no empty-state notice")
+        var emptyEvent = retainedEvent
+        emptyEvent["entered"] = 0
+        emptyEvent["retained_entrants"] = [] as [[String: Any]]
+        retainedPayload[0]["events"] = [emptyEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: retainedPayload), encoding: .utf8)!
+        let empty = try await service.list()[0].events[0]
+        precondition(empty.rosterEmptyMessage == "No players entered yet.")
+        TournamentTransport.body = activeBody
+        print("PASS: empty roster copy distinguishes held hidden registrations from no entries")
+        var retiredEventPayload = emptyEvent
+        retiredEventPayload["entry_state"] = ["state": "retired"]
+        retainedPayload[0]["events"] = [retiredEventPayload]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: retainedPayload), encoding: .utf8)!
+        let retiredWithoutEntry = try await service.list()[0].events[0]
+        precondition(retiredWithoutEntry.entryState.state.rawValue == "retired", "Retired players without a held entry need the explicit retirement refusal")
+        precondition(retiredWithoutEntry.entry(for: event.entrants[0].userId) == nil)
+        retiredEventPayload = retainedEvent
+        retiredEventPayload["entry_state"] = ["state": "retired"]
+        retainedPayload[0]["events"] = [retiredEventPayload]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: retainedPayload), encoding: .utf8)!
+        let retiredWithEntry = try await service.list()[0].events[0]
+        precondition(retiredWithEntry.entryState.state.rawValue == "retired")
+        let retiredHeldEntry = retiredWithEntry.entry(for: event.entrants[0].userId)
+        precondition(retiredHeldEntry?.id == event.entrants[0].id, "Retirement refusal must not remove held-entry withdrawal")
+        TournamentTransport.status = 204
+        TournamentTransport.body = ""
+        try await service.withdraw(retainedTournament.id, event: retiredWithEntry.id, entry: retiredHeldEntry!.id)
+        precondition(TournamentTransport.request?.url?.path.hasSuffix("/entries/\(event.entrants[0].id)") == true)
+        TournamentTransport.status = 200
+        TournamentTransport.body = activeBody
+        print("PASS: retirement refuses new entry while preserving held registration withdrawal")
         var roundTwoFailures: [String] = []
         if event.fixtureHeading(event.fixtures[0]) != "Round 1" { roundTwoFailures.append("Swiss fixtures show a structural group") }
         if TournamentCopy.entryFee("45.005", locale: Locale(identifier: "en_US")) != nil { roundTwoFailures.append("sub-cent fee admitted") }

@@ -307,7 +307,9 @@ async def _add_device(db_session: AsyncSession, user_id) -> None:
 
 async def test_notify_defaults_deliver_in_app_push_and_email(
     db_session: AsyncSession,
+    fake_email_queue,
 ):
+    fake_email_queue._is_async = True
     user = await make_user(db_session, "deliverable")
     user.email = "d@example.com"
     user.confirmed_at = datetime.now(UTC)
@@ -339,11 +341,14 @@ async def test_notify_defaults_deliver_in_app_push_and_email(
     assert [n.title for n in stored] == ["Draw posted"]
 
 
-async def test_notify_push_failure_does_not_drop_email(db_session: AsyncSession):
+async def test_notify_push_failure_does_not_drop_email(
+    db_session: AsyncSession, fake_email_queue
+):
     """#753: a DB error on the push path (device-token query or gone-token
     prune) must not sink the whole notification — the in-app row is already
     committed and the email still has to enqueue. The push branch catches the
     SQLAlchemyError, rolls back, and lets the remaining channels proceed."""
+    fake_email_queue._is_async = True
 
     class DbFlappingService(NotificationService):
         async def _tokens_for_user(self, user_id):

@@ -119,6 +119,7 @@ async def _standing_doubles_match(
         created_by_user_id=side1[0].id,
         status=MatchStatus.in_progress,
         results=[],
+        games=[],
     )
     match_side1 = MatchSide(match=match, side_number=1)
     for user in side1:
@@ -130,9 +131,12 @@ async def _standing_doubles_match(
         match_side2.players.append(
             MatchSidePlayer(match=match, user=user.primary_player)
         )
+    # Persist the complete sides before saving the first sporting evidence.
+    db.add(match)
+    await db.flush()
     game = MatchGame(match=match, game_number=1)
     game.score = MatchGameScore(side_1_points=11, side_2_points=4)
-    db.add(match)
+    db.add(game)
     await db.flush()
     result = MatchResult(
         match=match,

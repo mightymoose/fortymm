@@ -30,6 +30,8 @@ from app.match_creation import create_match as create_match_core
 from app.match_errors import (
     CannotAcceptOwnProposalError,
     MatchClosedError,
+    MatchCreationRateLimitedError,
+    MatchCreationUnavailableError,
     MatchNotFoundError,
     MatchNotScorableError,
     NegotiationConflictError,
@@ -201,6 +203,18 @@ async def create_match(
             best_of=payload.best_of,
             rated=payload.rated,
         )
+    except MatchCreationRateLimitedError as err:
+        raise HTTPException(
+            status_code=429,
+            detail=str(err),
+            headers={"Retry-After": str(err.retry_after)},
+        ) from err
+    except MatchCreationUnavailableError as err:
+        raise HTTPException(
+            status_code=503,
+            detail="Match creation is temporarily unavailable. Retry shortly.",
+            headers={"Retry-After": "5"},
+        ) from err
     except PlayerAccessDenied as err:
         raise HTTPException(
             status_code=409, detail="This account has no active primary player."

@@ -45,6 +45,27 @@ describe('EnterEventControl', () => {
     expect(page.queryWithdrawButton('Open Singles')).toBeNull()
   })
 
+  it('explains retirement instead of offering a new entry', async () => {
+    page.render({ event: buildEvent({ name: 'Open Singles', entryState: { state: 'retired' } }) })
+
+    expect(await page.findIneligibleNotice()).toHaveTextContent('This player is retired.')
+    expect(page.queryEnterButton('Open Singles')).toBeNull()
+    expect(page.queryWithdrawButton('Open Singles')).toBeNull()
+  })
+
+  it('still offers withdrawal for a retired player’s held entry', async () => {
+    page.render({ event: buildEvent({
+      name: 'Open Singles',
+      entrants: [],
+      retainedEntrants: [buildEntrant({ id: 'held-entry', username: SIGNED_IN_USERNAME })],
+      entryState: { state: 'retired' },
+    }) })
+
+    expect(await page.findWithdrawButton('Open Singles')).toBeInTheDocument()
+    expect(page.queryEnterButton('Open Singles')).toBeNull()
+    expect(page.queryIneligibleNotice()).toBeNull()
+  })
+
   it('offers Withdraw once that player is one of the entrants', async () => {
     page.render({ event: enteredEvent })
 

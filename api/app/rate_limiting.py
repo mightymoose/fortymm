@@ -152,3 +152,22 @@ async def check_expiring_budget(key: str, *, limit: int, seconds: int) -> bool:
         return int(count) <= limit
     except redis_asyncio.RedisError as error:
         raise RateLimitUnavailable() from error
+
+
+async def identity_creation_retry_after(
+    client_ip: str, *, hourly_limit: int, daily_limit: int
+) -> int | None:
+    """Charge shared public identity admission; return the refused window.
+
+    Keep the original guest namespace so deploying wider coverage cannot reset
+    an already-consumed budget. Redis failure propagates to fail-closed callers.
+    """
+    for window, limit, seconds in (
+        ("hour", hourly_limit, 3600),
+        ("day", daily_limit, 86400),
+    ):
+        if not await check_expiring_budget(
+            f"guest-create:{window}:{client_ip}", limit=limit, seconds=seconds
+        ):
+            return seconds
+    return None

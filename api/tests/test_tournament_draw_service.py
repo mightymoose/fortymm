@@ -1174,9 +1174,10 @@ async def test_sql_fixture_cannot_use_a_stage_without_its_rule_revision(
         await db_session.flush()
 
 
-async def test_recut_keeps_rule_history_until_permitted_event_deletion(
+async def test_recut_keeps_rule_history_after_refused_registered_event_deletion(
     db_session: AsyncSession, default_league: League
 ) -> None:
+    from app.tournament_errors import RecordedPlayDeletionError
     from app.tournament_events import delete_event
 
     owner = await make_user(db_session, "rules-retention-owner")
@@ -1231,13 +1232,14 @@ async def test_recut_keeps_rule_history_until_permitted_event_deletion(
         )
     ).one()
     assert retained == original
-    await delete_event(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    with pytest.raises(RecordedPlayDeletionError, match="Registration history"):
+        await delete_event(db_session, tournament_id=tid, event_id=eid, actor=owner)
     assert (
         await db_session.scalar(
             text("SELECT count(*) FROM tournament_draw_revisions WHERE event_id=:id"),
             {"id": eid},
         )
-        == 0
+        == 3
     )
 
 
@@ -1296,21 +1298,26 @@ async def test_qualification_count_is_frozen_before_any_group_finishes(
 async def test_unused_match_snapshot_does_not_prevent_permitted_event_deletion(
     db_session: AsyncSession, default_league: League
 ) -> None:
-    from app.models import MatchSettings
+    from app.competition_rules import snapshot_format_rules, snapshot_match_rules
+    from app.models import MatchSettings, TournamentDrawRevision
     from app.tournament_events import delete_event
 
     owner = await make_user(db_session, "rules-unused-owner")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     event = await _make_event(db_session, tournament)
     tid, eid = tournament.id, event.id
-    await _enter_field(db_session, event, 4, prefix="rules-unused-field")
-    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
-    await db_session.refresh(event)
+    revision = TournamentDrawRevision(
+        event_id=eid,
+        match_rules=snapshot_match_rules(event),
+        format_rules=snapshot_format_rules(event),
+    )
+    db_session.add(revision)
+    await db_session.flush()
     db_session.add(
         MatchSettings(
             team_size=1,
             best_of=5,
-            source_rule_revision_id=event.current_rule_revision.id,
+            source_rule_revision_id=revision.id,
         )
     )
     await db_session.commit()
@@ -1318,20 +1325,49 @@ async def test_unused_match_snapshot_does_not_prevent_permitted_event_deletion(
     assert await db_session.scalar(text("SELECT count(*) FROM match_settings")) == 0
 
 
-async def test_surviving_materialized_match_blocks_event_deletion_with_domain_error(
+async def test_surviving_match_blocks_unregistered_rule_source_event_deletion(
     db_session: AsyncSession, default_league: League
 ) -> None:
+    from app.competition_rules import snapshot_format_rules, snapshot_match_rules
+    from app.models import (
+        Match,
+        MatchSettings,
+        TournamentDrawRevision,
+        TournamentFixture,
+    )
     from app.tournament_errors import RecordedPlayDeletionError
     from app.tournament_events import delete_event
-    from app.tournament_materialization import materialize_event
 
     owner = await make_user(db_session, "rules-surviving-owner")
     tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     event = await _make_event(db_session, tournament)
     tid, eid = tournament.id, event.id
-    await _enter_field(db_session, event, 4, prefix="rules-surviving-field")
-    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
-    await materialize_event(db_session, tournament, event)
+    revision = TournamentDrawRevision(
+        event_id=eid,
+        match_rules=snapshot_match_rules(event),
+        format_rules=snapshot_format_rules(event),
+    )
+    db_session.add(revision)
+    await db_session.flush()
+    match = Match(
+        match_settings=MatchSettings(
+            team_size=1, best_of=5, source_rule_revision_id=revision.id
+        ),
+        league_id=default_league.id,
+        created_by_user_id=owner.id,
+    )
+    db_session.add(match)
+    await db_session.flush()
+    db_session.add(
+        TournamentFixture(
+            stage_id=event.stages[0].id,
+            group_id=event.groups[0].id,
+            draw_revision_id=revision.id,
+            match_id=match.id,
+            round=1,
+            position=1,
+        )
+    )
     await db_session.commit()
     with pytest.raises(RecordedPlayDeletionError, match="rule history"):
         await delete_event(db_session, tournament_id=tid, event_id=eid, actor=owner)

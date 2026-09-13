@@ -214,11 +214,13 @@ async def replace_advancement(
             )
         ).one()
         locked_match_id = fixture.match_id
-        await db.execute(
+        actor = await db.scalar(
             select(Account.id)
-            .where(Account.id == actor_account_id)
-            .with_for_update(read=True, key_share=True)
+            .where(Account.id == actor_account_id, Account.is_active)
+            .with_for_update(read=True)
         )
+        if actor is None:
+            raise ValueError("Advancement actor must be active")
         await db.execute(
             select(Tournament.id)
             .where(Tournament.id == fixture.scope_tournament_id)

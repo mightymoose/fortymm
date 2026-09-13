@@ -186,6 +186,12 @@ class Settings(BaseSettings):
     email_resend_session_limit_per_hour: Annotated[int, Field(gt=0)] = 3
     email_resend_ip_limit_per_hour: Annotated[int, Field(gt=0)] = 10
     login_consume_ip_limit_per_hour: Annotated[int, Field(gt=0)] = 60
+    # Shared public identity admission; names retain configuration compatibility.
+    # Existing sessions are exempt; email requests are uniformly charged.
+    guest_creation_ip_limit_per_hour: Annotated[int, Field(gt=0)] = 60
+    guest_creation_ip_limit_per_day: Annotated[int, Field(gt=0)] = 300
+    match_creation_account_limit_per_hour: Annotated[int, Field(gt=0)] = 60
+    match_creation_account_limit_per_day: Annotated[int, Field(gt=0)] = 300
 
     @model_validator(mode="after")
     def _require_google_key(self) -> "Settings":

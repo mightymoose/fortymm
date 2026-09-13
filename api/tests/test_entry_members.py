@@ -89,6 +89,20 @@ async def postgres_url(postgres_url, entry_schema):
         await admin.dispose()
 
 
+@pytest_asyncio.fixture(scope="session")
+async def engine(postgres_url):
+    """Keep the schema-specific engine separate from the shared session fixture.
+
+    Reusing the inherited engine fixture caches this module's overridden URL
+    for later modules even after DATABASE_URL returns to the ordinary test DB.
+    """
+    schema_engine = create_async_engine(postgres_url)
+    try:
+        yield schema_engine
+    finally:
+        await schema_engine.dispose()
+
+
 async def test_singles_registration_stores_a_player_member(api_client, db_session):
     player = await start_session(api_client, db_session)
     event = await _make_event(db_session)
@@ -1183,6 +1197,7 @@ async def test_cancelling_an_untouched_call_resets_its_provisional_lineup(
 ):
     from app.match_calls import apply_manual_placement
     from app.models import User
+    from app.tournament_errors import RecordedPlayDeletionError
     from app.tournament_events import delete_event
     from app.tournament_retention import require_no_recorded_play
 
@@ -1205,11 +1220,14 @@ async def test_cancelling_an_untouched_call_resets_its_provisional_lineup(
     await db_session.commit()
     assert match.status is MatchStatus.pending
     assert await db_session.scalar(text("SELECT count(*) FROM match_lineups")) == 0
-    await require_no_recorded_play(db_session, tournament_id=tournament.id)
+    with pytest.raises(RecordedPlayDeletionError, match="Registration history"):
+        await require_no_recorded_play(db_session, tournament_id=tournament.id)
     owner = await db_session.get(User, tournament.owner_account_id)
-    await delete_event(
-        db_session, tournament_id=tournament.id, event_id=event.id, actor=owner
-    )
+    with pytest.raises(RecordedPlayDeletionError, match="Registration history"):
+        await delete_event(
+            db_session, tournament_id=tournament.id, event_id=event.id, actor=owner
+        )
+    assert await db_session.scalar(text("SELECT count(*) FROM tournament_entries")) == 2
 
 
 @pytest.mark.parametrize("commit_cancellation", [False, True])
@@ -1497,6 +1515,14 @@ async def test_evidence_cannot_be_reassigned_to_another_match(
         status=MatchStatus.pending,
         match_settings=MatchSettings(team_size=2, best_of=5, affects_rating=False),
     )
+    # A proposal is recorded play even for a pending standalone match, so its
+    # original subjects must exist before this test attempts to move the evidence.
+    for number in (1, 2):
+        side = MatchSide(match=other, side_number=number)
+        side.players = [
+            MatchSidePlayer(match=other, user_id=player.player_id)
+            for player in players[(number - 1) * 2 : number * 2]
+        ]
     db_session.add(other)
     await db_session.commit()
     original, destination = (
@@ -1528,12 +1554,13 @@ async def test_evidence_cannot_be_reassigned_to_another_match(
 
 @pytest.mark.parametrize("evidence", ["game", "result", "status"])
 @pytest.mark.parametrize("target", ["event", "tournament"])
-async def test_evidence_write_aborts_when_deletion_commits_first(
+async def test_evidence_write_survives_refused_parent_deletion(
     db_session, engine, evidence, target
 ):
     from sqlalchemy.exc import DBAPIError
 
     from app.models import MatchGame, MatchResult, User
+    from app.tournament_errors import RecordedPlayDeletionError
     from app.tournament_events import delete_event
     from app.tournament_lifecycle import delete_tournament
 
@@ -1587,31 +1614,56 @@ async def test_evidence_write_aborts_when_deletion_commits_first(
                 await writer.rollback()
             else:
                 await asyncio.wait_for(wait_for_block(), timeout=5)
-            if target == "event":
-                await delete_event(
-                    deletion,
-                    tournament_id=event.tournament_id,
-                    event_id=event.id,
-                    actor=actor,
-                )
-            else:
-                await delete_tournament(
-                    deletion, tournament_id=event.tournament_id, actor=actor
-                )
+            with pytest.raises(RecordedPlayDeletionError, match="Registration history"):
+                if target == "event":
+                    await delete_event(
+                        deletion,
+                        tournament_id=event.tournament_id,
+                        event_id=event.id,
+                        actor=actor,
+                    )
+                else:
+                    await delete_tournament(
+                        deletion, tournament_id=event.tournament_id, actor=actor
+                    )
+            await deletion.rollback()
             if evidence != "status":
-                with pytest.raises(
-                    DBAPIError, match="tournament association was deleted"
-                ) as exc:
-                    await asyncio.wait_for(write_task, timeout=5)
-                assert exc.value.orig.sqlstate == "40001"
+                await asyncio.wait_for(write_task, timeout=5)
+                table = "match_games" if evidence == "game" else "match_results"
+                assert (
+                    await db_session.scalar(
+                        text(f"SELECT count(*) FROM {table} WHERE match_id = :id"),
+                        {"id": match.id},
+                    )
+                    == 1
+                )
             else:
+                # Status writes fail fast on inverted parent locks. After the
+                # refused delete releases them, the writer can retry normally.
+                await asyncio.wait_for(write_evidence(), timeout=5)
                 assert (
                     await db_session.scalar(
                         text("SELECT status FROM matches WHERE id = :id"),
                         {"id": match.id},
                     )
-                    == "pending"
+                    == "in_progress"
                 )
+            assert (
+                await db_session.scalar(
+                    text("SELECT count(*) FROM tournament_fixtures WHERE id = :id"),
+                    {"id": fixture.id},
+                )
+                == 1
+            )
+            assert (
+                await db_session.scalar(
+                    text(
+                        "SELECT count(*) FROM tournament_entries WHERE event_id = :id"
+                    ),
+                    {"id": event.id},
+                )
+                == 2
+            )
         finally:
             if not write_task.done():
                 write_task.cancel()
@@ -1950,7 +2002,10 @@ async def test_direct_member_delete_refuses_without_waiting_on_event(
 
 
 @pytest.mark.parametrize("action", ["join", "depart"])
-async def test_roster_actor_lock_precedes_tournament_lock(db_session, engine, action):
+@pytest.mark.parametrize("lifecycle_update", [False, True])
+async def test_roster_actor_lock_precedes_tournament_lock(
+    db_session, engine, action, lifecycle_update
+):
     from sqlalchemy.exc import DBAPIError
 
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
@@ -1975,7 +2030,11 @@ async def test_roster_actor_lock_precedes_tournament_lock(db_session, engine, ac
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with sessions() as merging, sessions() as roster:
         await merging.execute(
-            text("SELECT id FROM accounts WHERE id = :id FOR UPDATE"),
+            text(
+                "UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"
+                if lifecycle_update
+                else "SELECT id FROM accounts WHERE id = :id FOR UPDATE"
+            ),
             {"id": tournament.owner_account_id},
         )
         await roster.execute(text("SET LOCAL lock_timeout = '200ms'"))
@@ -2063,7 +2122,8 @@ async def test_result_acceptance_refuses_locked_actor_before_match(db_session, e
         await accepting.commit()
 
 
-async def test_entry_adder_lock_precedes_parent_locks(db_session, engine):
+@pytest.mark.parametrize("lifecycle", ["merge", "deactivation"])
+async def test_entry_adder_lock_precedes_parent_locks(db_session, engine, lifecycle):
     from sqlalchemy.exc import DBAPIError
 
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
@@ -2075,7 +2135,11 @@ async def test_entry_adder_lock_precedes_parent_locks(db_session, engine):
     params = {"event": event.id, "actor": match.created_by_user_id}
     async with sessions() as merging, sessions() as registering:
         await merging.execute(
-            text("SELECT id FROM accounts WHERE id = :id FOR UPDATE"),
+            text(
+                "SELECT id FROM accounts WHERE id = :id FOR UPDATE"
+                if lifecycle == "merge"
+                else "UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"
+            ),
             {"id": match.created_by_user_id},
         )
         await registering.execute(text("SET LOCAL lock_timeout = '200ms'"))
@@ -2091,31 +2155,33 @@ async def test_entry_adder_lock_precedes_parent_locks(db_session, engine):
 
 
 async def test_entry_withdrawal_does_not_relock_unchanged_adder(db_session, engine):
-    event, players, entries, match, fixture = await seed_doubles_match(db_session)
-    await db_session.execute(
-        text("UPDATE tournament_entries SET added_by_user_id = :actor WHERE id = :id"),
-        {"actor": match.created_by_user_id, "id": entries[0].id},
+    actor = await make_user(db_session, "unchanged-entry-adder")
+    player = await make_user(db_session, "unchanged-entry-player")
+    event = await _make_event(db_session)
+    entry = TournamentEntry(
+        event_id=event.id, user_id=player.player_id, added_by_user_id=actor.id
     )
+    db_session.add(entry)
     await db_session.commit()
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with sessions() as merging, sessions() as withdrawing:
         await merging.execute(
             text("SELECT id FROM accounts WHERE id = :id FOR UPDATE"),
-            {"id": match.created_by_user_id},
+            {"id": actor.id},
         )
         await withdrawing.execute(text("SET LOCAL lock_timeout = '200ms'"))
         await withdrawing.execute(
             text("UPDATE tournament_entries SET status = 'withdrawn' WHERE id = :id"),
-            {"id": entries[0].id},
+            {"id": entry.id},
         )
         await close_entry_participation(
-            withdrawing, entries[0].id, players[0].id, WithdrawalReason.self_withdrawal
+            withdrawing, entry.id, player.id, WithdrawalReason.self_withdrawal
         )
         await withdrawing.commit()
         assert (
             await withdrawing.scalar(
                 text("SELECT status FROM tournament_entries WHERE id = :id"),
-                {"id": entries[0].id},
+                {"id": entry.id},
             )
             == "withdrawn"
         )
@@ -2211,7 +2277,10 @@ async def test_pending_evidence_preserves_seated_membership(db_session, evidence
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
 
-async def test_lineup_correction_actor_lock_precedes_event_lock(db_session, engine):
+@pytest.mark.parametrize("lifecycle_update", [False, True])
+async def test_lineup_correction_actor_lock_precedes_event_lock(
+    db_session, engine, lifecycle_update
+):
     from sqlalchemy.exc import DBAPIError
 
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
@@ -2227,7 +2296,11 @@ async def test_lineup_correction_actor_lock_precedes_event_lock(db_session, engi
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with sessions() as merging, sessions() as correcting:
         await merging.execute(
-            text("SELECT id FROM accounts WHERE id = :id FOR UPDATE"),
+            text(
+                "UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"
+                if lifecycle_update
+                else "SELECT id FROM accounts WHERE id = :id FOR UPDATE"
+            ),
             {"id": match.created_by_user_id},
         )
         await correcting.execute(text("SET LOCAL lock_timeout = '200ms'"))
@@ -2632,11 +2705,11 @@ async def test_deleting_a_parent_cannot_cascade_away_recorded_membership(
         "event": ("DELETE FROM tournament_events WHERE id = :id", event.id),
         "tournament": ("DELETE FROM tournaments WHERE id = :id", event.tournament_id),
     }[parent]
-    refusal = (
-        "entry history must be retained"
-        if parent == "entry"
-        else "recorded match fixture must be retained"
-    )
+    refusal = {
+        "entry": "entry history must be retained",
+        "event": "entry history must be retained",
+        "tournament": "only unused draft tournaments can be deleted",
+    }[parent]
     with pytest.raises(IntegrityError, match=refusal):
         async with db_session.begin_nested():
             await db_session.execute(text(statement), {"id": parent_id})
@@ -3417,3 +3490,152 @@ async def test_table_call_history_is_append_only_in_both_schema_builds(
     with pytest.raises(IntegrityError, match="table call history is append-only"):
         async with db_session.begin_nested():
             await db_session.execute(text(statement), {"id": history.id})
+
+
+@pytest.mark.parametrize("status", [TournamentStatus.draft, TournamentStatus.published])
+@pytest.mark.parametrize("mutation", ["join", "leave"])
+async def test_fresh_roster_actor_must_be_active_before_event_start(
+    db_session, status, mutation
+):
+    actor = await make_user(db_session, "inactive-roster-actor")
+    player = await make_user(db_session, "roster-subject")
+    event = await _make_event(db_session, status=status)
+    entry = TournamentEntry(event_id=event.id, user_id=player.player_id)
+    db_session.add(entry)
+    await db_session.commit()
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"),
+        {"id": actor.id},
+    )
+    await db_session.commit()
+    statement = (
+        "INSERT INTO tournament_entry_members(entry_id,player_id,joined_by_account_id,"
+        "left_at,left_by_account_id) VALUES(:e,:p,:a,clock_timestamp(),:a)"
+        if mutation == "join"
+        else "UPDATE tournament_entry_members SET left_at=clock_timestamp(),"
+        "left_by_account_id=:a WHERE entry_id=:e AND left_at IS NULL"
+    )
+    with pytest.raises(IntegrityError, match="roster actor must be active"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(statement), {"e": entry.id, "p": player.player_id, "a": actor.id}
+            )
+            if mutation == "leave":
+                await db_session.execute(
+                    text(
+                        "UPDATE tournament_entries SET status='withdrawn' WHERE id=:e"
+                    ),
+                    {"e": entry.id},
+                )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_explicit_initial_lineup_actor_must_be_active(db_session):
+    _, _, _, match, _ = await seed_doubles_match(db_session)
+    actor = await make_user(db_session, "inactive-first-lineup-actor")
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"),
+        {"id": actor.id},
+    )
+    await db_session.commit()
+    with pytest.raises(IntegrityError, match="lineup actor must be active"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("UPDATE matches SET status='in_progress' WHERE id=:m"),
+                {"m": match.id},
+            )
+            lineup = await db_session.scalar(
+                text(
+                    "INSERT INTO match_lineups(match_id,revision,"
+                    "recorded_by_account_id) VALUES(:m,1,:a) RETURNING id"
+                ),
+                {"m": match.id, "a": actor.id},
+            )
+            await db_session.execute(
+                text(
+                    "INSERT INTO match_lineup_players(lineup_id,side_number,"
+                    "player_id,entry_member_id) SELECT :l,s.side_number,p.user_id,"
+                    "em.id FROM match_side_players p JOIN match_sides s ON "
+                    "s.id=p.match_side_id JOIN tournament_entry_members em ON "
+                    "em.player_id=p.user_id WHERE p.match_id=:m"
+                ),
+                {"l": lineup, "m": match.id},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("mutation", ["insert", "change"])
+async def test_new_entry_attribution_requires_active_actor(db_session, mutation):
+    actor = await make_user(db_session, "inactive-entry-attribution")
+    player = await make_user(db_session, "entry-attribution-subject")
+    event = await _make_event(db_session)
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"),
+        {"id": actor.id},
+    )
+    await db_session.commit()
+    existing = TournamentEntry(event_id=event.id, user_id=player.player_id)
+    if mutation == "change":
+        db_session.add(existing)
+        await db_session.commit()
+    with pytest.raises(
+        IntegrityError,
+        match="entry actor must be active"
+        if mutation == "insert"
+        else "entry creator is immutable",
+    ):
+        async with db_session.begin_nested():
+            existing.added_by_user_id = actor.id
+            if mutation == "insert":
+                db_session.add(existing)
+            await db_session.flush()
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_historical_roster_actors_do_not_block_fresh_departure_or_noop(
+    db_session,
+):
+    from app.models import TournamentEntryStatus
+
+    historical = await make_user(db_session, "historical-roster-actor")
+    current = await make_user(db_session, "current-roster-actor")
+    player = await make_user(db_session, "historical-roster-subject")
+    event = await _make_event(db_session)
+    member = TournamentEntryMember(
+        player_id=player.player_id, joined_by_account_id=historical.id
+    )
+    entry = TournamentEntry(event_id=event.id, members=[member])
+    db_session.add(entry)
+    await db_session.commit()
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:a"),
+        {"a": historical.id},
+    )
+    await db_session.commit()
+    await db_session.execute(
+        text(
+            "UPDATE tournament_entry_members SET left_at=clock_timestamp(),"
+            "left_by_account_id=:a WHERE id=:m"
+        ),
+        {"a": current.id, "m": member.id},
+    )
+    entry.status = TournamentEntryStatus.withdrawn
+    await db_session.commit()
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:a"),
+        {"a": current.id},
+    )
+    await db_session.execute(
+        text("UPDATE tournament_entry_members SET left_at=left_at WHERE id=:m"),
+        {"m": member.id},
+    )
+    await db_session.commit()
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT joined_by_account_id FROM tournament_entry_members WHERE id=:m"
+            ),
+            {"m": member.id},
+        )
+        == historical.id
+    )

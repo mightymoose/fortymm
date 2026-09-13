@@ -6,7 +6,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from rq import Queue
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import app.retirement_jobs as retirement_jobs
@@ -81,9 +82,12 @@ async def _build_standing_match(
     side1.players.append(MatchSidePlayer(match=match, user=poster.primary_player))
     side2 = MatchSide(match=match, side_number=2)
     side2.players.append(MatchSidePlayer(match=match, user=opponent.primary_player))
+    # Persist the complete sides before saving the first sporting evidence.
+    db.add(match)
+    await db.flush()
     game = MatchGame(match=match, game_number=1)
     game.score = MatchGameScore(side_1_points=11, side_2_points=4)
-    db.add(match)
+    db.add(game)
     await db.flush()
     if actor_id is not None:
         # The acting Account explicitly manages this Player as its primary.
@@ -311,33 +315,33 @@ async def test_retire_takes_the_match_row_lock(
     assert locked == [match_id]
 
 
-# ----- defensive: player-less owing side ----------------------------------
+# ----- retained owing-side identity ---------------------------------------
 
 
-async def test_owing_side_without_players_is_a_noop(
+async def test_recorded_owing_side_cannot_be_removed_before_retirement(
     db_session: AsyncSession, default_league: League
 ) -> None:
-    """A solo/sentinel match whose only other side has no players can't yield an
-    acceptor; the job must no-op rather than IndexError. (Such matches carry no
-    standing rated result in practice; this is belt-and-suspenders.)"""
+    """A rated result keeps its owing Player through automatic acceptance."""
     match, result, poster, opponent = await _build_standing_match(
         db_session, default_league, submitted_ago=timedelta(days=8)
     )
     match_id, result_id = match.id, result.id
-    # Strip the owing side's players to model the sentinel shape.
     owing = next(s for s in match.sides if s.side_number == 2)
-    for player in list(owing.players):
-        await db_session.delete(player)
-    await db_session.commit()
+    with pytest.raises(IntegrityError, match="recorded participants cannot lose"):
+        async with db_session.begin_nested():
+            for player in list(owing.players):
+                await db_session.delete(player)
+            await db_session.flush()
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
     db_session.expire_all()
     outcome = await retire_if_lapsed(
         db_session, match_id, result_id, _notifications(db_session)
     )
 
-    assert outcome is RetirementOutcome.no_owing_side
+    assert outcome is RetirementOutcome.retired
     await db_session.refresh(match)
-    assert match.status is MatchStatus.in_progress
+    assert match.status is MatchStatus.completed
 
 
 # ----- #1523 constraint 1: submitter on neither side (director bypass) -----

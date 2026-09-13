@@ -16,6 +16,7 @@ the real filter and not about a literal this file wrote.
 import uuid
 from decimal import Decimal
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.draws import FixtureGames
@@ -25,6 +26,8 @@ from app.models import (
     MatchGame,
     MatchGameScore,
     MatchSettings,
+    MatchSide,
+    MatchSidePlayer,
     MatchStatus,
     Tournament,
     TournamentEntry,
@@ -131,6 +134,7 @@ async def _match(
     league: League,
     status: MatchStatus,
     games: list[tuple[int, int]],
+    entries: tuple[uuid.UUID, uuid.UUID],
 ) -> uuid.UUID:
     """A match with ``games`` scored on its board — ``(side_1_points, side_2_points)``
     per game — in ``status``.
@@ -146,6 +150,19 @@ async def _match(
         status=status,
     )
     db.add(match)
+    await db.flush()
+    # First evidence snapshots the fixture's actual subjects, so seed them
+    # before populating its scored board.
+    for number, entry_id in enumerate(entries, 1):
+        player_id = await db.scalar(
+            select(TournamentEntry.user_id).where(TournamentEntry.id == entry_id)
+        )
+        side = MatchSide(match_id=match.id, side_number=number)
+        db.add(side)
+        await db.flush()
+        db.add(
+            MatchSidePlayer(match_id=match.id, match_side_id=side.id, user_id=player_id)
+        )
     await db.flush()
     for number, (side_1_points, side_2_points) in enumerate(games, start=1):
         game = MatchGame(match_id=match.id, game_number=number)
@@ -230,6 +247,7 @@ async def test_a_completed_match_projects_the_games_each_side_won(
             db_session,
             owner=owner,
             league=default_league,
+            entries=(a, b),
             status=MatchStatus.completed,
             games=[(11, 5), (11, 7), (6, 11), (11, 9)],
         ),
@@ -245,6 +263,7 @@ async def test_a_completed_match_projects_the_games_each_side_won(
             db_session,
             owner=owner,
             league=default_league,
+            entries=(c, d),
             status=MatchStatus.completed,
             games=[(5, 11), (7, 11), (11, 6), (9, 11)],
         ),
@@ -321,6 +340,7 @@ async def test_a_match_that_has_not_completed_projects_no_games(
             db_session,
             owner=owner,
             league=default_league,
+            entries=(a, b),
             status=MatchStatus.in_progress,
             games=[(11, 5), (11, 7)],
         ),

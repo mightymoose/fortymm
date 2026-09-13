@@ -28,7 +28,7 @@ async def email_action_is_valid(
     db: AsyncSession, action: EmailIntent | EmailToken
 ) -> bool:
     owner = await db.get(User, action.user_id)
-    if owner is None or owner.merged_into_user_id is not None:
+    if owner is None or not owner.is_active:
         return False
     if action.purpose == EmailPurpose.merge:
         target = (
@@ -37,9 +37,7 @@ async def email_action_is_valid(
             else None
         )
         return (
-            target is not None
-            and target.merged_into_user_id is None
-            and target.email == action.sent_to
+            target is not None and target.is_active and target.email == action.sent_to
         )
     if action.purpose == EmailPurpose.change:
         if owner.email != action.prior_email:
@@ -285,12 +283,16 @@ async def lock_pending_email_action(
         return intent
 
 
-async def resolve_login_recipient(db: AsyncSession, email: str) -> tuple[User, bool]:
+async def resolve_login_recipient(
+    db: AsyncSession, email: str, *, allow_create: bool
+) -> tuple[User | None, bool]:
     """Resolve after locking; restart if the address moved to another Account.
 
     The email advisory lock covers absent intent rows. Acquire every candidate
     Account in sorted order before modifying intent, matching consumption.
     Reads after locking decide the action; the earlier snapshot only finds locks.
+    A spent creation budget skips only a fresh allocation, never an existing
+    account or pending recipient. The router returns the same accepted body.
     """
     while True:
         await db.execute(
@@ -358,6 +360,8 @@ async def resolve_login_recipient(db: AsyncSession, email: str) -> tuple[User, b
             )
             await db.delete(intent)
             await db.flush()
+        if not allow_create:
+            return None, True
         pending = await _mint_pending_user(db)
         db.add(FirstSignInIntent(email=email, user_id=pending.id))
         return pending, True

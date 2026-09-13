@@ -83,6 +83,10 @@ FEED_LIMIT = 50
 RECIPIENT_LIMIT = 50
 
 
+class InactiveNotificationAccount(Exception):
+    """An inactive Account cannot change notification settings or device access."""
+
+
 class PushNotConfiguredError(Exception):
     """Raised when a push is requested but no APNs credentials are configured.
     The router maps this to a 503."""
@@ -373,6 +377,7 @@ class NotificationService:
         """Upsert keyed on the globally-unique APNs token: a device that has
         since signed into a different account re-points to the new owner rather
         than creating a duplicate row."""
+        await self._require_active_account(user.id)
         stmt = insert(DeviceToken).values(
             token=req.token,
             platform=req.platform,
@@ -474,8 +479,8 @@ class NotificationService:
         ``Notification.result_id`` / ``_visible_notifications_clause``. Leave
         it ``None`` for every notification that isn't one of the two hideable
         result-acceptance prompts."""
-        user = await self._db.get(User, user_id)
-        if user is None or user.merged_into_user_id is not None:
+        user = await self._active_recipient(user_id)
+        if user is None:
             return NotifyResult()
 
         candidates = set(NotificationChannel) if channels is None else set(channels)
@@ -525,25 +530,28 @@ class NotificationService:
                     extra={"user_id": str(user_id), "category": category.value},
                 )
 
-        if (
-            NotificationChannel.EMAIL in effective
-            and user.email
-            and user.confirmed_at is not None
-        ):
-            if self._enqueue_notification_email(user.email, title, body, link):
-                result.emailed = True
+        if NotificationChannel.EMAIL in effective:
+            # In-app persistence and token pruning may have committed the old
+            # lock. Recheck before enqueueing, and again in the email worker.
+            recipient = await self._active_recipient(user_id)
+            if recipient and recipient.email and recipient.confirmed_at is not None:
+                if self._enqueue_notification_email(
+                    user_id, recipient.email, title, body, link
+                ):
+                    result.emailed = True
 
         return result
 
     def _enqueue_notification_email(
-        self, to_email: str, title: str, body: str, link: str | None
+        self, user_id: uuid.UUID, to_email: str, title: str, body: str, link: str | None
     ) -> bool:
         """Fire-and-forget the notification email. A Redis hiccup must not fail
         the originating flow, so enqueue failures are logged and swallowed
         (mirrors ``app.sessions._enqueue_rating_recompute_after_merge``)."""
         try:
             queue_module.get_email_queue().enqueue(
-                "app.email.send_notification_email",
+                "app.notifications.jobs.deliver_notification_email",
+                str(user_id),
                 to_email,
                 title,
                 body,
@@ -627,6 +635,7 @@ class NotificationService:
         """Mark one notification read. Scoped to the owner — returns ``None``
         (router → 404) for a notification that isn't theirs or doesn't exist.
         Idempotent: re-marking an already-read row is a no-op."""
+        await self._require_active_account(user_id)
         notification = (
             await self._db.execute(
                 select(Notification).where(
@@ -644,11 +653,12 @@ class NotificationService:
         return NotificationItem.model_validate(notification)
 
     async def _mark_read_where(
-        self, *conditions: ColumnElement[bool]
+        self, user_id: uuid.UUID, *conditions: ColumnElement[bool]
     ) -> MarkAllReadResponse:
         """Stamp ``read_at`` on every notification matching ``conditions`` in one
         statement; ``marked`` is how many rows actually flipped. Shared by the
         batch and mark-all endpoints — callers supply the owner/unread scoping."""
+        await self._require_active_account(user_id)
         result = await self._db.execute(
             update(Notification).where(*conditions).values(read_at=datetime.now(UTC))
         )
@@ -664,6 +674,7 @@ class NotificationService:
         rows actually flipped. Lets the client coalesce many on-screen rows into
         a single round-trip."""
         return await self._mark_read_where(
+            user_id,
             Notification.user_id == user_id,
             Notification.id.in_(payload.ids),
             Notification.read_at.is_(None),
@@ -671,6 +682,7 @@ class NotificationService:
 
     async def mark_all_read(self, user_id: uuid.UUID) -> MarkAllReadResponse:
         return await self._mark_read_where(
+            user_id,
             Notification.user_id == user_id,
             Notification.read_at.is_(None),
         )
@@ -786,6 +798,7 @@ class NotificationService:
         default (and deleting overrides that fall back to the default).
         Locked/unavailable channels and cells are ignored — the user can't
         change them. Returns the freshly re-resolved preferences."""
+        await self._require_active_account(user.id)
         _, availability = await self._channel_order_and_availability()
         for channel_update in update_req.channels:
             channel = channel_update.channel
@@ -1018,7 +1031,7 @@ class NotificationService:
     ) -> Sequence[uuid.UUID]:
         # Only the ids are needed (one job per recipient), so don't hydrate
         # full User rows — an "all users" broadcast would load the whole table.
-        query = select(User.id).where(User.merged_into_user_id.is_(None))
+        query = select(User.id).where(User.is_active)
         if not all_users:
             if not user_ids:
                 return []
@@ -1029,7 +1042,7 @@ class NotificationService:
         """Players the admin can target, filtered by username substring. Returns
         a capped list plus the true total so "select all" reports the real
         audience size."""
-        base = select(User).where(User.merged_into_user_id.is_(None))
+        base = select(User).where(User.is_active)
         if query_text:
             pattern = f"%{escape_like(query_text)}%"
             base = base.where(User.username.ilike(pattern, escape="\\"))
@@ -1056,7 +1069,24 @@ class NotificationService:
 
     # ----- internals (push fan-out) ----------------------------------------
 
+    async def _require_active_account(self, user_id: uuid.UUID) -> None:
+        """Authorize notification mutations until their transaction commits."""
+        if await self._active_recipient(user_id) is None:
+            raise InactiveNotificationAccount
+
+    async def _active_recipient(self, user_id: uuid.UUID) -> User | None:
+        """Keep current recipient activity stable until delivery commits."""
+        recipient: User | None = await self._db.scalar(
+            select(User)
+            .where(User.id == user_id, User.is_active)
+            .with_for_update(read=True)
+            .execution_options(populate_existing=True)
+        )
+        return recipient
+
     async def _tokens_for_user(self, user_id: uuid.UUID) -> Sequence[DeviceToken]:
+        if await self._active_recipient(user_id) is None:
+            return []
         rows = await self._db.execute(
             select(DeviceToken).where(DeviceToken.user_id == user_id)
         )

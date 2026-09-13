@@ -64,7 +64,11 @@ from app.models import (
     User,
     UserRole,
 )
-from app.rate_limiting import RedisRateLimiter
+from app.rate_limiting import (
+    RateLimitUnavailable,
+    RedisRateLimiter,
+    identity_creation_retry_after,
+)
 from app.roles import grant_default_role
 from app.schemas.session import (
     AccountSwitchPreview,
@@ -167,11 +171,13 @@ async def _merge_guest_into(
 
     The single guard used by every merge path: token-bound sign-in/confirm and
     the browser-bound prior-session fold."""
+    if guest is not None:
+        await lock_accounts(db, {guest.id, target.id})
     if (
         guest is None
         or guest.id == target.id
         or guest.confirmed_at is not None
-        or guest.merged_into_user_id is not None
+        or not guest.is_active
     ):
         return None
     try:
@@ -203,7 +209,7 @@ async def _automatic_login_destination(
         guest is not None
         and guest.id != target.id
         and guest.confirmed_at is None
-        and guest.merged_into_user_id is None
+        and guest.is_active
         and await _guest_match_count(db, guest.id) == 0
     ):
         return guest.username
@@ -360,6 +366,32 @@ def _client_ip(request: Request) -> str:
     return client.host if client else "unknown"
 
 
+async def _identity_creation_retry_after(request: Request) -> int | None:
+    settings = get_settings()
+    try:
+        return await identity_creation_retry_after(
+            _client_ip(request),
+            hourly_limit=settings.guest_creation_ip_limit_per_hour,
+            daily_limit=settings.guest_creation_ip_limit_per_day,
+        )
+    except RateLimitUnavailable as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Identity admission is temporarily unavailable.",
+            headers={"Retry-After": "5"},
+        ) from error
+
+
+async def _admit_identity_creation(request: Request) -> None:
+    retry_after = await _identity_creation_retry_after(request)
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many identity requests. Try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
 async def _email_rate_limit_key(request: Request) -> str:
     """Key the email-send limiters by hashed session cookie so legitimate
     users behind a shared NAT aren't penalised collectively. Fall back to
@@ -466,7 +498,9 @@ def _cookie_secure() -> bool:
     return os.environ.get("SESSION_COOKIE_SECURE", "true").lower() != "false"
 
 
-async def _find_session_user(db: AsyncSession, raw_token: str) -> User | None:
+async def _find_session_user(
+    db: AsyncSession, raw_token: str, *, lock_read: bool = False
+) -> User | None:
     result = await db.execute(
         select(SessionToken).where(
             SessionToken.token == hash_token(raw_token),
@@ -475,8 +509,27 @@ async def _find_session_user(db: AsyncSession, raw_token: str) -> User | None:
     token = result.scalar_one_or_none()
     if token is None:
         return None
-    user_result = await db.execute(select(User).where(User.id == token.user_id))
-    return user_result.scalar_one_or_none()
+    statement = (
+        select(User)
+        .where(
+            User.id == token.user_id,
+            User.deactivated_at.is_(None),
+            User.erased_at.is_(None),
+        )
+        .execution_options(populate_existing=True)
+    )
+    if lock_read:
+        statement = statement.with_for_update(read=True, of=User)
+    user = (await db.execute(statement)).scalar_one_or_none()
+    if user is not None and lock_read:
+        # The token may have been revoked while waiting for the Account lock.
+        if not await db.scalar(
+            select(SessionToken.id).where(
+                SessionToken.id == token.id, SessionToken.user_id == user.id
+            )
+        ):
+            return None
+    return user
 
 
 def _clear_cookie_header() -> dict[str, str]:
@@ -578,6 +631,21 @@ async def _merged_session_exception(db: AsyncSession, user: User) -> HTTPExcepti
 async def _build_session_response(
     db: AsyncSession, user: User, merged: MergeSummary | None = None
 ) -> SessionResponse:
+    # Response-only branches and preceding commits must not expose a stale
+    # identity. This is the final read boundary, after any sorted mutation locks.
+    current = (
+        await db.execute(
+            select(User)
+            .where(User.id == user.id)
+            .with_for_update(read=True, of=User)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if current is not None and current.merged_into_user_id is not None:
+        raise await _merged_session_exception(db, current)
+    if current is None or not current.is_active:
+        raise _session_ended_exception()
+    user = current
     permissions = await _load_permissions(db, user.id)
     pending = await _pending_change_token(db, user.id)
     return SessionResponse(
@@ -701,6 +769,7 @@ async def _resolve_current_user(
     db: AsyncSession,
     *,
     session_cookie: str | None,
+    lock_read: bool = False,
 ) -> User | None:
     """Resolve the current user from the session cookie, or ``None``.
 
@@ -723,7 +792,12 @@ async def _resolve_current_user(
         if cookie_user is not None:
             if cookie_user.merged_into_user_id is not None:
                 raise await _merged_session_exception(db, cookie_user)
-            await _stamp_last_seen(db, cookie_user)
+            await _stamp_last_seen(db, cookie_user, session_cookie)
+            cookie_user = await _find_session_user(
+                db, session_cookie, lock_read=lock_read
+            )
+            if cookie_user is not None and cookie_user.merged_into_user_id is not None:
+                raise await _merged_session_exception(db, cookie_user)
             return cookie_user
     return None
 
@@ -734,20 +808,17 @@ async def _resolve_current_user(
 LAST_SEEN_STAMP_INTERVAL = timedelta(minutes=5)
 
 
-async def _stamp_last_seen(db: AsyncSession, user: User) -> None:
+async def _stamp_last_seen(db: AsyncSession, user: User, raw_token: str) -> None:
     """Stamp ``user.last_seen_at``, at most once per
     ``LAST_SEEN_STAMP_INTERVAL``.
 
-    The throttle is tested HERE, in Python, against the already-loaded row: a
-    request inside the window issues no SQL at all. Two concurrent requests may
-    both pass the test and both write; both write the same wall-clock stamp, so
-    the race is idempotent and needs no lock.
+    Fresh stamps require no write. A stale stamp takes the Account update lock
+    before refreshing activity and the throttle, so concurrent reads do not
+    upgrade shared locks or write through a completed suspension.
 
-    The stamp commits ITSELF rather than riding the route's transaction: it runs
-    as a dependency, before the route body, so nothing half-finished can be
-    swept up, and ``get_session`` does not auto-commit. The commit does not
-    expire the row (``expire_on_commit=False`` in ``app.db``), so the caller's
-    in-memory ``User`` stays usable without a lazy reload.
+    The stamp commits before route work because read routes do not auto-commit.
+    The resolver then revalidates the credential and reacquires its read lock;
+    no stale identity from this commit authorizes the response.
 
     A failed stamp write RAISES rather than being swallowed. After a failed
     commit the session needs a rollback before any further statement, so
@@ -762,6 +833,31 @@ async def _stamp_last_seen(db: AsyncSession, user: User) -> None:
         and now - user.last_seen_at < LAST_SEEN_STAMP_INTERVAL
     ):
         return
+    user = (
+        await db.execute(
+            select(User)
+            .where(User.id == user.id)
+            .with_for_update(of=User)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    token_exists = await db.scalar(
+        select(SessionToken.id)
+        .where(
+            SessionToken.user_id == user.id, SessionToken.token == hash_token(raw_token)
+        )
+        .with_for_update(read=True)
+    )
+    if (
+        not token_exists
+        or not user.is_active
+        or (
+            user.last_seen_at is not None
+            and now - user.last_seen_at < LAST_SEEN_STAMP_INTERVAL
+        )
+    ):
+        await db.commit()
+        return
     user.last_seen_at = now
     if user.primary_player is not None:
         user.primary_player.last_seen_at = now
@@ -770,6 +866,7 @@ async def _stamp_last_seen(db: AsyncSession, user: User) -> None:
 
 @router.get("/v1/session", response_model=SessionResponse)
 async def get_session_endpoint(
+    request: Request,
     response: Response,
     session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
     csrf_cookie: Annotated[str | None, Cookie(alias=CSRF_COOKIE_NAME)] = None,
@@ -784,12 +881,15 @@ async def get_session_endpoint(
     Only a missing cookie mints a fresh guest. A rejected cookie ends the
     session explicitly instead of silently replacing the caller's identity.
     """
-    user = await _resolve_current_user(db, session_cookie=session_cookie)
+    user = await _resolve_current_user(
+        db, session_cookie=session_cookie, lock_read=True
+    )
     if user is None:
         # A surviving CSRF companion identifies a browser whose dead session
         # cookie was cleared. Repeated loads must not silently create a guest.
         if session_cookie is not None or csrf_cookie is not None:
             raise _session_ended_exception()
+        await _admit_identity_creation(request)
         user, raw_token = await _create_session(db)
         _set_session_cookie(response, raw_token)
     elif csrf_cookie is None:
@@ -836,7 +936,7 @@ async def get_optional_user(
     """
     if not session_cookie:
         return None
-    user = await _find_session_user(db, session_cookie)
+    user = await _find_session_user(db, session_cookie, lock_read=True)
     if user is not None and user.merged_into_user_id is not None:
         # Tombstoned guest → render anonymously on optional endpoints; the next
         # required-auth call (or the session bootstrap) surfaces the redirect.
@@ -845,6 +945,7 @@ async def get_optional_user(
 
 
 async def get_current_user(
+    request: Request,
     session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
     db: AsyncSession = Depends(get_session),
 ) -> User:
@@ -862,7 +963,12 @@ async def get_current_user(
     ``session_ended`` 401 is raised so the client redirects to sign in (instead of
     acting as a merged-away ghost, or silently minting a new guest).
     """
-    user = await _resolve_current_user(db, session_cookie=session_cookie)
+    # Reads retain lifecycle protection through response construction. Mutations
+    # acquire complete, sorted actor/target locks in their services; taking an
+    # actor-only lock here would invert that order for opposed operations.
+    user = await _resolve_current_user(
+        db, session_cookie=session_cookie, lock_read=request.method in {"GET", "HEAD"}
+    )
     if user is None:
         raise _session_ended_exception()
     return user
@@ -874,6 +980,11 @@ async def update_current_user(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> SessionResponse:
+    await lock_accounts(db, {current_user.id})
+    if current_user.merged_into_user_id is not None:
+        raise await _merged_session_exception(db, current_user)
+    if not current_user.is_active:
+        raise _session_ended_exception()
     if current_user.primary_player is None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -979,7 +1090,7 @@ def _enqueue_merge_email(to_email: str, raw_token: str, username: str) -> Job:
 
 
 async def _begin_account_merge(
-    db: AsyncSession, guest: User, email: str
+    db: AsyncSession, guest: User, email: str, locked_target_id: uuid.UUID | None
 ) -> SessionResponse:
     """Issue a merge token for an ephemeral ``guest`` who entered an address
     owned by an existing account, and email that account a sign-in link.
@@ -991,9 +1102,14 @@ async def _begin_account_merge(
     target = (
         await db.execute(select(User).where(User.email == email))
     ).scalar_one_or_none()
-    if target is None or target.id == guest.id:
+    if (
+        target is None
+        or target.id != locked_target_id
+        or target.id == guest.id
+        or not target.is_active
+    ):
         # Lost the race (the owner just changed their address out from under
-        # us) or, impossibly, our own row — nothing to merge into.
+        # us), became inactive, or is our own row — nothing to merge into.
         return await _build_session_response(db, guest)
 
     raw_token = await _issue_confirmation_token(
@@ -1043,10 +1159,18 @@ async def set_email(
 
     await _verify_captcha_or_400(payload.captcha_token)
 
-    await lock_accounts(db, {current_user.id})
+    email = payload.email.lower()
+    # Resolve the possible destination before taking any Account lock. Opposed
+    # merge requests must acquire the same complete lock set in UUID order.
+    target_id = await db.scalar(select(User.id).where(User.email == email))
+    account_ids = {current_user.id}
+    if target_id is not None:
+        account_ids.add(target_id)
+    await lock_accounts(db, account_ids)
     if current_user.merged_into_user_id is not None:
         raise await _merged_session_exception(db, current_user)
-    email = payload.email.lower()
+    if not current_user.is_active:
+        raise _session_ended_exception()
     old_email = current_user.email
     if old_email == email and current_user.confirmed_at is not None:
         return await _build_session_response(db, current_user)
@@ -1066,7 +1190,7 @@ async def set_email(
         # not merging — silently absorbing their account into someone else's
         # would be data loss, so keep the enumeration-safe no-op for them.
         if current_user.confirmed_at is None:
-            return await _begin_account_merge(db, current_user, email)
+            return await _begin_account_merge(db, current_user, email, target_id)
         return await _build_session_response(db, current_user)
 
     raw_token = await _issue_confirmation_token(
@@ -1313,6 +1437,15 @@ async def confirm_email(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="That confirmation link is invalid or expired.",
         )
+    credential_owner = await db.get(User, token_row.user_id)
+    if credential_owner is None or not credential_owner.is_active:
+        await db.delete(token_row)
+        await _sweep_replaced_email_tokens(db, token_row.user_id)
+        await db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That confirmation link is invalid or expired.",
+        )
     if token_row.purpose == EmailPurpose.merge:
         return await _confirm_account_merge(
             db,
@@ -1325,7 +1458,7 @@ async def confirm_email(
     user = (
         await db.execute(select(User).where(User.id == token_row.user_id))
     ).scalar_one_or_none()
-    if user is None or user.merged_into_user_id is not None:
+    if user is None or not user.is_active:
         # The live token is burned without confirming, so its replaced
         # siblings can never be reported again either — sweep them (#1616).
         await db.delete(token_row)
@@ -1427,11 +1560,7 @@ async def _confirm_account_merge(
     # The token is only trustworthy while the target still owns the address it
     # was cut against. Reject (and burn the token) if the owner changed their
     # email or is itself tombstoned — surfacing the opaque error so nothing leaks.
-    if (
-        target is None
-        or target.merged_into_user_id is not None
-        or target.email != token_row.sent_to
-    ):
+    if target is None or not target.is_active or target.email != token_row.sent_to:
         # The live merge token is burned without confirming, so its replaced
         # siblings can never be reported again either — sweep them (#1616).
         await db.delete(token_row)
@@ -1508,13 +1637,19 @@ async def get_login_sender() -> LoginSenderResponse:
     ],
 )
 async def request_login_email(
+    request: Request,
     payload: RequestLoginRequest,
     session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
     db: AsyncSession = Depends(get_session),
 ) -> LoginRequestAccepted:
     """Mint a magic-link sign-in token and email it.
 
-    **Both branches mint a user, send the same email, and return the same 202.**
+    **Both admitted branches send the same email and return the same 202.**
+    Shared identity admission is checked before address lookup. Unavailable
+    Redis refuses every address identically. Exhaustion silently skips only new
+    identity allocation: existing recipients still receive their sign-in link,
+    and every address receives the same email-only 202 response, including an
+    enqueue failure on that exhausted-budget branch.
     An address that already has an account gets a link for that account. An
     address with no account gets one for a user this endpoint mints on the spot,
     whose ``email`` stays NULL until the link is clicked — so the sign-in link,
@@ -1543,15 +1678,29 @@ async def request_login_email(
 
     await _verify_captcha_or_400(payload.captcha_token)
 
-    user, first_sign_in = await resolve_login_recipient(db, email)
-    guest_id = await _requesting_guest_id(db, session_cookie, target=user)
-    await _issue_and_send_login_email(
-        db,
-        user,
-        email,
-        merge_from_guest_id=guest_id,
-        first_sign_in=first_sign_in,
+    # Budget availability is checked uniformly, before learning ownership.
+    # Exhaustion blocks only allocation: a shared venue IP must not prevent
+    # existing accounts (or pending recipients) from signing in.
+    allow_create = await _identity_creation_retry_after(request) is None
+    user, first_sign_in = await resolve_login_recipient(
+        db, email, allow_create=allow_create
     )
+    if user is None or not user.is_active:
+        return LoginRequestAccepted(email=email)
+    guest_id = await _requesting_guest_id(db, session_cookie, target=user)
+    try:
+        await _issue_and_send_login_email(
+            db,
+            user,
+            email,
+            merge_from_guest_id=guest_id,
+            first_sign_in=first_sign_in,
+        )
+    except _LoginEmailUnavailable:
+        if allow_create:
+            raise
+        # Unknown addresses already skip allocation with the same 202. Do not
+        # turn a queue failure for an existing recipient into an ownership oracle.
     return LoginRequestAccepted(email=email)
 
 
@@ -1572,6 +1721,16 @@ async def _requesting_guest_id(
     ):
         return None
     return requester.id
+
+
+class _LoginEmailUnavailable(HTTPException):
+    """An enqueue failure after rolling back the login credential transaction."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email service unavailable. Try again in a moment.",
+        )
 
 
 async def _issue_and_send_login_email(
@@ -1598,10 +1757,7 @@ async def _issue_and_send_login_email(
         job = _enqueue_login_email(email, raw_token, user.username)
     except Exception:
         await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Email service unavailable. Try again in a moment.",
-        ) from None
+        raise _LoginEmailUnavailable() from None
     try:
         await db.commit()
     except Exception:
@@ -1712,6 +1868,11 @@ async def consume_login_token(
     ).scalar_one_or_none()
     if user is None:
         await db.delete(token_row)
+        await db.commit()
+        raise _invalid_or_expired_exception()
+
+    if not user.is_active:
+        await discard_login_action(db, user.id)
         await db.commit()
         raise _invalid_or_expired_exception()
 
@@ -1914,7 +2075,7 @@ async def preview_merge(
         or guest is None
         or guest.id == owner.id
         or guest.confirmed_at is not None
-        or guest.merged_into_user_id is not None
+        or not guest.is_active
     ):
         return MergePreview(
             is_merge=False,

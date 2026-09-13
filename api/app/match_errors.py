@@ -20,6 +20,18 @@ from app.models import Match
 from app.schemas.match import MatchDetailsScore
 
 
+class MatchCreationRateLimitedError(Exception):
+    """A standalone match would exceed the creator's expiring admission budget."""
+
+    def __init__(self, retry_after: int) -> None:
+        self.retry_after = retry_after
+        super().__init__("Too many new matches. Retry later.")
+
+
+class MatchCreationUnavailableError(Exception):
+    """The shared standalone match admission budget is unavailable."""
+
+
 class SelfMatchError(Exception):
     """Raised by the match-creation service when the requested opponent is the
     acting user themselves. The HTTP adapter maps this to the existing 422

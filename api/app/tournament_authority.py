@@ -24,9 +24,7 @@ from app.tournament_errors import NotTournamentOwnerError, TournamentNotFoundErr
 def director_scope(account_id: uuid.UUID) -> ColumnElement[bool]:
     """SQL predicate shared by operational writes and match read flags."""
     return and_(
-        select(Account.id)
-        .where(Account.id == account_id, Account.merged_at.is_(None))
-        .exists(),
+        select(Account.id).where(Account.id == account_id, Account.is_active).exists(),
         or_(
             Tournament.owner_account_id == account_id,
             select(TournamentAccountGrant.id)
@@ -193,12 +191,12 @@ async def _lock_accounts(
             select(Account)
             .where(Account.id.in_(account_ids))
             .order_by(Account.id)
-            .with_for_update(read=True, key_share=True)
+            .with_for_update(read=True)
             .execution_options(populate_existing=True)
         )
     )
     if len(accounts) != len(set(account_ids)) or (
-        require_active and any(account.merged_at is not None for account in accounts)
+        require_active and any(not account.is_active for account in accounts)
     ):
         raise ValueError("Authority requires active accounts")
 

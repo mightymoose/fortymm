@@ -315,6 +315,7 @@ async def test_recovery_loop_survives_unexpected_dispatch_error_but_honors_cance
     db_session, engine, fake_ratings_queue, monkeypatch
 ):
     import asyncio
+    from types import SimpleNamespace
 
     import pytest
 
@@ -347,7 +348,10 @@ async def test_recovery_loop_survives_unexpected_dispatch_error_but_honors_cance
 
     monkeypatch.setattr(fake_ratings_queue, "enqueue", intermittent_queue)
     monkeypatch.setattr(required_repairs, "datetime", Clock)
-    monkeypatch.setattr(required_repairs.asyncio, "sleep", no_wait)
+    monkeypatch.setattr(required_repairs, "asyncio", SimpleNamespace(sleep=no_wait))
+    # Other tasks (including database cleanup) must retain real scheduling.
+    await asyncio.sleep(0)
+    assert sleeps == 0
     factory = async_sessionmaker(engine, expire_on_commit=False)
     with pytest.raises(asyncio.CancelledError):
         await required_repairs.recovery_loop(factory)

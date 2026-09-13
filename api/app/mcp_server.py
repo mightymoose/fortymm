@@ -76,6 +76,8 @@ from app.match_creation import create_match as create_match_core
 from app.match_errors import (
     CannotAcceptOwnProposalError,
     MatchClosedError,
+    MatchCreationRateLimitedError,
+    MatchCreationUnavailableError,
     MatchNotFoundError,
     MatchNotScorableError,
     NegotiationConflictError,
@@ -108,7 +110,11 @@ from app.notifications.service import NotificationService
 from app.player_accounts import PlayerAccessDenied, primary_player_id
 from app.player_matches import paginated_player_matches
 from app.player_search import SEARCH_DEFAULT_LIMIT, search_players_by_username
-from app.rate_limiting import RedisRateLimiter
+from app.rate_limiting import (
+    RateLimitUnavailable,
+    RedisRateLimiter,
+    identity_creation_retry_after,
+)
 from app.rbac import user_has_permission
 from app.repositories.match_details_repository import MatchDetailsRepository
 from app.repositories.match_repository import MatchRepository
@@ -405,6 +411,20 @@ class FortymmAuth0TokenVerifier(JWTVerifier):
                 async def may_write() -> bool:
                     return await _provision_ip_rate_limit.check(_provision_client_ip())
 
+                async def may_create() -> bool:
+                    settings = get_settings()
+                    try:
+                        return (
+                            await identity_creation_retry_after(
+                                _provision_client_ip(),
+                                hourly_limit=settings.guest_creation_ip_limit_per_hour,
+                                daily_limit=settings.guest_creation_ip_limit_per_day,
+                            )
+                            is None
+                        )
+                    except RateLimitUnavailable:
+                        return False
+
                 # The namespaced email claims the Auth0 Action ships (see
                 # ``app.auth0_provisioning``). Only a non-empty ``str`` email
                 # counts, and ``email_verified`` must be the literal boolean
@@ -414,8 +434,20 @@ class FortymmAuth0TokenVerifier(JWTVerifier):
                 email = raw_email if isinstance(raw_email, str) and raw_email else None
                 email_verified = access.claims.get(AUTH0_EMAIL_VERIFIED_CLAIM) is True
                 user = await resolve_or_provision_user(
-                    db, sub, email, email_verified, may_write=may_write
+                    db,
+                    sub,
+                    email,
+                    email_verified,
+                    may_write=may_write,
+                    may_create=may_create,
                 )
+                if user is None:
+                    return None
+                # Binding/provisioning may commit (including convergence after
+                # a uniqueness race). Resolve the actual subject again, with a
+                # fresh Account activity check and lifecycle-conflicting lock,
+                # before using any cached authorization state.
+                user = await resolve_linked_user(db, sub)
                 if user is None:
                     return None
             # The player's own revocation, checked *after* resolution so it holds
@@ -428,14 +460,14 @@ class FortymmAuth0TokenVerifier(JWTVerifier):
             if not await user_has_permission(db, user.id, MCP_ACCESS_PERMISSION):
                 return None
             user_id = str(user.id)
-        return AccessToken(
-            token=token,
-            client_id=user_id,
-            subject=user_id,
-            scopes=access.scopes,
-            expires_at=access.expires_at,
-            claims={**access.claims, "user_id": user_id},
-        )
+            return AccessToken(
+                token=token,
+                client_id=user_id,
+                subject=user_id,
+                scopes=access.scopes,
+                expires_at=access.expires_at,
+                claims={**access.claims, "user_id": user_id},
+            )
 
 
 def _build_mcp_auth() -> RemoteAuthProvider:
@@ -502,6 +534,35 @@ def _authenticated_user_id() -> uuid.UUID:
     if raw_user_id is None:
         raise ToolError("Not authenticated.")
     return uuid.UUID(raw_user_id)
+
+
+@asynccontextmanager
+async def _tool_session(
+    user_id: uuid.UUID, *, read_only: bool = False
+) -> AsyncIterator[AsyncSession]:
+    """Authorize the tool's own transaction, independently of JWT verification.
+
+    Reads hold activity stable through private response construction. Writes
+    take their complete sorted actor/target locks in the shared domain service;
+    an actor-only lock here would invert that ordering.
+    """
+    async with mcp_session() as db:
+        statement = (
+            select(User)
+            .where(User.id == user_id)
+            .execution_options(populate_existing=True)
+        )
+        if read_only:
+            statement = statement.with_for_update(read=True, of=User)
+        actor = (await db.execute(statement)).scalar_one_or_none()
+        if (
+            actor is None
+            or not actor.is_active
+            or actor.agent_access_revoked_at is not None
+            or not await user_has_permission(db, user_id, MCP_ACCESS_PERMISSION)
+        ):
+            raise ToolError("Not authenticated.")
+        yield db
 
 
 async def _load_user(db: AsyncSession, user_id: uuid.UUID) -> User | None:
@@ -586,7 +647,7 @@ async def get_match(match_id: uuid.UUID) -> MatchDetails:
     Raises a ``ToolError`` when no match has that id.
     """
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id, read_only=True) as db:
         match = await load_match_eager(db, match_id)
         if match is None:
             raise ToolError(f"No match found with id {match_id}.")
@@ -645,7 +706,7 @@ async def create_match(
     is requested with no registered opponent.
     """
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id) as db:
         creator = await _load_user(db, user_id)
         if creator is None:
             raise ToolError("Not authenticated.")
@@ -658,6 +719,14 @@ async def create_match(
                 best_of=best_of,
                 rated=rated,
             )
+        except MatchCreationRateLimitedError as err:
+            raise ToolError(
+                f"Too many new matches. Retry after {err.retry_after} seconds."
+            ) from err
+        except MatchCreationUnavailableError as err:
+            raise ToolError(
+                "Match creation is temporarily unavailable. Retry shortly."
+            ) from err
         except PlayerAccessDenied as err:
             raise ToolError("A primary player is required to start a match.") from err
         except SelfMatchError as err:
@@ -786,7 +855,7 @@ async def enter_game_score(
     or when a concurrent writer already scored this game (call ``get_match``,
     then retry)."""
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id) as db:
         try:
             reloaded = await enter_game_score_core(
                 db,
@@ -828,7 +897,7 @@ async def list_schedule_solves(
     Raises a ``ToolError`` when you lack ``scheduling.view``.
     """
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id, read_only=True) as db:
         # Permission first, through the same shared gate the HTTP admin router's
         # ``require_permission("scheduling.view")`` dependency asks — before any ledger
         # row is read, so an unauthorized caller only ever sees a ``ToolError`` (the
@@ -863,7 +932,7 @@ async def get_tournament(tournament_id: uuid.UUID) -> TournamentDetailRead:
     (absent, or an unannounced draft you do not own).
     """
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id, read_only=True) as db:
         # The visibility-scoped load — ``_visible_to`` scopes the row so a hidden
         # draft leaves by not-found. No permission gate: #1092 deleted
         # ``tournament.view``; every signed-in user reads a published tournament.
@@ -956,7 +1025,7 @@ async def get_schedule(tournament_id: uuid.UUID) -> TournamentScheduleRead:
     (absent, or an unannounced draft you do not own).
     """
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id, read_only=True) as db:
         # The visibility-scoped load — the same loader ``get_tournament`` uses; a
         # hidden draft leaves by not-found. No permission gate: #1092 deleted
         # ``tournament.view``.
@@ -1017,7 +1086,7 @@ async def list_my_tournaments() -> list[TournamentDetailRead]:
 
     """
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id, read_only=True) as db:
         # Owner-scoping is by construction (the WHERE selects only the caller's own
         # rows), so there is no separate visibility gate to run — an owner always
         # sees their own tournaments. No permission gate: #1092 deleted
@@ -1171,7 +1240,7 @@ async def edit_tournament(
     # ``Depends``, so it constructs the same seam the HTTP route resolves with
     # ``Depends(get_geocoder)``.
     geocoder = get_geocoder(get_settings())
-    async with mcp_session() as db:
+    async with _tool_session(user_id) as db:
         actor = await _load_user(db, user_id)
         if actor is None:
             raise ToolError("Not authenticated.")
@@ -1256,7 +1325,7 @@ async def create_tournament(payload: TournamentCreate) -> TournamentRead:
     # ``Depends``, so it constructs the same seam the HTTP route resolves with
     # ``Depends(get_geocoder)``.
     geocoder = get_geocoder(get_settings())
-    async with mcp_session() as db:
+    async with _tool_session(user_id) as db:
         # Permission first, through the same shared gate the HTTP ``require_create``
         # dependency asks — before the caller is loaded or anything is written, the
         # order the HTTP route keeps (``require_create`` (403) before the handler).
@@ -1324,7 +1393,7 @@ async def delete_tournament(tournament_id: uuid.UUID) -> TournamentDeletionConfi
     retry after it finishes.
     """
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id) as db:
         actor = await _load_user(db, user_id)
         if actor is None:
             raise ToolError("Not authenticated.")
@@ -1381,7 +1450,7 @@ async def transition_tournament(
     no current draw.
     """
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id) as db:
         actor = await _load_user(db, user_id)
         if actor is None:
             raise ToolError("Not authenticated.")
@@ -1436,7 +1505,7 @@ async def create_event(
     the tournament's owner.
     """
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id) as db:
         actor = await _load_user(db, user_id)
         if actor is None:
             raise ToolError("Not authenticated.")
@@ -1511,7 +1580,7 @@ async def update_event(
     change the frozen group set or draw type of a cut-draw event.
     """
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id) as db:
         actor = await _load_user(db, user_id)
         if actor is None:
             raise ToolError("Not authenticated.")
@@ -1621,7 +1690,7 @@ async def delete_event(
     retry after it finishes.
     """
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id) as db:
         actor = await _load_user(db, user_id)
         if actor is None:
             raise ToolError("Not authenticated.")
@@ -1706,7 +1775,7 @@ async def enter_event(
     player is already entered.
     """
     caller_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(caller_id) as db:
         actor = await _load_user(db, caller_id)
         if actor is None:
             raise ToolError("Not authenticated.")
@@ -1802,7 +1871,7 @@ async def withdraw_from_event(
     registration is closed.
     """
     caller_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(caller_id) as db:
         actor = await _load_user(db, caller_id)
         if actor is None:
             raise ToolError("Not authenticated.")
@@ -1972,7 +2041,7 @@ async def build_cut(event_id: uuid.UUID) -> list[TournamentFixtureRead]:
     for a grouped draw type, or its field is too small for its groups (a group of fewer
     than two has nobody to play). The message names what to change."""
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id) as db:
         actor = await _load_user(db, user_id)
         if actor is None:
             raise ToolError("Not authenticated.")
@@ -2012,7 +2081,7 @@ async def uncut(event_id: uuid.UUID) -> DrawUncutConfirmation:
     event's tournament, or when the draw already shows evidence of play (a fixture with
     a recorded winner or a linked match — it can no longer be removed)."""
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id) as db:
         actor = await _load_user(db, user_id)
         if actor is None:
             raise ToolError("Not authenticated.")
@@ -2093,7 +2162,7 @@ async def place_fixture(
     fixture's match is already completed/voided (its placement is frozen), or when a
     live call would clash with a table or a player an unfinished match already holds."""
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id) as db:
         actor = await _load_user(db, user_id)
         if actor is None:
             raise ToolError("Not authenticated.")
@@ -2168,7 +2237,7 @@ async def request_schedule_solve(tournament_id: uuid.UUID) -> ScheduleSolveRead:
     when Redis is unavailable; recovery scanning dispatches pending work when
     the queue becomes available."""
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id) as db:
         actor = await _load_user(db, user_id)
         if actor is None:
             raise ToolError("Not authenticated.")
@@ -2318,7 +2387,7 @@ async def preview_schedule(
     running past the internal wait (still solving — retry).
     """
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id) as db:
         actor = await _load_user(db, user_id)
         if actor is None:
             raise ToolError("Not authenticated.")
@@ -2406,7 +2475,7 @@ async def search_players(
     hit's ``id`` as ``create_match``'s ``opponent_user_id``.
     """
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id, read_only=True) as db:
         return await search_players_by_username(
             db,
             query=query,
@@ -2436,7 +2505,7 @@ async def list_my_matches(
     ``total`` is the all-inclusive count.
     """
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id, read_only=True) as db:
         player_id = await primary_player_id(db, user_id)
         if player_id is None:
             raise ToolError("Account has no primary player.")
@@ -2468,7 +2537,7 @@ async def update_game_score(
     saved this game since you read it (call ``get_match`` for the committed
     score, then retry with the current version)."""
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id) as db:
         try:
             reloaded = await update_game_score_core(
                 db,
@@ -2579,7 +2648,7 @@ async def propose_result(
     on under you — the last names ``get_match`` as the recovery path (re-read
     the standing result, then accept or counter)."""
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id) as db:
         try:
             outcome = await propose_result_core(
                 db,
@@ -2646,7 +2715,7 @@ async def accept_result(
     accepted) — the last names ``get_match`` as the recovery path (re-read the
     standing result, then accept or counter)."""
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id) as db:
         try:
             reloaded = await accept_result_core(
                 db,
@@ -2686,7 +2755,7 @@ async def delete_game_score(
     participant or the tournament's director, when the game score doesn't
     exist, or when the match isn't scorable."""
     user_id = _authenticated_user_id()
-    async with mcp_session() as db:
+    async with _tool_session(user_id) as db:
         try:
             reloaded = await delete_game_score_core(
                 db,

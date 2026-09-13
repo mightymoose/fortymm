@@ -42,8 +42,10 @@ async def test_parent_delete_refuses_busy_actor_before_tournament_lock(
         assert refused.status_code == 409, refused.text
         assert "Retry" in refused.json()["detail"]
         await gate.rollback()
-    deleted = await client.delete(url)
-    assert deleted.status_code == 204, deleted.text
+    retained = await client.delete(url)
+    assert retained.status_code == 409, retained.text
+    assert "registration" in retained.json()["detail"].lower()
+    assert (await client.get(tournament_url)).status_code == 200
 
 
 @pytest.mark.parametrize("operation", ["edit", "solve"])

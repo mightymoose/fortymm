@@ -1277,6 +1277,12 @@ class EventEntryOpen(BaseModel):
     state: Literal["open"] = "open"
 
 
+class EventEntryRetired(BaseModel):
+    """The caller's Player is retired and cannot enter new events."""
+
+    state: Literal["retired"] = "retired"
+
+
 class EventEntryFull(BaseModel):
     """The event holds ``max_players`` active entrants already, so nobody may enter it
     — the one arm of this union that says nothing about who is asking.
@@ -1322,7 +1328,7 @@ class EventEntryRatingIneligible(BaseModel):
 
 
 EventEntryState = Annotated[
-    EventEntryOpen | EventEntryFull | EventEntryRatingIneligible,
+    EventEntryOpen | EventEntryFull | EventEntryRatingIneligible | EventEntryRetired,
     Field(discriminator="state"),
 ]
 """Whether the CALLING user may enter this event — a sum type, not a bag of booleans.
@@ -1334,7 +1340,9 @@ something). ``full: bool`` + ``ineligible: bool`` + ``reason: str | None`` would
 constructible; here they are not (api/CLAUDE.md, "no tri-state booleans for what is
 really a sum type").
 
-The state names are the entry route's **refusal codes** (``EntryRefusal``,
+Retirement is reported independently of held registrations so withdrawal cannot
+make a retired Player appear eligible again. Other state names are the entry
+route's **refusal codes** (``EntryRefusal``,
 ADR-0968) — the same word for the same fact, so a client can hold one copy table for
 "why you cannot enter" whether it learned it from this read or from a 409 it got back
 from ``POST …/entries``.
@@ -1352,9 +1360,13 @@ class TournamentEntrantRead(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+    # Read-query metadata, never part of the wire contract or sporting history.
+    _visible_on_roster: bool = PrivateAttr(default=True)
+
     id: uuid.UUID
     user_id: uuid.UUID
     username: str
+    registration_order: int | None = None
     seed: int | None
     # This player's rating on the TOURNAMENT's ladder (its ``league_id``, ADR-0783) —
     # the same number, from the same ladder, that the event's rules judged them by. It
@@ -2034,6 +2046,13 @@ class TournamentEventRead(BaseModel):
     updated_at: datetime
     # The event's active entrants, oldest entry first.
     entrants: list[TournamentEntrantRead]
+    retained_entrants: list[TournamentEntrantRead] = Field(
+        default_factory=list,
+        description=(
+            "Retired or merged entrants retained for historical "
+            "fixture and result names."
+        ),
+    )
     # Current-user-aware: this is the CALLER's answer to "may I enter this event?",
     # decided server-side against the two facts only the server holds — the event's
     # live entry count against its ``max_players``, and the caller's rating on the
@@ -2081,13 +2100,8 @@ class TournamentEventRead(BaseModel):
     @computed_field  # type: ignore[prop-decorator]  # pydantic wraps the property
     @property
     def entered(self) -> int:
-        """The registration count. Derived — there is no stored counter (ADR-0016).
-
-        It is ``len(entrants)`` rather than a field of its own precisely so the
-        count and the list it counts cannot disagree: an event that says it has
-        52 entrants but lists 51 is not a representable state.
-        """
-        return len(self.entrants)
+        """Held registrations, including identities hidden from the active roster."""
+        return len(self.entrants) + len(self.retained_entrants)
 
 
 class DrawTypeRead(BaseModel):

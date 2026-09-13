@@ -97,7 +97,7 @@ async def test_fixture_counter_changes_rollback_with_the_fixture(
     "parent_table,id_key",
     [("tournament_events", "event_id"), ("tournaments", "tournament_id")],
 )
-async def test_parent_cascade_removes_retired_revision_storage(
+async def test_refused_parent_cascade_preserves_retired_revision_storage(
     db_session: AsyncSession,
     drawn_history: dict[str, uuid.UUID],
     parent_table: str,
@@ -105,12 +105,14 @@ async def test_parent_cascade_removes_retired_revision_storage(
 ) -> None:
     await _uncut(db_session, drawn_history)
     assert (await _counts(db_session))[drawn_history["revision_id"]] == 6
-    await db_session.execute(
-        text(f"DELETE FROM {parent_table} WHERE id=:id"),
-        {"id": drawn_history[id_key]},
-    )
+    with pytest.raises(IntegrityError, match="entry history must be retained"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(f"DELETE FROM {parent_table} WHERE id=:id"),
+                {"id": drawn_history[id_key]},
+            )
     await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
-    assert await _counts(db_session) == {}
+    assert (await _counts(db_session))[drawn_history["revision_id"]] == 6
 
 
 @pytest.mark.parametrize("moved", [1, 3])

@@ -292,7 +292,8 @@ _Avoid_: admin add, force add (there is no override yet — see #985).
 A player holding an **active** entry — `status = entered`. The count of entrants is
 always **derived from the rows**, never stored (ADR-0016): there is no `entered`
 column, because a counter is a second copy of a truth that can drift from the rows
-it counts.
+it counts. Retired Players remain in held-registration counts but are hidden
+from the current roster; retirement alone does not withdraw their entry.
 
 **Registration window**:
 The tournament-wide policy window for entering and withdrawing: `published`
@@ -437,6 +438,22 @@ it can exist without a Player. Historical actions belong to the acting Account.
 **Player**:
 A durable sporting identity with a username, matches, tournament entries and
 ratings. A Player can exist without a login and can be managed by multiple Accounts.
+
+**Account deactivation**:
+Reversible suspension of an Account's ability to sign in and act. Its email and
+current access relationships remain; its Players are not automatically retired.
+Reactivation honors current authority without restoring revoked or transferred rights.
+
+**Account erasure**:
+Removal of identifying Account data and credentials while preserving an inert
+Account reference for historical attribution. Distinct from deactivation and merge;
+reusing an email does not reclaim former Player access.
+
+**Player retirement**:
+Reversible removal from current discovery, selection, active rosters, and leaderboards,
+while retaining the same sporting identity, reserved username, results, and rating data.
+Restoration does not re-enter withdrawn competitions. A merged Player requires separate
+reconciliation rather than ordinary restoration.
 
 **Management grant**:
 Explicit authority for an Account to act for a Player in sporting workflows.

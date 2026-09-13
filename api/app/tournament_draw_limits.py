@@ -75,12 +75,10 @@ async def lock_draw_actor(db: AsyncSession, actor_id: uuid.UUID) -> None:
     )
     if not acquired:
         raise DrawActorBusy()
-    # The revision's historical-actor FK must not take this lock after Tournament,
-    # where a concurrent Account merge already holding Account would invert it.
+    # Hold actor activity stable through the cut, before locking Tournament;
+    # Account merges acquire the same parents in this order.
     await db.execute(
-        select(Account.id)
-        .where(Account.id == actor_id)
-        .with_for_update(read=True, key_share=True)
+        select(Account.id).where(Account.id == actor_id).with_for_update(read=True)
     )
 
 

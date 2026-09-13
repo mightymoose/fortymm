@@ -67,7 +67,7 @@ class TournamentEventReservationTable(Base):
     membership history with their parent. A physical table deletion also cascades these
     rows, but application-level catalogue removal first closes active periods and
     retires any table with call history; only an uncalled table can be hard-deleted.
-    Placed fixtures remain protected by ``ON DELETE RESTRICT`` on
+    Placed fixtures remain protected by deferred ``NO ACTION`` on
     ``tournament_fixtures.table_id`` (ADR 20260801).
     """
 

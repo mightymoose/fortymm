@@ -51,7 +51,11 @@ async def test_session_token_requires_credential_hash(db_session: AsyncSession):
         await db_session.commit()
 
 
-async def test_session_token_cascades_on_account_delete(db_session: AsyncSession):
+async def test_session_token_is_revoked_on_account_deactivation(
+    db_session: AsyncSession,
+):
+    from app.identity_lifecycle import deactivate_account
+
     user = User(username="dave")
     db_session.add(user)
     await db_session.commit()
@@ -61,7 +65,7 @@ async def test_session_token_cascades_on_account_delete(db_session: AsyncSession
     await db_session.commit()
 
     token_id = token.id
-    await db_session.delete(user)
+    await deactivate_account(db_session, user.id)
     await db_session.commit()
     db_session.expunge_all()
 

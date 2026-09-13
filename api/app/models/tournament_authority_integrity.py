@@ -13,6 +13,7 @@ AUTHORITY_INTEGRITY_DDL = (
         SELECT EXISTS (
             SELECT 1 FROM tournaments t JOIN accounts a ON a.id = account_uuid
             WHERE t.id = tournament_uuid AND a.merged_at IS NULL
+                AND a.deactivated_at IS NULL AND a.erased_at IS NULL
                 AND (t.owner_account_id = account_uuid OR EXISTS (
                     SELECT 1 FROM tournament_account_grants g
                     WHERE g.tournament_id = t.id AND g.account_id = account_uuid
@@ -31,7 +32,7 @@ AUTHORITY_INTEGRITY_DDL = (
             -- creates that FK; later authority changes must not lock its Account.
             WHERE id IN (NEW.account_id, NEW.revoked_by_account_id,
                 CASE WHEN TG_OP = 'INSERT' THEN NEW.granted_by_account_id END)
-            ORDER BY id FOR KEY SHARE NOWAIT;
+            ORDER BY id FOR SHARE NOWAIT;
             PERFORM id FROM tournaments WHERE id = NEW.tournament_id FOR UPDATE NOWAIT;
         EXCEPTION WHEN lock_not_available THEN
             RAISE EXCEPTION 'authority changes require parent locks; retry'
@@ -39,9 +40,24 @@ AUTHORITY_INTEGRITY_DDL = (
         END;
         IF TG_OP = 'INSERT' AND NOT EXISTS (
             SELECT 1 FROM accounts WHERE id = NEW.account_id AND merged_at IS NULL
+                AND deactivated_at IS NULL AND erased_at IS NULL
         ) THEN
             RAISE EXCEPTION 'authority recipient must be active'
                 USING ERRCODE = '23514';
+        END IF;
+        IF TG_OP='INSERT' AND NEW.reason='explicit' AND NOT EXISTS (
+            SELECT 1 FROM accounts WHERE id=NEW.granted_by_account_id
+                AND merged_at IS NULL AND deactivated_at IS NULL AND erased_at IS NULL
+        ) THEN
+            RAISE EXCEPTION 'authority actor must be active' USING ERRCODE='23514';
+        END IF;
+        IF NEW.revoked_at IS NOT NULL AND NEW.revocation_reason='explicit'
+            AND (TG_OP='INSERT' OR OLD.revoked_at IS NULL) AND NOT EXISTS (
+                SELECT 1 FROM accounts WHERE id=NEW.revoked_by_account_id
+                    AND merged_at IS NULL AND deactivated_at IS NULL
+                    AND erased_at IS NULL
+            ) THEN
+            RAISE EXCEPTION 'authority actor must be active' USING ERRCODE='23514';
         END IF;
         IF NEW.inherited_from_grant_id IS NOT NULL AND NOT EXISTS (
             SELECT 1 FROM tournament_account_grants g
@@ -68,13 +84,19 @@ AUTHORITY_INTEGRITY_DDL = (
         BEGIN
             PERFORM id FROM accounts
             WHERE id IN (NEW.previous_owner_account_id, NEW.new_owner_account_id,
-                NEW.actor_account_id) ORDER BY id FOR KEY SHARE NOWAIT;
+                NEW.actor_account_id) ORDER BY id FOR SHARE NOWAIT;
             SELECT * INTO parent FROM tournaments WHERE id = NEW.tournament_id
                 FOR UPDATE NOWAIT;
         EXCEPTION WHEN lock_not_available THEN
             RAISE EXCEPTION 'ownership transfer requires parent locks; retry'
                 USING ERRCODE = '40001';
         END;
+        IF NEW.reason='explicit' AND NOT EXISTS (
+            SELECT 1 FROM accounts WHERE id=NEW.actor_account_id
+                AND merged_at IS NULL AND deactivated_at IS NULL AND erased_at IS NULL
+        ) THEN
+            RAISE EXCEPTION 'authority actor must be active' USING ERRCODE='23514';
+        END IF;
         IF parent.id IS NULL
             OR parent.owner_account_id IS DISTINCT FROM NEW.previous_owner_account_id
             OR (NEW.revision IS NOT NULL
@@ -139,15 +161,25 @@ AUTHORITY_INTEGRITY_DDL = (
         IF TG_OP = 'INSERT'
             OR NEW.owner_account_id IS DISTINCT FROM OLD.owner_account_id THEN
             BEGIN
-                PERFORM id FROM accounts WHERE id = NEW.owner_account_id
-                    FOR KEY SHARE NOWAIT;
+                -- New attribution and current ownership are live authority.
+                -- Later writes retain the original creator without reauthorizing it.
+                PERFORM id FROM accounts
+                    WHERE id = NEW.owner_account_id
+                        OR (TG_OP = 'INSERT' AND id = NEW.created_by_user_id)
+                    ORDER BY id FOR SHARE NOWAIT;
             EXCEPTION WHEN lock_not_available THEN
                 RAISE EXCEPTION 'ownership changes require account locks; retry'
                     USING ERRCODE = '40001';
             END;
             IF NOT EXISTS (SELECT 1 FROM accounts
-                WHERE id = NEW.owner_account_id AND merged_at IS NULL) THEN
+                WHERE id = NEW.owner_account_id AND merged_at IS NULL
+                    AND deactivated_at IS NULL AND erased_at IS NULL) THEN
                 RAISE EXCEPTION 'owner must be active' USING ERRCODE = '23514';
+            END IF;
+            IF TG_OP = 'INSERT' AND NOT EXISTS (SELECT 1 FROM accounts
+                WHERE id = NEW.created_by_user_id AND merged_at IS NULL
+                    AND deactivated_at IS NULL AND erased_at IS NULL) THEN
+                RAISE EXCEPTION 'creator must be active' USING ERRCODE = '23514';
             END IF;
         END IF;
         RETURN NEW;

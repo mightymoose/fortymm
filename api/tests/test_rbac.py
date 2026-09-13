@@ -634,14 +634,17 @@ async def test_list_users_includes_role_ids(
     assert target["role_ids"] == [str(role.id)]
 
 
-async def test_delete_user(api_client: AsyncClient, db_session: AsyncSession):
+async def test_delete_unused_user_is_refused(
+    api_client: AsyncClient, db_session: AsyncSession
+):
     user = (await api_client.post("/v1/users", json={"username": "doomed"})).json()
     deleted = await api_client.delete(f"/v1/users/{user['id']}")
-    assert deleted.status_code == 204
+    assert deleted.status_code == 409
+    assert "retained" in deleted.json()["detail"]
     remaining = (
         await db_session.execute(select(User).where(User.username == "doomed"))
     ).scalar_one_or_none()
-    assert remaining is None
+    assert remaining is not None
 
 
 async def test_delete_user_refuses_self(api_client: AsyncClient, admin_user: User):
@@ -671,7 +674,7 @@ async def test_delete_user_with_activity_returns_409(
 
     response = await api_client.delete(f"/v1/users/{user['id']}")
     assert response.status_code == 409
-    assert "activity" in response.json()["detail"]
+    assert "retained" in response.json()["detail"]
 
     remaining = (
         await db_session.execute(select(User).where(User.username == "doomed"))

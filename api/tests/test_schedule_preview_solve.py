@@ -1081,3 +1081,57 @@ async def test_preview_solve_loads_events_without_relying_on_lazy_load(
     )
     assert {s.field_size for s in enqueued.field_summaries} == {4}
     assert len(enqueued.field_summaries) == 2
+
+
+@pytest.mark.parametrize("operation", ["enqueue", "cancel"])
+async def test_preview_authority_blocks_sql_account_suspension(
+    db_session, engine, default_league, preview_queue, operation
+):
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from tests.test_proposal_history import wait_for_blocked
+
+    owner = await make_user(db_session, "preview-suspension")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    await _add_event(db_session, tournament, max_players=4)
+    actor_id, tournament_id = owner.id, tournament.id
+    queued = None
+    if operation == "cancel":
+        queued = await request_schedule_preview(
+            db_session, tournament_id=tournament_id, actor=owner
+        )
+    await db_session.commit()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as writer, sessions() as lifecycle:
+        actor = await writer.get(User, actor_id)
+        lifecycle_pid = await lifecycle.scalar(text("SELECT pg_backend_pid()"))
+        if operation == "enqueue":
+            await request_schedule_preview(
+                writer, tournament_id=tournament_id, actor=actor
+            )
+            assert len(preview_queue.jobs) == 1
+        else:
+            await schedule_preview_solve.ensure_preview_access(
+                writer, tournament_id, actor
+            )
+            cancel_preview(queued.token, tournament_id)
+        pending = asyncio.create_task(
+            lifecycle.execute(
+                text(
+                    "UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"
+                ),
+                {"id": actor_id},
+            )
+        )
+        try:
+            await wait_for_blocked(writer, lifecycle_pid, pending)
+            await writer.commit()
+            await pending
+            await lifecycle.commit()
+        finally:
+            await writer.rollback()
+            await asyncio.gather(pending, return_exceptions=True)
+            await lifecycle.rollback()

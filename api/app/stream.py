@@ -23,8 +23,9 @@ the 503 path in ``app.main.db_pool_timeout_handler``. Instead the route injects 
 session **factory** and :func:`get_stream_principal` opens a short-lived session
 inside it, which is closed before the response even begins. ``tests/
 test_realtime_stream_route.py`` guards both halves: that ``get_session`` is
-absent from this route's dependency graph, and that exactly one session opens and
-closes before the first byte.
+absent from this route's dependency graph, and that authentication sessions close
+before the first byte. Subsequent credential checks also use short sessions: before
+live hints and every thirty idle seconds, without stamping activity.
 
 **Refusals must be dependencies, never generator body.** An exception raised
 inside an SSE generator surfaces *after* the 200 and its headers are on the wire;
@@ -48,8 +49,8 @@ import asyncio
 import hashlib
 import random
 import uuid
-from collections.abc import AsyncGenerator, AsyncIterator
-from contextlib import AbstractAsyncContextManager
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+from contextlib import AbstractAsyncContextManager, aclosing, suppress
 from dataclasses import dataclass
 from typing import Annotated, Protocol
 
@@ -67,7 +68,7 @@ from app.realtime import (
     RealtimeEvent,
     get_broker,
 )
-from app.sessions import SESSION_COOKIE_NAME, get_current_user
+from app.sessions import SESSION_COOKIE_NAME, get_current_user, get_optional_user
 
 router = APIRouter(prefix="/v1")
 
@@ -76,6 +77,8 @@ router = APIRouter(prefix="/v1")
 #: and the client's own ``retry:`` hint does not apply to a request that never
 #: became a stream.
 REALTIME_UNAVAILABLE_RETRY_AFTER_SECONDS = 30
+STREAM_AUTH_CHECK_SECONDS = 30.0
+StreamAuthCheck = Callable[[], Awaitable[bool]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +130,7 @@ async def get_stream_broker() -> RealtimeBroker | None:
 
 
 async def get_stream_principal(
+    request: Request,
     session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
     make_session: SessionFactory = Depends(get_stream_session_factory),
 ) -> StreamPrincipal:
@@ -140,13 +144,27 @@ async def get_stream_principal(
     they can still become a response.
     """
     async with make_session() as db:
-        user = await get_current_user(session_cookie=session_cookie, db=db)
+        user = await get_current_user(request, session_cookie=session_cookie, db=db)
         return StreamPrincipal(user_id=user.id)
+
+
+async def get_stream_auth_check(
+    principal: StreamPrincipal = Depends(get_stream_principal),
+    session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
+    make_session: SessionFactory = Depends(get_stream_session_factory),
+) -> StreamAuthCheck:
+    async def is_authorized() -> bool:
+        async with make_session() as db:
+            user = await get_optional_user(session_cookie=session_cookie, db=db)
+            return user is not None and user.id == principal.user_id
+
+    return is_authorized
 
 
 async def get_stream_events(
     principal: StreamPrincipal = Depends(get_stream_principal),
     broker: RealtimeBroker | None = Depends(get_stream_broker),
+    is_authorized: StreamAuthCheck = Depends(get_stream_auth_check),
 ) -> AsyncIterator[AsyncIterator[RealtimeEvent]]:
     """Attach to the caller's topic for the life of the request.
 
@@ -172,7 +190,36 @@ async def get_stream_events(
             headers={"Retry-After": str(REALTIME_UNAVAILABLE_RETRY_AFTER_SECONDS)},
         )
     async with broker.subscribe(user_id=principal.user_id) as events:
-        yield events
+        async with aclosing(_authorized_events(events, is_authorized)) as authorized:
+            yield authorized
+
+
+async def _authorized_events(
+    events: AsyncIterator[RealtimeEvent], is_authorized: StreamAuthCheck
+) -> AsyncGenerator[RealtimeEvent]:
+    pending: asyncio.Future[RealtimeEvent] | None = None
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.ensure_future(anext(events))
+            ready, _ = await asyncio.wait({pending}, timeout=STREAM_AUTH_CHECK_SECONDS)
+            # The short read transaction finishes before yielding or waiting again.
+            if not await is_authorized():
+                return
+            if not ready:
+                # Keep the same pending read: cancelling anext closes generators.
+                continue
+            try:
+                event = pending.result()
+            except StopAsyncIteration:
+                return
+            pending = None
+            yield event
+    finally:
+        if pending is not None:
+            pending.cancel()
+            with suppress(asyncio.CancelledError, StopAsyncIteration):
+                await pending
 
 
 async def _stream_rate_limit_key(request: Request) -> str:
@@ -249,6 +296,7 @@ def _reconnect_delay_ms() -> int:
 )
 async def stream(
     events: AsyncIterator[RealtimeEvent] = Depends(get_stream_events),
+    is_authorized: StreamAuthCheck = Depends(get_stream_auth_check),
 ) -> AsyncGenerator[ServerSentEvent]:
     """Live dashboard invalidation hints for the signed-in caller, over
     Server-Sent Events.
@@ -278,6 +326,8 @@ async def stream(
     loop = asyncio.get_running_loop()
     deadline = loop.time() + get_settings().realtime_max_stream_seconds
 
+    if not await is_authorized():
+        return
     yield ServerSentEvent(retry=_reconnect_delay_ms())
     yield ServerSentEvent(data=RealtimeEvent(kind=EventKind.resync))
 

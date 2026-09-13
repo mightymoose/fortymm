@@ -614,6 +614,8 @@ export type EventResults =
  * `id` is the ENTRY's id, not the player's: it's the address a withdrawal is
  * sent to, so an entrant you can see is an entrant you can act on. */
 export interface Entrant {
+  /** Original registration position before visible and retained entries are partitioned. */
+  registrationOrder?: number | null
   id: string
   userId: string
   username: string
@@ -657,6 +659,8 @@ export interface Entrant {
  * word and they share one copy table. Two tables would drift.
  */
 export type EventEntryState =
+  /** Retirement blocks new entries, but an existing held entry can still be withdrawn. */
+  | { state: 'retired' }
   /** Room, and your rating passes every rule. (An *unrated* player passes every
    * rule — ADR-0783 §3.) */
   | { state: 'open' }
@@ -735,11 +739,11 @@ export interface TournamentEvent {
    * `slot` times are in. The server does all timezone arithmetic; the client only
    * carries the name and shows it. */
   timezone: string
-  /** The registration count. Server-derived from the active entries — it is
-   * `entrants.length`, never a stored counter, so the count and the list it
-   * counts cannot disagree. Read it; never write it. */
+  /** Server-derived held registration count, including retained entrants. */
   entered: number
   entrants: Entrant[]
+  /** Still-entered players hidden from the active roster; retained for historical joins. */
+  retainedEntrants: Entrant[]
   /** What this event says about *the signed-in caller* entering it — server-
    * computed, never re-derived here (ADR-0783). Read it; never write it. */
   entryState: EventEntryState

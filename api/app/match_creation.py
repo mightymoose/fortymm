@@ -20,11 +20,14 @@ produced before.
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.leagues import resolve_league
 from app.match_errors import (
+    MatchCreationRateLimitedError,
+    MatchCreationUnavailableError,
     OpponentNotFoundError,
     RatedNeedsRegisteredOpponentError,
     SelfMatchError,
@@ -47,6 +50,7 @@ from app.player_accounts import (
     primary_player_id,
     require_player,
 )
+from app.rate_limiting import RateLimitUnavailable, check_expiring_budget
 
 
 def _add_side(match: Match, side_number: int, player: Player | None) -> None:
@@ -114,6 +118,23 @@ async def create_match(
     user, and :class:`RatedNeedsRegisteredOpponentError` when a rated match is
     requested with no registered opponent. It never raises ``HTTPException`` —
     it has no HTTP context; the caller adapts these to its transport."""
+    locked_account_ids: list[uuid.UUID] = []
+    if rated and opponent_user_id is not None:
+        # Lock the complete Account set before require_player takes Player locks.
+        # Recheck manager activity below, restricted to these locked candidates:
+        # a newly reassigned manager must not become unchecked authority.
+        manager_ids = select(AccountPlayer.account_id).where(
+            AccountPlayer.player_id == opponent_user_id,
+            AccountPlayer.is_primary.is_(True),
+        )
+        locked_account_ids = list(
+            await db.scalars(
+                select(Account.id)
+                .where(or_(Account.id == creator.id, Account.id.in_(manager_ids)))
+                .order_by(Account.id)
+                .with_for_update(read=True)
+            )
+        )
     participant_id = await primary_player_id(db, creator.id)
     if participant_id is None:
         raise PlayerAccessDenied
@@ -124,10 +145,14 @@ async def create_match(
             raise SelfMatchError
         opponent = (
             await db.execute(
-                select(Player).where(
+                select(Player)
+                .where(
                     Player.id == opponent_user_id,
                     Player.merged_into_player_id.is_(None),
+                    Player.retired_at.is_(None),
                 )
+                .with_for_update(read=True)
+                .execution_options(populate_existing=True)
             )
         ).scalar_one_or_none()
         # Rated casual opponents must be able to contest a proposed result.
@@ -140,8 +165,10 @@ async def create_match(
             .where(
                 AccountPlayer.player_id == opponent.id,
                 AccountPlayer.is_primary.is_(True),
-                Account.merged_into_user_id.is_(None),
+                Account.is_active,
+                Account.id.in_(locked_account_ids),
             )
+            .with_for_update(read=True, of=AccountPlayer)
             .limit(1)
         ):
             raise OpponentNotFoundError
@@ -155,6 +182,21 @@ async def create_match(
     affects_rating = rated and opponent is not None
 
     league = await resolve_league(db, league_id)
+
+    # Both public transports share this boundary. Tournament materialization
+    # has its own creation path; scoring existing history consumes no admission.
+    limits = get_settings()
+    try:
+        for window, limit, seconds in (
+            ("hour", limits.match_creation_account_limit_per_hour, 3600),
+            ("day", limits.match_creation_account_limit_per_day, 86400),
+        ):
+            if not await check_expiring_budget(
+                f"match-create:{window}:{creator.id}", limit=limit, seconds=seconds
+            ):
+                raise MatchCreationRateLimitedError(seconds)
+    except RateLimitUnavailable as error:
+        raise MatchCreationUnavailableError from error
 
     settings = MatchSettings(
         team_size=1,
