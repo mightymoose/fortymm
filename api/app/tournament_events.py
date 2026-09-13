@@ -42,6 +42,7 @@ from app.models import (
     User,
     VenueTable,
 )
+from app.models.tournament import EventLifecycleState
 from app.schedule_preview import preview_field_size
 from app.schedule_solves import request_solve
 from app.schemas.tournament import (
@@ -75,6 +76,7 @@ from app.tournament_draws import (
 from app.tournament_edit import _load_owned_tournament_for_update
 from app.tournament_errors import (
     DrawTypeFrozenError,
+    EventCancelledError,
     EventFormatMembershipError,
     EventNotFoundError,
     EventVersionConflictError,
@@ -1002,6 +1004,9 @@ async def update_event(
       and under the same row lock, so a write built on a superseded read is refused
       before any other gate can blame a field the caller never edited, and nothing is
       written. Every accepted update moves the token on by one.
+    * **409** — a cancelled event raises :class:`EventCancelledError`; its retained
+      configuration and placements cannot be edited. Score/result corrections use
+      their dedicated verbs. This gate follows the version check.
     * **409** — once the event's draw is cut, two things freeze (ADR-0786): a ``groups``
       payload that changes *which groups* the event has, **or the order they stand in**,
       raises :class:`GroupSetFrozenError`, and a draw-configuration payload that changes
@@ -1077,6 +1082,8 @@ async def update_event(
     # and deliberately out of #1499's scope; see the pull request's review notes.
     if updates.lock_version != event.lock_version:
         raise EventVersionConflictError(current_version=event.lock_version)
+    if event.lifecycle_state is EventLifecycleState.cancelled:
+        raise EventCancelledError()
     # 404 → 403 → 409: the freezes are asked before the setattr loop below, so a
     # refusal writes nothing at all.
     await _enforce_group_set_frozen(db, event, updates)

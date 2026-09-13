@@ -613,8 +613,8 @@ async def withdraw_from_event(
 
     # The gate is on the state CHANGE (ADR-0017): only an active entry is window-gated,
     # and only an active withdrawal that is seated in a cut draw owes a re-solve. An
-    # entry that is already withdrawn has nothing left to lock, so it falls straight
-    # through to the idempotent assignment — the 204 in every status ADR-0016 designed.
+    # already-withdrawn entry commits without changing status or adding reconciliation
+    # history — the idempotent 204 in every status ADR-0016 designed.
     if entry.status is TournamentEntryStatus.entered:
         _enforce_withdrawal_registration_open(tournament)
         await close_registration(
@@ -627,12 +627,8 @@ async def withdraw_from_event(
         )
         await _trigger_solve_if_seated(db, tournament_id, entry)
 
-    # Idempotent by construction: an assignment, not a decrement. Applied to an
-    # already-withdrawn entry it writes the value the row already holds (no UPDATE
-    # emitted), and it only ever removes a row from the partial unique index's
-    # predicate, so there is no IntegrityError to catch here.
-    entry.status = TournamentEntryStatus.withdrawn
-    from app.event_lifecycle import reconcile_event
+        entry.status = TournamentEntryStatus.withdrawn
+        from app.event_lifecycle import reconcile_event
 
-    await reconcile_event(db, event.id)
+        await reconcile_event(db, event.id)
     await db.commit()

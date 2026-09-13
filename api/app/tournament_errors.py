@@ -778,3 +778,10 @@ class TournamentArchivedError(Exception):
 
     def __init__(self) -> None:
         super().__init__("An archived tournament cannot accept new events.")
+
+
+class EventCancelledError(Exception):
+    """Cancellation freezes event configuration while retaining sporting records."""
+
+    def __init__(self) -> None:
+        super().__init__("A cancelled event cannot be edited.")

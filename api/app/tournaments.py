@@ -67,6 +67,7 @@ from app.tournament_errors import (
     EntryNotFoundError,
     EntryRateLimitedError,
     EntryRefusedError,
+    EventCancelledError,
     EventFormatMembershipError,
     EventNotFoundError,
     EventReservationCapExceededError,
@@ -233,6 +234,7 @@ _TournamentWriteError = (
     | DrawUnderWayError
     | RecordedPlayDeletionError
     | TournamentArchivedError
+    | EventCancelledError
     | LeagueNotEditableError
 )
 _TOURNAMENT_WRITE_ERRORS = (
@@ -245,6 +247,7 @@ _TOURNAMENT_WRITE_ERRORS = (
     LeagueNotEditableError,
     RecordedPlayDeletionError,
     TournamentArchivedError,
+    EventCancelledError,
 )
 
 

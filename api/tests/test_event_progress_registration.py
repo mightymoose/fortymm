@@ -57,6 +57,19 @@ async def test_withdrawal_reconciles_swiss_with_historical_result(
         actor=owner,
     )
     assert await db_session.scalar(state, {"id": uuid.UUID(event_id)}) == "finished"
+    receipts = text(
+        "SELECT count(*) FROM tournament_event_reconciliations WHERE event_id=:id"
+    )
+    before = await db_session.scalar(receipts, {"id": uuid.UUID(event_id)})
+    for _ in range(2):
+        await withdraw_from_event(
+            db_session,
+            tournament_id=uuid.UUID(tournament_id),
+            event_id=uuid.UUID(event_id),
+            entry_id=departing.id,
+            actor=owner,
+        )
+    assert await db_session.scalar(receipts, {"id": uuid.UUID(event_id)}) == before
     await enter_event(
         db_session,
         tournament_id=uuid.UUID(tournament_id),
