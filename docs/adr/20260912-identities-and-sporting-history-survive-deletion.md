@@ -66,6 +66,9 @@ as well as result actors. Explicit grantors, revokers, and ownership-transfer ac
 must be active; immutable historical actors are not revalidated on later updates.
 Tournament insertion validates both its original creator and initial owner under
 Account locks, including when those identities differ.
+Explicit advancement replacements and new rating inputs require an active actor
+under a lifecycle-conflicting Account lock. Existing decisions and rating inputs
+retain their original actor through later lifecycle changes.
 Rated match creation holds an active opponent manager Account and its primary grant
 through admission. Existing consent remains immutable historical evidence through
 suspension and erasure.

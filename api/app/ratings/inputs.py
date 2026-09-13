@@ -6,7 +6,7 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models import League, RatingInput
+from app.models import Account, League, RatingInput
 from app.models.rating_input import RatingInputSource
 
 
@@ -32,6 +32,16 @@ async def rating_inputs(
     )
 
 
+async def _require_active_actor(db: AsyncSession, actor_id: uuid.UUID) -> None:
+    actor = await db.scalar(
+        select(Account.id)
+        .where(Account.id == actor_id, Account.is_active)
+        .with_for_update(read=True)
+    )
+    if actor is None:
+        raise ValueError("Rating input actor must be active")
+
+
 async def record_rating_input(
     db: AsyncSession,
     league_id: uuid.UUID,
@@ -46,6 +56,7 @@ async def record_rating_input(
     from app.ratings.recompute import recompute_league_ratings
 
     async with db.begin_nested():
+        await _require_active_actor(db, actor_account_id)
         league = await db.get(League, league_id)
         if league is None:
             raise ValueError("League does not exist")
@@ -76,6 +87,7 @@ async def replace_rating_input(
     from app.ratings.recompute import recompute_league_ratings
 
     async with db.begin_nested():
+        await _require_active_actor(db, actor_account_id)
         original = await db.get(RatingInput, input_id)
         if original is None:
             raise ValueError("Rating input does not exist")
