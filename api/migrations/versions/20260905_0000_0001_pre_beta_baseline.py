@@ -1600,7 +1600,7 @@ COMPETITION_RULE_INTEGRITY_DDL = (
     """,
     """
     CREATE CONSTRAINT TRIGGER match_rule_fixture_owner
-    AFTER INSERT OR UPDATE OF match_settings_id ON matches
+    AFTER INSERT OR UPDATE OF id, match_settings_id ON matches
     DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
     EXECUTE FUNCTION check_match_rule_fixture()
     """,

@@ -151,8 +151,11 @@ async def test_sql_captures_matching_rules_and_preserves_policy_overrides(
     assert captured.match_rules == match_rules
 
 
+@pytest.mark.parametrize(
+    "rewrite_id", [False, True], ids=["original-id", "rewritten-id"]
+)
 async def test_source_linked_match_requires_a_fixture_from_its_revision(
-    db_session, default_league
+    db_session, default_league, rewrite_id
 ):
     from app.models import Match, MatchSettings
 
@@ -173,6 +176,11 @@ async def test_source_linked_match_requires_a_fixture_from_its_revision(
     )
     db_session.add(match)
     await db_session.flush()
+    if rewrite_id:
+        await db_session.execute(
+            text("UPDATE matches SET id=gen_random_uuid() WHERE id=:id"),
+            {"id": match.id},
+        )
     with pytest.raises(IntegrityError, match="source revision requires its fixture"):
         await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
