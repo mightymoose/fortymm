@@ -154,3 +154,48 @@ async def test_trusted_proxy_uses_actual_client_not_spoofed_forwarded_prefix(
             "/v1/session", headers={"X-Forwarded-For": "203.0.113.5"}
         )
         assert independent.status_code == 200
+
+
+async def test_login_requests_share_guest_creation_budget_before_allocating(
+    api_client, db_session, monkeypatch, fake_email_queue, stub_captcha
+):
+    settings = sessions.get_settings().model_copy(
+        update={"guest_creation_ip_limit_per_hour": 1}
+    )
+    monkeypatch.setattr(sessions, "get_settings", lambda: settings)
+    assert (await api_client.get("/v1/session")).status_code == 200
+    before = await db_session.scalar(text("SELECT count(*) FROM accounts"))
+    response = await api_client.post(
+        "/v1/login/request",
+        json={"email": "new@example.com", "captcha_token": "test-token"},
+    )
+    assert response.status_code == 429
+    assert await db_session.scalar(text("SELECT count(*) FROM accounts")) == before
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+async def test_login_admission_refuses_existing_and_unknown_addresses_uniformly(
+    api_client, db_session, monkeypatch, fake_email_queue, stub_captcha, unavailable
+):
+    from app import rate_limiting
+    from tests._helpers import make_user
+
+    owner = await make_user(db_session, "known-admission")
+    owner.email = "known@example.com"
+    await db_session.commit()
+    settings = sessions.get_settings().model_copy(
+        update={"guest_creation_ip_limit_per_hour": 1}
+    )
+    monkeypatch.setattr(sessions, "get_settings", lambda: settings)
+    assert (await api_client.get("/v1/session")).status_code == 200
+    if unavailable:
+        monkeypatch.setattr(rate_limiting, "_redis", None)
+    responses = []
+    for email in (owner.email, "unknown@example.com"):
+        response = await api_client.post(
+            "/v1/login/request", json={"email": email, "captcha_token": "test-token"}
+        )
+        responses.append(response)
+    assert [r.status_code for r in responses] == [503 if unavailable else 429] * 2
+    assert responses[0].json() == responses[1].json()
+    assert (await api_client.get("/v1/session")).status_code == 200

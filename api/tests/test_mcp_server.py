@@ -5489,3 +5489,60 @@ async def test_update_event_cancelled_event_raises_tool_error(
     await db_session.refresh(event)
     assert event.name == name
     assert event.lock_version == version
+
+
+async def test_fresh_auth0_identity_fails_closed_without_creation_budget(
+    db_session, monkeypatch
+):
+    from app import rate_limiting
+
+    monkeypatch.setattr(rate_limiting, "_redis", None)
+    email = "unavailable-creation@example.com"
+    token = _sign_token(
+        sub="auth0|" + uuid.uuid4().hex,
+        extra_claims={AUTH0_EMAIL_CLAIM: email, AUTH0_EMAIL_VERIFIED_CLAIM: True},
+    )
+    assert await _email_verifier().verify_token(token) is None
+    assert (
+        await db_session.execute(select(User).where(User.email == email))
+    ).scalar_one_or_none() is None
+
+
+async def test_guest_budget_caps_fresh_auth0_but_preserves_existing_bind(
+    api_client, db_session, monkeypatch
+):
+    from app import sessions
+
+    settings = sessions.get_settings().model_copy(
+        update={"guest_creation_ip_limit_per_hour": 1}
+    )
+    monkeypatch.setattr(sessions, "get_settings", lambda: settings)
+    monkeypatch.setattr(mcp_server, "get_settings", lambda: settings)
+    _pin_client_ip(monkeypatch, "127.0.0.1")
+    assert (await api_client.get("/v1/session")).status_code == 200
+    email = "capped-auth0@example.com"
+    token = _sign_token(
+        sub="auth0|" + uuid.uuid4().hex,
+        extra_claims={AUTH0_EMAIL_CLAIM: email, AUTH0_EMAIL_VERIFIED_CLAIM: True},
+    )
+    verifier = _email_verifier()
+    assert await verifier.verify_token(token) is None
+    assert (
+        await db_session.execute(select(User).where(User.email == email))
+    ).scalar_one_or_none() is None
+    existing = await make_user(db_session, "existing-capped-auth0")
+    existing.email = "existing-capped-auth0@example.com"
+    await db_session.commit()
+    await _grant_mcp_access(db_session, existing)
+    token = _sign_token(
+        sub="auth0|" + uuid.uuid4().hex,
+        extra_claims={
+            AUTH0_EMAIL_CLAIM: existing.email,
+            AUTH0_EMAIL_VERIFIED_CLAIM: True,
+        },
+    )
+    assert await verifier.verify_token(token) is not None
+    from app import rate_limiting
+
+    monkeypatch.setattr(rate_limiting, "_redis", None)
+    assert await verifier.verify_token(token) is not None

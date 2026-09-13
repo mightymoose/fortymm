@@ -67,7 +67,7 @@ from app.models import (
 from app.rate_limiting import (
     RateLimitUnavailable,
     RedisRateLimiter,
-    check_expiring_budget,
+    identity_creation_retry_after,
 )
 from app.roles import grant_default_role
 from app.schemas.session import (
@@ -366,26 +366,25 @@ def _client_ip(request: Request) -> str:
     return client.host if client else "unknown"
 
 
-async def _admit_guest_creation(request: Request) -> None:
+async def _admit_identity_creation(request: Request) -> None:
     settings = get_settings()
     client_ip = _client_ip(request)
     try:
-        for window, limit, seconds in (
-            ("hour", settings.guest_creation_ip_limit_per_hour, 3600),
-            ("day", settings.guest_creation_ip_limit_per_day, 86400),
-        ):
-            if not await check_expiring_budget(
-                f"guest-create:{window}:{client_ip}", limit=limit, seconds=seconds
-            ):
-                raise HTTPException(
-                    status_code=429,
-                    detail="Too many new guest sessions. Try again later.",
-                    headers={"Retry-After": str(seconds)},
-                )
+        retry_after = await identity_creation_retry_after(
+            client_ip,
+            hourly_limit=settings.guest_creation_ip_limit_per_hour,
+            daily_limit=settings.guest_creation_ip_limit_per_day,
+        )
+        if retry_after is not None:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many identity requests. Try again later.",
+                headers={"Retry-After": str(retry_after)},
+            )
     except RateLimitUnavailable as error:
         raise HTTPException(
             status_code=503,
-            detail="Guest creation is temporarily unavailable.",
+            detail="Identity admission is temporarily unavailable.",
             headers={"Retry-After": "5"},
         ) from error
 
@@ -827,7 +826,7 @@ async def get_session_endpoint(
         # cookie was cleared. Repeated loads must not silently create a guest.
         if session_cookie is not None or csrf_cookie is not None:
             raise _session_ended_exception()
-        await _admit_guest_creation(request)
+        await _admit_identity_creation(request)
         user, raw_token = await _create_session(db)
         _set_session_cookie(response, raw_token)
     elif csrf_cookie is None:
@@ -1569,13 +1568,16 @@ async def get_login_sender() -> LoginSenderResponse:
     ],
 )
 async def request_login_email(
+    request: Request,
     payload: RequestLoginRequest,
     session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
     db: AsyncSession = Depends(get_session),
 ) -> LoginRequestAccepted:
     """Mint a magic-link sign-in token and email it.
 
-    **Both branches mint a user, send the same email, and return the same 202.**
+    **Both admitted branches send the same email and return the same 202.**
+    Shared identity admission is checked before address lookup, so exhaustion
+    or unavailable Redis refuses existing and unknown addresses identically.
     An address that already has an account gets a link for that account. An
     address with no account gets one for a user this endpoint mints on the spot,
     whose ``email`` stays NULL until the link is clicked — so the sign-in link,
@@ -1604,6 +1606,7 @@ async def request_login_email(
 
     await _verify_captcha_or_400(payload.captcha_token)
 
+    await _admit_identity_creation(request)
     user, first_sign_in = await resolve_login_recipient(db, email)
     if not user.is_active:
         return LoginRequestAccepted(email=email)

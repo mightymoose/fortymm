@@ -60,6 +60,7 @@ async def resolve_or_provision_user(
     email_verified: bool,
     *,
     may_write: Callable[[], Awaitable[bool]] | None = None,
+    may_create: Callable[[], Awaitable[bool]] | None = None,
 ) -> User | None:
     """Turn a verified Auth0 token into the fortymm ``User`` it acts as.
 
@@ -79,6 +80,9 @@ async def resolve_or_provision_user(
 
     Writes on the first token for a new identity (a bind, or an INSERT); every
     later token resolves via step 1 with no write.
+
+    ``may_create`` gates only fresh allocation, after verified-email resolution;
+    existing binds and linked accounts do not consume its creation budget.
 
     ``may_write`` is an optional gate the caller supplies, awaited **immediately
     before** the bind or the INSERT and never on a path that only reads. The MCP
@@ -159,6 +163,8 @@ async def resolve_or_provision_user(
     # No account holds the email → provision a fresh registered account. This is
     # the account-creation case the caller's gate exists for.
     if may_write is not None and not await may_write():
+        return None
+    if may_create is not None and not await may_create():
         return None
     return await _provision_user(db, sub, email)
 

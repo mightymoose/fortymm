@@ -108,7 +108,11 @@ from app.notifications.service import NotificationService
 from app.player_accounts import PlayerAccessDenied, primary_player_id
 from app.player_matches import paginated_player_matches
 from app.player_search import SEARCH_DEFAULT_LIMIT, search_players_by_username
-from app.rate_limiting import RedisRateLimiter
+from app.rate_limiting import (
+    RateLimitUnavailable,
+    RedisRateLimiter,
+    identity_creation_retry_after,
+)
 from app.rbac import user_has_permission
 from app.repositories.match_details_repository import MatchDetailsRepository
 from app.repositories.match_repository import MatchRepository
@@ -405,6 +409,20 @@ class FortymmAuth0TokenVerifier(JWTVerifier):
                 async def may_write() -> bool:
                     return await _provision_ip_rate_limit.check(_provision_client_ip())
 
+                async def may_create() -> bool:
+                    settings = get_settings()
+                    try:
+                        return (
+                            await identity_creation_retry_after(
+                                _provision_client_ip(),
+                                hourly_limit=settings.guest_creation_ip_limit_per_hour,
+                                daily_limit=settings.guest_creation_ip_limit_per_day,
+                            )
+                            is None
+                        )
+                    except RateLimitUnavailable:
+                        return False
+
                 # The namespaced email claims the Auth0 Action ships (see
                 # ``app.auth0_provisioning``). Only a non-empty ``str`` email
                 # counts, and ``email_verified`` must be the literal boolean
@@ -414,7 +432,12 @@ class FortymmAuth0TokenVerifier(JWTVerifier):
                 email = raw_email if isinstance(raw_email, str) and raw_email else None
                 email_verified = access.claims.get(AUTH0_EMAIL_VERIFIED_CLAIM) is True
                 user = await resolve_or_provision_user(
-                    db, sub, email, email_verified, may_write=may_write
+                    db,
+                    sub,
+                    email,
+                    email_verified,
+                    may_write=may_write,
+                    may_create=may_create,
                 )
                 if user is None:
                     return None

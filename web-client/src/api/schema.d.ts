@@ -188,7 +188,9 @@ export interface paths {
          * Request Login Email
          * @description Mint a magic-link sign-in token and email it.
          *
-         *     **Both branches mint a user, send the same email, and return the same 202.**
+         *     **Both admitted branches send the same email and return the same 202.**
+         *     Shared identity admission is checked before address lookup, so exhaustion
+         *     or unavailable Redis refuses existing and unknown addresses identically.
          *     An address that already has an account gets a link for that account. An
          *     address with no account gets one for a user this endpoint mints on the spot,
          *     whose ``email`` stays NULL until the link is clicked — so the sign-in link,

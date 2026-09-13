@@ -9,11 +9,14 @@ unused identities. Historical Account references continue to name the original
 actor. Erasure must not turn a director-added entry into self-registration or
 fabricate participant consent by clearing an actor reference.
 
-Anonymous session bootstrap must pass an expiring, per-client creation budget
-before allocating an Account or Player. Missing or unavailable budget storage
-refuses new guest creation; existing sessions remain usable. The client address
-comes from the server's trusted proxy handling, never an unchecked request header.
-These admission limits do not authorize deleting unused identities.
+Public identity creation must pass a shared expiring, per-client budget before
+allocating an Account or Player. Anonymous session bootstrap and login-email
+requests share this budget with fresh authenticated provisioning. Login-email
+requests check admission before looking up the address, so exhaustion or an outage
+cannot reveal whether the address belongs to an Account. Existing sessions remain
+usable, but requesting a new login email requires available budget storage.
+The client address comes from the server's trusted proxy handling, never an
+unchecked request header. These limits do not authorize deleting unused identities.
 
 Account deactivation disables authentication and action through that Account,
 retaining its email and current grants and ownership. Reactivation restores the
