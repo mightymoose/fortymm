@@ -70,7 +70,6 @@ from app.models import (
     TournamentEvent,
     TournamentEventStage,
     TournamentFixture,
-    VenueTableCallHistory,
 )
 from app.models.draw_type import DRAW_TYPES_BY_ID
 from app.schemas.tournament import GroupRead, Reservation
@@ -670,21 +669,7 @@ async def draw_has_play(db: AsyncSession, event_id: uuid.UUID) -> bool:
         .limit(1)
         .execution_options(include_draw_history=True)
     )
-    if played or await draw_has_advancement_history(db, event_id):
-        return True
-    return (
-        await db.scalar(
-            select(VenueTableCallHistory.id)
-            .join(
-                TournamentFixture,
-                TournamentFixture.id == VenueTableCallHistory.fixture_id,
-            )
-            .where(TournamentFixture.scope_event_id == event_id)
-            .limit(1)
-            .execution_options(include_draw_history=True)
-        )
-        is not None
-    )
+    return bool(played) or await draw_has_advancement_history(db, event_id)
 
 
 class DrawCurrency(enum.Enum):

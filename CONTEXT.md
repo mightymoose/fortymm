@@ -292,7 +292,8 @@ _Avoid_: admin add, force add (there is no override yet — see #985).
 A player holding an **active** entry — `status = entered`. The count of entrants is
 always **derived from the rows**, never stored (ADR-0016): there is no `entered`
 column, because a counter is a second copy of a truth that can drift from the rows
-it counts.
+it counts. Retired Players remain in held-registration counts but are hidden
+from the current roster; retirement alone does not withdraw their entry.
 
 **Registration window**:
 The span in which entries may be created, which is exactly the tournament being

@@ -330,7 +330,7 @@ async def test_recorded_scores_cannot_be_reparented_to_a_disposable_match(
             )
 
 
-async def test_uncut_reports_conflict_for_call_history_without_a_linked_match(
+async def test_uncut_retains_cancelled_call_history_and_still_blocks_parent_deletion(
     db_session, default_league
 ):
     from datetime import UTC, datetime
@@ -345,7 +345,8 @@ async def test_uncut_reports_conflict_for_call_history_without_a_linked_match(
         VenueTableCallHistory,
     )
     from app.tournament_draw_service import uncut_event_draw
-    from app.tournament_errors import DrawUnderWayError
+    from app.tournament_errors import RecordedPlayDeletionError
+    from app.tournament_events import delete_event
 
     owner = await make_user(db_session, "call-history-draw-owner")
     tournament = await _make_tournament_at(
@@ -382,7 +383,24 @@ async def test_uncut_reports_conflict_for_call_history_without_a_linked_match(
         )
     )
     await db_session.commit()
-    with pytest.raises(DrawUnderWayError):
-        await uncut_event_draw(
+    await uncut_event_draw(
+        db_session, tournament_id=tournament.id, event_id=event.id, actor=owner
+    )
+    retained = await db_session.scalar(
+        select(TournamentFixture)
+        .where(TournamentFixture.id == fixture.id)
+        .execution_options(include_draw_history=True)
+    )
+    assert retained is not None and retained.retired_at is not None
+    assert (
+        await db_session.scalar(
+            select(VenueTableCallHistory.fixture_id).where(
+                VenueTableCallHistory.fixture_id == fixture.id
+            )
+        )
+        == fixture.id
+    )
+    with pytest.raises(RecordedPlayDeletionError, match="Table call history"):
+        await delete_event(
             db_session, tournament_id=tournament.id, event_id=event.id, actor=owner
         )

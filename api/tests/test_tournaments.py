@@ -993,7 +993,7 @@ async def test_call_history_cannot_reference_a_fixture_from_another_tournament(
             )
 
 
-async def test_deleting_fixture_clears_only_its_call_history_fixture_reference(
+async def test_call_history_preserves_its_fixture_reference_on_delete(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:
     client, _ = authed_client
@@ -1010,16 +1010,20 @@ async def test_deleting_fixture_clears_only_its_call_history_fixture_reference(
     db_session.add(history)
     await db_session.flush()
 
-    await db_session.execute(
-        text("DELETE FROM tournament_fixtures WHERE id = :id"), {"id": fixture.id}
-    )
+    with pytest.raises(IntegrityError, match="fk_tournament_table_call_history"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("DELETE FROM tournament_fixtures WHERE id = :id"),
+                {"id": fixture.id},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
     fixture_reference = await db_session.scalar(
         select(VenueTableCallHistory.fixture_id).where(
             VenueTableCallHistory.id == history.id
         )
     )
 
-    assert fixture_reference is None
+    assert fixture_reference == fixture.id
 
 
 @pytest.mark.parametrize(
@@ -1060,7 +1064,7 @@ async def test_reservation_membership_activity_matches_its_position(
             )
 
 
-async def test_delete_tournament_removes_its_call_history_before_table_cascade(
+async def test_delete_tournament_preserves_its_call_history(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
@@ -1087,14 +1091,14 @@ async def test_delete_tournament_removes_its_call_history_before_table_cascade(
 
     response = await client.delete(f"/v1/tournaments/{tournament_id}")
 
-    assert response.status_code == 204, response.text
+    assert response.status_code == 409, response.text
     assert (
         await db_session.scalar(
             select(func.count())
             .select_from(VenueTableCallHistory)
             .where(VenueTableCallHistory.tournament_id == uuid.UUID(tournament_id))
         )
-        == 0
+        == 1
     )
 
 

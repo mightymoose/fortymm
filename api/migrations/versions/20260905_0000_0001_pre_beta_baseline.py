@@ -5244,7 +5244,7 @@ def upgrade() -> None:
         CREATE FUNCTION preserve_table_call_history() RETURNS trigger
         LANGUAGE plpgsql AS $$
         BEGIN
-        RAISE EXCEPTION 'table call history must be retained' USING ERRCODE='23514';
+        RAISE EXCEPTION 'table call history is append-only' USING ERRCODE='23514';
         END $$
         """)
     op.execute("""

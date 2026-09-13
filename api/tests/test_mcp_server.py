@@ -5431,3 +5431,19 @@ async def test_draw_change_busy_actor_returns_actionable_refusal(
                 with pytest.raises(ToolError, match="already in progress.*Retry"):
                     await client.call_tool(tool_name, arguments)
         await gate.rollback()
+
+
+async def test_account_deactivation_rejects_an_existing_mcp_token(db_session):
+    from app.identity_lifecycle import deactivate_account, reactivate_account
+
+    account = await make_user(db_session, "mcp-deactivated-account")
+    token = await _mint(db_session, account)
+    async with _mcp_client(token) as client, client:
+        assert await client.list_tools()
+    await deactivate_account(db_session, account.id)
+    await db_session.commit()
+    await _assert_rejected(token)
+    await reactivate_account(db_session, account.id)
+    await db_session.commit()
+    async with _mcp_client(token) as client, client:
+        assert await client.list_tools()

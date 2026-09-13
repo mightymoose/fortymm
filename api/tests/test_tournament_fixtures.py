@@ -431,11 +431,10 @@ async def test_deleting_the_event_takes_its_groups_with_it(
     assert groups == []
 
 
-async def test_deleting_the_event_takes_its_fixtures_with_it(
+async def test_deleting_a_registered_event_retains_its_fixtures(
     db_session: AsyncSession, event: TournamentEvent
 ) -> None:
-    """The fixtures are part of the event, not free-standing rows — and the FK cascade
-    must survive the *entry* FKs, whose rows the same delete is also cascading away."""
+    """Registered contestants keep their fixtures and event from being deleted."""
     player = await _make_entry(db_session, event)
     entry = (
         await db_session.execute(
@@ -453,14 +452,12 @@ async def test_deleting_the_event_takes_its_fixtures_with_it(
     )
     await db_session.commit()
 
-    # Delete the parent first, as the event service does, so its database cascade
-    # removes immutable participation history together with the owning event.
-    await db_session.execute(
-        delete(TournamentEvent).where(TournamentEvent.id == event.id)
-    )
-    await db_session.commit()
-
-    assert (await db_session.execute(select(TournamentFixture))).scalars().all() == []
+    with pytest.raises(IntegrityError, match="entry history must be retained"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                delete(TournamentEvent).where(TournamentEvent.id == event.id)
+            )
+    assert len((await db_session.scalars(select(TournamentFixture))).all()) == 1
 
 
 async def test_the_stages_fixtures_relationship_is_ordered_group_round_position(
