@@ -1363,3 +1363,175 @@ async def test_complete_sql_draw_retirement_freezes_referenced_configuration(
                 ),
                 {"id": drawn_history["fixture_id"]},
             )
+
+
+@pytest.mark.parametrize("lifecycle", ["deactivate", "erase"])
+async def test_draw_revision_insert_requires_an_active_creator_but_preserves_history(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID], lifecycle: str
+) -> None:
+    from app.identity_lifecycle import deactivate_account, erase_account
+
+    await _uncut(db_session, drawn_history)
+    transition = deactivate_account if lifecycle == "deactivate" else erase_account
+    await transition(db_session, drawn_history["owner_id"])
+    await db_session.commit()
+    with pytest.raises(IntegrityError, match="draw revision creator must be active"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "INSERT INTO tournament_draw_revisions"
+                    "(event_id, created_by_account_id) "
+                    "VALUES (:event, :actor)"
+                ),
+                {
+                    "event": drawn_history["event_id"],
+                    "actor": drawn_history["owner_id"],
+                },
+            )
+    # Creator attribution remains immutable history, even once inactive.
+    await db_session.execute(
+        text(
+            "UPDATE tournament_draw_revisions SET created_by_account_id="
+            "created_by_account_id WHERE id=:id"
+        ),
+        {"id": drawn_history["revision_id"]},
+    )
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT created_by_account_id FROM tournament_draw_revisions "
+                "WHERE id=:id"
+            ),
+            {"id": drawn_history["revision_id"]},
+        )
+        == drawn_history["owner_id"]
+    )
+    # Automatic capture has no human creator and remains valid.
+    revision = await db_session.scalar(
+        text(
+            "INSERT INTO tournament_draw_revisions(event_id) "
+            "VALUES (:event) RETURNING id"
+        ),
+        {"event": drawn_history["event_id"]},
+    )
+    await db_session.commit()
+    assert revision is not None
+
+
+@pytest.mark.parametrize("lifecycle", ["deactivate", "erase"])
+async def test_draw_revision_creator_lock_precedes_parent_locks(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID], lifecycle: str
+) -> None:
+    from sqlalchemy.exc import DBAPIError
+
+    from app.identity_lifecycle import deactivate_account, erase_account
+
+    await _uncut(db_session, drawn_history)
+    await db_session.commit()
+    transition = deactivate_account if lifecycle == "deactivate" else erase_account
+    async with (
+        AsyncSession(bind=db_session.bind) as lifecycle_writer,
+        AsyncSession(bind=db_session.bind) as parent_writer,
+    ):
+        await transition(lifecycle_writer, drawn_history["owner_id"])
+        await lifecycle_writer.flush()
+        await parent_writer.execute(
+            text("SELECT id FROM tournaments WHERE id=:id FOR UPDATE"),
+            {"id": drawn_history["tournament_id"]},
+        )
+        with pytest.raises(
+            DBAPIError, match="creator requires account lock"
+        ) as refusal:
+            async with db_session.begin_nested():
+                await db_session.execute(
+                    text(
+                        "INSERT INTO tournament_draw_revisions"
+                        "(event_id,created_by_account_id) VALUES (:event,:actor)"
+                    ),
+                    {
+                        "event": drawn_history["event_id"],
+                        "actor": drawn_history["owner_id"],
+                    },
+                )
+        assert refusal.value.orig.sqlstate == "40001"
+        await lifecycle_writer.commit()
+        await parent_writer.rollback()
+        with pytest.raises(
+            IntegrityError, match="draw revision creator must be active"
+        ):
+            async with db_session.begin_nested():
+                await db_session.execute(
+                    text(
+                        "INSERT INTO tournament_draw_revisions"
+                        "(event_id,created_by_account_id) VALUES (:event,:actor)"
+                    ),
+                    {
+                        "event": drawn_history["event_id"],
+                        "actor": drawn_history["owner_id"],
+                    },
+                )
+
+
+@pytest.mark.parametrize("lifecycle", ["deactivate", "erase"])
+async def test_draw_revision_insert_serializes_lifecycle_and_retains_creator(
+    db_session: AsyncSession, drawn_history: dict[str, uuid.UUID], lifecycle: str
+) -> None:
+    import asyncio
+    from contextlib import suppress
+
+    await _uncut(db_session, drawn_history)
+    await db_session.commit()
+    assignments = "deactivated_at=clock_timestamp()"
+    if lifecycle == "erase":
+        assignments += (
+            ", erased_at=clock_timestamp(), email=NULL, display_name='Erased account',"
+            " confirmed_at=NULL, last_seen_at=NULL, agent_access_linked_at=NULL,"
+            " agent_access_revoked_at=NULL"
+        )
+    async with (
+        AsyncSession(bind=db_session.bind) as draw_writer,
+        AsyncSession(bind=db_session.bind) as lifecycle_writer,
+    ):
+        draw_pid = await draw_writer.scalar(text("SELECT pg_backend_pid()"))
+        lifecycle_pid = await lifecycle_writer.scalar(text("SELECT pg_backend_pid()"))
+        revision = await draw_writer.scalar(
+            text(
+                "INSERT INTO tournament_draw_revisions(event_id,created_by_account_id) "
+                "VALUES (:event,:actor) RETURNING id"
+            ),
+            {"event": drawn_history["event_id"], "actor": drawn_history["owner_id"]},
+        )
+        changing = asyncio.create_task(
+            lifecycle_writer.execute(
+                text(f"UPDATE accounts SET {assignments} WHERE id=:id"),
+                {"id": drawn_history["owner_id"]},
+            )
+        )
+        try:
+            async with asyncio.timeout(5):
+                while draw_pid not in (
+                    await db_session.scalar(
+                        text("SELECT pg_blocking_pids(:pid)"), {"pid": lifecycle_pid}
+                    )
+                ):
+                    if changing.done():
+                        await changing
+                        pytest.fail("Lifecycle change bypassed the draw creator lock")
+                    await asyncio.sleep(0.01)
+                await draw_writer.commit()
+                await changing
+                await lifecycle_writer.commit()
+        finally:
+            changing.cancel()
+            with suppress(asyncio.CancelledError):
+                await changing
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT created_by_account_id FROM tournament_draw_revisions "
+                "WHERE id=:id"
+            ),
+            {"id": revision},
+        )
+        == drawn_history["owner_id"]
+    )

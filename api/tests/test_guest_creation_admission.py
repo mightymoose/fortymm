@@ -169,12 +169,12 @@ async def test_login_requests_share_guest_creation_budget_before_allocating(
         "/v1/login/request",
         json={"email": "new@example.com", "captcha_token": "test-token"},
     )
-    assert response.status_code == 429
+    assert response.status_code == 202
     assert await db_session.scalar(text("SELECT count(*) FROM accounts")) == before
 
 
 @pytest.mark.parametrize("unavailable", [False, True])
-async def test_login_admission_refuses_existing_and_unknown_addresses_uniformly(
+async def test_login_reserve_preserves_sign_in_without_an_allocation_oracle(
     api_client, db_session, monkeypatch, fake_email_queue, stub_captcha, unavailable
 ):
     from app import rate_limiting
@@ -190,12 +190,74 @@ async def test_login_admission_refuses_existing_and_unknown_addresses_uniformly(
     assert (await api_client.get("/v1/session")).status_code == 200
     if unavailable:
         monkeypatch.setattr(rate_limiting, "_redis", None)
+    before = await db_session.scalar(text("SELECT count(*) FROM accounts"))
     responses = []
     for email in (owner.email, "unknown@example.com"):
         response = await api_client.post(
             "/v1/login/request", json={"email": email, "captcha_token": "test-token"}
         )
         responses.append(response)
-    assert [r.status_code for r in responses] == [503 if unavailable else 429] * 2
-    assert responses[0].json() == responses[1].json()
+    assert [r.status_code for r in responses] == [503 if unavailable else 202] * 2
+    if unavailable:
+        assert responses[0].json() == responses[1].json()
+    else:
+        assert responses[0].json() == {"email": owner.email}
+        assert responses[1].json() == {"email": "unknown@example.com"}
+    assert fake_email_queue.finished_job_registry.count == (0 if unavailable else 1)
+    assert await db_session.scalar(text("SELECT count(*) FROM accounts")) == before
     assert (await api_client.get("/v1/session")).status_code == 200
+
+
+async def test_exhausted_creation_budget_still_resends_existing_pending_login(
+    api_client, db_session, monkeypatch, fake_email_queue
+):
+    from sqlalchemy import select
+
+    from app.models import FirstSignInIntent
+
+    settings = sessions.get_settings().model_copy(
+        update={"guest_creation_ip_limit_per_hour": 1}
+    )
+    monkeypatch.setattr(sessions, "get_settings", lambda: settings)
+    payload = {"email": "pending-reserve@example.com", "captcha_token": "test-token"}
+    first = await api_client.post("/v1/login/request", json=payload)
+    assert first.status_code == 202
+    original_id = await db_session.scalar(select(FirstSignInIntent.user_id))
+    before = await db_session.scalar(text("SELECT count(*) FROM accounts"))
+    second = await api_client.post("/v1/login/request", json=payload)
+    assert second.status_code == 202
+    assert second.json() == first.json()
+    assert await db_session.scalar(select(FirstSignInIntent.user_id)) == original_id
+    assert await db_session.scalar(text("SELECT count(*) FROM accounts")) == before
+    assert fake_email_queue.finished_job_registry.count == 2
+
+
+async def test_exhausted_creation_reserve_masks_queue_failure_without_an_oracle(
+    api_client, db_session, monkeypatch
+):
+    from tests._helpers import make_user
+
+    owner = await make_user(db_session, "queue-reserve-owner")
+    owner.email = "queue-reserve@example.com"
+    await db_session.commit()
+    settings = sessions.get_settings().model_copy(
+        update={"guest_creation_ip_limit_per_hour": 1}
+    )
+    monkeypatch.setattr(sessions, "get_settings", lambda: settings)
+    assert (await api_client.get("/v1/session")).status_code == 200
+    before = await db_session.scalar(text("SELECT count(*) FROM accounts"))
+
+    def unavailable(*args, **kwargs):
+        raise ConnectionError("Email queue unavailable")
+
+    monkeypatch.setattr(sessions, "_enqueue_login_email", unavailable)
+    for email in (owner.email, "unknown-queue-reserve@example.com"):
+        response = await api_client.post(
+            "/v1/login/request", json={"email": email, "captcha_token": "test-token"}
+        )
+        assert response.status_code == 202
+        assert response.json() == {"email": email}
+    assert await db_session.scalar(text("SELECT count(*) FROM accounts")) == before
+    assert (
+        await db_session.scalar(text("SELECT count(*) FROM account_email_tokens")) == 0
+    )

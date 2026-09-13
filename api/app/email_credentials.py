@@ -283,12 +283,16 @@ async def lock_pending_email_action(
         return intent
 
 
-async def resolve_login_recipient(db: AsyncSession, email: str) -> tuple[User, bool]:
+async def resolve_login_recipient(
+    db: AsyncSession, email: str, *, allow_create: bool
+) -> tuple[User | None, bool]:
     """Resolve after locking; restart if the address moved to another Account.
 
     The email advisory lock covers absent intent rows. Acquire every candidate
     Account in sorted order before modifying intent, matching consumption.
     Reads after locking decide the action; the earlier snapshot only finds locks.
+    A spent creation budget skips only a fresh allocation, never an existing
+    account or pending recipient. The router returns the same accepted body.
     """
     while True:
         await db.execute(
@@ -356,6 +360,8 @@ async def resolve_login_recipient(db: AsyncSession, email: str) -> tuple[User, b
             )
             await db.delete(intent)
             await db.flush()
+        if not allow_create:
+            return None, True
         pending = await _mint_pending_user(db)
         db.add(FirstSignInIntent(email=email, user_id=pending.id))
         return pending, True

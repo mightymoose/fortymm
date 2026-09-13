@@ -37,6 +37,18 @@ those feature issues must apply this matrix to their own real references.
 
 ## Foreign-key review
 
+Account references also distinguish new authority from retained attribution:
+
+| Reference | Lifecycle admission |
+| --- | --- |
+| Match/tournament creators, initial tournament owner, explicit draw creator | Lock and validate the new actor; sourced automatic matches preserve historical ownership |
+| Entry creator, registration/withdrawal/restoration actors, roster join/leave, participation ending | Validate each newly introduced actor; historical no-ops retain their original references |
+| Lineup recorder, proposal/consent, official result/void, explicit grant/revoke/transfer | Lock and validate fresh authority; retain immutable evidence |
+| Rating input and explicit advancement replacement | Validate the new actor; replay and automatic advancement retain prior attribution |
+| Rating history creator | Rebuildable projection of retained rating input, not fresh authority |
+| Credentials and login identities | New or changed credentials require an active Account; suspension revokes usable sessions and delivery tokens |
+| Account/Player management, roles, ownership, merge provenance, notification recipients | Retained relationships do not themselves authorize an inactive Account; action and delivery boundaries recheck activity |
+
 Every FK registered in the current backend metadata is listed below. `NO ACTION`
 means PostgreSQL's default when no explicit delete action is specified. Deferred
 checks validate the final transaction state; retention triggers still prohibit

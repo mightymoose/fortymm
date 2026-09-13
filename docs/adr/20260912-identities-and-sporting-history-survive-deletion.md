@@ -15,9 +15,13 @@ an authorized correction.
 Public identity creation must pass a shared expiring, per-client budget before
 allocating an Account or Player. Anonymous session bootstrap and login-email
 requests share this budget with fresh authenticated provisioning. Login-email
-requests check admission before looking up the address, so exhaustion or an outage
-cannot reveal whether the address belongs to an Account. Existing sessions remain
-usable, but requesting a new login email requires available budget storage.
+requests check admission before looking up the address. When the creation budget
+is exhausted, existing accounts and pending sign-ins can still receive links under
+the email limits; unknown addresses receive the same generic accepted response
+without allocating an identity. Unavailable budget storage refuses all addresses
+identically. At exhaustion, an email queue failure also keeps the generic accepted
+response after rolling back credentials, avoiding an address-ownership oracle.
+Existing sessions remain usable.
 The client address comes from the server's trusted proxy handling, never an
 unchecked request header. These limits do not authorize deleting unused identities.
 
@@ -69,6 +73,11 @@ Account locks, including when those identities differ.
 Explicit advancement replacements and new rating inputs require an active actor
 under a lifecycle-conflicting Account lock. Existing decisions and rating inputs
 retain their original actor through later lifecycle changes.
+Standalone match creators, non-null draw creators, and newly recorded competition
+withdrawal, restoration, and participation-ending actors have the same SQL admission
+check. Automatic match materialization retains the tournament owner's attribution
+through immutable sourced rules; it does not require that historical owner to act
+again. Null system draw and participation actions remain supported.
 Rated match creation holds an active opponent manager Account and its primary grant
 through admission. Existing consent remains immutable historical evidence through
 suspension and erasure.

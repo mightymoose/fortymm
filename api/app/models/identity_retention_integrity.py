@@ -7,6 +7,25 @@ from app.db import Base
 
 IDENTITY_RETENTION_DDL = (
     """
+    CREATE FUNCTION guard_standalone_match_creator() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    DECLARE actor accounts%ROWTYPE;
+    BEGIN
+        -- A materialized tournament match attributes its historical owner;
+        -- immutable rule provenance separately requires its matching fixture.
+        IF EXISTS (SELECT 1 FROM match_settings WHERE id=NEW.match_settings_id
+            AND source_rule_revision_id IS NOT NULL) THEN RETURN NEW; END IF;
+        SELECT * INTO actor FROM accounts WHERE id=NEW.created_by_user_id FOR SHARE;
+        IF NOT FOUND OR actor.merged_at IS NOT NULL
+            OR actor.deactivated_at IS NOT NULL OR actor.erased_at IS NOT NULL THEN
+            RAISE EXCEPTION 'match creator must be active' USING ERRCODE='23514';
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """CREATE TRIGGER guard_standalone_match_creator BEFORE INSERT ON matches
+    FOR EACH ROW EXECUTE FUNCTION guard_standalone_match_creator()""",
+    """
     CREATE FUNCTION preserve_retired_username() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN
         IF (OLD.retired_at IS NOT NULL OR NEW.retired_at IS NOT NULL)

@@ -202,20 +202,37 @@ DRAW_HISTORY_INTEGRITY_DDL = (
         END IF;
         RETURN OLD;
         END IF;
-        IF (NEW.id, NEW.event_id, NEW.entry_id, NEW.stage_id, NEW.group_id,
+        IF TG_OP = 'UPDATE' AND ((NEW.id, NEW.event_id, NEW.entry_id, NEW.stage_id,
+        NEW.group_id,
         NEW.started_at, NEW.draw_revision_id)
         IS DISTINCT FROM
         (OLD.id, OLD.event_id, OLD.entry_id, OLD.stage_id, OLD.group_id, OLD.started_at,
         OLD.draw_revision_id)
-        OR (OLD.ended_at IS NOT NULL AND NEW IS DISTINCT FROM OLD)
+        OR (OLD.ended_at IS NOT NULL AND NEW IS DISTINCT FROM OLD))
         THEN
         RAISE EXCEPTION 'participation history is immutable' USING ERRCODE = '23514' ;
+        END IF;
+        IF NEW.ended_at IS NOT NULL AND NEW.ended_by_account_id IS NOT NULL
+            AND (TG_OP = 'INSERT' OR OLD.ended_at IS NULL) THEN
+            BEGIN
+                PERFORM id FROM accounts WHERE id = NEW.ended_by_account_id
+                    FOR SHARE NOWAIT;
+            EXCEPTION WHEN lock_not_available THEN
+                RAISE EXCEPTION 'participation actor is changing; retry'
+                    USING ERRCODE = '40001';
+            END;
+            IF NOT EXISTS (SELECT 1 FROM accounts WHERE id = NEW.ended_by_account_id
+                AND merged_at IS NULL AND deactivated_at IS NULL
+                AND erased_at IS NULL) THEN
+                RAISE EXCEPTION 'participation actor must be active'
+                    USING ERRCODE = '23514';
+            END IF;
         END IF;
         RETURN NEW;
         END $$
         """,
     """
-        CREATE TRIGGER preserve_participation_history BEFORE UPDATE OR DELETE
+        CREATE TRIGGER preserve_participation_history BEFORE INSERT OR UPDATE OR DELETE
         ON tournament_entry_participations FOR EACH ROW
         EXECUTE FUNCTION preserve_participation_history()
         """,
@@ -480,8 +497,23 @@ DRAW_HISTORY_INTEGRITY_DDL = (
     """
         CREATE FUNCTION lock_draw_history_parent() RETURNS trigger
         LANGUAGE plpgsql AS $$
-        DECLARE event_uuid uuid; previous_event_uuid uuid;
+        DECLARE event_uuid uuid; previous_event_uuid uuid; actor_row record;
         BEGIN
+        IF TG_TABLE_NAME = 'tournament_draw_revisions' AND TG_OP = 'INSERT' THEN
+        BEGIN
+        FOR actor_row IN SELECT id, merged_at, deactivated_at, erased_at
+        FROM accounts WHERE id=NEW.created_by_account_id FOR SHARE NOWAIT
+        LOOP
+        IF actor_row.merged_at IS NOT NULL OR actor_row.deactivated_at IS NOT NULL
+            OR actor_row.erased_at IS NOT NULL THEN
+        RAISE EXCEPTION 'draw revision creator must be active' USING ERRCODE='23514';
+        END IF;
+        END LOOP;
+        EXCEPTION WHEN lock_not_available THEN
+        RAISE EXCEPTION 'draw revision creator requires account lock; retry'
+        USING ERRCODE='40001';
+        END;
+        END IF;
         IF TG_TABLE_NAME = 'tournament_fixtures' THEN
         SELECT event_id INTO event_uuid FROM tournament_event_stages
         WHERE id=NEW.stage_id;
@@ -527,6 +559,7 @@ DRAW_HISTORY_INTEGRITY_DDL = (
     """
         CREATE FUNCTION preserve_competition_withdrawal_history() RETURNS trigger
         LANGUAGE plpgsql AS $$
+        DECLARE actor_ids uuid[];
         BEGIN
         IF TG_OP= 'DELETE' THEN
         IF EXISTS (SELECT 1 FROM tournament_events WHERE id=OLD.event_id) THEN
@@ -534,19 +567,45 @@ DRAW_HISTORY_INTEGRITY_DDL = (
         END IF;
         RETURN OLD;
         END IF;
-        IF (NEW.id,NEW.event_id,NEW.entry_id,NEW.stage_id,NEW.actor_account_id,
+        IF TG_OP = 'UPDATE' AND ((NEW.id,NEW.event_id,NEW.entry_id,NEW.stage_id,
+        NEW.actor_account_id,
         NEW.reason,NEW.explanation,NEW.withdrawn_at) IS DISTINCT FROM
         (OLD.id,OLD.event_id,OLD.entry_id,OLD.stage_id,OLD.actor_account_id,
         OLD.reason,OLD.explanation,OLD.withdrawn_at)
-        OR (OLD.restored_at IS NOT NULL AND NEW IS DISTINCT FROM OLD)
+        OR (OLD.restored_at IS NOT NULL AND NEW IS DISTINCT FROM OLD))
         THEN
         RAISE EXCEPTION 'withdrawal history is immutable' USING ERRCODE= '23514' ;
+        END IF;
+        IF TG_OP = 'INSERT' THEN
+            actor_ids := ARRAY[NEW.actor_account_id, NEW.restored_by_account_id];
+        ELSIF OLD.restored_at IS NULL AND NEW.restored_at IS NOT NULL THEN
+            actor_ids := ARRAY[NEW.restored_by_account_id];
+        ELSE
+            -- An unchanged historical actor is not a fresh decision.
+            actor_ids := ARRAY[]::uuid[];
+        END IF;
+        BEGIN
+            PERFORM id FROM accounts WHERE id = ANY(actor_ids)
+                ORDER BY id FOR SHARE NOWAIT;
+        EXCEPTION WHEN lock_not_available THEN
+            RAISE EXCEPTION 'withdrawal actor is changing; retry'
+                USING ERRCODE = '40001';
+        END;
+        IF EXISTS (
+            SELECT 1 FROM unnest(actor_ids) AS candidate(id)
+            LEFT JOIN accounts a ON a.id = candidate.id
+            WHERE candidate.id IS NOT NULL AND (a.id IS NULL
+                OR a.merged_at IS NOT NULL OR a.deactivated_at IS NOT NULL
+                OR a.erased_at IS NOT NULL)
+        ) THEN
+            RAISE EXCEPTION 'withdrawal actor must be active' USING ERRCODE = '23514';
         END IF;
         RETURN NEW;
         END $$
         """,
     """
-        CREATE TRIGGER preserve_competition_withdrawal_history BEFORE UPDATE OR DELETE
+        CREATE TRIGGER preserve_competition_withdrawal_history
+        BEFORE INSERT OR UPDATE OR DELETE
         ON tournament_entry_withdrawals FOR EACH ROW
         EXECUTE FUNCTION preserve_competition_withdrawal_history()
         """,

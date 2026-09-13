@@ -366,27 +366,30 @@ def _client_ip(request: Request) -> str:
     return client.host if client else "unknown"
 
 
-async def _admit_identity_creation(request: Request) -> None:
+async def _identity_creation_retry_after(request: Request) -> int | None:
     settings = get_settings()
-    client_ip = _client_ip(request)
     try:
-        retry_after = await identity_creation_retry_after(
-            client_ip,
+        return await identity_creation_retry_after(
+            _client_ip(request),
             hourly_limit=settings.guest_creation_ip_limit_per_hour,
             daily_limit=settings.guest_creation_ip_limit_per_day,
         )
-        if retry_after is not None:
-            raise HTTPException(
-                status_code=429,
-                detail="Too many identity requests. Try again later.",
-                headers={"Retry-After": str(retry_after)},
-            )
     except RateLimitUnavailable as error:
         raise HTTPException(
             status_code=503,
             detail="Identity admission is temporarily unavailable.",
             headers={"Retry-After": "5"},
         ) from error
+
+
+async def _admit_identity_creation(request: Request) -> None:
+    retry_after = await _identity_creation_retry_after(request)
+    if retry_after is not None:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many identity requests. Try again later.",
+            headers={"Retry-After": str(retry_after)},
+        )
 
 
 async def _email_rate_limit_key(request: Request) -> str:
@@ -1627,8 +1630,11 @@ async def request_login_email(
     """Mint a magic-link sign-in token and email it.
 
     **Both admitted branches send the same email and return the same 202.**
-    Shared identity admission is checked before address lookup, so exhaustion
-    or unavailable Redis refuses existing and unknown addresses identically.
+    Shared identity admission is checked before address lookup. Unavailable
+    Redis refuses every address identically. Exhaustion silently skips only new
+    identity allocation: existing recipients still receive their sign-in link,
+    and every address receives the same email-only 202 response, including an
+    enqueue failure on that exhausted-budget branch.
     An address that already has an account gets a link for that account. An
     address with no account gets one for a user this endpoint mints on the spot,
     whose ``email`` stays NULL until the link is clicked — so the sign-in link,
@@ -1657,18 +1663,29 @@ async def request_login_email(
 
     await _verify_captcha_or_400(payload.captcha_token)
 
-    await _admit_identity_creation(request)
-    user, first_sign_in = await resolve_login_recipient(db, email)
-    if not user.is_active:
+    # Budget availability is checked uniformly, before learning ownership.
+    # Exhaustion blocks only allocation: a shared venue IP must not prevent
+    # existing accounts (or pending recipients) from signing in.
+    allow_create = await _identity_creation_retry_after(request) is None
+    user, first_sign_in = await resolve_login_recipient(
+        db, email, allow_create=allow_create
+    )
+    if user is None or not user.is_active:
         return LoginRequestAccepted(email=email)
     guest_id = await _requesting_guest_id(db, session_cookie, target=user)
-    await _issue_and_send_login_email(
-        db,
-        user,
-        email,
-        merge_from_guest_id=guest_id,
-        first_sign_in=first_sign_in,
-    )
+    try:
+        await _issue_and_send_login_email(
+            db,
+            user,
+            email,
+            merge_from_guest_id=guest_id,
+            first_sign_in=first_sign_in,
+        )
+    except _LoginEmailUnavailable:
+        if allow_create:
+            raise
+        # Unknown addresses already skip allocation with the same 202. Do not
+        # turn a queue failure for an existing recipient into an ownership oracle.
     return LoginRequestAccepted(email=email)
 
 
@@ -1689,6 +1706,16 @@ async def _requesting_guest_id(
     ):
         return None
     return requester.id
+
+
+class _LoginEmailUnavailable(HTTPException):
+    """An enqueue failure after rolling back the login credential transaction."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Email service unavailable. Try again in a moment.",
+        )
 
 
 async def _issue_and_send_login_email(
@@ -1715,10 +1742,7 @@ async def _issue_and_send_login_email(
         job = _enqueue_login_email(email, raw_token, user.username)
     except Exception:
         await db.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Email service unavailable. Try again in a moment.",
-        ) from None
+        raise _LoginEmailUnavailable() from None
     try:
         await db.commit()
     except Exception:
