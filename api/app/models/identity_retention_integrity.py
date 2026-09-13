@@ -9,7 +9,7 @@ IDENTITY_RETENTION_DDL = (
     """
     CREATE FUNCTION preserve_retired_username() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN
-        IF OLD.retired_at IS NOT NULL
+        IF (OLD.retired_at IS NOT NULL OR NEW.retired_at IS NOT NULL)
             AND NEW.username IS DISTINCT FROM OLD.username THEN
             RAISE EXCEPTION 'retired Player username remains reserved'
                 USING ERRCODE='23514';

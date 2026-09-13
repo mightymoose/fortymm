@@ -230,6 +230,10 @@ struct TournamentEventDTO: Decodable, Identifiable {
     }
     var formatLabel: String { drawType.replacingOccurrences(of: "-", with: " ").capitalized }
     var capacityLabel: String { maxPlayers.map { "\(entryCount)/\($0) players" } ?? TournamentCopy.count(entryCount, "player") }
+    var rosterEmptyMessage: String? {
+        guard entrants.isEmpty else { return nil }
+        return entryCount == 0 ? "No players entered yet." : "No active players to display."
+    }
     func entry(for userId: UUID?) -> Entrant? {
         historicalEntrants.first { $0.userId == userId }
     }

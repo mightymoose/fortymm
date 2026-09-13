@@ -77,6 +77,7 @@ type RosterState =
       myEntryId: string | null
     }
   | { kind: 'empty' }
+  | { kind: 'hidden-entries' }
   | { kind: 'entry-closed'; formatLabel: string }
 
 function rosterState(
@@ -112,6 +113,7 @@ function rosterState(
       myEntryId: mine?.id ?? null,
     }
   }
+  if (event.entered > 0) return { kind: 'hidden-entries' }
   if (event.format !== 'singles') {
     const formatLabel =
       FORMAT_OPTIONS.find((f) => f.value === event.format)?.label ?? event.format
@@ -253,6 +255,13 @@ const RosterBody = ({
             </li>
           )}
         </ul>
+      )
+
+    case 'hidden-entries':
+      return (
+        <p className="mt-1.5 text-[12px] text-[color:var(--fg-3)]">
+          No active players to display.
+        </p>
       )
 
     case 'empty':

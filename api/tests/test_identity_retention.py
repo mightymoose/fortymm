@@ -934,3 +934,198 @@ async def test_confirmation_refreshes_activity_after_waiting_for_deactivation(
         await db_session.scalar(text("SELECT count(*) FROM account_session_tokens"))
         == 0
     )
+
+
+@pytest.mark.parametrize("initially_retired", [False, True])
+async def test_retirement_transition_cannot_release_username(
+    db_session, initially_retired
+):
+    from app.identity_lifecycle import retire_player
+
+    player = Player(username="transition-reserved")
+    db_session.add(player)
+    await db_session.commit()
+    if initially_retired:
+        await retire_player(db_session, player.id)
+        await db_session.commit()
+    with pytest.raises(IntegrityError, match="reserved"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "UPDATE players SET username='released', retired_at="
+                    + ("NULL" if initially_retired else "clock_timestamp()")
+                    + " WHERE id=:id"
+                ),
+                {"id": player.id},
+            )
+
+
+async def test_set_email_refreshes_activity_after_deactivation(db_session, engine):
+    from fastapi import HTTPException
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.identity_lifecycle import deactivate_account, reactivate_account
+    from app.sessions import SetEmailRequest, set_email
+    from tests._helpers import make_user
+
+    actor = await make_user(db_session, "stale-email-writer")
+    await db_session.commit()
+    async with async_sessionmaker(engine)() as other:
+        await deactivate_account(other, actor.id)
+        await other.commit()
+    with pytest.raises(HTTPException) as error:
+        await set_email(
+            SetEmailRequest(email="late@example.com", captcha_token="test-token"),
+            db_session,
+            actor,
+        )
+    assert error.value.status_code == 401
+    actor_id = actor.id
+    await db_session.rollback()
+    await reactivate_account(db_session, actor_id)
+    await db_session.commit()
+    assert (
+        await db_session.scalar(text("SELECT count(*) FROM account_email_tokens")) == 0
+    )
+    assert (
+        await db_session.scalar(text("SELECT count(*) FROM account_email_intents")) == 0
+    )
+
+
+@pytest.mark.parametrize("fresh_request", [False, True])
+async def test_multihop_merge_keeps_held_entry_identifiable_and_withdrawable(
+    api_client, db_session, fresh_request
+):
+    from app.account_merge import merge_user
+    from app.tournament_queries import active_entrants_by_event
+    from app.tournament_serialization import serialize_event
+    from tests._helpers import make_user, start_session
+    from tests.test_tournament_entries import _entries_url, _make_event
+
+    target = await start_session(api_client, db_session)
+    source = await make_user(db_session, "held-original")
+    middle = await make_user(db_session, "held-middle")
+    event = await _make_event(db_session)
+    from app.tournament_entries import enter_event
+
+    entered = await enter_event(
+        db_session,
+        tournament_id=event.tournament_id,
+        event_id=event.id,
+        actor=source,
+        user_id=None,
+    )
+    await db_session.commit()
+    original_player_id = source.player_id
+    await merge_user(db_session, from_user_id=source.id, to_user_id=middle.id)
+    await db_session.commit()
+    await merge_user(db_session, from_user_id=middle.id, to_user_id=target.id)
+    await db_session.commit()
+    entrants = (await active_entrants_by_event(db_session, [event.id]))[event.id]
+    serialized = serialize_event(
+        event, entrants=entrants, fixtures=[], rating=None, game_counts=None
+    )
+    assert serialized.entered == 1
+    assert serialized.entrants[0].user_id == target.player_id
+    assert serialized.entrants[0].username == target.username
+    assert serialized.retained_entrants == []
+    assert (
+        await db_session.scalar(
+            text("SELECT player_id FROM tournament_entry_members WHERE entry_id=:id"),
+            {"id": entered.id},
+        )
+        == original_player_id
+    )
+    withdrawal_url = f"{_entries_url(event)}/{entered.id}"
+    if fresh_request:
+        db_session.expunge_all()
+    response = await api_client.delete(withdrawal_url)
+    assert response.status_code == 204, response.text
+
+
+async def test_set_email_cannot_queue_merge_into_inactive_target(
+    api_client, db_session
+):
+    from app.identity_lifecycle import deactivate_account, reactivate_account
+    from tests._helpers import make_user, start_session
+    from tests.test_email import _set_email
+
+    await start_session(api_client, db_session)
+    target = await make_user(db_session, "inactive-merge-destination")
+    target.email = "inactive-destination@example.com"
+    await db_session.commit()
+    await deactivate_account(db_session, target.id)
+    await db_session.commit()
+    response = await _set_email(api_client, email=target.email)
+    assert response.status_code == 202, response.text
+    await reactivate_account(db_session, target.id)
+    await db_session.commit()
+    assert (
+        await db_session.scalar(text("SELECT count(*) FROM account_email_tokens")) == 0
+    )
+    assert (
+        await db_session.scalar(text("SELECT count(*) FROM account_email_intents")) == 0
+    )
+
+
+@pytest.mark.parametrize("inactive_role", ["owner", "target"])
+async def test_set_email_waits_for_deactivation_before_issuing_credential(
+    db_session, engine, inactive_role
+):
+    import asyncio
+
+    from fastapi import HTTPException
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.identity_lifecycle import deactivate_account, reactivate_account
+    from app.sessions import SetEmailRequest, set_email
+    from tests._helpers import make_user
+
+    actor = await make_user(db_session, "queued-email-owner")
+    target = await make_user(db_session, "queued-email-target")
+    target.email = "queued-target@example.com"
+    await db_session.commit()
+    inactive_id = actor.id if inactive_role == "owner" else target.id
+    request_pid = await db_session.scalar(text("SELECT pg_backend_pid()"))
+    async with async_sessionmaker(engine)() as deactivator:
+        deactivate_pid = await deactivator.scalar(text("SELECT pg_backend_pid()"))
+        await deactivate_account(deactivator, inactive_id)
+        attempt = asyncio.create_task(
+            set_email(
+                SetEmailRequest(email=target.email, captcha_token="test-token"),
+                db_session,
+                actor,
+            )
+        )
+        try:
+            async with asyncio.timeout(5):
+                while deactivate_pid not in (
+                    await deactivator.scalar(
+                        text("SELECT pg_blocking_pids(:pid)"), {"pid": request_pid}
+                    )
+                ):
+                    if attempt.done():
+                        pytest.fail(
+                            "email writer did not wait for Account deactivation"
+                        )
+                    await asyncio.sleep(0.01)
+            await deactivator.commit()
+            if inactive_role == "owner":
+                with pytest.raises(HTTPException) as error:
+                    await attempt
+                assert error.value.status_code == 401
+            else:
+                await attempt
+        finally:
+            if not attempt.done():
+                attempt.cancel()
+                await asyncio.gather(attempt, return_exceptions=True)
+    await db_session.rollback()
+    await reactivate_account(db_session, inactive_id)
+    await db_session.commit()
+    assert (
+        await db_session.scalar(text("SELECT count(*) FROM account_email_tokens")) == 0
+    )
+    assert (
+        await db_session.scalar(text("SELECT count(*) FROM account_email_intents")) == 0
+    )

@@ -122,6 +122,17 @@ private final class TestLocationManager: CLLocationManager {
         precondition(legacyOrdered.historicalEntrants.map(\.username) == ["later", "alex"], "Legacy responses must preserve their existing stable order")
         TournamentTransport.body = activeBody
         print("PASS: retained self-entry withdrawal and stable historical registration order")
+        precondition(retained.rosterEmptyMessage == "No active players to display.", "Hidden held registrations must not be described as zero entries")
+        precondition(event.rosterEmptyMessage == nil, "A visible roster needs no empty-state notice")
+        var emptyEvent = retainedEvent
+        emptyEvent["entered"] = 0
+        emptyEvent["retained_entrants"] = [] as [[String: Any]]
+        retainedPayload[0]["events"] = [emptyEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: retainedPayload), encoding: .utf8)!
+        let empty = try await service.list()[0].events[0]
+        precondition(empty.rosterEmptyMessage == "No players entered yet.")
+        TournamentTransport.body = activeBody
+        print("PASS: empty roster copy distinguishes held hidden registrations from no entries")
         var roundTwoFailures: [String] = []
         if event.fixtureHeading(event.fixtures[0]) != "Round 1" { roundTwoFailures.append("Swiss fixtures show a structural group") }
         if TournamentCopy.entryFee("45.005", locale: Locale(identifier: "en_US")) != nil { roundTwoFailures.append("sub-cent fee admitted") }

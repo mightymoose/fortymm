@@ -28,7 +28,7 @@ struct TournamentEventView: View {
                     switch section {
                     case .players:
                         Text(event.capacityLabel).font(FMFont.ui(14, weight: .semibold))
-                        if event.entrants.isEmpty { TournamentNotice(message: "No players entered yet.") }
+                        if let message = event.rosterEmptyMessage { TournamentNotice(message: message) }
                         ForEach(event.entrants) { entrant in
                             FMCard {
                                 HStack {

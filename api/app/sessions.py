@@ -987,7 +987,7 @@ def _enqueue_merge_email(to_email: str, raw_token: str, username: str) -> Job:
 
 
 async def _begin_account_merge(
-    db: AsyncSession, guest: User, email: str
+    db: AsyncSession, guest: User, email: str, locked_target_id: uuid.UUID | None
 ) -> SessionResponse:
     """Issue a merge token for an ephemeral ``guest`` who entered an address
     owned by an existing account, and email that account a sign-in link.
@@ -999,9 +999,14 @@ async def _begin_account_merge(
     target = (
         await db.execute(select(User).where(User.email == email))
     ).scalar_one_or_none()
-    if target is None or target.id == guest.id:
+    if (
+        target is None
+        or target.id != locked_target_id
+        or target.id == guest.id
+        or not target.is_active
+    ):
         # Lost the race (the owner just changed their address out from under
-        # us) or, impossibly, our own row — nothing to merge into.
+        # us), became inactive, or is our own row — nothing to merge into.
         return await _build_session_response(db, guest)
 
     raw_token = await _issue_confirmation_token(
@@ -1051,10 +1056,18 @@ async def set_email(
 
     await _verify_captcha_or_400(payload.captcha_token)
 
-    await lock_accounts(db, {current_user.id})
+    email = payload.email.lower()
+    # Resolve the possible destination before taking any Account lock. Opposed
+    # merge requests must acquire the same complete lock set in UUID order.
+    target_id = await db.scalar(select(User.id).where(User.email == email))
+    account_ids = {current_user.id}
+    if target_id is not None:
+        account_ids.add(target_id)
+    await lock_accounts(db, account_ids)
     if current_user.merged_into_user_id is not None:
         raise await _merged_session_exception(db, current_user)
-    email = payload.email.lower()
+    if not current_user.is_active:
+        raise _session_ended_exception()
     old_email = current_user.email
     if old_email == email and current_user.confirmed_at is not None:
         return await _build_session_response(db, current_user)
@@ -1074,7 +1087,7 @@ async def set_email(
         # not merging — silently absorbing their account into someone else's
         # would be data loss, so keep the enumeration-safe no-op for them.
         if current_user.confirmed_at is None:
-            return await _begin_account_merge(db, current_user, email)
+            return await _begin_account_merge(db, current_user, email, target_id)
         return await _build_session_response(db, current_user)
 
     raw_token = await _issue_confirmation_token(
