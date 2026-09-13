@@ -57,6 +57,7 @@ from app.models import (
     TournamentEvent,
     TournamentFixture,
 )
+from app.models.tournament import EventLifecycleState
 from app.tournament_draws import (
     fixture_state,
     group_order,
@@ -153,6 +154,8 @@ async def materialize_event(
     declares it, so the other three still cost exactly
     the one fixture statement they always cost.
     """
+    if event.lifecycle_state is EventLifecycleState.cancelled:
+        return
     (
         fixtures,
         completed_match_ids,

@@ -386,10 +386,12 @@ async def _merge_players(
     # Advance only after the sporting identity is reconciled: a newly ready
     # fixture must materialize against the merged Player, not the old identity.
     if collided_matches:
+        from app.event_lifecycle import reconcile_match_event
         from app.tournament_advancement import on_match_completed
 
         for match in collided_matches:
             await on_match_completed(db, match)
+            await reconcile_match_event(db, match.id)
     # A voided rated collision was dropped by the belt-and-braces delete above
     # (its guest MatchSidePlayer was never re-pointed), so it got added into
     # `matches_moved`. But we just voided it — it no longer counts. Subtract the
@@ -961,6 +963,12 @@ async def _resolve_entry_collisions(
     # Retire only unplayed draws whose active field changed. The shared operation
     # preserves the previous revision, fixtures and ended participation periods.
     await uncut_draw(db, unplayed_event_ids)
+    # Active registration is also a Swiss result input, even when a retained
+    # played draw needs no new pairing or schedule placement.
+    from app.event_lifecycle import reconcile_event
+
+    for event_id in sorted(collided_event_ids - unplayed_event_ids):
+        await reconcile_event(db, event_id)
 
     # The uncut arm's solve gate, AFTER the un-cut — uncut_event_draw's
     # doctrine: the former draw was retired, which frees this event's

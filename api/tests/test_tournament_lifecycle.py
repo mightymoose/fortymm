@@ -660,7 +660,7 @@ async def _make_tournament_at(
         tables=venue_tables(("Table 1", "A"), ("Table 2", "A")),
         league_id=league.id,
         created_by_user_id=owner.id,
-        status=status,
+        status=TournamentStatus.draft if with_event else status,
     )
     db.add(tournament)
     await db.flush()
@@ -693,6 +693,7 @@ async def _make_tournament_at(
         )
         db.add(event)
         await db.flush()
+    tournament.status = status
     await db.commit()
     await db.refresh(tournament)
     return tournament

@@ -381,6 +381,9 @@ async def test_a_draw_advancing_hints_the_whole_event_not_only_the_two_who_playe
 
     async with watch_hints(realtime_broker, *field.everyone) as watch:
         await on_match_completed(db_session, match)
+        from app.event_lifecycle import reconcile_match_event
+
+        await reconcile_match_event(db_session, match.id)
         await db_session.commit()
         hints = await watch.collect()
 

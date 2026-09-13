@@ -146,5 +146,6 @@ to calls without play. The existing
 [official-result](20260911-official-results-have-immutable-revisions.md),
 [rating-input](20260911-rating-inputs-outlive-rebuildable-projections.md), and
 [advancement](20260912-advancement-decisions-retain-their-result-evidence.md)
-protections remain in force. Event lifecycle and archive history in #1688 must
-retain their parent identities under the same matrix.
+protections remain in force. [Event progress and archive history](20260912-event-progress-is-independent-of-tournament-publication.md)
+retain their parent identities under the same matrix. Lifecycle transitions, recorded-game
+evidence, cancellation and reconciliation receipts survive publication and archive changes.

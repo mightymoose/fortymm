@@ -646,11 +646,13 @@ class FixturePlacementFrozenError(Exception):
     longer be changed."``, via ``str(exc)``) and the MCP tool its equivalent
     ``ToolError`` prose. Never an ``HTTPException``."""
 
-    def __init__(self, match_status: str) -> None:
-        super().__init__(
-            f"This fixture's match is already {match_status}, so its placement can "
-            "no longer be changed."
+    def __init__(self, match_status: str, *, event_cancelled: bool = False) -> None:
+        subject = (
+            "This fixture's event is cancelled"
+            if event_cancelled
+            else f"This fixture's match is already {match_status}"
         )
+        super().__init__(f"{subject}, so its placement can no longer be changed.")
         self.match_status = match_status
 
 
@@ -769,6 +771,20 @@ class InactiveTournamentActorError(Exception):
 
     def __init__(self) -> None:
         super().__init__("This account is no longer active. Refresh your session.")
+
+
+class TournamentArchivedError(Exception):
+    """An archived tournament cannot acquire additional event composition."""
+
+    def __init__(self) -> None:
+        super().__init__("An archived tournament cannot accept new events.")
+
+
+class EventCancelledError(Exception):
+    """Cancellation freezes event configuration while retaining sporting records."""
+
+    def __init__(self) -> None:
+        super().__init__("A cancelled event cannot be edited.")
 
 
 class MatchRulesFrozenError(Exception):

@@ -141,6 +141,7 @@ from app.models import (
     VenueTableOutage,
 )
 from app.models.draw_type import StageDrawType
+from app.models.tournament import EventLifecycleState
 from app.notifications.match_calls import (
     MATCH_CALLS_CATEGORY,
     MatchCallCancellationReason,
@@ -393,8 +394,10 @@ async def _held_resources(
     stmt = (
         select(TournamentFixture)
         .join(Match, Match.id == TournamentFixture.match_id)
+        .join(TournamentEvent, TournamentEvent.id == TournamentFixture.scope_event_id)
         .where(
             TournamentFixture.stage_id.in_(stage_ids_for_tournament(tournament_id)),
+            TournamentEvent.lifecycle_state != EventLifecycleState.cancelled,
             Match.status == MatchStatus.in_progress,
         )
     )
@@ -461,7 +464,20 @@ async def call_due_fixtures(
     if tournament.status is not TournamentStatus.live:
         return []
 
-    due = [fixture for fixture in fixtures if _due_for_call(fixture, now)]
+    cancelled_event_ids = set(
+        await db.scalars(
+            select(TournamentEvent.id).where(
+                TournamentEvent.tournament_id == tournament.id,
+                TournamentEvent.lifecycle_state == EventLifecycleState.cancelled,
+            )
+        )
+    )
+    due = [
+        fixture
+        for fixture in fixtures
+        if fixture.scope_event_id not in cancelled_event_ids
+        and _due_for_call(fixture, now)
+    ]
     if not due:
         return []
 

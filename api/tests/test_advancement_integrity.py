@@ -1,5 +1,6 @@
 """Raw SQL advancement invariants on both ORM and fresh Alembic schemas."""
 
+from app.event_lifecycle import reconcile_event
 from app.models import TournamentFixture
 from app.result_proposal import propose_result
 from tests._advancement_seeds import seed_knockout_advancement as knockout
@@ -54,6 +55,7 @@ async def test_sql_cannot_commit_a_decision_without_its_required_evidence(db_ses
         entry_a_id=source.entry_a_id,
     )
     db_session.add(other_target)
+    await reconcile_event(db_session, source.scope_event_id)
     await db_session.commit()
     with pytest.raises(IntegrityError, match="evidence"):
         async with db_session.begin_nested():
@@ -112,6 +114,7 @@ async def test_sql_rejects_source_from_another_event(db_session):
         entry_a_id=source.entry_a_id,
     )
     db_session.add(other_target)
+    await reconcile_event(db_session, source.scope_event_id)
     await db_session.commit()
     with pytest.raises(IntegrityError, match="advancement.*source"):
         async with db_session.begin_nested():

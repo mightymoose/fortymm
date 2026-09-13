@@ -449,6 +449,9 @@ async def fixtures_by_event(
             .join(TournamentEvent, TournamentEvent.id == TournamentEventStage.event_id)
             .outerjoin(Match, Match.id == TournamentFixture.match_id)
             .where(TournamentEventStage.event_id.in_(fixtures.keys()))
+            # Reconciliation also follows raw SQL attachments. Refresh an existing
+            # identity-map fixture so its match_id agrees with the live joined status.
+            .execution_options(populate_existing=True)
             .options(contains_eager(TournamentFixture.stage))
             .order_by(
                 TournamentEventStage.position,

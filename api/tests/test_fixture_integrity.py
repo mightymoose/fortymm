@@ -131,6 +131,9 @@ async def test_recorded_play_freezes_fixture_ownership(db_session, change):
     await db_session.execute(
         text("UPDATE matches SET status = 'voided' WHERE id = :id"), {"id": match.id}
     )
+    from app.event_lifecycle import reconcile_match_event
+
+    await reconcile_match_event(db_session, match.id)
     await db_session.commit()
     with pytest.raises(IntegrityError, match="recorded match fixture must be retained"):
         async with db_session.begin_nested():

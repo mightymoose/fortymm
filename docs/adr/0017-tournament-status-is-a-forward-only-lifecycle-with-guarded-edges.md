@@ -6,6 +6,12 @@ Date: 2026-07-11
 
 Accepted
 
+The identification of this lifecycle with event progress and registration
+permission is amended by
+[Event progress is independent of tournament publication](20260912-event-progress-is-independent-of-tournament-publication.md).
+The existing public edges and tournament-wide registration window remain;
+archive preserves event progress and prevents hard deletion.
+
 ## Context
 
 A tournament carries a `status` of `draft`, `published`, `live`, or `archived`.

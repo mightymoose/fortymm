@@ -1029,6 +1029,10 @@ async def cut_draw(
             )
         )
 
+    from app.event_lifecycle import reconcile_event
+
+    await reconcile_event(db, event.id)
+
 
 def _stage_id_at(stage_ids: Mapping[int, uuid.UUID], position: int) -> uuid.UUID:
     """The id of this event's stage at ``position``, or a loud failure — never a
@@ -1119,3 +1123,7 @@ async def uncut_draw(db: AsyncSession, event_ids: Collection[uuid.UUID]) -> None
         .values(retired_at=func.clock_timestamp())
     )
     await archive_stage_configuration(db, event_ids)
+    from app.event_lifecycle import reconcile_event
+
+    for event_id in sorted(event_ids):
+        await reconcile_event(db, event_id)

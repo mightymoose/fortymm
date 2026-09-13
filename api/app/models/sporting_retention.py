@@ -49,22 +49,6 @@ class MatchRecordedParticipant(Base):
 
 SPORTING_RETENTION_DDL = (
     """
-    CREATE FUNCTION preserve_recorded_score_identity() RETURNS trigger
-    LANGUAGE plpgsql AS $$
-    BEGIN
-        IF NEW.match_game_id <> OLD.match_game_id THEN
-            RAISE EXCEPTION 'a recorded score preserves its game identity'
-                USING ERRCODE='23514';
-        END IF;
-        RETURN NEW;
-    END $$
-    """,
-    """
-    CREATE TRIGGER preserve_recorded_score_identity BEFORE UPDATE
-    ON match_game_scores FOR EACH ROW
-    EXECUTE FUNCTION preserve_recorded_score_identity()
-    """,
-    """
     CREATE FUNCTION preserve_published_tournament() RETURNS trigger
     LANGUAGE plpgsql AS $$
     BEGIN

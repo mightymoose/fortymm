@@ -521,6 +521,10 @@ async def _mark_completed(
             db, fixture, status=MatchStatus.completed, completed_at=completed_at
         )
     fixture.winner_entry_id = entry_a_id
+    if with_match:
+        from app.event_lifecycle import reconcile_event
+
+        await reconcile_event(db, fixture.scope_event_id)
     await db.commit()
     return await _fixture_user_ids(db, entry_a_id, entry_b_id)
 

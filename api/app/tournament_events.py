@@ -38,9 +38,11 @@ from app.models import (
     TournamentEvent,
     TournamentEventReservation,
     TournamentFixture,
+    TournamentStatus,
     User,
     VenueTable,
 )
+from app.models.tournament import EventLifecycleState
 from app.schedule_preview import preview_field_size
 from app.schedule_solves import request_solve
 from app.schemas.tournament import (
@@ -75,11 +77,13 @@ from app.tournament_draws import (
 from app.tournament_edit import _load_owned_tournament_for_update
 from app.tournament_errors import (
     DrawTypeFrozenError,
+    EventCancelledError,
     EventFormatMembershipError,
     EventNotFoundError,
     EventVersionConflictError,
     GroupSetFrozenError,
     MatchRulesFrozenError,
+    TournamentArchivedError,
 )
 from app.tournament_event_stages import mint_stages, remint_stages_in_place
 from app.tournament_queries import stage_ids_for_events
@@ -159,6 +163,8 @@ async def create_event(
     it is judged on, ADR-0783) without re-querying the column the verb just loaded.
     """
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
+    if tournament.status is TournamentStatus.archived:
+        raise TournamentArchivedError()
     # The event's stages, also ROWS (ADR 20260815) and also created with the event in
     # this same transaction — every event holds its minted stages from the moment it
     # exists, never as a follow-up write. ``mint_stages`` reads the template straight
@@ -266,9 +272,10 @@ async def delete_event(
     * **404** — an event id that names no event under this tournament (a mismatched
       pair included) raises :class:`EventNotFoundError`.
 
-    Recorded actual play prevents deletion. An unplayed event can still be deleted
-    regardless of publication or draw state. Never raises ``HTTPException`` — the
-    caller adapts each domain exception to its transport.
+    Recorded play and event lifecycle history prevent deletion. An unplayed,
+    unstarted event without retained history can still be deleted.
+    Never raises ``HTTPException`` — the caller adapts each domain exception to its
+    transport.
 
     Draw settings are inline event values and disappear with this row, including
     when the event is deleted by a database cascade.
@@ -997,6 +1004,9 @@ async def update_event(
       and under the same row lock, so a write built on a superseded read is refused
       before any other gate can blame a field the caller never edited, and nothing is
       written. Every accepted update moves the token on by one.
+    * **409** — a cancelled event raises :class:`EventCancelledError`; its retained
+      configuration and placements cannot be edited. Score/result corrections use
+      their dedicated verbs. This gate follows the version check.
     * **409** — once the event's draw is cut, two things freeze (ADR-0786): a ``groups``
       payload that changes *which groups* the event has, **or the order they stand in**,
       raises :class:`GroupSetFrozenError`, and a draw-configuration payload that changes
@@ -1072,6 +1082,8 @@ async def update_event(
     # and deliberately out of #1499's scope; see the pull request's review notes.
     if updates.lock_version != event.lock_version:
         raise EventVersionConflictError(current_version=event.lock_version)
+    if event.lifecycle_state is EventLifecycleState.cancelled:
+        raise EventCancelledError()
     # 404 → 403 → 409: the freezes are asked before the setattr loop below, so a
     # refusal writes nothing at all.
     await _enforce_group_set_frozen(db, event, updates)

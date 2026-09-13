@@ -14,6 +14,8 @@ reset is not an application deletion operation.
 | Registration, participation and withdrawal periods | Close or explicitly restore through lifecycle operations; retain original periods | Historical registration priority, competition eligibility, seats and acting Accounts |
 | Draw revision | Retire on removal or replacement; retain fixtures and cut-time configuration | Original field, stages, groups, placements and configuration snapshots |
 | Competition and Match rules | Immutable snapshots; retain source revision while a surviving Match requires it | Cut-time rules, stage binding and materialized Match provenance |
+| Event progress, cancellation and reconciliation | Retain lifecycle transitions, recorded-game evidence and reconciliation receipts | Publication and archive do not reset sporting progress or remove its parents |
+| Archive history | Append archive/unarchive actions; never remove original history | Retains the tournament and event composition |
 | Entry member | Close interval or append replacement under existing roster rules | Original Player and membership provenance; lineup references survive |
 | Fixture and stage/group ancestors | Disposable only without protected references | Recorded lineup/play, advancement and call evidence protect their required parents |
 | Untouched standalone Match | May be discarded | No saved score or result exists |
@@ -158,6 +160,7 @@ Review rationale:
 | `tournament_account_grants` | `inherited_from_grant_id` → `tournament_account_grants.id` | NO ACTION | Deferred | Evidence |
 | `tournament_account_grants` | `revoked_by_account_id` → `accounts.id` | RESTRICT | Immediate | Identity |
 | `tournament_account_grants` | `tournament_id` → `tournaments.id` | CASCADE | Immediate | Owned setup |
+| `tournament_archive_history` | `tournament_id` → `tournaments.id` | RESTRICT | Immediate | Evidence |
 | `tournament_draw_revisions` | `created_by_account_id` → `accounts.id` | RESTRICT | Immediate | Identity |
 | `tournament_draw_revisions` | `event_id` → `tournament_events.id` | CASCADE | Immediate | Evidence |
 | `tournament_entries` | `added_by_user_id` → `accounts.id` | RESTRICT | Immediate | Identity |
@@ -182,6 +185,10 @@ Review rationale:
 | `tournament_event_group_reservations` | `event_id, reservation_id` → `tournament_event_reservations.event_id, tournament_event_reservations.id` | CASCADE | Immediate | Owned setup |
 | `tournament_event_group_reservations` | `event_id, stage_id` → `tournament_event_stages.event_id, tournament_event_stages.id` | CASCADE | Immediate | Owned setup |
 | `tournament_event_group_reservations` | `stage_id, group_id` → `tournament_event_stage_groups.stage_id, tournament_event_stage_groups.id` | CASCADE | Immediate | Owned setup |
+| `tournament_event_lifecycle_history` | `event_id` → `tournament_events.id` | RESTRICT | Immediate | Evidence |
+| `tournament_event_reconciliations` | `event_id` → `tournament_events.id` | RESTRICT | Immediate | Evidence |
+| `tournament_event_recorded_games` | `event_id` → `tournament_events.id` | RESTRICT | Immediate | Evidence |
+| `tournament_event_recorded_games` | `match_id` → `matches.id` | RESTRICT | Immediate | Evidence |
 | `tournament_event_reservation_tables` | `event_id, reservation_id` → `tournament_event_reservations.event_id, tournament_event_reservations.id` | CASCADE | Immediate | Interval |
 | `tournament_event_reservation_tables` | `tournament_id, event_id` → `tournament_events.tournament_id, tournament_events.id` | CASCADE | Immediate | Interval |
 | `tournament_event_reservation_tables` | `tournament_id, table_id` → `tournament_tables.tournament_id, tournament_tables.id` | CASCADE | Immediate | Interval |
@@ -224,5 +231,5 @@ Review rationale:
 | `user_roles` | `role_id` → `roles.id` | CASCADE | Immediate | Current/delivery state |
 | `user_roles` | `user_id` → `accounts.id` | CASCADE | Immediate | Identity |
 
-Reviewed 161 foreign keys. Regenerate this inventory when adding references,
+Reviewed 166 foreign keys. Regenerate this inventory when adding references,
 and review their ownership and historical meaning rather than copying a delete action.

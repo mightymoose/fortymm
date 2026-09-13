@@ -59,6 +59,7 @@ from app.models import (
     User,
     VenueTableOutage,
 )
+from app.models.tournament import EventLifecycleState
 from app.schedule_solves import request_solve
 from app.schemas.tournament import (
     TournamentFixturePlacementUpdate,
@@ -100,7 +101,12 @@ async def _load_fixture_for_placement(
     # relationship's docstring), so attaching a stage here costs nothing extra.
     row = (
         await db.execute(
-            select(TournamentFixture, Match.status, TournamentEvent.timezone)
+            select(
+                TournamentFixture,
+                Match.status,
+                TournamentEvent.timezone,
+                TournamentEvent.lifecycle_state,
+            )
             .join(
                 TournamentEventStage,
                 TournamentEventStage.id == TournamentFixture.stage_id,
@@ -116,7 +122,9 @@ async def _load_fixture_for_placement(
     ).one_or_none()
     if row is None:
         raise FixtureNotFoundError()
-    fixture, match_status, event_timezone = row
+    fixture, match_status, event_timezone, lifecycle_state = row
+    if lifecycle_state is EventLifecycleState.cancelled:
+        raise FixturePlacementFrozenError("cancelled", event_cancelled=True)
     return fixture, match_status, event_timezone
 
 

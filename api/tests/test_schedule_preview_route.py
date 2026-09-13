@@ -117,7 +117,7 @@ async def _make_tournament(
 
     tournament = Tournament(
         name="Preview Open 2030",
-        status=status,
+        status=TournamentStatus.draft,
         address={
             "venue": "Berkeley TT Club",
             "street": "1 Shattuck Ave",
@@ -186,6 +186,7 @@ async def _make_tournament(
         )
         await db.flush()
 
+    tournament.status = status
     await db.commit()
     return tournament.id
 

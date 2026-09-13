@@ -434,6 +434,9 @@ async def finalize_match(db: AsyncSession, match: Match, decided_side: int) -> N
     _set_side_won(match, decided_side)
     await _apply_rating_update(db, match)
     await on_match_completed(db, match)
+    from app.event_lifecycle import reconcile_match_event
+
+    await reconcile_match_event(db, match.id)
     await stage_match_participant_hints(db, match)
 
 

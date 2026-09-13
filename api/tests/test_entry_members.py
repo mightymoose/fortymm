@@ -961,6 +961,10 @@ async def test_fixture_attaching_an_already_played_match_captures_history(
         text("UPDATE tournament_fixtures SET match_id = :match WHERE id = :id"),
         {"match": match.id, "id": fixture.id},
     )
+    if status == "completed":
+        from app.event_lifecycle import reconcile_event
+
+        await reconcile_event(db_session, event.id)
     await db_session.commit()
     assert set(
         await db_session.scalars(text("SELECT player_id FROM match_lineup_players"))
@@ -3300,6 +3304,9 @@ async def test_clearing_completed_walkover_captures_actual_lineup(db_session, ev
         ),
         {"id": match.id},
     )
+    from app.event_lifecycle import reconcile_match_event
+
+    await reconcile_match_event(db_session, match.id)
     await db_session.commit()
     assert await db_session.scalar(text("SELECT count(*) FROM match_lineups")) == 0
     await db_session.execute(
@@ -3355,6 +3362,9 @@ async def test_walkover_rejects_later_score_evidence(db_session, evidence):
         ),
         {"id": match.id},
     )
+    from app.event_lifecycle import reconcile_match_event
+
+    await reconcile_match_event(db_session, match.id)
     await db_session.commit()
     with pytest.raises(IntegrityError, match="ending contradicts recorded play"):
         async with db_session.begin_nested():
@@ -3389,6 +3399,10 @@ async def test_special_ending_distinguishes_played_participants(
         {"id": match.id, "ending": ending},
     )
     fixture.winner_entry_id = entries[1].id
+    await db_session.flush()
+    from app.event_lifecycle import reconcile_match_event
+
+    await reconcile_match_event(db_session, match.id)
     await db_session.commit()
     count = await db_session.scalar(
         text(
