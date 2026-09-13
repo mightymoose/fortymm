@@ -1649,7 +1649,17 @@ IDENTITY_RETENTION_DDL = (
                     USING ERRCODE='23514';
             END IF;
             -- A foreign guest reference does not grant access to that guest.
-            -- Login identities and device registrations survive deactivation.
+            -- Existing login identities survive deactivation, but a writer
+            -- cannot introduce a new credential while its owner is suspended.
+            IF account_row.deactivated_at IS NOT NULL
+                AND TG_TABLE_NAME='login_identities'
+                AND (TG_OP='INSERT' OR
+                    (to_jsonb(NEW) - 'id') IS DISTINCT FROM (to_jsonb(OLD) - 'id'))
+            THEN
+                RAISE EXCEPTION 'inactive account credentials cannot be attached'
+                    USING ERRCODE='23514';
+            END IF;
+            -- Device registrations survive deactivation.
             IF account_row.deactivated_at IS NOT NULL
                 AND TG_TABLE_NAME IN ('account_session_tokens',
                     'account_email_tokens', 'account_email_intents',
@@ -1735,6 +1745,88 @@ IDENTITY_RETENTION_DDL = (
     """CREATE TRIGGER guard_retired_registration BEFORE INSERT
     ON tournament_entry_registrations FOR EACH ROW
     EXECUTE FUNCTION guard_retired_registration()""",
+    """
+    CREATE FUNCTION lock_match_player_admission() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        IF TG_OP='UPDATE' AND (NEW.match_id, NEW.match_side_id, NEW.user_id)
+            IS NOT DISTINCT FROM (OLD.match_id, OLD.match_side_id, OLD.user_id)
+        THEN RETURN NEW; END IF;
+        PERFORM id FROM players WHERE id IN
+            (NEW.user_id, entry_canonical_player(NEW.user_id))
+            ORDER BY id FOR SHARE;
+        -- Standalone inserts cannot create their own historical authority.
+        IF TG_OP='INSERT'
+            AND EXISTS (SELECT 1 FROM players WHERE id IN
+                (NEW.user_id, entry_canonical_player(NEW.user_id))
+                AND retired_at IS NOT NULL)
+            AND EXISTS (SELECT 1 FROM matches m JOIN match_settings rules
+                ON rules.id=m.match_settings_id WHERE m.id=NEW.match_id
+                AND rules.source_rule_revision_id IS NULL)
+            AND NOT EXISTS (SELECT 1 FROM match_recorded_participants r
+                WHERE r.match_id=NEW.match_id AND
+                    entry_canonical_player(r.player_id)=
+                    entry_canonical_player(NEW.user_id)) THEN
+            RAISE EXCEPTION 'retired Player cannot be admitted to a new match'
+                USING ERRCODE='23514';
+        END IF;
+        RETURN NEW;
+    END $$
+    """,
+    """CREATE TRIGGER lock_match_player_admission BEFORE INSERT OR UPDATE
+    ON match_side_players FOR EACH ROW
+    EXECUTE FUNCTION lock_match_player_admission()""",
+    """
+    CREATE FUNCTION check_retired_match_admission() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    DECLARE participant match_side_players%ROWTYPE;
+    BEGIN
+        SELECT * INTO participant FROM match_side_players WHERE id=NEW.id;
+        IF NOT FOUND OR (participant.match_id, participant.user_id)
+            IS DISTINCT FROM (NEW.match_id, NEW.user_id) THEN
+            -- A removed/transient row still matters if first play retained it.
+            IF EXISTS (SELECT 1 FROM match_recorded_participants r
+                WHERE r.match_id=NEW.match_id AND r.player_id=NEW.user_id) THEN
+                participant := NEW;
+            ELSIF NOT FOUND THEN RETURN NULL; END IF;
+        END IF;
+        IF TG_OP='INSERT' AND EXISTS (
+            SELECT 1 FROM matches m JOIN match_settings rules
+                ON rules.id=m.match_settings_id WHERE m.id=participant.match_id
+                AND rules.source_rule_revision_id IS NULL
+        ) THEN RETURN NULL; END IF;
+        IF TG_OP='UPDATE' AND participant.match_id=OLD.match_id
+            AND entry_canonical_player(participant.user_id)=
+                entry_canonical_player(OLD.user_id) THEN RETURN NULL; END IF;
+        IF NOT EXISTS (SELECT 1 FROM players WHERE id IN
+            (participant.user_id, entry_canonical_player(participant.user_id))
+            AND retired_at IS NOT NULL) THEN RETURN NULL; END IF;
+        -- Materialization links its fixture after flushing the match. Validate
+        -- the exact final fixture side and its already-held member at commit.
+        IF EXISTS (
+            SELECT 1 FROM tournament_fixtures f
+            JOIN match_sides side ON side.id=participant.match_side_id
+            JOIN tournament_entry_members member ON member.entry_id=
+                CASE WHEN side.side_number=1 THEN f.entry_a_id ELSE f.entry_b_id END
+            JOIN tournament_entries entry ON entry.id=member.entry_id
+            WHERE f.match_id=participant.match_id AND entry.status='entered'
+              AND member.left_at IS NULL
+              AND entry_canonical_player(member.player_id)=
+                  entry_canonical_player(participant.user_id)
+        ) THEN RETURN NULL; END IF;
+        IF EXISTS (
+            SELECT 1 FROM match_lineups lineup
+            JOIN match_lineup_players p ON p.lineup_id=lineup.id
+            JOIN match_sides side ON side.id=participant.match_side_id
+            WHERE lineup.match_id=participant.match_id AND lineup.revision > 1
+              AND p.side_number=side.side_number AND p.player_id=participant.user_id
+        ) THEN RETURN NULL; END IF;
+        RAISE EXCEPTION 'retired Player cannot be admitted to a new match'
+            USING ERRCODE='23514';
+    END $$
+    """,
+    """CREATE CONSTRAINT TRIGGER check_retired_match_admission
+    AFTER INSERT OR UPDATE ON match_side_players DEFERRABLE INITIALLY DEFERRED
+    FOR EACH ROW EXECUTE FUNCTION check_retired_match_admission()""",
 )
 
 
@@ -8043,6 +8135,8 @@ def downgrade() -> None:
         "revoke_deactivated_account_credentials",
         "guard_retired_player_admission",
         "guard_retired_registration",
+        "lock_match_player_admission",
+        "check_retired_match_admission",
         "preserve_published_tournament",
         "retain_match_play",
         "lock_recorded_participants",

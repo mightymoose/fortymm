@@ -16,6 +16,14 @@ class PlayerAccessDenied(Exception):
 async def require_player(
     db: AsyncSession, account_id: uuid.UUID, player_id: uuid.UUID
 ) -> Player:
+    # Lifecycle and identity merges take Account before Player. Keep the
+    # author's Account stable until the caller commits its authorized action.
+    await db.execute(
+        select(Account.id)
+        .where(Account.id == account_id)
+        .order_by(Account.id)
+        .with_for_update(read=True)
+    )
     player = await db.scalar(
         select(Player)
         .join(AccountPlayer)

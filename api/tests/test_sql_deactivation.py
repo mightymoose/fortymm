@@ -118,7 +118,18 @@ async def test_sql_deactivation_revokes_pending_access(
 
 
 @pytest.mark.parametrize("operation", ["insert", "reparent"])
-@pytest.mark.parametrize("table,column,columns,values", CREDENTIALS)
+@pytest.mark.parametrize(
+    "table,column,columns,values",
+    CREDENTIALS
+    + [
+        (
+            "login_identities",
+            "account_id",
+            "id,account_id,issuer,provider,subject",
+            "gen_random_uuid(),:account,'test-issuer','auth0','test-subject'",
+        )
+    ],
+)
 async def test_sql_cannot_issue_credentials_for_inactive_accounts(
     db_session, operation, table, column, columns, values
 ):
@@ -151,7 +162,7 @@ async def test_sql_cannot_issue_credentials_for_inactive_accounts(
 
 
 @pytest.mark.parametrize("first", ["deactivation", "credential"])
-@pytest.mark.parametrize("role", ["owner", "target"])
+@pytest.mark.parametrize("role", ["owner", "target", "login"])
 async def test_sql_deactivation_serializes_with_credential_issuance(
     db_session, engine, first, role
 ):
@@ -167,6 +178,11 @@ async def test_sql_deactivation_serializes_with_credential_issuance(
         "(id,user_id,target_account_id,purpose,token,sent_to) "
         "VALUES(gen_random_uuid(),:other,:id,'merge',decode('cdef','hex'),'to@example.com')"
     )
+    if role == "login":
+        statement = (
+            "INSERT INTO login_identities(id,account_id,issuer,provider,subject) "
+            "VALUES(gen_random_uuid(),:id,'race-issuer','auth0','race-subject')"
+        )
     sessions = async_sessionmaker(engine)
     async with sessions() as suspender, sessions() as issuer:
         suspend_pid = await suspender.scalar(text("SELECT pg_backend_pid()"))
@@ -222,4 +238,52 @@ async def test_sql_deactivation_serializes_with_credential_issuance(
     )
     assert (
         await db_session.scalar(text("SELECT count(*) FROM account_email_tokens")) == 0
+    )
+
+    if role == "login":
+        assert await db_session.scalar(
+            text("SELECT count(*) FROM login_identities WHERE account_id=:id"),
+            {"id": account_id},
+        ) == (1 if first == "credential" else 0)
+
+
+@pytest.mark.parametrize("field", ["issuer", "provider", "subject"])
+async def test_suspended_login_identity_is_retained_but_cannot_change_credential(
+    db_session, field
+):
+    account = Account(auth0_sub="auth0|existing")
+    db_session.add(account)
+    await db_session.commit()
+    account_id = account.id
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"),
+        {"id": account_id},
+    )
+    await db_session.commit()
+    # An unchanged identity remains valid retained state during suspension.
+    await db_session.execute(
+        text("UPDATE login_identities SET account_id=account_id WHERE account_id=:id"),
+        {"id": account_id},
+    )
+    await db_session.commit()
+    with pytest.raises(IntegrityError, match="inactive account credentials"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    f"UPDATE login_identities SET {field}='replacement' "
+                    "WHERE account_id=:id"
+                ),
+                {"id": account_id},
+            )
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=NULL WHERE id=:id"),
+        {"id": account_id},
+    )
+    await db_session.commit()
+    assert (
+        await db_session.scalar(
+            text("SELECT subject FROM login_identities WHERE account_id=:id"),
+            {"id": account_id},
+        )
+        == "auth0|existing"
     )

@@ -15,12 +15,15 @@ same Account, subject to its current authority: revoked grants stay revoked and
 transferred ownership stays transferred. Deactivation does not retire a Player,
 withdraw an entry, transfer tournament ownership, or disable another manager.
 An inactive owning Account retains its reference but cannot exercise authority.
-Deactivation revokes outstanding login and email-confirmation credentials,
+Deactivation revokes outstanding session and email-confirmation credentials,
 including merge confirmations targeting the Account. Confirmation endpoints
 must recheck Account activity before changing identity or minting a session.
 The database also revokes credentials on direct SQL deactivation and rejects new
 credentials owned by or targeting an inactive Account. Reactivation cannot revive
-old cookies or links. A foreign login's guest reference grants no access to the
+old cookies or links. Existing linked login identities survive suspension, but SQL
+cannot attach, reassign, or change a login credential while its Account is inactive.
+Player-authorized writes hold the Account lock through the action so suspension
+and admission have a deterministic order. A foreign login's guest reference grants no access to the
 inactive guest and may remain so the active destination can still sign in.
 
 Account erasure removes identifying Account data and credentials while retaining
@@ -48,7 +51,10 @@ lists, preserve the server's derived `registration_order`, and use the server's
 `entered` count for held registrations and capacity. Current-player membership and
 withdrawal use both lists; hiding a roster row never cancels its held seat.
 The server reports a `retired` entry refusal so withdrawing a held seat does not
-make an ineligible Player appear able to enter again.
+make an ineligible Player appear able to enter again. SQL match-side admission also
+locks the Player and refuses new retired participants, including insert-and-score
+transactions. An already-held tournament seat may still materialize its exact
+Player; unrelated seats do not grant admission.
 
 The explicit Account/Player merge rules remain in force: retained attribution and
 membership identify their original subjects, while current sporting identity
