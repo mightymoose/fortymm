@@ -1633,18 +1633,22 @@ IDENTITY_RETENTION_DDL = (
             SELECT * INTO actor FROM accounts
                 WHERE id=NEW.created_by_user_id FOR SHARE NOWAIT;
         END IF;
-        IF NOT FOUND OR actor.merged_at IS NOT NULL
-            OR actor.deactivated_at IS NOT NULL OR actor.erased_at IS NOT NULL THEN
-            IF source_revision IS NOT NULL THEN
-                SELECT t.owner_account_id INTO source_owner
-                FROM tournament_draw_revisions revision
-                JOIN tournament_events e ON e.id=revision.event_id
-                JOIN tournaments t ON t.id=e.tournament_id
-                WHERE revision.id=source_revision FOR SHARE OF t NOWAIT;
-                -- Only the actual owner is historical materialization attribution.
-                -- Keep ownership stable until the matching fixture is committed.
-                IF source_owner=NEW.created_by_user_id THEN RETURN NEW; END IF;
+        IF source_revision IS NOT NULL THEN
+            SELECT t.owner_account_id INTO source_owner
+            FROM tournament_draw_revisions revision
+            JOIN tournament_events e ON e.id=revision.event_id
+            JOIN tournaments t ON t.id=e.tournament_id
+            WHERE revision.id=source_revision FOR SHARE OF t NOWAIT;
+            -- Sourced matches always attribute their actual tournament owner.
+            -- Keep ownership stable until the matching fixture is committed.
+            IF source_owner IS DISTINCT FROM NEW.created_by_user_id THEN
+                RAISE EXCEPTION 'sourced match creator must be its owner'
+                    USING ERRCODE='23514';
             END IF;
+            RETURN NEW;
+        END IF;
+        IF actor.id IS NULL OR actor.merged_at IS NOT NULL
+            OR actor.deactivated_at IS NOT NULL OR actor.erased_at IS NOT NULL THEN
             RAISE EXCEPTION 'match creator must be active' USING ERRCODE='23514';
         END IF;
         RETURN NEW;

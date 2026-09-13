@@ -86,8 +86,8 @@ withdrawal, restoration, and participation-ending actors have the same SQL admis
 check. Automatic match materialization retains the tournament owner's attribution
 through immutable sourced rules; it does not require that historical owner to act
 again. Null system draw and participation actions remain supported.
-The sourced-match exception applies only to its tournament owner at insertion,
-under an ownership lock; sourcing rules cannot exempt an arbitrary inactive creator.
+Every sourced match must attribute its tournament owner at insertion, under an
+ownership lock. Neither active nor inactive unrelated creators are permitted.
 Rated match creation holds an active opponent manager Account and its primary grant
 through admission. Existing consent remains immutable historical evidence through
 suspension and erasure.

@@ -238,15 +238,16 @@ async def _insert_sourced_match(db, fixture_id, rules_id, league_id, actor_id):
     await db.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
 
-@pytest.mark.parametrize("lifecycle", [deactivate_account, erase_account])
-async def test_sourced_sql_match_cannot_impersonate_unrelated_inactive_creator(
+@pytest.mark.parametrize("lifecycle", [None, deactivate_account, erase_account])
+async def test_sourced_sql_match_cannot_impersonate_unrelated_creator(
     db_session, default_league, lifecycle
 ):
     _, _, fixture, rules = await _sourced_fixture(db_session, default_league)
     other = await make_user(db_session, "unrelated-inactive-creator")
-    await lifecycle(db_session, other.id)
+    if lifecycle is not None:
+        await lifecycle(db_session, other.id)
     await db_session.commit()
-    with pytest.raises(IntegrityError, match="match creator must be active"):
+    with pytest.raises(IntegrityError, match="sourced match creator must be its owner"):
         async with db_session.begin_nested():
             await _insert_sourced_match(
                 db_session, fixture.id, rules.id, default_league.id, other.id
@@ -254,8 +255,9 @@ async def test_sourced_sql_match_cannot_impersonate_unrelated_inactive_creator(
 
 
 @pytest.mark.parametrize("first", ["match", "transfer"])
+@pytest.mark.parametrize("inactive", [False, True])
 async def test_sourced_owner_attribution_serializes_with_ownership_transfer(
-    db_session, engine, default_league, first
+    db_session, engine, default_league, first, inactive
 ):
     from sqlalchemy.exc import DBAPIError
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -264,7 +266,8 @@ async def test_sourced_owner_attribution_serializes_with_ownership_transfer(
         db_session, default_league
     )
     successor = await make_user(db_session, "sourced-owner-successor")
-    await deactivate_account(db_session, owner.id)
+    if inactive:
+        await deactivate_account(db_session, owner.id)
     await db_session.commit()
     arguments = (fixture.id, rules.id, default_league.id, owner.id)
     parameters = {
@@ -287,7 +290,9 @@ async def test_sourced_owner_attribution_serializes_with_ownership_transfer(
             assert busy.value.orig.sqlstate == "40001"
             await writer.rollback()
             await ownership.commit()
-            with pytest.raises(IntegrityError, match="match creator must be active"):
+            with pytest.raises(
+                IntegrityError, match="sourced match creator must be its owner"
+            ):
                 await _insert_sourced_match(writer, *arguments)
         else:
             await _insert_sourced_match(writer, *arguments)
