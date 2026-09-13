@@ -1031,7 +1031,7 @@ class NotificationService:
     ) -> Sequence[uuid.UUID]:
         # Only the ids are needed (one job per recipient), so don't hydrate
         # full User rows — an "all users" broadcast would load the whole table.
-        query = select(User.id).where(User.merged_into_user_id.is_(None))
+        query = select(User.id).where(User.is_active)
         if not all_users:
             if not user_ids:
                 return []
@@ -1042,7 +1042,7 @@ class NotificationService:
         """Players the admin can target, filtered by username substring. Returns
         a capped list plus the true total so "select all" reports the real
         audience size."""
-        base = select(User).where(User.merged_into_user_id.is_(None))
+        base = select(User).where(User.is_active)
         if query_text:
             pattern = f"%{escape_like(query_text)}%"
             base = base.where(User.username.ilike(pattern, escape="\\"))

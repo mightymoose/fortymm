@@ -5648,3 +5648,106 @@ async def test_auth0_issuance_holds_bound_account_through_authorization(
                 await suspension
         await suspender.commit()
     assert await _email_verifier().verify_token(token) is None
+
+
+@pytest.mark.parametrize("tool", ["list_my_tournaments", "list_schedule_solves"])
+@pytest.mark.parametrize("change", ["suspend", "disconnect", "revoke_permission"])
+async def test_mcp_read_refuses_suspension_between_verification_and_tool_session(
+    db_session, monkeypatch, default_league, tool, change
+):
+    from app.identity_lifecycle import deactivate_account
+
+    owner = await make_user(db_session, "tool-session-suspended")
+    await grant_permissions(db_session, owner, [SCHEDULING_VIEW_PERMISSION])
+    token = await _mint(db_session, owner)
+    await _seed_owned_tournament(
+        db_session,
+        owner,
+        default_league,
+        "Unannounced private event",
+        TournamentStatus.draft,
+    )
+    original_id = mcp_server._authenticated_user_id
+    original_session = mcp_server.mcp_session
+    entered_tool = False
+
+    def mark_tool():
+        nonlocal entered_tool
+        entered_tool = True
+        return original_id()
+
+    @asynccontextmanager
+    async def suspend_before_tool_session():
+        nonlocal entered_tool
+        if entered_tool:
+            entered_tool = False
+            if change == "suspend":
+                await deactivate_account(db_session, owner.id)
+            elif change == "disconnect":
+                owner.agent_access_revoked_at = datetime.now(UTC)
+            else:
+                from sqlalchemy import delete
+
+                await db_session.execute(
+                    delete(UserRole).where(UserRole.user_id == owner.id)
+                )
+            await db_session.commit()
+        async with original_session() as db:
+            yield db
+
+    monkeypatch.setattr(mcp_server, "_authenticated_user_id", mark_tool)
+    monkeypatch.setattr(mcp_server, "mcp_session", suspend_before_tool_session)
+    async with _mcp_client(token) as client, client:
+        await client.list_tools()
+        with pytest.raises(ToolError, match="Not authenticated"):
+            await client.call_tool(tool, {})
+
+
+async def test_mcp_private_read_holds_activity_through_tool_response(
+    db_session, engine, monkeypatch
+):
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    owner = await make_user(db_session, "mcp-held-private-read")
+    await grant_permissions(db_session, owner, [SCHEDULING_VIEW_PERMISSION])
+    token = await _mint(db_session, owner)
+    account_id = owner.id
+    original = mcp_server.list_schedule_solves_core
+    suspension = None
+    async with async_sessionmaker(engine)() as suspender:
+        suspend_pid = await suspender.scalar(text("SELECT pg_backend_pid()"))
+
+        async def suspend_during_read(db, **kwargs):
+            nonlocal suspension
+            read_pid = await db.scalar(text("SELECT pg_backend_pid()"))
+            suspension = asyncio.create_task(
+                suspender.execute(
+                    text("UPDATE accounts SET deactivated_at=now() WHERE id=:id"),
+                    {"id": account_id},
+                )
+            )
+            async with asyncio.timeout(5):
+                while read_pid not in await db_session.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": suspend_pid}
+                ):
+                    if suspension.done():
+                        await suspension
+                        pytest.fail("suspension passed an authorized private read")
+                    await asyncio.sleep(0.01)
+            return await original(db, **kwargs)
+
+        monkeypatch.setattr(
+            mcp_server, "list_schedule_solves_core", suspend_during_read
+        )
+        try:
+            async with _mcp_client(token) as client, client:
+                await client.list_tools()
+                result = await client.call_tool("list_schedule_solves", {})
+                assert result.structured_content["result"] == []
+        finally:
+            if suspension is not None:
+                await suspension
+        await suspender.commit()

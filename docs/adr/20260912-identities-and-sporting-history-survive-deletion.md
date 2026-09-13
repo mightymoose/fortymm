@@ -34,13 +34,19 @@ The database also revokes credentials on direct SQL deactivation and rejects new
 credentials owned by or targeting an inactive Account. Reactivation cannot revive
 old cookies, links, or device tokens. Notification settings and read-state writes
 require a locked active Account, and delivery rechecks recipient activity so already-queued work
-cannot send to a suspended Account. Existing linked
+cannot send to a suspended Account. Broadcast recipient selection and counts
+exclude inactive Accounts. Existing linked
 login identities survive suspension, but SQL
 cannot attach, reassign, or change a login credential while either its existing or
 new Account is inactive. Linked-token verification, profile changes, and
 agent-access mutations lock and refresh the Account before accepting authority.
 Auth0 binding and provisioning re-resolve the linked Account under its lifecycle
 lock after internal commits, through the final token-authorization decision.
+MCP tools recheck Account activity, agent revocation, and MCP permission in their
+own database session; read tools hold the Account lock through the read.
+Long-lived event streams revalidate their credential during the connection and
+close after revocation, using short database sessions rather than pinning a
+connection or lifecycle lock for the stream's lifetime.
 Authenticated reads hold a lifecycle-conflicting Account lock and revalidate the
 session token after waiting. Activity timestamps refresh under an update lock,
 then read authentication reacquires its protection after the timestamp commit.

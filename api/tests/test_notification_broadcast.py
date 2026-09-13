@@ -3,6 +3,7 @@ background fan-out (one delivery job enqueued per resolved recipient)."""
 
 from datetime import UTC, datetime
 
+import pytest
 from httpx import AsyncClient
 from rq import Queue
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -288,3 +289,71 @@ async def test_broadcast_rejects_selected_with_no_ids(
         },
     )
     assert response.status_code == 422
+
+
+async def _lifecycle_audience(db_session):
+    from app.identity_lifecycle import deactivate_account, erase_account, retire_player
+
+    active = await make_user(db_session, "audience-active")
+    retired = await make_user(db_session, "audience-retired")
+    suspended = await make_user(db_session, "audience-suspended")
+    erased = await make_user(db_session, "audience-erased")
+    await retire_player(db_session, retired.player_id)
+    await deactivate_account(db_session, suspended.id)
+    await erase_account(db_session, erased.id)
+    await db_session.commit()
+    return active, retired, suspended, erased
+
+
+@pytest.mark.parametrize("mode", ["all", "selected"])
+async def test_broadcast_counts_only_active_accounts_including_retired_players(
+    api_client, db_session, fake_notifications_queue, mode
+):
+    admin = await start_session(api_client, db_session)
+    await grant_broadcast(db_session, admin)
+    audience = await _lifecycle_audience(db_session)
+    recipients = {"mode": mode}
+    if mode == "selected":
+        recipients["user_ids"] = [str(user.id) for user in audience]
+    response = await api_client.post(
+        "/v1/notifications/broadcast",
+        json={
+            "recipients": recipients,
+            "title": "Existing competition",
+            "body": "Update",
+        },
+    )
+    assert response.status_code == 200, response.text
+    expected = {audience[0].id, audience[1].id}
+    if mode == "all":
+        expected.add(admin.id)
+    assert response.json()["recipients"] == len(expected)
+    assert {
+        job.user_id for job in enqueued_notification_jobs(fake_notifications_queue)
+    } == expected
+
+
+@pytest.mark.parametrize(
+    "query", [None, "audience-", "audience-suspended", "audience-erased"]
+)
+async def test_recipient_picker_and_total_follow_account_activity(
+    api_client, db_session, query
+):
+    admin = await start_session(api_client, db_session)
+    admin.username = "broadcaster"
+    await db_session.commit()
+    await grant_broadcast(db_session, admin)
+    active, retired, _, _ = await _lifecycle_audience(db_session)
+    response = await api_client.get(
+        "/v1/notifications/broadcast/recipients",
+        params={"q": query} if query else {},
+    )
+    assert response.status_code == 200, response.text
+    expected = (
+        {str(active.id), str(retired.id)} if query in (None, "audience-") else set()
+    )
+    if query is None:
+        expected.add(str(admin.id))
+    payload = response.json()
+    assert payload["total"] == len(expected)
+    assert {recipient["id"] for recipient in payload["recipients"]} == expected
