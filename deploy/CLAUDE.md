@@ -44,6 +44,16 @@ Infra has no single directory — it spans:
   `redeploy-uat` (deploy the published, digest-pinned chart to k3d), `qa-down`,
   `regen-*-types`, `ios-testflight`, and `release-beta` (UAT then TestFlight).
 
+## Beta data and migration freeze
+
+The #1670 freeze PR freezes migration history on merge, independently of any
+deployment. UAT and production each preserve data from their own beta openings.
+Their initial reinitializations remain separate, target-specific operator work;
+this PR does not execute them. Synthetic QA/CI databases remain disposable.
+Follow `docs/beta-schema-cutover.md` for release records, compatibility evidence
+and opening timestamps. Do not interpret older pre-beta reset guidance as
+permission to reset an environment that has opened to beta users.
+
 ## Stacks at a glance
 
 | Stack | How | Host URL | Notes |

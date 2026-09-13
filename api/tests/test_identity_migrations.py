@@ -1,8 +1,12 @@
 """A fresh Alembic install must match the ORM, without legacy backfills."""
 
+from pathlib import Path
+
 import pytest
 from alembic.autogenerate import compare_metadata
+from alembic.config import Config
 from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -75,5 +79,7 @@ async def test_disposable_baseline_can_be_downgraded_and_reinstalled(postgres_ur
         async with migrated.connect() as connection:
             assert (
                 await connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "0001"
+                == ScriptDirectory.from_config(
+                    Config(str(Path(__file__).parents[1] / "alembic.ini"))
+                ).get_current_head()
             )
