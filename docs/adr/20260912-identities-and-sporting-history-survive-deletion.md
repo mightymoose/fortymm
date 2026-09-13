@@ -20,8 +20,8 @@ credentials, including merge confirmations targeting the Account. Confirmation e
 must recheck Account activity before changing identity or minting a session.
 The database also revokes credentials on direct SQL deactivation and rejects new
 credentials owned by or targeting an inactive Account. Reactivation cannot revive
-old cookies, links, or device tokens. Notification preferences require a locked
-active Account, and delivery rechecks recipient activity so already-queued work
+old cookies, links, or device tokens. Notification settings and read-state writes
+require a locked active Account, and delivery rechecks recipient activity so already-queued work
 cannot send to a suspended Account. Existing linked
 login identities survive suspension, but SQL
 cannot attach, reassign, or change a login credential while either its existing or
@@ -30,7 +30,8 @@ agent-access mutations lock and refresh the Account before accepting authority.
 Reactivation cannot undo an explicit agent-access revocation through a stale request.
 Privileged mutations lock and refresh the acting Account before rechecking
 permission, holding that lock through the operation, including broadcast delivery
-enqueueing. RBAC changes lock acting and target Accounts together in a stable order,
+enqueueing and schedule-preview enqueue/cancel operations. RBAC changes lock acting
+and target Accounts together in a stable order,
 so suspension cannot be followed by an already-started role grant.
 SQL result submission authority, new consent, and official-result actors require
 active Accounts. New consent locks both actors in stable order; concurrent lifecycle

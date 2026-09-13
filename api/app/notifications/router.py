@@ -98,7 +98,10 @@ async def mark_notifications_read(
     """Mark a batch of notifications read — the endpoint the client flushes its
     debounced "seen on screen" ids to. Owner-scoped and idempotent; ``marked``
     counts only the rows that were still unread."""
-    return await service.mark_many_read(current_user.id, payload)
+    try:
+        return await service.mark_many_read(current_user.id, payload)
+    except InactiveNotificationAccount:
+        raise HTTPException(status_code=401, detail="Account is inactive") from None
 
 
 @router.post("/v1/notifications/read-all", response_model=MarkAllReadResponse)
@@ -106,7 +109,10 @@ async def mark_all_notifications_read(
     service: NotificationService = Depends(get_notification_service),
     current_user: User = Depends(get_current_user),
 ) -> MarkAllReadResponse:
-    return await service.mark_all_read(current_user.id)
+    try:
+        return await service.mark_all_read(current_user.id)
+    except InactiveNotificationAccount:
+        raise HTTPException(status_code=401, detail="Account is inactive") from None
 
 
 @router.post(
@@ -117,7 +123,10 @@ async def mark_notification_read(
     service: NotificationService = Depends(get_notification_service),
     current_user: User = Depends(get_current_user),
 ) -> NotificationItem:
-    item = await service.mark_read(current_user.id, notification_id)
+    try:
+        item = await service.mark_read(current_user.id, notification_id)
+    except InactiveNotificationAccount:
+        raise HTTPException(status_code=401, detail="Account is inactive") from None
     if item is None:
         raise HTTPException(status_code=404, detail="Notification not found.")
     return item

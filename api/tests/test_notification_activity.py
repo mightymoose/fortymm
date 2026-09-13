@@ -344,3 +344,141 @@ async def test_retired_proposer_receives_standing_result_acceptance(
     notices = enqueued_notification_jobs(fake_notifications_queue)
     assert [notice.user_id for notice in notices] == [account_id]
     assert notices[0].collapse_id == f"result-accepted:{match_id}"
+
+
+@pytest.mark.parametrize("action", ["single", "many", "all"])
+async def test_suspended_account_cannot_mark_retained_notifications_read(
+    db_session, action
+):
+    from app.identity_lifecycle import reactivate_account
+    from app.notifications.service import InactiveNotificationAccount
+    from app.schemas.notification import MarkReadRequest
+
+    user = await make_user(db_session, "suspended-read-flags")
+    notice = Notification(
+        user_id=user.id, category="match_calls", title="Table call", body="Table 2"
+    )
+    db_session.add(notice)
+    await db_session.commit()
+    notice_id = notice.id
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"),
+        {"id": user.id},
+    )
+    await db_session.commit()
+    service = NotificationService(db_session, FakeSender())
+    with pytest.raises(InactiveNotificationAccount):
+        if action == "single":
+            await service.mark_read(user.id, notice_id)
+        elif action == "many":
+            await service.mark_many_read(user.id, MarkReadRequest(ids=[notice_id]))
+        else:
+            await service.mark_all_read(user.id)
+    await reactivate_account(db_session, user.id)
+    await db_session.commit()
+    await db_session.refresh(notice)
+    assert notice.read_at is None
+
+
+@pytest.mark.parametrize("action", ["single", "many", "all"])
+async def test_read_flag_mutation_holds_activity_through_commit(
+    db_session, monkeypatch, action
+):
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from app.schemas.notification import MarkReadRequest
+
+    user = await make_user(db_session, "read-flag-activity-race")
+    notice = Notification(
+        user_id=user.id, category="match_calls", title="Table call", body="Table 2"
+    )
+    db_session.add(notice)
+    await db_session.commit()
+    entered, release = asyncio.Event(), asyncio.Event()
+    sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    async with sessions() as writer, sessions() as lifecycle:
+        original_commit = AsyncSession.commit
+
+        async def pause_commit(self):
+            if self is writer:
+                entered.set()
+                await release.wait()
+            await original_commit(self)
+
+        monkeypatch.setattr(AsyncSession, "commit", pause_commit)
+        writer_pid = await writer.scalar(text("SELECT pg_backend_pid()"))
+        lifecycle_pid = await lifecycle.scalar(text("SELECT pg_backend_pid()"))
+        service = NotificationService(writer, FakeSender())
+        if action == "single":
+            operation = service.mark_read(user.id, notice.id)
+        elif action == "many":
+            operation = service.mark_many_read(
+                user.id, MarkReadRequest(ids=[notice.id])
+            )
+        else:
+            operation = service.mark_all_read(user.id)
+        marking = asyncio.create_task(operation)
+        await asyncio.wait_for(entered.wait(), 5)
+        suspension = asyncio.create_task(
+            lifecycle.execute(
+                text(
+                    "UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"
+                ),
+                {"id": user.id},
+            )
+        )
+        try:
+            async with asyncio.timeout(5):
+                while writer_pid not in await db_session.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": lifecycle_pid}
+                ):
+                    assert not suspension.done(), (
+                        "suspension bypassed read-flag mutation"
+                    )
+                    await asyncio.sleep(0.01)
+        finally:
+            release.set()
+            await marking
+            await suspension
+            await lifecycle.rollback()
+
+
+@pytest.mark.parametrize("action", ["single", "many", "all"])
+async def test_read_routes_refuse_request_authenticated_before_suspension(
+    api_client, db_session, action
+):
+    from app.main import app
+    from app.sessions import get_current_user
+
+    user = await make_user(db_session, "cached-read-request")
+    notice = Notification(
+        user_id=user.id, category="match_calls", title="Table call", body="Table 2"
+    )
+    db_session.add(notice)
+    await db_session.commit()
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"),
+        {"id": user.id},
+    )
+    await db_session.commit()
+    previous = app.dependency_overrides.get(get_current_user)
+    app.dependency_overrides[get_current_user] = lambda: user
+    try:
+        if action == "single":
+            response = await api_client.post(f"/v1/notifications/{notice.id}/read")
+        elif action == "many":
+            response = await api_client.post(
+                "/v1/notifications/read", json={"ids": [str(notice.id)]}
+            )
+        else:
+            response = await api_client.post("/v1/notifications/read-all")
+    finally:
+        if previous is None:
+            app.dependency_overrides.pop(get_current_user)
+        else:
+            app.dependency_overrides[get_current_user] = previous
+    assert response.status_code == 401, response.text
+    await db_session.refresh(notice)
+    assert notice.read_at is None

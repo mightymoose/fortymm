@@ -2122,7 +2122,8 @@ async def test_result_acceptance_refuses_locked_actor_before_match(db_session, e
         await accepting.commit()
 
 
-async def test_entry_adder_lock_precedes_parent_locks(db_session, engine):
+@pytest.mark.parametrize("lifecycle", ["merge", "deactivation"])
+async def test_entry_adder_lock_precedes_parent_locks(db_session, engine, lifecycle):
     from sqlalchemy.exc import DBAPIError
 
     event, players, entries, match, fixture = await seed_doubles_match(db_session)
@@ -2134,7 +2135,11 @@ async def test_entry_adder_lock_precedes_parent_locks(db_session, engine):
     params = {"event": event.id, "actor": match.created_by_user_id}
     async with sessions() as merging, sessions() as registering:
         await merging.execute(
-            text("SELECT id FROM accounts WHERE id = :id FOR UPDATE"),
+            text(
+                "SELECT id FROM accounts WHERE id = :id FOR UPDATE"
+                if lifecycle == "merge"
+                else "UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"
+            ),
             {"id": match.created_by_user_id},
         )
         await registering.execute(text("SET LOCAL lock_timeout = '200ms'"))
@@ -3483,3 +3488,147 @@ async def test_table_call_history_is_append_only_in_both_schema_builds(
     with pytest.raises(IntegrityError, match="table call history is append-only"):
         async with db_session.begin_nested():
             await db_session.execute(text(statement), {"id": history.id})
+
+
+@pytest.mark.parametrize("status", [TournamentStatus.draft, TournamentStatus.published])
+@pytest.mark.parametrize("mutation", ["join", "leave"])
+async def test_fresh_roster_actor_must_be_active_before_event_start(
+    db_session, status, mutation
+):
+    actor = await make_user(db_session, "inactive-roster-actor")
+    player = await make_user(db_session, "roster-subject")
+    event = await _make_event(db_session, status=status)
+    entry = TournamentEntry(event_id=event.id, user_id=player.player_id)
+    db_session.add(entry)
+    await db_session.commit()
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"),
+        {"id": actor.id},
+    )
+    await db_session.commit()
+    statement = (
+        "INSERT INTO tournament_entry_members(entry_id,player_id,joined_by_account_id,"
+        "left_at,left_by_account_id) VALUES(:e,:p,:a,clock_timestamp(),:a)"
+        if mutation == "join"
+        else "UPDATE tournament_entry_members SET left_at=clock_timestamp(),"
+        "left_by_account_id=:a WHERE entry_id=:e AND left_at IS NULL"
+    )
+    with pytest.raises(IntegrityError, match="roster actor must be active"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(statement), {"e": entry.id, "p": player.player_id, "a": actor.id}
+            )
+            if mutation == "leave":
+                await db_session.execute(
+                    text(
+                        "UPDATE tournament_entries SET status='withdrawn' WHERE id=:e"
+                    ),
+                    {"e": entry.id},
+                )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_explicit_initial_lineup_actor_must_be_active(db_session):
+    _, _, _, match, _ = await seed_doubles_match(db_session)
+    actor = await make_user(db_session, "inactive-first-lineup-actor")
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"),
+        {"id": actor.id},
+    )
+    await db_session.commit()
+    with pytest.raises(IntegrityError, match="lineup actor must be active"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("UPDATE matches SET status='in_progress' WHERE id=:m"),
+                {"m": match.id},
+            )
+            lineup = await db_session.scalar(
+                text(
+                    "INSERT INTO match_lineups(match_id,revision,"
+                    "recorded_by_account_id) VALUES(:m,1,:a) RETURNING id"
+                ),
+                {"m": match.id, "a": actor.id},
+            )
+            await db_session.execute(
+                text(
+                    "INSERT INTO match_lineup_players(lineup_id,side_number,"
+                    "player_id,entry_member_id) SELECT :l,s.side_number,p.user_id,"
+                    "em.id FROM match_side_players p JOIN match_sides s ON "
+                    "s.id=p.match_side_id JOIN tournament_entry_members em ON "
+                    "em.player_id=p.user_id WHERE p.match_id=:m"
+                ),
+                {"l": lineup, "m": match.id},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("mutation", ["insert", "change"])
+async def test_new_entry_attribution_requires_active_actor(db_session, mutation):
+    actor = await make_user(db_session, "inactive-entry-attribution")
+    player = await make_user(db_session, "entry-attribution-subject")
+    event = await _make_event(db_session)
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"),
+        {"id": actor.id},
+    )
+    await db_session.commit()
+    existing = TournamentEntry(event_id=event.id, user_id=player.player_id)
+    if mutation == "change":
+        db_session.add(existing)
+        await db_session.commit()
+    with pytest.raises(IntegrityError, match="entry actor must be active"):
+        async with db_session.begin_nested():
+            existing.added_by_user_id = actor.id
+            if mutation == "insert":
+                db_session.add(existing)
+            await db_session.flush()
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_historical_roster_actors_do_not_block_fresh_departure_or_noop(
+    db_session,
+):
+    from app.models import TournamentEntryStatus
+
+    historical = await make_user(db_session, "historical-roster-actor")
+    current = await make_user(db_session, "current-roster-actor")
+    player = await make_user(db_session, "historical-roster-subject")
+    event = await _make_event(db_session)
+    member = TournamentEntryMember(
+        player_id=player.player_id, joined_by_account_id=historical.id
+    )
+    entry = TournamentEntry(event_id=event.id, members=[member])
+    db_session.add(entry)
+    await db_session.commit()
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:a"),
+        {"a": historical.id},
+    )
+    await db_session.commit()
+    await db_session.execute(
+        text(
+            "UPDATE tournament_entry_members SET left_at=clock_timestamp(),"
+            "left_by_account_id=:a WHERE id=:m"
+        ),
+        {"a": current.id, "m": member.id},
+    )
+    entry.status = TournamentEntryStatus.withdrawn
+    await db_session.commit()
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:a"),
+        {"a": current.id},
+    )
+    await db_session.execute(
+        text("UPDATE tournament_entry_members SET left_at=left_at WHERE id=:m"),
+        {"m": member.id},
+    )
+    await db_session.commit()
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT joined_by_account_id FROM tournament_entry_members WHERE id=:m"
+            ),
+            {"m": member.id},
+        )
+        == historical.id
+    )

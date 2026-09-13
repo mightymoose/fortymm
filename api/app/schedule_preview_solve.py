@@ -232,6 +232,14 @@ class PreviewJobInputs:
     events: tuple[_PreviewEventMeta, ...] = ()
 
 
+async def _lock_preview_actor(db: AsyncSession, actor: User) -> None:
+    # Account before Tournament, held through enqueue/cancel in Redis. The
+    # existing director gate checks fresh activity after both locks are held.
+    await db.execute(
+        select(User.id).where(User.id == actor.id).with_for_update(read=True)
+    )
+
+
 async def _load_owned_pre_live_tournament(
     db: AsyncSession, tournament_id: uuid.UUID, actor: User
 ) -> Tournament:
@@ -251,6 +259,7 @@ async def _load_owned_pre_live_tournament(
 
     Hold a tournament SHARE lock through preview enqueue so revocation or transfer
     cannot complete between authorization and the privileged queue operation."""
+    await _lock_preview_actor(db, actor)
     tournament = (
         await db.execute(
             select(Tournament)
@@ -297,6 +306,7 @@ async def ensure_preview_access(
     owner's, so its token is too. Loads the row alone (the reads need no events) and
     raises the same tournament-write / pre-live domain exceptions the enqueue does,
     which the caller adapts to HTTP (404 → 403 → 409)."""
+    await _lock_preview_actor(db, actor)
     tournament = (
         await db.execute(
             select(Tournament)

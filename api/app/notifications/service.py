@@ -377,8 +377,7 @@ class NotificationService:
         """Upsert keyed on the globally-unique APNs token: a device that has
         since signed into a different account re-points to the new owner rather
         than creating a duplicate row."""
-        if await self._active_recipient(user.id) is None:
-            raise InactiveNotificationAccount
+        await self._require_active_account(user.id)
         stmt = insert(DeviceToken).values(
             token=req.token,
             platform=req.platform,
@@ -636,6 +635,7 @@ class NotificationService:
         """Mark one notification read. Scoped to the owner — returns ``None``
         (router → 404) for a notification that isn't theirs or doesn't exist.
         Idempotent: re-marking an already-read row is a no-op."""
+        await self._require_active_account(user_id)
         notification = (
             await self._db.execute(
                 select(Notification).where(
@@ -653,11 +653,12 @@ class NotificationService:
         return NotificationItem.model_validate(notification)
 
     async def _mark_read_where(
-        self, *conditions: ColumnElement[bool]
+        self, user_id: uuid.UUID, *conditions: ColumnElement[bool]
     ) -> MarkAllReadResponse:
         """Stamp ``read_at`` on every notification matching ``conditions`` in one
         statement; ``marked`` is how many rows actually flipped. Shared by the
         batch and mark-all endpoints — callers supply the owner/unread scoping."""
+        await self._require_active_account(user_id)
         result = await self._db.execute(
             update(Notification).where(*conditions).values(read_at=datetime.now(UTC))
         )
@@ -673,6 +674,7 @@ class NotificationService:
         rows actually flipped. Lets the client coalesce many on-screen rows into
         a single round-trip."""
         return await self._mark_read_where(
+            user_id,
             Notification.user_id == user_id,
             Notification.id.in_(payload.ids),
             Notification.read_at.is_(None),
@@ -680,6 +682,7 @@ class NotificationService:
 
     async def mark_all_read(self, user_id: uuid.UUID) -> MarkAllReadResponse:
         return await self._mark_read_where(
+            user_id,
             Notification.user_id == user_id,
             Notification.read_at.is_(None),
         )
@@ -795,9 +798,7 @@ class NotificationService:
         default (and deleting overrides that fall back to the default).
         Locked/unavailable channels and cells are ignored — the user can't
         change them. Returns the freshly re-resolved preferences."""
-        recipient = await self._active_recipient(user.id)
-        if recipient is None:
-            raise InactiveNotificationAccount
+        await self._require_active_account(user.id)
         _, availability = await self._channel_order_and_availability()
         for channel_update in update_req.channels:
             channel = channel_update.channel
@@ -1067,6 +1068,11 @@ class NotificationService:
         )
 
     # ----- internals (push fan-out) ----------------------------------------
+
+    async def _require_active_account(self, user_id: uuid.UUID) -> None:
+        """Authorize notification mutations until their transaction commits."""
+        if await self._active_recipient(user_id) is None:
+            raise InactiveNotificationAccount
 
     async def _active_recipient(self, user_id: uuid.UUID) -> User | None:
         """Keep current recipient activity stable until delivery commits."""
