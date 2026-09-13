@@ -778,8 +778,8 @@ async def test_registration_actor_serializes_with_sql_deactivation(
         assert (
             await db_session.scalar(
                 text(
-                    "SELECT registered_by_account_id FROM tournament_entry_registrations "
-                    "WHERE entry_id=:e"
+                    "SELECT registered_by_account_id "
+                    "FROM tournament_entry_registrations WHERE entry_id=:e"
                 ),
                 {"e": entry_id},
             )
