@@ -9,18 +9,37 @@ IDENTITY_RETENTION_DDL = (
     """
     CREATE FUNCTION guard_standalone_match_creator() RETURNS trigger
     LANGUAGE plpgsql AS $$
-    DECLARE actor accounts%ROWTYPE;
+    DECLARE actor accounts%ROWTYPE; source_revision uuid; source_owner uuid;
     BEGIN
-        -- A materialized tournament match attributes its historical owner;
-        -- immutable rule provenance separately requires its matching fixture.
-        IF EXISTS (SELECT 1 FROM match_settings WHERE id=NEW.match_settings_id
-            AND source_rule_revision_id IS NOT NULL) THEN RETURN NEW; END IF;
-        SELECT * INTO actor FROM accounts WHERE id=NEW.created_by_user_id FOR SHARE;
+        SELECT source_rule_revision_id INTO source_revision FROM match_settings
+            WHERE id=NEW.match_settings_id;
+        IF source_revision IS NULL THEN
+            SELECT * INTO actor FROM accounts
+                WHERE id=NEW.created_by_user_id FOR SHARE;
+        ELSE
+            -- Materialization can already hold parent locks. Refuse contention
+            -- rather than invert another operation's Account-before-parent order.
+            SELECT * INTO actor FROM accounts
+                WHERE id=NEW.created_by_user_id FOR SHARE NOWAIT;
+        END IF;
         IF NOT FOUND OR actor.merged_at IS NOT NULL
             OR actor.deactivated_at IS NOT NULL OR actor.erased_at IS NOT NULL THEN
+            IF source_revision IS NOT NULL THEN
+                SELECT t.owner_account_id INTO source_owner
+                FROM tournament_draw_revisions revision
+                JOIN tournament_events e ON e.id=revision.event_id
+                JOIN tournaments t ON t.id=e.tournament_id
+                WHERE revision.id=source_revision FOR SHARE OF t NOWAIT;
+                -- Only the actual owner is historical materialization attribution.
+                -- Keep ownership stable until the matching fixture is committed.
+                IF source_owner=NEW.created_by_user_id THEN RETURN NEW; END IF;
+            END IF;
             RAISE EXCEPTION 'match creator must be active' USING ERRCODE='23514';
         END IF;
         RETURN NEW;
+    EXCEPTION WHEN lock_not_available THEN
+        RAISE EXCEPTION 'match creator authorization changed; retry'
+            USING ERRCODE='40001';
     END $$
     """,
     """CREATE TRIGGER guard_standalone_match_creator BEFORE INSERT ON matches

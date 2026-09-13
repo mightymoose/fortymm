@@ -173,3 +173,128 @@ async def test_fresh_alembic_install_enforces_standalone_creator_activity(postgr
                     ),
                     {"rules": rules.id, "actor": actor.id},
                 )
+
+
+async def _sourced_fixture(db_session, default_league):
+    from sqlalchemy import select
+
+    from app.competition_rules import match_rules_for_revision
+    from app.models import TournamentFixture, TournamentStatus
+    from app.tournament_draws import cut_draw
+    from tests.test_tournament_lifecycle import _enter, _make_tournament_at, _one_event
+
+    owner = await make_user(db_session, "sourced-match-owner")
+    tournament = await _make_tournament_at(
+        db_session,
+        owner=owner,
+        league=default_league,
+        status=TournamentStatus.published,
+        with_event=True,
+    )
+    event = await _one_event(db_session, tournament.id)
+    await _enter(db_session, event, 4)
+    await cut_draw(db_session, event)
+    fixture = await db_session.scalar(
+        select(TournamentFixture)
+        .where(TournamentFixture.scope_event_id == event.id)
+        .limit(1)
+    )
+    frozen = await match_rules_for_revision(db_session, fixture.draw_revision_id)
+    rules = MatchSettings(
+        source_rule_revision_id=fixture.draw_revision_id, **frozen.model_dump()
+    )
+    db_session.add(rules)
+    await db_session.commit()
+    return owner, tournament, fixture, rules
+
+
+async def _insert_sourced_match(db, fixture_id, rules_id, league_id, actor_id):
+    match_id = await db.scalar(
+        text(
+            "INSERT INTO matches(match_settings_id,league_id,created_by_user_id) "
+            "VALUES(:rules,:league,:actor) RETURNING id"
+        ),
+        {"rules": rules_id, "league": league_id, "actor": actor_id},
+    )
+    await db.execute(
+        text("INSERT INTO match_sides(match_id,side_number) VALUES(:m,1),(:m,2)"),
+        {"m": match_id},
+    )
+    await db.execute(
+        text(
+            "INSERT INTO match_side_players(match_id,match_side_id,user_id) "
+            "SELECT :m,s.id,entry_canonical_player(member.player_id) "
+            "FROM match_sides s JOIN tournament_fixtures f ON f.id=:f "
+            "JOIN tournament_entry_members member ON member.entry_id="
+            "CASE WHEN s.side_number=1 THEN f.entry_a_id ELSE f.entry_b_id END "
+            "WHERE s.match_id=:m AND member.left_at IS NULL"
+        ),
+        {"m": match_id, "f": fixture_id},
+    )
+    await db.execute(
+        text("UPDATE tournament_fixtures SET match_id=:m WHERE id=:f"),
+        {"m": match_id, "f": fixture_id},
+    )
+    await db.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("lifecycle", [deactivate_account, erase_account])
+async def test_sourced_sql_match_cannot_impersonate_unrelated_inactive_creator(
+    db_session, default_league, lifecycle
+):
+    _, _, fixture, rules = await _sourced_fixture(db_session, default_league)
+    other = await make_user(db_session, "unrelated-inactive-creator")
+    await lifecycle(db_session, other.id)
+    await db_session.commit()
+    with pytest.raises(IntegrityError, match="match creator must be active"):
+        async with db_session.begin_nested():
+            await _insert_sourced_match(
+                db_session, fixture.id, rules.id, default_league.id, other.id
+            )
+
+
+@pytest.mark.parametrize("first", ["match", "transfer"])
+async def test_sourced_owner_attribution_serializes_with_ownership_transfer(
+    db_session, engine, default_league, first
+):
+    from sqlalchemy.exc import DBAPIError
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    owner, tournament, fixture, rules = await _sourced_fixture(
+        db_session, default_league
+    )
+    successor = await make_user(db_session, "sourced-owner-successor")
+    await deactivate_account(db_session, owner.id)
+    await db_session.commit()
+    arguments = (fixture.id, rules.id, default_league.id, owner.id)
+    parameters = {
+        "tournament": tournament.id,
+        "previous": owner.id,
+        "owner": successor.id,
+    }
+    transfer = text(
+        "INSERT INTO tournament_ownership_transfers "
+        "(id,tournament_id,previous_owner_account_id,new_owner_account_id,"
+        "actor_account_id,reason) VALUES "
+        "(gen_random_uuid(),:tournament,:previous,:owner,:owner,'explicit')"
+    )
+    factory = async_sessionmaker(engine)
+    async with factory() as writer, factory() as ownership:
+        if first == "transfer":
+            await ownership.execute(transfer, parameters)
+            with pytest.raises(DBAPIError) as busy:
+                await _insert_sourced_match(writer, *arguments)
+            assert busy.value.orig.sqlstate == "40001"
+            await writer.rollback()
+            await ownership.commit()
+            with pytest.raises(IntegrityError, match="match creator must be active"):
+                await _insert_sourced_match(writer, *arguments)
+        else:
+            await _insert_sourced_match(writer, *arguments)
+            with pytest.raises(DBAPIError) as busy:
+                await ownership.execute(transfer, parameters)
+            assert busy.value.orig.sqlstate == "40001"
+            await ownership.rollback()
+            await writer.commit()
+            await ownership.execute(transfer, parameters)
+            await ownership.commit()
