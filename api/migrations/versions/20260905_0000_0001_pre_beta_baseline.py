@@ -1706,6 +1706,8 @@ IDENTITY_RETENTION_DDL = (
         IF TG_OP='UPDATE' AND (NEW.entry_id, NEW.player_id, NEW.left_at)
             IS NOT DISTINCT FROM (OLD.entry_id, OLD.player_id, OLD.left_at)
         THEN RETURN NEW; END IF;
+        -- Serialize membership admission with activation of a withdrawn entry.
+        PERFORM id FROM tournament_entries WHERE id=NEW.entry_id FOR SHARE;
         IF NOT EXISTS (SELECT 1 FROM tournament_entries
             WHERE id=NEW.entry_id AND status='entered') THEN RETURN NEW; END IF;
         FOR player_row IN SELECT id, retired_at FROM players
@@ -1749,6 +1751,33 @@ IDENTITY_RETENTION_DDL = (
     ON tournament_entry_registrations FOR EACH ROW
     EXECUTE FUNCTION guard_retired_registration()""",
     """
+    CREATE FUNCTION guard_retired_entry_activation() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    DECLARE player_row record;
+    BEGIN
+        IF NEW.status <> 'entered' THEN RETURN NEW; END IF;
+        IF TG_OP='UPDATE' AND OLD.status='entered' THEN RETURN NEW; END IF;
+        FOR player_row IN SELECT id, retired_at FROM players
+            WHERE id IN (
+                SELECT player_id FROM tournament_entry_members
+                WHERE entry_id=NEW.id AND left_at IS NULL
+                UNION
+                SELECT entry_canonical_player(player_id) FROM tournament_entry_members
+                WHERE entry_id=NEW.id AND left_at IS NULL
+            ) ORDER BY id FOR SHARE
+        LOOP
+            IF player_row.retired_at IS NOT NULL THEN
+                RAISE EXCEPTION 'retired Player cannot be admitted'
+                    USING ERRCODE='23514';
+            END IF;
+        END LOOP;
+        RETURN NEW;
+    END $$
+    """,
+    """CREATE TRIGGER guard_retired_entry_activation BEFORE INSERT OR UPDATE OF status
+    ON tournament_entries FOR EACH ROW
+    EXECUTE FUNCTION guard_retired_entry_activation()""",
+    """
     CREATE FUNCTION lock_match_player_admission() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN
         IF TG_OP='UPDATE' AND (NEW.match_id, NEW.match_side_id, NEW.user_id)
@@ -1783,58 +1812,6 @@ IDENTITY_RETENTION_DDL = (
     LANGUAGE plpgsql AS $$
     DECLARE participant match_side_players%ROWTYPE;
     BEGIN
-        IF TG_OP='DELETE' THEN
-            IF EXISTS (SELECT 1 FROM match_recorded_play WHERE match_id=OLD.match_id)
-                AND (
-                    EXISTS (
-                        SELECT 1 FROM match_recorded_participants recorded
-                        WHERE recorded.match_id=OLD.match_id
-                          AND entry_canonical_player(recorded.player_id)=
-                              entry_canonical_player(OLD.user_id)
-                    ) OR EXISTS (
-                        SELECT 1 FROM match_lineups lineup
-                        JOIN match_lineup_players p ON p.lineup_id=lineup.id
-                        WHERE lineup.match_id=OLD.match_id
-                          AND entry_canonical_player(p.player_id)=
-                              entry_canonical_player(OLD.user_id)
-                    )
-                )
-                AND NOT EXISTS (
-                    SELECT 1 FROM match_side_players current
-                    WHERE current.match_id=OLD.match_id
-                      AND entry_canonical_player(current.user_id)=
-                          entry_canonical_player(OLD.user_id)
-                )
-                AND NOT EXISTS (
-                    -- An audited correction may replace a subject, but its
-                    -- complete final lineup must remain in the current view.
-                    SELECT 1 FROM match_lineups lineup
-                    WHERE lineup.match_id=OLD.match_id AND lineup.revision > 1
-                      AND lineup.revision=(SELECT max(revision) FROM match_lineups
-                          WHERE match_id=OLD.match_id)
-                      AND EXISTS (SELECT 1 FROM match_lineup_players
-                          WHERE lineup_id=lineup.id)
-                      AND NOT EXISTS (
-                          SELECT 1 FROM match_lineup_players p
-                          WHERE p.lineup_id=lineup.id AND (
-                              entry_canonical_player(p.player_id)=
-                                  entry_canonical_player(OLD.user_id)
-                              OR NOT EXISTS (
-                                  SELECT 1 FROM match_side_players current
-                                  JOIN match_sides side ON side.id=current.match_side_id
-                                  WHERE current.match_id=OLD.match_id
-                                    AND side.side_number=p.side_number
-                                    AND entry_canonical_player(current.user_id)=
-                                        entry_canonical_player(p.player_id)
-                              )
-                          )
-                      )
-                ) THEN
-                RAISE EXCEPTION 'recorded participants cannot lose a current identity'
-                    USING ERRCODE='23514';
-            END IF;
-            RETURN NULL;
-        END IF;
         SELECT * INTO participant FROM match_side_players WHERE id=NEW.id;
         IF NOT FOUND OR (participant.match_id, participant.user_id)
             IS DISTINCT FROM (NEW.match_id, NEW.user_id) THEN
@@ -1880,7 +1857,7 @@ IDENTITY_RETENTION_DDL = (
     END $$
     """,
     """CREATE CONSTRAINT TRIGGER check_retired_match_admission
-    AFTER INSERT OR UPDATE OR DELETE ON match_side_players DEFERRABLE INITIALLY DEFERRED
+    AFTER INSERT OR UPDATE ON match_side_players DEFERRABLE INITIALLY DEFERRED
     FOR EACH ROW EXECUTE FUNCTION check_retired_match_admission()""",
 )
 
@@ -8242,6 +8219,7 @@ def downgrade() -> None:
         "revoke_deactivated_account_credentials",
         "guard_retired_player_admission",
         "guard_retired_registration",
+        "guard_retired_entry_activation",
         "lock_match_player_admission",
         "check_retired_match_admission",
         "preserve_published_tournament",

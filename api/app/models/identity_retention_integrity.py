@@ -167,6 +167,8 @@ IDENTITY_RETENTION_DDL = (
         IF TG_OP='UPDATE' AND (NEW.entry_id, NEW.player_id, NEW.left_at)
             IS NOT DISTINCT FROM (OLD.entry_id, OLD.player_id, OLD.left_at)
         THEN RETURN NEW; END IF;
+        -- Serialize membership admission with activation of a withdrawn entry.
+        PERFORM id FROM tournament_entries WHERE id=NEW.entry_id FOR SHARE;
         IF NOT EXISTS (SELECT 1 FROM tournament_entries
             WHERE id=NEW.entry_id AND status='entered') THEN RETURN NEW; END IF;
         FOR player_row IN SELECT id, retired_at FROM players
@@ -209,6 +211,33 @@ IDENTITY_RETENTION_DDL = (
     """CREATE TRIGGER guard_retired_registration BEFORE INSERT
     ON tournament_entry_registrations FOR EACH ROW
     EXECUTE FUNCTION guard_retired_registration()""",
+    """
+    CREATE FUNCTION guard_retired_entry_activation() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    DECLARE player_row record;
+    BEGIN
+        IF NEW.status <> 'entered' THEN RETURN NEW; END IF;
+        IF TG_OP='UPDATE' AND OLD.status='entered' THEN RETURN NEW; END IF;
+        FOR player_row IN SELECT id, retired_at FROM players
+            WHERE id IN (
+                SELECT player_id FROM tournament_entry_members
+                WHERE entry_id=NEW.id AND left_at IS NULL
+                UNION
+                SELECT entry_canonical_player(player_id) FROM tournament_entry_members
+                WHERE entry_id=NEW.id AND left_at IS NULL
+            ) ORDER BY id FOR SHARE
+        LOOP
+            IF player_row.retired_at IS NOT NULL THEN
+                RAISE EXCEPTION 'retired Player cannot be admitted'
+                    USING ERRCODE='23514';
+            END IF;
+        END LOOP;
+        RETURN NEW;
+    END $$
+    """,
+    """CREATE TRIGGER guard_retired_entry_activation BEFORE INSERT OR UPDATE OF status
+    ON tournament_entries FOR EACH ROW
+    EXECUTE FUNCTION guard_retired_entry_activation()""",
     """
     CREATE FUNCTION lock_match_player_admission() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN

@@ -385,3 +385,126 @@ async def test_sql_match_admission_serializes_with_player_retirement(
         ),
         {"match": match.id, "player": opponent.player_id},
     ) == (1 if first == "admission" else 0)
+
+
+async def test_sql_status_toggle_cannot_admit_a_retired_player_without_registration(
+    db_session,
+):
+    from app.models import TournamentEntry, TournamentEntryStatus
+    from tests.test_tournament_entries import _make_event
+
+    player = await make_user(db_session, "withdrawn-retired-admission")
+    event = await _make_event(db_session)
+    await retire_player(db_session, player.player_id)
+    entry = TournamentEntry(event_id=event.id, status=TournamentEntryStatus.withdrawn)
+    db_session.add(entry)
+    await db_session.flush()
+    await db_session.execute(
+        text("INSERT INTO tournament_entry_members(entry_id,player_id) VALUES(:e,:p)"),
+        {"e": entry.id, "p": player.player_id},
+    )
+    await db_session.commit()
+    with pytest.raises(IntegrityError, match="retired Player cannot be admitted"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text("UPDATE tournament_entries SET status='entered' WHERE id=:e"),
+                {"e": entry.id},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("first", ["admission", "retirement"])
+async def test_sql_entry_activation_serializes_with_retirement(
+    db_session, engine, first
+):
+    from app.models import TournamentEntry, TournamentEntryStatus
+    from tests.test_tournament_entries import _make_event
+
+    player = await make_user(db_session, "entry-activation-race")
+    event = await _make_event(db_session)
+    entry = TournamentEntry(event_id=event.id, status=TournamentEntryStatus.withdrawn)
+    db_session.add(entry)
+    await db_session.flush()
+    await db_session.execute(
+        text("INSERT INTO tournament_entry_members(entry_id,player_id) VALUES(:e,:p)"),
+        {"e": entry.id, "p": player.player_id},
+    )
+    await db_session.commit()
+    entry_id, player_id = entry.id, player.player_id
+    async with (
+        async_sessionmaker(engine)() as writer,
+        async_sessionmaker(engine)() as lifecycle,
+    ):
+        writer_pid = await writer.scalar(text("SELECT pg_backend_pid()"))
+        lifecycle_pid = await lifecycle.scalar(text("SELECT pg_backend_pid()"))
+
+        async def admit():
+            await writer.execute(
+                text("UPDATE tournament_entries SET status='entered' WHERE id=:e"),
+                {"e": entry_id},
+            )
+
+        if first == "retirement":
+            await retire_player(lifecycle, player_id)
+            await lifecycle.flush()
+            pending = asyncio.create_task(admit())
+            try:
+                await wait_for_blocked(lifecycle, writer_pid, pending)
+                await lifecycle.commit()
+                with pytest.raises(
+                    IntegrityError, match="retired Player cannot be admitted"
+                ):
+                    await pending
+                    await writer.commit()
+            finally:
+                if not pending.done():
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+        else:
+            await admit()
+            pending = asyncio.create_task(retire_player(lifecycle, player_id))
+            try:
+                await wait_for_blocked(writer, lifecycle_pid, pending)
+                await writer.commit()
+                await pending
+                await lifecycle.commit()
+            finally:
+                if not pending.done():
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+    status = await db_session.scalar(
+        text("SELECT status FROM tournament_entries WHERE id=:e"), {"e": entry_id}
+    )
+    assert status == ("entered" if first == "admission" else "withdrawn")
+
+
+@pytest.mark.parametrize("first", ["membership", "activation"])
+async def test_sql_compound_entry_activation_cannot_admit_retired_player(
+    db_session, first
+):
+    from app.models import TournamentEntry, TournamentEntryStatus
+    from tests.test_tournament_entries import _make_event
+
+    player = await make_user(db_session, "compound-retired-entry")
+    event = await _make_event(db_session)
+    await retire_player(db_session, player.player_id)
+    entry = TournamentEntry(event_id=event.id, status=TournamentEntryStatus.withdrawn)
+    db_session.add(entry)
+    await db_session.commit()
+    statement = (
+        "WITH membership AS (INSERT INTO tournament_entry_members(entry_id,player_id) "
+        "VALUES(:e,:p) RETURNING entry_id) UPDATE tournament_entries "
+        "SET status='entered' "
+        "WHERE id IN (SELECT entry_id FROM membership)"
+        if first == "membership"
+        else "WITH activation AS (UPDATE tournament_entries SET status='entered' "
+        "WHERE id=:e RETURNING id) INSERT INTO tournament_entry_members"
+        "(entry_id,player_id) "
+        "SELECT id,:p FROM activation"
+    )
+    with pytest.raises(IntegrityError, match="retired Player cannot be admitted"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(statement), {"e": entry.id, "p": player.player_id}
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))

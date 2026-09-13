@@ -1,12 +1,13 @@
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import get_session
+from app.email_credentials import lock_accounts
 from app.leagues import add_user_to_default_league
 from app.models import Permission, Player, Role, RolePermission, User, UserRole
 from app.roles import DEFAULT_ROLE_NAME, get_default_role, grant_default_role
@@ -69,7 +70,29 @@ def require_permission(name: str) -> Callable[..., Awaitable[User]]:
     return dep
 
 
-_require_rbac = require_permission(RBAC_PERMISSION)
+async def _require_rbac(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> User:
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        account_ids = {user.id}
+        target_id = request.path_params.get("user_id")
+        if target_id is not None:
+            try:
+                account_ids.add(uuid.UUID(str(target_id)))
+            except ValueError:
+                # FastAPI reports an invalid path ID after authorization.
+                pass
+        # Lock actor and target together, before role/permission rows. Opposing
+        # administrators changing each other's roles use the same lock order.
+        await lock_accounts(db, account_ids)
+    if not user.is_active or not await user_has_permission(
+        db, user.id, RBAC_PERMISSION
+    ):
+        raise HTTPException(status_code=403, detail="Forbidden.")
+    return user
+
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(_require_rbac)])
 
