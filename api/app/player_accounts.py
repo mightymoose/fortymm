@@ -84,7 +84,6 @@ async def managing_account_ids(
                 AccountPlayer.player_id.in_(player_ids),
                 Account.is_active,
                 Player.merged_into_player_id.is_(None),
-                Player.retired_at.is_(None),
             )
             .distinct()
             .order_by(Account.id)

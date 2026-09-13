@@ -20,8 +20,9 @@ credentials, including merge confirmations targeting the Account. Confirmation e
 must recheck Account activity before changing identity or minting a session.
 The database also revokes credentials on direct SQL deactivation and rejects new
 credentials owned by or targeting an inactive Account. Reactivation cannot revive
-old cookies, links, or device tokens. Notification delivery rechecks recipient
-activity so already-queued work cannot send to a suspended Account. Existing linked
+old cookies, links, or device tokens. Notification preferences require a locked
+active Account, and delivery rechecks recipient activity so already-queued work
+cannot send to a suspended Account. Existing linked
 login identities survive suspension, but SQL
 cannot attach, reassign, or change a login credential while either its existing or
 new Account is inactive. Linked-token verification, profile changes, and
@@ -60,13 +61,15 @@ Player retirement is reversible and keeps the same identity, reserved username,
 membership history, match results, and rating inputs. Retired and merged Players
 are excluded from discovery, new-participant selection, active roster listings,
 and current leaderboards. Historical results remain resolvable. Retirement alone
-does not alter results or trigger a rating reset. Restoration applies normal
+does not alter results or trigger a rating reset, or suppress historical-match
+notifications to its active managing Accounts. Restoration applies normal
 listing and leaderboard eligibility and does not re-enter withdrawn competitions
 or recreate revoked access. Restoring a merged Player requires separate merge
 reconciliation; it is not ordinary restoration. The event response separates the
 visible `entrants` roster from `retained_entrants`, a lookup for hidden identities
 referenced by fixtures and results. Clients resolve historical names through both
-lists, preserve the server's derived `registration_order`, and use the server's
+lists, preserve the server's current-period `registration_order` (the same priority
+used for draw seeding), and use the server's
 `entered` count for held registrations and capacity. Current-player membership and
 withdrawal use both lists; hiding a roster row never cancels its held seat.
 The server reports a `retired` entry refusal so withdrawing a held seat does not

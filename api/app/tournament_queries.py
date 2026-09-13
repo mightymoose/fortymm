@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 from pydantic import ValidationError
 from sqlalchemy import ColumnElement, Select, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import contains_eager
+from sqlalchemy.orm import aliased, contains_eager
 from sqlalchemy.sql.expression import ScalarSelect
 
 from app.models import (
@@ -34,6 +34,7 @@ from app.models import (
     Player,
     Tournament,
     TournamentEntry,
+    TournamentEntryRegistration,
     TournamentEntryStatus,
     TournamentEvent,
     TournamentEventGroupReservation,
@@ -187,6 +188,42 @@ async def draw_type_catalogue(db: AsyncSession) -> list[DrawTypeRead]:
     return [DrawTypeRead.model_validate(row) for row in rows]
 
 
+def registration_order() -> ColumnElement[datetime]:
+    """Current registration priority, including identities reconciled during it.
+
+    A same-person merge retains the earlier registration without rewriting either
+    period. A later reentry starts after that reconciliation and therefore does
+    not inherit its priority. Entry creation is the fallback for direct seed rows.
+    """
+    current_period = (
+        select(TournamentEntryRegistration.registered_at)
+        .where(
+            TournamentEntryRegistration.entry_id == TournamentEntry.id,
+            TournamentEntryRegistration.withdrawn_at.is_(None),
+        )
+        .correlate(TournamentEntry)
+        .scalar_subquery()
+    )
+    current_order = func.coalesce(current_period, TournamentEntry.created_at)
+    reconciled_period = aliased(TournamentEntryRegistration)
+    former_entry = aliased(TournamentEntry)
+    reconciled_order = (
+        select(func.min(reconciled_period.registered_at))
+        .join(former_entry, former_entry.id == reconciled_period.entry_id)
+        .where(
+            former_entry.event_id == TournamentEntry.event_id,
+            former_entry.superseded_by_entry_id.is_not(None),
+            func.entry_single_player(former_entry.id)
+            == func.entry_single_player(TournamentEntry.id),
+            reconciled_period.withdrawal_reason == "identity_reconciliation",
+            reconciled_period.withdrawn_at >= current_order,
+        )
+        .correlate(TournamentEntry)
+        .scalar_subquery()
+    )
+    return func.least(current_order, reconciled_order)
+
+
 async def active_entrants_by_event(
     db: AsyncSession, event_ids: Sequence[uuid.UUID]
 ) -> dict[uuid.UUID, list[TournamentEntrantRead]]:
@@ -263,9 +300,9 @@ async def active_entrants_by_event(
                 TournamentEntry.event_id.in_(entrants.keys()),
                 TournamentEntry.status == TournamentEntryStatus.entered,
             )
-            # Oldest entry first, matching the event's ``entries`` relationship,
-            # so the list is stable across reads.
-            .order_by(TournamentEntry.created_at, TournamentEntry.id)
+            # Current registration priority matches draw seeding, including
+            # returning entrants and reconciled registration periods.
+            .order_by(registration_order(), TournamentEntry.id)
         )
     ).all()
     for (

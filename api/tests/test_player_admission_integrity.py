@@ -588,3 +588,180 @@ async def test_rated_opponent_manager_serializes_with_deactivation(
                 if not pending.done():
                     pending.cancel()
                     await asyncio.gather(pending, return_exceptions=True)
+
+
+async def test_retired_merged_source_entry_can_reenter_as_active_survivor(db_session):
+    from app.account_merge import merge_user
+    from app.tournament_entries import enter_event, withdraw_from_event
+    from tests.test_tournament_entries import _make_event
+
+    source = await make_user(db_session, "reentry-retired-source")
+    target = await make_user(db_session, "reentry-active-survivor")
+    original_player = source.player_id
+    event = await _make_event(db_session)
+    scope = {"tournament_id": event.tournament_id, "event_id": event.id}
+    entry = await enter_event(db_session, **scope, actor=source, user_id=None)
+    await retire_player(db_session, original_player)
+    await db_session.commit()
+    await withdraw_from_event(db_session, **scope, entry_id=entry.id, actor=source)
+    await merge_user(db_session, from_user_id=source.id, to_user_id=target.id)
+    await db_session.commit()
+    restored = await enter_event(db_session, **scope, actor=target, user_id=None)
+    assert restored.id == entry.id
+    assert restored.user_id == target.player_id
+    assert (
+        await db_session.scalar(
+            text("SELECT player_id FROM tournament_entry_members WHERE entry_id=:e"),
+            {"e": entry.id},
+        )
+        == original_player
+    )
+
+
+@pytest.mark.parametrize("operation", ["register", "withdraw"])
+async def test_sql_new_registration_requires_active_actor(db_session, operation):
+    from app.models import TournamentEntry
+    from tests.test_tournament_entries import _make_event
+
+    actor = await make_user(db_session, "inactive-registration-actor")
+    player = await make_user(db_session, "active-registration-player")
+    event = await _make_event(db_session)
+    entry = TournamentEntry(event_id=event.id, user_id=player.player_id)
+    db_session.add(entry)
+    await db_session.commit()
+    if operation == "withdraw":
+        await db_session.execute(
+            text(
+                "INSERT INTO tournament_entry_registrations"
+                "(entry_id,registered_by_account_id) VALUES(:e,:a)"
+            ),
+            {"e": entry.id, "a": actor.id},
+        )
+        await db_session.commit()
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:a"),
+        {"a": actor.id},
+    )
+    await db_session.commit()
+    statement = (
+        "INSERT INTO tournament_entry_registrations"
+        "(entry_id,registered_by_account_id) VALUES(:e,:a)"
+        if operation == "register"
+        else "UPDATE tournament_entry_registrations SET withdrawn_at=clock_timestamp(),"
+        "withdrawn_by_account_id=:a,withdrawal_reason='self_withdrawal' "
+        "WHERE entry_id=:e"
+    )
+    with pytest.raises(IntegrityError, match="registration actor must be active"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(statement),
+                {"e": entry.id, "a": actor.id},
+            )
+            if operation == "withdraw":
+                await db_session.execute(
+                    text(
+                        "UPDATE tournament_entries SET status='withdrawn' WHERE id=:e"
+                    ),
+                    {"e": entry.id},
+                )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("first", ["registration", "deactivation"])
+@pytest.mark.parametrize("operation", ["register", "withdraw"])
+async def test_registration_actor_serializes_with_sql_deactivation(
+    db_session, engine, first, operation
+):
+    from app.models import TournamentEntry
+    from tests.test_tournament_entries import _make_event
+
+    actor = await make_user(db_session, "registration-actor-race")
+    event = await _make_event(db_session)
+    entry = TournamentEntry(event_id=event.id, user_id=actor.player_id)
+    db_session.add(entry)
+    await db_session.commit()
+    if operation == "withdraw":
+        await db_session.execute(
+            text(
+                "INSERT INTO tournament_entry_registrations"
+                "(entry_id,registered_by_account_id) VALUES(:e,:a)"
+            ),
+            {"e": entry.id, "a": actor.id},
+        )
+        await db_session.commit()
+    actor_id, entry_id = actor.id, entry.id
+    async with (
+        async_sessionmaker(engine)() as writer,
+        async_sessionmaker(engine)() as lifecycle,
+    ):
+        writer_pid = await writer.scalar(text("SELECT pg_backend_pid()"))
+        lifecycle_pid = await lifecycle.scalar(text("SELECT pg_backend_pid()"))
+
+        async def register():
+            if operation == "withdraw":
+                await writer.execute(
+                    text(
+                        "UPDATE tournament_entry_registrations "
+                        "SET "
+                        "withdrawn_at=clock_timestamp(),withdrawn_by_account_id=:a,"
+                        "withdrawal_reason='self_withdrawal' WHERE entry_id=:e"
+                    ),
+                    {"e": entry_id, "a": actor_id},
+                )
+                await writer.execute(
+                    text(
+                        "UPDATE tournament_entries SET status='withdrawn' WHERE id=:e"
+                    ),
+                    {"e": entry_id},
+                )
+                return
+            await writer.execute(
+                text(
+                    "INSERT INTO tournament_entry_registrations"
+                    "(entry_id,registered_by_account_id) VALUES(:e,:a)"
+                ),
+                {"e": entry_id, "a": actor_id},
+            )
+
+        async def deactivate():
+            await lifecycle.execute(
+                text(
+                    "UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:a"
+                ),
+                {"a": actor_id},
+            )
+
+        if first == "deactivation":
+            await deactivate()
+            pending = asyncio.create_task(register())
+            try:
+                await wait_for_blocked(lifecycle, writer_pid, pending)
+                await lifecycle.commit()
+                with pytest.raises(
+                    IntegrityError, match="registration actor must be active"
+                ):
+                    await pending
+                    await writer.commit()
+            finally:
+                if not pending.done():
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+        else:
+            await register()
+            pending = asyncio.create_task(deactivate())
+            try:
+                await wait_for_blocked(writer, lifecycle_pid, pending)
+                await writer.commit()
+                await pending
+                await lifecycle.commit()
+            finally:
+                if not pending.done():
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)
+    assert await db_session.scalar(
+        text(
+            "SELECT count(*) FROM tournament_entry_registrations "
+            "WHERE entry_id=:e AND withdrawn_at IS NULL"
+        ),
+        {"e": entry_id},
+    ) == int((first == "registration") == (operation == "register"))

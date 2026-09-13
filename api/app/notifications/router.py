@@ -159,7 +159,10 @@ async def update_notification_preferences(
     """Partial update: only the listed channels/cells change. Attempts to alter
     a locked or unavailable channel are ignored; the response reflects the
     server-resolved state."""
-    return await service.update_preferences(current_user, payload)
+    try:
+        return await service.update_preferences(current_user, payload)
+    except InactiveNotificationAccount:
+        raise HTTPException(status_code=401, detail="Account is inactive") from None
 
 
 # ----- admin broadcast ------------------------------------------------------

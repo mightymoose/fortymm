@@ -190,10 +190,26 @@ IDENTITY_RETENTION_DDL = (
     """
     CREATE FUNCTION guard_retired_registration() RETURNS trigger
     LANGUAGE plpgsql AS $$
-    DECLARE player_row record;
+    DECLARE player_row record; actor_row record;
     BEGIN
-        -- Closing an existing registration never admits a Player.
-        IF NEW.withdrawn_at IS NOT NULL THEN RETURN NEW; END IF;
+        -- Lock only fresh actor provenance, never historical registrants or
+        -- completed withdrawal attribution. Identity reconciliation is system work.
+        FOR actor_row IN SELECT id, merged_at, deactivated_at, erased_at FROM accounts
+            WHERE id IN (
+                CASE WHEN TG_OP='INSERT' THEN NEW.registered_by_account_id END,
+                CASE WHEN NEW.withdrawn_at IS NOT NULL
+                    AND (TG_OP='INSERT' OR OLD.withdrawn_at IS NULL)
+                    AND NEW.withdrawal_reason <> 'identity_reconciliation'
+                    THEN NEW.withdrawn_by_account_id END
+            ) ORDER BY id FOR SHARE
+        LOOP
+            IF actor_row.merged_at IS NOT NULL OR actor_row.deactivated_at IS NOT NULL
+                OR actor_row.erased_at IS NOT NULL THEN
+                RAISE EXCEPTION 'registration actor must be active'
+                    USING ERRCODE='23514';
+            END IF;
+        END LOOP;
+        IF TG_OP='UPDATE' OR NEW.withdrawn_at IS NOT NULL THEN RETURN NEW; END IF;
         FOR player_row IN SELECT p.id, p.retired_at FROM players p
             WHERE p.id IN (
                 SELECT entry_canonical_player(m.player_id)
@@ -209,7 +225,7 @@ IDENTITY_RETENTION_DDL = (
         RETURN NEW;
     END $$
     """,
-    """CREATE TRIGGER guard_retired_registration BEFORE INSERT
+    """CREATE TRIGGER guard_retired_registration BEFORE INSERT OR UPDATE
     ON tournament_entry_registrations FOR EACH ROW
     EXECUTE FUNCTION guard_retired_registration()""",
     """
@@ -221,9 +237,6 @@ IDENTITY_RETENTION_DDL = (
         IF TG_OP='UPDATE' AND OLD.status='entered' THEN RETURN NEW; END IF;
         FOR player_row IN SELECT id, retired_at FROM players
             WHERE id IN (
-                SELECT player_id FROM tournament_entry_members
-                WHERE entry_id=NEW.id AND left_at IS NULL
-                UNION
                 SELECT entry_canonical_player(player_id) FROM tournament_entry_members
                 WHERE entry_id=NEW.id AND left_at IS NULL
             ) ORDER BY id FOR SHARE

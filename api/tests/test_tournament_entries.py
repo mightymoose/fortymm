@@ -3034,11 +3034,16 @@ async def test_registration_withdrawal_records_event_wide_competition_withdrawal
     assert withdrawal.reason == "self_withdrawal"
 
 
-async def test_reregistration_uses_new_registration_order_for_draw_seeding(
+@pytest.mark.parametrize("retire_returning_player", [False, True])
+async def test_reregistration_order_matches_draw_and_display(
     db_session: AsyncSession,
+    retire_returning_player: bool,
 ) -> None:
     from app.draws import order_entrants
+    from app.identity_lifecycle import retire_player
     from app.tournament_draws import active_draw_entrants
+    from app.tournament_queries import active_entrants_by_event
+    from app.tournament_serialization import serialize_event
 
     first = await make_user(db_session, "order-first")
     second = await make_user(db_session, "order-second")
@@ -3081,6 +3086,26 @@ async def test_reregistration_uses_new_registration_order_for_draw_seeding(
         second_entry.id,
         first_entry.id,
     ]
+
+    if retire_returning_player:
+        await retire_player(db_session, first.player_id)
+        await db_session.commit()
+    await db_session.refresh(event)
+    read = serialize_event(
+        event,
+        entrants=(await active_entrants_by_event(db_session, [event_id]))[event_id],
+        fixtures=[],
+        rating=None,
+        game_counts={},
+    )
+    displayed = sorted(
+        read.entrants + read.retained_entrants,
+        key=lambda entrant: entrant.registration_order,
+    )
+    assert [entrant.id for entrant in displayed] == [second_entry.id, first_entry.id]
+    assert [entrant.id for entrant in read.retained_entrants] == (
+        [first_entry.id] if retire_returning_player else []
+    )
 
 
 async def test_retired_player_is_not_enterable_by_director(db_session):

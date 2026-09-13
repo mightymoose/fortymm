@@ -31,13 +31,11 @@ import enum
 import uuid
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import replace
-from datetime import datetime
 from itertools import batched
 from types import MappingProxyType
 
 from sqlalchemy import ColumnElement, exists, func, insert, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.competition_rules import (
@@ -72,7 +70,6 @@ from app.models import (
     TournamentDrawRevision,
     TournamentEntry,
     TournamentEntryParticipation,
-    TournamentEntryRegistration,
     TournamentEntryStatus,
     TournamentEntryWithdrawal,
     TournamentEvent,
@@ -90,7 +87,7 @@ from app.tournament_draw_limits import (
 )
 from app.tournament_draw_settings import draw_settings_of
 from app.tournament_event_stages import GroupCountSource, archive_stage_configuration
-from app.tournament_queries import stage_ids_for_events
+from app.tournament_queries import registration_order, stage_ids_for_events
 from app.tournament_reservations import (
     group_count_for,
     group_read,
@@ -98,42 +95,6 @@ from app.tournament_reservations import (
     ordered_reservations,
     reservation_read,
 )
-
-
-def _registration_order() -> ColumnElement[datetime]:
-    """Current registration priority, including identities reconciled during it.
-
-    A same-person merge retains the earlier registration without rewriting either
-    period. A later reentry starts after that reconciliation and therefore does
-    not inherit its priority. Entry creation is the fallback for direct seed rows.
-    """
-    current_period = (
-        select(TournamentEntryRegistration.registered_at)
-        .where(
-            TournamentEntryRegistration.entry_id == TournamentEntry.id,
-            TournamentEntryRegistration.withdrawn_at.is_(None),
-        )
-        .correlate(TournamentEntry)
-        .scalar_subquery()
-    )
-    current_order = func.coalesce(current_period, TournamentEntry.created_at)
-    reconciled_period = aliased(TournamentEntryRegistration)
-    former_entry = aliased(TournamentEntry)
-    reconciled_order = (
-        select(func.min(reconciled_period.registered_at))
-        .join(former_entry, former_entry.id == reconciled_period.entry_id)
-        .where(
-            former_entry.event_id == TournamentEntry.event_id,
-            former_entry.superseded_by_entry_id.is_not(None),
-            func.entry_single_player(former_entry.id)
-            == func.entry_single_player(TournamentEntry.id),
-            reconciled_period.withdrawal_reason == "identity_reconciliation",
-            reconciled_period.withdrawn_at >= current_order,
-        )
-        .correlate(TournamentEntry)
-        .scalar_subquery()
-    )
-    return func.least(current_order, reconciled_order)
 
 
 def _eligible_for_initial_draw() -> ColumnElement[bool]:
@@ -168,7 +129,7 @@ async def active_draw_entrants(db: AsyncSession, event_id: uuid.UUID) -> list[En
             select(
                 TournamentEntry.id,
                 TournamentEntry.seed,
-                _registration_order(),
+                registration_order(),
             ).where(
                 TournamentEntry.event_id == event_id,
                 _eligible_for_initial_draw(),
@@ -192,7 +153,7 @@ async def participating_draw_entrants(
     """
     rows = (
         await db.execute(
-            select(TournamentEntry.id, TournamentEntry.seed, _registration_order())
+            select(TournamentEntry.id, TournamentEntry.seed, registration_order())
             .join(
                 TournamentEntryParticipation,
                 TournamentEntryParticipation.entry_id == TournamentEntry.id,
@@ -241,7 +202,7 @@ async def active_draw_entrants_by_event(
                 TournamentEntry.event_id,
                 TournamentEntry.id,
                 TournamentEntry.seed,
-                _registration_order(),
+                registration_order(),
             ).where(
                 TournamentEntry.event_id.in_(event_ids),
                 _eligible_for_initial_draw(),

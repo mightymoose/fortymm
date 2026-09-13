@@ -84,7 +84,7 @@ RECIPIENT_LIMIT = 50
 
 
 class InactiveNotificationAccount(Exception):
-    """A suspended or erased Account cannot register notification access."""
+    """An inactive Account cannot change notification settings or device access."""
 
 
 class PushNotConfiguredError(Exception):
@@ -795,6 +795,9 @@ class NotificationService:
         default (and deleting overrides that fall back to the default).
         Locked/unavailable channels and cells are ignored — the user can't
         change them. Returns the freshly re-resolved preferences."""
+        recipient = await self._active_recipient(user.id)
+        if recipient is None:
+            raise InactiveNotificationAccount
         _, availability = await self._channel_order_and_availability()
         for channel_update in update_req.channels:
             channel = channel_update.channel

@@ -233,3 +233,114 @@ async def test_queued_notification_job_skips_recipient_suspended_before_worker(
         await worker_engine.dispose()
     assert sender.sent == []
     assert await db_session.scalar(select(Notification.id)) is None
+
+
+async def test_inactive_cached_account_cannot_change_notification_preferences(
+    db_session,
+):
+    from app.notifications.service import InactiveNotificationAccount
+    from app.schemas.notification import NotificationPreferencesUpdate
+
+    user = await make_user(db_session, "inactive-preferences")
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"),
+        {"id": user.id},
+    )
+    await db_session.commit()
+    with pytest.raises(InactiveNotificationAccount):
+        await NotificationService(db_session, FakeSender()).update_preferences(
+            user,
+            NotificationPreferencesUpdate.model_validate(
+                {
+                    "channels": [{"channel": "push", "enabled": False}],
+                }
+            ),
+        )
+
+
+async def test_preference_update_holds_activity_until_commit(db_session, monkeypatch):
+    import asyncio
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.schemas.notification import NotificationPreferencesUpdate
+
+    user = await make_user(db_session, "preference-activity-race")
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = NotificationService._set_channel_override
+
+    async def paused_update(self, *args, **kwargs):
+        entered.set()
+        await release.wait()
+        return await original(self, *args, **kwargs)
+
+    monkeypatch.setattr(NotificationService, "_set_channel_override", paused_update)
+    sessions = async_sessionmaker(db_session.bind, expire_on_commit=False)
+    async with sessions() as writer, sessions() as lifecycle:
+        writer_pid = await writer.scalar(text("SELECT pg_backend_pid()"))
+        lifecycle_pid = await lifecycle.scalar(text("SELECT pg_backend_pid()"))
+        update = asyncio.create_task(
+            NotificationService(writer, FakeSender()).update_preferences(
+                user,
+                NotificationPreferencesUpdate.model_validate(
+                    {
+                        "channels": [{"channel": "push", "enabled": False}],
+                    }
+                ),
+            )
+        )
+        await asyncio.wait_for(entered.wait(), 5)
+        suspension = asyncio.create_task(
+            lifecycle.execute(
+                text(
+                    "UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"
+                ),
+                {"id": user.id},
+            )
+        )
+        try:
+            async with asyncio.timeout(5):
+                while writer_pid not in await db_session.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": lifecycle_pid}
+                ):
+                    assert not suspension.done(), (
+                        "suspension bypassed preference writer"
+                    )
+                    await asyncio.sleep(0.01)
+        finally:
+            release.set()
+            await update
+            await suspension
+            await lifecycle.rollback()
+
+
+async def test_retired_proposer_receives_standing_result_acceptance(
+    db_session, fake_notifications_queue
+):
+    from app.identity_lifecycle import retire_player
+    from app.match_result_notifications import notify_result_accepted
+    from app.models import MatchResult
+    from app.result_acceptance import accept_result
+    from tests._helpers import enqueued_notification_jobs
+    from tests.test_accept_result_service import _propose_standing
+
+    match_id, result_id, opponent_id = await _propose_standing(
+        db_session,
+        creator_name="retired-result-proposer",
+        opponent_name="active-result-acceptor",
+    )
+    proposal = await db_session.get(MatchResult, result_id)
+    proposer_id = proposal.submitted_for_player_id
+    account_id = proposal.submitted_by_user_id
+    await retire_player(db_session, proposer_id)
+    await db_session.commit()
+    fake_notifications_queue.empty()
+    completed = await accept_result(
+        db_session, match_id, opponent_id, result_id=result_id
+    )
+    await notify_result_accepted(
+        NotificationService(db_session, FakeSender()), completed, proposer_id
+    )
+    notices = enqueued_notification_jobs(fake_notifications_queue)
+    assert [notice.user_id for notice in notices] == [account_id]
+    assert notices[0].collapse_id == f"result-accepted:{match_id}"
