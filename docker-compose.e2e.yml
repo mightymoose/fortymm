@@ -19,6 +19,9 @@ services:
     ports: !reset []
     environment:
       GEOCODER: fake
+      # Fixture guests share one address; exercise admission with finite budgets.
+      GUEST_CREATION_IP_LIMIT_PER_HOUR: "1000"
+      GUEST_CREATION_IP_LIMIT_PER_DAY: "5000"
       # The whole e2e suite is one host from the api's point of view, so the
       # per-IP self-entry ceiling must never fire mid-suite (the #1552 lesson).
       TOURNAMENT_ENTRY_IP_PER_HOUR: "1000000"

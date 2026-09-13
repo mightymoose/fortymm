@@ -64,7 +64,11 @@ from app.models import (
     User,
     UserRole,
 )
-from app.rate_limiting import RedisRateLimiter
+from app.rate_limiting import (
+    RateLimitUnavailable,
+    RedisRateLimiter,
+    check_expiring_budget,
+)
 from app.roles import grant_default_role
 from app.schemas.session import (
     AccountSwitchPreview,
@@ -360,6 +364,30 @@ def _client_ip(request: Request) -> str:
     # otherwise it's the proxy peer and these limiters become one global bucket (#837).
     client = request.client
     return client.host if client else "unknown"
+
+
+async def _admit_guest_creation(request: Request) -> None:
+    settings = get_settings()
+    client_ip = _client_ip(request)
+    try:
+        for window, limit, seconds in (
+            ("hour", settings.guest_creation_ip_limit_per_hour, 3600),
+            ("day", settings.guest_creation_ip_limit_per_day, 86400),
+        ):
+            if not await check_expiring_budget(
+                f"guest-create:{window}:{client_ip}", limit=limit, seconds=seconds
+            ):
+                raise HTTPException(
+                    status_code=429,
+                    detail="Too many new guest sessions. Try again later.",
+                    headers={"Retry-After": str(seconds)},
+                )
+    except RateLimitUnavailable as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Guest creation is temporarily unavailable.",
+            headers={"Retry-After": "5"},
+        ) from error
 
 
 async def _email_rate_limit_key(request: Request) -> str:
@@ -778,6 +806,7 @@ async def _stamp_last_seen(db: AsyncSession, user: User) -> None:
 
 @router.get("/v1/session", response_model=SessionResponse)
 async def get_session_endpoint(
+    request: Request,
     response: Response,
     session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
     csrf_cookie: Annotated[str | None, Cookie(alias=CSRF_COOKIE_NAME)] = None,
@@ -798,6 +827,7 @@ async def get_session_endpoint(
         # cookie was cleared. Repeated loads must not silently create a guest.
         if session_cookie is not None or csrf_cookie is not None:
             raise _session_ended_exception()
+        await _admit_guest_creation(request)
         user, raw_token = await _create_session(db)
         _set_session_cookie(response, raw_token)
     elif csrf_cookie is None:
