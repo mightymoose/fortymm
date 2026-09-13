@@ -1391,3 +1391,26 @@ async def test_empty_rule_revision_can_be_replaced(
         )
     ).all()
     assert bindings and all(binding == current for binding in bindings)
+
+
+async def test_draw_currency_uses_frozen_unseated_allowance(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    from app.tournament_draws import DrawCurrency, draw_currency_by_event
+
+    owner = await make_user(db_session, "currency-frozen-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    tid, eid = tournament.id, event.id
+    await _enter_field(db_session, event, 4, prefix="currency-frozen-field")
+    await cut_event_draw(db_session, tournament_id=tid, event_id=eid, actor=owner)
+    await _enter_field(db_session, event, 1, prefix="currency-frozen-new")
+    await db_session.execute(
+        text(
+            "UPDATE tournament_events SET draw_type_id="
+            "(SELECT id FROM draw_types WHERE key='swiss'), "
+            "draw_settings=CAST(:settings AS jsonb) WHERE id=:id"
+        ),
+        {"id": eid, "settings": '{"rounds":3}'},
+    )
+    assert (await draw_currency_by_event(db_session, [eid]))[eid] is DrawCurrency.stale

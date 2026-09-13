@@ -35,8 +35,9 @@ their materialized-match and advancement-history restrictions; this does not
 introduce a mid-competition rules-change operation.
 
 The event's inline draw and match settings remain its owned planning values.
-The API refuses actual event format, best-of or rated changes while a draw exists,
-with a 409 explaining that the draw must first be removed. Unchanged values remain
+The API refuses actual event format, best-of or rated changes while a draw revision
+is active, even before it has fixtures, with a 409 explaining that the draw must
+first be removed. Unchanged values remain
 accepted so saving an unrelated edit still works. Existing draw-format restrictions
 continue. This tighter rules-edit policy is an intentional compatibility
 change; silently accepting an edit that cannot affect the competition would
@@ -54,6 +55,7 @@ Attaching an existing standalone match to a fixture preserves its original
 snapshot and requires agreement with the fixture's frozen rules. The fixture
 retains the competition reference; attachment cannot rewrite the match's rules
 or falsely attribute its original creation to that competition.
+A match claiming tournament provenance must belong to a fixture in that revision.
 
 PostgreSQL enforces immutability and real, scope-correct references as well as
 application validation. Competition rules belong to their event/draw scope and

@@ -149,3 +149,81 @@ async def test_sql_captures_matching_rules_and_preserves_policy_overrides(
     ).one()
     assert captured.format_rules == format_rules
     assert captured.match_rules == match_rules
+
+
+async def test_source_linked_match_requires_a_fixture_from_its_revision(
+    db_session, default_league
+):
+    from app.models import Match, MatchSettings
+
+    owner = await make_user(db_session, "forged-match-source")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    revision = await db_session.scalar(
+        text(
+            "INSERT INTO tournament_draw_revisions(event_id) VALUES (:id) RETURNING id"
+        ),
+        {"id": event.id},
+    )
+    rules = MatchSettings(
+        team_size=1, best_of=5, affects_rating=True, source_rule_revision_id=revision
+    )
+    match = Match(
+        match_settings=rules, league_id=default_league.id, created_by_user_id=owner.id
+    )
+    db_session.add(match)
+    await db_session.flush()
+    with pytest.raises(IntegrityError, match="source revision requires its fixture"):
+        await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("mutation", ["unlink", "delete", "reassign", "truncate"])
+async def test_source_linked_match_cannot_lose_its_fixture(
+    db_session, default_league, mutation
+):
+    from sqlalchemy import select
+
+    from app.models import Match, MatchSettings, TournamentFixture
+    from app.tournament_draw_service import cut_event_draw
+    from app.tournament_materialization import materialize_event
+    from tests._entry_seeds import seed_fixture_match_sides
+    from tests.test_tournament_draw_service import _enter_field
+
+    owner = await make_user(db_session, "surviving-source-owner")
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
+    event = await _make_event(db_session, tournament)
+    await _enter_field(db_session, event, 4, prefix="surviving-source-field")
+    await cut_event_draw(
+        db_session, tournament_id=tournament.id, event_id=event.id, actor=owner
+    )
+    await materialize_event(db_session, tournament, event)
+    await db_session.commit()
+    fixture = await db_session.scalar(select(TournamentFixture).limit(1))
+    replacement = None
+    if mutation == "reassign":
+        replacement = Match(
+            match_settings=MatchSettings(team_size=1, best_of=5, affects_rating=True),
+            league_id=default_league.id,
+            created_by_user_id=owner.id,
+        )
+        db_session.add(replacement)
+        await db_session.flush()
+        await seed_fixture_match_sides(db_session, fixture, replacement)
+        await db_session.commit()
+    if mutation == "truncate":
+        with pytest.raises(
+            IntegrityError, match="source revision requires its fixture"
+        ):
+            await db_session.execute(text("TRUNCATE tournament_fixtures CASCADE"))
+        return
+    if mutation == "delete":
+        await db_session.execute(
+            text("DELETE FROM tournament_fixtures WHERE id=:id"), {"id": fixture.id}
+        )
+    else:
+        await db_session.execute(
+            text("UPDATE tournament_fixtures SET match_id=:match WHERE id=:id"),
+            {"id": fixture.id, "match": replacement.id if replacement else None},
+        )
+    with pytest.raises(IntegrityError, match="source revision requires its fixture"):
+        await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))

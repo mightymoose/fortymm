@@ -68,6 +68,7 @@ from app.tournament_draw_settings import (
 from app.tournament_draws import (
     event_groups,
     event_has_draw,
+    event_has_rule_revision,
     event_reservations,
     group_stage_ids,
 )
@@ -530,7 +531,7 @@ async def _enforce_group_set_frozen(
     # The freeze turns on the draw EXISTING, not on it having been played: an unplayed
     # draw is the ordinary state of a tournament that has not started, and it is just as
     # orphanable as a played one.
-    if not await event_has_draw(db, event.id):
+    if not await event_has_rule_revision(db, event.id):
         return
     # The reservations the event holds, in their stored order (``event.reservations``
     # is eager).
@@ -650,11 +651,9 @@ async def _enforce_draw_settings_frozen(
         return
     current = stored.draw_type
     # Only now the query — and only for a payload that really moves the configuration.
-    # It is the same ``event_has_draw`` the group freeze asks; a payload that changes
-    # both
-    # asks it twice — two COUNTs on an indexed column under a lock we hold, in exchange
-    # for two guards that each read as one rule.
-    if not await event_has_draw(db, event.id):
+    # Both configuration guards ask for an active revision under the parent lock.
+    # Fixture counts remain a separate scheduling concern.
+    if not await event_has_rule_revision(db, event.id):
         return
     # The draw type is named first when both moved: it is the bigger claim, and the
     # qualifier-count sentence would be describing a bracket the event is no longer
@@ -1081,7 +1080,7 @@ async def update_event(
     # the re-solve trigger): a draw is cut or removed only under this same lock, so
     # the answer cannot move between here and the commit.
     has_draw = await event_has_draw(db, event.id)
-    if has_draw and (
+    if event.current_rule_revision is not None and (
         (updates.format is not None and updates.format != event.format)
         or (
             updates.match_settings is not None

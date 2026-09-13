@@ -1577,6 +1577,59 @@ COMPETITION_RULE_INTEGRITY_DDL = (
     ON tournament_fixtures FOR EACH ROW EXECUTE FUNCTION check_fixture_rules()
     """,
     """
+    CREATE FUNCTION check_match_rule_fixture() RETURNS trigger LANGUAGE plpgsql AS $$
+    DECLARE source_revision uuid; target_match uuid;
+    BEGIN
+        IF TG_TABLE_NAME = 'matches' THEN
+            target_match := NEW.id;
+        ELSE
+            target_match := OLD.match_id;
+        END IF;
+        SELECT ms.source_rule_revision_id INTO source_revision
+            FROM matches m JOIN match_settings ms ON ms.id=m.match_settings_id
+            WHERE m.id=target_match FOR UPDATE OF m;
+        IF source_revision IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM tournament_fixtures
+            WHERE match_id=target_match AND draw_revision_id=source_revision
+        ) THEN
+            RAISE EXCEPTION 'match source revision requires its fixture'
+                USING ERRCODE='23514';
+        END IF;
+        RETURN NULL;
+    END $$
+    """,
+    """
+    CREATE CONSTRAINT TRIGGER match_rule_fixture_owner
+    AFTER INSERT OR UPDATE OF match_settings_id ON matches
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+    EXECUTE FUNCTION check_match_rule_fixture()
+    """,
+    """
+    CREATE CONSTRAINT TRIGGER preserve_fixture_rule_owner
+    AFTER DELETE OR UPDATE OF match_id, draw_revision_id ON tournament_fixtures
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+    EXECUTE FUNCTION check_match_rule_fixture()
+    """,
+    """
+    CREATE FUNCTION preserve_rule_sources_on_truncate() RETURNS trigger
+    LANGUAGE plpgsql AS $$
+    BEGIN
+        IF EXISTS (
+            SELECT 1 FROM matches m JOIN match_settings ms ON ms.id=m.match_settings_id
+            WHERE ms.source_rule_revision_id IS NOT NULL
+        ) THEN
+            RAISE EXCEPTION 'match source revision requires its fixture'
+                USING ERRCODE='23514';
+        END IF;
+        RETURN NULL;
+    END $$
+    """,
+    """
+    CREATE TRIGGER preserve_rule_sources_on_truncate AFTER TRUNCATE
+    ON tournament_fixtures FOR EACH STATEMENT
+    EXECUTE FUNCTION preserve_rule_sources_on_truncate()
+    """,
+    """
     CREATE FUNCTION preserve_stage_rules() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN
         IF OLD.rule_revision_id IS NOT NULL AND
@@ -6237,6 +6290,8 @@ def downgrade() -> None:
     op.execute("DROP FUNCTION bind_competition_stage_rules() CASCADE")
     op.execute("DROP FUNCTION check_fixture_rules() CASCADE")
     op.execute("DROP FUNCTION check_match_rule_source() CASCADE")
+    op.execute("DROP FUNCTION check_match_rule_fixture() CASCADE")
+    op.execute("DROP FUNCTION preserve_rule_sources_on_truncate() CASCADE")
     op.execute("DROP FUNCTION match_rules_agree(match_settings,jsonb) CASCADE")
     op.execute("DROP FUNCTION preserve_stage_rules() CASCADE")
     op.execute("DROP FUNCTION preserve_match_rule_reference() CASCADE")

@@ -41,6 +41,7 @@ from sqlalchemy.orm import aliased
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.competition_rules import (
+    FrozenFormatRules,
     effective_draw_settings,
     format_rule_version,
     snapshot_format_rules,
@@ -78,7 +79,6 @@ from app.models import (
     TournamentEventStage,
     TournamentFixture,
 )
-from app.models.draw_type import DRAW_TYPES_BY_ID
 from app.schemas.tournament import GroupRead, Reservation
 from app.tournament_draw_history import (
     bind_draw_configuration,
@@ -555,25 +555,26 @@ def strategy_for_event(event: TournamentEvent) -> DrawStrategy:
     )
 
 
+async def event_has_rule_revision(db: AsyncSession, event_id: uuid.UUID) -> bool:
+    """Rules are frozen by an active revision even when it has no fixtures."""
+    return bool(
+        await db.scalar(
+            select(TournamentDrawRevision.id)
+            .where(
+                TournamentDrawRevision.event_id == event_id,
+                TournamentDrawRevision.retired_at.is_(None),
+            )
+            .limit(1)
+        )
+    )
+
+
 async def event_has_draw(db: AsyncSession, event_id: uuid.UUID) -> bool:
-    """Whether this event has a draw at all — whether the cut has happened.
+    """Whether the active draw retains fixtures that affect scheduling.
 
-    The question the **group-set freeze** turns on (ADR-0786). Nothing in the database
-    stops a ``PATCH`` from *adding* a group to an event whose draw was dealt across the
-    groups it had at the cut — the removal half is a foreign-key violation now
-    (ADR 20260801), but an empty new group breaks no constraint, and the removal's
-    violation is a deferred 500 rather than something a director can act on. This is the
-    read both halves of that refusal are built on.
-
-    Deliberately **not** ``draw_has_play``. Play is the gate on *destroying* a draw
-    (re-cutting, un-cutting); the mere *existence* of one is the gate on moving the
-    groups under it. The two are different questions with different answers, and a draw
-    that has been cut but not yet played — the ordinary state of a tournament on the
-    morning of — is exactly where the group-set freeze does its work: nothing has been
-    played, so the play guard would wave the change through, and every fixture would
-    still be orphaned.
-
-    The current revision's transactionally maintained count bounds this lookup.
+    This uses the revision's transactionally maintained fixture count. An active
+    revision with no fixtures still freezes rules via ``event_has_rule_revision``;
+    it does not contribute fixtures to scheduling or materialization.
     """
     return bool(
         await db.scalar(
@@ -786,17 +787,20 @@ async def draw_currency_by_event(
         )
 
     # The draw type of each cut event determines how many entrants may remain
-    # unseated. Read the event FK directly; the seed/enum tests pin its mapping.
+    # unseated. Interpret the active revision, independent of editable planning.
     draw_types: dict[uuid.UUID, DrawType] = {}
     if cut:
         draw_types = {
-            event_id: DRAW_TYPES_BY_ID[draw_type_id]
-            for event_id, draw_type_id in (
+            event_id: FrozenFormatRules.model_validate(rules).draw_type
+            for event_id, rules in (
                 await db.execute(
                     select(
-                        TournamentEvent.id,
-                        TournamentEvent.draw_type_id,
-                    ).where(TournamentEvent.id.in_(cut))
+                        TournamentDrawRevision.event_id,
+                        TournamentDrawRevision.format_rules,
+                    ).where(
+                        TournamentDrawRevision.event_id.in_(cut),
+                        TournamentDrawRevision.retired_at.is_(None),
+                    )
                 )
             ).all()
         }
