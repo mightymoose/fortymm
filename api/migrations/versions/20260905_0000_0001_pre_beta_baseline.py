@@ -1850,7 +1850,11 @@ IDENTITY_RETENTION_DDL = (
             JOIN match_lineup_players p ON p.lineup_id=lineup.id
             JOIN match_sides side ON side.id=participant.match_side_id
             WHERE lineup.match_id=participant.match_id AND lineup.revision > 1
-              AND p.side_number=side.side_number AND p.player_id=participant.user_id
+              AND lineup.revision=(SELECT max(revision) FROM match_lineups
+                  WHERE match_id=participant.match_id)
+              AND p.side_number=side.side_number
+              AND entry_canonical_player(p.player_id)=
+                  entry_canonical_player(participant.user_id)
         ) THEN RETURN NULL; END IF;
         RAISE EXCEPTION 'retired Player cannot be admitted to a new match'
             USING ERRCODE='23514';
@@ -2024,6 +2028,9 @@ SPORTING_RETENTION_DDL = (
                 SELECT 1 FROM match_recorded_participants recorded
                 JOIN match_sides side ON side.id=participant.match_side_id
                 WHERE recorded.match_id=participant.match_id
+                  AND NOT EXISTS (SELECT 1 FROM match_lineups correction
+                      WHERE correction.match_id=participant.match_id
+                        AND correction.revision > 1)
                   AND recorded.side_number=side.side_number
                   AND entry_canonical_player(recorded.player_id)=
                       entry_canonical_player(participant.user_id)
@@ -2033,7 +2040,11 @@ SPORTING_RETENTION_DDL = (
                 JOIN match_lineup_players p ON p.lineup_id=lineup.id
                 JOIN match_sides side ON side.id=participant.match_side_id
                 WHERE lineup.match_id=participant.match_id AND lineup.revision > 1
-                  AND p.side_number=side.side_number AND p.player_id=participant.user_id
+                  AND lineup.revision=(SELECT max(revision) FROM match_lineups
+                      WHERE match_id=participant.match_id)
+                  AND p.side_number=side.side_number
+                  AND entry_canonical_player(p.player_id)=
+                      entry_canonical_player(participant.user_id)
             ) THEN
             RAISE EXCEPTION 'recorded participants cannot gain an unrecorded identity'
                 USING ERRCODE='23514';
@@ -4018,6 +4029,22 @@ def upgrade() -> None:
         CREATE FUNCTION guard_proposal_insert() RETURNS trigger
         LANGUAGE plpgsql AS $$
         BEGIN
+            IF NEW.accepted_by_user_id IS NOT NULL THEN
+                -- Lock actors in stable order; arbitrary SQL lock inversions retry.
+                BEGIN
+                    PERFORM id FROM accounts
+                    WHERE id IN (NEW.submitted_by_user_id, NEW.accepted_by_user_id)
+                    ORDER BY id FOR SHARE NOWAIT;
+                EXCEPTION WHEN lock_not_available THEN
+                    RAISE EXCEPTION 'consent authority changed; retry' USING ERRCODE = '40001';
+                END;
+                IF NOT EXISTS (
+                    SELECT 1 FROM accounts WHERE id = NEW.accepted_by_user_id
+                    AND merged_at IS NULL AND deactivated_at IS NULL AND erased_at IS NULL
+                ) THEN
+                    RAISE EXCEPTION 'consent actor must be active' USING ERRCODE = '23514';
+                END IF;
+            END IF;
             -- Serialize appends and acceptance even for direct SQL writers.
             -- A real row version (not just FOR UPDATE) also makes stale
             -- REPEATABLE READ / SERIALIZABLE writers fail with 40001.
@@ -4057,7 +4084,8 @@ def upgrade() -> None:
                 JOIN match_side_players p ON p.user_id = ap.player_id
                 WHERE ap.account_id = NEW.submitted_by_user_id
                   AND ap.player_id = NEW.submitted_for_player_id AND ap.is_primary
-                  AND a.merged_at IS NULL AND p.match_id = NEW.match_id
+                  AND a.merged_at IS NULL AND a.deactivated_at IS NULL
+                  AND a.erased_at IS NULL AND p.match_id = NEW.match_id
             );
             -- A non-deferrable FK alone checks at statement end, permitting
             -- circular multi-row INSERTs. Require an already inserted parent.
@@ -4114,6 +4142,20 @@ def upgrade() -> None:
             END IF;
             IF OLD.accepted_by_user_id IS NULL AND
                NEW.accepted_by_user_id IS NOT NULL THEN
+                -- Lock actors in stable order; arbitrary SQL lock inversions retry.
+                BEGIN
+                    PERFORM id FROM accounts
+                    WHERE id IN (NEW.submitted_by_user_id, NEW.accepted_by_user_id)
+                    ORDER BY id FOR SHARE NOWAIT;
+                EXCEPTION WHEN lock_not_available THEN
+                    RAISE EXCEPTION 'consent authority changed; retry' USING ERRCODE = '40001';
+                END;
+                IF NOT EXISTS (
+                    SELECT 1 FROM accounts WHERE id = NEW.accepted_by_user_id
+                    AND merged_at IS NULL AND deactivated_at IS NULL AND erased_at IS NULL
+                ) THEN
+                    RAISE EXCEPTION 'consent actor must be active' USING ERRCODE = '23514';
+                END IF;
                 UPDATE matches SET id = id WHERE id = OLD.match_id;
                 IF EXISTS (
                     SELECT 1 FROM matches WHERE id = OLD.match_id
@@ -7099,7 +7141,8 @@ def upgrade() -> None:
             -- Same parent ordering as backend transitions; NOWAIT avoids inverted
             -- locks held by arbitrary SQL callers and yields an explicit retry.
             BEGIN
-                PERFORM id FROM accounts WHERE id = NEW.actor_account_id FOR KEY SHARE NOWAIT;
+                -- SHARE conflicts with lifecycle updates to non-key Account columns.
+                PERFORM id FROM accounts WHERE id = NEW.actor_account_id FOR SHARE NOWAIT;
                 SELECT t.* INTO tournament FROM tournaments t
                     JOIN tournament_events e ON e.tournament_id = t.id
                     JOIN tournament_event_stages s ON s.event_id = e.id
@@ -7123,7 +7166,8 @@ def upgrade() -> None:
             END IF;
             NEW.recorded_at := clock_timestamp();
             IF NEW.actor_account_id IS NOT NULL AND NOT EXISTS (
-                SELECT 1 FROM accounts WHERE id = NEW.actor_account_id AND merged_at IS NULL
+                SELECT 1 FROM accounts WHERE id = NEW.actor_account_id
+                AND merged_at IS NULL AND deactivated_at IS NULL AND erased_at IS NULL
             ) THEN
                 RAISE EXCEPTION 'official actor must be active' USING ERRCODE = '23514';
             END IF;

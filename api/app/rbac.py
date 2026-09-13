@@ -58,40 +58,38 @@ async def user_has_permission(db: AsyncSession, user_id: uuid.UUID, name: str) -
     return result.first() is not None
 
 
-def require_permission(name: str) -> Callable[..., Awaitable[User]]:
+def require_permission(
+    name: str, *, target_account_parameter: str | None = None
+) -> Callable[..., Awaitable[User]]:
     async def dep(
+        request: Request,
         user: User = Depends(get_current_user),
         db: AsyncSession = Depends(get_session),
     ) -> User:
-        if not await user_has_permission(db, user.id, name):
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            account_ids = {user.id}
+            target_id = (
+                request.path_params.get(target_account_parameter)
+                if target_account_parameter is not None
+                else None
+            )
+            if target_id is not None:
+                try:
+                    account_ids.add(uuid.UUID(str(target_id)))
+                except ValueError:
+                    # FastAPI reports an invalid path ID after authorization.
+                    pass
+            # Hold the actor through the mutation, including queued delivery.
+            # Actor and target use one order for opposing administrators.
+            await lock_accounts(db, account_ids)
+        if not user.is_active or not await user_has_permission(db, user.id, name):
             raise HTTPException(status_code=403, detail="Forbidden.")
         return user
 
     return dep
 
 
-async def _require_rbac(
-    request: Request,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_session),
-) -> User:
-    if request.method not in {"GET", "HEAD", "OPTIONS"}:
-        account_ids = {user.id}
-        target_id = request.path_params.get("user_id")
-        if target_id is not None:
-            try:
-                account_ids.add(uuid.UUID(str(target_id)))
-            except ValueError:
-                # FastAPI reports an invalid path ID after authorization.
-                pass
-        # Lock actor and target together, before role/permission rows. Opposing
-        # administrators changing each other's roles use the same lock order.
-        await lock_accounts(db, account_ids)
-    if not user.is_active or not await user_has_permission(
-        db, user.id, RBAC_PERMISSION
-    ):
-        raise HTTPException(status_code=403, detail="Forbidden.")
-    return user
+_require_rbac = require_permission(RBAC_PERMISSION, target_account_parameter="user_id")
 
 
 router = APIRouter(prefix="/v1", dependencies=[Depends(_require_rbac)])

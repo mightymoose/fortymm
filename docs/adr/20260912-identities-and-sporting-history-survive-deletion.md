@@ -23,9 +23,14 @@ credentials owned by or targeting an inactive Account. Reactivation cannot reviv
 old cookies or links. Existing linked login identities survive suspension, but SQL
 cannot attach, reassign, or change a login credential while either its existing or
 new Account is inactive. Linked-token verification and profile changes also lock
-and refresh the Account before accepting authority. Privileged RBAC mutations lock
-the acting and target Accounts together before rechecking permission, so suspension
-cannot be followed by an already-started role grant.
+and refresh the Account before accepting authority. Privileged mutations lock and refresh the acting Account before rechecking
+permission, holding that lock through the operation, including broadcast delivery
+enqueueing. RBAC changes lock acting and target Accounts together in a stable order,
+so suspension cannot be followed by an already-started role grant.
+SQL result submission authority, new consent, and official-result actors require
+active Accounts. New consent locks both actors in stable order; concurrent lifecycle
+changes produce a retryable conflict. Existing consent remains immutable historical
+evidence through suspension and erasure.
 Player-authorized writes hold the Account lock through the action so suspension
 and admission have a deterministic order. A foreign login's guest reference grants no access to the
 inactive guest and may remain so the active destination can still sign in.
@@ -97,6 +102,8 @@ can reconcile those sides without deleting the original evidence. First evidence
 requires valid participant topology; the established solo-match opponent sentinel
 remains supported. Later writes cannot silently add missing original subjects;
 same-person reconciliation and explicitly recorded lineup corrections remain valid.
+The latest correction controls current participant admission, with canonical Player
+comparison allowing merges while preserving the original correction evidence.
 Deleting or reparenting a recorded current participant must leave an equivalent
 canonical participant, or the complete latest audited replacement lineup, so current
 match, career, head-to-head and rating queries cannot silently lose that result.

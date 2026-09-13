@@ -311,7 +311,11 @@ IDENTITY_RETENTION_DDL = (
             JOIN match_lineup_players p ON p.lineup_id=lineup.id
             JOIN match_sides side ON side.id=participant.match_side_id
             WHERE lineup.match_id=participant.match_id AND lineup.revision > 1
-              AND p.side_number=side.side_number AND p.player_id=participant.user_id
+              AND lineup.revision=(SELECT max(revision) FROM match_lineups
+                  WHERE match_id=participant.match_id)
+              AND p.side_number=side.side_number
+              AND entry_canonical_player(p.player_id)=
+                  entry_canonical_player(participant.user_id)
         ) THEN RETURN NULL; END IF;
         RAISE EXCEPTION 'retired Player cannot be admitted to a new match'
             USING ERRCODE='23514';

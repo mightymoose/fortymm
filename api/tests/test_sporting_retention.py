@@ -822,3 +822,127 @@ async def test_recorded_current_participant_cannot_be_deleted(
                 },
             )
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def _corrected_recorded_match(db_session):
+    from app.models import EventFormat, TournamentEntryMember
+    from tests.test_entry_members import seed_doubles_match
+
+    event, players, entries, match, _ = await seed_doubles_match(db_session)
+    event.format = EventFormat.teams
+    players.append(await make_user(db_session, "second-lineup-alternate"))
+    entries[0].members.extend(
+        TournamentEntryMember(player_id=p.player_id) for p in players[4:]
+    )
+    await db_session.commit()
+    await db_session.execute(
+        text("UPDATE matches SET status='in_progress' WHERE id=:m"), {"m": match.id}
+    )
+    game = await db_session.scalar(
+        text("INSERT INTO match_games(match_id,game_number) VALUES(:m,1) RETURNING id"),
+        {"m": match.id},
+    )
+    await db_session.execute(
+        text(
+            "INSERT INTO match_game_scores(match_game_id,side_1_points,side_2_points) "
+            "VALUES(:g,11,5)"
+        ),
+        {"g": game},
+    )
+    await db_session.commit()
+    return players, match
+
+
+async def _replace_corrected_player(db_session, match, old, new, revision):
+    lineup = await db_session.scalar(
+        text(
+            "INSERT INTO match_lineups(match_id,revision,started_at,"
+            "recorded_by_account_id,correction_reason) SELECT match_id,:r,started_at,"
+            ":actor,'Correct player' FROM match_lineups WHERE "
+            "match_id=:m AND revision=1 "
+            "RETURNING id"
+        ),
+        {"r": revision, "actor": match.created_by_user_id, "m": match.id},
+    )
+    await db_session.execute(
+        text(
+            "INSERT INTO "
+            "match_lineup_players(lineup_id,side_number,player_id,entry_member_id) "
+            "SELECT :l,p.side_number,CASE WHEN p.player_id=:old THEN "
+            ":new ELSE p.player_id END,"
+            "CASE WHEN p.player_id=:old THEN (SELECT id FROM tournament_entry_members "
+            "WHERE player_id=:new AND left_at IS NULL) ELSE p.entry_member_id END "
+            "FROM match_lineup_players p JOIN match_lineups l ON l.id=p.lineup_id "
+            "WHERE l.match_id=:m AND l.revision=:previous"
+        ),
+        {
+            "l": lineup,
+            "old": old.player_id,
+            "new": new.player_id,
+            "m": match.id,
+            "previous": revision - 1,
+        },
+    )
+    await db_session.execute(
+        text(
+            "UPDATE match_side_players SET user_id=:new WHERE "
+            "match_id=:m AND user_id=:old"
+        ),
+        {"new": new.player_id, "m": match.id, "old": old.player_id},
+    )
+    await db_session.commit()
+
+
+@pytest.mark.parametrize("obsolete", [0, 4])
+async def test_latest_correction_does_not_readmit_obsolete_participants(
+    db_session, obsolete
+):
+    players, match = await _corrected_recorded_match(db_session)
+    await _replace_corrected_player(db_session, match, players[0], players[4], 2)
+    await _replace_corrected_player(db_session, match, players[4], players[5], 3)
+    with pytest.raises(IntegrityError, match="recorded participants"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(
+                    "INSERT INTO match_side_players(match_id,match_side_id,user_id) "
+                    "SELECT :m,id,:p FROM match_sides WHERE match_id=:m "
+                    "AND side_number=1"
+                ),
+                {"m": match.id, "p": players[obsolete].player_id},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+async def test_correction_only_player_can_merge_without_rewriting_lineup_history(
+    db_session,
+):
+    from app.account_merge import merge_user
+
+    players, match = await _corrected_recorded_match(db_session)
+    await _replace_corrected_player(db_session, match, players[0], players[4], 2)
+    target = await make_user(db_session, "correction-merge-target")
+    await db_session.commit()
+    original_player_id = players[4].player_id
+    await merge_user(db_session, from_user_id=players[4].id, to_user_id=target.id)
+    await db_session.commit()
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT count(*) FROM match_side_players WHERE "
+                "match_id=:m AND user_id=:p"
+            ),
+            {"m": match.id, "p": target.player_id},
+        )
+        == 1
+    )
+    assert (
+        await db_session.scalar(
+            text(
+                "SELECT count(*) FROM match_lineup_players p JOIN "
+                "match_lineups l ON l.id=p.lineup_id "
+                "WHERE l.match_id=:m AND l.revision=2 AND p.player_id=:p"
+            ),
+            {"m": match.id, "p": original_player_id},
+        )
+        == 1
+    )

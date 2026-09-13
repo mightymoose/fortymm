@@ -209,6 +209,9 @@ SPORTING_RETENTION_DDL = (
                 SELECT 1 FROM match_recorded_participants recorded
                 JOIN match_sides side ON side.id=participant.match_side_id
                 WHERE recorded.match_id=participant.match_id
+                  AND NOT EXISTS (SELECT 1 FROM match_lineups correction
+                      WHERE correction.match_id=participant.match_id
+                        AND correction.revision > 1)
                   AND recorded.side_number=side.side_number
                   AND entry_canonical_player(recorded.player_id)=
                       entry_canonical_player(participant.user_id)
@@ -218,7 +221,11 @@ SPORTING_RETENTION_DDL = (
                 JOIN match_lineup_players p ON p.lineup_id=lineup.id
                 JOIN match_sides side ON side.id=participant.match_side_id
                 WHERE lineup.match_id=participant.match_id AND lineup.revision > 1
-                  AND p.side_number=side.side_number AND p.player_id=participant.user_id
+                  AND lineup.revision=(SELECT max(revision) FROM match_lineups
+                      WHERE match_id=participant.match_id)
+                  AND p.side_number=side.side_number
+                  AND entry_canonical_player(p.player_id)=
+                      entry_canonical_player(participant.user_id)
             ) THEN
             RAISE EXCEPTION 'recorded participants cannot gain an unrecorded identity'
                 USING ERRCODE='23514';
