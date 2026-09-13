@@ -1724,17 +1724,38 @@ EVENT_LIFECYCLE_DDL = (
         END IF;
         INSERT INTO tournament_event_recorded_games(match_id,game_number,event_id)
         VALUES (match_uuid,game_no,event_uuid) ON CONFLICT DO NOTHING;
-        UPDATE tournament_events
-        SET first_recorded_play_at=clock_timestamp(),
-            lifecycle_state=CASE WHEN lifecycle_state='unstarted'
-                THEN 'in_progress'::event_lifecycle_state ELSE lifecycle_state END
-        WHERE id=event_uuid AND first_recorded_play_at IS NULL;
         RETURN NEW;
     END $$
     """,
     """
     CREATE TRIGGER record_event_play BEFORE INSERT ON match_game_scores
     FOR EACH ROW EXECUTE FUNCTION record_event_play();
+    """,
+    """
+    CREATE FUNCTION observe_recorded_event_play() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN
+        -- The BEFORE trigger already owns the parent/event locks and validated
+        -- cancellation. Observe only persisted evidence so earlier-time refinement
+        -- is checked against the retained scores by preserve_event_lifecycle.
+        UPDATE tournament_events e
+        SET first_recorded_play_at=(
+                SELECT min(s.created_at) FROM tournament_fixtures evidence
+                JOIN match_games game ON game.match_id=evidence.match_id
+                JOIN match_game_scores s ON s.match_game_id=game.id
+                WHERE evidence.scope_event_id=e.id
+            ),
+            lifecycle_state=CASE WHEN e.lifecycle_state='unstarted'
+                THEN 'in_progress'::event_lifecycle_state ELSE e.lifecycle_state END
+        FROM tournament_fixtures f JOIN match_games g ON g.match_id=f.match_id
+        WHERE g.id=NEW.match_game_id AND e.id=f.scope_event_id
+            AND (e.first_recorded_play_at IS NULL
+                OR NEW.created_at < e.first_recorded_play_at);
+        RETURN NULL;
+    END $$
+    """,
+    """
+    CREATE TRIGGER observe_recorded_event_play AFTER INSERT ON match_game_scores
+    FOR EACH ROW EXECUTE FUNCTION observe_recorded_event_play()
     """,
     """
     CREATE FUNCTION observe_attached_event_play() RETURNS trigger
@@ -7290,6 +7311,7 @@ def downgrade() -> None:
         "preserve_event_lifecycle_history",
     ):
         op.execute(f"DROP FUNCTION {function}() CASCADE")
+    op.execute("DROP FUNCTION observe_recorded_event_play() CASCADE")
     op.execute("DROP FUNCTION record_event_play() CASCADE")
 
     op.execute("DROP FUNCTION bind_competition_stage_rules() CASCADE")
