@@ -9445,11 +9445,11 @@ async def test_removing_a_catalogue_table_a_fixture_is_placed_at_is_a_409_naming
     assert fixture.pinned_at is not None
 
 
-@pytest.mark.parametrize("delete_event_first", [False, True])
+@pytest.mark.parametrize("attempt_event_deletion", [False, True])
 async def test_removing_table_after_uncut_preserves_historical_placement(
     authed_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
-    delete_event_first: bool,
+    attempt_event_deletion: bool,
 ) -> None:
     client, _ = authed_client
     (
@@ -9487,28 +9487,25 @@ async def test_removing_table_after_uncut_preserves_historical_placement(
         event for event in reread.json()["events"] if event["id"] == event_id
     )
     assert [row["table_ids"] for row in event_read["reservations"]] == [[table_2]]
-    if delete_event_first:
+    if attempt_event_deletion:
         removed_event = await client.delete(
             f"/v1/tournaments/{tournament_id}/events/{event_id}"
         )
-        assert removed_event.status_code == 204, removed_event.text
-        assert (
-            await db_session.scalar(
-                select(VenueTable.id)
-                .where(VenueTable.id == table_1)
-                .execution_options(include_draw_history=True)
-            )
-            is None
-        )
+        assert removed_event.status_code == 409, removed_event.text
+        assert await db_session.scalar(
+            select(VenueTable.id)
+            .where(VenueTable.id == table_1)
+            .execution_options(include_draw_history=True)
+        ) == uuid.UUID(table_1)
         assert await db_session.scalar(
             select(VenueTable.id).where(VenueTable.id == table_2)
         ) == uuid.UUID(table_2)
 
     removed = await client.delete(f"/v1/tournaments/{tournament_id}")
-    assert removed.status_code == 204, removed.text
+    assert removed.status_code == 409, removed.text
 
 
-async def test_retired_table_survives_until_its_last_event_is_deleted(
+async def test_retired_table_survives_refused_event_deletions(
     authed_client: tuple[AsyncClient, User], db_session: AsyncSession
 ) -> None:
     client, _ = authed_client
@@ -9572,13 +9569,13 @@ async def test_retired_table_survives_until_its_last_event_is_deleted(
     first_deleted = await client.delete(
         f"/v1/tournaments/{tournament_id}/events/{first_event_id}"
     )
-    assert first_deleted.status_code == 204, first_deleted.text
+    assert first_deleted.status_code == 409, first_deleted.text
     assert await db_session.scalar(table_query) == uuid.UUID(table_1)
     second_deleted = await client.delete(
         f"/v1/tournaments/{tournament_id}/events/{second_event_id}"
     )
-    assert second_deleted.status_code == 204, second_deleted.text
-    assert await db_session.scalar(table_query) is None
+    assert second_deleted.status_code == 409, second_deleted.text
+    assert await db_session.scalar(table_query) == uuid.UUID(table_1)
 
 
 async def test_the_opt_in_removes_the_catalogue_table_and_leaves_its_fixtures_unplaced(

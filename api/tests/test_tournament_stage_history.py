@@ -237,14 +237,18 @@ async def test_archived_mapping_rejects_direct_deletion_but_reservation_can_be_r
         db_session, tournament_id=tournament_id, event_id=event_id, actor=owner
     )
     if mutation.startswith("parent_"):
-        if mutation == "parent_event":
-            await db_session.execute(
-                text("DELETE FROM tournament_events WHERE id=:id"), {"id": event_id}
-            )
-        else:
-            await db_session.execute(
-                text("DELETE FROM tournaments WHERE id=:id"), {"id": tournament_id}
-            )
+        with pytest.raises(IntegrityError, match="entry history must be retained"):
+            async with db_session.begin_nested():
+                if mutation == "parent_event":
+                    await db_session.execute(
+                        text("DELETE FROM tournament_events WHERE id=:id"),
+                        {"id": event_id},
+                    )
+                else:
+                    await db_session.execute(
+                        text("DELETE FROM tournaments WHERE id=:id"),
+                        {"id": tournament_id},
+                    )
         await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
         assert (
             await db_session.scalar(
@@ -254,7 +258,7 @@ async def test_archived_mapping_rejects_direct_deletion_but_reservation_can_be_r
                 ),
                 {"id": group_id},
             )
-            == 0
+            == 1
         )
         return
     with pytest.raises(IntegrityError, match="archived group mapping is immutable"):
