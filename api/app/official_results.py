@@ -259,6 +259,9 @@ async def void_official_match(
         # reloaded sides have no winner, so this advances completion without
         # inventing a result or restoring the preserved score's decision.
         await on_match_completed(db, match)
+        from app.event_lifecycle import reconcile_match_event
+
+        await reconcile_match_event(db, match.id)
         await _stage_ruling_hints(db, match)
         await db.flush()
         return action

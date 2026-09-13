@@ -664,6 +664,22 @@ ENTRY_INTEGRITY_DDL = (
             RAISE EXCEPTION 'tournament association was deleted; retry transaction'
                 USING ERRCODE = '40001';
         END IF;
+        IF TG_TABLE_NAME = 'matches' THEN
+            IF OLD.status='pending' AND NEW.status='in_progress' AND EXISTS (
+                SELECT 1 FROM tournament_events
+                WHERE id=event_uuid AND lifecycle_state='cancelled'
+            ) THEN
+                RAISE EXCEPTION 'cancelled events cannot start matches'
+                    USING ERRCODE = '23514';
+            END IF;
+        ELSIF TG_TABLE_NAME = 'match_lineups' THEN
+            IF NOT EXISTS (SELECT 1 FROM match_lineups WHERE match_id=NEW.match_id)
+                AND EXISTS (SELECT 1 FROM tournament_events
+                    WHERE id=event_uuid AND lifecycle_state='cancelled') THEN
+                RAISE EXCEPTION 'cancelled events cannot record a first lineup'
+                    USING ERRCODE = '23514';
+            END IF;
+        END IF;
         IF fixture_uuid IS NOT NULL AND NOT EXISTS (
             SELECT 1 FROM tournament_fixtures f
             JOIN tournament_event_stages s ON s.id = f.stage_id

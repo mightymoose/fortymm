@@ -53,6 +53,15 @@ EVENT_LIFECYCLE_DDL = (
             RAISE EXCEPTION 'event lifecycle facts are immutable'
                 USING ERRCODE='23514';
         END IF;
+        IF OLD.lifecycle_state='cancelled' AND
+            (to_jsonb(NEW) - ARRAY['updated_at','lock_version','lifecycle_state',
+                'lifecycle_version','first_recorded_play_at','started_at'])
+            IS DISTINCT FROM
+            (to_jsonb(OLD) - ARRAY['updated_at','lock_version','lifecycle_state',
+                'lifecycle_version','first_recorded_play_at','started_at']) THEN
+            RAISE EXCEPTION 'cancelled event configuration is immutable'
+                USING ERRCODE='23514';
+        END IF;
         IF NEW.lifecycle_state <> OLD.lifecycle_state THEN
             IF OLD.lifecycle_state='unstarted' AND NEW.lifecycle_state='in_progress'
                 AND NEW.started_at IS NULL AND NEW.first_recorded_play_at IS NULL THEN

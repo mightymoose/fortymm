@@ -384,10 +384,12 @@ async def _merge_players(
     # Advance only after the sporting identity is reconciled: a newly ready
     # fixture must materialize against the merged Player, not the old identity.
     if collided_matches:
+        from app.event_lifecycle import reconcile_match_event
         from app.tournament_advancement import on_match_completed
 
         for match in collided_matches:
             await on_match_completed(db, match)
+            await reconcile_match_event(db, match.id)
     # A voided rated collision was dropped by the belt-and-braces delete above
     # (its guest MatchSidePlayer was never re-pointed), so it got added into
     # `matches_moved`. But we just voided it — it no longer counts. Subtract the

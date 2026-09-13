@@ -926,6 +926,22 @@ ENTRY_INTEGRITY_DDL = (
             RAISE EXCEPTION 'tournament association was deleted; retry transaction'
                 USING ERRCODE = '40001';
         END IF;
+        IF TG_TABLE_NAME = 'matches' THEN
+            IF OLD.status='pending' AND NEW.status='in_progress' AND EXISTS (
+                SELECT 1 FROM tournament_events
+                WHERE id=event_uuid AND lifecycle_state='cancelled'
+            ) THEN
+                RAISE EXCEPTION 'cancelled events cannot start matches'
+                    USING ERRCODE = '23514';
+            END IF;
+        ELSIF TG_TABLE_NAME = 'match_lineups' THEN
+            IF NOT EXISTS (SELECT 1 FROM match_lineups WHERE match_id=NEW.match_id)
+                AND EXISTS (SELECT 1 FROM tournament_events
+                    WHERE id=event_uuid AND lifecycle_state='cancelled') THEN
+                RAISE EXCEPTION 'cancelled events cannot record a first lineup'
+                    USING ERRCODE = '23514';
+            END IF;
+        END IF;
         IF fixture_uuid IS NOT NULL AND NOT EXISTS (
             SELECT 1 FROM tournament_fixtures f
             JOIN tournament_event_stages s ON s.id = f.stage_id
@@ -1574,6 +1590,15 @@ EVENT_LIFECYCLE_DDL = (
             RAISE EXCEPTION 'event lifecycle facts are immutable'
                 USING ERRCODE='23514';
         END IF;
+        IF OLD.lifecycle_state='cancelled' AND
+            (to_jsonb(NEW) - ARRAY['updated_at','lock_version','lifecycle_state',
+                'lifecycle_version','first_recorded_play_at','started_at'])
+            IS DISTINCT FROM
+            (to_jsonb(OLD) - ARRAY['updated_at','lock_version','lifecycle_state',
+                'lifecycle_version','first_recorded_play_at','started_at']) THEN
+            RAISE EXCEPTION 'cancelled event configuration is immutable'
+                USING ERRCODE='23514';
+        END IF;
         IF NEW.lifecycle_state <> OLD.lifecycle_state THEN
             IF OLD.lifecycle_state='unstarted' AND NEW.lifecycle_state='in_progress'
                 AND NEW.started_at IS NULL AND NEW.first_recorded_play_at IS NULL THEN
@@ -1999,7 +2024,9 @@ RECONCILIATION_DDL = (
     """
     CREATE FUNCTION invalidate_event_reconciliation() RETURNS trigger
     LANGUAGE plpgsql AS $$
-    DECLARE affected_events uuid[] := '{}';
+    DECLARE
+        affected_events uuid[] := '{}';
+        require_progress boolean := false;
     BEGIN
         IF TG_TABLE_NAME = 'match_void_actions' THEN
             SELECT ARRAY[scope_event_id] INTO affected_events FROM tournament_fixtures
@@ -2013,12 +2040,23 @@ RECONCILIATION_DDL = (
             SELECT ARRAY[scope_event_id] INTO affected_events FROM tournament_fixtures
                 WHERE match_id=NEW.id;
         ELSIF TG_TABLE_NAME = 'tournament_events' THEN
-            IF NEW.lifecycle_state IS NOT DISTINCT FROM OLD.lifecycle_state
-                OR (NEW.lifecycle_state<>'finished' AND OLD.lifecycle_state<>'finished')
+            IF NEW.lifecycle_state IS DISTINCT FROM OLD.lifecycle_state
+                AND (NEW.lifecycle_state='finished' OR OLD.lifecycle_state='finished')
             THEN
+                affected_events := ARRAY[NEW.id];
+            ELSIF NEW.draw_type_id IS DISTINCT FROM OLD.draw_type_id THEN
+                affected_events := ARRAY[NEW.id];
+                require_progress := true;
+            ELSE
                 RETURN NULL;
             END IF;
-            affected_events := ARRAY[NEW.id];
+        ELSIF TG_TABLE_NAME = 'tournament_event_stages' THEN
+            IF ROW(NEW.draw_type_id, NEW.event_id)
+                IS NOT DISTINCT FROM ROW(OLD.draw_type_id, OLD.event_id) THEN
+                RETURN NULL;
+            END IF;
+            affected_events := ARRAY[OLD.event_id, NEW.event_id];
+            require_progress := true;
         ELSIF TG_TABLE_NAME = 'tournament_entries' THEN
             IF TG_OP = 'UPDATE' AND ROW(NEW.status, NEW.event_id)
                 IS NOT DISTINCT FROM ROW(OLD.status, OLD.event_id) THEN
@@ -2052,7 +2090,8 @@ RECONCILIATION_DDL = (
         IF COALESCE(cardinality(affected_events), 0) = 0 THEN
             RETURN NULL;
         END IF;
-        IF TG_TABLE_NAME IN ('tournament_fixtures','tournament_entries') THEN
+        IF require_progress OR
+            TG_TABLE_NAME IN ('tournament_fixtures','tournament_entries') THEN
             SELECT array_agg(scope.id) INTO affected_events
             FROM unnest(affected_events) AS scope(id)
             WHERE EXISTS (SELECT 1 FROM tournament_event_lifecycle_history h
@@ -2098,7 +2137,12 @@ RECONCILIATION_DDL = (
     """,
     """
     CREATE TRIGGER invalidate_progress_event_reconciliation
-    AFTER UPDATE OF lifecycle_state ON tournament_events
+    AFTER UPDATE OF lifecycle_state, draw_type_id ON tournament_events
+    FOR EACH ROW EXECUTE FUNCTION invalidate_event_reconciliation()
+    """,
+    """
+    CREATE TRIGGER invalidate_stage_strategy_event_reconciliation
+    AFTER UPDATE OF draw_type_id, event_id ON tournament_event_stages
     FOR EACH ROW EXECUTE FUNCTION invalidate_event_reconciliation()
     """,
     """
