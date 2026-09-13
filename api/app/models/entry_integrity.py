@@ -792,7 +792,7 @@ ENTRY_INTEGRITY_DDL = (
     """
     CREATE OR REPLACE FUNCTION lock_fixture_link() RETURNS trigger
     LANGUAGE plpgsql AS $$
-    DECLARE event_row RECORD;
+    DECLARE event_row RECORD; placement_only boolean := false;
     BEGIN
         IF TG_OP = 'UPDATE' THEN
             IF NEW.match_id IS NOT DISTINCT FROM OLD.match_id
@@ -805,7 +805,14 @@ ENTRY_INTEGRITY_DDL = (
                 AND NEW.position IS NOT DISTINCT FROM OLD.position
                 AND NEW.scope_event_id IS NOT DISTINCT FROM OLD.scope_event_id
                 AND NEW.scope_tournament_id IS NOT DISTINCT FROM OLD.scope_tournament_id
-            THEN RETURN NEW; END IF;
+            THEN
+                IF ROW(NEW.table_id, NEW.scheduled_start, NEW.pinned_at)
+                    IS NOT DISTINCT FROM
+                    ROW(OLD.table_id, OLD.scheduled_start, OLD.pinned_at) THEN
+                    RETURN NEW;
+                END IF;
+                placement_only := true;
+            END IF;
         END IF;
         PERFORM t.id FROM tournaments t
         JOIN tournament_events e ON e.tournament_id = t.id
@@ -829,7 +836,7 @@ ENTRY_INTEGRITY_DDL = (
                     USING ERRCODE = '23514';
             END IF;
         END LOOP;
-        IF TG_OP <> 'INSERT' THEN
+        IF TG_OP <> 'INSERT' AND NOT placement_only THEN
             IF EXISTS (SELECT 1 FROM match_lineups WHERE match_id = OLD.match_id)
                 OR EXISTS (SELECT 1 FROM match_games WHERE match_id = OLD.match_id)
                 OR EXISTS (SELECT 1 FROM match_results WHERE match_id = OLD.match_id)
@@ -851,7 +858,8 @@ ENTRY_INTEGRITY_DDL = (
     """
     CREATE TRIGGER lock_fixture_link BEFORE INSERT OR DELETE
     OR UPDATE OF id, match_id, entry_a_id, entry_b_id, stage_id, group_id,
-        round, position, scope_event_id, scope_tournament_id
+        round, position, scope_event_id, scope_tournament_id,
+        table_id, scheduled_start, pinned_at
     ON tournament_fixtures FOR EACH ROW EXECUTE FUNCTION lock_fixture_link()
     """,
     """

@@ -147,6 +147,7 @@ async def test_first_play_observation_uses_earliest_attached_score(
             text("UPDATE tournament_fixtures SET match_id=:match WHERE id=:fixture"),
             {"match": matches[index], "fixture": fixtures[index].id},
         )
+        await reconcile_event(db_session, event_id)
         await db_session.commit()
         current_history = (
             await db_session.execute(history_statement, {"id": event_id})

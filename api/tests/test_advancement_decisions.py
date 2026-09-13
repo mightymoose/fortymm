@@ -3,6 +3,7 @@
 import pytest
 from sqlalchemy import select
 
+from app.event_lifecycle import reconcile_event
 from app.result_proposal import propose_result
 from tests._advancement_seeds import seed_knockout_advancement as knockout
 from tests.test_official_results import board
@@ -176,6 +177,7 @@ async def test_recorded_play_allows_reaffirmation_but_refuses_a_different_partic
         text("UPDATE matches SET status = 'in_progress' WHERE id = :id"),
         {"id": target.match_id},
     )
+    await reconcile_event(db_session, source.scope_event_id)
     await db_session.commit()
     (original,) = await advancement_history(db_session, target.id, "a")
     downstream = await load_match_for_write(
@@ -416,6 +418,7 @@ async def test_replacement_does_not_hold_match_while_waiting_for_scoring_parent_
         await db_session.get(Tournament, source.scope_tournament_id),
         await db_session.get(TournamentEvent, source.scope_event_id),
     )
+    await reconcile_event(db_session, source.scope_event_id)
     await db_session.commit()
     (original,) = await advancement_history(db_session, target.id, "a")
     sessions = async_sessionmaker(engine, expire_on_commit=False)
