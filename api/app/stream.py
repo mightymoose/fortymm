@@ -127,6 +127,7 @@ async def get_stream_broker() -> RealtimeBroker | None:
 
 
 async def get_stream_principal(
+    request: Request,
     session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
     make_session: SessionFactory = Depends(get_stream_session_factory),
 ) -> StreamPrincipal:
@@ -140,7 +141,7 @@ async def get_stream_principal(
     they can still become a response.
     """
     async with make_session() as db:
-        user = await get_current_user(session_cookie=session_cookie, db=db)
+        user = await get_current_user(request, session_cookie=session_cookie, db=db)
         return StreamPrincipal(user_id=user.id)
 
 

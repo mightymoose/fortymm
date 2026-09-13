@@ -495,7 +495,9 @@ def _cookie_secure() -> bool:
     return os.environ.get("SESSION_COOKIE_SECURE", "true").lower() != "false"
 
 
-async def _find_session_user(db: AsyncSession, raw_token: str) -> User | None:
+async def _find_session_user(
+    db: AsyncSession, raw_token: str, *, lock_read: bool = False
+) -> User | None:
     result = await db.execute(
         select(SessionToken).where(
             SessionToken.token == hash_token(raw_token),
@@ -504,14 +506,27 @@ async def _find_session_user(db: AsyncSession, raw_token: str) -> User | None:
     token = result.scalar_one_or_none()
     if token is None:
         return None
-    user_result = await db.execute(
-        select(User).where(
+    statement = (
+        select(User)
+        .where(
             User.id == token.user_id,
             User.deactivated_at.is_(None),
             User.erased_at.is_(None),
         )
+        .execution_options(populate_existing=True)
     )
-    return user_result.scalar_one_or_none()
+    if lock_read:
+        statement = statement.with_for_update(read=True, of=User)
+    user = (await db.execute(statement)).scalar_one_or_none()
+    if user is not None and lock_read:
+        # The token may have been revoked while waiting for the Account lock.
+        if not await db.scalar(
+            select(SessionToken.id).where(
+                SessionToken.id == token.id, SessionToken.user_id == user.id
+            )
+        ):
+            return None
+    return user
 
 
 def _clear_cookie_header() -> dict[str, str]:
@@ -736,6 +751,7 @@ async def _resolve_current_user(
     db: AsyncSession,
     *,
     session_cookie: str | None,
+    lock_read: bool = False,
 ) -> User | None:
     """Resolve the current user from the session cookie, or ``None``.
 
@@ -758,7 +774,12 @@ async def _resolve_current_user(
         if cookie_user is not None:
             if cookie_user.merged_into_user_id is not None:
                 raise await _merged_session_exception(db, cookie_user)
-            await _stamp_last_seen(db, cookie_user)
+            await _stamp_last_seen(db, cookie_user, session_cookie)
+            cookie_user = await _find_session_user(
+                db, session_cookie, lock_read=lock_read
+            )
+            if cookie_user is not None and cookie_user.merged_into_user_id is not None:
+                raise await _merged_session_exception(db, cookie_user)
             return cookie_user
     return None
 
@@ -769,20 +790,17 @@ async def _resolve_current_user(
 LAST_SEEN_STAMP_INTERVAL = timedelta(minutes=5)
 
 
-async def _stamp_last_seen(db: AsyncSession, user: User) -> None:
+async def _stamp_last_seen(db: AsyncSession, user: User, raw_token: str) -> None:
     """Stamp ``user.last_seen_at``, at most once per
     ``LAST_SEEN_STAMP_INTERVAL``.
 
-    The throttle is tested HERE, in Python, against the already-loaded row: a
-    request inside the window issues no SQL at all. Two concurrent requests may
-    both pass the test and both write; both write the same wall-clock stamp, so
-    the race is idempotent and needs no lock.
+    Fresh stamps require no write. A stale stamp takes the Account update lock
+    before refreshing activity and the throttle, so concurrent reads do not
+    upgrade shared locks or write through a completed suspension.
 
-    The stamp commits ITSELF rather than riding the route's transaction: it runs
-    as a dependency, before the route body, so nothing half-finished can be
-    swept up, and ``get_session`` does not auto-commit. The commit does not
-    expire the row (``expire_on_commit=False`` in ``app.db``), so the caller's
-    in-memory ``User`` stays usable without a lazy reload.
+    The stamp commits before route work because read routes do not auto-commit.
+    The resolver then revalidates the credential and reacquires its read lock;
+    no stale identity from this commit authorizes the response.
 
     A failed stamp write RAISES rather than being swallowed. After a failed
     commit the session needs a rollback before any further statement, so
@@ -796,6 +814,31 @@ async def _stamp_last_seen(db: AsyncSession, user: User) -> None:
         user.last_seen_at is not None
         and now - user.last_seen_at < LAST_SEEN_STAMP_INTERVAL
     ):
+        return
+    user = (
+        await db.execute(
+            select(User)
+            .where(User.id == user.id)
+            .with_for_update(of=User)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    token_exists = await db.scalar(
+        select(SessionToken.id)
+        .where(
+            SessionToken.user_id == user.id, SessionToken.token == hash_token(raw_token)
+        )
+        .with_for_update(read=True)
+    )
+    if (
+        not token_exists
+        or not user.is_active
+        or (
+            user.last_seen_at is not None
+            and now - user.last_seen_at < LAST_SEEN_STAMP_INTERVAL
+        )
+    ):
+        await db.commit()
         return
     user.last_seen_at = now
     if user.primary_player is not None:
@@ -820,7 +863,9 @@ async def get_session_endpoint(
     Only a missing cookie mints a fresh guest. A rejected cookie ends the
     session explicitly instead of silently replacing the caller's identity.
     """
-    user = await _resolve_current_user(db, session_cookie=session_cookie)
+    user = await _resolve_current_user(
+        db, session_cookie=session_cookie, lock_read=True
+    )
     if user is None:
         # A surviving CSRF companion identifies a browser whose dead session
         # cookie was cleared. Repeated loads must not silently create a guest.
@@ -873,7 +918,7 @@ async def get_optional_user(
     """
     if not session_cookie:
         return None
-    user = await _find_session_user(db, session_cookie)
+    user = await _find_session_user(db, session_cookie, lock_read=True)
     if user is not None and user.merged_into_user_id is not None:
         # Tombstoned guest → render anonymously on optional endpoints; the next
         # required-auth call (or the session bootstrap) surfaces the redirect.
@@ -882,6 +927,7 @@ async def get_optional_user(
 
 
 async def get_current_user(
+    request: Request,
     session_cookie: Annotated[str | None, Cookie(alias=SESSION_COOKIE_NAME)] = None,
     db: AsyncSession = Depends(get_session),
 ) -> User:
@@ -899,7 +945,12 @@ async def get_current_user(
     ``session_ended`` 401 is raised so the client redirects to sign in (instead of
     acting as a merged-away ghost, or silently minting a new guest).
     """
-    user = await _resolve_current_user(db, session_cookie=session_cookie)
+    # Reads retain lifecycle protection through response construction. Mutations
+    # acquire complete, sorted actor/target locks in their services; taking an
+    # actor-only lock here would invert that order for opposed operations.
+    user = await _resolve_current_user(
+        db, session_cookie=session_cookie, lock_read=request.method in {"GET", "HEAD"}
+    )
     if user is None:
         raise _session_ended_exception()
     return user

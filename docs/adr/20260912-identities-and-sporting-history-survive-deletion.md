@@ -36,6 +36,10 @@ login identities survive suspension, but SQL
 cannot attach, reassign, or change a login credential while either its existing or
 new Account is inactive. Linked-token verification, profile changes, and
 agent-access mutations lock and refresh the Account before accepting authority.
+Authenticated reads hold a lifecycle-conflicting Account lock and revalidate the
+session token after waiting. Activity timestamps refresh under an update lock,
+then read authentication reacquires its protection after the timestamp commit.
+Mutation services acquire their complete actor/target lock sets in sorted order.
 Reactivation cannot undo an explicit agent-access revocation through a stale request.
 Privileged mutations lock and refresh the acting Account before rechecking
 permission, holding that lock through the operation, including broadcast delivery
@@ -49,6 +53,8 @@ Account locks: `FOR KEY SHARE` does not block direct SQL updates to lifecycle
 columns. This applies to tournament ownership/grants and roster/correction authority
 as well as result actors. Explicit grantors, revokers, and ownership-transfer actors
 must be active; immutable historical actors are not revalidated on later updates.
+Tournament insertion validates both its original creator and initial owner under
+Account locks, including when those identities differ.
 Rated match creation holds an active opponent manager Account and its primary grant
 through admission. Existing consent remains immutable historical evidence through
 suspension and erasure.

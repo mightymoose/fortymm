@@ -165,8 +165,12 @@ AUTHORITY_INTEGRITY_DDL = (
         IF TG_OP = 'INSERT'
             OR NEW.owner_account_id IS DISTINCT FROM OLD.owner_account_id THEN
             BEGIN
-                PERFORM id FROM accounts WHERE id = NEW.owner_account_id
-                    FOR SHARE NOWAIT;
+                -- New attribution and current ownership are live authority.
+                -- Later writes retain the original creator without reauthorizing it.
+                PERFORM id FROM accounts
+                    WHERE id = NEW.owner_account_id
+                        OR (TG_OP = 'INSERT' AND id = NEW.created_by_user_id)
+                    ORDER BY id FOR SHARE NOWAIT;
             EXCEPTION WHEN lock_not_available THEN
                 RAISE EXCEPTION 'ownership changes require account locks; retry'
                     USING ERRCODE = '40001';
@@ -175,6 +179,11 @@ AUTHORITY_INTEGRITY_DDL = (
                 WHERE id = NEW.owner_account_id AND merged_at IS NULL
                     AND deactivated_at IS NULL AND erased_at IS NULL) THEN
                 RAISE EXCEPTION 'owner must be active' USING ERRCODE = '23514';
+            END IF;
+            IF TG_OP = 'INSERT' AND NOT EXISTS (SELECT 1 FROM accounts
+                WHERE id = NEW.created_by_user_id AND merged_at IS NULL
+                    AND deactivated_at IS NULL AND erased_at IS NULL) THEN
+                RAISE EXCEPTION 'creator must be active' USING ERRCODE = '23514';
             END IF;
         END IF;
         RETURN NEW;
