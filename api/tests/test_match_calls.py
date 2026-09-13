@@ -1208,6 +1208,10 @@ async def _complete_linked_match(
     fixture = await db.get(TournamentFixture, fixture_id)
     assert fixture is not None
     fixture.winner_entry_id = winner_entry_id
+    await db.flush()
+    from app.event_lifecycle import reconcile_match_event
+
+    await reconcile_match_event(db, match.id)
     await db.commit()
 
 

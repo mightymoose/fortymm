@@ -54,7 +54,10 @@ def fake_solver_queue(monkeypatch):
     def enqueue_with_background_repairs(function, *args, **kwargs):
         # Required repairs are dispatched after commit and run on a real worker.
         # Keep only the health probe synchronous; record repairs for explicit drain.
-        background = function == "app.schedule_solves.run_schedule_solve"
+        background = function in (
+            "app.schedule_solves.run_schedule_solve",
+            "app.required_repairs.run_rating",
+        )
         previous = q._is_async
         q._is_async = background or previous
         try:

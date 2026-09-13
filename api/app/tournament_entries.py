@@ -168,27 +168,14 @@ async def _load_entrant(db: AsyncSession, user_id: uuid.UUID) -> Player:
     return user
 
 
-def _enforce_entry_registration_open(tournament: Tournament) -> None:
-    """Raise the ``registration_closed`` refusal unless the window is open (ADR-0968).
-
-    Same decision (``registration_open``) and the same words
-    (``registration_refusal_detail``) as the withdraw route's enforcer — only the
-    envelope differs, because only the entry endpoint's refusals are coded so far. So
-    the two routes cannot come to disagree about *whether* registration is open, which
-    is the property worth protecting.
-
-    One code for all three closed statuses. The status is *why*, and the client does
-    not branch on which one — it branches on "the window is shut", and the per-status
-    sentence rides along as the message (a fallback for a client that does not know the
-    code, and prose for a human). ``registration_open`` is asked module-qualified so a
-    test can stub the single decision point for both the enter and withdraw legs.
-    """
-    if tournament_registration.registration_open(tournament):
+def _enforce_entry_registration_open(
+    tournament: Tournament, event: TournamentEvent
+) -> None:
+    """Adapt the shared entry policy to the existing coded refusal (ADR-0968)."""
+    refusal = tournament_registration.entry_registration_refusal(tournament, event)
+    if refusal is None:
         return
-    raise EntryRefusedError(
-        EntryRefusal.registration_closed,
-        tournament_registration.registration_refusal_detail(tournament.status),
-    )
+    raise EntryRefusedError(EntryRefusal.registration_closed, refusal)
 
 
 async def _enforce_rating_eligible(
@@ -406,7 +393,7 @@ async def enter_event(
     # and hands back the number that admitted the entrant — the same number reported
     # beside their name, read once. Capacity is counted UNDER THE LOCK taken above, and
     # nothing between its count and the commit may take a lock of its own.
-    _enforce_entry_registration_open(tournament)
+    _enforce_entry_registration_open(tournament, event)
     rating = await _enforce_rating_eligible(db, tournament, event, entrant)
     await _enforce_event_has_room(db, event)
 
@@ -440,6 +427,9 @@ async def enter_event(
                 entry_id=entry.id, registered_by_account_id=actor.id
             )
         )
+        from app.event_lifecycle import reconcile_event
+
+        await reconcile_event(db, event.id)
         await db.commit()
     except IntegrityError:
         # The database is the final authority on duplicate active registration,
@@ -623,8 +613,8 @@ async def withdraw_from_event(
 
     # The gate is on the state CHANGE (ADR-0017): only an active entry is window-gated,
     # and only an active withdrawal that is seated in a cut draw owes a re-solve. An
-    # entry that is already withdrawn has nothing left to lock, so it falls straight
-    # through to the idempotent assignment — the 204 in every status ADR-0016 designed.
+    # already-withdrawn entry commits without changing status or adding reconciliation
+    # history — the idempotent 204 in every status ADR-0016 designed.
     if entry.status is TournamentEntryStatus.entered:
         _enforce_withdrawal_registration_open(tournament)
         await close_registration(
@@ -637,9 +627,8 @@ async def withdraw_from_event(
         )
         await _trigger_solve_if_seated(db, tournament_id, entry)
 
-    # Idempotent by construction: an assignment, not a decrement. Applied to an
-    # already-withdrawn entry it writes the value the row already holds (no UPDATE
-    # emitted), and it only ever removes a row from the partial unique index's
-    # predicate, so there is no IntegrityError to catch here.
-    entry.status = TournamentEntryStatus.withdrawn
+        entry.status = TournamentEntryStatus.withdrawn
+        from app.event_lifecycle import reconcile_event
+
+        await reconcile_event(db, event.id)
     await db.commit()

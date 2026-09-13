@@ -633,6 +633,11 @@ ENTRY_INTEGRITY_DDL = (
                     USING ERRCODE = '40001';
             END;
         END IF;
+        IF TG_TABLE_NAME IN ('match_games', 'match_results') THEN
+            PERFORM t.id FROM tournaments t
+            JOIN tournament_events e ON e.tournament_id = t.id
+            WHERE e.id = event_uuid FOR SHARE OF t;
+        END IF;
         IF TG_TABLE_NAME IN ('tournament_entries', 'matches') THEN
             IF TG_OP = 'UPDATE' THEN
                 BEGIN
@@ -658,6 +663,22 @@ ENTRY_INTEGRITY_DDL = (
         ) THEN
             RAISE EXCEPTION 'tournament association was deleted; retry transaction'
                 USING ERRCODE = '40001';
+        END IF;
+        IF TG_TABLE_NAME = 'matches' THEN
+            IF OLD.status='pending' AND NEW.status='in_progress' AND EXISTS (
+                SELECT 1 FROM tournament_events
+                WHERE id=event_uuid AND lifecycle_state='cancelled'
+            ) THEN
+                RAISE EXCEPTION 'cancelled events cannot start matches'
+                    USING ERRCODE = '23514';
+            END IF;
+        ELSIF TG_TABLE_NAME = 'match_lineups' THEN
+            IF NOT EXISTS (SELECT 1 FROM match_lineups WHERE match_id=NEW.match_id)
+                AND EXISTS (SELECT 1 FROM tournament_events
+                    WHERE id=event_uuid AND lifecycle_state='cancelled') THEN
+                RAISE EXCEPTION 'cancelled events cannot record a first lineup'
+                    USING ERRCODE = '23514';
+            END IF;
         END IF;
         IF fixture_uuid IS NOT NULL AND NOT EXISTS (
             SELECT 1 FROM tournament_fixtures f
@@ -787,8 +808,8 @@ ENTRY_INTEGRITY_DDL = (
     """
     CREATE OR REPLACE FUNCTION lock_fixture_link() RETURNS trigger
     LANGUAGE plpgsql AS $$
+    DECLARE event_row RECORD; placement_only boolean := false;
     BEGIN
-        IF TG_OP = 'INSERT' AND NEW.match_id IS NULL THEN RETURN NEW; END IF;
         IF TG_OP = 'UPDATE' THEN
             IF NEW.match_id IS NOT DISTINCT FROM OLD.match_id
                 AND NEW.stage_id IS NOT DISTINCT FROM OLD.stage_id
@@ -800,21 +821,43 @@ ENTRY_INTEGRITY_DDL = (
                 AND NEW.position IS NOT DISTINCT FROM OLD.position
                 AND NEW.scope_event_id IS NOT DISTINCT FROM OLD.scope_event_id
                 AND NEW.scope_tournament_id IS NOT DISTINCT FROM OLD.scope_tournament_id
-            THEN RETURN NEW; END IF;
+            THEN
+                IF ROW(NEW.table_id, NEW.scheduled_start, NEW.pinned_at)
+                    IS NOT DISTINCT FROM
+                    ROW(OLD.table_id, OLD.scheduled_start, OLD.pinned_at) THEN
+                    RETURN NEW;
+                END IF;
+                placement_only := true;
+            END IF;
         END IF;
         PERFORM t.id FROM tournaments t
         JOIN tournament_events e ON e.tournament_id = t.id
         JOIN tournament_event_stages s ON s.event_id = e.id
         WHERE s.id IN (NEW.stage_id, OLD.stage_id)
         ORDER BY t.id FOR SHARE OF t NOWAIT;
-        PERFORM e.id FROM tournament_events e
-        JOIN tournament_event_stages s ON s.event_id = e.id
-        WHERE s.id IN (NEW.stage_id, OLD.stage_id)
-        ORDER BY e.id FOR UPDATE OF e NOWAIT;
-        IF TG_OP <> 'INSERT' THEN
+        FOR event_row IN
+            SELECT e.id, e.lifecycle_state FROM tournament_events e
+            JOIN tournament_event_stages s ON s.event_id = e.id
+            WHERE s.id IN (NEW.stage_id, OLD.stage_id)
+            ORDER BY e.id FOR UPDATE OF e NOWAIT
+        LOOP
+            IF TG_OP <> 'INSERT' AND event_row.id=OLD.scope_event_id
+                AND event_row.lifecycle_state='cancelled' THEN
+                RAISE EXCEPTION 'cancelled event fixture must be retained'
+                    USING ERRCODE = '23514';
+            END IF;
+            IF TG_OP <> 'DELETE' AND event_row.id=NEW.scope_event_id
+                AND event_row.lifecycle_state='cancelled' THEN
+                RAISE EXCEPTION 'cancelled events cannot accept fixtures'
+                    USING ERRCODE = '23514';
+            END IF;
+        END LOOP;
+        IF TG_OP <> 'INSERT' AND NOT placement_only THEN
             IF EXISTS (SELECT 1 FROM match_lineups WHERE match_id = OLD.match_id)
                 OR EXISTS (SELECT 1 FROM match_games WHERE match_id = OLD.match_id)
                 OR EXISTS (SELECT 1 FROM match_results WHERE match_id = OLD.match_id)
+                OR EXISTS (SELECT 1 FROM tournament_event_recorded_games
+                    WHERE match_id = OLD.match_id)
             THEN
                 RAISE EXCEPTION 'recorded match fixture must be retained'
                     USING ERRCODE = '23514';
@@ -831,7 +874,8 @@ ENTRY_INTEGRITY_DDL = (
     """
     CREATE TRIGGER lock_fixture_link BEFORE INSERT OR DELETE
     OR UPDATE OF id, match_id, entry_a_id, entry_b_id, stage_id, group_id,
-        round, position, scope_event_id, scope_tournament_id
+        round, position, scope_event_id, scope_tournament_id,
+        table_id, scheduled_start, pinned_at
     ON tournament_fixtures FOR EACH ROW EXECUTE FUNCTION lock_fixture_link()
     """,
     """

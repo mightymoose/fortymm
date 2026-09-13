@@ -839,15 +839,9 @@ async def test_explicit_sql_fixture_insert_retries_when_parent_is_locked(
             text(f"SELECT id FROM {parent_table} WHERE id=:id FOR UPDATE"),
             {"id": drawn_history[id_key]},
         )
-        # Explicitly immediate FKs run before AFTER STATEMENT triggers. Their
-        # normal key-share wait can precede our NOWAIT event lock; a SQL caller's
-        # lock_timeout bounds that wait without weakening the FK or seat checks.
-        expected = (
-            "lock timeout"
-            if immediate and parent_table == "tournament_events"
-            else "draw history requires parent locks"
-        )
-        with pytest.raises(DBAPIError, match=expected):
+        # Cancellation protection locks parents in the BEFORE ROW fixture guard,
+        # so both deferred and immediate constraints now refuse contention there.
+        with pytest.raises(DBAPIError, match="fixture link requires parent locks"):
             async with db_session.begin_nested():
                 await db_session.execute(text("SET LOCAL lock_timeout = '500ms'"))
                 if immediate:

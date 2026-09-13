@@ -1211,6 +1211,10 @@ async def test_advancing_a_swiss_event_costs_three_statements(
     match = await db_session.get(Match, played.match_id)
     assert match is not None
     match.status = MatchStatus.completed
+    await db_session.flush()
+    from app.event_lifecycle import reconcile_match_event
+
+    await reconcile_match_event(db_session, match.id)
     await db_session.commit()
 
     async with counted_statements(engine) as (session, statements):

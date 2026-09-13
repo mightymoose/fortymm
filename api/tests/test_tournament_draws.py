@@ -249,6 +249,9 @@ async def test_a_completed_match_projects_the_games_each_side_won(
             games=[(5, 11), (7, 11), (11, 6), (9, 11)],
         ),
     )
+    from app.event_lifecycle import reconcile_event
+
+    await reconcile_event(db_session, event.id)
     await db_session.commit()
 
     game_counts = await _game_counts(db_session, event.id)

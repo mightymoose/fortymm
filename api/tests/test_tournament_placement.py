@@ -344,6 +344,10 @@ async def test_a_played_out_fixture_refuses_the_placement(
     await db_session.commit()
     await seed_fixture_match_sides(db_session, fixture, match)
     fixture.match_id = match.id
+    if frozen_status in (MatchStatus.completed, MatchStatus.voided):
+        from app.event_lifecycle import reconcile_event
+
+        await reconcile_event(db_session, _event.id)
     await db_session.commit()
 
     with pytest.raises(FixturePlacementFrozenError) as exc_info:

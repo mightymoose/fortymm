@@ -217,6 +217,9 @@ async def _enter(
         created_at=datetime(2026, 6, 1, 9, 0, tzinfo=UTC) + timedelta(minutes=minutes),
     )
     db.add(entry)
+    from app.event_lifecycle import reconcile_event
+
+    await reconcile_event(db, uuid.UUID(event_id))
     await db.commit()
     return entry
 
@@ -1095,6 +1098,9 @@ async def test_group_completion_does_not_advance_a_superseded_qualifier(
         await _record_result(db_session, recorded, submitted_by=target)
         knockout.entry_a_id, knockout.entry_b_id = target_id, opponent_entry.id
         knockout.match_id = recorded.id
+        from app.event_lifecycle import reconcile_event
+
+        await reconcile_event(db_session, uuid.UUID(event_id))
         await db_session.commit()
         await merge_user(db_session, from_user_id=owner.id, to_user_id=target.id)
         await db_session.commit()

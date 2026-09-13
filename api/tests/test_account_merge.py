@@ -552,6 +552,9 @@ async def _enter(
         # a NOT NULL column instead of falling back to ``now()``.
         entry.created_at = created_at
     db.add(entry)
+    from app.event_lifecycle import reconcile_event
+
+    await reconcile_event(db, event.id)
     await db.commit()
     await db.refresh(entry)
     return entry
@@ -1417,6 +1420,9 @@ async def test_merge_refuses_duplicate_recorded_play_in_same_stage_atomically(
             affects_rating=True,
         )
         fixture.match_id = match.id
+        from app.event_lifecycle import reconcile_event
+
+        await reconcile_event(db_session, event.id)
         await db_session.commit()
     if registration_withdrawn:
         from app.models import TournamentStatus
@@ -1485,6 +1491,9 @@ async def test_merge_keeps_the_entry_with_recorded_play_when_guest_account_is_re
             affects_rating=True,
         )
         fixture.match_id = match.id
+        from app.event_lifecycle import reconcile_event
+
+        await reconcile_event(db_session, event.id)
         await db_session.commit()
     duplicate = await _enter(db_session, event, survivor, seed=3, created_at=earlier)
 
@@ -1536,6 +1545,9 @@ async def test_merge_preserves_registration_on_a_withdrawn_played_survivor(
         affects_rating=True,
     )
     fixture.match_id = match.id
+    from app.event_lifecycle import reconcile_event
+
+    await reconcile_event(db_session, event.id)
     await db_session.commit()
     await withdraw_entry_with_history(db_session, played_entry.id)
     await db_session.commit()
@@ -1640,6 +1652,9 @@ async def test_login_reports_entry_merge_conflict_without_consuming_credentials(
         affects_rating=True,
     )
     fixture.match_id = match.id
+    from app.event_lifecycle import reconcile_event
+
+    await reconcile_event(db_session, event.id)
     raw_token = "entry-conflict-login-token"
     token = EmailToken(
         user_id=survivor.id,

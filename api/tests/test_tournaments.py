@@ -9658,6 +9658,10 @@ async def test_removing_a_table_with_call_history_retires_it_instead_of_deleting
     )
     fixture.call_notified_count = 1
     await db_session.flush()
+    if completed:
+        from app.event_lifecycle import reconcile_event
+
+        await reconcile_event(db_session, uuid.UUID(_event_id))
 
     response = await client.patch(
         f"/v1/tournaments/{tournament_id}",
@@ -10410,6 +10414,10 @@ async def test_advancing_a_round_robin_event_costs_one_statement_and_no_game_cou
     match = await db_session.get(Match, played.match_id)
     assert match is not None
     match.status = MatchStatus.completed
+    await db_session.flush()
+    from app.event_lifecycle import reconcile_match_event
+
+    await reconcile_match_event(db_session, match.id)
     await db_session.commit()
 
     async with counted_statements(engine) as (session, statements):
@@ -12114,6 +12122,10 @@ async def test_a_decided_matchs_placement_flags_neither_axis(
     match.status = frozen_status
     await seed_fixture_match_sides(db_session, fixture, match)
     fixture.match_id = match.id
+    if frozen_status in (MatchStatus.completed, MatchStatus.voided):
+        from app.event_lifecycle import reconcile_event
+
+        await reconcile_event(db_session, fixture.scope_event_id)
     await db_session.commit()
 
     placed = await _fixture_in_detail(client, tournament_id, str(fixture.id))
@@ -12346,6 +12358,10 @@ async def test_a_played_out_fixture_refuses_a_placement_move(
     match.status = frozen_status
     await seed_fixture_match_sides(db_session, fixture, match)
     fixture.match_id = match.id
+    if frozen_status in (MatchStatus.completed, MatchStatus.voided):
+        from app.event_lifecycle import reconcile_event
+
+        await reconcile_event(db_session, fixture.scope_event_id)
     await db_session.commit()
 
     response = await client.patch(

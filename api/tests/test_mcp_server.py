@@ -5257,6 +5257,9 @@ async def test_place_fixture_played_out_fixture_raises_tool_error(
     await db_session.commit()
     await seed_fixture_match_sides(db_session, fixture, match)
     fixture.match_id = match.id
+    from app.event_lifecycle import reconcile_event
+
+    await reconcile_event(db_session, _event.id)
     await db_session.commit()
 
     async with _mcp_client(raw) as client, client:
@@ -5438,3 +5441,35 @@ async def test_draw_change_busy_actor_returns_actionable_refusal(
                 with pytest.raises(ToolError, match="already in progress.*Retry"):
                     await client.call_tool(tool_name, arguments)
         await gate.rollback()
+
+
+async def test_update_event_cancelled_event_raises_tool_error(
+    db_session: AsyncSession, default_league: League
+) -> None:
+    from app.event_lifecycle import cancel_event
+
+    owner = await make_user(db_session, "mcp-cancelled-event-editor")
+    raw = await _mint(db_session, owner)
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Cancelled Cup", TournamentStatus.draft
+    )
+    event = await _seed_event(db_session, tournament)
+    name, version = event.name, event.lock_version
+    await cancel_event(
+        db_session, tournament_id=tournament.id, event_id=event.id, actor=owner
+    )
+    await db_session.commit()
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp(
+            "update_event",
+            {
+                "tournament_id": str(tournament.id),
+                "event_id": str(event.id),
+                "updates": {"name": "Changed", "lock_version": version},
+            },
+        )
+        assert result.isError is True
+        assert "A cancelled event cannot be edited." in str(result.content)
+    await db_session.refresh(event)
+    assert event.name == name
+    assert event.lock_version == version

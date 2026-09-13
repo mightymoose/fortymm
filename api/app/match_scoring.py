@@ -143,13 +143,15 @@ async def lock_match_for_transition(
         # Tournament completion guards require parents before the match. Take
         # these locks before loading/mutating it, so ordinary acceptance waits
         # safely for scheduling instead of leaking a retryable SQL error.
+        # Completion updates this parent: acquire UPDATE now, before the event,
+        # rather than upgrading SHARE while another event writer waits on us.
         await db.execute(
             text(
                 "SELECT t.id FROM tournaments t "
                 "JOIN tournament_events e ON e.tournament_id = t.id "
                 "JOIN tournament_event_stages s ON s.event_id = e.id "
                 "JOIN tournament_fixtures f ON f.stage_id = s.id "
-                "WHERE f.match_id = :match FOR SHARE OF t"
+                "WHERE f.match_id = :match FOR UPDATE OF t"
             ),
             {"match": match_id},
         )
@@ -628,6 +630,9 @@ async def enter_game_score(
     match = await load_match(db, match_id, user_id, lock=True)
     ensure_scorable(match)
     ensure_game_in_range(match, game_number)
+    from app.event_lifecycle import require_game_recording_allowed
+
+    await require_game_recording_allowed(db, match.id, (game_number,))
 
     game = _game_by_number(match, game_number)
     if game is None or game.score is None:

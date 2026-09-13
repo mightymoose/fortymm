@@ -295,13 +295,14 @@ column, because a counter is a second copy of a truth that can drift from the ro
 it counts.
 
 **Registration window**:
-The span in which entries may be created, which is exactly the tournament being
-`published` (ADR-0017). A `draft` has not opened, a `live` one has locked, an
-`archived` one has ended. Entering *and* withdrawing both obey it — **including the
+The tournament-wide policy window for entering and withdrawing: `published`
+opens it, while `draft`, `live` and `archived` close it. Cancelled events additionally
+refuse new entries. It is separate from **event progress**: an unstarted event in
+a live tournament still has closed registration. Entering *and* withdrawing both obey it — **including the
 director's** (ADR-0784). So once a tournament is `live` nobody can be added or
 removed, not even by the owner: that is deliberate, and it is why #985 (the
 override, for walk-ins and no-shows) exists.
-_Avoid_: open, deadline (there is no date; the window is a function of the status).
+_Avoid_: publication, event start (neither is a synonym for permission to enter).
 
 **Eligibility**:
 Whether a given player may enter a given event, decided **server-side, for that
@@ -497,6 +498,27 @@ be *styled* with tournament "seed" flavor, but the underlying concept is a
 rating rank, never the player's index on the current page).
 
 ## Tournaments
+
+**Event progress**:
+An event's sporting state: unstarted, in progress, finished or cancelled,
+independent of its tournament's publication status. First recorded play starts it;
+complete results finish it. Corrections can reopen a finished event, preserving
+every earlier finish. An event can finish without play.
+
+**First recorded play**:
+The first saved game score in an event. Its recording time is known; the exact
+time play began can remain unknown. Clearing a score does not erase this fact.
+A match call alone is not recorded play for event progression.
+
+**Event cancellation**:
+A terminal decision before or during play that stops new scoring while preserving
+prior play and permitting authorized historical corrections. Cancellation is
+distinct from a voided match and from tournament archive.
+
+**Tournament archive**:
+Putting a tournament away while retaining its events and history. Archive does
+not assert that its events finished or were cancelled, and prevents hard deletion.
+See [event progress](docs/adr/20260912-event-progress-is-independent-of-tournament-publication.md).
 
 **Tournament creator**:
 The Account that originally created a tournament. Attribution stays with that

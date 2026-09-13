@@ -2350,6 +2350,10 @@ async def test_a_completed_tournament_match_stays_closed_to_the_director(
             p2=p2,
         )
         match.status = MatchStatus.completed
+        await db_session.flush()
+        from app.event_lifecycle import reconcile_match_event
+
+        await reconcile_match_event(db_session, match.id)
         await db_session.commit()
 
         response = await director_client.post(

@@ -356,7 +356,10 @@ async def replace_advancement(
             )
         )
         if previous.entry_id != entry_id:
+            from app.event_lifecycle import reconcile_event
             from app.schedule_solves import request_solve
+
+            await reconcile_event(db, fixture.scope_event_id)
 
             # Entrant identity affects conflicts and rest even before a fixture
             # materializes. Validate the replacement before enqueueing, and keep

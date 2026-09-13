@@ -47,6 +47,7 @@ from app.models import (
     TournamentEvent,
     User,
 )
+from app.models.tournament import EventLifecycleState
 from app.schedule_solves import request_solve, tournament_has_drawn_event
 from app.schemas.tournament import TournamentFixtureRead
 from app.tournament_draw_limits import lock_draw_actor
@@ -110,6 +111,8 @@ async def _enforce_unplayed(db: AsyncSession, event: TournamentEvent) -> None:
     Read under the tournament lock. Retaining the former revision does not grant
     permission to redraw competition that is already under way.
     """
+    if event.lifecycle_state is EventLifecycleState.cancelled:
+        raise DrawUnderWayError("This event is cancelled; its draw must be retained.")
     if await draw_has_advancement_history(db, event.id):
         raise DrawUnderWayError(
             "Advancement history must be preserved. "

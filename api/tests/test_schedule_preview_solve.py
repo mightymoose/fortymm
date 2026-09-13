@@ -814,10 +814,10 @@ async def test_preview_solve_refuses_a_post_live_tournament(
     status: TournamentStatus,
 ) -> None:
     owner = await make_user(db_session, f"prev-{status.value}")
-    tournament = await _make_tournament(
-        db_session, owner=owner, league=default_league, status=status
-    )
+    tournament = await _make_tournament(db_session, owner=owner, league=default_league)
     await _add_event(db_session, tournament)
+    tournament.status = status
+    await db_session.commit()
 
     with pytest.raises(TournamentNotPreLiveError) as excinfo:
         await request_schedule_preview(
