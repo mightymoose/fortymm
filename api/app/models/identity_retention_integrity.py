@@ -78,6 +78,7 @@ IDENTITY_RETENTION_DDL = (
     LANGUAGE plpgsql AS $$
     BEGIN
         DELETE FROM account_session_tokens WHERE user_id=NEW.id;
+        DELETE FROM device_tokens WHERE user_id=NEW.id;
         DELETE FROM account_email_tokens
             WHERE user_id=NEW.id OR target_account_id=NEW.id;
         DELETE FROM account_email_intents
@@ -123,11 +124,11 @@ IDENTITY_RETENTION_DDL = (
                 RAISE EXCEPTION 'inactive account credentials cannot be attached'
                     USING ERRCODE='23514';
             END IF;
-            -- Device registrations survive deactivation.
+            -- Device registrations are bearer delivery credentials too.
             IF account_row.deactivated_at IS NOT NULL
                 AND TG_TABLE_NAME IN ('account_session_tokens',
                     'account_email_tokens', 'account_email_intents',
-                    'account_first_sign_in_intents')
+                    'account_first_sign_in_intents', 'device_tokens')
                 AND account_row.id IN (
                     (to_jsonb(NEW)->>'user_id')::uuid,
                     (to_jsonb(NEW)->>'target_account_id')::uuid

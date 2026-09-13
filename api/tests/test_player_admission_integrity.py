@@ -508,3 +508,83 @@ async def test_sql_compound_entry_activation_cannot_admit_retired_player(
                 text(statement), {"e": entry.id, "p": player.player_id}
             )
             await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+
+@pytest.mark.parametrize("first", ["match", "deactivation"])
+@pytest.mark.parametrize("invalidation", ["deactivation", "grant_revocation"])
+async def test_rated_opponent_manager_serializes_with_deactivation(
+    db_session, engine, monkeypatch, first, invalidation
+):
+    from app import match_creation
+    from app.match_creation import OpponentNotFoundError
+
+    creator = await make_user(db_session, "rated-manager-race-creator")
+    opponent = await make_user(db_session, "rated-manager-race-opponent")
+    await db_session.commit()
+    creator_id, opponent_id, player_id = creator.id, opponent.id, opponent.player_id
+    checked, proceed = asyncio.Event(), asyncio.Event()
+    original = match_creation.resolve_league
+
+    async def pause_after_opponent_check(*args, **kwargs):
+        checked.set()
+        await proceed.wait()
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(match_creation, "resolve_league", pause_after_opponent_check)
+    async with (
+        async_sessionmaker(engine, expire_on_commit=False)() as writer,
+        async_sessionmaker(engine)() as lifecycle,
+    ):
+        writer_pid = await writer.scalar(text("SELECT pg_backend_pid()"))
+        lifecycle_pid = await lifecycle.scalar(text("SELECT pg_backend_pid()"))
+        actor = await writer.get(Account, creator_id)
+
+        async def create():
+            return await create_match(
+                writer,
+                creator=actor,
+                opponent_user_id=player_id,
+                league_id=None,
+                best_of=3,
+                rated=True,
+            )
+
+        async def deactivate():
+            statement = (
+                "UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"
+                if invalidation == "deactivation"
+                else "DELETE FROM account_players WHERE account_id=:id"
+            )
+            await lifecycle.execute(text(statement), {"id": opponent_id})
+
+        if first == "match":
+            pending = asyncio.create_task(create())
+            suspension = None
+            try:
+                await asyncio.wait_for(checked.wait(), 2)
+                suspension = asyncio.create_task(deactivate())
+                await wait_for_blocked(writer, lifecycle_pid, suspension)
+                proceed.set()
+                await pending
+                await suspension
+                await lifecycle.commit()
+            finally:
+                proceed.set()
+                for task in (pending, suspension):
+                    if task is not None and not task.done():
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+        else:
+            await deactivate()
+            pending = asyncio.create_task(create())
+            try:
+                await wait_for_blocked(lifecycle, writer_pid, pending)
+                await lifecycle.commit()
+                proceed.set()
+                with pytest.raises(OpponentNotFoundError):
+                    await pending
+            finally:
+                proceed.set()
+                if not pending.done():
+                    pending.cancel()
+                    await asyncio.gather(pending, return_exceptions=True)

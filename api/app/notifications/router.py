@@ -9,7 +9,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.models import User
 from app.notifications.dependencies import get_notification_service
-from app.notifications.service import NotificationService, PushNotConfiguredError
+from app.notifications.service import (
+    InactiveNotificationAccount,
+    NotificationService,
+    PushNotConfiguredError,
+)
 from app.rbac import require_permission
 from app.schemas.notification import (
     BroadcastRecipientList,
@@ -42,7 +46,10 @@ async def register_device_token(
     service: NotificationService = Depends(get_notification_service),
     current_user: User = Depends(get_current_user),
 ) -> DeviceTokenResponse:
-    await service.register_device_token(current_user, payload)
+    try:
+        await service.register_device_token(current_user, payload)
+    except InactiveNotificationAccount:
+        raise HTTPException(status_code=401, detail="Account is inactive") from None
     return DeviceTokenResponse()
 
 

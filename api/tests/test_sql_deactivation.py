@@ -13,6 +13,12 @@ from app.sessions import get_optional_user, hash_token
 
 CREDENTIALS = [
     (
+        "device_tokens",
+        "user_id",
+        "id,user_id,token,platform,environment",
+        "gen_random_uuid(),:account,'suspended-device','ios','sandbox'",
+    ),
+    (
         "account_session_tokens",
         "user_id",
         "id,user_id,token",
@@ -162,7 +168,7 @@ async def test_sql_cannot_issue_credentials_for_inactive_accounts(
 
 
 @pytest.mark.parametrize("first", ["deactivation", "credential"])
-@pytest.mark.parametrize("role", ["owner", "target", "login"])
+@pytest.mark.parametrize("role", ["owner", "target", "login", "device"])
 async def test_sql_deactivation_serializes_with_credential_issuance(
     db_session, engine, first, role
 ):
@@ -182,6 +188,11 @@ async def test_sql_deactivation_serializes_with_credential_issuance(
         statement = (
             "INSERT INTO login_identities(id,account_id,issuer,provider,subject) "
             "VALUES(gen_random_uuid(),:id,'race-issuer','auth0','race-subject')"
+        )
+    if role == "device":
+        statement = (
+            "INSERT INTO device_tokens(id,user_id,token,platform,environment) "
+            "VALUES(gen_random_uuid(),:id,'race-device','ios','sandbox')"
         )
     sessions = async_sessionmaker(engine)
     async with sessions() as suspender, sessions() as issuer:
@@ -240,6 +251,7 @@ async def test_sql_deactivation_serializes_with_credential_issuance(
         await db_session.scalar(text("SELECT count(*) FROM account_email_tokens")) == 0
     )
 
+    assert await db_session.scalar(text("SELECT count(*) FROM device_tokens")) == 0
     if role == "login":
         assert await db_session.scalar(
             text("SELECT count(*) FROM login_identities WHERE account_id=:id"),
@@ -308,3 +320,46 @@ async def test_sql_cannot_move_login_identity_out_of_suspended_account(db_sessio
                 ),
                 {"source": source_id, "destination": destination_id},
             )
+
+
+@pytest.mark.parametrize("interface", ["service", "sql"])
+async def test_reactivation_requires_fresh_device_registration(db_session, interface):
+    from app.identity_lifecycle import deactivate_account, reactivate_account
+    from app.models.device_token import DeviceToken
+
+    account = Account()
+    db_session.add(account)
+    await db_session.flush()
+    db_session.add(
+        DeviceToken(
+            user_id=account.id,
+            token="old-device",
+            platform="ios",
+            environment="sandbox",
+        )
+    )
+    await db_session.commit()
+    account_id = account.id
+    if interface == "service":
+        await deactivate_account(db_session, account_id)
+    else:
+        await db_session.execute(
+            text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"),
+            {"id": account_id},
+        )
+    await db_session.commit()
+    await reactivate_account(db_session, account_id)
+    await db_session.commit()
+    assert await db_session.scalar(text("SELECT count(*) FROM device_tokens")) == 0
+    db_session.add(
+        DeviceToken(
+            user_id=account_id,
+            token="new-device",
+            platform="ios",
+            environment="sandbox",
+        )
+    )
+    await db_session.commit()
+    assert (
+        await db_session.scalar(text("SELECT token FROM device_tokens")) == "new-device"
+    )

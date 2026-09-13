@@ -83,6 +83,10 @@ FEED_LIMIT = 50
 RECIPIENT_LIMIT = 50
 
 
+class InactiveNotificationAccount(Exception):
+    """A suspended or erased Account cannot register notification access."""
+
+
 class PushNotConfiguredError(Exception):
     """Raised when a push is requested but no APNs credentials are configured.
     The router maps this to a 503."""
@@ -373,6 +377,8 @@ class NotificationService:
         """Upsert keyed on the globally-unique APNs token: a device that has
         since signed into a different account re-points to the new owner rather
         than creating a duplicate row."""
+        if await self._active_recipient(user.id) is None:
+            raise InactiveNotificationAccount
         stmt = insert(DeviceToken).values(
             token=req.token,
             platform=req.platform,
@@ -474,8 +480,8 @@ class NotificationService:
         ``Notification.result_id`` / ``_visible_notifications_clause``. Leave
         it ``None`` for every notification that isn't one of the two hideable
         result-acceptance prompts."""
-        user = await self._db.get(User, user_id)
-        if user is None or user.merged_into_user_id is not None:
+        user = await self._active_recipient(user_id)
+        if user is None:
             return NotifyResult()
 
         candidates = set(NotificationChannel) if channels is None else set(channels)
@@ -525,25 +531,28 @@ class NotificationService:
                     extra={"user_id": str(user_id), "category": category.value},
                 )
 
-        if (
-            NotificationChannel.EMAIL in effective
-            and user.email
-            and user.confirmed_at is not None
-        ):
-            if self._enqueue_notification_email(user.email, title, body, link):
-                result.emailed = True
+        if NotificationChannel.EMAIL in effective:
+            # In-app persistence and token pruning may have committed the old
+            # lock. Recheck before enqueueing, and again in the email worker.
+            recipient = await self._active_recipient(user_id)
+            if recipient and recipient.email and recipient.confirmed_at is not None:
+                if self._enqueue_notification_email(
+                    user_id, recipient.email, title, body, link
+                ):
+                    result.emailed = True
 
         return result
 
     def _enqueue_notification_email(
-        self, to_email: str, title: str, body: str, link: str | None
+        self, user_id: uuid.UUID, to_email: str, title: str, body: str, link: str | None
     ) -> bool:
         """Fire-and-forget the notification email. A Redis hiccup must not fail
         the originating flow, so enqueue failures are logged and swallowed
         (mirrors ``app.sessions._enqueue_rating_recompute_after_merge``)."""
         try:
             queue_module.get_email_queue().enqueue(
-                "app.email.send_notification_email",
+                "app.notifications.jobs.deliver_notification_email",
+                str(user_id),
                 to_email,
                 title,
                 body,
@@ -1056,7 +1065,19 @@ class NotificationService:
 
     # ----- internals (push fan-out) ----------------------------------------
 
+    async def _active_recipient(self, user_id: uuid.UUID) -> User | None:
+        """Keep current recipient activity stable until delivery commits."""
+        recipient: User | None = await self._db.scalar(
+            select(User)
+            .where(User.id == user_id, User.is_active)
+            .with_for_update(read=True)
+            .execution_options(populate_existing=True)
+        )
+        return recipient
+
     async def _tokens_for_user(self, user_id: uuid.UUID) -> Sequence[DeviceToken]:
+        if await self._active_recipient(user_id) is None:
+            return []
         rows = await self._db.execute(
             select(DeviceToken).where(DeviceToken.user_id == user_id)
         )

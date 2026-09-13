@@ -8,10 +8,14 @@ process-local ``PushSender`` — mirroring ``app.ratings.jobs``.
 
 import asyncio
 import logging
+import uuid
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app import email
 from app.db import get_engine
+from app.models import Account
 from app.notifications.apns import push_sender_from_env
 from app.notifications.service import NotificationService
 from app.schemas.notification import NotificationJob
@@ -45,3 +49,30 @@ async def _deliver(job: NotificationJob) -> None:
             channels=job.channels,
             result_id=job.result_id,
         )
+
+
+def deliver_notification_email(
+    account_id: str, to_email: str, title: str, body: str, link: str | None = None
+) -> None:
+    """Deliver queued notification email only while its original recipient is live."""
+    asyncio.run(_deliver_email(uuid.UUID(account_id), to_email, title, body, link))
+
+
+async def _deliver_email(
+    account_id: uuid.UUID, to_email: str, title: str, body: str, link: str | None
+) -> None:
+    sessions = async_sessionmaker(get_engine(), expire_on_commit=False)
+    async with sessions() as db:
+        recipient = await db.scalar(
+            select(Account.id)
+            .where(
+                Account.id == account_id,
+                Account.is_active,
+                Account.email == to_email,
+                Account.confirmed_at.is_not(None),
+            )
+            .with_for_update(read=True)
+        )
+        if recipient is not None:
+            # Hold activity and address stable through the external send.
+            email.send_notification_email(to_email, title, body, link)

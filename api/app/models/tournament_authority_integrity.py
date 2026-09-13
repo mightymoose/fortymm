@@ -45,6 +45,20 @@ AUTHORITY_INTEGRITY_DDL = (
             RAISE EXCEPTION 'authority recipient must be active'
                 USING ERRCODE = '23514';
         END IF;
+        IF TG_OP='INSERT' AND NEW.reason='explicit' AND NOT EXISTS (
+            SELECT 1 FROM accounts WHERE id=NEW.granted_by_account_id
+                AND merged_at IS NULL AND deactivated_at IS NULL AND erased_at IS NULL
+        ) THEN
+            RAISE EXCEPTION 'authority actor must be active' USING ERRCODE='23514';
+        END IF;
+        IF NEW.revoked_at IS NOT NULL AND NEW.revocation_reason='explicit'
+            AND (TG_OP='INSERT' OR OLD.revoked_at IS NULL) AND NOT EXISTS (
+                SELECT 1 FROM accounts WHERE id=NEW.revoked_by_account_id
+                    AND merged_at IS NULL AND deactivated_at IS NULL
+                    AND erased_at IS NULL
+            ) THEN
+            RAISE EXCEPTION 'authority actor must be active' USING ERRCODE='23514';
+        END IF;
         IF NEW.inherited_from_grant_id IS NOT NULL AND NOT EXISTS (
             SELECT 1 FROM tournament_account_grants g
             WHERE g.id = NEW.inherited_from_grant_id
@@ -77,6 +91,12 @@ AUTHORITY_INTEGRITY_DDL = (
             RAISE EXCEPTION 'ownership transfer requires parent locks; retry'
                 USING ERRCODE = '40001';
         END;
+        IF NEW.reason='explicit' AND NOT EXISTS (
+            SELECT 1 FROM accounts WHERE id=NEW.actor_account_id
+                AND merged_at IS NULL AND deactivated_at IS NULL AND erased_at IS NULL
+        ) THEN
+            RAISE EXCEPTION 'authority actor must be active' USING ERRCODE='23514';
+        END IF;
         IF parent.id IS NULL
             OR parent.owner_account_id IS DISTINCT FROM NEW.previous_owner_account_id
             OR (NEW.revision IS NOT NULL

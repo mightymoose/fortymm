@@ -1195,3 +1195,55 @@ async def test_authority_admission_serializes_with_sql_deactivation(
                 if not pending.done():
                     pending.cancel()
                     await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.mark.parametrize("operation", ["grant", "transfer", "revoke"])
+async def test_sql_explicit_authority_requires_active_actor(
+    db_session, default_league, operation
+):
+    from sqlalchemy import text
+    from sqlalchemy.exc import IntegrityError
+
+    owner = await make_user(db_session, "inactive-explicit-authority-owner")
+    recipient = await make_user(db_session, "inactive-explicit-authority-recipient")
+    tournament = Tournament(
+        name="Explicit authority",
+        league_id=default_league.id,
+        created_by_user_id=owner.id,
+    )
+    db_session.add(tournament)
+    await db_session.commit()
+    if operation == "revoke":
+        from app.tournament_authority import grant_director
+
+        await grant_director(
+            db_session, tournament.id, actor_id=owner.id, account_id=recipient.id
+        )
+        await db_session.commit()
+    await db_session.execute(
+        text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"),
+        {"id": owner.id},
+    )
+    await db_session.commit()
+    statement = (
+        "INSERT INTO tournament_account_grants"
+        "(id,role,reason,tournament_id,account_id,granted_by_account_id) "
+        "VALUES(gen_random_uuid(),'director','explicit',:t,:recipient,:actor)"
+        if operation == "grant"
+        else "INSERT INTO tournament_ownership_transfers(id,tournament_id,"
+        "previous_owner_account_id,new_owner_account_id,actor_account_id,reason) "
+        "VALUES(gen_random_uuid(),:t,:actor,:recipient,:actor,'explicit')"
+    )
+    if operation == "revoke":
+        statement = (
+            "UPDATE tournament_account_grants SET revoked_at=clock_timestamp(),"
+            "revoked_by_account_id=:actor,revocation_reason='explicit' "
+            "WHERE tournament_id=:t AND account_id=:recipient"
+        )
+    with pytest.raises(IntegrityError, match="authority actor must be active"):
+        async with db_session.begin_nested():
+            await db_session.execute(
+                text(statement),
+                {"t": tournament.id, "recipient": recipient.id, "actor": owner.id},
+            )
+            await db_session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))

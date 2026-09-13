@@ -27,11 +27,12 @@ refuse), and the connector pair is ``Settings.mcp_connector``.
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import McpConnectorConfig, get_settings
 from app.db import get_session
+from app.email_credentials import lock_accounts
 from app.mcp_server import MCP_ACCESS_PERMISSION
 from app.models import User
 from app.rbac import user_has_permission
@@ -160,9 +161,19 @@ async def get_agent_access(
     return await _describe(db, current_user)
 
 
+async def _active_mutating_account(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_session),
+) -> User:
+    await lock_accounts(db, {current_user.id})
+    if not current_user.is_active:
+        raise HTTPException(status_code=401, detail="Account is inactive.")
+    return current_user
+
+
 @router.post("/settings/agent-access/disconnect", response_model=AgentAccessResponse)
 async def disconnect_agent_access(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_active_mutating_account),
     db: AsyncSession = Depends(get_session),
 ) -> AgentAccessResponse:
     """Switch agent access off for the calling player, and report the page's new
@@ -213,7 +224,7 @@ async def disconnect_agent_access(
 
 @router.post("/settings/agent-access/allow", response_model=AgentAccessResponse)
 async def allow_agent_access(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_active_mutating_account),
     db: AsyncSession = Depends(get_session),
 ) -> AgentAccessResponse:
     """Let agents connect to this account again, and report the page's new state.

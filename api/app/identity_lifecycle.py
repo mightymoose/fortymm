@@ -41,6 +41,7 @@ async def deactivate_account(db: AsyncSession, account_id: uuid.UUID) -> None:
     account = await _account(db, account_id)
     account.deactivated_at = account.deactivated_at or datetime.now(UTC)
     await db.execute(delete(SessionToken).where(SessionToken.user_id == account_id))
+    await db.execute(delete(DeviceToken).where(DeviceToken.user_id == account_id))
     await db.execute(
         delete(EmailToken).where(
             or_(

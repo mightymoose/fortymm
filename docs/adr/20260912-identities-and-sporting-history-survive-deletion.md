@@ -15,15 +15,19 @@ same Account, subject to its current authority: revoked grants stay revoked and
 transferred ownership stays transferred. Deactivation does not retire a Player,
 withdraw an entry, transfer tournament ownership, or disable another manager.
 An inactive owning Account retains its reference but cannot exercise authority.
-Deactivation revokes outstanding session and email-confirmation credentials,
-including merge confirmations targeting the Account. Confirmation endpoints
+Deactivation revokes outstanding session, email-confirmation, and device delivery
+credentials, including merge confirmations targeting the Account. Confirmation endpoints
 must recheck Account activity before changing identity or minting a session.
 The database also revokes credentials on direct SQL deactivation and rejects new
 credentials owned by or targeting an inactive Account. Reactivation cannot revive
-old cookies or links. Existing linked login identities survive suspension, but SQL
+old cookies, links, or device tokens. Notification delivery rechecks recipient
+activity so already-queued work cannot send to a suspended Account. Existing linked
+login identities survive suspension, but SQL
 cannot attach, reassign, or change a login credential while either its existing or
-new Account is inactive. Linked-token verification and profile changes also lock
-and refresh the Account before accepting authority. Privileged mutations lock and refresh the acting Account before rechecking
+new Account is inactive. Linked-token verification, profile changes, and
+agent-access mutations lock and refresh the Account before accepting authority.
+Reactivation cannot undo an explicit agent-access revocation through a stale request.
+Privileged mutations lock and refresh the acting Account before rechecking
 permission, holding that lock through the operation, including broadcast delivery
 enqueueing. RBAC changes lock acting and target Accounts together in a stable order,
 so suspension cannot be followed by an already-started role grant.
@@ -32,8 +36,11 @@ active Accounts. New consent locks both actors in stable order; concurrent lifec
 changes produce a retryable conflict. Activity checks use `FOR SHARE` or stronger
 Account locks: `FOR KEY SHARE` does not block direct SQL updates to lifecycle
 columns. This applies to tournament ownership/grants and roster/correction authority
-as well as result actors. Existing consent remains immutable historical
-evidence through suspension and erasure.
+as well as result actors. Explicit grantors, revokers, and ownership-transfer actors
+must be active; immutable historical actors are not revalidated on later updates.
+Rated match creation holds an active opponent manager Account and its primary grant
+through admission. Existing consent remains immutable historical evidence through
+suspension and erasure.
 Player-authorized writes hold the Account lock through the action so suspension
 and admission have a deterministic order. A foreign login's guest reference grants no access to the
 inactive guest and may remain so the active destination can still sign in.

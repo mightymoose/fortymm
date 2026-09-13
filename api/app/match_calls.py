@@ -1070,7 +1070,7 @@ def _tell_pair(
     told = False
     for player, opponent in ((user_a, user_b), (user_b, user_a)):
         for recipient in accounts_by_player.get(player.id, []):
-            if recipient.merged_into_user_id is not None:
+            if not recipient.is_active:
                 continue
             fanout.append(
                 _record_message(
@@ -1198,7 +1198,7 @@ async def load_copy_ingredients(
         .join(Player, Player.id == AccountPlayer.player_id)
         .where(
             AccountPlayer.player_id.in_(players),
-            User.merged_into_user_id.is_(None),
+            User.is_active,
             Player.merged_into_player_id.is_(None),
         )
         .order_by(User.id)

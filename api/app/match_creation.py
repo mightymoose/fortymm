@@ -20,7 +20,7 @@ produced before.
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.leagues import resolve_league
@@ -114,6 +114,23 @@ async def create_match(
     user, and :class:`RatedNeedsRegisteredOpponentError` when a rated match is
     requested with no registered opponent. It never raises ``HTTPException`` —
     it has no HTTP context; the caller adapts these to its transport."""
+    locked_account_ids: list[uuid.UUID] = []
+    if rated and opponent_user_id is not None:
+        # Lock the complete Account set before require_player takes Player locks.
+        # Recheck manager activity below, restricted to these locked candidates:
+        # a newly reassigned manager must not become unchecked authority.
+        manager_ids = select(AccountPlayer.account_id).where(
+            AccountPlayer.player_id == opponent_user_id,
+            AccountPlayer.is_primary.is_(True),
+        )
+        locked_account_ids = list(
+            await db.scalars(
+                select(Account.id)
+                .where(or_(Account.id == creator.id, Account.id.in_(manager_ids)))
+                .order_by(Account.id)
+                .with_for_update(read=True)
+            )
+        )
     participant_id = await primary_player_id(db, creator.id)
     if participant_id is None:
         raise PlayerAccessDenied
@@ -145,7 +162,9 @@ async def create_match(
                 AccountPlayer.player_id == opponent.id,
                 AccountPlayer.is_primary.is_(True),
                 Account.is_active,
+                Account.id.in_(locked_account_ids),
             )
+            .with_for_update(read=True, of=AccountPlayer)
             .limit(1)
         ):
             raise OpponentNotFoundError
