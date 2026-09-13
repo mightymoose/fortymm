@@ -190,3 +190,111 @@ async def test_optional_cookie_read_rechecks_suspension_after_waiting(
         finally:
             await suspender.rollback()
             await read
+
+
+@pytest.mark.parametrize("path", ["/v1/me/email", "/v1/me/email/resend"])
+@pytest.mark.parametrize("erase", [False, True])
+async def test_honeypot_session_response_rechecks_activity_after_authentication(
+    api_client, db_session, engine, monkeypatch, path, erase
+):
+    from app.identity_lifecycle import deactivate_account, erase_account
+
+    user = await start_session(api_client, db_session)
+    user.email = "private-session@example.com"
+    await db_session.commit()
+    original = sessions._resolve_current_user
+
+    async def suspend_after_resolution(db, **kwargs):
+        actor = await original(db, **kwargs)
+        assert actor is not None
+        async with async_sessionmaker(engine)() as lifecycle:
+            await (erase_account if erase else deactivate_account)(lifecycle, actor.id)
+            await lifecycle.commit()
+        return actor
+
+    monkeypatch.setattr(sessions, "_resolve_current_user", suspend_after_resolution)
+    response = await api_client.post(
+        path,
+        json={
+            "email": "new@example.com",
+            "captcha_token": "test-token",
+            "fmm_hp_token": "filled",
+        },
+    )
+    assert response.status_code == 401, response.text
+    assert "private-session@example.com" not in response.text
+
+
+async def test_email_response_rechecks_activity_after_credential_commit(
+    api_client, db_session, engine, monkeypatch
+):
+    from app.identity_lifecycle import deactivate_account
+
+    user = await start_session(api_client, db_session)
+    account_id = user.id
+    original = sessions._build_session_response
+
+    async def suspend_before_response(db, actor, *args, **kwargs):
+        async with async_sessionmaker(engine)() as lifecycle:
+            await deactivate_account(lifecycle, account_id)
+            await lifecycle.commit()
+        return await original(db, actor, *args, **kwargs)
+
+    monkeypatch.setattr(sessions, "_build_session_response", suspend_before_response)
+    response = await api_client.post(
+        "/v1/me/email",
+        json={"email": "pending@example.com", "captcha_token": "test-token"},
+    )
+    assert response.status_code == 401
+
+
+async def test_honeypot_response_holds_activity_while_reading_private_fields(
+    api_client, db_session, engine, monkeypatch
+):
+    user = await start_session(api_client, db_session)
+    account_id = user.id
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = sessions._load_permissions
+
+    async def pause_fields(db, user_id):
+        entered.set()
+        await release.wait()
+        return await original(db, user_id)
+
+    monkeypatch.setattr(sessions, "_load_permissions", pause_fields)
+    factory = async_sessionmaker(engine)
+    async with factory() as lifecycle, factory() as observer:
+        read_pid = await db_session.scalar(text("SELECT pg_backend_pid()"))
+        lifecycle_pid = await lifecycle.scalar(text("SELECT pg_backend_pid()"))
+        response = asyncio.create_task(
+            api_client.post(
+                "/v1/me/email/resend",
+                json={"captcha_token": "test-token", "fmm_hp_token": "filled"},
+            )
+        )
+        await asyncio.wait_for(entered.wait(), 5)
+        suspension = asyncio.create_task(
+            lifecycle.execute(
+                text("UPDATE accounts SET deactivated_at=now() WHERE id=:id"),
+                {"id": account_id},
+            )
+        )
+        try:
+            async with asyncio.timeout(5):
+                while read_pid not in await observer.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": lifecycle_pid}
+                ):
+                    if suspension.done():
+                        await suspension
+                        pytest.fail("suspension passed private response construction")
+                    await asyncio.sleep(0.01)
+            release.set()
+            assert (await response).status_code == 202
+            await db_session.rollback()
+            await suspension
+            await lifecycle.commit()
+        finally:
+            release.set()
+            await response
+            await db_session.rollback()
+            await suspension

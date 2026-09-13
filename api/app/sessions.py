@@ -631,6 +631,21 @@ async def _merged_session_exception(db: AsyncSession, user: User) -> HTTPExcepti
 async def _build_session_response(
     db: AsyncSession, user: User, merged: MergeSummary | None = None
 ) -> SessionResponse:
+    # Response-only branches and preceding commits must not expose a stale
+    # identity. This is the final read boundary, after any sorted mutation locks.
+    current = (
+        await db.execute(
+            select(User)
+            .where(User.id == user.id)
+            .with_for_update(read=True, of=User)
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if current is not None and current.merged_into_user_id is not None:
+        raise await _merged_session_exception(db, current)
+    if current is None or not current.is_active:
+        raise _session_ended_exception()
+    user = current
     permissions = await _load_permissions(db, user.id)
     pending = await _pending_change_token(db, user.id)
     return SessionResponse(

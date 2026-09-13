@@ -76,6 +76,8 @@ from app.match_creation import create_match as create_match_core
 from app.match_errors import (
     CannotAcceptOwnProposalError,
     MatchClosedError,
+    MatchCreationRateLimitedError,
+    MatchCreationUnavailableError,
     MatchNotFoundError,
     MatchNotScorableError,
     NegotiationConflictError,
@@ -717,6 +719,14 @@ async def create_match(
                 best_of=best_of,
                 rated=rated,
             )
+        except MatchCreationRateLimitedError as err:
+            raise ToolError(
+                f"Too many new matches. Retry after {err.retry_after} seconds."
+            ) from err
+        except MatchCreationUnavailableError as err:
+            raise ToolError(
+                "Match creation is temporarily unavailable. Retry shortly."
+            ) from err
         except PlayerAccessDenied as err:
             raise ToolError("A primary player is required to start a match.") from err
         except SelfMatchError as err:

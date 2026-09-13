@@ -25,6 +25,12 @@ Existing sessions remain usable.
 The client address comes from the server's trusted proxy handling, never an
 unchecked request header. These limits do not authorize deleting unused identities.
 
+Standalone match creation also consumes an expiring per-Account budget before
+writing match rows, shared by HTTP and MCP. Its finite hourly and daily limits
+bound retained-match growth from reuse of a single guest identity; unavailable
+budget storage refuses creation. Automatic tournament materialization and writes
+to existing sporting history retain their own lifecycle rules.
+
 Account deactivation disables authentication and action through that Account,
 retaining its email and current grants and ownership. Reactivation restores the
 same Account, subject to its current authority: revoked grants stay revoked and
@@ -54,6 +60,8 @@ connection or lifecycle lock for the stream's lifetime.
 Authenticated reads hold a lifecycle-conflicting Account lock and revalidate the
 session token after waiting. Activity timestamps refresh under an update lock,
 then read authentication reacquires its protection after the timestamp commit.
+Session responses also refresh and lock their Account before reading email and
+permissions, including honeypot shortcuts and responses after a mutation commits.
 Mutation services acquire their complete actor/target lock sets in sorted order.
 Reactivation cannot undo an explicit agent-access revocation through a stale request.
 Privileged mutations lock and refresh the acting Account before rechecking

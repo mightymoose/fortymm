@@ -23,8 +23,11 @@ import uuid
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
 from app.leagues import resolve_league
 from app.match_errors import (
+    MatchCreationRateLimitedError,
+    MatchCreationUnavailableError,
     OpponentNotFoundError,
     RatedNeedsRegisteredOpponentError,
     SelfMatchError,
@@ -47,6 +50,7 @@ from app.player_accounts import (
     primary_player_id,
     require_player,
 )
+from app.rate_limiting import RateLimitUnavailable, check_expiring_budget
 
 
 def _add_side(match: Match, side_number: int, player: Player | None) -> None:
@@ -178,6 +182,21 @@ async def create_match(
     affects_rating = rated and opponent is not None
 
     league = await resolve_league(db, league_id)
+
+    # Both public transports share this boundary. Tournament materialization
+    # has its own creation path; scoring existing history consumes no admission.
+    limits = get_settings()
+    try:
+        for window, limit, seconds in (
+            ("hour", limits.match_creation_account_limit_per_hour, 3600),
+            ("day", limits.match_creation_account_limit_per_day, 86400),
+        ):
+            if not await check_expiring_budget(
+                f"match-create:{window}:{creator.id}", limit=limit, seconds=seconds
+            ):
+                raise MatchCreationRateLimitedError(seconds)
+    except RateLimitUnavailable as error:
+        raise MatchCreationUnavailableError from error
 
     settings = MatchSettings(
         team_size=1,

@@ -2144,6 +2144,8 @@ async def test_resend_and_confirmation_serialize_without_reviving_intent(
         async with factory() as transaction:
             yield transaction
 
+    # End the setup request before independent request transactions contend.
+    await db_session.commit()
     app.dependency_overrides[get_session] = independent_session
     async with factory() as gate, make_client() as resend, make_client() as confirm:
         resend.cookies.set("session", cookie)
@@ -2242,6 +2244,8 @@ async def test_merge_resend_waits_for_destination_change_then_clears_stale_inten
         async with factory() as transaction:
             yield transaction
 
+    # End the setup request before independent request transactions contend.
+    await db_session.commit()
     app.dependency_overrides[get_session] = independent_session
     async with factory() as gate, make_client() as requester:
         requester.cookies.set("session", cookie)
@@ -2294,6 +2298,8 @@ async def test_set_email_rechecks_live_owner_after_waiting_for_merge(
         async with factory() as transaction:
             yield transaction
 
+    # End the setup request before independent request transactions contend.
+    await db_session.commit()
     app.dependency_overrides[get_session] = independent_session
     async with factory() as gate, make_client() as requester:
         requester.cookies.set("session", cookie)
