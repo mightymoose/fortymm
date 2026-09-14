@@ -34,6 +34,7 @@ defaults:
 # docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md
 # ("The geocoder is selected by explicit config, not inferred from key presence").
 env:
+  MIGRATION_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
   GEOCODER: fake
 
 jobs:

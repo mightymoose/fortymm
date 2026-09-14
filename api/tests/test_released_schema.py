@@ -1,11 +1,12 @@
 """Run with unittest for Git-only validation without the database fixtures."""
 
+import json
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-from tests._released_schema import verify_release_commit
+from tests._released_schema import verify_release_commit, verify_release_record
 
 
 class ReleasedSchemaTests(unittest.TestCase):
@@ -126,3 +127,65 @@ class ReleasedSchemaTests(unittest.TestCase):
         self.write_revision("0003", "0001")
         self.write_revision("0004", ["0002", "0003"])
         verify_release_commit(self.repo, self.commit(), "0004")
+
+    def record(self, commit, revision="0001", status="released"):
+        return {"revision": revision, "status": status, "release_commit": commit}
+
+    def record_base(self, record):
+        (self.repo / "api/migrations/released-schema.json").write_text(
+            json.dumps(record)
+        )
+        return self.commit()
+
+    def test_initial_record_can_advance_to_first_release(self):
+        base = self.record_base(self.record(None, status="initial-beta-candidate"))
+        self.assertEqual(
+            verify_release_record(self.repo, base, self.record(self.baseline), "0001"),
+            "0001",
+        )
+
+    def test_released_record_cannot_return_to_candidate(self):
+        base = self.record_base(self.record(self.baseline))
+        with self.assertRaisesRegex(AssertionError, "cannot return"):
+            verify_release_record(
+                self.repo,
+                base,
+                self.record(None, status="initial-beta-candidate"),
+                "0001",
+            )
+
+    def test_release_record_cannot_point_to_older_commit_with_same_schema(self):
+        (self.repo / "app-version").write_text("new application")
+        newer = self.commit()
+        base = self.record_base(self.record(newer))
+        with self.assertRaisesRegex(AssertionError, "Git check failed"):
+            verify_release_record(self.repo, base, self.record(self.baseline), "0001")
+
+    def test_release_record_can_advance_and_stay_unchanged(self):
+        base = self.record_base(self.record(self.baseline))
+        verify_release_record(self.repo, base, self.record(self.baseline), "0001")
+        self.write_revision("0002", "0001")
+        newer = self.commit()
+        verify_release_record(self.repo, base, self.record(newer, "0002"), "0001")
+
+    def test_later_commit_cannot_record_temporarily_downgraded_schema(self):
+        path = self.write_revision("0002", "0001")
+        old_release = self.commit()
+        base = self.record_base(self.record(old_release, "0002"))
+        path.unlink()
+        downgrade = self.commit()
+        self.write_revision("0002", "0001")
+        self.commit()
+        with self.assertRaisesRegex(AssertionError, "cannot move backward"):
+            verify_release_record(self.repo, base, self.record(downgrade), "0001")
+
+    def test_missing_release_record_on_frozen_base_fails(self):
+        (self.repo / "api/migrations/beta-baseline.json").write_text("{}")
+        base = self.commit()
+        with self.assertRaisesRegex(AssertionError, "missing its release record"):
+            verify_release_record(
+                self.repo,
+                base,
+                self.record(None, status="initial-beta-candidate"),
+                "0001",
+            )

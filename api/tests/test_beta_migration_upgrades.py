@@ -6,6 +6,7 @@ this same test without rewriting the frozen fixture or creating fake revisions.
 """
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from tests._migration_database import empty_database, run_alembic
-from tests._released_schema import verify_release_commit
+from tests._released_schema import git, verify_release_record
 
 API = Path(__file__).parents[1]
 FIXTURE = Path(__file__).parent / "fixtures" / "beta-0001.json"
@@ -23,6 +24,24 @@ FIXTURE = Path(__file__).parent / "fixtures" / "beta-0001.json"
 # Every populated fixture table must have an explicit preservation policy below.
 RETAINED_TABLES = (
     "accounts",
+    "device_tokens",
+    "account_session_tokens",
+    "account_email_tokens",
+    "account_email_intents",
+    "account_first_sign_in_intents",
+    "league_memberships",
+    "notifications",
+    "notification_channel_settings",
+    "notification_preferences",
+    "match_void_actions",
+    "role_permissions",
+    "user_roles",
+    "tournament_account_grants",
+    "tournament_ownership_transfers",
+    "tournament_entry_registrations",
+    "tournament_table_call_history",
+    "required_repair_attempts",
+    "tournament_archive_history",
     "players",
     "account_players",
     "login_identities",
@@ -69,6 +88,7 @@ RETAINED_TABLES = (
 # Preserve the original catalogue rows' meaning without freezing display labels,
 # activation/availability policy, ordering, or the addition of new catalogue rows.
 CATALOGUE_COLUMNS = {
+    "permissions": ("id", "name"),
     "draw_types": ("id", "key"),
     "notification_channels": ("id", "key"),
     "notification_types": ("id", "key"),
@@ -94,14 +114,12 @@ def migration_revision(filename):
     revision = record["revision"]
     assert isinstance(revision, str) and revision
     if filename == "released-schema.json":
-        assert record["status"] in {"initial-beta-candidate", "released"}
-        if record["status"] == "initial-beta-candidate":
-            assert revision == migration_revision("beta-baseline.json")
-            assert record["release_commit"] is None
-        else:
-            commit = record["release_commit"]
-            assert isinstance(commit, str)
-            verify_release_commit(API.parent, commit, revision)
+        base = os.environ.get("MIGRATION_BASE_SHA")
+        if base is None:
+            base = git(API.parent, "merge-base", "HEAD", "origin/main").strip()
+        return verify_release_record(
+            API.parent, base, record, migration_revision("beta-baseline.json")
+        )
     return revision
 
 
@@ -111,6 +129,12 @@ async def load_frozen_fixture(engine, fixture):
     # before returning the connection. The source rows were committed with all
     # real baseline constraints enabled; no current app/model imports seed them.
     async with engine.begin() as connection:
+        baseline_tables = await connection.run_sync(
+            lambda conn: set(inspect(conn).get_table_names()) - {"alembic_version"}
+        )
+        assert set(fixture) == baseline_tables, (
+            "Every baseline table needs fixture rows"
+        )
         await connection.execute(text("SET LOCAL session_replication_role = replica"))
         for table in fixture:
             await connection.execute(text(f'DELETE FROM "{table}"'))
@@ -280,7 +304,7 @@ async def test_retained_history_detects_lost_child_scores_and_changed_games(
     "statement",
     [
         "UPDATE tournaments SET name = name || '-corrupt'",
-        "UPDATE tournaments SET status = 'draft'",
+        "UPDATE tournaments SET status = 'draft' WHERE status <> 'archived'",
         "UPDATE tournament_events SET name = name || '-corrupt'",
         "UPDATE tournament_events SET timezone = 'UTC'",
     ],
@@ -333,3 +357,40 @@ async def test_catalogue_additions_and_display_edits_preserve_historical_meaning
                 text("UPDATE draw_types SET key = key || '_corrupt'")
             )
         assert await retained_history(engine, fixture) != expected
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "DELETE FROM tournament_account_grants WHERE revoked_at IS NOT NULL",
+        "DELETE FROM league_memberships",
+        "DELETE FROM notifications",
+        "DELETE FROM notification_channel_settings",
+        "DELETE FROM notification_preferences",
+        "DELETE FROM required_repair_attempts",
+        "DELETE FROM account_email_intents",
+        "DELETE FROM user_roles",
+        "DELETE FROM tournament_entry_registrations",
+    ],
+)
+async def test_retained_history_detects_lost_owned_state_and_operational_history(
+    postgres_server_url, statement
+):
+    fixture = json.loads(FIXTURE.read_text())
+    async with empty_database(postgres_server_url) as engine:
+        run_alembic(engine.url, "upgrade", "0001")
+        await load_frozen_fixture(engine, fixture)
+        expected = await retained_history(engine, fixture)
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("SET LOCAL session_replication_role = replica")
+            )
+            await connection.execute(text(statement))
+        # Losing these child rows leaves valid FKs and unchanged owning roots;
+        # only explicit preservation checks detect the lost settings/history.
+        await assert_foreign_keys(engine)
+        actual = await retained_history(engine, fixture)
+        assert actual["accounts"] == expected["accounts"]
+        assert actual["tournaments"] == expected["tournaments"]
+        assert actual["required_repairs"] == expected["required_repairs"]
+        assert actual != expected, "Owned state or operational history loss was missed"

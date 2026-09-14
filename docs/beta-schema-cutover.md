@@ -83,6 +83,11 @@ CI verifies that the recorded release commit exists in the current history,
 that its sole migration head matches the record, and that its historical
 migration files remain unchanged. It reads literal Alembic revision metadata
 without executing historical migration or application code.
+The record cannot return to candidate status or move to an older commit/schema
+than the trusted base branch's record. It tracks the furthest released schema;
+an application rollback leaves it unchanged. CI supplies `MIGRATION_BASE_SHA`;
+local runs compare against the merge-base with `origin/main` and require full
+Git history.
 
 For every later schema-changing PR:
 

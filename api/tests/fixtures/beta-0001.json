@@ -1,4 +1,34 @@
 {
+  "account_email_intents": [
+    {
+      "created_at": "2026-09-14T00:41:12.959239+00:00",
+      "prior_email": "director@example.invalid",
+      "purpose": "change",
+      "sent_to": "new@example.invalid",
+      "target_account_id": null,
+      "user_id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6"
+    }
+  ],
+  "account_email_tokens": [
+    {
+      "created_at": "2040-01-01T00:00:00+00:00",
+      "guest_account_id": null,
+      "id": "20023429-d458-4ab8-88b8-9e1d98fcb86e",
+      "prior_email": "director@example.invalid",
+      "purpose": "change",
+      "replaced_at": null,
+      "sent_to": "new@example.invalid",
+      "target_account_id": null,
+      "token": "\\x2222222222222222222222222222222222222222222222222222222222222222",
+      "user_id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6"
+    }
+  ],
+  "account_first_sign_in_intents": [
+    {
+      "email": "pending@example.invalid",
+      "user_id": "99fe676d-f36d-4dd5-8f15-0e30502d3c70"
+    }
+  ],
   "account_players": [
     {
       "account_id": "c8ce5d56-b837-4937-8aae-23014a8a8027",
@@ -89,6 +119,24 @@
       "account_id": "91806394-01a4-4678-ac4d-eef8dc88fcc2",
       "is_primary": true,
       "player_id": "f58bbfab-e398-48af-8b59-dd48f7b094dd"
+    },
+    {
+      "account_id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6",
+      "is_primary": true,
+      "player_id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6"
+    },
+    {
+      "account_id": "755d3c0b-c669-408d-a357-f15fdb6a871d",
+      "is_primary": true,
+      "player_id": "755d3c0b-c669-408d-a357-f15fdb6a871d"
+    }
+  ],
+  "account_session_tokens": [
+    {
+      "created_at": "2040-01-01T00:00:00+00:00",
+      "id": "9a53facb-ddab-482e-9b0b-9d04b079de24",
+      "token": "\\x1111111111111111111111111111111111111111111111111111111111111111",
+      "user_id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6"
     }
   ],
   "accounts": [
@@ -361,6 +409,51 @@
       "merged_at": null,
       "merged_into_user_id": null,
       "updated_at": "2026-09-13T13:34:19.619873+00:00"
+    },
+    {
+      "agent_access_linked_at": null,
+      "agent_access_revoked_at": null,
+      "confirmed_at": null,
+      "created_at": "2026-09-14T00:41:12.875881+00:00",
+      "deactivated_at": null,
+      "display_name": "fixture-delegated-director",
+      "email": "director@example.invalid",
+      "erased_at": null,
+      "id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6",
+      "last_seen_at": null,
+      "merged_at": null,
+      "merged_into_user_id": null,
+      "updated_at": "2026-09-14T00:41:12.875881+00:00"
+    },
+    {
+      "agent_access_linked_at": null,
+      "agent_access_revoked_at": null,
+      "confirmed_at": null,
+      "created_at": "2026-09-14T00:41:12.875881+00:00",
+      "deactivated_at": null,
+      "display_name": "fixture-revoked-director",
+      "email": null,
+      "erased_at": null,
+      "id": "755d3c0b-c669-408d-a357-f15fdb6a871d",
+      "last_seen_at": null,
+      "merged_at": null,
+      "merged_into_user_id": null,
+      "updated_at": "2026-09-14T00:41:12.875881+00:00"
+    },
+    {
+      "agent_access_linked_at": null,
+      "agent_access_revoked_at": null,
+      "confirmed_at": null,
+      "created_at": "2026-09-14T00:41:12.875881+00:00",
+      "deactivated_at": null,
+      "display_name": "Account",
+      "email": "pending@example.invalid",
+      "erased_at": null,
+      "id": "99fe676d-f36d-4dd5-8f15-0e30502d3c70",
+      "last_seen_at": null,
+      "merged_at": null,
+      "merged_into_user_id": null,
+      "updated_at": "2026-09-14T00:41:12.875881+00:00"
     }
   ],
   "advancement_decision_evidence": [
@@ -373,6 +466,17 @@
       "decision_id": "e0c5a547-92c9-471a-9a88-36f89fbdfcff",
       "match_id": "a7d96b98-7f52-402f-9f03-d4730c7db324",
       "official_result_id": "04c2b341-ecfd-4b51-8320-d7f164c1aa66"
+    }
+  ],
+  "device_tokens": [
+    {
+      "created_at": "2026-09-14T00:41:12.959239+00:00",
+      "environment": "sandbox",
+      "id": "0334b69e-5597-4532-a7ba-6ba96a1fb696",
+      "platform": "ios",
+      "token": "SYNTHETIC-NON-APNS-DEVICE-TOKEN",
+      "updated_at": "2026-09-14T00:41:12.959239+00:00",
+      "user_id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6"
     }
   ],
   "draw_types": [
@@ -449,6 +553,15 @@
       "source_fixture_id": "75363547-adb8-4c93-9081-5b9a9cd9a4e3",
       "source_group_id": null,
       "unknown_reason": null
+    }
+  ],
+  "league_memberships": [
+    {
+      "created_at": "2026-09-14T00:41:12.959239+00:00",
+      "id": "914781e5-76d5-4ef0-be39-6fa811f4591e",
+      "league_id": "b75fe2dd-f52d-4762-8517-29a7fd1d8639",
+      "updated_at": "2026-09-14T00:41:12.959239+00:00",
+      "user_id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6"
     }
   ],
   "leagues": [
@@ -909,20 +1022,6 @@
   ],
   "match_sides": [
     {
-      "id": "38ef7a2b-e60e-4f7b-95d5-a64985f1686a",
-      "match_id": "d057bcfb-7f2c-4f75-ad0e-e401a7cf29ca",
-      "score": 1,
-      "side_number": 1,
-      "won": true
-    },
-    {
-      "id": "7b8cb727-4c82-4c35-9dc5-6f33b54ecc12",
-      "match_id": "d057bcfb-7f2c-4f75-ad0e-e401a7cf29ca",
-      "score": 0,
-      "side_number": 2,
-      "won": false
-    },
-    {
       "id": "ec6b5d32-52fe-459d-bbf7-dcc6a6cfabfb",
       "match_id": "a7d96b98-7f52-402f-9f03-d4730c7db324",
       "score": 0,
@@ -949,21 +1048,36 @@
       "score": 0,
       "side_number": 2,
       "won": null
+    },
+    {
+      "id": "38ef7a2b-e60e-4f7b-95d5-a64985f1686a",
+      "match_id": "d057bcfb-7f2c-4f75-ad0e-e401a7cf29ca",
+      "score": 1,
+      "side_number": 1,
+      "won": null
+    },
+    {
+      "id": "7b8cb727-4c82-4c35-9dc5-6f33b54ecc12",
+      "match_id": "d057bcfb-7f2c-4f75-ad0e-e401a7cf29ca",
+      "score": 0,
+      "side_number": 2,
+      "won": null
+    }
+  ],
+  "match_void_actions": [
+    {
+      "actor_account_id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6",
+      "director_grant_id": "e92cdffd-4b04-4ac2-9fc7-53354efb9c09",
+      "id": "43f2b646-c65c-40af-a9e2-ffdcfc42b24a",
+      "match_id": "d057bcfb-7f2c-4f75-ad0e-e401a7cf29ca",
+      "official_result_id": "7c588e94-51ef-4837-8772-6821cb335446",
+      "owner_revision": null,
+      "reason": "Synthetic invalid match",
+      "recorded_at": "2026-09-14T00:41:13.132784+00:00",
+      "tournament_id": "d0c98ce3-83a6-431d-ba64-1689102eb0ff"
     }
   ],
   "matches": [
-    {
-      "completed_at": "2026-09-13T13:34:18.152006+00:00",
-      "created_at": "2026-09-13T13:34:17.934265+00:00",
-      "created_by_user_id": "23701fdf-0639-4e91-906e-44f8309243d5",
-      "current_official_result_id": "7c588e94-51ef-4837-8772-6821cb335446",
-      "ending": null,
-      "id": "d057bcfb-7f2c-4f75-ad0e-e401a7cf29ca",
-      "league_id": "b75fe2dd-f52d-4762-8517-29a7fd1d8639",
-      "match_settings_id": "61c8a07f-d714-4d86-90ce-e5b684bedfe5",
-      "status": "completed",
-      "updated_at": "2026-09-13T13:34:18.152006+00:00"
-    },
     {
       "completed_at": "2026-09-13T13:34:18.821233+00:00",
       "created_at": "2026-09-13T13:34:18.733562+00:00",
@@ -987,6 +1101,28 @@
       "match_settings_id": "19eceaeb-9183-4383-8475-41e22ed457e3",
       "status": "in_progress",
       "updated_at": "2026-09-13T13:34:19.594369+00:00"
+    },
+    {
+      "completed_at": "2026-09-13T13:34:18.152006+00:00",
+      "created_at": "2026-09-13T13:34:17.934265+00:00",
+      "created_by_user_id": "23701fdf-0639-4e91-906e-44f8309243d5",
+      "current_official_result_id": "7c588e94-51ef-4837-8772-6821cb335446",
+      "ending": null,
+      "id": "d057bcfb-7f2c-4f75-ad0e-e401a7cf29ca",
+      "league_id": "b75fe2dd-f52d-4762-8517-29a7fd1d8639",
+      "match_settings_id": "61c8a07f-d714-4d86-90ce-e5b684bedfe5",
+      "status": "voided",
+      "updated_at": "2026-09-14T00:41:13.051184+00:00"
+    }
+  ],
+  "notification_channel_settings": [
+    {
+      "channel": "email",
+      "created_at": "2026-09-14T00:41:12.959239+00:00",
+      "enabled": false,
+      "id": "e7eedb09-4864-4a8b-8e0a-2ecd64427db3",
+      "updated_at": "2026-09-14T00:41:12.959239+00:00",
+      "user_id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6"
     }
   ],
   "notification_channels": [
@@ -1033,6 +1169,26 @@
       "key": "sms",
       "name": "SMS",
       "updated_at": "2026-09-13T13:34:17.899068+00:00"
+    }
+  ],
+  "notification_preferences": [
+    {
+      "category": "result_confirm",
+      "channel": "push",
+      "created_at": "2026-09-14T00:41:12.959239+00:00",
+      "enabled": false,
+      "id": "69f07398-05f0-487c-9962-7f60249d9432",
+      "updated_at": "2026-09-14T00:41:12.959239+00:00",
+      "user_id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6"
+    },
+    {
+      "category": "rating_change",
+      "channel": "email",
+      "created_at": "2026-09-14T00:41:12.959239+00:00",
+      "enabled": true,
+      "id": "1236f6fe-6fe2-428a-87b8-b9b074fee359",
+      "updated_at": "2026-09-14T00:41:12.959239+00:00",
+      "user_id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6"
     }
   ],
   "notification_types": [
@@ -1101,6 +1257,43 @@
       "name": "Match calls",
       "short_label": "Calls",
       "updated_at": "2026-09-13T13:34:17.902787+00:00"
+    }
+  ],
+  "notifications": [
+    {
+      "action_label": null,
+      "body": "Fixture only",
+      "category": "result_confirm",
+      "created_at": "2026-09-14T00:41:12.959239+00:00",
+      "delta": null,
+      "id": "b3a8e24d-9850-49ad-aa57-e75806ce3559",
+      "link": null,
+      "read_at": null,
+      "result_id": "1b0583c8-e5ec-4cec-82de-280f47cfabc2",
+      "title": "Synthetic result notice",
+      "user_id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6"
+    },
+    {
+      "action_label": null,
+      "body": "Fixture only",
+      "category": "result_confirm",
+      "created_at": "2026-09-14T00:41:12.959239+00:00",
+      "delta": null,
+      "id": "5a6a86cb-6ed8-409b-bd65-9e52077046af",
+      "link": null,
+      "read_at": "2030-01-01T00:00:00+00:00",
+      "result_id": "1b0583c8-e5ec-4cec-82de-280f47cfabc2",
+      "title": "Synthetic result notice",
+      "user_id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6"
+    }
+  ],
+  "permissions": [
+    {
+      "created_at": "2026-09-14T00:41:12.97724+00:00",
+      "description": "Synthetic permission",
+      "id": "cb25d5db-b159-4f3e-b383-b4eccf20fe17",
+      "name": "fixture.read",
+      "updated_at": "2026-09-14T00:41:12.97724+00:00"
     }
   ],
   "players": [
@@ -1265,49 +1458,63 @@
       "merged_into_player_id": null,
       "retired_at": null,
       "username": "separate-sporting-identity"
+    },
+    {
+      "created_at": "2026-09-14T00:41:12.875881+00:00",
+      "id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6",
+      "last_seen_at": null,
+      "merged_at": null,
+      "merged_into_player_id": null,
+      "retired_at": null,
+      "username": "fixture-delegated-director"
+    },
+    {
+      "created_at": "2026-09-14T00:41:12.875881+00:00",
+      "id": "755d3c0b-c669-408d-a357-f15fdb6a871d",
+      "last_seen_at": null,
+      "merged_at": null,
+      "merged_into_player_id": null,
+      "retired_at": null,
+      "username": "fixture-revoked-director"
+    },
+    {
+      "created_at": "2026-09-14T00:41:12.986104+00:00",
+      "id": "0c439c52-57d6-4ac1-bf04-e58fcbaed674",
+      "last_seen_at": null,
+      "merged_at": null,
+      "merged_into_player_id": null,
+      "retired_at": null,
+      "username": "repair-fixture-completed"
+    },
+    {
+      "created_at": "2026-09-14T00:41:13.029278+00:00",
+      "id": "8870105e-ed4d-4e89-a025-44a07d4c6aed",
+      "last_seen_at": null,
+      "merged_at": null,
+      "merged_into_player_id": null,
+      "retired_at": null,
+      "username": "repair-fixture-transient"
+    },
+    {
+      "created_at": "2026-09-14T00:41:13.039069+00:00",
+      "id": "abbaf0c3-8d4a-4f51-89d7-e9883ec87af0",
+      "last_seen_at": null,
+      "merged_at": null,
+      "merged_into_player_id": null,
+      "retired_at": null,
+      "username": "repair-fixture-permanent"
+    },
+    {
+      "created_at": "2026-09-14T00:41:13.04606+00:00",
+      "id": "cce98f97-d66e-49cc-a61c-1d9c8f8fccac",
+      "last_seen_at": null,
+      "merged_at": null,
+      "merged_into_player_id": null,
+      "retired_at": null,
+      "username": "repair-fixture-running"
     }
   ],
   "rating_history": [
-    {
-      "created_at": "2026-09-13T13:34:18.152006+00:00",
-      "created_by_user_id": null,
-      "id": "58485afe-81d3-4ca8-9813-4ae17b6b297a",
-      "league_id": "b75fe2dd-f52d-4762-8517-29a7fd1d8639",
-      "match_id": "d057bcfb-7f2c-4f75-ad0e-e401a7cf29ca",
-      "note": null,
-      "official_result_id": "7c588e94-51ef-4837-8772-6821cb335446",
-      "previous_rating_value": 1500,
-      "rating_input_id": null,
-      "rating_state": {
-        "rating": 1662.3108939062977,
-        "rd": 290.31896371798047,
-        "volatility": 0.05999967537233814
-      },
-      "rating_strategy_id": "c158495a-4ccf-418d-89c8-d40a2df82d56",
-      "rating_value": 1662.3108939062977,
-      "source": "match",
-      "user_id": "23701fdf-0639-4e91-906e-44f8309243d5"
-    },
-    {
-      "created_at": "2026-09-13T13:34:18.152006+00:00",
-      "created_by_user_id": null,
-      "id": "68c8c57b-bf53-41ee-ab28-7daec7702fb1",
-      "league_id": "b75fe2dd-f52d-4762-8517-29a7fd1d8639",
-      "match_id": "d057bcfb-7f2c-4f75-ad0e-e401a7cf29ca",
-      "note": null,
-      "official_result_id": "7c588e94-51ef-4837-8772-6821cb335446",
-      "previous_rating_value": 1500,
-      "rating_input_id": null,
-      "rating_state": {
-        "rating": 1337.6891060937023,
-        "rd": 290.31896371798047,
-        "volatility": 0.05999967537233814
-      },
-      "rating_strategy_id": "c158495a-4ccf-418d-89c8-d40a2df82d56",
-      "rating_value": 1337.6891060937023,
-      "source": "match",
-      "user_id": "9f99e260-4a07-470e-8e38-952dc6d74a2b"
-    },
     {
       "created_at": "2026-01-01T00:00:00+00:00",
       "created_by_user_id": "67f6db3d-65f0-456a-9b8e-ef82f7f6ae63",
@@ -1455,22 +1662,45 @@
       "version": 1
     }
   ],
-  "required_repairs": [
+  "required_repair_attempts": [
     {
-      "available_at": "2026-09-13T13:34:18.152006+00:00",
-      "claim_token": null,
-      "completed_at": null,
-      "completed_generation": 0,
-      "dispatch_after": "2026-09-13T13:34:18.152006+00:00",
-      "failures": 0,
-      "id": "f16daa6e-43ad-4a12-92d0-fedd9c08b063",
-      "last_error": null,
-      "lease_until": null,
-      "player_id": null,
-      "requested_generation": 1,
-      "state": "pending",
-      "tournament_id": "d0c98ce3-83a6-431d-ba64-1689102eb0ff"
+      "error": null,
+      "finished_at": "2031-01-01T00:00:01+00:00",
+      "generation": 1,
+      "id": "1e169f96-9e1d-4ddb-b198-c80189b4cbe8",
+      "outcome": "completed",
+      "repair_id": "e80931b1-434d-4dee-80b3-2bed78099b32",
+      "started_at": "2031-01-01T00:00:00+00:00"
     },
+    {
+      "error": "Synthetic transient failure",
+      "finished_at": "2031-01-01T00:00:01+00:00",
+      "generation": 1,
+      "id": "6e06324f-daf4-4fd3-9df1-c7208538f346",
+      "outcome": "transient",
+      "repair_id": "849ccd0f-398d-4fdf-be66-daedd546d701",
+      "started_at": "2031-01-01T00:00:00+00:00"
+    },
+    {
+      "error": "Synthetic permanent failure",
+      "finished_at": "2031-01-01T00:00:01+00:00",
+      "generation": 1,
+      "id": "d7979e57-39f5-4e64-8887-8a9e36c84e56",
+      "outcome": "permanent",
+      "repair_id": "4c989a0b-38b2-4828-8715-c672ddd1edf3",
+      "started_at": "2031-01-01T00:00:00+00:00"
+    },
+    {
+      "error": null,
+      "finished_at": null,
+      "generation": 1,
+      "id": "e63a04da-f476-4559-b87f-4638e40c4b81",
+      "outcome": "running",
+      "repair_id": "e9544632-4df0-4c60-9a13-6c1cab32cc3a",
+      "started_at": "2031-01-01T00:00:00+00:00"
+    }
+  ],
+  "required_repairs": [
     {
       "available_at": "2026-09-13T13:34:18.94148+00:00",
       "claim_token": null,
@@ -1485,6 +1715,88 @@
       "requested_generation": 2,
       "state": "pending",
       "tournament_id": "cff8ff00-8ed0-4614-b1b2-39aeb0fbc731"
+    },
+    {
+      "available_at": "2031-01-01T00:00:01+00:00",
+      "claim_token": null,
+      "completed_at": "2031-01-01T00:00:01+00:00",
+      "completed_generation": 1,
+      "dispatch_after": "2026-09-14T00:41:12.986104+00:00",
+      "failures": 0,
+      "id": "e80931b1-434d-4dee-80b3-2bed78099b32",
+      "last_error": null,
+      "lease_until": null,
+      "player_id": "0c439c52-57d6-4ac1-bf04-e58fcbaed674",
+      "requested_generation": 1,
+      "state": "completed",
+      "tournament_id": null
+    },
+    {
+      "available_at": "2031-01-01T00:00:31+00:00",
+      "claim_token": null,
+      "completed_at": null,
+      "completed_generation": 0,
+      "dispatch_after": "2026-09-14T00:41:13.029278+00:00",
+      "failures": 1,
+      "id": "849ccd0f-398d-4fdf-be66-daedd546d701",
+      "last_error": "Synthetic transient failure",
+      "lease_until": null,
+      "player_id": "8870105e-ed4d-4e89-a025-44a07d4c6aed",
+      "requested_generation": 1,
+      "state": "pending",
+      "tournament_id": null
+    },
+    {
+      "available_at": "2031-01-01T00:00:31+00:00",
+      "claim_token": null,
+      "completed_at": null,
+      "completed_generation": 0,
+      "dispatch_after": "2026-09-14T00:41:13.039069+00:00",
+      "failures": 1,
+      "id": "4c989a0b-38b2-4828-8715-c672ddd1edf3",
+      "last_error": "Synthetic permanent failure",
+      "lease_until": null,
+      "player_id": "abbaf0c3-8d4a-4f51-89d7-e9883ec87af0",
+      "requested_generation": 1,
+      "state": "failed",
+      "tournament_id": null
+    },
+    {
+      "available_at": "2026-09-14T00:41:13.04606+00:00",
+      "claim_token": "e63a04da-f476-4559-b87f-4638e40c4b81",
+      "completed_at": null,
+      "completed_generation": 0,
+      "dispatch_after": "2026-09-14T00:41:13.04606+00:00",
+      "failures": 0,
+      "id": "e9544632-4df0-4c60-9a13-6c1cab32cc3a",
+      "last_error": null,
+      "lease_until": "2031-01-01T00:15:00+00:00",
+      "player_id": "cce98f97-d66e-49cc-a61c-1d9c8f8fccac",
+      "requested_generation": 1,
+      "state": "running",
+      "tournament_id": null
+    },
+    {
+      "available_at": "2026-09-14T00:41:13.051184+00:00",
+      "claim_token": null,
+      "completed_at": null,
+      "completed_generation": 0,
+      "dispatch_after": "2026-09-13T13:34:18.152006+00:00",
+      "failures": 0,
+      "id": "f16daa6e-43ad-4a12-92d0-fedd9c08b063",
+      "last_error": null,
+      "lease_until": null,
+      "player_id": null,
+      "requested_generation": 2,
+      "state": "pending",
+      "tournament_id": "d0c98ce3-83a6-431d-ba64-1689102eb0ff"
+    }
+  ],
+  "role_permissions": [
+    {
+      "created_at": "2026-09-14T00:41:12.97724+00:00",
+      "permission_id": "cb25d5db-b159-4f3e-b383-b4eccf20fe17",
+      "role_id": "2cd8c914-6381-4be9-83f5-047131de94fb"
     }
   ],
   "roles": [
@@ -1534,6 +1846,41 @@
       "trigger": "match_completed",
       "verdict": null,
       "wall_time_ms": null
+    }
+  ],
+  "tournament_account_grants": [
+    {
+      "account_id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6",
+      "granted_at": "2026-09-14T00:41:12.922721+00:00",
+      "granted_by_account_id": "c8ce5d56-b837-4937-8aae-23014a8a8027",
+      "id": "e92cdffd-4b04-4ac2-9fc7-53354efb9c09",
+      "inherited_from_grant_id": null,
+      "reason": "explicit",
+      "revocation_reason": null,
+      "revoked_at": null,
+      "revoked_by_account_id": null,
+      "role": "director",
+      "tournament_id": "d0c98ce3-83a6-431d-ba64-1689102eb0ff"
+    },
+    {
+      "account_id": "755d3c0b-c669-408d-a357-f15fdb6a871d",
+      "granted_at": "2026-09-14T00:41:12.930158+00:00",
+      "granted_by_account_id": "c8ce5d56-b837-4937-8aae-23014a8a8027",
+      "id": "25565424-8f36-42a5-a0e5-87d3c1d513dd",
+      "inherited_from_grant_id": null,
+      "reason": "explicit",
+      "revocation_reason": "explicit",
+      "revoked_at": "2026-09-14T00:41:12.940697+00:00",
+      "revoked_by_account_id": "c8ce5d56-b837-4937-8aae-23014a8a8027",
+      "role": "director",
+      "tournament_id": "d0c98ce3-83a6-431d-ba64-1689102eb0ff"
+    }
+  ],
+  "tournament_archive_history": [
+    {
+      "observed_at": "2026-09-14T00:41:13.398693+00:00",
+      "occurred_at": "2026-09-14T00:41:13.398693+00:00",
+      "tournament_id": "740a9674-7e5b-45f8-8969-a69bd7b407fd"
     }
   ],
   "tournament_draw_revisions": [
@@ -1847,6 +2194,18 @@
       "started_at": "2026-09-13T13:34:19.395396+00:00"
     }
   ],
+  "tournament_entry_registrations": [
+    {
+      "entry_id": "aaf95c18-d381-4f15-b180-d4b1e00088e7",
+      "id": "d15943b7-99fd-48bd-bf46-fd29afac06ab",
+      "registered_at": "2026-09-14T00:41:12.981794+00:00",
+      "registered_by_account_id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6",
+      "withdrawal_explanation": null,
+      "withdrawal_reason": null,
+      "withdrawn_at": null,
+      "withdrawn_by_account_id": null
+    }
+  ],
   "tournament_entry_withdrawals": [
     {
       "actor_account_id": "2b69446a-0f28-4f81-a407-f88dbecc7908",
@@ -1951,6 +2310,13 @@
       "lifecycle_version": 1,
       "reconciled": true,
       "transaction_id": 788
+    },
+    {
+      "event_id": "7c6076ce-66bb-4c38-8666-0d53d523422b",
+      "lifecycle_state": "finished",
+      "lifecycle_version": 2,
+      "reconciled": true,
+      "transaction_id": 754
     }
   ],
   "tournament_event_recorded_games": [
@@ -2110,35 +2476,6 @@
     },
     {
       "allow_multiple_entries_per_player": false,
-      "created_at": "2026-09-13T13:34:17.934265+00:00",
-      "draw_settings": {},
-      "draw_type_id": "22222222-2222-2222-2222-222222220001",
-      "entry_fee": 0.0,
-      "first_recorded_play_at": "2026-09-13T13:34:18.045679+00:00",
-      "format": "singles",
-      "id": "7c6076ce-66bb-4c38-8666-0d53d523422b",
-      "lifecycle_state": "finished",
-      "lifecycle_version": 2,
-      "lock_version": 1,
-      "match_settings": {
-        "length_games": 1,
-        "rated": true
-      },
-      "max_players": null,
-      "name": "Singles",
-      "predicates": [],
-      "slot": {
-        "date": "2030-01-01",
-        "end": "17:00",
-        "start": "09:00"
-      },
-      "started_at": null,
-      "timezone": "America/Chicago",
-      "tournament_id": "d0c98ce3-83a6-431d-ba64-1689102eb0ff",
-      "updated_at": "2026-09-13T13:34:18.152006+00:00"
-    },
-    {
-      "allow_multiple_entries_per_player": false,
       "created_at": "2026-09-13T13:34:18.733562+00:00",
       "draw_settings": {},
       "draw_type_id": "22222222-2222-2222-2222-222222220002",
@@ -2165,6 +2502,35 @@
       "timezone": "America/Chicago",
       "tournament_id": "cff8ff00-8ed0-4614-b1b2-39aeb0fbc731",
       "updated_at": "2026-09-13T13:34:18.733562+00:00"
+    },
+    {
+      "allow_multiple_entries_per_player": false,
+      "created_at": "2026-09-13T13:34:17.934265+00:00",
+      "draw_settings": {},
+      "draw_type_id": "22222222-2222-2222-2222-222222220001",
+      "entry_fee": 0.0,
+      "first_recorded_play_at": "2026-09-13T13:34:18.045679+00:00",
+      "format": "singles",
+      "id": "7c6076ce-66bb-4c38-8666-0d53d523422b",
+      "lifecycle_state": "finished",
+      "lifecycle_version": 2,
+      "lock_version": 1,
+      "match_settings": {
+        "length_games": 1,
+        "rated": true
+      },
+      "max_players": null,
+      "name": "Singles",
+      "predicates": [],
+      "slot": {
+        "date": "2030-01-01",
+        "end": "17:00",
+        "start": "09:00"
+      },
+      "started_at": null,
+      "timezone": "America/Chicago",
+      "tournament_id": "d0c98ce3-83a6-431d-ba64-1689102eb0ff",
+      "updated_at": "2026-09-13T13:34:18.152006+00:00"
     }
   ],
   "tournament_fixtures": [
@@ -2261,6 +2627,29 @@
       "winner_entry_id": null
     }
   ],
+  "tournament_ownership_transfers": [
+    {
+      "actor_account_id": "9d267deb-90b3-4722-a828-06d7501bdd11",
+      "id": "52ebf964-e577-4575-9b56-dc155566feb7",
+      "new_owner_account_id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6",
+      "previous_owner_account_id": "9d267deb-90b3-4722-a828-06d7501bdd11",
+      "reason": "explicit",
+      "revision": 1,
+      "tournament_id": "cff8ff00-8ed0-4614-b1b2-39aeb0fbc731",
+      "transferred_at": "2026-09-14T00:41:12.953261+00:00"
+    }
+  ],
+  "tournament_table_call_history": [
+    {
+      "created_at": "2026-09-14T00:41:12.97724+00:00",
+      "fixture_id": null,
+      "id": "ed51e7fa-3c22-4472-9b7c-64678c6618f7",
+      "kind": "called",
+      "scheduled_start": "2030-01-01T15:00:00+00:00",
+      "table_id": "de65a0da-6ac4-43c5-9f42-9b946f390428",
+      "tournament_id": "0581b74d-7477-4d75-bde2-973372ff0812"
+    }
+  ],
   "tournament_table_outages": [
     {
       "effective_from": "2030-01-01T15:00:00+00:00",
@@ -2300,22 +2689,6 @@
       "updated_at": "2026-09-13T13:34:17.934265+00:00"
     },
     {
-      "address": null,
-      "archive_observed_at": null,
-      "archived_at": null,
-      "created_at": "2026-09-13T13:34:18.733562+00:00",
-      "created_by_user_id": "9d267deb-90b3-4722-a828-06d7501bdd11",
-      "description": null,
-      "details_version": 1,
-      "id": "cff8ff00-8ed0-4614-b1b2-39aeb0fbc731",
-      "league_id": "b75fe2dd-f52d-4762-8517-29a7fd1d8639",
-      "name": "advancement Director Test Open",
-      "owner_account_id": "9d267deb-90b3-4722-a828-06d7501bdd11",
-      "ownership_revision": 0,
-      "status": "draft",
-      "updated_at": "2026-09-13T13:34:18.733562+00:00"
-    },
-    {
       "address": {
         "city": "Berkeley",
         "country": "USA",
@@ -2341,6 +2714,22 @@
       "updated_at": "2026-09-13T13:34:19.260649+00:00"
     },
     {
+      "address": null,
+      "archive_observed_at": null,
+      "archived_at": null,
+      "created_at": "2026-09-13T13:34:18.733562+00:00",
+      "created_by_user_id": "9d267deb-90b3-4722-a828-06d7501bdd11",
+      "description": null,
+      "details_version": 1,
+      "id": "cff8ff00-8ed0-4614-b1b2-39aeb0fbc731",
+      "league_id": "b75fe2dd-f52d-4762-8517-29a7fd1d8639",
+      "name": "advancement Director Test Open",
+      "owner_account_id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6",
+      "ownership_revision": 1,
+      "status": "draft",
+      "updated_at": "2026-09-13T13:34:18.733562+00:00"
+    },
+    {
       "address": {
         "city": "Berkeley",
         "country": "USA",
@@ -2351,8 +2740,8 @@
         "street": "1 Shattuck Ave",
         "venue": "Berkeley TT Club"
       },
-      "archive_observed_at": null,
-      "archived_at": null,
+      "archive_observed_at": "2026-09-14T00:41:13.398693+00:00",
+      "archived_at": "2026-09-14T00:41:13.398693+00:00",
       "created_at": "2026-09-13T13:34:19.493242+00:00",
       "created_by_user_id": "8529a45a-2780-4cb4-b4bd-53e6dd1e91a5",
       "description": null,
@@ -2362,39 +2751,11 @@
       "name": "Spring Open",
       "owner_account_id": "8529a45a-2780-4cb4-b4bd-53e6dd1e91a5",
       "ownership_revision": 0,
-      "status": "published",
+      "status": "archived",
       "updated_at": "2026-09-13T13:34:19.493242+00:00"
     }
   ],
   "user_league_ratings": [
-    {
-      "created_at": "2026-09-13T13:34:18.152006+00:00",
-      "id": "53dfbd2a-c530-40c4-b620-82871438016f",
-      "league_id": "b75fe2dd-f52d-4762-8517-29a7fd1d8639",
-      "rating_state": {
-        "rating": 1337.6891060937023,
-        "rd": 290.31896371798047,
-        "volatility": 0.05999967537233814
-      },
-      "rating_strategy_id": "c158495a-4ccf-418d-89c8-d40a2df82d56",
-      "rating_value": 1337.6891060937023,
-      "updated_at": "2026-09-13T13:34:18.576597+00:00",
-      "user_id": "9f99e260-4a07-470e-8e38-952dc6d74a2b"
-    },
-    {
-      "created_at": "2026-09-13T13:34:18.152006+00:00",
-      "id": "7d8e4aca-ba79-4d0a-90e5-c94e440b72be",
-      "league_id": "b75fe2dd-f52d-4762-8517-29a7fd1d8639",
-      "rating_state": {
-        "rating": 1662.3108939062977,
-        "rd": 290.31896371798047,
-        "volatility": 0.05999967537233814
-      },
-      "rating_strategy_id": "c158495a-4ccf-418d-89c8-d40a2df82d56",
-      "rating_value": 1662.3108939062977,
-      "updated_at": "2026-09-13T13:34:18.576597+00:00",
-      "user_id": "23701fdf-0639-4e91-906e-44f8309243d5"
-    },
     {
       "created_at": "2026-09-13T13:34:19.146504+00:00",
       "id": "be1825b8-2e55-4bfd-a068-bce696005146",
@@ -2408,6 +2769,41 @@
       "rating_value": 1700,
       "updated_at": "2026-09-13T13:34:19.146504+00:00",
       "user_id": "67f6db3d-65f0-456a-9b8e-ef82f7f6ae63"
+    },
+    {
+      "created_at": "2026-09-13T13:34:18.152006+00:00",
+      "id": "53dfbd2a-c530-40c4-b620-82871438016f",
+      "league_id": "b75fe2dd-f52d-4762-8517-29a7fd1d8639",
+      "rating_state": {
+        "rating": 1500.0,
+        "rd": 350.0,
+        "volatility": 0.06
+      },
+      "rating_strategy_id": "c158495a-4ccf-418d-89c8-d40a2df82d56",
+      "rating_value": 1500,
+      "updated_at": "2026-09-14T00:41:13.051184+00:00",
+      "user_id": "9f99e260-4a07-470e-8e38-952dc6d74a2b"
+    },
+    {
+      "created_at": "2026-09-13T13:34:18.152006+00:00",
+      "id": "7d8e4aca-ba79-4d0a-90e5-c94e440b72be",
+      "league_id": "b75fe2dd-f52d-4762-8517-29a7fd1d8639",
+      "rating_state": {
+        "rating": 1500.0,
+        "rd": 350.0,
+        "volatility": 0.06
+      },
+      "rating_strategy_id": "c158495a-4ccf-418d-89c8-d40a2df82d56",
+      "rating_value": 1500,
+      "updated_at": "2026-09-14T00:41:13.051184+00:00",
+      "user_id": "23701fdf-0639-4e91-906e-44f8309243d5"
+    }
+  ],
+  "user_roles": [
+    {
+      "created_at": "2026-09-14T00:41:12.97724+00:00",
+      "role_id": "2cd8c914-6381-4be9-83f5-047131de94fb",
+      "user_id": "89ee5c1c-3962-47d5-a9dc-5fafbf52bab6"
     }
   ]
 }

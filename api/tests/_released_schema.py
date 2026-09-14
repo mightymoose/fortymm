@@ -1,6 +1,7 @@
 """Validate a release record against Git without importing historical code."""
 
 import ast
+import json
 import re
 import subprocess
 from pathlib import Path
@@ -17,7 +18,9 @@ def git(repo: Path, *args: str) -> str:
         text=True,
         timeout=30,
     )
-    assert result.returncode == 0, f"Release Git check failed: {result.stderr.strip()}"
+    assert result.returncode == 0, (
+        f"Release Git check failed ({' '.join(args)}): {result.stderr.strip()}"
+    )
     return result.stdout
 
 
@@ -67,7 +70,7 @@ def static_revision(source: str, path: str) -> Revision:
     )
 
 
-def verify_release_commit(repo: Path, commit: str, revision: str) -> None:
+def verify_release_commit(repo: Path, commit: str, revision: str) -> RevisionMap:
     """The exact historical commit must be an ancestor with this sole schema head.
 
     Read blobs from Git and parse only literal Alembic metadata. Never check out,
@@ -118,3 +121,56 @@ def verify_release_commit(repo: Path, commit: str, revision: str) -> None:
     assert heads == (revision,), (
         f"Release commit migration heads {heads} do not match {revision}"
     )
+
+    return graph
+
+
+def verify_release_record(
+    repo: Path, base: str, record: dict[str, object], baseline: str
+) -> str:
+    """Check the candidate record and its forward-only transition from trusted base."""
+    assert re.fullmatch(r"[0-9a-f]{40}", base), "Expected a full base commit SHA"
+    git(repo, "cat-file", "-e", f"{base}^{{commit}}")
+    git(repo, "merge-base", "--is-ancestor", base, "HEAD")
+    status = record["status"]
+    revision = record["revision"]
+    commit = record["release_commit"]
+    assert status in {"initial-beta-candidate", "released"}
+    assert isinstance(revision, str) and revision
+    graph = None
+    if status == "initial-beta-candidate":
+        assert revision == baseline and commit is None
+    else:
+        assert isinstance(commit, str)
+        graph = verify_release_commit(repo, commit, revision)
+
+    path = "api/migrations/released-schema.json"
+    if not git(repo, "ls-tree", "--name-only", base, "--", path).strip():
+        assert not git(
+            repo,
+            "ls-tree",
+            "--name-only",
+            base,
+            "--",
+            "api/migrations/beta-baseline.json",
+        ).strip(), "Frozen base is missing its release record"
+        return revision
+    previous = json.loads(git(repo, "show", f"{base}:{path}"))
+    if previous["status"] == "released":
+        assert status == "released", "A released record cannot return to beta candidate"
+        old_commit = previous["release_commit"]
+        old_revision = previous["revision"]
+        assert isinstance(old_commit, str) and isinstance(old_revision, str)
+        verify_release_commit(repo, old_commit, old_revision)
+        assert isinstance(commit, str) and graph is not None
+        git(repo, "merge-base", "--is-ancestor", old_commit, commit)
+        # A later commit can temporarily remove old migrations and then have them
+        # restored by HEAD. Commit ancestry alone therefore does not prove that
+        # its recorded schema still descends from the previous released schema.
+        try:
+            list(graph.iterate_revisions(revision, old_revision))
+        except (RevisionError, KeyError) as error:
+            raise AssertionError("Released schema cannot move backward") from error
+    else:
+        assert previous["status"] == "initial-beta-candidate"
+    return revision
