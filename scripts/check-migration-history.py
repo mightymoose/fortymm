@@ -40,8 +40,14 @@ def files_at(repo: Path, commit: str) -> list[str]:
 
 
 def read_candidate(repo: Path, path: str) -> bytes:
-    target = repo / path
-    if not target.is_file() or target.is_symlink():
+    # is_symlink() on the leaf alone follows symlinked parents. A moved
+    # versions directory must not hide revisions from later Git tree scans.
+    target = repo
+    for component in Path(path).parts:
+        target = target / component
+        if target.is_symlink():
+            raise ValueError(f"Frozen file missing or not a regular file: {path}")
+    if not target.is_file():
         raise ValueError(f"Frozen file missing or not a regular file: {path}")
     return target.read_bytes()
 
@@ -91,6 +97,14 @@ def check(repo: Path, base: str, bootstrap: bool) -> None:
             raise ValueError(f"Baseline source checksum mismatch: {path}")
         if hashlib.sha256(read_candidate(repo, path)).hexdigest() != expected:
             raise ValueError(f"Baseline checksum mismatch: {path}")
+
+    # New revisions must also be real files before they become frozen. Otherwise
+    # a symlink could merge once and make every subsequent freeze check fail.
+    for candidate in (repo / VERSIONS).rglob("*"):
+        if candidate.is_symlink():
+            raise ValueError(
+                f"Migration path is not a regular file: {candidate.relative_to(repo)}"
+            )
 
     fixture_paths = (
         git(repo, "ls-tree", "-r", "--name-only", base, BASELINE_FIXTURE)

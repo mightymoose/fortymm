@@ -22,8 +22,9 @@ running these existing domain scenarios together:
 The fixture also includes catalogue/supporting rows needed for those facts.
 Restoration temporarily disables triggers only inside a transaction on a newly
 created disposable database, then restores enforcement before any upgrade.
-The upgrade tests compare original historical columns, allow additional columns,
-and omit rebuildable rating/notification projections. Explicit FK anti-joins
+The upgrade tests compare original historical columns, including game identity,
+numbering and child scores, and allow additional columns. They omit rebuildable
+rating/notification projections. Explicit FK anti-joins
 validate restored and upgraded relationships, since reenabling triggers alone
 does not check previously loaded rows. They also exercise retained
 identity and official-result write protection after upgrading.

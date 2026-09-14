@@ -120,6 +120,34 @@ class MigrationHistoryTests(unittest.TestCase):
         target.symlink_to(target.name + ".renamed")
         self.assert_fails(self.run_check(base), "not a regular file")
 
+    def test_symlinked_parent_directories_cannot_hide_frozen_files(self):
+        fixture = "api/tests/fixtures/beta-0001.json"
+        self.write(fixture, "{}\n")
+        base = self.commit("freeze with fixture")
+        for parent in (
+            "api/migrations/versions",
+            "api/migrations",
+            "api",
+            "api/tests/fixtures",
+            "api/tests",
+        ):
+            with self.subTest(parent=parent):
+                directory = self.repo / parent
+                moved = directory.with_name(directory.name + "-moved")
+                directory.rename(moved)
+                directory.symlink_to(moved.name, target_is_directory=True)
+                try:
+                    self.assert_fails(self.run_check(base), "not a regular file")
+                finally:
+                    directory.unlink()
+                    moved.rename(directory)
+
+    def test_new_migration_symlink_is_rejected_before_it_can_merge(self):
+        base = self.commit("freeze")
+        self.write("forward.py", "revision = 'forward'\ndown_revision = 'baseline'\n")
+        (self.repo / FORWARD).symlink_to(self.repo / "forward.py")
+        self.assert_fails(self.run_check(base), "not a regular file")
+
     def test_missing_invalid_or_nonancestor_base_fails_closed(self):
         for base in ["", "0" * 40, "f" * 40, "HEAD"]:
             with self.subTest(base=base):

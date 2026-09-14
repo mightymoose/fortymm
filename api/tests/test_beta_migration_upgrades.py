@@ -6,7 +6,6 @@ this same test without rewriting the frozen fixture or creating fake revisions.
 """
 
 import json
-import re
 from pathlib import Path
 
 import pytest
@@ -16,6 +15,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 
 from tests._migration_database import empty_database, run_alembic
+from tests._released_schema import verify_release_commit
 
 API = Path(__file__).parents[1]
 FIXTURE = Path(__file__).parent / "fixtures" / "beta-0001.json"
@@ -28,6 +28,8 @@ RETAINED_TABLES = (
     "login_identities",
     "matches",
     "match_settings",
+    "match_games",
+    "match_game_scores",
     "match_sides",
     "match_lineups",
     "match_lineup_players",
@@ -62,7 +64,8 @@ def migration_revision(filename):
             assert record["release_commit"] is None
         else:
             commit = record["release_commit"]
-            assert isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit)
+            assert isinstance(commit, str)
+            verify_release_commit(API.parent, commit, revision)
     return revision
 
 
@@ -192,3 +195,33 @@ async def test_populated_beta_history_survives_upgrade_to_head(
                 with pytest.raises(IntegrityError):
                     async with connection.begin_nested():
                         await connection.execute(text(statement))
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "DELETE FROM match_game_scores",
+        "UPDATE match_games SET game_number = game_number + 1",
+    ],
+)
+async def test_retained_history_detects_lost_child_scores_and_changed_games(
+    postgres_server_url, statement
+):
+    fixture = json.loads(FIXTURE.read_text())
+    async with empty_database(postgres_server_url) as engine:
+        run_alembic(engine.url, "upgrade", "0001")
+        await load_frozen_fixture(engine, fixture)
+        expected = await retained_history(engine, fixture)
+        # Model a faulty migration that bypasses retention triggers. Deleting a
+        # child score leaves valid FKs and unchanged parent matches/results, so
+        # checking only those parents would incorrectly report preservation.
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("SET LOCAL session_replication_role = replica")
+            )
+            await connection.execute(text(statement))
+        await assert_foreign_keys(engine)
+        actual = await retained_history(engine, fixture)
+        assert actual["matches"] == expected["matches"]
+        assert actual["match_official_results"] == expected["match_official_results"]
+        assert actual != expected, "Historical game/score corruption was not detected"

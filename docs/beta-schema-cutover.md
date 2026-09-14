@@ -79,6 +79,10 @@ released schema. UAT and production retain their individual deployed artifact
 records below; the latest release is not necessarily deployed in both. If they
 diverge, also verify the older deployed revision before upgrading that environment.
 Never move the recorded revision forward just to skip a failing upgrade test.
+CI verifies that the recorded release commit exists in the current history,
+that its sole migration head matches the record, and that its historical
+migration files remain unchanged. It reads literal Alembic revision metadata
+without executing historical migration or application code.
 
 For every later schema-changing PR:
 
