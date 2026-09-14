@@ -77,10 +77,17 @@ rows and presentation/policy changes:
 | `roles` | `id`, `name` (authorization key) | Description, timestamps, new roles |
 | `rating_strategies` | `id`, `key`, `version`, `state_schema`, `initial_state`, `initial_rating_value`, `is_automatic` | Name, description, timestamps, new strategy versions |
 
-No baseline table is left unseeded. Only two tables are excluded entirely: `rating_history` and
-`user_league_ratings`. They are replayable rating projections; their durable
-rating inputs, official results, strategy definitions, and match rating bases
-are preserved. Volatile values (leases, attempt progress, credential dates, read state) are
+No baseline table is left unseeded or excluded from preservation checks.
+`rating_history` and `user_league_ratings` are compared by semantic contents,
+including row multiplicity, player/league/strategy identity, rating values and
+state, source, actor, original input/result links, notes, previous rating, and
+historical timeline. Replay may regenerate only their surrogate `id` values;
+current `user_league_ratings` creation/update bookkeeping timestamps may also
+change. `rating_history.created_at` is the history timeline and must remain.
+Deleting or corrupting either projection without an equivalent replay fails,
+even if all source inputs and official results survive.
+
+Volatile values (leases, attempt progress, credential dates, read state) are
 preserved as data during a schema upgrade; background workers and expiry cleanup
 do not run in this fixture test. A migration intentionally reconciling that state
 needs explicit semantic checks showing retained ownership, obligations, and

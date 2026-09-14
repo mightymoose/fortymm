@@ -103,9 +103,11 @@ CATALOGUE_COLUMNS = {
         "is_automatic",
     ),
 }
-EXCLUDED_TABLES = {
-    "rating_history": "Replayable rating projection; original inputs/results retained",
-    "user_league_ratings": "Current rating projection rebuilt by replay",
+# Replay may regenerate surrogate IDs and current-projection bookkeeping dates.
+# Historical created_at is the rating timeline and must survive unchanged.
+RATING_PROJECTION_BOOKKEEPING = {
+    "rating_history": {"id"},
+    "user_league_ratings": {"id", "created_at", "updated_at"},
 }
 
 
@@ -156,15 +158,20 @@ async def load_frozen_fixture(engine, fixture):
 
 
 async def retained_history(engine, fixture):
-    classified = set(RETAINED_TABLES) | set(CATALOGUE_COLUMNS) | set(EXCLUDED_TABLES)
+    classified = (
+        set(RETAINED_TABLES)
+        | set(CATALOGUE_COLUMNS)
+        | set(RATING_PROJECTION_BOOKKEEPING)
+    )
     assert set(fixture) == classified, "Every populated fixture table needs a policy"
     history = {}
     async with engine.connect() as connection:
-        for table in RETAINED_TABLES:
+        for table in (*RETAINED_TABLES, *RATING_PROJECTION_BOOKKEEPING):
             # Explicitly retain the original columns, so additive columns do not
             # look like lost data. Schema transformations need semantic assertions
             # here rather than regenerating the input fixture from current models.
-            columns = sorted(set(fixture[table][0]) - {"updated_at"})
+            bookkeeping = RATING_PROJECTION_BOOKKEEPING.get(table, {"updated_at"})
+            columns = sorted(set(fixture[table][0]) - bookkeeping)
             projection = ", ".join(f'"{column}"' for column in columns)
             rows = await connection.scalars(
                 text(
@@ -394,3 +401,59 @@ async def test_retained_history_detects_lost_owned_state_and_operational_history
         assert actual["tournaments"] == expected["tournaments"]
         assert actual["required_repairs"] == expected["required_repairs"]
         assert actual != expected, "Owned state or operational history loss was missed"
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "DELETE FROM rating_history",
+        "DELETE FROM user_league_ratings",
+        "UPDATE rating_history SET rating_state = "
+        "jsonb_set(rating_state, '{rd}', '999'::jsonb)",
+        "UPDATE user_league_ratings SET rating_value = rating_value + 100, "
+        "rating_state = jsonb_set(rating_state, '{rating}', "
+        "to_jsonb(rating_value + 100))",
+        "UPDATE rating_history SET created_at = created_at + INTERVAL '1 day'",
+        "UPDATE rating_history SET created_by_user_id = NULL",
+    ],
+)
+async def test_retained_history_requires_rating_projection_semantics(
+    postgres_server_url, statement
+):
+    fixture = json.loads(FIXTURE.read_text())
+    async with empty_database(postgres_server_url) as engine:
+        run_alembic(engine.url, "upgrade", "0001")
+        await load_frozen_fixture(engine, fixture)
+        expected = await retained_history(engine, fixture)
+        async with engine.begin() as connection:
+            # Simulate a migration bypassing projection consistency triggers;
+            # re-enable them before checking FKs and preserved semantics.
+            await connection.execute(
+                text("SET LOCAL session_replication_role = replica")
+            )
+            await connection.execute(text(statement))
+        await assert_foreign_keys(engine)
+        actual = await retained_history(engine, fixture)
+        assert actual["rating_inputs"] == expected["rating_inputs"]
+        assert actual["match_official_results"] == expected["match_official_results"]
+        assert actual != expected, "Ratings/history changed without equivalent replay"
+
+
+async def test_rating_replay_may_regenerate_projection_bookkeeping(postgres_server_url):
+    fixture = json.loads(FIXTURE.read_text())
+    async with empty_database(postgres_server_url) as engine:
+        run_alembic(engine.url, "upgrade", "0001")
+        await load_frozen_fixture(engine, fixture)
+        expected = await retained_history(engine, fixture)
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("UPDATE rating_history SET id = gen_random_uuid()")
+            )
+            await connection.execute(
+                text(
+                    "UPDATE user_league_ratings SET id = gen_random_uuid(), "
+                    "created_at = clock_timestamp(), updated_at = clock_timestamp()"
+                )
+            )
+        await assert_foreign_keys(engine)
+        assert await retained_history(engine, fixture) == expected

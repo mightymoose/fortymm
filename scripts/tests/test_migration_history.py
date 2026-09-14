@@ -179,6 +179,27 @@ class MigrationHistoryTests(unittest.TestCase):
                 finally:
                     self.git("read-tree", base)
 
+    def test_release_record_cannot_become_a_symlink_or_gitlink(self):
+        path = "api/migrations/released-schema.json"
+        self.write(
+            path,
+            '{"revision":"baseline","status":"initial-beta-candidate","release_commit":null}\n',
+        )
+        base = self.commit("freeze with release record")
+        target = self.repo / path
+        target.unlink()
+        self.write(
+            "record.json",
+            '{"revision":"baseline","status":"initial-beta-candidate","release_commit":null}\n',
+        )
+        target.symlink_to("../../record.json")
+        self.git("add", path)
+        self.assert_fails(self.run_check(base), "non-regular Git mode")
+        target.unlink()
+        target.mkdir()
+        self.git("update-index", "--add", "--cacheinfo", f"160000,{base},{path}")
+        self.assert_fails(self.run_check(base), "non-regular Git mode")
+
     def test_missing_invalid_or_nonancestor_base_fails_closed(self):
         for base in ["", "0" * 40, "f" * 40, "HEAD"]:
             with self.subTest(base=base):

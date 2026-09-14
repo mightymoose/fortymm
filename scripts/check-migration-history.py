@@ -16,6 +16,7 @@ import sys
 MANIFEST = "api/migrations/beta-baseline.json"
 VERSIONS = "api/migrations/versions/"
 BASELINE_FIXTURE = "api/tests/fixtures/beta-0001.json"
+RELEASE_RECORD = "api/migrations/released-schema.json"
 
 
 def git(repo: Path, *args: str) -> bytes:
@@ -102,7 +103,7 @@ def check(repo: Path, base: str, bootstrap: bool) -> None:
     # them as commit objects. Reject them in the candidate index before they
     # become impossible-to-read frozen entries on main. In CI the checkout index
     # is the candidate merge tree; locally this also checks staged additions.
-    protected = (MANIFEST, BASELINE_FIXTURE, VERSIONS.rstrip("/"))
+    protected = (MANIFEST, BASELINE_FIXTURE, RELEASE_RECORD, VERSIONS.rstrip("/"))
     # Include ancestor entries too: an initialized submodule replacing api/ or
     # migrations/ can expose identical files while hiding them from the index.
     for entry in git(repo, "ls-files", "--stage", "-z", "--", "api").split(b"\0"):
