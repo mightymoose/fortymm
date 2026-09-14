@@ -1,0 +1,7 @@
+{
+  "revision": "0001",
+  "source_commit": "0e8fce1d1c6c8d4ff24d17666957164c93ba4113",
+  "files": {
+    "api/migrations/versions/20260905_0000_0001_pre_beta_baseline.py": "1cecd3d9c5b3145b6c7db3a803655c026ab6bb9613208f579e6daccdc8f0469e"
+  }
+}

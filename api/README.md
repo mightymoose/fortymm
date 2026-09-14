@@ -50,6 +50,13 @@ Apply migrations:
 alembic upgrade head
 ```
 
+The beta baseline is recorded in `migrations/beta-baseline.json` and becomes
+immutable when the #1670 freeze PR merges. All migrations are immutable once
+merged to `main`; use forward, data-preserving changes even before deployment.
+Both deployed and incoming application/worker versions must support the upgraded
+schema. See [beta schema cutover](../docs/beta-schema-cutover.md) for populated
+upgrade verification, release records and the separate UAT/production cutover.
+
 ## Test
 
 The test suite uses [testcontainers](https://testcontainers-python.readthedocs.io/) to spin up an ephemeral Postgres for DB-backed tests, so a working Docker daemon is required by default. To use an already-running Postgres instead, set `TEST_DATABASE_URL`:

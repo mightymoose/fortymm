@@ -14,7 +14,7 @@ name: api
 # costs ~30s of runner instead of ~4 minutes and 1,490 tests.
 #
 # Fail safe: if the base commit can't be resolved (force-push, first push,
-# shallow history), we run everything rather than skip.
+# shallow history), the migration freeze check fails closed.
 
 on:
   push:
@@ -34,6 +34,7 @@ defaults:
 # docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md
 # ("The geocoder is selected by explicit config, not inferred from key presence").
 env:
+  MIGRATION_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
   GEOCODER: fake
 
 jobs:
@@ -44,6 +45,34 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      # This runs even for web/docs-only PRs, inside the existing required check.
+      # Use the trusted base checker so edits to the candidate checker cannot
+      # authorize rewriting migrations in the same PR. Checker improvements are
+      # allowed and take effect once merged. Workflow edits still require review.
+      - name: Enforce frozen migration history
+        working-directory: .
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ && "$BASE_SHA" != "0000000000000000000000000000000000000000" ]]
+          git cat-file -e "${BASE_SHA}^{commit}"
+          git merge-base --is-ancestor "$BASE_SHA" HEAD
+          if [ -n "$(git ls-tree --name-only "$BASE_SHA" -- api/migrations/beta-baseline.json)" ]; then
+            trusted_checker="$(mktemp)"
+            trap 'rm -f "$trusted_checker"' EXIT
+            git show "${BASE_SHA}:scripts/check-migration-history.py" > "$trusted_checker"
+            python3 "$trusted_checker" --repo "$PWD" --base "$BASE_SHA"
+            python3 scripts/check-migration-history.py --base "$BASE_SHA"
+          else
+            # Only the initial freeze PR may use the candidate implementation.
+            python3 scripts/check-migration-history.py --base "$BASE_SHA" --bootstrap
+          fi
+
+      - name: Test migration freeze guard
+        working-directory: .
+        run: python3 -m unittest discover -s scripts/tests -p 'test_migration_history.py'
 
       - name: Does this change affect the API?
         id: changes

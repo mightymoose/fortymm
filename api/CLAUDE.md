@@ -88,26 +88,32 @@ arbitrary secondary Player. See [the identity ADR](../docs/adr/20260905-accounts
 for the complete FK classification and merge rules. New owned state must specify its
 Account-transfer or Player-merge policy; historical actors must remain preserved.
 
-## Pre-deploy: edit migrations in place
+## Beta migration history is immutable on merge
 
-Until the first production deploy, fix schema mistakes by editing the
-existing migration file rather than adding an "alter" migration. Obliterate
-and re-run alembic against a fresh database to test.
+The #1670 freeze PR's merge to `main` freezes the baseline recorded in
+`migrations/beta-baseline.json`. Every later migration also becomes immutable
+when merged, even before deployment. Never edit, delete, rename or consolidate
+merged migrations; fix mistakes with a new forward, data-preserving migration.
+Older ADR permissions to rewrite the pre-beta baseline are historical and no
+longer apply after that merge. Teams (#1673) and encounters (#1674) are deferred
+and must follow this policy when implemented.
 
-- Until #1670 freezes the beta baseline, rewriting or consolidating migrations is
-  permitted. #1671 replaces the old chain with `0001_pre_beta_baseline`.
-- Keep the baseline self-contained and in dependency order, with catalogue seeds.
-  Do not build legacy backfills for disposable pre-beta data.
-- After #1670, use forward, data-preserving migrations; routine resets stop.
-- **Deleting a revision invalidates every database that applied it.** Alembic
-  refuses outright — `Can't locate revision identified by '00NN'` — it does not
-  degrade. So a roll-up means wiping UAT, local dev databases, and any live QA stack
-  volume, not just re-running migrations. That is affordable pre-deploy and will
-  stop being affordable the day it isn't.
-- **A test may load a migration by filename.** `tests/test_match_calls_notifications.py`
-  reads its seed constant straight out of a migration module, so deleting or renaming
-  one turns that test into a `FileNotFoundError`. Grep the suite for the filename
-  before you delete a revision.
+Keep fresh installs, schema parity, SQL integrity tests and populated upgrades
+from both the frozen beta baseline and latest released schema green. Add
+regressions for the data and behavior each migration changes. Update
+`migrations/released-schema.json` to reflect the latest successful beta release;
+its initial candidate entry is not evidence of a deployment. Do not change the
+frozen baseline manifest or historical fixture to make a new migration pass.
+
+An upgraded schema must support both deployed and incoming app/worker versions.
+Use expand/contract releases for incompatible changes and verify application
+rollback against the upgraded schema; do not rely on downgrade for recovery.
+
+Synthetic local/CI/QA databases remain disposable. UAT and production each allow
+only the separately scoped pre-beta reinitialization until that environment
+opens; afterward preserve all beta data. No blanket database/volume reset is
+permitted. See [the cutover record](../docs/beta-schema-cutover.md) for the freeze,
+verification and operational boundary. This PR does not deploy or reset them.
 
 **Route/schema/docstring changes regenerate `openapi.json`.** A FastAPI route
 **docstring** becomes the OpenAPI description, so even a docstring edit drifts the
@@ -136,7 +142,9 @@ cannot install. `TEST_DATABASE_URL` selects the server on which to create that
 disposable database; the supplied database is not reset. Between tests, TRUNCATE
 resets the disposable database and fixtures restore representative seeds.
 `tests/test_identity_migrations.py` additionally checks untouched catalogue seeds,
-schema parity and baseline reinstall. Run it for every schema or migration change.
+schema parity and disposable baseline reinstall. Populated forward upgrades live
+in `tests/test_beta_migration_upgrades.py`. Run both for every schema or migration change;
+downgrade/reinstall is only a synthetic database check, never a beta recovery step.
 
 **A race test written the obvious way passes against a broken implementation.**
 `asyncio.Barrier` + `asyncio.gather` over two sessions both hitting the endpoint only

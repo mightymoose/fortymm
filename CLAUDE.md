@@ -175,6 +175,14 @@ What does not run, by design:
 
 ## Cross-cutting invariants
 
+**Migration history freezes on merge, not deployment.** The #1670 freeze PR
+records revision `0001` in `api/migrations/beta-baseline.json`. From its merge,
+all migrations already on `main` are immutable; use forward, data-preserving
+migrations. Teams and encounters are deferred and follow that same rule. Both
+UAT and production preserve data from their own beta openings onward; synthetic
+test databases remain disposable. See `docs/beta-schema-cutover.md`. Historical
+pre-beta rewrite/reset guidance does not override this policy.
+
 **OpenAPI is the source of truth for client/server types.** `web-client/src/api/schema.d.ts` is generated from the API's `openapi.json` (`npm run gen:api`, consumed by `openapi-fetch` in `web-client/src/api/client.ts`). The `openapi-schema` CI workflow fails if the committed file drifts. Whenever you change FastAPI routes or pydantic schemas (docstrings count — they become OpenAPI descriptions), run `mise run regen-api-types` and commit `schema.d.ts` in the same PR.
 
 The iOS app mirrors this with `ios/Fortymm/Generated/Types.swift`, generated from the same `openapi.json` by `swift-openapi-generator` (types-only — the app's hand-rolled `MatchAPI.swift`-style DTOs aren't migrated onto it yet, this just gives a compiler-checked reference and a CI drift guard). Generation goes through `ios/openapi/fix_openapi_nullable.py` first: `swift-openapi-generator` silently drops any `Optional[T]` field encoded the way Pydantic/FastAPI emit OpenAPI 3.1 (`anyOf: [T, {type: null}]`) — the script rewrites that into the older `nullable: true` form the generator actually understands. The `verify-ios` job in the `openapi-schema` workflow catches drift the same way. After changing routes/schemas, also run `mise run regen-ios-api-types` and commit the regenerated `Types.swift`.
