@@ -19,8 +19,8 @@ from tests._released_schema import verify_release_commit
 
 API = Path(__file__).parents[1]
 FIXTURE = Path(__file__).parent / "fixtures" / "beta-0001.json"
-# Deliberately exclude rebuildable ratings/notifications and other projections.
-# These are durable facts, identities, and relationships in the frozen fixture.
+# Durable facts, aggregate settings, relationships, pending work and ledgers.
+# Every populated fixture table must have an explicit preservation policy below.
 RETAINED_TABLES = (
     "accounts",
     "players",
@@ -40,6 +40,19 @@ RETAINED_TABLES = (
     "match_results",
     "match_official_results",
     "rating_inputs",
+    "leagues",
+    "required_repairs",
+    "schedule_solves",
+    "tournaments",
+    "tournament_events",
+    "tournament_draw_revisions",
+    "tournament_event_stages",
+    "tournament_event_stage_groups",
+    "tournament_event_reservations",
+    "tournament_event_group_reservations",
+    "tournament_event_reservation_tables",
+    "tournament_event_recorded_games",
+    "tournament_event_reconciliations",
     "fixture_advancement_decisions",
     "advancement_decision_evidence",
     "tournament_entries",
@@ -51,6 +64,29 @@ RETAINED_TABLES = (
     "tournament_tables",
     "tournament_table_outages",
 )
+
+
+# Preserve the original catalogue rows' meaning without freezing display labels,
+# activation/availability policy, ordering, or the addition of new catalogue rows.
+CATALOGUE_COLUMNS = {
+    "draw_types": ("id", "key"),
+    "notification_channels": ("id", "key"),
+    "notification_types": ("id", "key"),
+    "roles": ("id", "name"),  # Name is the authorization key, not a display label.
+    "rating_strategies": (
+        "id",
+        "key",
+        "version",
+        "state_schema",
+        "initial_state",
+        "initial_rating_value",
+        "is_automatic",
+    ),
+}
+EXCLUDED_TABLES = {
+    "rating_history": "Replayable rating projection; original inputs/results retained",
+    "user_league_ratings": "Current rating projection rebuilt by replay",
+}
 
 
 def migration_revision(filename):
@@ -96,6 +132,8 @@ async def load_frozen_fixture(engine, fixture):
 
 
 async def retained_history(engine, fixture):
+    classified = set(RETAINED_TABLES) | set(CATALOGUE_COLUMNS) | set(EXCLUDED_TABLES)
+    assert set(fixture) == classified, "Every populated fixture table needs a policy"
     history = {}
     async with engine.connect() as connection:
         for table in RETAINED_TABLES:
@@ -109,6 +147,17 @@ async def retained_history(engine, fixture):
                     f"SELECT to_jsonb(retained) FROM (SELECT {projection} "
                     f'FROM "{table}") retained'
                 )
+            )
+            history[table] = sorted(json.dumps(row, sort_keys=True) for row in rows)
+        for table, columns in CATALOGUE_COLUMNS.items():
+            projection = ", ".join(f'"{column}"' for column in columns)
+            rows = await connection.scalars(
+                text(
+                    f"SELECT to_jsonb(retained) FROM (SELECT {projection} "
+                    f'FROM "{table}" WHERE id::text IN '
+                    "(SELECT jsonb_array_elements_text(CAST(:ids AS jsonb)))) retained"
+                ),
+                {"ids": json.dumps([row["id"] for row in fixture[table]])},
             )
             history[table] = sorted(json.dumps(row, sort_keys=True) for row in rows)
     return history
@@ -225,3 +274,62 @@ async def test_retained_history_detects_lost_child_scores_and_changed_games(
         assert actual["matches"] == expected["matches"]
         assert actual["match_official_results"] == expected["match_official_results"]
         assert actual != expected, "Historical game/score corruption was not detected"
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE tournaments SET name = name || '-corrupt'",
+        "UPDATE tournaments SET status = 'draft'",
+        "UPDATE tournament_events SET name = name || '-corrupt'",
+        "UPDATE tournament_events SET timezone = 'UTC'",
+    ],
+)
+async def test_retained_history_detects_changed_tournament_roots(
+    postgres_server_url, statement
+):
+    fixture = json.loads(FIXTURE.read_text())
+    async with empty_database(postgres_server_url) as engine:
+        run_alembic(engine.url, "upgrade", "0001")
+        await load_frozen_fixture(engine, fixture)
+        expected = await retained_history(engine, fixture)
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("SET LOCAL session_replication_role = replica")
+            )
+            await connection.execute(text(statement))
+        await assert_foreign_keys(engine)
+        actual = await retained_history(engine, fixture)
+        assert actual["tournament_fixtures"] == expected["tournament_fixtures"]
+        assert actual["match_official_results"] == expected["match_official_results"]
+        assert actual != expected, "Tournament root corruption was not detected"
+
+
+async def test_catalogue_additions_and_display_edits_preserve_historical_meaning(
+    postgres_server_url,
+):
+    fixture = json.loads(FIXTURE.read_text())
+    async with empty_database(postgres_server_url) as engine:
+        run_alembic(engine.url, "upgrade", "0001")
+        await load_frozen_fixture(engine, fixture)
+        expected = await retained_history(engine, fixture)
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("UPDATE draw_types SET name = name || ' label'")
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO notification_types"
+                    "(key,name,short_label,description,display_order) "
+                    "VALUES ('future_type','Future type','Future',"
+                    "'Future notifications',99)"
+                )
+            )
+        assert await retained_history(engine, fixture) == expected
+        # Retargeting a stable identity to a different semantic key must fail,
+        # even though all foreign keys and display labels remain valid.
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("UPDATE draw_types SET key = key || '_corrupt'")
+            )
+        assert await retained_history(engine, fixture) != expected

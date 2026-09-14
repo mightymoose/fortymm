@@ -22,12 +22,37 @@ running these existing domain scenarios together:
 The fixture also includes catalogue/supporting rows needed for those facts.
 Restoration temporarily disables triggers only inside a transaction on a newly
 created disposable database, then restores enforcement before any upgrade.
-The upgrade tests compare original historical columns, including game identity,
-numbering and child scores, and allow additional columns. They omit rebuildable
-rating/notification projections. Explicit FK anti-joins
-validate restored and upgraded relationships, since reenabling triggers alone
-does not check previously loaded rows. They also exercise retained
-identity and official-result write protection after upgrading.
+The preservation policy explicitly classifies all 48 populated tables; the test
+fails if any table is unclassified. All 41 non-catalogue, non-projection tables
+retain their original columns (except `updated_at`), and additive columns are
+allowed. This includes tournament/event/league roots and settings, draw revisions,
+stages and groups, reservations and table memberships, recorded-game observations,
+lifecycle/reconciliation evidence, identities, sporting results and child scores,
+pending repair requirements, and the historical schedule-solve ledger. Pending
+work and operational history are not assumed to be disposable projections.
+
+Five catalogues retain the original rows' semantic identity while allowing new
+rows and presentation/policy changes:
+
+| Catalogue | Preserved columns on original rows | Allowed changes |
+| --- | --- | --- |
+| `draw_types` | `id`, `key` | Name, description, order, timestamps, new types |
+| `notification_channels` | `id`, `key` | Labels, description, order, active/available flags, timestamps, new channels |
+| `notification_types` | `id`, `key` | Labels, description, order, active flag, timestamps, new types |
+| `roles` | `id`, `name` (authorization key) | Description, timestamps, new roles |
+| `rating_strategies` | `id`, `key`, `version`, `state_schema`, `initial_state`, `initial_rating_value`, `is_automatic` | Name, description, timestamps, new strategy versions |
+
+Only two tables are excluded entirely: `rating_history` and
+`user_league_ratings`. They are replayable rating projections; their durable
+rating inputs, official results, strategy definitions, and match rating bases
+are preserved. This does not waive behavioral replay tests for a migration that
+changes rating calculations or storage.
+
+Explicit FK anti-joins validate restored and upgraded relationships, since
+reenabling triggers alone does not check previously loaded rows. Tests also
+exercise identity/result write protection, demonstrate that child-score and
+root-record mutations are detected with valid FKs, and verify that new catalogue
+rows and display-label edits do not falsely report historical-data loss.
 
 Both tracked origins initially equal `0001`, so the first freeze run is a
 populated no-op upgrade. Subsequent forward migrations exercise real upgrades.

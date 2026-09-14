@@ -98,6 +98,29 @@ def check(repo: Path, base: str, bootstrap: bool) -> None:
         if hashlib.sha256(read_candidate(repo, path)).hexdigest() != expected:
             raise ValueError(f"Baseline checksum mismatch: {path}")
 
+    # Gitlinks look like ordinary directories on disk, but ls-tree includes
+    # them as commit objects. Reject them in the candidate index before they
+    # become impossible-to-read frozen entries on main. In CI the checkout index
+    # is the candidate merge tree; locally this also checks staged additions.
+    protected = (MANIFEST, BASELINE_FIXTURE, VERSIONS.rstrip("/"))
+    # Include ancestor entries too: an initialized submodule replacing api/ or
+    # migrations/ can expose identical files while hiding them from the index.
+    for entry in git(repo, "ls-files", "--stage", "-z", "--", "api").split(b"\0"):
+        if not entry:
+            continue
+        attributes, indexed_path = entry.decode().split("\t", 1)
+        concerns_frozen_paths = indexed_path.startswith(VERSIONS) or any(
+            path == indexed_path or path.startswith(indexed_path + "/")
+            for path in protected
+        )
+        if not concerns_frozen_paths:
+            continue
+        mode, _, stage = attributes.split()
+        if mode not in {"100644", "100755"} or stage != "0":
+            raise ValueError(
+                f"Migration path has non-regular Git mode or unresolved stage: {indexed_path}"
+            )
+
     # New revisions must also be real files before they become frozen. Otherwise
     # a symlink could merge once and make every subsequent freeze check fail.
     for candidate in (repo / VERSIONS).rglob("*"):

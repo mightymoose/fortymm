@@ -148,6 +148,37 @@ class MigrationHistoryTests(unittest.TestCase):
         (self.repo / FORWARD).symlink_to(self.repo / "forward.py")
         self.assert_fails(self.run_check(base), "not a regular file")
 
+    def test_new_gitlink_is_rejected_before_it_can_freeze(self):
+        base = self.commit("freeze")
+        path = "api/migrations/versions/external"
+        (self.repo / path).mkdir()
+        self.git("update-index", "--add", "--cacheinfo", f"160000,{base},{path}")
+        self.assert_fails(self.run_check(base), "non-regular Git mode")
+        # Match CI's committed checkout as well as the staged local change.
+        self.git("commit", "-qm", "Candidate gitlink")
+        self.assert_fails(self.run_check(base), "non-regular Git mode")
+
+    def test_gitlink_parent_cannot_hide_populated_frozen_directories(self):
+        self.write("api/tests/fixtures/beta-0001.json", "{}\n")
+        base = self.commit("freeze with fixture")
+        for parent in (
+            "api",
+            "api/migrations",
+            "api/migrations/versions",
+            "api/tests",
+            "api/tests/fixtures",
+        ):
+            with self.subTest(parent=parent):
+                # Leave the files on disk to model an initialized submodule.
+                self.git("rm", "-r", "--cached", parent)
+                self.git(
+                    "update-index", "--add", "--cacheinfo", f"160000,{base},{parent}"
+                )
+                try:
+                    self.assert_fails(self.run_check(base), "non-regular Git mode")
+                finally:
+                    self.git("read-tree", base)
+
     def test_missing_invalid_or_nonancestor_base_fails_closed(self):
         for base in ["", "0" * 40, "f" * 40, "HEAD"]:
             with self.subTest(base=base):
