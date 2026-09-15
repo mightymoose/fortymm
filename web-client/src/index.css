@@ -1107,10 +1107,7 @@ body.dark.fortymm-theme {
   .app-shell__actions {
     gap: 6px;
   }
-  /* At the narrowest phones the actions cluster (Alpha badge + bell + user
-     menu) overflows the 320px viewport. The user-name is already hidden on
-     mobile, leaving the chevron beside a bare avatar — drop it here to reclaim
-     the width and keep the top nav inside the viewport (#661). */
+  /* Hide the chevron beside the avatar to keep the actions compact on phones. */
   .app-shell__user-menu-chev {
     display: none;
   }

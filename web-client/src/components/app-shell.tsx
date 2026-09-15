@@ -3,7 +3,6 @@ import { Link, useLinkProps, useRouterState } from '@tanstack/react-router'
 import {
   Bell,
   CalendarClock,
-  ChevronDown,
   Gauge,
   Inbox,
   Key,
@@ -11,10 +10,8 @@ import {
   Shield,
   SlidersHorizontal,
   Smartphone,
-  TriangleAlert,
   Trophy,
   Users,
-  X,
 } from 'lucide-react'
 import { useSession } from '@/api/session'
 import { Wordmark } from '@/components/wordmark'
@@ -23,17 +20,6 @@ import { TESTFLIGHT_URL } from '@/lib/external-links'
 import { PERM } from '@/lib/permissions'
 import { NotificationBell } from './notifications/notification-bell'
 import { UserMenu } from './user-menu'
-import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import {
-  Popover,
-  PopoverClose,
-  PopoverContent,
-  PopoverDescription,
-  PopoverHeader,
-  PopoverTitle,
-  PopoverTrigger,
-} from '@/components/ui/popover'
 
 type NavChild = { label: string; to: string; icon: ReactNode; requires?: string }
 
@@ -458,63 +444,6 @@ export function AppShell({ children }: AppShellProps) {
           <div className="app-shell__spacer" />
 
           <div className="app-shell__actions">
-            <Popover>
-              <PopoverTrigger asChild>
-                <Badge
-                  asChild
-                  variant="outline"
-                  className="cursor-pointer gap-1.5 border-amber-500/50 bg-amber-500/15 px-2.5 font-semibold tracking-wider text-amber-300 uppercase shadow-sm transition-colors hover:bg-amber-500/25 hover:text-amber-200 focus-visible:border-amber-400 focus-visible:ring-amber-400/50"
-                >
-                  <button type="button" aria-label="About the alpha release">
-                    <TriangleAlert />
-                    Alpha
-                    <ChevronDown className="opacity-60" />
-                  </button>
-                </Badge>
-              </PopoverTrigger>
-              <PopoverContent
-                align="end"
-                className="w-80 gap-0 overflow-hidden p-0"
-              >
-                <PopoverHeader className="flex-row items-start gap-3 border-b border-border/60 bg-amber-500/10 p-3.5">
-                  <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-amber-500/20 text-amber-300">
-                    <TriangleAlert className="size-4" />
-                  </span>
-                  <span className="flex flex-col gap-0.5">
-                    <PopoverTitle>You're using an early alpha</PopoverTitle>
-                    <PopoverDescription className="text-xs leading-relaxed">
-                      FortyMM is under active development — expect rough edges.
-                    </PopoverDescription>
-                  </span>
-                  {/*
-                    #891: the notice had no visible way out. It is a non-modal
-                    popover, so Escape and an outside click already dismissed it
-                    — but neither is an affordance you can *see*, and on a 375px
-                    viewport this panel covers most of the page. Same shape as
-                    the dialog's close (ghost icon button, X), named the way the
-                    sidebar's is ("Close navigation").
-                  */}
-                  <PopoverClose asChild>
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      className="-mt-1 -mr-1 ml-auto shrink-0 text-muted-foreground hover:text-foreground"
-                      aria-label="Close alpha notice"
-                    >
-                      <X />
-                    </Button>
-                  </PopoverClose>
-                </PopoverHeader>
-                <ul className="list-disc space-y-1.5 py-3.5 pr-3.5 pl-8 text-xs leading-relaxed text-muted-foreground">
-                  <li>Features may change or break without warning.</li>
-                  <li>Your data can be reset or lost at any time.</li>
-                  <li>Please don't rely on it for anything important yet.</li>
-                </ul>
-                <p className="border-t border-border/60 p-3.5 text-xs text-foreground">
-                  Thanks for helping us test it. 🏓
-                </p>
-              </PopoverContent>
-            </Popover>
             <NotificationBell />
             <UserMenu />
           </div>
