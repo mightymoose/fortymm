@@ -1,8 +1,7 @@
 import SwiftUI
 
 /// The "You" tab: an account hub showing your identity and email-claim status,
-/// with entry points into the username and email editors. The shell lays its
-/// frosted top bar over this screen (`.fmTopBar`), so this is just the content.
+/// with entry points into the username and email editors.
 /// The editors are presented as sheets — the app's modal idiom for focused
 /// sub-tasks (matching the new-match flow's full-screen cover).
 struct ProfileView: View {
@@ -211,8 +210,7 @@ private struct SettingRow: View {
 }
 
 /// Shared header for the editor sheets: a Cancel button, a centered title, and
-/// a trailing action (the Save/Update button). Mirrors the frosted top-bar look
-/// without depending on the tab shell's `FMTopBar`.
+/// a trailing action (the Save/Update button) on a frosted background.
 struct EditorHeader<Trailing: View>: View {
     let title: String
     let onCancel: () -> Void
