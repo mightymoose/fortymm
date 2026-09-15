@@ -391,4 +391,65 @@ test.describe('Tournaments · schedule solve strip', () => {
     await expect(pom.solveStripState('succeeded')).toBeVisible()
     await expect(pom.runScheduler).not.toBeVisible()
   })
+
+  test('while a solve is in flight the placements are provisional — notice up, actions withheld, and the poll reconciles the open tab to the fresh board (#1614)', async ({
+    page,
+  }) => {
+    // The go-live race in the browser: a LIVE tournament whose draw is cut but
+    // unplaced. Run queues a solve, and while it is queued/running the
+    // placements on screen are the server's LAST ACCEPTED plan — the worker may
+    // commit at any second, so the tab must not offer Place/Move on data a
+    // landing solve may replace, and must say so.
+    const { pom, store } = await TournamentDetailPage.navigateTo(page, {
+      ...DRAWN_SEED,
+      status: 'live',
+    })
+    await pom.openScheduleTab()
+
+    await expect(pom.solveStripState('none')).toBeVisible()
+    expect(store.fixturesOf(EVENT.GROUPS).length).toBeGreaterThan(0)
+    const fixtureIds = store.fixturesOf(EVENT.GROUPS).map((f) => f.id)
+
+    await pom.runScheduler.click()
+
+    // The run is in flight: the strip walks solving, the tab speaks the
+    // provisional state — the last-good schedule kept visible…
+    await expect(pom.solveStripState('solving')).toBeVisible()
+    await expect(pom.placementUpdating).toBeVisible()
+    await expect(pom.placementUpdating).toContainText(
+      'Placement updates in progress',
+    )
+    await expect(pom.awaitingSection).toBeVisible()
+    // …and NOT actionable: no Place on any awaiting row while the solve runs.
+    for (const id of fixtureIds.slice(0, 3)) {
+      await expect(pom.placeTrigger(id)).toHaveCount(0)
+    }
+
+    await expectAxeClean(
+      page,
+      'schedule tab — provisional placements while a solve is in flight',
+    )
+
+    // The next poll (the ~3s in-flight clip) lands the terminal payload: the
+    // notice clears, every fixture the solver placed sits in its table's column
+    // — none awaiting — and the (now-Move) affordances return. No reload, no
+    // navigation: the same open tab reconciled itself.
+    await expect(pom.solveStripState('succeeded')).toBeVisible({ timeout: 15_000 })
+    expect(store.latestSolve?.status).toBe('succeeded')
+    await expect(pom.placementUpdating).toHaveCount(0)
+    await expect(pom.awaitingSection).toHaveCount(0)
+    const placed = store
+      .fixturesOf(EVENT.GROUPS)
+      .filter((f) => f.table_id !== null)
+    expect(placed.length).toBeGreaterThan(0)
+    for (const fixture of placed) {
+      await expect(
+        pom.tableSection(fixture.table_id!).getByTestId(
+          `schedule-match-${fixture.id}`,
+        ),
+      ).toBeVisible()
+    }
+    // A placed fixture is not offered Place — its affordance, if read, is Move.
+    await expect(pom.placeTrigger(placed[0].id)).toContainText('Move')
+  })
 })
