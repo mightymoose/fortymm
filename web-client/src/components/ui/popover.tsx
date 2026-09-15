@@ -49,7 +49,7 @@ function PopoverAnchor({
  *
  * ```tsx
  * <PopoverClose asChild>
- *   <Button variant="ghost" size="icon-sm" aria-label="Close alpha notice">
+ *   <Button variant="ghost" size="icon-sm" aria-label="Close popover">
  *     <XIcon />
  *   </Button>
  * </PopoverClose>
