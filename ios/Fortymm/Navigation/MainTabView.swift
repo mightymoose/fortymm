@@ -4,24 +4,11 @@ import SwiftUI
 /// selecting it triggers the new-match flow rather than switching tabs.
 enum FMTab: Hashable {
     case home, matches, newMatch, tournaments, profile
-
-    /// Title shown in the top bar for the tab.
-    var title: String {
-        switch self {
-        case .home: return "FortyMM"
-        case .matches: return "Matches"
-        case .newMatch: return "New match"
-        case .tournaments: return "Tournaments"
-        case .profile: return "You"
-        }
-    }
 }
 
 /// The signed-in app shell. Uses the system `TabView` so the bottom bar is the
 /// real iOS tab bar (free safe-area handling, accessibility, the standard look),
-/// tinted ball-orange for the active tab. The
-/// shell lays the frosted top bar over each tab screen (`.fmTopBar`), so the
-/// screens carry only their own content.
+/// tinted ball-orange for the active tab. Each screen fills the space above it.
 struct MainTabView: View {
     @State private var selection: FMTab = .home
     @State private var showingNewMatch = false
@@ -35,12 +22,10 @@ struct MainTabView: View {
                 matchesFilter = MatchesFilter(status: nil, query: username ?? "")
                 selection = .matches
             }, isSelected: selection == .home)
-                .fmTopBar(FMTab.home.title)
                 .tabItem { Label("Home", systemImage: "house") }
                 .tag(FMTab.home)
 
             MatchesListView(pendingFilter: $matchesFilter, isSelected: selection == .matches)
-                .fmTopBar(FMTab.matches.title)
                 .tabItem { Label("Matches", systemImage: "sportscourt") }
                 .tag(FMTab.matches)
 
@@ -51,12 +36,10 @@ struct MainTabView: View {
                 .tag(FMTab.newMatch)
 
             TournamentsListView(isSelected: selection == .tournaments)
-                .fmTopBar(FMTab.tournaments.title)
                 .tabItem { Label("Tournaments", systemImage: "trophy") }
                 .tag(FMTab.tournaments)
 
             ProfileView()
-                .fmTopBar(FMTab.profile.title)
                 .tabItem { Label("You", systemImage: "person.crop.circle") }
                 .tag(FMTab.profile)
         }

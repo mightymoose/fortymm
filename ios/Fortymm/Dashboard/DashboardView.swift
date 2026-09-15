@@ -46,7 +46,6 @@ struct DashboardView: View {
                     content
                 }
                 .padding(.horizontal, FMSpace.s5)
-                // Top inset for the shell's frosted bar is reserved by `.fmTopBar`.
                 .padding(.bottom, FMSpace.s6)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
