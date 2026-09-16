@@ -14,6 +14,7 @@ export function buildScheduleTabProps(
 ): ScheduleTabProps {
   return {
     tournament: buildTournament({ events: [buildDrawnEvent()] }),
+    tournamentDetailUpdatedAt: 1,
     tables: buildTables(),
     ...overrides,
   }
