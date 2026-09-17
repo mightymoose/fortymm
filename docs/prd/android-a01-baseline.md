@@ -26,7 +26,7 @@ This is the durable brief that the A01 subtasks (#1742–#1754) and the player-r
 
 ## Session recovery and refresh rules
 
-- The session loads once at startup, through the owner. First run mints a guest. Overlapping startups and process recreation keep one guest and never create competing identities.
+- The session loads once at startup, through the owner. First run mints a guest. Overlapping startups and process recreation keep one guest once the credential is persisted. A first request whose guest response was lost before persistence is the documented exception above: the app does not require server deduplication, a client bootstrap key, or stable-identity recovery in that case.
 - A revoked or merged session shows an explicit session-ended state. It offers sign-in and continue-as-guest. It never auto-mints a replacement guest (iOS: `SessionStore.signedOut` + `startNewGuest`, [SessionStore.swift:103–126](../../ios/Fortymm/Session/SessionStore.swift)).
 - A stale in-flight response must not clear a newer session. iOS does this token-aware (`endIfCurrent`, [SessionTokenStore.swift:120–135](../../ios/Fortymm/Networking/SessionTokenStore.swift)).
 - Pending email links stay usable during recovery.
