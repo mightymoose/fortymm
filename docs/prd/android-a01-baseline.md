@@ -144,6 +144,7 @@ Classification: **A01** (owner in #1728), **release** (owner in #1729–#1740), 
 - Sign-out: iOS has no sign-out button. Only the session-ended gate offers continue-as-guest. #1729 should define Android sign-out explicitly.
 - iOS match list loads one 50-item page. #1730 sets the Android pagination contract.
 - The stale launch-screen paragraph in [ios/README.md:52](../../ios/README.md) (launch renders `DesignSystemView`) does not describe the current app. This inventory supersedes it.
+- Shared match links resolve to a match on warm/cold start (#1730 / A03). This needs new Android URL routing and verified-link handling. iOS has no URL deep link for matches. iOS `DeepLink.match` is a push-notification case, and iOS `DeepLink.init(url:)` parses only /login/verifying and /confirm-email. It is a new workflow, not a port of the notification entry on line 125.
 
 ## Source references
 
