@@ -198,7 +198,7 @@ Deliver tournament discovery and player-readable tournament/event detail, includ
 
 ### Acceptance criteria
 
-- [ ] Search by name/status, paginate and open tournaments/events using existing page responses.
+- [ ] Search tournaments by name/status and paginate the result. `GET /v1/tournaments` currently returns a bare list with only a near-me filter and no page contract, so the API change for a page-shaped tournament list is owned by this ticket: define and ship the server-side name/status filter plus pagination contract before relying on it.
 - [ ] Near me is opt-in, supports the existing 25/50/100-mile choices and distance display, and leaves ordinary search usable when location is denied or unavailable.
 - [ ] Show event rules, eligibility explanations, venue/map links, reservation windows and public table information.
 - [ ] Tournament publication and event progress are rendered as separate concepts; unsupported or unavailable data does not fabricate a status.
