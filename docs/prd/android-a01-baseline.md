@@ -42,7 +42,8 @@ Hidden in #1728, owned by the named ticket:
 
 | Home surface | Owner |
 | --- | --- |
-| Attention/actionable list, and live Home updates (SSE hint refetch, resume refetch) | [#1733](https://github.com/mightymoose/fortymm/issues/1733) |
+| Attention/actionable list | [#1733](https://github.com/mightymoose/fortymm/issues/1733) |
+| Live Home updates (SSE hint refetch) | [#1733](https://github.com/mightymoose/fortymm/issues/1733) |
 | Home tournament panel integration | [#1738](https://github.com/mightymoose/fortymm/issues/1738) (hidden for #1728) |
 
 iOS source: dashboard fetch at [DashboardStore.swift:65](../../ios/Fortymm/Dashboard/DashboardStore.swift). Rating states at [DashboardModels.swift:116–133](../../ios/Fortymm/Dashboard/DashboardModels.swift). Realtime hint via `GET /v1/stream` in [Realtime/](../../ios/Fortymm/Realtime/). Refresh modifiers in [ViewModifiers.swift](../../ios/Fortymm/Components/ViewModifiers.swift).
