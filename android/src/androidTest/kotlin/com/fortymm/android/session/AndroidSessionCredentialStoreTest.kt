@@ -59,6 +59,23 @@ class AndroidSessionCredentialStoreTest {
     }
 
     @Test
+    fun syncedTemporaryCredentialIsRecoveredAfterProcessDeathBeforeRename() {
+        val credential = "credential-synced-before-process-death"
+        val writer = AndroidSessionCredentialStore(context)
+        assertEquals(CredentialSaveResult.Saved, writer.save(credential))
+        val credentialFile = File(credentialDirectory, "credential.bin")
+        val temporaryFile = File(credentialDirectory, "credential.bin.tmp")
+        assertTrue(credentialFile.renameTo(temporaryFile))
+
+        assertEquals(
+            CredentialLoadResult.Credential(credential),
+            AndroidSessionCredentialStore(context).load(),
+        )
+        assertTrue(credentialFile.exists())
+        assertFalse(temporaryFile.exists())
+    }
+
+    @Test
     fun unreadableStorageAndAFailedWriteAreNotReportedAsAnEmptyStore() {
         val credentialFile = File(credentialDirectory, "credential.bin")
         credentialFile.parentFile?.mkdirs()

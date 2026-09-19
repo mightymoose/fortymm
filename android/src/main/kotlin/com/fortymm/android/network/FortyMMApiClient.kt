@@ -59,7 +59,29 @@ class FortyMMApiClient(
             ) {
                 throw IOException("Session bootstrap returned from an unexpected origin")
             }
-            val body = response.body?.string() ?: throw IOException("Session bootstrap returned no body")
+            val cookies = response.headers.values("Set-Cookie")
+                .mapNotNull { Cookie.parse(responseUrl, it) }
+                .filter { it.matches(apiRoot) }
+            val receivedCredential = cookies
+                .lastOrNull { it.name == SESSION_COOKIE_NAME && it.value.isNotEmpty() }
+                ?.value
+            val receivedCsrfToken = cookies
+                .lastOrNull { it.name == CSRF_COOKIE_NAME && it.value.isNotEmpty() }
+                ?.value
+            val body = try {
+                response.body?.string() ?: throw IOException("Session bootstrap returned no body")
+            } catch (error: Exception) {
+                if (response.isSuccessful) {
+                    return@withContext incompleteSessionOrThrow(
+                        receivedCredential = receivedCredential,
+                        sentCredential = credential,
+                        receivedCsrfToken = receivedCsrfToken,
+                        message = "Session bootstrap response ended before its body was read",
+                        cause = error,
+                    )
+                }
+                throw IOException("Session bootstrap response ended before its error body was read", error)
+            }
             if (!response.isSuccessful) {
                 if (response.code == 401 && credential != null) {
                     val ended = try {
@@ -84,24 +106,34 @@ class FortyMMApiClient(
             val dto = try {
                 json.decodeFromString<SessionResponseDto>(body)
             } catch (error: Exception) {
-                throw IOException("Session bootstrap returned an unreadable response", error)
+                return@withContext incompleteSessionOrThrow(
+                    receivedCredential = receivedCredential,
+                    sentCredential = credential,
+                    receivedCsrfToken = receivedCsrfToken,
+                    message = "Session bootstrap returned an unreadable response",
+                    cause = error,
+                )
             }
-            val cookies = response.headers.values("Set-Cookie")
-                .mapNotNull { Cookie.parse(responseUrl, it) }
-                .filter { it.matches(apiRoot) }
-            val resolvedCredential = cookies
-                .lastOrNull { it.name == SESSION_COOKIE_NAME && it.value.isNotEmpty() }
-                ?.value
+            val resolvedCredential = receivedCredential
                 ?: credential
                 ?: throw IOException("Session bootstrap returned no session credential")
-            val csrfToken = cookies
-                .lastOrNull { it.name == CSRF_COOKIE_NAME && it.value.isNotEmpty() }
-                ?.value
-                ?: throw IOException("Session bootstrap returned no CSRF companion")
+            val csrfToken = receivedCsrfToken
+                ?: return@withContext incompleteSessionOrThrow(
+                    receivedCredential = receivedCredential,
+                    sentCredential = credential,
+                    receivedCsrfToken = null,
+                    message = "Session bootstrap returned no CSRF companion",
+                )
             val userId = try {
                 UUID.fromString(dto.data.user.id)
             } catch (error: IllegalArgumentException) {
-                throw IOException("Session bootstrap returned an invalid user id", error)
+                return@withContext incompleteSessionOrThrow(
+                    receivedCredential = receivedCredential,
+                    sentCredential = credential,
+                    receivedCsrfToken = receivedCsrfToken,
+                    message = "Session bootstrap returned an invalid user id",
+                    cause = error,
+                )
             }
             this@FortyMMApiClient.sessionCredential = resolvedCredential
             this@FortyMMApiClient.csrfToken = csrfToken
@@ -110,6 +142,21 @@ class FortyMMApiClient(
                 credential = resolvedCredential,
             )
         }
+    }
+
+    private fun incompleteSessionOrThrow(
+        receivedCredential: String?,
+        sentCredential: String?,
+        receivedCsrfToken: String?,
+        message: String,
+        cause: Exception? = null,
+    ): IncompleteSession {
+        if (receivedCredential != null && receivedCredential != sentCredential) {
+            sessionCredential = receivedCredential
+            csrfToken = receivedCsrfToken
+            return IncompleteSession(receivedCredential)
+        }
+        throw IOException(message, cause)
     }
 
     companion object {
@@ -135,6 +182,10 @@ data class SessionBootstrap(
 
 data class EndedSession(
     val reason: SessionEndReason,
+) : SessionBootstrapResult
+
+data class IncompleteSession(
+    val credential: String,
 ) : SessionBootstrapResult
 
 @Serializable

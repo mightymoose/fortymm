@@ -33,6 +33,7 @@ fun FortyMMApp(sessionOwner: SessionOwner) {
         HomeShell(
             sessionState = sessionState,
             onRetry = { coroutineScope.launch { sessionOwner.bootstrap() } },
+            onStartNewGuest = { coroutineScope.launch { sessionOwner.startNewGuest() } },
         )
     }
 }

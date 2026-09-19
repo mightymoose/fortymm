@@ -45,6 +45,25 @@ class HomeShellStateTest {
     }
 
     @Test
+    fun unreadableStorageOffersExplicitStartNewGuestRecovery() {
+        var startCount = 0
+        composeRule.setContent {
+            FortyMMTheme {
+                HomeShell(
+                    sessionState = SessionState.UnreadableStorage(
+                        "We couldn't read your saved session.",
+                    ),
+                    onRetry = {},
+                    onStartNewGuest = { startCount += 1 },
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Start new guest").performClick()
+        composeRule.runOnIdle { assertEquals(1, startCount) }
+    }
+
+    @Test
     fun retryableStartupShowsItsMessageAndRequestsRetry() {
         var retryCount = 0
         composeRule.setContent {

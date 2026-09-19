@@ -21,6 +21,7 @@ import com.fortymm.android.ui.FortyMMSpace
 fun HomeShell(
     sessionState: SessionState,
     onRetry: () -> Unit,
+    onStartNewGuest: () -> Unit = {},
 ) {
     Scaffold(contentWindowInsets = WindowInsets.safeDrawing) { contentPadding ->
         Column(
@@ -62,6 +63,19 @@ fun HomeShell(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+
+                is SessionState.UnreadableStorage -> {
+                    Text(
+                        text = sessionState.message,
+                        modifier = Modifier.padding(top = FortyMMSpace.S4.dp),
+                    )
+                    Button(
+                        onClick = onStartNewGuest,
+                        modifier = Modifier.padding(top = FortyMMSpace.S4.dp),
+                    ) {
+                        Text("Start new guest")
+                    }
                 }
 
                 is SessionState.RetryableStartup -> {

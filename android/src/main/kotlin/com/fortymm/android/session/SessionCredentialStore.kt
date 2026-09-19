@@ -62,12 +62,23 @@ class AndroidSessionCredentialStore(context: Context) : SessionCredentialStore {
 
     override fun load(): CredentialLoadResult = synchronized(processWideStorageLock) {
         try {
-            if (!credentialFile.exists()) {
+            val sourceFile = when {
+                credentialFile.exists() -> credentialFile
+                temporaryCredentialFile.exists() -> temporaryCredentialFile
+                else -> null
+            }
+            if (sourceFile == null) {
                 CredentialLoadResult.Absent
             } else {
-                val (initializationVector, ciphertext) = readCiphertext()
+                val (initializationVector, ciphertext) = readCiphertext(sourceFile)
                 val plaintext = decrypt(initializationVector, ciphertext).toString(Charsets.UTF_8)
-                decodeStoredSession(plaintext)
+                val loaded = decodeStoredSession(plaintext)
+                if (sourceFile == temporaryCredentialFile && loaded != CredentialLoadResult.UnreadableStorage) {
+                    check(temporaryCredentialFile.renameTo(credentialFile)) {
+                        "Unable to recover temporary session credential"
+                    }
+                }
+                loaded
             }
         } catch (_: Exception) {
             CredentialLoadResult.UnreadableStorage
@@ -165,8 +176,8 @@ class AndroidSessionCredentialStore(context: Context) : SessionCredentialStore {
         return generator.generateKey()
     }
 
-    private fun readCiphertext(): EncryptedCredential =
-        DataInputStream(BufferedInputStream(FileInputStream(credentialFile))).use { input ->
+    private fun readCiphertext(file: File): EncryptedCredential =
+        DataInputStream(BufferedInputStream(FileInputStream(file))).use { input ->
             val version = input.readUnsignedByte()
             require(version == FORMAT_VERSION) { "Unsupported credential format" }
             val ivLength = input.readUnsignedByte()

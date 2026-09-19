@@ -8,6 +8,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -213,7 +214,39 @@ class SessionOwnerTest {
     }
 
     @Test
-    fun unreadableCredentialStorageDoesNotCreateACookielessGuest() = runBlocking {
+    fun truncatedFreshGuestResponsePreservesItsCredentialForAuthenticatedRetry() = runBlocking {
+        val userId = UUID.fromString("32a3e549-8868-459a-b309-d1905e5cb895")
+        val credentialStore = MemoryCredentialStore()
+        server.enqueue(
+            sessionResponse(userId, "first-guest")
+                .addHeader("Set-Cookie", "session=header-session-token; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=header-csrf; Path=/")
+                .setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY),
+        )
+        val owner = SessionOwner(
+            apiClient = FortyMMApiClient(server.url("/")),
+            credentialStore = credentialStore,
+        )
+
+        owner.bootstrap()
+
+        assertEquals("header-session-token", credentialStore.credential)
+        server.enqueue(
+            sessionResponse(userId, "recovered-guest")
+                .addHeader("Set-Cookie", "csrf_token=recovered-csrf; Path=/"),
+        )
+        owner.bootstrap()
+
+        assertEquals(
+            SessionState.Ready(SessionUser(userId, "recovered-guest")),
+            owner.state.value,
+        )
+        assertEquals(null, server.takeRequest().getHeader("Cookie"))
+        assertEquals("session=header-session-token", server.takeRequest().getHeader("Cookie"))
+    }
+
+    @Test
+    fun unreadableCredentialStorageRequiresExplicitResetBeforeNewGuest() = runBlocking {
         val credentialStore = MemoryCredentialStore(unreadable = true)
         val owner = SessionOwner(
             apiClient = FortyMMApiClient(server.url("/")),
@@ -223,12 +256,26 @@ class SessionOwnerTest {
         owner.bootstrap()
 
         assertEquals(
-            SessionState.RetryableStartup(
-                "We couldn't read your saved session. Please try again.",
+            SessionState.UnreadableStorage(
+                "We couldn't read your saved session.",
             ),
             owner.state.value,
         )
         assertEquals(0, server.requestCount)
+
+        val userId = UUID.fromString("33ed6bd5-0a2f-4b99-81a2-6fd39db4c898")
+        server.enqueue(
+            sessionResponse(userId, "reset-guest")
+                .addHeader("Set-Cookie", "session=reset-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=reset-csrf; Path=/"),
+        )
+        owner.startNewGuest()
+
+        assertEquals(
+            SessionState.Ready(SessionUser(userId, "reset-guest")),
+            owner.state.value,
+        )
+        assertEquals(1, server.requestCount)
     }
 
     @Test
@@ -322,6 +369,8 @@ class SessionOwnerTest {
 
         override fun clear(): CredentialClearResult {
             credential = null
+            unreadable = false
+            sessionEndReason = null
             return CredentialClearResult.Cleared
         }
     }
