@@ -42,6 +42,11 @@ jobs:
           java-version: '17.0.17+10'
 
       - uses: android-actions/setup-android@v3
+        with:
+          # The legacy SDK "tools" package no longer exists. Install only the
+          # package this setup step needs; the exact build/image packages follow.
+          cmdline-tools-version: 13114758
+          packages: platform-tools
 
       - name: Install pinned Android SDK packages
         run: >
