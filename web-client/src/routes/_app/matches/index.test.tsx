@@ -162,7 +162,7 @@ describe('MatchesPage', () => {
     const firstUrl = new URL(requests[0])
     expect(firstUrl.searchParams.get('status')).toBeNull()
 
-    await user.click(screen.getByRole('tab', { name: /live/i }))
+    await user.click(screen.getByRole('radio', { name: /live/i }))
 
     await waitFor(() => {
       const last = new URL(requests[requests.length - 1])
@@ -172,7 +172,7 @@ describe('MatchesPage', () => {
 
   it('no longer renders the disabled "Called" tab or coming-soon filters (#149)', async () => {
     renderMatchesPage()
-    await screen.findByRole('tab', { name: /up next/i })
+    await screen.findByRole('radio', { name: /up next/i })
     expect(screen.queryByRole('tab', { name: /called/i })).not.toBeInTheDocument()
     expect(screen.queryByText(/all contexts/i)).not.toBeInTheDocument()
     expect(screen.queryByText(/all rounds/i)).not.toBeInTheDocument()
@@ -452,7 +452,7 @@ describe('MatchesPage', () => {
     renderMatchesPage()
     await screen.findByText('nguyen.t')
     // Narrow to the Final filter — the export link must carry it.
-    await user.click(screen.getByRole('tab', { name: /final/i }))
+    await user.click(screen.getByRole('radio', { name: /final/i }))
 
     const link = screen.getByRole('link', { name: /export csv/i })
     const href = link.getAttribute('href') ?? ''

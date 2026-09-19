@@ -167,6 +167,7 @@ export const OpponentTypeahead = ({
   // `placeholderData` on the search query keeps the prior term's rows visible
   // while the next term loads, so this only fires on the very first search.
   const loadingFirstResults = isFetching && results.length === 0
+  const listboxOpen = open && !!term && !loadingFirstResults && results.length > 0
   const optionId = (i: number) => `${listboxId}-opt-${i}`
   // Only ever points at a row the user actually highlighted, and only at one
   // that is still on screen (a stale index can outlive its result set).
@@ -178,7 +179,7 @@ export const OpponentTypeahead = ({
   function renderBody() {
     if (!term) {
       return (
-        <div className="nm-no-match">
+        <div className="nm-no-match" role="status">
           Start typing to search players by username.
         </div>
       )
@@ -192,7 +193,7 @@ export const OpponentTypeahead = ({
     }
     if (results.length === 0) {
       return (
-        <div className="nm-no-match">
+        <div className="nm-no-match" role="status">
           No one matches “{term}”. Try a different name.
         </div>
       )
@@ -227,8 +228,8 @@ export const OpponentTypeahead = ({
           className="nm-input"
           role="combobox"
           aria-autocomplete="list"
-          aria-expanded={open}
-          aria-controls={listboxId}
+          aria-expanded={listboxOpen}
+          aria-controls={listboxOpen ? listboxId : undefined}
           aria-activedescendant={activeDescendant}
           aria-label="Search players by username"
           placeholder="Search by username"

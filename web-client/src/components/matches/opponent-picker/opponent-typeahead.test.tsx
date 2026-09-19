@@ -29,7 +29,8 @@ describe('OpponentTypeahead', () => {
     const combobox = opponentTypeaheadPage.getCombobox()
 
     expect(combobox).toHaveAttribute('aria-autocomplete', 'list')
-    expect(combobox).toHaveAttribute('aria-expanded', 'true')
+    expect(combobox).toHaveAttribute('aria-expanded', 'false')
+    expect(combobox).not.toHaveAttribute('aria-controls')
     expect(combobox).toHaveAccessibleName('Search players by username')
   })
 

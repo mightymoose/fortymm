@@ -82,16 +82,16 @@ test.describe('tournaments list — the search box follows the URL', () => {
 
     await pom.statusTab('Live').click()
     await expect(page).toHaveURL(/[?&]status=live(&|$)/)
-    await expect(pom.statusTab('Live')).toHaveAttribute('aria-selected', 'true')
+    await expect(pom.statusTab('Live')).toHaveAttribute('aria-checked', 'true')
     await expect(pom.card(SEEDED)).toHaveCount(0)
 
     await pom.sidebarTournamentsLink.click()
     await expect(page).not.toHaveURL(/[?&]status=/)
 
     // Status is derived from the URL on every render — it has no buffer to go stale.
-    await expect(pom.statusTab('All')).toHaveAttribute('aria-selected', 'true')
+    await expect(pom.statusTab('All')).toHaveAttribute('aria-checked', 'true')
     await expect(pom.statusTab('Live')).toHaveAttribute(
-      'aria-selected',
+      'aria-checked',
       'false',
     )
     await expect(pom.card(SEEDED)).toBeVisible()

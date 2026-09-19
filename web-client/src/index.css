@@ -302,7 +302,7 @@ code {
   --fg-1: var(--chalk-50);
   --fg-2: var(--chalk-100);
   --fg-3: var(--chalk-300);
-  --fg-muted: var(--chalk-500);
+  --fg-muted: #929bad;
   --fg-disabled: var(--ink-400);
 
   --bg-app: var(--ink-950);
@@ -393,8 +393,8 @@ code {
   color: var(--fg-1);
 }
 
-.dark.fortymm-theme h1,
-.dark.fortymm-theme h2 {
+.dark.fortymm-theme h1:not(.fortymm-landing h1),
+.dark.fortymm-theme h2:not(.fortymm-landing h2) {
   line-height: 1;
   letter-spacing: 0;
   margin: 0;
@@ -408,9 +408,9 @@ code {
 body.dark.fortymm-theme {
   letter-spacing: normal;
 }
-.dark.fortymm-theme h2,
-.dark.fortymm-theme h3,
-.dark.fortymm-theme h4 {
+.dark.fortymm-theme h2:not(.fortymm-landing h2),
+.dark.fortymm-theme h3:not(.fortymm-landing h3),
+.dark.fortymm-theme h4:not(.fortymm-landing h4) {
   font-family: inherit;
   font-size: inherit;
   font-weight: inherit;
@@ -4045,4 +4045,28 @@ body.dark.fortymm-theme {
   .fortymm-theme .md-modal-scrim {
     animation: none !important;
   }
+}
+/* Status filters select a query, rather than switching tab panels. */
+.fortymm-theme .status-filters {
+  max-width: 100%;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+}
+.fortymm-theme .status-filters [data-slot="toggle-group-item"] {
+  min-height: 36px;
+  border-radius: 6px;
+  padding-inline: 8px;
+  color: var(--fg-3);
+}
+.fortymm-theme .status-filters [data-state="on"] {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+  box-shadow: inset 0 0 0 1px var(--border-subtle);
+}
+@media (pointer: coarse) {
+  .fortymm-theme .status-filters [data-slot="toggle-group-item"] { min-height: 44px; }
 }
