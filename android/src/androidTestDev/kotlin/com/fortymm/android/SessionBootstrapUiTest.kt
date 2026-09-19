@@ -9,6 +9,7 @@ import com.fortymm.android.session.CredentialClearResult
 import com.fortymm.android.session.CredentialLoadResult
 import com.fortymm.android.session.CredentialSaveResult
 import com.fortymm.android.session.SessionCredentialStore
+import com.fortymm.android.session.SessionEndReason
 import com.fortymm.android.session.SessionOwner
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -63,6 +64,9 @@ class SessionBootstrapUiTest {
             this.credential = credential
             return CredentialSaveResult.Saved
         }
+
+        override fun markSessionEnded(reason: SessionEndReason): CredentialSaveResult =
+            CredentialSaveResult.Saved
 
         override fun clear(): CredentialClearResult {
             credential = null

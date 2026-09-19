@@ -27,6 +27,7 @@ abstract class LocalHttpTransportProbe {
             )
 
             val session = FortyMMApiClient(BuildConfig.API_BASE_URL.toHttpUrl()).bootstrap(null)
+                as SessionBootstrap
 
             assertEquals(userId, session.user.id)
             assertEquals("transport-guest", session.user.username)

@@ -1,7 +1,11 @@
 package com.fortymm.android.session
 
 import com.fortymm.android.network.FortyMMApiClient
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
@@ -9,6 +13,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
 import java.util.UUID
+import java.util.concurrent.TimeUnit
 
 class SessionOwnerTest {
     private lateinit var server: MockWebServer
@@ -68,6 +73,40 @@ class SessionOwnerTest {
     }
 
     @Test
+    fun cancelledUiCallerDoesNotRestartGuestCreation() = runBlocking {
+        val firstUserId = UUID.fromString("0b47aab8-7453-49ae-a359-b78cd77151c2")
+        val replacementUserId = UUID.fromString("693f6573-cae1-49cc-9d4d-f1dbc7c652a6")
+        val credentialStore = MemoryCredentialStore()
+        server.enqueue(
+            sessionResponse(firstUserId, "first-guest")
+                .addHeader("Set-Cookie", "session=first-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=first-csrf; Path=/")
+                .setBodyDelay(300, TimeUnit.MILLISECONDS),
+        )
+        server.enqueue(
+            sessionResponse(replacementUserId, "replacement-guest")
+                .addHeader("Set-Cookie", "session=replacement-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=replacement-csrf; Path=/"),
+        )
+        val owner = SessionOwner(
+            apiClient = FortyMMApiClient(server.url("/")),
+            credentialStore = credentialStore,
+        )
+
+        val firstUiCaller = launch { owner.bootstrap() }
+        withContext(Dispatchers.IO) { server.takeRequest() }
+        firstUiCaller.cancelAndJoin()
+        owner.bootstrap()
+
+        assertEquals(
+            SessionState.Ready(SessionUser(firstUserId, "first-guest")),
+            owner.state.value,
+        )
+        assertEquals("first-session", credentialStore.credential)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
     fun existingSessionRestoresItsRootScopedCsrfCompanionWithoutReplacingIdentity() = runBlocking {
         val userId = UUID.fromString("48e21096-99c6-481d-bbe4-98e10354dc62")
         val credentialStore = MemoryCredentialStore().apply {
@@ -92,6 +131,50 @@ class SessionOwnerTest {
         assertEquals("durable-session-token", apiClient.sessionCredential)
         assertEquals("restored-csrf", apiClient.csrfToken)
         assertEquals("session=durable-session-token", server.takeRequest().getHeader("Cookie"))
+    }
+
+    @Test
+    fun endedSessionPersistsAcrossLaterProcessWithoutMintingAReplacementGuest() = runBlocking {
+        val credentialStore = MemoryCredentialStore().apply {
+            credential = "revoked-session-token"
+        }
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(401)
+                .setHeader("Content-Type", "application/json")
+                .addHeader("Set-Cookie", "session=; Path=/; Max-Age=0; HttpOnly")
+                .setBody(
+                    """
+                    {
+                      "detail": {
+                        "code": "session_ended",
+                        "message": "You've been signed out. Sign in to continue."
+                      }
+                    }
+                    """.trimIndent(),
+                ),
+        )
+        val firstProcess = SessionOwner(
+            apiClient = FortyMMApiClient(server.url("/")),
+            credentialStore = credentialStore,
+        )
+
+        firstProcess.bootstrap()
+
+        assertEquals(
+            SessionState.SessionEnded("You've been signed out. Sign in to continue.", email = null),
+            firstProcess.state.value,
+        )
+        val laterProcess = SessionOwner(
+            apiClient = FortyMMApiClient(server.url("/")),
+            credentialStore = credentialStore,
+        )
+        laterProcess.bootstrap()
+        assertEquals(
+            SessionState.SessionEnded("You've been signed out. Sign in to continue.", email = null),
+            laterProcess.state.value,
+        )
+        assertEquals(1, server.requestCount)
     }
 
     @Test
@@ -210,10 +293,12 @@ class SessionOwnerTest {
         var unreadable: Boolean = false,
     ) : SessionCredentialStore {
         var credential: String? = null
+        var sessionEndReason: SessionEndReason? = null
         var saveCount = 0
 
         override fun load(): CredentialLoadResult = when {
             unreadable -> CredentialLoadResult.UnreadableStorage
+            sessionEndReason != null -> CredentialLoadResult.SessionEnded(sessionEndReason!!)
             credential != null -> CredentialLoadResult.Credential(credential!!)
             else -> CredentialLoadResult.Absent
         }
@@ -225,6 +310,13 @@ class SessionOwnerTest {
                 return CredentialSaveResult.Failed
             }
             this.credential = credential
+            sessionEndReason = null
+            return CredentialSaveResult.Saved
+        }
+
+        override fun markSessionEnded(reason: SessionEndReason): CredentialSaveResult {
+            credential = null
+            sessionEndReason = reason
             return CredentialSaveResult.Saved
         }
 

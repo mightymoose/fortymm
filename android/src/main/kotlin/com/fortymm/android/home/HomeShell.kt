@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -49,6 +50,19 @@ fun HomeShell(
                     modifier = Modifier.padding(top = FortyMMSpace.S4.dp),
                     style = androidx.compose.material3.MaterialTheme.typography.headlineSmall,
                 )
+
+                is SessionState.SessionEnded -> {
+                    Text(
+                        text = "Signed out",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = MaterialTheme.colorScheme.onBackground,
+                    )
+                    Text(
+                        text = sessionState.message,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
 
                 is SessionState.RetryableStartup -> {
                     Text(

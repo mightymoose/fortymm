@@ -3,6 +3,8 @@ package com.fortymm.android.session
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import java.io.BufferedInputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
@@ -26,11 +28,15 @@ interface SessionCredentialStore {
 
     fun save(credential: String): CredentialSaveResult
 
+    fun markSessionEnded(reason: SessionEndReason): CredentialSaveResult
+
     fun clear(): CredentialClearResult
 }
 
 sealed interface CredentialLoadResult {
     data class Credential(val value: String) : CredentialLoadResult
+
+    data class SessionEnded(val reason: SessionEndReason) : CredentialLoadResult
 
     data object Absent : CredentialLoadResult
 
@@ -52,6 +58,7 @@ class AndroidSessionCredentialStore(context: Context) : SessionCredentialStore {
     private val credentialFile = File(context.filesDir, CREDENTIAL_DIRECTORY).resolve(CREDENTIAL_FILE)
     private val temporaryCredentialFile = File(credentialFile.parentFile, "$CREDENTIAL_FILE.tmp")
     private val keyAlias = "${context.packageName}.session-credential.v1"
+    private val json = Json { ignoreUnknownKeys = true }
 
     override fun load(): CredentialLoadResult = synchronized(processWideStorageLock) {
         try {
@@ -59,8 +66,8 @@ class AndroidSessionCredentialStore(context: Context) : SessionCredentialStore {
                 CredentialLoadResult.Absent
             } else {
                 val (initializationVector, ciphertext) = readCiphertext()
-                val plaintext = decrypt(initializationVector, ciphertext)
-                CredentialLoadResult.Credential(plaintext.toString(Charsets.UTF_8))
+                val plaintext = decrypt(initializationVector, ciphertext).toString(Charsets.UTF_8)
+                decodeStoredSession(plaintext)
             }
         } catch (_: Exception) {
             CredentialLoadResult.UnreadableStorage
@@ -68,12 +75,51 @@ class AndroidSessionCredentialStore(context: Context) : SessionCredentialStore {
     }
 
     override fun save(credential: String): CredentialSaveResult = synchronized(processWideStorageLock) {
+        writeProtectedPayload(
+            json.encodeToString(StoredSessionDto(kind = CREDENTIAL_KIND, credential = credential)),
+        )
+    }
+
+    override fun markSessionEnded(reason: SessionEndReason): CredentialSaveResult =
+        synchronized(processWideStorageLock) {
+            writeProtectedPayload(
+                json.encodeToString(
+                    StoredSessionDto(
+                        kind = SESSION_ENDED_KIND,
+                        message = reason.message,
+                        email = reason.email,
+                    ),
+                ),
+            )
+        }
+
+    private fun writeProtectedPayload(payload: String): CredentialSaveResult {
         try {
-            val encrypted = encrypt(credential.toByteArray(Charsets.UTF_8))
+            val encrypted = encrypt(payload.toByteArray(Charsets.UTF_8))
             writeCiphertext(encrypted.initializationVector, encrypted.ciphertext)
-            CredentialSaveResult.Saved
+            return CredentialSaveResult.Saved
         } catch (_: Exception) {
-            CredentialSaveResult.Failed
+            return CredentialSaveResult.Failed
+        }
+    }
+
+    private fun decodeStoredSession(payload: String): CredentialLoadResult {
+        val stored = try {
+            json.decodeFromString<StoredSessionDto>(payload)
+        } catch (_: Exception) {
+            return CredentialLoadResult.Credential(payload)
+        }
+        return when (stored.kind) {
+            CREDENTIAL_KIND -> stored.credential
+                ?.let(CredentialLoadResult::Credential)
+                ?: CredentialLoadResult.UnreadableStorage
+            SESSION_ENDED_KIND -> CredentialLoadResult.SessionEnded(
+                SessionEndReason(
+                    message = stored.message ?: "Your session has ended. Sign in to continue.",
+                    email = stored.email,
+                ),
+            )
+            else -> CredentialLoadResult.UnreadableStorage
         }
     }
 
@@ -162,5 +208,15 @@ class AndroidSessionCredentialStore(context: Context) : SessionCredentialStore {
         const val FORMAT_VERSION = 1
         const val CREDENTIAL_DIRECTORY = "session-credentials"
         const val CREDENTIAL_FILE = "credential.bin"
+        const val CREDENTIAL_KIND = "credential"
+        const val SESSION_ENDED_KIND = "session-ended"
     }
 }
+
+@Serializable
+private data class StoredSessionDto(
+    val kind: String,
+    val credential: String? = null,
+    val message: String? = null,
+    val email: String? = null,
+)

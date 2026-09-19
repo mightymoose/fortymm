@@ -1,5 +1,6 @@
 package com.fortymm.android.network
 
+import com.fortymm.android.session.SessionEndReason
 import com.fortymm.android.session.SessionUser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -38,7 +39,7 @@ class FortyMMApiClient(
         }
     }
 
-    suspend fun bootstrap(credential: String?): SessionBootstrap = withContext(Dispatchers.IO) {
+    suspend fun bootstrap(credential: String?): SessionBootstrapResult = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url(sessionUrl)
             .header("Accept", "application/json")
@@ -50,9 +51,6 @@ class FortyMMApiClient(
             .build()
 
         httpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw IOException("Session bootstrap failed with HTTP ${response.code}")
-            }
             val responseUrl = response.request.url
             if (
                 responseUrl.scheme != apiRoot.scheme ||
@@ -62,6 +60,27 @@ class FortyMMApiClient(
                 throw IOException("Session bootstrap returned from an unexpected origin")
             }
             val body = response.body?.string() ?: throw IOException("Session bootstrap returned no body")
+            if (!response.isSuccessful) {
+                if (response.code == 401 && credential != null) {
+                    val ended = try {
+                        json.decodeFromString<SessionEndedResponseDto>(body)
+                    } catch (_: Exception) {
+                        null
+                    }
+                    if (ended?.detail?.code in SESSION_ENDED_CODES) {
+                        this@FortyMMApiClient.sessionCredential = null
+                        this@FortyMMApiClient.csrfToken = null
+                        return@withContext EndedSession(
+                            SessionEndReason(
+                                message = ended?.detail?.message
+                                    ?: "Your session has ended. Sign in to continue.",
+                                email = ended?.detail?.email,
+                            ),
+                        )
+                    }
+                }
+                throw IOException("Session bootstrap failed with HTTP ${response.code}")
+            }
             val dto = try {
                 json.decodeFromString<SessionResponseDto>(body)
             } catch (error: Exception) {
@@ -97,6 +116,7 @@ class FortyMMApiClient(
         private const val SESSION_PATH = "/v1/session"
         private const val SESSION_COOKIE_NAME = "session"
         private const val CSRF_COOKIE_NAME = "csrf_token"
+        private val SESSION_ENDED_CODES = setOf("session_ended", "session_merged")
 
         internal fun newHttpClient(): OkHttpClient = OkHttpClient.Builder()
             .cookieJar(CookieJar.NO_COOKIES)
@@ -106,10 +126,16 @@ class FortyMMApiClient(
     }
 }
 
+sealed interface SessionBootstrapResult
+
 data class SessionBootstrap(
     val user: SessionUser,
     val credential: String,
-)
+) : SessionBootstrapResult
+
+data class EndedSession(
+    val reason: SessionEndReason,
+) : SessionBootstrapResult
 
 @Serializable
 private data class SessionResponseDto(
@@ -125,4 +151,16 @@ private data class SessionDataDto(
 private data class SessionUserDto(
     val id: String,
     val username: String,
+)
+
+@Serializable
+private data class SessionEndedResponseDto(
+    val detail: SessionEndedDetailDto,
+)
+
+@Serializable
+private data class SessionEndedDetailDto(
+    val code: String,
+    val message: String? = null,
+    val email: String? = null,
 )

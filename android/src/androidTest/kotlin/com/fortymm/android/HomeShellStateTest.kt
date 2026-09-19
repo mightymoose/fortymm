@@ -27,6 +27,24 @@ class HomeShellStateTest {
     }
 
     @Test
+    fun sessionEndedShowsThePersistedReason() {
+        composeRule.setContent {
+            FortyMMTheme {
+                HomeShell(
+                    SessionState.SessionEnded(
+                        message = "You've been signed out. Sign in to continue.",
+                        email = null,
+                    ),
+                    onRetry = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Signed out").assertIsDisplayed()
+        composeRule.onNodeWithText("You've been signed out. Sign in to continue.").assertIsDisplayed()
+    }
+
+    @Test
     fun retryableStartupShowsItsMessageAndRequestsRetry() {
         var retryCount = 0
         composeRule.setContent {

@@ -42,6 +42,23 @@ class AndroidSessionCredentialStoreTest {
     }
 
     @Test
+    fun sessionEndedReasonReplacesTheCredentialAndSurvivesANewStore() {
+        val store = AndroidSessionCredentialStore(context)
+        val reason = SessionEndReason(
+            message = "This guest session was merged into your account. Sign in to continue.",
+            email = "player@example.com",
+        )
+
+        assertEquals(CredentialSaveResult.Saved, store.save("merged-guest-credential"))
+        assertEquals(CredentialSaveResult.Saved, store.markSessionEnded(reason))
+
+        assertEquals(
+            CredentialLoadResult.SessionEnded(reason),
+            AndroidSessionCredentialStore(context).load(),
+        )
+    }
+
+    @Test
     fun unreadableStorageAndAFailedWriteAreNotReportedAsAnEmptyStore() {
         val credentialFile = File(credentialDirectory, "credential.bin")
         credentialFile.parentFile?.mkdirs()
