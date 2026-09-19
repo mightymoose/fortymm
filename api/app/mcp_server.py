@@ -217,6 +217,7 @@ from app.tournament_queries import (
     fixtures_by_event,
     visible_to,
 )
+from app.tournament_registration import set_registration_open
 from app.tournament_serialization import (
     serialize,
     shape_created_event_read,
@@ -1472,6 +1473,38 @@ async def transition_tournament(
             # Each carries its exact, domain-authored sentence — the self-transition's
             # single-ended wording, the illegal edge's two-ended wording, and the
             # go-live precondition's event-naming body — surfaced verbatim to the agent.
+            raise ToolError(str(exc)) from exc
+        return serialize(
+            tournament,
+            created_by_username=await creator_username(db, tournament),
+            current_user_id=actor.id,
+        )
+
+
+@mcp.tool
+async def set_tournament_registration(
+    tournament_id: uuid.UUID, is_open: bool
+) -> TournamentRead:
+    """Close or reopen registration on a published tournament you own.
+
+    This is the MCP twin of the HTTP close/reopen actions and uses the same locked,
+    audited policy.  It is deliberately not a lifecycle transition: publishing,
+    live, and archive remain the only lifecycle statuses.
+    """
+    user_id = _authenticated_user_id()
+    async with _tool_session(user_id) as db:
+        actor = await _load_user(db, user_id)
+        if actor is None:
+            raise ToolError("Not authenticated.")
+        try:
+            tournament = await set_registration_open(
+                db, tournament_id=tournament_id, actor=actor, is_open=is_open
+            )
+        except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
+            raise _map_tournament_write_tool_error(
+                exc, tournament_id=tournament_id, owner_denial="change registration for"
+            ) from exc
+        except IllegalTournamentTransitionError as exc:
             raise ToolError(str(exc)) from exc
         return serialize(
             tournament,

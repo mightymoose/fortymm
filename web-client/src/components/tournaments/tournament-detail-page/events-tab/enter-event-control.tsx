@@ -69,6 +69,7 @@ export const EnterEventControl = ({
 
   const state = entryControlState({
     status: tournament.status,
+    registrationOpen: tournament.registrationOpen,
     event,
     sessionLoaded,
     username,

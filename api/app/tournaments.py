@@ -120,6 +120,7 @@ from app.tournament_list import (
 from app.tournament_placement import place_fixture as place_fixture_core
 from app.tournament_queries import creator_username
 from app.tournament_queries import visible_to as _visible_to
+from app.tournament_registration import set_registration_open
 from app.tournament_serialization import (
     serialize,
     shape_created_event_read,
@@ -719,6 +720,54 @@ async def create_tournament_transition(
         # The three lifecycle 409s each carry their exact, domain-authored sentence
         # (``str(exc)``): the self-transition's single-ended wording, the illegal
         # edge's two-ended wording, and the go-live precondition's event-naming body.
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return serialize(
+        tournament,
+        created_by_username=await creator_username(db, tournament),
+        current_user_id=current_user.id,
+    )
+
+
+@router.post(
+    "/tournaments/{tournament_id}/registration/close",
+    response_model=TournamentRead,
+)
+async def close_tournament_registration(
+    tournament_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> TournamentRead:
+    try:
+        tournament = await set_registration_open(
+            db, tournament_id=tournament_id, actor=current_user, is_open=False
+        )
+    except _TOURNAMENT_WRITE_ERRORS as exc:
+        raise _map_tournament_write_error(exc) from exc
+    except IllegalTournamentTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return serialize(
+        tournament,
+        created_by_username=await creator_username(db, tournament),
+        current_user_id=current_user.id,
+    )
+
+
+@router.post(
+    "/tournaments/{tournament_id}/registration/reopen",
+    response_model=TournamentRead,
+)
+async def reopen_tournament_registration(
+    tournament_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> TournamentRead:
+    try:
+        tournament = await set_registration_open(
+            db, tournament_id=tournament_id, actor=current_user, is_open=True
+        )
+    except _TOURNAMENT_WRITE_ERRORS as exc:
+        raise _map_tournament_write_error(exc) from exc
+    except IllegalTournamentTransitionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return serialize(
         tournament,

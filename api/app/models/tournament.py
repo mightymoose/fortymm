@@ -144,6 +144,16 @@ class Tournament(Base):
         nullable=False,
         server_default=TournamentStatus.draft.value,
     )
+    # The registration window is deliberately distinct from lifecycle status: an
+    # announced tournament may temporarily stop admitting entries while it is still
+    # published.  ``registration_generation`` is monotonic, so work invalidated by a
+    # close can never become valid merely because a later reopen flips the boolean.
+    registration_open: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    registration_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
     # There is deliberately no ``start_date``/``end_date`` column pair any more
     # (#1511, "A tournament's dates run backwards, and an event can sit outside
     # them"). They used to be typed, independently-writable columns — nothing

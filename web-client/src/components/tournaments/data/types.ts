@@ -835,6 +835,9 @@ export interface Tournament {
   id: string
   name: string
   status: TournamentStatus
+  /** The owner-controlled admission window; lifecycle status remains unchanged. */
+  registrationOpen?: boolean
+  registrationGeneration?: number
   /** True when the current user may edit/delete this tournament; the API's
    * `can_edit`. Gates every mutation affordance — a non-creator sees the
    * read-only view. */

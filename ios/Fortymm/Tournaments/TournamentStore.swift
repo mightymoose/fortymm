@@ -22,6 +22,9 @@ struct TournamentService {
         struct Response: Decodable { let id: UUID }
         let _: Response = try await client.post("/v1/tournaments/\(id)/transitions", body: Body(to: to.rawValue))
     }
+    func setRegistration(_ id: UUID, open: Bool) async throws {
+        let _: TournamentDTO = try await client.post("/v1/tournaments/\(id)/registration/\(open ? "reopen" : "close")")
+    }
     func cutDraw(_ id: UUID, event: UUID) async throws {
         let _: [TournamentEventDTO.Fixture] = try await client.post("/v1/tournaments/\(id)/events/\(event)/draw")
     }

@@ -119,7 +119,23 @@ describe('EnterEventControl', () => {
     expect(page.queryWithdrawButton('Club Teams')).toBeNull()
   })
 
-  describe('the registration window (ADR-0017)', () => {
+  describe('the registration window', () => {
+    it('explains that registration is closed when a published owner closes the window', async () => {
+      page.render({
+        tournament: buildTournament({
+          status: 'published',
+          registrationOpen: false,
+        }),
+        event: buildEvent({ name: 'Open Singles' }),
+      })
+
+      const notice = await page.findRegistrationNotice()
+      expect(notice).toHaveTextContent('Entries locked')
+      expect(notice).toHaveTextContent('Registration for this tournament is closed.')
+      expect(page.queryEnterButton('Open Singles')).toBeNull()
+      expect(page.queryWithdrawButton('Open Singles')).toBeNull()
+    })
+
     // A draft nobody has published: the door is not locked, it is not built yet.
     // The player is told so — rendering an Enter button here would be a 409, and
     // rendering nothing would suggest the event has no entry at all.

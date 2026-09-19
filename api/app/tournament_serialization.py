@@ -35,6 +35,7 @@ from app.models import (
     ScheduleSolve,
     Tournament,
     TournamentEvent,
+    TournamentStatus,
 )
 from app.models.draw_type import StageDrawType
 from app.player_accounts import primary_player_reference
@@ -145,6 +146,14 @@ def _tournament_fields(
         "name": t.name,
         "description": t.description,
         "status": t.status,
+        "registration_open": (
+            t.registration_open
+            or (
+                t.status is TournamentStatus.published
+                and t.registration_generation == 0
+            )
+        ),
+        "registration_generation": t.registration_generation,
         "address": t.address,
         "table_catalogue": [table for table in t.tables if table.retired_at is None],
         "league_id": t.league_id,

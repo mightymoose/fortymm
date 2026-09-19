@@ -18,10 +18,22 @@ attribute here and both legs see it — the single overridable decision point su
 the split across two modules.
 """
 
+import uuid
 from typing import Literal, assert_never
 
-from app.models import Tournament, TournamentEvent, TournamentStatus
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models import (
+    Tournament,
+    TournamentEvent,
+    TournamentRegistrationWindowChange,
+    TournamentStatus,
+    User,
+)
 from app.models.tournament import EventLifecycleState
+from app.tournament_draw_limits import lock_draw_actor
+from app.tournament_edit import _load_owned_tournament_for_update
+from app.tournament_errors import IllegalTournamentTransitionError
 
 # The exhaustive ``match`` in ``_registration_closed_detail`` narrows against this
 # ``Literal``, so a fourth closed status added to the enum is a type error until
@@ -103,7 +115,43 @@ def registration_open(t: Tournament) -> bool:
     cannot quietly grow a fourth opinion about when registration is open. The routes
     ask their own enforcer; the *decision* lives here, exactly once.
     """
-    return t.status is TournamentStatus.published
+    # A generation of zero is the pre-window shape used by direct construction
+    # in older callers and fixtures. It was never an owner closure: every real
+    # window transition writes generation one or later. Preserve its historical
+    # meaning (published opens) while an explicit close remains false at a
+    # positive generation.
+    return t.status is TournamentStatus.published and (
+        t.registration_open or t.registration_generation == 0
+    )
+
+
+async def set_registration_open(
+    db: AsyncSession, *, tournament_id: uuid.UUID, actor: User, is_open: bool
+) -> Tournament:
+    """Close or reopen a published tournament's admission window atomically.
+
+    The held tournament lock is the same capacity serialization point used by entry,
+    withdrawal and go-live.  Every real change advances the generation and writes
+    immutable evidence; a no-op is intentionally successful for retry safety.
+    """
+    await lock_draw_actor(db, actor.id)
+    tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
+    if tournament.status is not TournamentStatus.published:
+        raise IllegalTournamentTransitionError(tournament.status.value, "registration")
+    if registration_open(tournament) != is_open:
+        tournament.registration_open = is_open
+        tournament.registration_generation += 1
+        db.add(
+            TournamentRegistrationWindowChange(
+                tournament_id=tournament.id,
+                actor_id=actor.id,
+                generation=tournament.registration_generation,
+                is_open=is_open,
+            )
+        )
+        await db.commit()
+        await db.refresh(tournament)
+    return tournament
 
 
 def entry_registration_refusal(t: Tournament, event: TournamentEvent) -> str | None:

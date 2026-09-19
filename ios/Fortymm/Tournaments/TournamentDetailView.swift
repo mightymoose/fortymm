@@ -137,6 +137,20 @@ struct TournamentDetailView: View {
     private func header(_ tournament: TournamentDTO) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             TournamentStatusBadge(status: tournament.status)
+            if tournament.status == .published {
+                Label(tournament.registrationOpen != false ? "Registration open" : "Registration closed", systemImage: tournament.registrationOpen != false ? "person.badge.plus" : "lock.fill")
+                if tournament.canEdit {
+                    Button(tournament.registrationOpen != false ? "Close registration" : "Reopen registration") {
+                        busy = true
+                        Task {
+                            do { try await service.setRegistration(tournament.id, open: tournament.registrationOpen == false); error = nil }
+                            catch { self.error = error.fmMessage }
+                            await store.load(force: true)
+                            busy = false
+                        }
+                    }.buttonStyle(.bordered).disabled(busy)
+                }
+            }
             Text(tournament.name).font(FMFont.display(34))
             Label(tournament.dateRange?.label ?? "Dates to be announced", systemImage: "calendar")
             Label(tournament.address?.label ?? "Venue to be announced", systemImage: "mappin.and.ellipse")

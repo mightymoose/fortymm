@@ -67,6 +67,7 @@ from app.models.tournament_event_reservation_table import (
 from app.models.tournament_event_stage import TournamentEventStage
 from app.models.tournament_event_stage_group import TournamentEventStageGroup
 from app.models.tournament_fixture import TournamentFixture
+from app.models.tournament_registration_window import TournamentRegistrationWindowChange
 from app.models.tournament_table import VenueTable
 from app.models.tournament_table_call_history import VenueTableCallHistory
 from app.models.tournament_table_outage import VenueTableOutage
@@ -126,6 +127,7 @@ __all__ = [
     "Tournament",
     "TournamentEntry",
     "TournamentEntryWithdrawal",
+    "TournamentRegistrationWindowChange",
     "TournamentDrawRevision",
     "TournamentEntryParticipation",
     "TournamentEntryRegistration",

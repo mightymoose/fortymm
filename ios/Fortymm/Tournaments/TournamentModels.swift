@@ -43,6 +43,8 @@ struct TournamentDTO: Decodable, Identifiable {
     let name: String
     let description: String?
     let status: TournamentStatus
+    let registrationOpen: Bool
+    let registrationGeneration: Int
     let canEdit: Bool
     let distanceMiles: Double?
     let createdByUsername: String

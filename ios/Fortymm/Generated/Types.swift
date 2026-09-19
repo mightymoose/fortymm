@@ -723,6 +723,16 @@ internal protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/transitions`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/transitions/post(create_tournament_transition_v1_tournaments__tournament_id__transitions_post)`.
     func createTournamentTransitionV1TournamentsTournamentIdTransitionsPost(_ input: Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Input) async throws -> Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Output
+    /// Close Tournament Registration
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/registration/close`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/registration/close/post(close_tournament_registration_v1_tournaments__tournament_id__registration_close_post)`.
+    func closeTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost(_ input: Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.Input) async throws -> Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.Output
+    /// Reopen Tournament Registration
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/registration/reopen`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/registration/reopen/post(reopen_tournament_registration_v1_tournaments__tournament_id__registration_reopen_post)`.
+    func reopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost(_ input: Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.Input) async throws -> Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.Output
     /// Create Event
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/events`.
@@ -2332,6 +2342,32 @@ extension APIProtocol {
             path: path,
             headers: headers,
             body: body
+        ))
+    }
+    /// Close Tournament Registration
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/registration/close`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/registration/close/post(close_tournament_registration_v1_tournaments__tournament_id__registration_close_post)`.
+    internal func closeTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost(
+        path: Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.Input.Path,
+        headers: Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.Input.Headers = .init()
+    ) async throws -> Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.Output {
+        try await closeTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost(Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// Reopen Tournament Registration
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/registration/reopen`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/registration/reopen/post(reopen_tournament_registration_v1_tournaments__tournament_id__registration_reopen_post)`.
+    internal func reopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost(
+        path: Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.Input.Path,
+        headers: Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.Input.Headers = .init()
+    ) async throws -> Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.Output {
+        try await reopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost(Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.Input(
+            path: path,
+            headers: headers
         ))
     }
     /// Create Event
@@ -11278,6 +11314,10 @@ internal enum Components {
             internal var description: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/status`.
             internal var status: Components.Schemas.TournamentStatus
+            /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/registration_open`.
+            internal var registrationOpen: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/registration_generation`.
+            internal var registrationGeneration: Swift.Int
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/address`.
             internal struct AddressPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/address/value1`.
@@ -11366,6 +11406,8 @@ internal enum Components {
             ///   - name:
             ///   - description:
             ///   - status:
+            ///   - registrationOpen:
+            ///   - registrationGeneration:
             ///   - address:
             ///   - tableCatalogue:
             ///   - leagueId:
@@ -11385,6 +11427,8 @@ internal enum Components {
                 name: Swift.String,
                 description: Swift.String? = nil,
                 status: Components.Schemas.TournamentStatus,
+                registrationOpen: Swift.Bool,
+                registrationGeneration: Swift.Int,
                 address: Components.Schemas.TournamentDetailRead.AddressPayload? = nil,
                 tableCatalogue: [Components.Schemas.TournamentTable],
                 leagueId: Swift.String,
@@ -11404,6 +11448,8 @@ internal enum Components {
                 self.name = name
                 self.description = description
                 self.status = status
+                self.registrationOpen = registrationOpen
+                self.registrationGeneration = registrationGeneration
                 self.address = address
                 self.tableCatalogue = tableCatalogue
                 self.leagueId = leagueId
@@ -11424,6 +11470,8 @@ internal enum Components {
                 case name
                 case description
                 case status
+                case registrationOpen = "registration_open"
+                case registrationGeneration = "registration_generation"
                 case address
                 case tableCatalogue = "table_catalogue"
                 case leagueId = "league_id"
@@ -12615,6 +12663,10 @@ internal enum Components {
             internal var description: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentRead/status`.
             internal var status: Components.Schemas.TournamentStatus
+            /// - Remark: Generated from `#/components/schemas/TournamentRead/registration_open`.
+            internal var registrationOpen: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/TournamentRead/registration_generation`.
+            internal var registrationGeneration: Swift.Int
             /// - Remark: Generated from `#/components/schemas/TournamentRead/address`.
             internal struct AddressPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/TournamentRead/address/value1`.
@@ -12657,6 +12709,8 @@ internal enum Components {
             ///   - name:
             ///   - description:
             ///   - status:
+            ///   - registrationOpen:
+            ///   - registrationGeneration:
             ///   - address:
             ///   - tableCatalogue:
             ///   - leagueId:
@@ -12671,6 +12725,8 @@ internal enum Components {
                 name: Swift.String,
                 description: Swift.String? = nil,
                 status: Components.Schemas.TournamentStatus,
+                registrationOpen: Swift.Bool,
+                registrationGeneration: Swift.Int,
                 address: Components.Schemas.TournamentRead.AddressPayload? = nil,
                 tableCatalogue: [Components.Schemas.TournamentTable],
                 leagueId: Swift.String,
@@ -12685,6 +12741,8 @@ internal enum Components {
                 self.name = name
                 self.description = description
                 self.status = status
+                self.registrationOpen = registrationOpen
+                self.registrationGeneration = registrationGeneration
                 self.address = address
                 self.tableCatalogue = tableCatalogue
                 self.leagueId = leagueId
@@ -12700,6 +12758,8 @@ internal enum Components {
                 case name
                 case description
                 case status
+                case registrationOpen = "registration_open"
+                case registrationGeneration = "registration_generation"
                 case address
                 case tableCatalogue = "table_catalogue"
                 case leagueId = "league_id"
@@ -24924,6 +24984,364 @@ internal enum Operations {
             /// - Throws: An error if `self` is not `.unprocessableContent`.
             /// - SeeAlso: `.unprocessableContent`.
             internal var unprocessableContent: Operations.CreateTournamentTransitionV1TournamentsTournamentIdTransitionsPost.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Close Tournament Registration
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/registration/close`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/registration/close/post(close_tournament_registration_v1_tournaments__tournament_id__registration_close_post)`.
+    internal enum CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost {
+        internal static let id: Swift.String = "close_tournament_registration_v1_tournaments__tournament_id__registration_close_post"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/registration/close/POST/path`.
+            internal struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/registration/close/POST/path/tournament_id`.
+                internal var tournamentId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - tournamentId:
+                internal init(tournamentId: Swift.String) {
+                    self.tournamentId = tournamentId
+                }
+            }
+            internal var path: Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.Input.Path
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/registration/close/POST/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            internal init(
+                path: Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.Input.Path,
+                headers: Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/registration/close/POST/responses/200/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/registration/close/POST/responses/200/content/application\/json`.
+                    case json(Components.Schemas.TournamentRead)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.TournamentRead {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/registration/close/post(close_tournament_registration_v1_tournaments__tournament_id__registration_close_post)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            internal var ok: Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/registration/close/POST/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/registration/close/POST/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/registration/close/post(close_tournament_registration_v1_tournaments__tournament_id__registration_close_post)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.CloseTournamentRegistrationV1TournamentsTournamentIdRegistrationClosePost.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Reopen Tournament Registration
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/registration/reopen`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/registration/reopen/post(reopen_tournament_registration_v1_tournaments__tournament_id__registration_reopen_post)`.
+    internal enum ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost {
+        internal static let id: Swift.String = "reopen_tournament_registration_v1_tournaments__tournament_id__registration_reopen_post"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/registration/reopen/POST/path`.
+            internal struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/registration/reopen/POST/path/tournament_id`.
+                internal var tournamentId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - tournamentId:
+                internal init(tournamentId: Swift.String) {
+                    self.tournamentId = tournamentId
+                }
+            }
+            internal var path: Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.Input.Path
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/registration/reopen/POST/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            internal init(
+                path: Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.Input.Path,
+                headers: Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/registration/reopen/POST/responses/200/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/registration/reopen/POST/responses/200/content/application\/json`.
+                    case json(Components.Schemas.TournamentRead)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.TournamentRead {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/registration/reopen/post(reopen_tournament_registration_v1_tournaments__tournament_id__registration_reopen_post)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            internal var ok: Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/registration/reopen/POST/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/registration/reopen/POST/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/registration/reopen/post(reopen_tournament_registration_v1_tournaments__tournament_id__registration_reopen_post)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.ReopenTournamentRegistrationV1TournamentsTournamentIdRegistrationReopenPost.Output.UnprocessableContent {
                 get throws {
                     switch self {
                     case let .unprocessableContent(response):
