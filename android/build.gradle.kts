@@ -1,3 +1,7 @@
+import java.util.zip.ZipFile
+
+fun buildConfigString(value: String) = "\"${value.replace("\"", "\\\"")}\""
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -7,6 +11,45 @@ plugins {
 android {
     namespace = "com.fortymm.android"
     compileSdk = 36
+
+    flavorDimensions += "environment"
+
+    productFlavors {
+        create("dev") {
+            dimension = "environment"
+            applicationId = "com.fortymm.android.dev"
+            buildConfigField(
+                "String",
+                "API_BASE_URL",
+                buildConfigString(providers.gradleProperty("devApiBaseUrl").getOrElse("http://127.0.0.1:8080")),
+            )
+        }
+        create("qa") {
+            dimension = "environment"
+            applicationId = "com.fortymm.android.qa"
+            buildConfigField(
+                "String",
+                "API_BASE_URL",
+                buildConfigString(providers.gradleProperty("qaApiBaseUrl").getOrElse("http://127.0.0.1:8080")),
+            )
+        }
+        create("production") {
+            dimension = "environment"
+            applicationId = "com.fortymm.android"
+            buildConfigField("String", "API_BASE_URL", "\"https://uat.fortymm.com\"")
+        }
+    }
+
+    sourceSets {
+        getByName("dev") {
+            manifest.srcFile("src/nonrelease/AndroidManifest.xml")
+            res.srcDirs("src/dev/res", "src/nonrelease/res")
+        }
+        getByName("qa") {
+            manifest.srcFile("src/nonrelease/AndroidManifest.xml")
+            res.srcDirs("src/qa/res", "src/nonrelease/res")
+        }
+    }
 
     defaultConfig {
         applicationId = "com.fortymm.android"
@@ -20,11 +63,67 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+tasks.register("verifyVariantArtifacts") {
+    dependsOn("assembleDevRelease", "assembleQaRelease", "assembleProductionRelease")
+
+    doLast {
+        val sdkRoot = System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT")
+            ?: error("Set ANDROID_HOME or ANDROID_SDK_ROOT to inspect packaged Android manifests")
+        val aapt = file("$sdkRoot/build-tools/35.0.0/aapt")
+        check(aapt.canExecute()) { "Expected aapt at $aapt" }
+
+        val variants = mapOf(
+            "dev" to ("com.fortymm.android.dev" to "FortyMM Dev"),
+            "qa" to ("com.fortymm.android.qa" to "FortyMM QA"),
+            "production" to ("com.fortymm.android" to "FortyMM"),
+        )
+        val apks = variants.mapValues { (flavor, _) ->
+            val apkDirectory = layout.buildDirectory.dir("outputs/apk/$flavor/release").get().asFile
+            apkDirectory.listFiles()?.singleOrNull { it.extension == "apk" }
+                ?: error("Expected one $flavor release APK in $apkDirectory")
+        }
+
+        apks.forEach { (flavor, apk) ->
+            val (applicationId, label) = variants.getValue(flavor)
+            val badgingText = providers.exec {
+                commandLine(aapt, "dump", "badging", apk)
+            }.standardOutput.asText.get()
+            check("package: name='$applicationId'" in badgingText) {
+                "$flavor APK has the wrong application ID"
+            }
+            check("application-label:'$label'" in badgingText) {
+                "$flavor APK has the wrong launcher label"
+            }
+        }
+
+        val productionApk = apks.getValue("production")
+        ZipFile(productionApk).use { archive ->
+            check(archive.getEntry("AndroidManifest.xml") != null) {
+                "Production APK is missing its Android manifest"
+            }
+            check(archive.getEntry("res/xml/network_security_config.xml") == null) {
+                "Production APK must not package a nonrelease cleartext policy"
+            }
+        }
+
+        val manifestText = providers.exec {
+            commandLine(aapt, "dump", "xmltree", productionApk, "AndroidManifest.xml")
+        }.standardOutput.asText.get()
+        check("usesCleartextTraffic" in manifestText && "(type 0x12)0xffffffff" in manifestText) {
+            "Production APK manifest must set usesCleartextTraffic=false"
+        }
+        check("networkSecurityConfig" !in manifestText) {
+            "Production APK manifest must not reference a network security config"
+        }
     }
 }
 
@@ -43,6 +142,7 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }

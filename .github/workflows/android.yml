@@ -60,11 +60,19 @@ jobs:
       - name: Enable KVM for the emulator
         run: sudo chmod 666 /dev/kvm
 
-      - name: Build, install, launch, and verify Home
+      - name: Build, install, launch, and verify transport policies
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 26
           target: google_apis
           arch: x86_64
           profile: pixel_2
-          script: ./gradlew :android:connectedDebugAndroidTest --console=plain
+          script: >
+            ./gradlew
+            :android:connectedDevDebugAndroidTest
+            :android:connectedQaDebugAndroidTest
+            :android:connectedProductionDebugAndroidTest
+            --console=plain
+
+      - name: Verify packaged variant manifests
+        run: ./gradlew :android:verifyVariantArtifacts --console=plain
