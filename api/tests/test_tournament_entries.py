@@ -2498,6 +2498,46 @@ async def test_admissions_share_the_callers_transaction(
     assert len(await _active_entries(db_session, second_id)) == 2
 
 
+async def test_duplicate_admission_refusal_keeps_the_callers_transaction_usable(
+    db_session: AsyncSession,
+) -> None:
+    """A composable duplicate refusal leaves its caller free to continue or commit."""
+    actor = await make_user(db_session, f"duplicate-{uuid.uuid4().hex[:8]}")
+    first = await _make_event(db_session)
+    second = await _make_event(db_session)
+    second.tournament_id = first.tournament_id
+    tournament_id, first_id, second_id = first.tournament_id, first.id, second.id
+    await db_session.commit()
+
+    async with db_session.begin():
+        await admit_to_event(
+            db_session,
+            tournament_id=tournament_id,
+            event_id=first_id,
+            actor=actor,
+            user_id=None,
+        )
+        with pytest.raises(EntryRefusedError) as exc_info:
+            await admit_to_event(
+                db_session,
+                tournament_id=tournament_id,
+                event_id=first_id,
+                actor=actor,
+                user_id=None,
+            )
+        assert exc_info.value.refusal is EntryRefusal.already_entered
+        await admit_to_event(
+            db_session,
+            tournament_id=tournament_id,
+            event_id=second_id,
+            actor=actor,
+            user_id=None,
+        )
+
+    assert len(await _active_entries(db_session, first_id)) == 1
+    assert len(await _active_entries(db_session, second_id)) == 1
+
+
 async def test_verb_non_owner_naming_another_player_is_not_owner_error(
     db_session: AsyncSession,
 ) -> None:
