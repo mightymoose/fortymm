@@ -1,8 +1,25 @@
-# FortyMM Android shell
+# FortyMM Android app
 
-This module is the Android entry point for FortyMM. It is deliberately a
-read-only, dark Home shell until the later A01 slices add session and Home data.
-It has no tabs, sign-in control, fake statistics, or network dependency.
+This module is the Android entry point for FortyMM. It presents a read-only,
+dark Home shell backed by the real guest session. It has no tabs, sign-in
+control, fake statistics, or dashboard request yet.
+
+## Session bootstrap
+
+`FortyMMApplication` owns the process-wide `SessionOwner` and OkHttp client.
+On launch the owner restores the Android Keystore-backed credential, requests
+`GET /v1/session`, captures its root-scoped session and CSRF cookies, and only
+reports `Ready` after a new or rotated session credential is durably saved.
+The Home shell observes that state and renders loading, the API-returned
+username, or a retryable startup error.
+
+Run the focused JVM session tests and the API 26 device tests with:
+
+```bash
+./gradlew :android:testDevDebugUnitTest \
+  --tests com.fortymm.android.session.SessionOwnerTest
+./gradlew :android:connectedDevDebugAndroidTest
+```
 
 ## Pinned baseline
 
