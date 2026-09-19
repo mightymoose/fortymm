@@ -15,8 +15,8 @@ description = "Tear down a QA stack and reclaim its volumes + built images (--al
 run = "./scripts/qa-down.sh"
 
 [tasks.android-launch-check]
-description = "Build, install, launch, and check the Android Home shell on a running emulator"
-run = "./gradlew :android:connectedDebugAndroidTest --console=plain"
+description = "Build, install, launch, and check the Android development build on a running emulator"
+run = "./gradlew :android:connectedDevDebugAndroidTest --console=plain"
 
 [tasks.release-beta]
 description = "Release to test channels: redeploy UAT, then build + upload the iOS app to TestFlight"

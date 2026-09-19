@@ -42,7 +42,42 @@ and boot an API 26 AVD, then run the same public launch check used by CI:
 mise run android-launch-check
 ```
 
-The command builds the debug APK and test APK, installs them, launches
-`MainActivity`, and checks the public Compose semantics for the FortyMM Home
-shell. The GitHub Actions workflow performs the equivalent clean-checkout run
-on an API 26 Google APIs emulator.
+The command builds the development debug APK and test APK, installs them,
+launches `MainActivity`, and checks the public Compose semantics for the FortyMM
+Home shell. The GitHub Actions workflow performs the equivalent clean-checkout
+run on an API 26 Google APIs emulator.
+
+## Variants and local endpoints
+
+The installable variants are isolated by application ID:
+
+| Variant | Build task | Application ID | Launcher label | Endpoint |
+| --- | --- | --- | --- | --- |
+| Development | `:android:assembleDevDebug` | `com.fortymm.android.dev` | FortyMM Dev | `http://127.0.0.1:8080` by default |
+| QA | `:android:assembleQaDebug` | `com.fortymm.android.qa` | FortyMM QA | `http://127.0.0.1:8080` by default |
+| Release | `:android:assembleProductionRelease` | `com.fortymm.android` | FortyMM | `https://uat.fortymm.com` |
+
+Development and QA accept only local cleartext hosts (`localhost`, `127.0.0.1`,
+and emulator host `10.0.2.2`). To point either at an isolated local API at build
+time, pass its endpoint while building and installing that variant:
+
+```bash
+./gradlew :android:installDevDebug -PdevApiBaseUrl=http://10.0.2.2:8080
+scripts/qa-up.sh android-qa
+# Use the QA port that qa-up.sh prints (the default is 8085 when available).
+./gradlew :android:installQaDebug -PqaApiBaseUrl=http://10.0.2.2:<QA_PORT>
+```
+
+The release variant has no endpoint property or cleartext exception. Verify the
+three packaged application IDs and labels, plus the release manifest's cleartext
+policy, with:
+
+```bash
+./gradlew :android:verifyVariantArtifacts
+```
+
+Run the controlled-server transport probes on an API 26 emulator with:
+
+```bash
+./gradlew :android:connectedDevDebugAndroidTest :android:connectedQaDebugAndroidTest :android:connectedProductionDebugAndroidTest
+```
