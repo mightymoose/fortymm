@@ -21,7 +21,7 @@ Translate the requested goal into the user's intent, material preconditions, obs
 
 Complete the normal journey first. Verify an outcome, rather than considering a successful click or submission proof of success. When relevant, leave and return, refresh, reopen, or relogin to confirm persistence.
 
-Then explore roughly 3–7 high-value, realistic nearby cases and at least one meaningful recovery or state-transition scenario. Favor depth at risky boundaries over random broad clicking. Stop when additional exploration has diminishing returns; increase depth for destructive, stateful, permission-sensitive, or concurrency-sensitive features.
+Then explore roughly 3–7 high-value, realistic nearby cases and at least one meaningful recovery or state-transition scenario. Favor depth at risky boundaries over random broad clicking. Stop when additional exploration has diminishing returns; increase depth for destructive, stateful, permission-sensitive, or concurrency-sensitive features. Perform destructive mutations (including delete/revisit probes) only with confirmed disposable test data or the user's explicit approval.
 
 Useful probes include:
 
@@ -41,7 +41,7 @@ Do not stop at the first defect unless it blocks further progress. Deliberately 
 
 ## Evidence and reporting
 
-Only report observable user impact. For each finding, capture reproducible steps, expected and actual behavior, surface plus relevant device/viewport and account/session context, visible error text, and a screenshot. Add video or a Playwright trace for timing- or sequence-dependent failures when useful. Capture evidence after deliberate reproduction; do not report speculation.
+Only report observable user impact. For each finding, capture reproducible steps, expected and actual behavior, surface plus relevant device/viewport and account/session context, visible error text, and a screenshot. Add video or a Playwright trace for timing- or sequence-dependent failures when useful. Use disposable accounts where possible; before attaching, committing, or sharing any artifact, review it for credentials, session material, and private data, then redact or omit it as needed. Capture evidence after deliberate reproduction; do not report speculation.
 
 Use conservative severity:
 

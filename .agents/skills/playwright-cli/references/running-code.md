@@ -90,9 +90,10 @@ playwright-cli run-code "async page => {
 ## Wait Strategies
 
 ```bash
-# Wait for network idle
+# Wait for a user-visible readiness condition. Avoid `networkidle`: polling,
+# streaming, and analytics can keep requests open after the UI is ready.
 playwright-cli run-code "async page => {
-  await page.waitForLoadState('networkidle');
+  await page.getByRole('heading', { name: 'Dashboard' }).waitFor();
 }"
 
 # Wait for specific element

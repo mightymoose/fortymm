@@ -171,7 +171,7 @@ playwright-cli attach tw-XXXX
 
 **Do not** just open the app url with playwright-cli, always go through the test to capture any custom setup done there.
 
-Walk the scenario's `Steps:` one by one with `playwright-cli`, treating the spec as the plan and the live app as the source of truth. If a step is vague ("click the button" — which button?), references an element that no longer exists, or contradicts the app's actual behaviour, use your judgement: update the spec to match what the app really does, then keep going. Editing the spec mid-generation is expected.
+Walk the scenario's `Steps:` one by one with `playwright-cli`, treating the spec as the acceptance plan. Clarify vague steps ("click the button" — which button?) from the observable UI. If an element no longer exists or the app contradicts a user-visible step or expected outcome, stop and ask whether this is an intentional product change or a regression before editing the spec or generating a test that codifies the new behavior. Editing the spec mid-generation is appropriate only after that confirmation.
 
 Every action prints the equivalent Playwright TypeScript (see [test-generation.md](test-generation.md)):
 
@@ -194,7 +194,7 @@ import { test, expect } from './fixtures';   // or '@playwright/test' if no fixt
 test.describe('Signing in and out', () => {
   test('should sign in', async ({ page }) => {
     // 1. Navigate to the application
-    // (handled by the seed fixture)
+    // (handled by the seed fixture, or copied from the standalone seed)
 
     // 2. Type 'John Doe' into the username field
     await page.getByRole('textbox', { name: 'username' }).fill('John Doe');
@@ -215,12 +215,13 @@ Rules:
 - **One test per file.** File path, describe name, and test name come verbatim from the spec (minus the ordinal).
 - Prefix each numbered step with a `// N. <step text>` comment before its actions.
 - Use the describe group name verbatim from the spec (no `1.` ordinal).
-- Import from `./fixtures` if the project has one; otherwise `@playwright/test`.
+- When a reusable fixture exists, import it relative to the generated file. For example, a scenario at `tests/<group>/<scenario>.spec.ts` imports a fixture at `tests/fixtures.ts` as `../fixtures`; derive the path instead of assuming `./fixtures`.
+- If the seed is a standalone test rather than a reusable fixture, copy its required navigation, login, and feature-flag setup into every generated scenario before that scenario's steps. Do not assume the standalone seed executes when a generated test is run.
 - **Important**: close the CLI session and stop the background test before moving to the next scenario.
 
 ### 2.3 Generate multiple scenarios
 
-Loop 2.2 over the targeted scenarios one at a time, restarting the seed between each so every test starts from a clean page. This is safe to parallelise due to unique generated session names - just make sure each test run is stopped.
+Loop 2.2 over the targeted scenarios one at a time, restarting the seed between each so every test starts from a clean page. Do not parallelise generation: scenarios share the seed session and cleanup boundary.
 
 ### 2.4 Run generated tests
 

@@ -9,18 +9,15 @@ Save and restore complete browser state including cookies and storage.
 ### Save Storage State
 
 ```bash
-# Save to auto-generated filename (storage-state-{timestamp}.json)
-playwright-cli state-save
-
-# Save to specific filename
-playwright-cli state-save my-auth-state.json
+# Save under the repository's ignored Playwright CLI directory.
+playwright-cli state-save .playwright-cli/storage-state.json
 ```
 
 ### Restore Storage State
 
 ```bash
 # Load storage state from file
-playwright-cli state-load my-auth-state.json
+playwright-cli state-load .playwright-cli/storage-state.json
 
 # Reload page to apply cookies
 playwright-cli open https://example.com
@@ -240,10 +237,10 @@ playwright-cli fill e2 "password123"
 playwright-cli click e3
 
 # Save the authenticated state
-playwright-cli state-save auth.json
+playwright-cli state-save .playwright-cli/auth.json
 
 # Step 2: Later, restore state and skip login
-playwright-cli state-load auth.json
+playwright-cli state-load .playwright-cli/auth.json
 playwright-cli open https://app.example.com/dashboard
 # Already logged in!
 ```
@@ -256,20 +253,19 @@ playwright-cli open https://example.com
 playwright-cli eval "() => { document.cookie = 'session=abc123'; localStorage.setItem('user', 'john'); }"
 
 # Save state to file
-playwright-cli state-save my-session.json
+playwright-cli state-save .playwright-cli/my-session.json
 
 # ... later, in a new session ...
 
 # Restore state
-playwright-cli state-load my-session.json
+playwright-cli state-load .playwright-cli/my-session.json
 playwright-cli open https://example.com
 # Cookies and localStorage are restored!
 ```
 
 ## Security Notes
 
-- Never commit storage state files containing auth tokens
-- Add `*.auth-state.json` to `.gitignore`
+- Never commit storage state files containing auth tokens; save every state file under the already-ignored `.playwright-cli/` directory.
 - Delete state files after automation completes
 - Use environment variables for sensitive data
 - By default, sessions run in-memory mode which is safer for sensitive operations
