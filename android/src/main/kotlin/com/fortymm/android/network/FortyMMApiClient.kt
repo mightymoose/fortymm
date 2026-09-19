@@ -16,11 +16,7 @@ import java.util.UUID
 /** The one HTTP and JSON boundary used by Android features. */
 class FortyMMApiClient(
     baseUrl: HttpUrl,
-    private val httpClient: OkHttpClient = OkHttpClient.Builder()
-        .cookieJar(CookieJar.NO_COOKIES)
-        .followRedirects(false)
-        .followSslRedirects(false)
-        .build(),
+    private val httpClient: OkHttpClient = newHttpClient(),
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
     private val apiRoot = baseUrl.newBuilder()
@@ -97,10 +93,16 @@ class FortyMMApiClient(
         }
     }
 
-    private companion object {
-        const val SESSION_PATH = "/v1/session"
-        const val SESSION_COOKIE_NAME = "session"
-        const val CSRF_COOKIE_NAME = "csrf_token"
+    companion object {
+        private const val SESSION_PATH = "/v1/session"
+        private const val SESSION_COOKIE_NAME = "session"
+        private const val CSRF_COOKIE_NAME = "csrf_token"
+
+        internal fun newHttpClient(): OkHttpClient = OkHttpClient.Builder()
+            .cookieJar(CookieJar.NO_COOKIES)
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
     }
 }
 
