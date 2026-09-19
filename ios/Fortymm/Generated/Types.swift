@@ -11315,9 +11315,9 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/status`.
             internal var status: Components.Schemas.TournamentStatus
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/registration_open`.
-            internal var registrationOpen: Swift.Bool?
+            internal var registrationOpen: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/registration_generation`.
-            internal var registrationGeneration: Swift.Int?
+            internal var registrationGeneration: Swift.Int
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/address`.
             internal struct AddressPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/address/value1`.
@@ -11427,8 +11427,8 @@ internal enum Components {
                 name: Swift.String,
                 description: Swift.String? = nil,
                 status: Components.Schemas.TournamentStatus,
-                registrationOpen: Swift.Bool? = nil,
-                registrationGeneration: Swift.Int? = nil,
+                registrationOpen: Swift.Bool,
+                registrationGeneration: Swift.Int,
                 address: Components.Schemas.TournamentDetailRead.AddressPayload? = nil,
                 tableCatalogue: [Components.Schemas.TournamentTable],
                 leagueId: Swift.String,
@@ -12664,9 +12664,9 @@ internal enum Components {
             /// - Remark: Generated from `#/components/schemas/TournamentRead/status`.
             internal var status: Components.Schemas.TournamentStatus
             /// - Remark: Generated from `#/components/schemas/TournamentRead/registration_open`.
-            internal var registrationOpen: Swift.Bool?
+            internal var registrationOpen: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/TournamentRead/registration_generation`.
-            internal var registrationGeneration: Swift.Int?
+            internal var registrationGeneration: Swift.Int
             /// - Remark: Generated from `#/components/schemas/TournamentRead/address`.
             internal struct AddressPayload: Codable, Hashable, Sendable {
                 /// - Remark: Generated from `#/components/schemas/TournamentRead/address/value1`.
@@ -12725,8 +12725,8 @@ internal enum Components {
                 name: Swift.String,
                 description: Swift.String? = nil,
                 status: Components.Schemas.TournamentStatus,
-                registrationOpen: Swift.Bool? = nil,
-                registrationGeneration: Swift.Int? = nil,
+                registrationOpen: Swift.Bool,
+                registrationGeneration: Swift.Int,
                 address: Components.Schemas.TournamentRead.AddressPayload? = nil,
                 tableCatalogue: [Components.Schemas.TournamentTable],
                 leagueId: Swift.String,

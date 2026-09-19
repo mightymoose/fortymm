@@ -101,7 +101,7 @@ struct TournamentEventView: View {
     @ViewBuilder
     private func registration(_ tournament: TournamentDTO, _ event: TournamentEventDTO) -> some View {
         if event.format == "singles", session.user != nil {
-            if tournament.status != .published {
+            if tournament.status != .published || !tournament.registrationOpen {
                 Text(tournament.status == .draft ? "Registration has not opened yet." : "Registration is closed.")
                     .font(FMFont.ui(14)).foregroundStyle(FMColor.fg3)
             } else if event.entry(for: session.user?.id) != nil {

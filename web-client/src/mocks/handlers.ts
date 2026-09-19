@@ -58,6 +58,7 @@ import {
   type NearMeFilter,
   placeFixture as placeTournamentFixture,
   requestScheduleSolve as requestTournamentScheduleSolve,
+  setTournamentRegistration,
   transitionTournament,
   uncutDraw as uncutTournamentDraw,
   updateEvent as updateTournamentEvent,
@@ -2023,6 +2024,23 @@ export const handlers = [
         )
       }
       return HttpResponse.json(result.tournament, { status: 201 })
+    },
+  ),
+  http.post(
+    '*/v1/tournaments/:tournamentId/registration/:action',
+    async ({ params }) => {
+      await delay(250)
+      const result = setTournamentRegistration(
+        String(params.tournamentId),
+        params.action === 'reopen',
+      )
+      if (!result.ok) {
+        return detail(
+          result.status === 409 ? result.detail : 'Tournament not found.',
+          result.status,
+        )
+      }
+      return HttpResponse.json(result.tournament)
     },
   ),
   http.post(

@@ -5362,15 +5362,9 @@ export interface components {
             /** Description */
             description: string | null;
             status: components["schemas"]["TournamentStatus"];
-            /**
-             * Registration Open
-             * @default false
-             */
+            /** Registration Open */
             registration_open: boolean;
-            /**
-             * Registration Generation
-             * @default 0
-             */
+            /** Registration Generation */
             registration_generation: number;
             address: components["schemas"]["Address"] | null;
             /** Table Catalogue */
@@ -5848,15 +5842,9 @@ export interface components {
             /** Description */
             description: string | null;
             status: components["schemas"]["TournamentStatus"];
-            /**
-             * Registration Open
-             * @default false
-             */
+            /** Registration Open */
             registration_open: boolean;
-            /**
-             * Registration Generation
-             * @default 0
-             */
+            /** Registration Generation */
             registration_generation: number;
             address: components["schemas"]["Address"] | null;
             /** Table Catalogue */

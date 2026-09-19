@@ -165,6 +165,8 @@ type StoredTournament = Omit<
   'events' | 'draw_type_catalogue' | 'date_range' | 'registration_open' | 'registration_generation'
 > & {
   events: StoredEvent[]
+  registration_open?: boolean
+  registration_generation?: number
 }
 
 // The dev current user — must line up with the mocked session in handlers.ts so
@@ -1418,8 +1420,8 @@ function readDetail(t: StoredTournament): TournamentDetailRead {
   // near-me query keeps.
   return {
     ...t,
-    registration_open: t.status === 'published',
-    registration_generation: t.status === 'draft' ? 0 : 1,
+    registration_open: t.registration_open ?? t.status === 'published',
+    registration_generation: t.registration_generation ?? (t.status === 'draft' ? 0 : 1),
     events: t.events.map(readEvent),
     distance_miles: null,
     // The served draw-type catalogue — every draw type the server can actually run, with
@@ -1828,6 +1830,8 @@ export function createTournament(body: TournamentCreate): TournamentRead {
     name: body.name,
     description: body.description ?? null,
     status: 'draft',
+    registration_open: false,
+    registration_generation: 0,
     // An omitted `league_id` resolves to the default league, exactly as on the
     // server (ADR-0783): the column is NOT NULL, so a created tournament always
     // names the ladder it will be judged on — the caller only says which when it
@@ -1949,8 +1953,8 @@ function readOf({ events, ...read }: StoredTournament): TournamentRead {
   void events
   return {
     ...read,
-    registration_open: read.status === 'published',
-    registration_generation: read.status === 'draft' ? 0 : 1,
+    registration_open: read.registration_open ?? read.status === 'published',
+    registration_generation: read.registration_generation ?? (read.status === 'draft' ? 0 : 1),
   }
 }
 
@@ -2344,6 +2348,31 @@ export function transitionTournament(
     ...existing,
     events,
     status: to,
+    registration_open: to === 'published',
+    registration_generation:
+      (existing.registration_generation ?? (existing.status === 'draft' ? 0 : 1)) +
+      (to === 'published' || to === 'live' ? 1 : 0),
+    updated_at: new Date().toISOString(),
+  }
+  replace(next)
+  return { ok: true, tournament: readOf(next) }
+}
+
+export function setTournamentRegistration(
+  id: string,
+  isOpen: boolean,
+): TransitionResult {
+  const owned = requireOwned(id)
+  if (!owned.ok) return owned
+  const existing = owned.tournament
+  if (existing.status !== 'published') {
+    return { ok: false, status: 409, detail: 'Registration can only change while published.' }
+  }
+  if ((existing.registration_open ?? true) === isOpen) return { ok: true, tournament: readOf(existing) }
+  const next: StoredTournament = {
+    ...existing,
+    registration_open: isOpen,
+    registration_generation: (existing.registration_generation ?? 1) + 1,
     updated_at: new Date().toISOString(),
   }
   replace(next)
