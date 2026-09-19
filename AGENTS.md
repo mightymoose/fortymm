@@ -7,6 +7,11 @@
 Issues and specs live in GitHub Issues for `mightymoose/fortymm`.
 See `docs/agents/issue-tracker.md`.
 
+### Triage labels
+
+Triage uses the default canonical label vocabulary.
+See `docs/agents/triage-labels.md`.
+
 ### Domain docs
 
 Single-context layout: root `CONTEXT.md` and `docs/adr/`.
