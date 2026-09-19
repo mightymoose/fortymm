@@ -25,5 +25,10 @@ deploy/observability/charts/
 ios/Fortymm.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 .qa-artifacts/
 
+# Android/Gradle local outputs.
+.gradle/
+build/
+android/build/
+
 # Stray QA/debug screenshots dropped at the repo root (they belong in .qa-review/).
 /*.png

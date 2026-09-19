@@ -1,0 +1,62 @@
+name: android
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle.properties'
+      - 'mise.toml'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'gradle/**'
+      - 'gradlew'
+      - 'gradlew.bat'
+      - 'build.gradle.kts'
+      - 'settings.gradle.kts'
+      - 'gradle.properties'
+      - 'mise.toml'
+      - '.github/workflows/android.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-launch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      # AGP 8.13.2 requires Gradle 8.13 and JDK 17. Keep the JDK patch aligned
+      # with mise.toml so local and CI builds execute the same bytecode toolchain.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17.0.17+10'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install pinned Android SDK packages
+        run: >
+          sdkmanager --install
+          "platform-tools"
+          "platforms;android-36"
+          "build-tools;35.0.0"
+          "emulator"
+          "system-images;android-26;google_apis;x86_64"
+
+      - name: Build, install, launch, and verify Home
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 26
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          script: ./gradlew :android:connectedDebugAndroidTest --console=plain
