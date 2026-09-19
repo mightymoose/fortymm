@@ -38,6 +38,7 @@ playwright-cli run-code "async page => {
 
 # Clear geolocation override
 playwright-cli run-code "async page => {
+  await page.context().setGeolocation(null);
   await page.context().clearPermissions();
 }"
 ```

@@ -19,9 +19,10 @@ Goal: produce a spec file (e.g. `specs/<feature>.plan.md`) that enumerates the s
 Check the workspace has Playwright installed before anything else:
 
 ```bash
-# Either of these confirms a workspace:
+# A Playwright configuration locates the workspace, and this command verifies
+# the actual `@playwright/test` runner used by seed and generated tests.
 test -f playwright.config.ts || test -f playwright.config.js
-npx --no-install playwright --version
+npx --no-install playwright test --version
 ```
 
 If there is no Playwright install, bootstrap one and let the user pick the defaults:
