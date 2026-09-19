@@ -64,6 +64,8 @@ def _tournament_read_payload(**overrides: Any) -> dict[str, Any]:
         "name": "Summer Open",
         "description": None,
         "status": TournamentStatus.draft,
+        "registration_open": False,
+        "registration_generation": 0,
         "address": _stored_address(),
         "table_catalogue": [],
         "league_id": uuid.uuid4(),
