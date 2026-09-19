@@ -1,6 +1,7 @@
 [tools]
 node = "26.1.0"
 python = "3.13"
+java = "temurin-17.0.17+10"
 # UAT deploys to a local k3d Kubernetes cluster via Helm (scripts/redeploy-uat.sh).
 helm = "latest"
 k3d = "latest"
@@ -12,6 +13,10 @@ run = "./scripts/redeploy-uat.sh"
 [tasks.qa-down]
 description = "Tear down a QA stack and reclaim its volumes + built images (--all for every stack, --prune-cache for the buildx cache)"
 run = "./scripts/qa-down.sh"
+
+[tasks.android-launch-check]
+description = "Build, install, launch, and check the Android Home shell on a running emulator"
+run = "./gradlew :android:connectedDebugAndroidTest --console=plain"
 
 [tasks.release-beta]
 description = "Release to test channels: redeploy UAT, then build + upload the iOS app to TestFlight"
