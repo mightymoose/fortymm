@@ -268,7 +268,7 @@ async def _enforce_event_has_room(db: AsyncSession, event: TournamentEvent) -> N
     )
 
 
-async def enter_event(
+async def admit_to_event(
     db: AsyncSession,
     *,
     tournament_id: uuid.UUID,
@@ -319,8 +319,9 @@ async def enter_event(
       commit, so no pre-flight ``SELECT`` opens a race, and nothing is written on any
       earlier refusal (each is judged before the INSERT).
 
-    Commits and refreshes before returning. Never raises ``HTTPException`` — the caller
-    adapts each domain exception to its transport.
+    Does not commit or roll back: its caller owns the transaction, so several event
+    admissions can succeed or fail together. Never raises ``HTTPException`` — the
+    caller adapts each domain exception to its transport.
     """
     # ----- the fork (ADR-0784) ----------------------------------------------
     # One line, decided from ``user_id`` alone, before anything is loaded: WHO is being
@@ -421,26 +422,16 @@ async def enter_event(
         db.add(entry)
     else:
         entry.status = TournamentEntryStatus.entered
-    try:
-        await db.flush()
-        await restore_event_eligibility(db, entry.id, actor.id)
-        db.add(
-            TournamentEntryRegistration(
-                entry_id=entry.id, registered_by_account_id=actor.id
-            )
+    await db.flush()
+    await restore_event_eligibility(db, entry.id, actor.id)
+    db.add(
+        TournamentEntryRegistration(
+            entry_id=entry.id, registered_by_account_id=actor.id
         )
-        from app.event_lifecycle import reconcile_event
+    )
+    from app.event_lifecycle import reconcile_event
 
-        await reconcile_event(db, event.id)
-        await db.commit()
-    except IntegrityError:
-        # The database is the final authority on duplicate active registration,
-        # including canonical Player identities changed by concurrent reconciliation.
-        await db.rollback()
-        raise EntryRefusedError(
-            EntryRefusal.already_entered,
-            "You have already entered this event.",
-        ) from None
+    await reconcile_event(db, event.id)
 
     return TournamentEntrantRead(
         id=entry.id,
@@ -456,6 +447,43 @@ async def enter_event(
         # detail read lists.
         rating=rating,
     )
+
+
+async def enter_event(
+    db: AsyncSession,
+    *,
+    tournament_id: uuid.UUID,
+    event_id: uuid.UUID,
+    actor: User,
+    user_id: uuid.UUID | None,
+    client_ip: str | None = None,
+) -> TournamentEntrantRead:
+    """Admit one entrant and retain the legacy one-request transaction boundary.
+
+    HTTP and MCP use this compatibility wrapper, so their successful requests still
+    commit before they receive an entrant and duplicate entries still become the
+    established ``already_entered`` refusal. Payment operations can instead compose
+    :func:`admit_to_event` calls inside one caller-owned transaction.
+    """
+    try:
+        entrant = await admit_to_event(
+            db,
+            tournament_id=tournament_id,
+            event_id=event_id,
+            actor=actor,
+            user_id=user_id,
+            client_ip=client_ip,
+        )
+        await db.commit()
+        return entrant
+    except IntegrityError:
+        # The database is the final authority on duplicate active registration,
+        # including canonical Player identities changed by concurrent reconciliation.
+        await db.rollback()
+        raise EntryRefusedError(
+            EntryRefusal.already_entered,
+            "You have already entered this event.",
+        ) from None
 
 
 async def _load_entry(
