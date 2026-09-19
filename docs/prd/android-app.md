@@ -130,7 +130,7 @@ Extend the playable flow to rated matches with a real opponent, result proposal,
 - [ ] The first proposal freezes the scratchpad. Corrections submit a complete legal board as a new immutable proposal.
 - [ ] The opponent accepts the exact proposal displayed. A superseding result forces a fresh review instead of accepting a newer unseen score.
 - [ ] Distinguish waiting on the opponent, awaiting the player's response and completed matches; reflect the server's retirement window and resolution without presenting silence as human acceptance.
-- [ ] Official outcomes and proposal history render from server data, including later administrator revisions; Android adds no organizer correction capability in this slice.
+- [ ] Official outcomes and proposal history render from server data, including later administrator revisions; Android adds no organizer correction capability in this slice. The current match-details negotiation block flattens only the final result, so A05 owns a backwards-compatible API schema or endpoint that exposes proposal and official-revision history, including each official revision's resolution method, actor and timestamp, before requiring these displays.
 - [ ] Two identities across Android and web/iOS can propose, correct and accept; concurrent corrections, stale acceptance, duplicate taps and interrupted responses are covered.
 
 ### Blocked by
