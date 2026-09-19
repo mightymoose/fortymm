@@ -1,8 +1,8 @@
 import { http, HttpResponse } from 'msw'
-import { screen, waitFor } from '@/test/utilities'
+import { fireEvent, screen, waitFor } from '@/test/utilities'
 import { server } from '@/mocks/server'
 import { rolesPage } from './roles-page.page'
-import { DEFAULT_ROLE_ID, PERM_VIEW, buildRolesSeed } from './roles-page.factory'
+import { DEFAULT_ROLE_ID, PERM_VIEW, PLAIN_ROLE_ID, buildRolesSeed } from './roles-page.factory'
 
 // ADR-0016: one role — `User` — is held by every account on the platform. The
 // API refuses to delete or rename it (400), so the page must not offer either.
@@ -170,12 +170,14 @@ describe('RolesPage — deleting a role', () => {
     await user.click(await rolesPage.within(detail).findDeleteButton())
     const confirm = await screen.findByRole('button', { name: 'Delete role' })
 
-    await user.click(confirm)
+    // Dispatch both activations before React can render the pending disabled
+    // state; a UI-only guard leaves this synchronous double-submit window.
+    fireEvent.click(confirm)
+    fireEvent.click(confirm)
     await deleteStarted
-    expect(confirm).toBeDisabled()
-
-    await user.click(confirm)
     expect(deleteCount).toBe(1)
+    await waitFor(() => expect(confirm).toBeDisabled())
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
 
     releaseDelete()
   })
@@ -204,6 +206,19 @@ describe('RolesPage — deleting a role', () => {
 
     await user.click(screen.getByRole('button', { name: 'Delete role' }))
     await waitFor(() => expect(deleteCount).toBe(2))
+  })
+
+  it('closes confirmation before successful deletion selects another role', async () => {
+    const user = rolesPage.user()
+    const state = rolesPage.render()
+
+    const detail = await rolesPage.select('Owner')
+    await user.click(await rolesPage.within(detail).findDeleteButton())
+    await user.click(await screen.findByRole('button', { name: 'Delete role' }))
+
+    await waitFor(() => expect(state.roles.has(PLAIN_ROLE_ID)).toBe(false))
+    expect(screen.queryByRole('button', { name: 'Delete role' })).not.toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 1, name: 'User' })).toBeInTheDocument()
   })
 })
 
