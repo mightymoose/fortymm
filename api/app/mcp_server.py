@@ -210,7 +210,6 @@ from app.tournament_lifecycle import delete_tournament as delete_tournament_core
 from app.tournament_lifecycle import (
     transition_tournament as transition_tournament_core,
 )
-from app.tournament_registration import set_registration_open
 from app.tournament_list import list_tournament_details, tournament_detail
 from app.tournament_placement import place_fixture as place_fixture_core
 from app.tournament_queries import (
@@ -218,6 +217,7 @@ from app.tournament_queries import (
     fixtures_by_event,
     visible_to,
 )
+from app.tournament_registration import set_registration_open
 from app.tournament_serialization import (
     serialize,
     shape_created_event_read,
@@ -1482,7 +1482,9 @@ async def transition_tournament(
 
 
 @mcp.tool
-async def set_tournament_registration(tournament_id: uuid.UUID, is_open: bool) -> TournamentRead:
+async def set_tournament_registration(
+    tournament_id: uuid.UUID, is_open: bool
+) -> TournamentRead:
     """Close or reopen registration on a published tournament you own.
 
     This is the MCP twin of the HTTP close/reopen actions and uses the same locked,
@@ -1504,7 +1506,11 @@ async def set_tournament_registration(tournament_id: uuid.UUID, is_open: bool) -
             ) from exc
         except IllegalTournamentTransitionError as exc:
             raise ToolError(str(exc)) from exc
-        return serialize(tournament, created_by_username=await creator_username(db, tournament), current_user_id=actor.id)
+        return serialize(
+            tournament,
+            created_by_username=await creator_username(db, tournament),
+            current_user_id=actor.id,
+        )
 
 
 @mcp.tool

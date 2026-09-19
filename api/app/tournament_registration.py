@@ -115,7 +115,14 @@ def registration_open(t: Tournament) -> bool:
     cannot quietly grow a fourth opinion about when registration is open. The routes
     ask their own enforcer; the *decision* lives here, exactly once.
     """
-    return t.status is TournamentStatus.published and t.registration_open
+    # A generation of zero is the pre-window shape used by direct construction
+    # in older callers and fixtures. It was never an owner closure: every real
+    # window transition writes generation one or later. Preserve its historical
+    # meaning (published opens) while an explicit close remains false at a
+    # positive generation.
+    return t.status is TournamentStatus.published and (
+        t.registration_open or t.registration_generation == 0
+    )
 
 
 async def set_registration_open(
@@ -131,13 +138,17 @@ async def set_registration_open(
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
     if tournament.status is not TournamentStatus.published:
         raise IllegalTournamentTransitionError(tournament.status.value, "registration")
-    if tournament.registration_open != is_open:
+    if registration_open(tournament) != is_open:
         tournament.registration_open = is_open
         tournament.registration_generation += 1
-        db.add(TournamentRegistrationWindowChange(
-            tournament_id=tournament.id, actor_id=actor.id,
-            generation=tournament.registration_generation, is_open=is_open,
-        ))
+        db.add(
+            TournamentRegistrationWindowChange(
+                tournament_id=tournament.id,
+                actor_id=actor.id,
+                generation=tournament.registration_generation,
+                is_open=is_open,
+            )
+        )
         await db.commit()
         await db.refresh(tournament)
     return tournament

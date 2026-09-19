@@ -25,5 +25,7 @@ class TournamentRegistrationWindowChange(Base):
     generation: Mapped[int] = mapped_column(Integer, nullable=False)
     is_open: Mapped[bool] = mapped_column(Boolean, nullable=False)
     changed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=text("clock_timestamp()")
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("clock_timestamp()"),
     )

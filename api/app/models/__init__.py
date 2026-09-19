@@ -56,7 +56,6 @@ from app.models.tournament_entry_member import TournamentEntryMember
 from app.models.tournament_entry_participation import TournamentEntryParticipation
 from app.models.tournament_entry_registration import TournamentEntryRegistration
 from app.models.tournament_entry_withdrawal import TournamentEntryWithdrawal
-from app.models.tournament_registration_window import TournamentRegistrationWindowChange
 from app.models.tournament_event_draw_settings import TournamentEventDrawSettings
 from app.models.tournament_event_group_reservation import (
     TournamentEventGroupReservation,
@@ -68,6 +67,7 @@ from app.models.tournament_event_reservation_table import (
 from app.models.tournament_event_stage import TournamentEventStage
 from app.models.tournament_event_stage_group import TournamentEventStageGroup
 from app.models.tournament_fixture import TournamentFixture
+from app.models.tournament_registration_window import TournamentRegistrationWindowChange
 from app.models.tournament_table import VenueTable
 from app.models.tournament_table_call_history import VenueTableCallHistory
 from app.models.tournament_table_outage import VenueTableOutage

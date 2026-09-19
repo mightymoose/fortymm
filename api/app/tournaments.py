@@ -112,7 +112,6 @@ from app.tournament_geocoding import (
 from app.tournament_lifecycle import create_tournament as create_tournament_core
 from app.tournament_lifecycle import delete_tournament as delete_tournament_core
 from app.tournament_lifecycle import transition_tournament
-from app.tournament_registration import set_registration_open
 from app.tournament_list import (
     NearMeFilter,
     list_tournament_details,
@@ -121,6 +120,7 @@ from app.tournament_list import (
 from app.tournament_placement import place_fixture as place_fixture_core
 from app.tournament_queries import creator_username
 from app.tournament_queries import visible_to as _visible_to
+from app.tournament_registration import set_registration_open
 from app.tournament_serialization import (
     serialize,
     shape_created_event_read,
@@ -728,9 +728,13 @@ async def create_tournament_transition(
     )
 
 
-@router.post("/tournaments/{tournament_id}/registration/close", response_model=TournamentRead)
+@router.post(
+    "/tournaments/{tournament_id}/registration/close",
+    response_model=TournamentRead,
+)
 async def close_tournament_registration(
-    tournament_id: uuid.UUID, db: AsyncSession = Depends(get_session),
+    tournament_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TournamentRead:
     try:
@@ -741,12 +745,20 @@ async def close_tournament_registration(
         raise _map_tournament_write_error(exc) from exc
     except IllegalTournamentTransitionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return serialize(tournament, created_by_username=await creator_username(db, tournament), current_user_id=current_user.id)
+    return serialize(
+        tournament,
+        created_by_username=await creator_username(db, tournament),
+        current_user_id=current_user.id,
+    )
 
 
-@router.post("/tournaments/{tournament_id}/registration/reopen", response_model=TournamentRead)
+@router.post(
+    "/tournaments/{tournament_id}/registration/reopen",
+    response_model=TournamentRead,
+)
 async def reopen_tournament_registration(
-    tournament_id: uuid.UUID, db: AsyncSession = Depends(get_session),
+    tournament_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TournamentRead:
     try:
@@ -757,7 +769,11 @@ async def reopen_tournament_registration(
         raise _map_tournament_write_error(exc) from exc
     except IllegalTournamentTransitionError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return serialize(tournament, created_by_username=await creator_username(db, tournament), current_user_id=current_user.id)
+    return serialize(
+        tournament,
+        created_by_username=await creator_username(db, tournament),
+        current_user_id=current_user.id,
+    )
 
 
 # ----- event routes --------------------------------------------------------
