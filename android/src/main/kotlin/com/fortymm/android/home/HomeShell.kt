@@ -63,6 +63,12 @@ fun HomeShell(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Button(
+                        onClick = onStartNewGuest,
+                        modifier = Modifier.padding(top = FortyMMSpace.S4.dp),
+                    ) {
+                        Text("Start new guest")
+                    }
                 }
 
                 is SessionState.UnreadableStorage -> {

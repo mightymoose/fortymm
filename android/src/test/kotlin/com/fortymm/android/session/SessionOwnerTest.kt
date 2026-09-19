@@ -176,6 +176,20 @@ class SessionOwnerTest {
             laterProcess.state.value,
         )
         assertEquals(1, server.requestCount)
+
+        val replacementUserId = UUID.fromString("952dff7f-9bf5-42fa-a2cb-8d0e28ac6c04")
+        server.enqueue(
+            sessionResponse(replacementUserId, "replacement-guest")
+                .addHeader("Set-Cookie", "session=replacement-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=replacement-csrf; Path=/"),
+        )
+        laterProcess.startNewGuest()
+
+        assertEquals(
+            SessionState.Ready(SessionUser(replacementUserId, "replacement-guest")),
+            laterProcess.state.value,
+        )
+        assertEquals(2, server.requestCount)
     }
 
     @Test

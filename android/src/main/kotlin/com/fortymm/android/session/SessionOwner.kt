@@ -64,10 +64,10 @@ class SessionOwner(
     }
 
     suspend fun startNewGuest() {
-        if (mutableState.value !is SessionState.UnreadableStorage) return
+        if (!canStartNewGuest()) return
         val job = synchronized(bootstrapLock) {
             bootstrapJob?.takeIf { it.isActive }
-                ?: applicationScope.async { resetUnreadableStorageAndBootstrap() }
+                ?: applicationScope.async { clearSessionAndBootstrap() }
                     .also { bootstrapJob = it }
         }
         job.await()
@@ -183,18 +183,29 @@ class SessionOwner(
         }
     }
 
-    private suspend fun resetUnreadableStorageAndBootstrap() {
-        if (mutableState.value !is SessionState.UnreadableStorage) return
+    private fun canStartNewGuest(): Boolean =
+        mutableState.value is SessionState.UnreadableStorage ||
+            mutableState.value is SessionState.SessionEnded
+
+    private suspend fun clearSessionAndBootstrap() {
+        if (!canStartNewGuest()) return
+        val previousState = mutableState.value
         val cleared = withContext(Dispatchers.IO) { credentialStore.clear() }
         if (cleared == CredentialClearResult.Failed) {
-            mutableState.value = SessionState.UnreadableStorage(
-                "We couldn't clear the unreadable saved session. Please try again.",
-            )
+            mutableState.value = when (previousState) {
+                is SessionState.SessionEnded -> previousState.copy(
+                    message = "We couldn't clear the ended session. Please try again.",
+                )
+                else -> SessionState.UnreadableStorage(
+                    "We couldn't clear the unreadable saved session. Please try again.",
+                )
+            }
             return
         }
         pendingCredentialRecovery = null
         pendingPersistence = null
         pendingSessionEnd = null
+        mutableState.value = SessionState.Loading
         bootstrapOnce()
     }
 }

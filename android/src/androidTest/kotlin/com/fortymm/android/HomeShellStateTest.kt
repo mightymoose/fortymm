@@ -28,6 +28,7 @@ class HomeShellStateTest {
 
     @Test
     fun sessionEndedShowsThePersistedReason() {
+        var startCount = 0
         composeRule.setContent {
             FortyMMTheme {
                 HomeShell(
@@ -36,12 +37,15 @@ class HomeShellStateTest {
                         email = null,
                     ),
                     onRetry = {},
+                    onStartNewGuest = { startCount += 1 },
                 )
             }
         }
 
         composeRule.onNodeWithText("Signed out").assertIsDisplayed()
         composeRule.onNodeWithText("You've been signed out. Sign in to continue.").assertIsDisplayed()
+        composeRule.onNodeWithText("Start new guest").performClick()
+        composeRule.runOnIdle { assertEquals(1, startCount) }
     }
 
     @Test
