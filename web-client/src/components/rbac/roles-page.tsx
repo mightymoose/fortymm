@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties } from 'react'
+import { useMemo, useRef, useState, type CSSProperties } from 'react'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
 import { toast } from 'sonner'
@@ -332,6 +332,9 @@ function RoleDetail({
   const setUserRoles = useSetUserRoles()
   const [tab, setTab] = useState<'permissions' | 'members'>('permissions')
   const [confirmDelete, setConfirmDelete] = useState(false)
+  // React renders mutation state asynchronously, so this closes the gap where
+  // two activation events arrive before `isPending` disables the action.
+  const deleteInFlight = useRef(false)
 
   const accent = colorFor(role.name)
   const members = useMemo(() => users.filter((u) => u.role_ids.includes(role.id)), [users, role.id])
@@ -487,11 +490,26 @@ function RoleDetail({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleteRole.isPending}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() =>
-                deleteRole.mutate(role.id, { onSuccess: () => onSelect(null) })
-              }
+              disabled={deleteRole.isPending}
+              onClick={(event) => {
+                // Keep the dialog open while the mutation settles: disabling
+                // its action closes the double-submit window, while retaining
+                // a deliberate retry path after a refusal.
+                event.preventDefault()
+                if (deleteInFlight.current) return
+                deleteInFlight.current = true
+                deleteRole.mutate(role.id, {
+                  onSuccess: () => {
+                    setConfirmDelete(false)
+                    onSelect(null)
+                  },
+                  onSettled: () => {
+                    deleteInFlight.current = false
+                  },
+                })
+              }}
             >
               Delete role
             </AlertDialogAction>

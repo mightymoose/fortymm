@@ -38,10 +38,11 @@ This is the highest-nuance tournament verb, and every nuance is preserved exactl
   **singles-only 400** (:class:`NonSinglesEntryError`) → the **registration-window 409**
   (``registration_closed``) → the **rating-eligibility 409** (``rating_ineligible``) →
   the **capacity 409** (``event_full``) → the **already-entered 409**
-  (``already_entered``, caught as the partial unique index's ``IntegrityError`` at
-  commit). The permanent refusals precede the transient ones (a doubles event and a
-  wrong-arm director are facts that will not change; a full event or a shut window
-  invite a retry), and every one of the four coded refusals is an :class:`EntryRefusal`
+  (``already_entered``, caught from the deferred uniqueness constraint inside the
+  admission savepoint). The permanent refusals precede the transient ones (a doubles
+  event and a wrong-arm director are facts that will not change; a full event or a
+  shut window invite a retry), and every one of the four coded refusals is an
+  :class:`EntryRefusal`
   (ADR-0968). A director's entry is judged by the SAME evaluator, the SAME capacity lock
   and the SAME four codes — there is no ``force`` (ADR-0784), so ownership is never an
   eligibility bypass.
@@ -56,7 +57,7 @@ import uuid
 from typing import assert_never
 
 from pyrate_limiter import Duration, Rate
-from sqlalchemy import exists, or_, select
+from sqlalchemy import exists, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -268,7 +269,7 @@ async def _enforce_event_has_room(db: AsyncSession, event: TournamentEvent) -> N
     )
 
 
-async def enter_event(
+async def admit_to_event(
     db: AsyncSession,
     *,
     tournament_id: uuid.UUID,
@@ -315,12 +316,14 @@ async def enter_event(
       (ADR-0968).
       The rating the eligibility guard judged them on is read ONCE and put on the
       created
-      entrant. The duplicate refusal is the partial unique index's ``IntegrityError`` at
-      commit, so no pre-flight ``SELECT`` opens a race, and nothing is written on any
+      entrant. The duplicate refusal is the deferred uniqueness constraint's
+      ``IntegrityError`` inside a savepoint, so no pre-flight ``SELECT`` opens a race,
+      and nothing is written on any
       earlier refusal (each is judged before the INSERT).
 
-    Commits and refreshes before returning. Never raises ``HTTPException`` — the caller
-    adapts each domain exception to its transport.
+    Does not commit or roll back: its caller owns the transaction, so several event
+    admissions can succeed or fail together. Never raises ``HTTPException`` — the
+    caller adapts each domain exception to its transport.
     """
     # ----- the fork (ADR-0784) ----------------------------------------------
     # One line, decided from ``user_id`` alone, before anything is loaded: WHO is being
@@ -412,31 +415,38 @@ async def enter_event(
         .order_by(TournamentEntry.created_at, TournamentEntry.id)
         .limit(1)
     )
-    if entry is None:
-        entry = TournamentEntry(
-            event_id=event.id,
-            user_id=entrant.id,
-            added_by_user_id=added_by_user_id,
-        )
-        db.add(entry)
-    else:
-        entry.status = TournamentEntryStatus.entered
     try:
-        await db.flush()
-        await restore_event_eligibility(db, entry.id, actor.id)
-        db.add(
-            TournamentEntryRegistration(
-                entry_id=entry.id, registered_by_account_id=actor.id
+        # A savepoint lets this domain verb translate the duplicate active-entry index
+        # without poisoning its caller's transaction. The outer transaction still owns
+        # whether earlier or later admissions commit together.
+        async with db.begin_nested():
+            if entry is None:
+                entry = TournamentEntry(
+                    event_id=event.id,
+                    user_id=entrant.id,
+                    added_by_user_id=added_by_user_id,
+                )
+                db.add(entry)
+            else:
+                entry.status = TournamentEntryStatus.entered
+            await db.flush()
+            # The canonical-player uniqueness guard is a deferred PostgreSQL
+            # constraint trigger. Check just that guard while the savepoint is still
+            # available, then restore its normal deferred mode for the outer caller.
+            await db.execute(text("SET CONSTRAINTS check_entry_event IMMEDIATE"))
+            await db.execute(text("SET CONSTRAINTS check_entry_event DEFERRED"))
+            await restore_event_eligibility(db, entry.id, actor.id)
+            db.add(
+                TournamentEntryRegistration(
+                    entry_id=entry.id, registered_by_account_id=actor.id
+                )
             )
-        )
-        from app.event_lifecycle import reconcile_event
+            from app.event_lifecycle import reconcile_event
 
-        await reconcile_event(db, event.id)
-        await db.commit()
+            await reconcile_event(db, event.id)
     except IntegrityError:
         # The database is the final authority on duplicate active registration,
         # including canonical Player identities changed by concurrent reconciliation.
-        await db.rollback()
         raise EntryRefusedError(
             EntryRefusal.already_entered,
             "You have already entered this event.",
@@ -456,6 +466,45 @@ async def enter_event(
         # detail read lists.
         rating=rating,
     )
+
+
+async def enter_event(
+    db: AsyncSession,
+    *,
+    tournament_id: uuid.UUID,
+    event_id: uuid.UUID,
+    actor: User,
+    user_id: uuid.UUID | None,
+    client_ip: str | None = None,
+) -> TournamentEntrantRead:
+    """Admit one entrant and retain the legacy one-request transaction boundary.
+
+    HTTP and MCP use this compatibility wrapper, so their successful requests still
+    commit before they receive an entrant and duplicate entries still become the
+    established ``already_entered`` refusal. Payment operations can instead compose
+    :func:`admit_to_event` calls inside one caller-owned transaction.
+    """
+    entrant = await admit_to_event(
+        db,
+        tournament_id=tournament_id,
+        event_id=event_id,
+        actor=actor,
+        user_id=user_id,
+        client_ip=client_ip,
+    )
+    try:
+        await db.commit()
+    except IntegrityError:
+        # Compatibility callers own this one-request transaction. A deferred
+        # integrity trigger can still fail at commit (for example, after a
+        # concurrent canonical-player reconciliation), and keeps the established
+        # already-entered refusal at the HTTP and MCP boundary.
+        await db.rollback()
+        raise EntryRefusedError(
+            EntryRefusal.already_entered,
+            "You have already entered this event.",
+        ) from None
+    return entrant
 
 
 async def _load_entry(

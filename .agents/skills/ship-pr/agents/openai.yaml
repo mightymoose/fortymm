@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ship PR"
+  short_description: "Push and harden a PR until fully green"
+  default_prompt: "Use $ship-pr to publish this branch and iterate until CI passes and Codex approves."

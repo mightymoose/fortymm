@@ -53,6 +53,7 @@ from app.models import (
     User,
     UserLeagueRating,
 )
+from app.tournament_entries import admit_to_event
 from app.tournament_entries import enter_event as enter_event_verb
 from app.tournament_entries import withdraw_from_event as withdraw_from_event_verb
 from app.tournament_errors import (
@@ -2435,6 +2436,106 @@ async def test_verb_owner_enters_another_player_recording_the_adder(
     assert entrant.username == player.username
     (row,) = await _active_entries(db_session, event.id)
     assert (row.user_id, row.added_by_user_id) == (player.id, owner.id)
+
+
+async def test_admissions_share_the_callers_transaction(
+    db_session: AsyncSession,
+) -> None:
+    """Two event admissions commit together, and a later refusal rolls both back."""
+    actor = await make_user(db_session, f"checkout-{uuid.uuid4().hex[:8]}")
+    actor_id = actor.id
+    first = await _make_event(db_session)
+    second = await _make_event(db_session, max_players=1)
+    second.tournament_id = first.tournament_id
+    other = await make_user(db_session, f"existing-{uuid.uuid4().hex[:8]}")
+    db_session.add(TournamentEntry(event_id=second.id, user_id=other.player_id))
+    tournament_id, first_id, second_id = first.tournament_id, first.id, second.id
+    await db_session.commit()
+
+    with pytest.raises(EntryRefusedError) as exc_info:
+        async with db_session.begin():
+            await admit_to_event(
+                db_session,
+                tournament_id=tournament_id,
+                event_id=first_id,
+                actor=actor,
+                user_id=None,
+            )
+            await admit_to_event(
+                db_session,
+                tournament_id=tournament_id,
+                event_id=second_id,
+                actor=actor,
+                user_id=None,
+            )
+    assert exc_info.value.refusal is EntryRefusal.event_full
+    assert await _all_entries(db_session, first_id) == []
+    assert len(await _all_entries(db_session, second_id)) == 1
+
+    second = await db_session.get(TournamentEvent, second_id)
+    assert second is not None
+    second.max_players = 2
+    await db_session.commit()
+    async with db_session.begin():
+        actor = await db_session.get(User, actor_id)
+        assert actor is not None
+        await admit_to_event(
+            db_session,
+            tournament_id=tournament_id,
+            event_id=first_id,
+            actor=actor,
+            user_id=None,
+        )
+        await admit_to_event(
+            db_session,
+            tournament_id=tournament_id,
+            event_id=second_id,
+            actor=actor,
+            user_id=None,
+        )
+
+    assert len(await _active_entries(db_session, first_id)) == 1
+    assert len(await _active_entries(db_session, second_id)) == 2
+
+
+async def test_duplicate_admission_refusal_keeps_the_callers_transaction_usable(
+    db_session: AsyncSession,
+) -> None:
+    """A composable duplicate refusal leaves its caller free to continue or commit."""
+    actor = await make_user(db_session, f"duplicate-{uuid.uuid4().hex[:8]}")
+    first = await _make_event(db_session)
+    second = await _make_event(db_session)
+    second.tournament_id = first.tournament_id
+    tournament_id, first_id, second_id = first.tournament_id, first.id, second.id
+    await db_session.commit()
+
+    async with db_session.begin():
+        await admit_to_event(
+            db_session,
+            tournament_id=tournament_id,
+            event_id=first_id,
+            actor=actor,
+            user_id=None,
+        )
+        with pytest.raises(EntryRefusedError) as exc_info:
+            await admit_to_event(
+                db_session,
+                tournament_id=tournament_id,
+                event_id=first_id,
+                actor=actor,
+                user_id=None,
+            )
+        assert exc_info.value.refusal is EntryRefusal.already_entered
+        await admit_to_event(
+            db_session,
+            tournament_id=tournament_id,
+            event_id=second_id,
+            actor=actor,
+            user_id=None,
+        )
+
+    assert len(await _active_entries(db_session, first_id)) == 1
+    assert len(await _active_entries(db_session, second_id)) == 1
 
 
 async def test_verb_non_owner_naming_another_player_is_not_owner_error(
