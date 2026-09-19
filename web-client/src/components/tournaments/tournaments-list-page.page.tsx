@@ -28,12 +28,12 @@ const scoped = (container: Container) => ({
     return container.getByLabelText(/Search tournaments/)
   },
   getStatusTab(label: string) {
-    return container.getByRole('tab', { name: label })
+    return container.getByRole('radio', { name: label })
   },
   /** Every status tab, in render order — so a test can assert the tab strip itself
    * rather than only that a named tab exists. */
   getStatusTabs(): HTMLElement[] {
-    return container.getAllByRole('tab')
+    return container.getAllByRole('radio')
   },
   getNewButton() {
     return container.getAllByRole('button', { name: /New tournament/ })[0]

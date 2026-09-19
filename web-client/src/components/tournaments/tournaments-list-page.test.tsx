@@ -232,7 +232,7 @@ describe('TournamentsListPage', () => {
 
       expect(tournamentsListPagePage.getSearch()).toHaveValue('Bay')
       expect(tournamentsListPagePage.getStatusTab('Published')).toHaveAttribute(
-        'aria-selected',
+        'aria-checked',
         'true',
       )
       expect(tournamentsListPagePage.getCard('Bay Area Open 2026')).toBeInTheDocument()
@@ -243,7 +243,7 @@ describe('TournamentsListPage', () => {
       await renderList({}, '/tournaments?status=someoldvalue')
 
       expect(tournamentsListPagePage.getStatusTab('All')).toHaveAttribute(
-        'aria-selected',
+        'aria-checked',
         'true',
       )
       // Nothing is filtered out — the whole list renders.

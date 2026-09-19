@@ -101,7 +101,7 @@ test.describe('Matches list', () => {
     await page.goto('/matches')
     await expect(page.getByText('nguyen.t')).toBeVisible()
 
-    await page.getByRole('tab', { name: /^live/i }).click()
+    await page.getByRole('radio', { name: /^live/i }).click()
 
     await expect(page.getByText('nguyen.t')).toBeVisible()
     await expect(page.getByText('okafor.d')).toHaveCount(0)

@@ -17,7 +17,7 @@ const scoped = (container: Container) => ({
   },
   /** A status tab by its accessible name, e.g. /up next/i, "Live". */
   getTab(name: RegExp | string) {
-    return container.getByRole("tab", { name });
+    return container.getByRole("radio", { name });
   },
   queryTab(name: RegExp | string) {
     return container.queryByRole("tab", { name });

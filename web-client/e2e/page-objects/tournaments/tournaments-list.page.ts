@@ -52,9 +52,9 @@ export class TournamentsListPage {
   }
 
   /** A status-filter tab (`All`, `Live`, ...). The active one carries
-   * `aria-selected="true"`, which is what `toHaveAttribute` reads. */
+   * `aria-checked="true"`, which is what `toHaveAttribute` reads. */
   statusTab(label: string): Locator {
-    return this.page.getByRole('tab', { name: label, exact: true })
+    return this.page.getByRole('radio', { name: label, exact: true })
   }
 
   /** A tournament card's full-card open target, keyed on the name the organizer

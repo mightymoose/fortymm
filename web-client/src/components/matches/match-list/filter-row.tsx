@@ -1,7 +1,7 @@
 import { Search, X } from 'lucide-react'
 
 import { Input } from '@/components/ui/input'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
 import type { TabValue } from './match-list-status'
 
@@ -50,20 +50,23 @@ export const FilterRow = ({ q, setQ, status, setStatus, tabs }: FilterRowProps) 
         )}
       </div>
 
-      <Tabs
+      <ToggleGroup
+        type="single"
+        aria-label="Filter matches by status"
+        className="status-filters"
         value={status}
-        onValueChange={(v) => setStatus(v as TabValue)}
+        onValueChange={(v) => {
+          if (v) setStatus(v as TabValue)
+        }}
       >
-        <TabsList>
-          {tabs.map((t) => (
-            <TabsTrigger key={t.value} value={t.value} className="gap-1.5">
-              {t.isLive && <span className="live-dot" />}
-              {t.label}
-              {t.count !== null && <span className="seg-count">{t.count}</span>}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
+        {tabs.map((t) => (
+          <ToggleGroupItem key={t.value} value={t.value} className="gap-1.5">
+            {t.isLive && <span className="live-dot" />}
+            {t.label}
+            {t.count !== null && <span className="seg-count">{t.count}</span>}
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
     </div>
   )
 }

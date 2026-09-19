@@ -44,7 +44,7 @@
   --fg-1: var(--chalk-50);
   --fg-2: var(--chalk-100);
   --fg-3: var(--chalk-300);
-  --fg-muted: var(--chalk-500);
+  --fg-muted: #929bad;
   --fg-disabled: var(--ink-400);
   --fg-accent: var(--ball-500);
   --fg-accent-hover: var(--ball-400);

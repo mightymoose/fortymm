@@ -7,6 +7,20 @@ import './landing.css'
 /** Public source repository — FortyMM is GPLv3 and open to contributors. */
 const GITHUB_URL = 'https://github.com/mightymoose/fortymm'
 
+function useReducedMotion() {
+  const [reduced, setReduced] = useState(
+    () => window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  )
+  useEffect(() => {
+    const query = window.matchMedia('(prefers-reduced-motion: reduce)')
+    const update = () => setReduced(query.matches)
+    update()
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
+  return reduced
+}
+
 function App() {
   return (
     <div className="fortymm-theme fortymm-landing">
@@ -179,9 +193,9 @@ function HeroStatsStrip() {
   return (
     <div className="stats-strip">
       <div className="stats-strip-inner">
-        <Stat n="12,480" l="matches logged" />
-        <Stat n="340" l="clubs worldwide" />
-        <Stat n="1,102" l="tournaments run" />
+        <Stat n="Web" l="play in your browser" />
+        <Stat n="GPLv3" l="open source" />
+        <Stat n="No ads" l="just table tennis" />
         <Stat n="0" l="dollars charged" highlight />
       </div>
     </div>
@@ -201,16 +215,18 @@ function Stat({ n, l, highlight }: { n: string; l: string; highlight?: boolean }
 /*  Live Scoreboard                                                   */
 /* ------------------------------------------------------------------ */
 function HeroScoreboard() {
+  const reducedMotion = useReducedMotion()
   const [tick, setTick] = useState(0)
   useEffect(() => {
+    if (reducedMotion) return
     const id = setInterval(() => setTick((t) => t + 1), 2600)
     return () => clearInterval(id)
-  }, [])
+  }, [reducedMotion])
 
   const seq: Array<[number, number]> = [
     [8, 8], [9, 8], [9, 9], [10, 9], [10, 10], [11, 10], [11, 11], [12, 11],
   ]
-  const [a, b] = seq[tick % seq.length]
+  const [a, b] = seq[reducedMotion ? 0 : tick % seq.length]
   const aServ = tick % 4 < 2
 
   return (
@@ -218,7 +234,7 @@ function HeroScoreboard() {
       <div className="sb-chrome">
         <div className="sb-live">
           <span className="ball-dot ball-dot--live" />
-          <span className="sb-live-label">LIVE · GAME 4 · BO5</span>
+          <span className="sb-live-label">DEMO · GAME 4 · BO5</span>
         </div>
         <div className="sb-meta">COURT 3 · 19:42</div>
       </div>
@@ -386,32 +402,26 @@ function Features() {
 
         <div className="feat-grid">
           <FeatBullet
-            n="01"
             t="Match log"
-            d="Tap in scores. Games auto-advance. Rating delta shows up the moment you save."
+            d="Enter each game’s score. Save to advance, then revisit the result in your match history."
           />
           <FeatBullet
-            n="02"
             t="Clubs & ladders"
             d="Every club gets a feed, a ladder, and a challenge board. Set it up in a minute."
           />
           <FeatBullet
-            n="03"
             t="Schedules that actually work"
             d="Constraints in, schedule out — fewer back-to-backs, smarter court assignments."
           />
           <FeatBullet
-            n="04"
             t="Ephemeral accounts"
             d="You get an account when you start playing. Upgrade it to a real one by adding an email — whenever."
           />
           <FeatBullet
-            n="05"
             t="Live spectator view"
             d="Share a link. Parents, friends, your grandma — they all get the live bracket."
           />
           <FeatBullet
-            n="06"
             t="Export your data"
             d="One JSON download. Full match history. It's yours. Delete your account and take it with you."
           />
@@ -421,10 +431,9 @@ function Features() {
   )
 }
 
-function FeatBullet({ n, t, d }: { n: string; t: string; d: string }) {
+function FeatBullet({ t, d }: { t: string; d: string }) {
   return (
     <div className="feat-bullet">
-      <div className="fb-n mono">{n}</div>
       <h3 className="fb-t">{t}</h3>
       <p className="fb-d">{d}</p>
     </div>
@@ -437,15 +446,14 @@ function FeatTrack() {
       <div className="feat-panel-copy">
         <h3 className="fp-h">Scores in, history out.</h3>
         <p className="fp-p">
-          Tap the score after every rally. Games end themselves. The app watches
-          for deuce, win-by-2, change-of-ends. Save the match and it's on your
-          profile, in your club feed, and in your head-to-head record. No forms.
-          No dropdowns.
+          Set up a match, then enter each game’s score in your browser.
+          Save a game to move to the next one, with the scoreline always in view.
+          When the match is finished, find it in your match history.
         </p>
         <ul className="fp-list">
-          <li>Score with one finger on the bench</li>
-          <li>Auto-detect deuce &amp; game point</li>
-          <li>Head-to-head and rating delta on save</li>
+          <li>Enter scores with large, labeled fields</li>
+          <li>Keep every game in the scoreline</li>
+          <li>Track results in your match history</li>
         </ul>
       </div>
       <MatchLogMock />
@@ -532,7 +540,7 @@ function MatchLogMock() {
         <div className="mp-head-l">
           <div className="mp-eyebrow">
             <span className="ball-dot ball-dot--live" />
-            LIVE · GAME 3
+            EXAMPLE · GAME 3
           </div>
           <div className="mp-title">Match · Club Tuesday</div>
         </div>
@@ -542,7 +550,7 @@ function MatchLogMock() {
         <div className="mp-player mp-player--win">
           <div className="mp-avatar">TN</div>
           <div className="mp-name">You</div>
-          <div className="mp-score mono">08</div>
+          <div className="mp-score mono">11</div>
         </div>
         <div className="mp-player">
           <div className="mp-avatar">DO</div>
@@ -562,16 +570,15 @@ function MatchLogMock() {
           <span>11</span>
         </div>
         <div className="mp-g is-live">
-          <span>8</span>
+          <span>11</span>
           <i />
           <span className="muted">6</span>
         </div>
       </div>
       <div className="mp-keypad">
-        <button className="mp-key mp-key--me">+1 you</button>
-        <button className="mp-key mp-key--them">+1 D.O.</button>
+        <span className="mp-key mp-key--me" style={{ gridColumn: '1 / -1' }}>Save game &amp; next →</span>
       </div>
-      <div className="mp-hint">Swipe ↓ to end game · Hold to undo</div>
+      <div className="mp-hint">Illustrative game-score entry</div>
     </div>
   )
 }
@@ -770,6 +777,7 @@ function TournamentsBand() {
 type SolverLine = { t: 'constraint' | 'solve'; txt: string }
 
 function SolverCard() {
+  const reducedMotion = useReducedMotion()
   const lines: SolverLine[] = [
     { t: 'constraint', txt: '32 players · 4 courts · 3 hr block' },
     { t: 'constraint', txt: 'no back-to-back within 20 min' },
@@ -779,14 +787,15 @@ function SolverCard() {
   ]
   const [line, setLine] = useState(0)
   useEffect(() => {
+    if (reducedMotion) return
     const id = setInterval(() => setLine((l) => (l + 1) % (lines.length + 2)), 1200)
     return () => clearInterval(id)
-  }, [lines.length])
+  }, [lines.length, reducedMotion])
 
   return (
     <div className="solver">
       <div className="sv-head">
-        <span className="mono sv-head-l">scheduler.fortymm</span>
+        <span className="mono sv-head-l">scheduler demo</span>
         <span className="sv-dots">
           <i />
           <i />
@@ -794,14 +803,14 @@ function SolverCard() {
         </span>
       </div>
       <div className="sv-body mono">
-        {lines.slice(0, Math.min(line + 1, lines.length)).map((l, i) => (
+        {lines.slice(0, reducedMotion ? lines.length : Math.min(line + 1, lines.length)).map((l, i) => (
           <div key={i} className={`sv-line sv-line--${l.t}`}>
             <span className="sv-arrow">{l.t === 'solve' ? '✓' : '›'}</span>
             <span className="sv-label">{l.t}</span>
             <span className="sv-txt">{l.txt}</span>
           </div>
         ))}
-        {line >= lines.length && (
+        {(reducedMotion || line >= lines.length) && (
           <>
             <div className="sv-line sv-line--out">
               <span className="sv-arrow">→</span>
@@ -896,7 +905,6 @@ function Manifesto() {
         <div className="mf-grid">
           {promises.map((p) => (
             <div key={p.n} className="mf-card">
-              <div className="mf-n mono">{p.n}</div>
               <h3 className="mf-t">{p.t}</h3>
               <p className="mf-d">{p.d}</p>
             </div>
@@ -1026,15 +1034,14 @@ function FAQ() {
             <div key={i} className={`faq-item ${open === i ? 'is-open' : ''}`}>
               <button
                 className="faq-q"
+                aria-expanded={open === i}
+                aria-controls={`faq-answer-${i}`}
                 onClick={() => setOpen(open === i ? -1 : i)}
               >
-                <span className="faq-n mono">
-                  {String(i + 1).padStart(2, '0')}
-                </span>
                 <span className="faq-qt">{item.q}</span>
                 <span className="faq-chev">{open === i ? '–' : '+'}</span>
               </button>
-              {open === i && <div className="faq-a">{item.a}</div>}
+              <div id={`faq-answer-${i}`} className="faq-a" hidden={open !== i}>{item.a}</div>
             </div>
           ))}
         </div>
@@ -1061,8 +1068,8 @@ function CtaBand() {
           <span className="accent">Play your first match.</span>
         </h2>
         <p className="cta-p">
-          We give you an account the moment the page loads. Your first match is
-          already being tracked. If you ever want to keep it, add an email.
+          Start as a guest, choose your match format, and enter each game’s score.
+          Add an email whenever you want to keep your account across devices.
         </p>
         <div className="cta-ctas">
           <Link className="btn btn-primary btn-xl" to="/matches/new">
@@ -1153,7 +1160,7 @@ function Footer() {
         />
       </div>
       <div className="footer-bar">
-        <span className="mono">v0.9.0 · commit a4f2e1 · status: operational</span>
+        <span className="mono">Open source · GPLv3</span>
         <span className="mono">Play more. Pay never.</span>
       </div>
     </footer>

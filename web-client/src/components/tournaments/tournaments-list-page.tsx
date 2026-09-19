@@ -4,7 +4,7 @@ import { Plus, Search, Trophy } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 
 import { ConfirmDeleteDialog } from './confirm-delete-dialog'
 import { EmptyState } from './empty-state'
@@ -168,7 +168,7 @@ export const TournamentsListPage = ({
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <div className="relative w-[320px]">
+        <div className="relative w-full max-w-[320px]">
           <Search
             size={16}
             className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-[color:var(--fg-3)]"
@@ -181,15 +181,21 @@ export const TournamentsListPage = ({
             onChange={(e) => changeQuery(e.target.value)}
           />
         </div>
-        <Tabs value={status} onValueChange={changeStatus}>
-          <TabsList>
-            {STATUS_FILTER_OPTIONS.map((o) => (
-              <TabsTrigger key={o.value} value={o.value}>
-                {o.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
+        <ToggleGroup
+          type="single"
+          aria-label="Filter tournaments by status"
+          className="status-filters"
+          value={status}
+          onValueChange={(value) => {
+            if (value) changeStatus(value)
+          }}
+        >
+          {STATUS_FILTER_OPTIONS.map((o) => (
+            <ToggleGroupItem key={o.value} value={o.value}>
+              {o.label}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
         <NearMeControl onNearMeChange={onNearMeChange} />
         <span className="flex-1" />
         <span className="font-mono text-[11px] text-[color:var(--fg-3)]">
