@@ -464,11 +464,15 @@ function ineligibleReason(
 
 export function entryControlState({
   status,
+  registrationOpen,
   event,
   sessionLoaded,
   username,
 }: {
   status: TournamentStatus
+  /** The server's owner-controlled window. Undefined is retained for legacy
+   * fixtures and means the historical status-derived behaviour. */
+  registrationOpen?: boolean
   event: TournamentEvent
   /** Has the session request settled? False while it is still in flight, which
    * is exactly the load-bearing guard it replaced: we cannot tell Enter from
@@ -491,6 +495,13 @@ export function entryControlState({
   if (registration.state !== 'open') {
     const { lead, reason } = registration
     return { kind: 'closed', lead, reason }
+  }
+  if (registrationOpen === false) {
+    return {
+      kind: 'closed',
+      lead: 'Entries locked',
+      reason: 'Registration for this tournament is closed.',
+    }
   }
 
   // 3. Already in? Then the only act left is leaving — and it stays available even
