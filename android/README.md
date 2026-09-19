@@ -21,6 +21,28 @@ Run the focused JVM session tests and the API 26 device tests with:
 ./gradlew :android:connectedDevDebugAndroidTest
 ```
 
+For the cold-process demonstration, boot the pinned API 26 emulator and run an
+isolated backend, then install the app against the emulator's host gateway:
+
+```bash
+QA_PORT=8085 QA_MAILPIT_PORT=8087 scripts/qa-up.sh android-session
+./gradlew :android:installDevDebug \
+  -PdevApiBaseUrl=http://10.0.2.2:8085
+adb shell pm clear com.fortymm.android.dev
+adb shell am start -W \
+  -n com.fortymm.android.dev/com.fortymm.android.MainActivity
+adb shell uiautomator dump /sdcard/fortymm-first.xml
+adb shell am force-stop com.fortymm.android.dev
+adb shell am start -W \
+  -n com.fortymm.android.dev/com.fortymm.android.MainActivity
+adb shell uiautomator dump /sdcard/fortymm-relaunch.xml
+```
+
+Both dumps must show the same API-generated username. Resolve that username in
+the isolated backend's `players` table before and after relaunch to confirm the
+same stable player ID and a single `account_session_tokens` row. Tear the stack
+down with `scripts/qa-down.sh android-session`.
+
 ## Pinned baseline
 
 | Tool | Version |

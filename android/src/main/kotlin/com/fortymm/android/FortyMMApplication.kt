@@ -13,6 +13,8 @@ class FortyMMApplication : Application() {
     private val httpClient by lazy {
         OkHttpClient.Builder()
             .cookieJar(CookieJar.NO_COOKIES)
+            .followRedirects(false)
+            .followSslRedirects(false)
             .build()
     }
 

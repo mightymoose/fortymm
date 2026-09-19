@@ -180,6 +180,7 @@ class SessionOwnerTest {
                 owner.state.value,
             )
             assertEquals("durable-session-token", credentialStore.credential)
+            assertEquals(0, otherOrigin.requestCount)
         }
     }
 

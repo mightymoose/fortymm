@@ -3,10 +3,10 @@ package com.fortymm.android.network
 import com.fortymm.android.session.SessionUser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.Cookie
+import okhttp3.CookieJar
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -16,7 +16,11 @@ import java.util.UUID
 /** The one HTTP and JSON boundary used by Android features. */
 class FortyMMApiClient(
     baseUrl: HttpUrl,
-    private val httpClient: OkHttpClient = OkHttpClient(),
+    private val httpClient: OkHttpClient = OkHttpClient.Builder()
+        .cookieJar(CookieJar.NO_COOKIES)
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build(),
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
     private val apiRoot = baseUrl.newBuilder()
@@ -31,6 +35,12 @@ class FortyMMApiClient(
 
     internal var csrfToken: String? = null
         private set
+
+    init {
+        require(!httpClient.followRedirects && !httpClient.followSslRedirects) {
+            "The session client must not follow redirects"
+        }
+    }
 
     suspend fun bootstrap(credential: String?): SessionBootstrap = withContext(Dispatchers.IO) {
         val request = Request.Builder()
@@ -113,8 +123,4 @@ private data class SessionDataDto(
 private data class SessionUserDto(
     val id: String,
     val username: String,
-    val permissions: List<String>,
-    val email: String? = null,
-    @SerialName("confirmed_at") val confirmedAt: String? = null,
-    @SerialName("pending_email") val pendingEmail: String? = null,
 )
