@@ -1,0 +1,4 @@
+interface:
+  display_name: "User Journey QA"
+  short_description: "Explore user journeys and report evidence-backed defects."
+  default_prompt: "Perform a black-box user journey QA pass for:"
