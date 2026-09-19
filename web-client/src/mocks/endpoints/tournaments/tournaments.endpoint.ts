@@ -95,6 +95,25 @@ export const mockTournamentTransitionEndpoint = (
     http.post('*/v1/tournaments/:tournamentId/transitions', resolver),
   )
 
+/** Resolver for closing or reopening registration on a published tournament. */
+export type TournamentRegistrationResolver = HttpResponseResolver<
+  { tournamentId: string; action: string },
+  never,
+  TournamentWriteBody
+>
+
+/** POST /v1/tournaments/{id}/registration/{close|reopen}. */
+export const mockTournamentRegistrationEndpoint = (
+  backend: Backend,
+  resolver: TournamentRegistrationResolver,
+) =>
+  backend.use(
+    http.post(
+      '*/v1/tournaments/:tournamentId/registration/:action',
+      resolver,
+    ),
+  )
+
 /** Resolver for the delete endpoint — a 204 with no body, or an error envelope
  * on a 4xx (403 non-creator / 404 already deleted). */
 export type TournamentDeleteResolver = HttpResponseResolver<

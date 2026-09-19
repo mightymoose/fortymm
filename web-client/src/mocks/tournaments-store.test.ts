@@ -31,6 +31,7 @@ import {
   placeInStatus,
   requestScheduleSolve,
   resetTournamentsStore,
+  setTournamentRegistration,
   transitionTournament,
   uncutDraw,
   updateEvent,
@@ -1395,6 +1396,34 @@ describe('transitionTournament', () => {
     expect(result.tournament.name).toBe('Renamed Open')
     expect(result.tournament.status).toBe('published')
     expect(findTournament(PUBLISHED)!.status).toBe('published')
+  })
+})
+
+describe('setTournamentRegistration', () => {
+  it('closes and reopens a published tournament, advancing its generation each time', () => {
+    const closed = setTournamentRegistration(TOURNAMENT, false)
+
+    expect(closed).toMatchObject({
+      ok: true,
+      tournament: { registration_open: false, registration_generation: 2 },
+    })
+
+    const reopened = setTournamentRegistration(TOURNAMENT, true)
+
+    expect(reopened).toMatchObject({
+      ok: true,
+      tournament: { registration_open: true, registration_generation: 3 },
+    })
+  })
+
+  it('refuses a registration change once the tournament is no longer published', () => {
+    placeInStatus(TOURNAMENT, 'live')
+
+    expect(setTournamentRegistration(TOURNAMENT, true)).toEqual({
+      ok: false,
+      status: 409,
+      detail: 'Registration can only change while published.',
+    })
   })
 })
 
