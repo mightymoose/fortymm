@@ -47,6 +47,10 @@ struct NewTournamentEventBody: Encodable {
 /// Refresh in place; a newer request always supersedes the old one.
 @MainActor
 final class TournamentStore<Value>: ObservableObject {
+    // Swift 6.3.3 crashes optimizing the implicit isolated deinit for iOS 17.
+    // This store needs no actor-isolated teardown; stored fields still release normally.
+    nonisolated deinit {}
+
     enum State { case idle, loading, loaded(Value), failed(String) }
     @Published private(set) var state: State = .idle
     @Published private(set) var refreshError: String?

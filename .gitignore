@@ -6,6 +6,14 @@ node_modules
 .playwright-cli/
 .tanstack/
 
+# Gradle/Kotlin caches, Android build output, and local SDK paths.
+.gradle/
+.kotlin/
+/build/
+/android/**/build/
+/local.properties
+/android/**/local.properties
+
 secrets
 .qa-review/
 
