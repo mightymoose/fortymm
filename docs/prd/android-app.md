@@ -107,11 +107,11 @@ Make the New match action deliver a complete unrated match: choose an opponent o
 
 ### Acceptance criteria
 
-- [ ] Create permitted unrated and solo matches with the existing rules/settings; prevent duplicate submissions and reconcile ambiguous network outcomes before inviting a retry.
+- [ ] Create permitted unrated and solo matches with the existing rules/settings; disable duplicate submissions while a create request is in flight. The current create contract has no client idempotency key, so after a lost response Android must retain and explain the uncertain outcome rather than infer the created match from the global feed; any later retry is an explicit new create attempt.
 - [ ] Read, save and clear individual games through the canonical server scratchpad. Reopening a match shows server-saved scores across clients.
 - [ ] Enforce contiguous scoring and decided-board requirements; reject games after the decider instead of silently trimming them.
 - [ ] Recording an unrated result completes through the existing API without waiting for opponent acceptance; solo games retain the No opponent side.
-- [ ] Permission changes, network failure and session expiry preserve an honest saved/unsaved state. Rotation/recreation cannot duplicate a match or silently submit an edit.
+- [ ] Permission changes, network failure and session expiry preserve an honest saved/unsaved state. Rotation/recreation cannot re-submit an in-flight create or silently submit an edit; a lost create response remains an explicit uncertain state.
 - [ ] Demonstrate Android scoring followed by verification from another client against the same backend.
 
 ### Blocked by
