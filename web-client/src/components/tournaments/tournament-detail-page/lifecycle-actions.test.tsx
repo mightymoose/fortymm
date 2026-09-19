@@ -459,7 +459,7 @@ describe('LifecycleActions · the confirm on every edge', () => {
       // …and it priced THIS edge, not another one.
       expect(lifecycleActionsPage.confirm.getDialog()).toHaveTextContent(title)
       expect(calls).toBe(0)
-      expect(liveControls()).toHaveLength(1)
+      expect(liveControls()).toHaveLength(status === 'published' ? 2 : 1)
       expectNoToast()
     },
   )
