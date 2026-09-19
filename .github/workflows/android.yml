@@ -57,6 +57,9 @@ jobs:
           "emulator"
           "system-images;android-26;google_apis;x86_64"
 
+      - name: Enable KVM for the emulator
+        run: sudo chmod 666 /dev/kvm
+
       - name: Build, install, launch, and verify Home
         uses: reactivecircus/android-emulator-runner@v2
         with:
