@@ -118,7 +118,9 @@ tasks.register("verifyVariantArtifacts") {
         val manifestText = providers.exec {
             commandLine(aapt, "dump", "xmltree", productionApk, "AndroidManifest.xml")
         }.standardOutput.asText.get()
-        check("usesCleartextTraffic" in manifestText && "(type 0x12)0xffffffff" in manifestText) {
+        val cleartextAttribute = manifestText.lineSequence()
+            .singleOrNull { "usesCleartextTraffic" in it }
+        check(cleartextAttribute?.contains("(type 0x12)0x0") == true) {
             "Production APK manifest must set usesCleartextTraffic=false"
         }
         check("networkSecurityConfig" !in manifestText) {

@@ -63,7 +63,9 @@ time, pass its endpoint while building and installing that variant:
 
 ```bash
 ./gradlew :android:installDevDebug -PdevApiBaseUrl=http://10.0.2.2:8080
-./gradlew :android:installQaDebug -PqaApiBaseUrl=http://10.0.2.2:8080
+scripts/qa-up.sh android-qa
+# Use the QA port that qa-up.sh prints (the default is 8085 when available).
+./gradlew :android:installQaDebug -PqaApiBaseUrl=http://10.0.2.2:<QA_PORT>
 ```
 
 The release variant has no endpoint property or cleartext exception. Verify the
