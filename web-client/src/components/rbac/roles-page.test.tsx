@@ -142,6 +142,71 @@ describe('RolesPage — a role nobody special', () => {
   })
 })
 
+describe('RolesPage — deleting a role', () => {
+  it('sends one DELETE while confirmation is pending, even when activated again', async () => {
+    let deleteCount = 0
+    let releaseDelete!: () => void
+    let markDeleteStarted!: () => void
+    const deleteStarted = new Promise<void>((resolve) => {
+      markDeleteStarted = resolve
+    })
+    const deleteHeld = new Promise<void>((resolve) => {
+      releaseDelete = resolve
+    })
+    const user = rolesPage.user()
+    rolesPage.render()
+    // `rolesPage.render()` installs its stateful RBAC handlers, so this
+    // pending response must be added afterwards to take precedence.
+    server.use(
+      http.delete('*/v1/roles/:id', async () => {
+        deleteCount += 1
+        markDeleteStarted()
+        await deleteHeld
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+
+    const detail = await rolesPage.select('Owner')
+    await user.click(await rolesPage.within(detail).findDeleteButton())
+    const confirm = await screen.findByRole('button', { name: 'Delete role' })
+
+    await user.click(confirm)
+    await deleteStarted
+    expect(confirm).toBeDisabled()
+
+    await user.click(confirm)
+    expect(deleteCount).toBe(1)
+
+    releaseDelete()
+  })
+
+  it('keeps a failed deletion open for a deliberate retry', async () => {
+    let deleteCount = 0
+    const user = rolesPage.user()
+    rolesPage.render()
+    server.use(
+      http.delete('*/v1/roles/:id', () => {
+        deleteCount += 1
+        return deleteCount === 1
+          ? HttpResponse.json({ detail: 'Role is in use.' }, { status: 409 })
+          : new HttpResponse(null, { status: 204 })
+      }),
+    )
+
+    const detail = await rolesPage.select('Owner')
+    await user.click(await rolesPage.within(detail).findDeleteButton())
+    const confirm = await screen.findByRole('button', { name: 'Delete role' })
+
+    await user.click(confirm)
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Delete role' })).toBeEnabled(),
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Delete role' }))
+    await waitFor(() => expect(deleteCount).toBe(2))
+  })
+})
+
 // #937: a name the server rejects (a duplicate → 409, an over-long name → 422)
 // must surface inline on the name field with the dialog left open — not vanish
 // behind a global toast. The modal closes only on success.

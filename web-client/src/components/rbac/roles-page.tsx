@@ -489,9 +489,14 @@ function RoleDetail({
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() =>
+              disabled={deleteRole.isPending}
+              onClick={(event) => {
+                // Keep the dialog open while the mutation settles: disabling
+                // its action closes the double-submit window, while retaining
+                // a deliberate retry path after a refusal.
+                event.preventDefault()
                 deleteRole.mutate(role.id, { onSuccess: () => onSelect(null) })
-              }
+              }}
             >
               Delete role
             </AlertDialogAction>
