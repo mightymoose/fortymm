@@ -2157,6 +2157,10 @@ class TournamentRead(BaseModel):
     name: str
     description: str | None
     status: TournamentStatus
+    # Defaults preserve decoding of pre-window snapshots while all current server
+    # responses explicitly carry these fields.
+    registration_open: bool = False
+    registration_generation: int = 0
     # ``null`` means **this tournament has no venue** — a first-class state, not
     # missing data (CONTEXT.md, "Venue"; the ADR's 2026-07-26 amendment). It covers
     # both the not-booked-yet and the deliberately-withheld cases, which nothing

@@ -56,6 +56,7 @@ from app.models.tournament_entry_member import TournamentEntryMember
 from app.models.tournament_entry_participation import TournamentEntryParticipation
 from app.models.tournament_entry_registration import TournamentEntryRegistration
 from app.models.tournament_entry_withdrawal import TournamentEntryWithdrawal
+from app.models.tournament_registration_window import TournamentRegistrationWindowChange
 from app.models.tournament_event_draw_settings import TournamentEventDrawSettings
 from app.models.tournament_event_group_reservation import (
     TournamentEventGroupReservation,
@@ -126,6 +127,7 @@ __all__ = [
     "Tournament",
     "TournamentEntry",
     "TournamentEntryWithdrawal",
+    "TournamentRegistrationWindowChange",
     "TournamentDrawRevision",
     "TournamentEntryParticipation",
     "TournamentEntryRegistration",

@@ -241,6 +241,8 @@ export function apiToTournament(t: TournamentDetailRead): Tournament {
     detailsVersion: z.number().int().positive().parse(t.details_version),
     name: t.name,
     status: t.status,
+    registrationOpen: t.registration_open,
+    registrationGeneration: t.registration_generation,
     canEdit: t.can_edit,
     description: t.description ?? '',
     // Carried across UNCHANGED, `null` included: the server derives this from the
@@ -1004,6 +1006,23 @@ export function useTransitionTournament(tournamentId: string) {
     // Reconcile on BOTH paths — the 409 IS the stale-view signal — and **await it**, so
     // the header's inline refusal is written against the state the server judged rather
     // than racing the refetch that proves it (`reconcileTournament`).
+    onSettled: () => reconcileTournament(qc, tournamentId),
+  })
+}
+
+export function useSetTournamentRegistration(tournamentId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (isOpen: boolean): Promise<TournamentRead> =>
+      unwrap(
+        'change registration',
+        await api.POST(
+          isOpen
+            ? '/v1/tournaments/{tournament_id}/registration/reopen'
+            : '/v1/tournaments/{tournament_id}/registration/close',
+          { params: { path: { tournament_id: tournamentId } } },
+        ),
+      ),
     onSettled: () => reconcileTournament(qc, tournamentId),
   })
 }

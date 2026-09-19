@@ -1549,6 +1549,8 @@ export function buildTournamentDetailRead(
     name: 'Bay Area Open 2026',
     description: 'Two-day open. USATT-sanctioned, ratings-eligible.',
     status: 'published',
+    registration_open: true,
+    registration_generation: 1,
     // The min/max of the default `events` below's own `slot.date` (#1511) — the
     // server derives this from the tournament's events on every read, and a
     // fixture that wants a different span overrides both together.

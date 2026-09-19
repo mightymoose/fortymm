@@ -112,6 +112,7 @@ from app.tournament_geocoding import (
 from app.tournament_lifecycle import create_tournament as create_tournament_core
 from app.tournament_lifecycle import delete_tournament as delete_tournament_core
 from app.tournament_lifecycle import transition_tournament
+from app.tournament_registration import set_registration_open
 from app.tournament_list import (
     NearMeFilter,
     list_tournament_details,
@@ -725,6 +726,38 @@ async def create_tournament_transition(
         created_by_username=await creator_username(db, tournament),
         current_user_id=current_user.id,
     )
+
+
+@router.post("/tournaments/{tournament_id}/registration/close", response_model=TournamentRead)
+async def close_tournament_registration(
+    tournament_id: uuid.UUID, db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> TournamentRead:
+    try:
+        tournament = await set_registration_open(
+            db, tournament_id=tournament_id, actor=current_user, is_open=False
+        )
+    except _TOURNAMENT_WRITE_ERRORS as exc:
+        raise _map_tournament_write_error(exc) from exc
+    except IllegalTournamentTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return serialize(tournament, created_by_username=await creator_username(db, tournament), current_user_id=current_user.id)
+
+
+@router.post("/tournaments/{tournament_id}/registration/reopen", response_model=TournamentRead)
+async def reopen_tournament_registration(
+    tournament_id: uuid.UUID, db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> TournamentRead:
+    try:
+        tournament = await set_registration_open(
+            db, tournament_id=tournament_id, actor=current_user, is_open=True
+        )
+    except _TOURNAMENT_WRITE_ERRORS as exc:
+        raise _map_tournament_write_error(exc) from exc
+    except IllegalTournamentTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return serialize(tournament, created_by_username=await creator_username(db, tournament), current_user_id=current_user.id)
 
 
 # ----- event routes --------------------------------------------------------

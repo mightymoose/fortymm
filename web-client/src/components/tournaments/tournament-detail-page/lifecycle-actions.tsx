@@ -3,7 +3,7 @@ import { useState, type ComponentProps } from 'react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 
-import { useTransitionTournament } from '../data/api'
+import { useSetTournamentRegistration, useTransitionTournament } from '../data/api'
 import {
   lifecycleEdgeFor,
   lifecycleRefusalNotice,
@@ -146,6 +146,7 @@ const consequenceFor = (
  */
 export const LifecycleActions = ({ tournament }: LifecycleActionsProps) => {
   const transition = useTransitionTournament(tournament.id)
+  const registration = useSetTournamentRegistration(tournament.id)
   // The last refusal, in words — held only while the state it describes still stands
   // (`useScopedNotice`). Cleared when a new attempt starts, and again the moment the
   // director *fixes* what it named: a 409 reading "This tournament has no events" must not
@@ -191,9 +192,9 @@ export const LifecycleActions = ({ tournament }: LifecycleActionsProps) => {
   const [pending, setPending] = useState<LifecycleEdge | null>(null)
 
   const edge = lifecycleEdgeFor(tournament)
-  if (!edge) return null
-  const Icon = edge.icon
-  const tone = TONE[edge.tone]
+  if (!edge && !(tournament.canEdit && tournament.status === 'published')) return null
+  const Icon = edge?.icon
+  const tone = edge ? TONE[edge.tone] : TONE.default
 
   /** Post the edge the director was ASKED about — the captured one, passed in — never the
    * one `lifecycleEdgeFor` happens to offer by the time they answer. The refusal is framed
@@ -215,7 +216,7 @@ export const LifecycleActions = ({ tournament }: LifecycleActionsProps) => {
       data-testid="lifecycle-actions"
       className="flex w-[380px] max-w-full flex-col items-end gap-2.5"
     >
-      <Button
+      {edge && Icon && <Button
         variant={tone.variant}
         className={tone.className}
         // One in-flight move at a time: a double-click on Publish must not send a
@@ -228,7 +229,16 @@ export const LifecycleActions = ({ tournament }: LifecycleActionsProps) => {
       >
         <Icon size={16} />
         {edge.label}
-      </Button>
+      </Button>}
+      {tournament.canEdit && tournament.status === 'published' && (
+        <Button
+          variant="outline"
+          disabled={registration.isPending || transition.isPending}
+          onClick={() => void registration.mutateAsync(!tournament.registrationOpen).catch((error) => setRefusal(lifecycleRefusalNotice(error, edge!)))}
+        >
+          {tournament.registrationOpen !== false ? 'Close registration' : 'Reopen registration'}
+        </Button>
+      )}
 
       {/* The refusal, where the click was. An `Alert` — the app talking back — and not a
           `Card`, which is a content surface (`web-client/CLAUDE.md`, ## Design system). */}

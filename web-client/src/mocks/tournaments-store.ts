@@ -162,7 +162,7 @@ type StoredEvent = Omit<TournamentEventRead, 'entered' | 'entry_state' | 'groups
  * let the two disagree the moment an event's slot moved and nobody re-derived the copy. */
 type StoredTournament = Omit<
   TournamentDetailRead,
-  'events' | 'draw_type_catalogue' | 'date_range'
+  'events' | 'draw_type_catalogue' | 'date_range' | 'registration_open' | 'registration_generation'
 > & {
   events: StoredEvent[]
 }
@@ -1418,6 +1418,8 @@ function readDetail(t: StoredTournament): TournamentDetailRead {
   // near-me query keeps.
   return {
     ...t,
+    registration_open: t.status === 'published',
+    registration_generation: t.status === 'draft' ? 0 : 1,
     events: t.events.map(readEvent),
     distance_miles: null,
     // The served draw-type catalogue — every draw type the server can actually run, with
@@ -1945,7 +1947,11 @@ export type WithdrawResult =
  * `TournamentRead` the real API does. */
 function readOf({ events, ...read }: StoredTournament): TournamentRead {
   void events
-  return read
+  return {
+    ...read,
+    registration_open: read.status === 'published',
+    registration_generation: read.status === 'draft' ? 0 : 1,
+  }
 }
 
 /** Swap one tournament in the store for an updated copy. */

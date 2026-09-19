@@ -1226,6 +1226,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tournaments/{tournament_id}/registration/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Close Tournament Registration */
+        post: operations["close_tournament_registration_v1_tournaments__tournament_id__registration_close_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tournaments/{tournament_id}/registration/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reopen Tournament Registration */
+        post: operations["reopen_tournament_registration_v1_tournaments__tournament_id__registration_reopen_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tournaments/{tournament_id}/events": {
         parameters: {
             query?: never;
@@ -5328,6 +5362,16 @@ export interface components {
             /** Description */
             description: string | null;
             status: components["schemas"]["TournamentStatus"];
+            /**
+             * Registration Open
+             * @default false
+             */
+            registration_open: boolean;
+            /**
+             * Registration Generation
+             * @default 0
+             */
+            registration_generation: number;
             address: components["schemas"]["Address"] | null;
             /** Table Catalogue */
             table_catalogue: components["schemas"]["TournamentTable"][];
@@ -5804,6 +5848,16 @@ export interface components {
             /** Description */
             description: string | null;
             status: components["schemas"]["TournamentStatus"];
+            /**
+             * Registration Open
+             * @default false
+             */
+            registration_open: boolean;
+            /**
+             * Registration Generation
+             * @default 0
+             */
+            registration_generation: number;
             address: components["schemas"]["Address"] | null;
             /** Table Catalogue */
             table_catalogue: components["schemas"]["TournamentTable"][];
@@ -8254,6 +8308,72 @@ export interface operations {
         responses: {
             /** @description Successful Response */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    close_tournament_registration_v1_tournaments__tournament_id__registration_close_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reopen_tournament_registration_v1_tournaments__tournament_id__registration_reopen_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

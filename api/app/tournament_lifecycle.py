@@ -39,6 +39,7 @@ from app.models import (
     Tournament,
     TournamentEvent,
     TournamentStatus,
+    TournamentRegistrationWindowChange,
     User,
 )
 from app.models.tournament import EventLifecycleState
@@ -581,7 +582,26 @@ async def transition_tournament(
     if to is TournamentStatus.live:
         await _enforce_ready_to_go_live(db, tournament)
 
+    # Going live is an admission boundary, not merely a lifecycle label.  It closes
+    # the window before the draw-currency check is committed; a refusal rolls this
+    # assignment back with the transaction, so it cannot accidentally reopen or
+    # leave a failed attempt half-closed.
+    if to is TournamentStatus.live and tournament.registration_open:
+        tournament.registration_open = False
+        tournament.registration_generation += 1
+        db.add(TournamentRegistrationWindowChange(
+            tournament_id=tournament.id, actor_id=actor.id,
+            generation=tournament.registration_generation, is_open=False,
+        ))
+
     tournament.status = to
+    if to is TournamentStatus.published:
+        tournament.registration_open = True
+        tournament.registration_generation += 1
+        db.add(TournamentRegistrationWindowChange(
+            tournament_id=tournament.id, actor_id=actor.id,
+            generation=tournament.registration_generation, is_open=True,
+        ))
     # Materialization + the go-live solve, as the transition's final acts — only on
     # the ``published → live`` edge, only after the precondition above (which
     # guarantees a complete, current draw to work from), and in the SAME transaction

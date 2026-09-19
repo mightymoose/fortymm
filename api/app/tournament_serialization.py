@@ -145,6 +145,8 @@ def _tournament_fields(
         "name": t.name,
         "description": t.description,
         "status": t.status,
+        "registration_open": t.registration_open,
+        "registration_generation": t.registration_generation,
         "address": t.address,
         "table_catalogue": [table for table in t.tables if table.retired_at is None],
         "league_id": t.league_id,
