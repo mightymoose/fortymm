@@ -1745,7 +1745,7 @@ export interface paths {
         put?: never;
         /**
          * Start Tournament Checkout
-         * @description Start or resume one immutable combined paid-event reservation.
+         * @description Start or resume one immutable combined paid-event checkout hold.
          */
         post: operations["start_tournament_checkout_v1_tournaments__tournament_id__checkouts_post"];
         delete?: never;
@@ -9010,6 +9010,20 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+            /** @description Checkout admission limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Checkout admission budget unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

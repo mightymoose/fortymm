@@ -1,4 +1,4 @@
-"""Behavioral tests for combined tournament checkout reservations."""
+"""Behavioral tests for combined tournament checkout holds."""
 
 import asyncio
 import uuid
@@ -30,6 +30,7 @@ from app.models import (
     TournamentStatus,
     User,
 )
+from app.rate_limiting import RateLimitUnavailable
 from app.schemas.tournament import TournamentEventUpdate
 from app.schemas.tournament_checkout import TournamentCheckoutCreate
 from app.tournament_authority import transfer_ownership
@@ -757,6 +758,41 @@ async def test_changing_a_paid_event_to_free_invalidates_its_active_checkout(
     assert entered.json()["user_id"] == str(payer.player_id)
 
 
+async def test_changing_a_paid_singles_event_to_doubles_invalidates_checkout(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("10.00"),), capacities=(2,)
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    created = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]},
+    )
+    assert created.status_code == 201
+
+    await update_event(
+        db_session,
+        tournament_id=tournament.id,
+        event_id=event.id,
+        actor=owner,
+        updates=TournamentEventUpdate(
+            lock_version=event.lock_version,
+            format=EventFormat.doubles,
+        ),
+    )
+
+    checkout = await db_session.get(TournamentCheckout, uuid.UUID(created.json()["id"]))
+    assert checkout is not None
+    assert checkout.status is TournamentCheckoutStatus.invalidated
+    holds = await valid_hold_counts_by_event(db_session, [event.id])
+    assert holds.get(event.id, 0) == 0
+
+
 async def test_checkout_refuses_a_positive_fee_below_fifty_cents(
     api_client: AsyncClient,
     db_session: AsyncSession,
@@ -968,6 +1004,10 @@ async def test_request_identity_replays_after_registration_closes(
     assert replayed.status_code == 201
     assert replayed.json()["id"] == created.json()["id"]
     assert replayed.json()["status"] == "invalidated"
+    checkout = await db_session.get(TournamentCheckout, uuid.UUID(created.json()["id"]))
+    assert checkout is not None
+    await db_session.refresh(checkout)
+    assert checkout.status is TournamentCheckoutStatus.invalidated
 
 
 async def test_new_request_id_cannot_alias_an_active_checkout(
@@ -1332,6 +1372,78 @@ async def test_checkout_creation_is_rate_limited_per_network(
 
     assert refused.status_code == 429
     assert "retry shortly" in refused.json()["detail"]
+
+
+async def test_checkout_budget_fails_closed_before_taking_database_locks(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch,
+) -> None:
+    payer = await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("10.00"),)
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def unavailable_before_locks(*_args, **_kwargs) -> bool:
+        async with make_session() as observer:
+            await observer.execute(
+                select(User).where(User.id == payer.id).with_for_update(nowait=True)
+            )
+            await observer.rollback()
+            await observer.execute(
+                select(Tournament)
+                .where(Tournament.id == tournament.id)
+                .with_for_update(nowait=True)
+            )
+            await observer.rollback()
+        raise RateLimitUnavailable()
+
+    monkeypatch.setattr(
+        "app.tournament_checkouts.check_expiring_budget", unavailable_before_locks
+    )
+    refused = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]},
+    )
+
+    assert refused.status_code == 503
+    assert refused.headers["retry-after"] == "5"
+    assert "temporarily unavailable" in refused.json()["detail"]
+    assert await db_session.scalar(select(func.count(TournamentCheckout.id))) == 0
+
+
+async def test_durable_checkout_replay_skips_unavailable_admission_budget(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+    rate_limiter_fakeredis,
+) -> None:
+    await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("10.00"),)
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    payload = {"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]}
+    created = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts", json=payload
+    )
+    assert created.status_code == 201
+
+    async def unavailable(*_args, **_kwargs) -> bool:
+        raise RateLimitUnavailable()
+
+    monkeypatch.setattr("app.tournament_checkouts.check_expiring_budget", unavailable)
+    replayed = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts", json=payload
+    )
+
+    assert replayed.status_code == 201
+    assert replayed.json()["id"] == created.json()["id"]
 
 
 async def test_database_enforces_one_active_checkout_and_processor_minimum(

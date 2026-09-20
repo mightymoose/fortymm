@@ -1,4 +1,4 @@
-"""Transport-neutral combined paid-event reservation operations."""
+"""Transport-neutral combined paid-event checkout operations."""
 
 import uuid
 from datetime import datetime
@@ -6,7 +6,6 @@ from decimal import Decimal
 from math import ceil
 from typing import cast
 
-from pyrate_limiter import Duration, Rate
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -25,7 +24,7 @@ from app.models import (
     TournamentEvent,
     User,
 )
-from app.rate_limiting import RedisRateLimiter
+from app.rate_limiting import RateLimitUnavailable, check_expiring_budget
 from app.schemas.tournament_checkout import (
     TournamentCheckoutCreate,
     TournamentCheckoutLineRead,
@@ -36,6 +35,7 @@ from app.schemas.tournament_checkout import (
 from app.tournament_checkout_errors import (
     CheckoutNotFoundError,
     CheckoutRateLimitedError,
+    CheckoutRateLimitUnavailableError,
     CheckoutRefusal,
     CheckoutRefusedError,
 )
@@ -48,23 +48,16 @@ from app.tournament_queries import (
 )
 from app.tournament_registration import registration_open
 
-_checkout_ip_limiters: dict[int, RedisRateLimiter] = {}
-
-
-def _checkout_ip_limiter(limit: int) -> RedisRateLimiter:
-    limiter = _checkout_ip_limiters.get(limit)
-    if limiter is None:
-        limiter = RedisRateLimiter(
-            rates=[Rate(limit, Duration.HOUR)],
-            bucket_key="tournament-checkout-ip",
-        )
-        _checkout_ip_limiters[limit] = limiter
-    return limiter
-
 
 async def _enforce_checkout_rate_limit(client_ip: str) -> None:
     limit = get_settings().tournament_checkout_ip_per_hour
-    if not await _checkout_ip_limiter(limit).check(f"ip:{client_ip}"):
+    try:
+        allowed = await check_expiring_budget(
+            f"tournament-checkout-ip:{client_ip}", limit=limit, seconds=3600
+        )
+    except RateLimitUnavailable as error:
+        raise CheckoutRateLimitUnavailableError() from error
+    if not allowed:
         raise CheckoutRateLimitedError()
 
 
@@ -194,6 +187,19 @@ async def start_checkout(
     request: TournamentCheckoutCreate,
     client_ip: str,
 ) -> TournamentCheckoutRead:
+    # A durable request replay does not consume admission budget. Check for its
+    # existence without a row lock first; genuinely new requests charge the
+    # fail-closed Redis budget before taking Account, Tournament, or Player locks.
+    # The request is loaded and validated again under the account lock below.
+    prior_request_exists = await db.scalar(
+        select(TournamentCheckout.id).where(
+            TournamentCheckout.payer_account_id == actor.id,
+            TournamentCheckout.request_id == request.request_id,
+        )
+    )
+    if prior_request_exists is None:
+        await _enforce_checkout_rate_limit(client_ip)
+
     # An exclusive account lock serializes request ids across every tournament and
     # queues behind account merges.  Reload after acquiring it: the dependency's
     # actor may have been authenticated before a merge tombstoned this account or
@@ -250,6 +256,10 @@ async def start_checkout(
             )
         # A durable result wins over mutable admission gates.  A retry after a
         # lost response must replay even if registration closed in the meantime.
+        effective = _effective_state(prior_request, tournament, now)
+        if effective is not TournamentCheckoutState.active:
+            prior_request.status = TournamentCheckoutStatus(effective.value)
+            await db.commit()
         return _read(prior_request, tournament, now)
 
     merchant_account_id = get_settings().tournament_payment_merchant_account_id
@@ -282,8 +292,6 @@ async def start_checkout(
             CheckoutRefusal.active_checkout_conflict,
             "Cancel the active checkout before changing the event selection.",
         )
-
-    await _enforce_checkout_rate_limit(client_ip)
 
     events = list(
         await db.scalars(

@@ -59,6 +59,24 @@ describe('EventsTab', () => {
   // permissions (entering needs none, #1092) — and she is not among the seeded
   // entrants.
   describe('the self-registration control on each card', () => {
+    it('waits for the session before loading the viewer checkout', async () => {
+      let checkoutReads = 0
+      server.use(
+        http.get('*/v1/session', () => new Promise(() => {})),
+        http.get('*/v1/tournaments/:tournamentId/checkouts/current', () => {
+          checkoutReads += 1
+          return HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 })
+        }),
+      )
+
+      eventsTabPage.render({
+        tournament: buildTournament({ events: [buildEvent({ name: 'Open Singles' })] }),
+      })
+
+      await new Promise((resolve) => window.setTimeout(resolve, 50))
+      expect(checkoutReads).toBe(0)
+    })
+
     it('offers paid selection on a singles event', async () => {
       eventsTabPage.render({
         tournament: buildTournament({
@@ -85,7 +103,7 @@ describe('EventsTab', () => {
       expect(eventsTabPage.querySelectButton('Open Singles')).toBeNull()
     })
 
-    it('reserves multiple paid events as one itemized checkout', async () => {
+    it('holds multiple paid events as one itemized checkout', async () => {
       const firstId = '00000000-0000-4000-8000-000000000001'
       const secondId = '00000000-0000-4000-8000-000000000002'
       let postedEventIds: string[] = []
@@ -157,28 +175,28 @@ describe('EventsTab', () => {
           name: 'Remove U1500 from entry summary',
         }),
       )
-      expect(screen.getByRole('button', { name: 'Reserve 1 place' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Hold 1 place' })).toBeInTheDocument()
       await userEvent.click(await eventsTabPage.findSelectButton('U1500'))
-      await userEvent.click(screen.getByRole('button', { name: 'Reserve 2 places' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Hold 2 places' }))
 
       await waitFor(() => expect(postedEventIds).toEqual([firstId, secondId]))
-      expect(await screen.findByText('Your reserved places')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Cancel reservation' })).toBeInTheDocument()
+      expect(await screen.findByText('Your held places')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Release hold' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Change selection' })).toBeInTheDocument()
       await userEvent.click(screen.getByRole('button', { name: 'Change selection' }))
-      expect(screen.getByText(/cancels this reservation/i)).toBeInTheDocument()
-      await userEvent.click(screen.getByRole('button', { name: 'Keep reservation' }))
+      expect(screen.getByText(/releases this checkout hold/i)).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Keep hold' }))
       await userEvent.click(screen.getByRole('button', { name: 'Change selection' }))
       await userEvent.click(screen.getByRole('button', { name: 'Release and change' }))
       await waitFor(() => expect(cancelled).toBe(1))
       expect(await screen.findByText('Entry summary')).toBeInTheDocument()
-      await userEvent.click(screen.getByRole('button', { name: 'Reserve 2 places' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Hold 2 places' }))
       await waitFor(() => expect(createdCheckoutIds).toHaveLength(2))
       expect(createdCheckoutIds[1]).not.toBe(createdCheckoutIds[0])
-      expect(await screen.findByText('Your reserved places')).toBeInTheDocument()
-      await userEvent.click(screen.getByRole('button', { name: 'Cancel reservation' }))
+      expect(await screen.findByText('Your held places')).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Release hold' }))
       await waitFor(() => expect(cancelled).toBe(2))
-      expect(screen.queryByText('Your reserved places')).toBeNull()
+      expect(screen.queryByText('Your held places')).toBeNull()
     })
 
     it('refreshes checkout and tournament state when the hold expires', async () => {
@@ -218,12 +236,54 @@ describe('EventsTab', () => {
         }),
       })
 
-      expect(await screen.findByText('Your reserved places')).toBeInTheDocument()
+      expect(await screen.findByText('Your held places')).toBeInTheDocument()
       await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2), {
         timeout: 2_000,
       })
-      await waitFor(() => expect(screen.queryByText('Your reserved places')).toBeNull())
+      await waitFor(() => expect(screen.queryByText('Your held places')).toBeNull())
     })
+
+    it('polls an active checkout so external invalidation releases the UI', async () => {
+      const eventId = '00000000-0000-4000-8000-000000000037'
+      let reads = 0
+      server.use(
+        http.get('*/v1/tournaments/:tournamentId/checkouts/current', () => {
+          reads += 1
+          if (reads > 1) {
+            return HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 })
+          }
+          return HttpResponse.json({
+            id: '00000000-0000-4000-8000-000000000038',
+            request_id: '00000000-0000-4000-8000-000000000039',
+            tournament_id: '00000000-0000-4000-8000-000000000020',
+            registration_generation: 0,
+            status: 'active',
+            payment_state: 'unavailable',
+            currency: 'USD',
+            total_cents: 4500,
+            created_at: new Date().toISOString(),
+            expires_at: new Date(Date.now() + 600_000).toISOString(),
+            remaining_seconds: 600,
+            lines: [
+              {
+                event_id: eventId,
+                event_name: 'Open Singles',
+                price_cents: 4500,
+              },
+            ],
+          })
+        }),
+      )
+      eventsTabPage.render({
+        tournament: buildTournament({
+          events: [buildEvent({ id: eventId, name: 'Open Singles', entryFee: 45 })],
+        }),
+      })
+
+      expect(await screen.findByText('Your held places')).toBeInTheDocument()
+      await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2), { timeout: 6_500 })
+      await waitFor(() => expect(screen.queryByText('Your held places')).toBeNull())
+    }, 8_000)
 
     it('restores choices when a committed change cancellation loses its response', async () => {
       const eventId = '00000000-0000-4000-8000-000000000034'
@@ -264,12 +324,12 @@ describe('EventsTab', () => {
         }),
       })
 
-      expect(await screen.findByText('Your reserved places')).toBeInTheDocument()
+      expect(await screen.findByText('Your held places')).toBeInTheDocument()
       await userEvent.click(screen.getByRole('button', { name: 'Change selection' }))
       await userEvent.click(screen.getByRole('button', { name: 'Release and change' }))
 
       expect(await screen.findByText('Entry summary')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Reserve 1 place' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Hold 1 place' })).toBeInTheDocument()
     })
 
     it('hides paid selection toggles while a checkout is active', async () => {
@@ -307,7 +367,7 @@ describe('EventsTab', () => {
         }),
       })
 
-      expect(await screen.findByText('Your reserved places')).toBeInTheDocument()
+      expect(await screen.findByText('Your held places')).toBeInTheDocument()
       expect(eventsTabPage.querySelectButton('Open Singles')).toBeNull()
       expect(eventsTabPage.querySelectButton('U1500')).toBeNull()
     })
@@ -389,7 +449,7 @@ describe('EventsTab', () => {
       })
 
       await userEvent.click(await eventsTabPage.findSelectButton('Open Singles'))
-      await userEvent.click(screen.getByRole('button', { name: 'Reserve 1 place' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Hold 1 place' }))
 
       await waitFor(() =>
         expect(
@@ -401,7 +461,7 @@ describe('EventsTab', () => {
       expect(eventsTabPage.querySelectButton('U1500')).toBeNull()
 
       releaseRequest()
-      expect(await screen.findByText('Your reserved places')).toBeInTheDocument()
+      expect(await screen.findByText('Your held places')).toBeInTheDocument()
     })
 
     it('offers none on a doubles event', async () => {

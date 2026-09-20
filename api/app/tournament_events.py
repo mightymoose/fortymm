@@ -1118,6 +1118,7 @@ async def update_event(
     _enforce_reservation_containment(event, updates)
     facts_before = _event_scheduling_facts(event)
     old_entry_fee = event.entry_fee
+    old_format = event.format
     # Captured BEFORE the setattr loop overwrites it: a timezone edit preserves the
     # wall-clock of already-placed fixtures, which needs the zone they were placed IN to
     # recover it.
@@ -1170,10 +1171,12 @@ async def update_event(
     draw_settings = updates.draw_settings
     for key, value in changes.items():
         setattr(event, key, value)
-    if old_entry_fee > 0 and event.entry_fee == 0:
-        # A free entry no longer has a checkout step in which to consume its hold.
-        # Release every combined quote containing this event before the free-entry
-        # path can count the stale hold against its owner (or against anybody else).
+    if (old_entry_fee > 0 and event.entry_fee == 0) or (
+        old_format is EventFormat.singles and event.format is not EventFormat.singles
+    ):
+        # A free or non-singles event no longer has the paid singles checkout path
+        # that created its hold. Release every combined quote containing it before
+        # stale capacity remains attached to an event that cannot consume the hold.
         from app.tournament_checkouts import invalidate_checkouts_for_event
 
         await invalidate_checkouts_for_event(db, event.id)

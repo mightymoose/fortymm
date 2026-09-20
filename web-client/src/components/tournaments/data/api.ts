@@ -876,9 +876,15 @@ export function useTables(id: string): TournamentTable[] {
   return data ?? []
 }
 
-/** The caller's one active reservation for this tournament. A 404 is the normal
- * "no reservation" state, not an error screen. */
-export function useCurrentCheckout(tournamentId: string) {
+/** The caller's one active checkout hold for this tournament. A 404 is the normal
+ * "no active checkout" state, not an error screen. */
+export function checkoutRefreshInterval(
+  checkout: TournamentCheckout | null | undefined,
+): number | false {
+  return checkout?.status === 'active' ? 5_000 : false
+}
+
+export function useCurrentCheckout(tournamentId: string, sessionLoaded = true) {
   return useQuery({
     queryKey: checkoutKey(tournamentId),
     queryFn: async (): Promise<TournamentCheckout | null> => {
@@ -887,8 +893,10 @@ export function useCurrentCheckout(tournamentId: string) {
         { params: { path: { tournament_id: tournamentId } } },
       )
       if (result.response.status === 404) return null
-      return apiToCheckout(unwrap('load your reserved places', result))
+      return apiToCheckout(unwrap('load your held places', result))
     },
+    enabled: sessionLoaded,
+    refetchInterval: (query) => checkoutRefreshInterval(query.state.data),
     throwOnError: (_error, query) => query.state.data === undefined,
     retry: false,
   })
@@ -915,7 +923,7 @@ export function useStartCheckout(tournamentId: string) {
     mutationFn: async (eventIds: string[]): Promise<TournamentCheckout> =>
       apiToCheckout(
         unwrap(
-          'reserve your places',
+          'start checkout',
           await api.POST('/v1/tournaments/{tournament_id}/checkouts', {
             params: { path: { tournament_id: tournamentId } },
             body: { request_id: crypto.randomUUID(), event_ids: eventIds },
@@ -926,7 +934,7 @@ export function useStartCheckout(tournamentId: string) {
     // Re-read the durable checkout even on a transport error: the POST may have
     // committed before its response was lost.
     onSettled: () => reconcileTournamentCheckout(qc, tournamentId),
-    onError: notifyError('reserve your places'),
+    onError: notifyError('start checkout'),
   })
 }
 
@@ -939,7 +947,7 @@ export function useCancelCheckout(tournamentId: string) {
     mutationFn: async (checkoutId: string): Promise<TournamentCheckout> =>
       apiToCheckout(
         unwrap(
-          'cancel your reservation',
+          'release your checkout hold',
           await api.DELETE(
             '/v1/tournaments/{tournament_id}/checkouts/{checkout_id}',
             {
@@ -954,7 +962,7 @@ export function useCancelCheckout(tournamentId: string) {
     // A lost DELETE response is equally ambiguous, so reconcile the checkout
     // cache as well as tournament capacity on every settlement.
     onSettled: () => reconcileTournamentCheckout(qc, tournamentId),
-    onError: notifyError('cancel your reservation'),
+    onError: notifyError('release your checkout hold'),
   })
 }
 
@@ -1229,7 +1237,7 @@ export function useUpdateEvent(tournamentId: string) {
           body: input.body,
         }),
       ),
-    onSettled: () => reconcileTournament(qc, tournamentId),
+    onSettled: () => reconcileTournamentCheckout(qc, tournamentId),
   })
 }
 

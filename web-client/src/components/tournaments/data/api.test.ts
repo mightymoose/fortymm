@@ -14,11 +14,13 @@ import {
   apiToEvent,
   apiToTournament,
   catalogueToUpdateBody,
+  checkoutRefreshInterval,
   draftToCreateBody,
   eventToCreateBody,
   eventToUpdateBody,
   tournamentToUpdateBody,
 } from './api'
+import type { TournamentCheckout } from './api'
 import { blankAddress } from './helpers'
 import { nameByEntryId } from './entrant-names'
 import { addedReservation, keepReservations } from './reservation-entries'
@@ -27,6 +29,29 @@ import { addTable, keepTables } from './table-catalogue'
 import type { Tournament, TournamentEvent } from './types'
 
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
+
+const activeCheckout: TournamentCheckout = {
+  id: '00000000-0000-4000-8000-000000000001',
+  requestId: '00000000-0000-4000-8000-000000000002',
+  tournamentId: '00000000-0000-4000-8000-000000000003',
+  registrationGeneration: 0,
+  status: 'active',
+  paymentState: 'unavailable',
+  currency: 'USD',
+  totalCents: 4500,
+  createdAt: '2030-04-20T14:00:00Z',
+  expiresAt: '2030-04-20T14:10:00Z',
+  remainingSeconds: 600,
+  lines: [{ eventId: 'event-1', eventName: 'Open Singles', priceCents: 4500 }],
+}
+
+describe('checkoutRefreshInterval', () => {
+  it('polls only while a checkout hold is active', () => {
+    expect(checkoutRefreshInterval(activeCheckout)).toBe(5_000)
+    expect(checkoutRefreshInterval({ ...activeCheckout, status: 'invalidated' })).toBe(false)
+    expect(checkoutRefreshInterval(null)).toBe(false)
+  })
+})
 
 /** A payload the generated types say cannot exist — which is exactly what the runtime
  * parse is for. The cast is the *point* of these cases, not a shortcut around them:

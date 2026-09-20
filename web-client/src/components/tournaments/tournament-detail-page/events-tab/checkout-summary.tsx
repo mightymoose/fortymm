@@ -54,7 +54,7 @@ export function CheckoutSummary({
   selection,
   checkout,
   pending,
-  onReserve,
+  onHold,
   onCancel,
   onChange,
   onExpired,
@@ -63,7 +63,7 @@ export function CheckoutSummary({
   selection: TournamentEvent[]
   checkout: TournamentCheckout | null
   pending: boolean
-  onReserve: () => void
+  onHold: () => void
   onCancel: () => void
   onChange: () => void
   onExpired: () => void
@@ -82,7 +82,7 @@ export function CheckoutSummary({
       <section aria-labelledby="checkout-title">
         <CardHeader className="border-b">
           <div className="flex items-center gap-2 text-primary"><ShoppingBasket size={18} /></div>
-          <CardTitle id="checkout-title">{checkout ? 'Your reserved places' : 'Entry summary'}</CardTitle>
+          <CardTitle id="checkout-title">{checkout ? 'Your held places' : 'Entry summary'}</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4 pt-1 md:grid-cols-[1fr_190px]">
           <div>
@@ -111,7 +111,7 @@ export function CheckoutSummary({
             {checkout && (
               <p className="mt-3 flex gap-2 text-sm text-muted-foreground">
                 <ShieldCheck className="mt-0.5 shrink-0" size={15} />
-                Payment collection isn’t available yet. Your places stay reserved until the timer ends.
+                Payment collection isn’t available yet. Your places stay held until the timer ends.
               </p>
             )}
           </div>
@@ -129,20 +129,20 @@ export function CheckoutSummary({
                     <AlertDialogHeader>
                       <AlertDialogTitle>Release these places?</AlertDialogTitle>
                       <AlertDialogDescription>
-                        Changing your selection cancels this reservation. Your new choices will be checked again and receive a new hold.
+                        Changing your selection releases this checkout hold. Your new choices will be checked again and receive a new hold.
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
-                      <AlertDialogCancel>Keep reservation</AlertDialogCancel>
+                      <AlertDialogCancel>Keep hold</AlertDialogCancel>
                       <AlertDialogAction onClick={onChange}>Release and change</AlertDialogAction>
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
-                <Button variant="ghost" disabled={pending} onClick={onCancel}>Cancel reservation</Button>
+                <Button variant="ghost" disabled={pending} onClick={onCancel}>Release hold</Button>
               </>
             ) : (
-              <Button disabled={pending} onClick={onReserve}>
-                Reserve {selection.length} {selection.length === 1 ? 'place' : 'places'}
+              <Button disabled={pending} onClick={onHold}>
+                Hold {selection.length} {selection.length === 1 ? 'place' : 'places'}
               </Button>
             )}
           </div>

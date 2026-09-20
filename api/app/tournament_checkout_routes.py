@@ -1,4 +1,4 @@
-"""HTTP adapter for combined tournament checkout reservations."""
+"""HTTP adapter for combined tournament checkout holds."""
 
 import uuid
 
@@ -16,6 +16,7 @@ from app.sessions import get_current_user
 from app.tournament_checkout_errors import (
     CheckoutNotFoundError,
     CheckoutRateLimitedError,
+    CheckoutRateLimitUnavailableError,
     CheckoutRefusedError,
 )
 from app.tournament_checkouts import (
@@ -42,7 +43,11 @@ def _checkout_refusal(error: CheckoutRefusedError) -> HTTPException:
     "/tournaments/{tournament_id}/checkouts",
     response_model=TournamentCheckoutRead,
     status_code=status.HTTP_201_CREATED,
-    responses={409: {"model": TournamentCheckoutRefusalResponse}},
+    responses={
+        409: {"model": TournamentCheckoutRefusalResponse},
+        429: {"description": "Checkout admission limit exceeded."},
+        503: {"description": "Checkout admission budget unavailable."},
+    },
 )
 async def start_tournament_checkout(
     tournament_id: uuid.UUID,
@@ -51,7 +56,7 @@ async def start_tournament_checkout(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
 ) -> TournamentCheckoutRead:
-    """Start or resume one immutable combined paid-event reservation."""
+    """Start or resume one immutable combined paid-event checkout hold."""
     try:
         return await start_checkout(
             db,
@@ -69,7 +74,13 @@ async def start_tournament_checkout(
     except CheckoutRateLimitedError as error:
         raise HTTPException(
             status_code=429,
-            detail="Too many checkout reservations from this network; retry shortly.",
+            detail="Too many checkout attempts from this network; retry shortly.",
+        ) from error
+    except CheckoutRateLimitUnavailableError as error:
+        raise HTTPException(
+            status_code=503,
+            detail="Checkout is temporarily unavailable. Retry shortly.",
+            headers={"Retry-After": "5"},
         ) from error
 
 

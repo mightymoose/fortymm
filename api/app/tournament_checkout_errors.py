@@ -1,4 +1,4 @@
-"""Transport-neutral refusals for combined checkout reservations."""
+"""Transport-neutral refusals for combined checkout holds."""
 
 import uuid
 from enum import StrEnum
@@ -37,3 +37,7 @@ class CheckoutNotFoundError(Exception):
 
 class CheckoutRateLimitedError(Exception):
     pass
+
+
+class CheckoutRateLimitUnavailableError(Exception):
+    """The shared checkout admission budget cannot currently be checked."""

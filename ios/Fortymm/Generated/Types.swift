@@ -1102,7 +1102,7 @@ internal protocol APIProtocol: Sendable {
     func cancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete(_ input: Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.Input) async throws -> Operations.CancelSchedulePreviewV1TournamentsTournamentIdSchedulePreviewTokenDelete.Output
     /// Start Tournament Checkout
     ///
-    /// Start or resume one immutable combined paid-event reservation.
+    /// Start or resume one immutable combined paid-event checkout hold.
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/checkouts`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/post(start_tournament_checkout_v1_tournaments__tournament_id__checkouts_post)`.
@@ -2873,7 +2873,7 @@ extension APIProtocol {
     }
     /// Start Tournament Checkout
     ///
-    /// Start or resume one immutable combined paid-event reservation.
+    /// Start or resume one immutable combined paid-event checkout hold.
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/checkouts`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/post(start_tournament_checkout_v1_tournaments__tournament_id__checkouts_post)`.
@@ -28263,7 +28263,7 @@ internal enum Operations {
     }
     /// Start Tournament Checkout
     ///
-    /// Start or resume one immutable combined paid-event reservation.
+    /// Start or resume one immutable combined paid-event checkout hold.
     ///
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/checkouts`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/post(start_tournament_checkout_v1_tournaments__tournament_id__checkouts_post)`.
@@ -28415,6 +28415,76 @@ internal enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "conflict",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct TooManyRequests: Sendable, Hashable {
+                /// Creates a new `TooManyRequests`.
+                internal init() {}
+            }
+            /// Checkout admission limit exceeded.
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/post(start_tournament_checkout_v1_tournaments__tournament_id__checkouts_post)/responses/429`.
+            ///
+            /// HTTP response code: `429 tooManyRequests`.
+            case tooManyRequests(Operations.StartTournamentCheckoutV1TournamentsTournamentIdCheckoutsPost.Output.TooManyRequests)
+            /// Checkout admission limit exceeded.
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/post(start_tournament_checkout_v1_tournaments__tournament_id__checkouts_post)/responses/429`.
+            ///
+            /// HTTP response code: `429 tooManyRequests`.
+            internal static var tooManyRequests: Self {
+                .tooManyRequests(.init())
+            }
+            /// The associated value of the enum case if `self` is `.tooManyRequests`.
+            ///
+            /// - Throws: An error if `self` is not `.tooManyRequests`.
+            /// - SeeAlso: `.tooManyRequests`.
+            internal var tooManyRequests: Operations.StartTournamentCheckoutV1TournamentsTournamentIdCheckoutsPost.Output.TooManyRequests {
+                get throws {
+                    switch self {
+                    case let .tooManyRequests(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "tooManyRequests",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct ServiceUnavailable: Sendable, Hashable {
+                /// Creates a new `ServiceUnavailable`.
+                internal init() {}
+            }
+            /// Checkout admission budget unavailable.
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/post(start_tournament_checkout_v1_tournaments__tournament_id__checkouts_post)/responses/503`.
+            ///
+            /// HTTP response code: `503 serviceUnavailable`.
+            case serviceUnavailable(Operations.StartTournamentCheckoutV1TournamentsTournamentIdCheckoutsPost.Output.ServiceUnavailable)
+            /// Checkout admission budget unavailable.
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/post(start_tournament_checkout_v1_tournaments__tournament_id__checkouts_post)/responses/503`.
+            ///
+            /// HTTP response code: `503 serviceUnavailable`.
+            internal static var serviceUnavailable: Self {
+                .serviceUnavailable(.init())
+            }
+            /// The associated value of the enum case if `self` is `.serviceUnavailable`.
+            ///
+            /// - Throws: An error if `self` is not `.serviceUnavailable`.
+            /// - SeeAlso: `.serviceUnavailable`.
+            internal var serviceUnavailable: Operations.StartTournamentCheckoutV1TournamentsTournamentIdCheckoutsPost.Output.ServiceUnavailable {
+                get throws {
+                    switch self {
+                    case let .serviceUnavailable(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "serviceUnavailable",
                             response: self
                         )
                     }

@@ -46,9 +46,10 @@ export const EventsTab = ({
   // and "which entrant is me" is a join on the USERNAME — the session carries no
   // user id (see `myEntrant`). `EnterEventControl` reads the same session for the
   // same join, so the chip and the Enter/Withdraw control can never disagree.
-  const username = useSession().data?.data.user.username
+  const session = useSession()
+  const username = session.data?.data.user.username
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
-  const currentCheckout = useCurrentCheckout(tournament.id)
+  const currentCheckout = useCurrentCheckout(tournament.id, session.isSuccess)
   const startCheckout = useStartCheckout(tournament.id)
   const cancelCheckout = useCancelCheckout(tournament.id)
   const refreshCheckout = useRefreshTournamentCheckout(tournament.id)
@@ -90,7 +91,7 @@ export const EventsTab = ({
         selection={selectedEvents}
         checkout={checkout}
         pending={startCheckout.isPending || cancelCheckout.isPending}
-        onReserve={() => {
+        onHold={() => {
           startCheckout.mutate(selectedEvents.map((event) => event.id), {
             onSuccess: () => setSelectedIds(new Set()),
           })

@@ -20,7 +20,7 @@ const checkout: TournamentCheckout = {
 }
 
 const callbacks = {
-  onReserve: vi.fn(),
+  onHold: vi.fn(),
   onCancel: vi.fn(),
   onChange: vi.fn(),
   onExpired: vi.fn(),
@@ -32,7 +32,7 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-it('locks selection removal while reservation creation is pending', () => {
+it('locks selection removal while checkout creation is pending', () => {
   render(
     <CheckoutSummary
       selection={[buildEvent({ name: 'Open Singles', entryFee: 45 })]}
@@ -47,7 +47,7 @@ it('locks selection removal while reservation creation is pending', () => {
       name: 'Remove Open Singles from entry summary',
     }),
   ).toBeDisabled()
-  expect(screen.getByRole('button', { name: 'Reserve 1 place' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Hold 1 place' })).toBeDisabled()
 })
 
 it('adopts a shorter authoritative duration when the checkout refreshes', async () => {
