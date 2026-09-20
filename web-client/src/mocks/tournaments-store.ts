@@ -162,7 +162,12 @@ type StoredEvent = Omit<TournamentEventRead, 'entered' | 'held_places' | 'availa
  * let the two disagree the moment an event's slot moved and nobody re-derived the copy. */
 type StoredTournament = Omit<
   TournamentDetailRead,
-  'events' | 'draw_type_catalogue' | 'date_range' | 'registration_open' | 'registration_generation'
+  | 'events'
+  | 'draw_type_catalogue'
+  | 'date_range'
+  | 'registration_open'
+  | 'registration_generation'
+  | 'checkout_available'
 > & {
   events: StoredEvent[]
   registration_open?: boolean
@@ -1427,6 +1432,7 @@ function readDetail(t: StoredTournament): TournamentDetailRead {
     ...t,
     registration_open: t.registration_open ?? t.status === 'published',
     registration_generation: t.registration_generation ?? (t.status === 'draft' ? 0 : 1),
+    checkout_available: false,
     events: t.events.map(readEvent),
     distance_miles: null,
     // The served draw-type catalogue — every draw type the server can actually run, with
@@ -1960,6 +1966,7 @@ function readOf({ events, ...read }: StoredTournament): TournamentRead {
     ...read,
     registration_open: read.registration_open ?? read.status === 'published',
     registration_generation: read.registration_generation ?? (read.status === 'draft' ? 0 : 1),
+    checkout_available: false,
   }
 }
 

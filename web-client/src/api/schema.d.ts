@@ -5448,6 +5448,8 @@ export interface components {
              * Format: date-time
              */
             expires_at: string;
+            /** Remaining Seconds */
+            remaining_seconds: number;
             /** Lines */
             lines: components["schemas"]["TournamentCheckoutLineRead"][];
         };
@@ -5517,6 +5519,8 @@ export interface components {
             created_by_username: string;
             /** Can Edit */
             can_edit: boolean;
+            /** Checkout Available */
+            checkout_available: boolean;
             /**
              * Created At
              * Format: date-time
@@ -6004,6 +6008,8 @@ export interface components {
             created_by_username: string;
             /** Can Edit */
             can_edit: boolean;
+            /** Checkout Available */
+            checkout_available: boolean;
             /**
              * Created At
              * Format: date-time

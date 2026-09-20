@@ -71,6 +71,20 @@ describe('EventsTab', () => {
       ).toBeInTheDocument()
     })
 
+    it('explains when paid checkout is unavailable for this organizer', async () => {
+      eventsTabPage.render({
+        tournament: buildTournament({
+          checkoutAvailable: false,
+          events: [buildEvent({ name: 'Open Singles', entryFee: 45 })],
+        }),
+      })
+
+      expect(
+        await screen.findByTestId('checkout-unavailable-notice'),
+      ).toHaveTextContent('Checkout is not available for this tournament.')
+      expect(eventsTabPage.querySelectButton('Open Singles')).toBeNull()
+    })
+
     it('reserves multiple paid events as one itemized checkout', async () => {
       const firstId = '00000000-0000-4000-8000-000000000001'
       const secondId = '00000000-0000-4000-8000-000000000002'
@@ -88,6 +102,7 @@ describe('EventsTab', () => {
         total_cents: 7500,
         created_at: new Date().toISOString(),
         expires_at: new Date(Date.now() + 600_000).toISOString(),
+        remaining_seconds: 600,
         lines: [
           { event_id: firstId, event_name: 'Open Singles', price_cents: 4500 },
           { event_id: secondId, event_name: 'U1500', price_cents: 3000 },
@@ -126,6 +141,13 @@ describe('EventsTab', () => {
       await userEvent.click(await eventsTabPage.findSelectButton('U1500'))
       expect(screen.getByText('Entry summary')).toBeInTheDocument()
       expect(screen.getByText('$75.00')).toBeInTheDocument()
+      await userEvent.click(
+        screen.getByRole('button', {
+          name: 'Remove U1500 from entry summary',
+        }),
+      )
+      expect(screen.getByRole('button', { name: 'Reserve 1 place' })).toBeInTheDocument()
+      await userEvent.click(await eventsTabPage.findSelectButton('U1500'))
       await userEvent.click(screen.getByRole('button', { name: 'Reserve 2 places' }))
 
       await waitFor(() => expect(postedEventIds).toEqual([firstId, secondId]))
@@ -168,6 +190,7 @@ describe('EventsTab', () => {
             total_cents: 4500,
             created_at: new Date().toISOString(),
             expires_at: new Date(Date.now() + 50).toISOString(),
+            remaining_seconds: 1,
             lines: [
               {
                 event_id: eventId,

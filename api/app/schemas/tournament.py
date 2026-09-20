@@ -2184,6 +2184,7 @@ class TournamentRead(BaseModel):
     created_by_user_id: uuid.UUID
     created_by_username: str
     can_edit: bool
+    checkout_available: bool
     created_at: datetime
     updated_at: datetime
 

@@ -21,6 +21,7 @@ from typing import Any, assert_never, cast
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.competition_rules import effective_draw_settings, format_rule_version
+from app.config import get_settings
 from app.draws import (
     EntryId,
     GroupId,
@@ -161,6 +162,9 @@ def _tournament_fields(
         "created_by_user_id": t.created_by_user_id,
         "created_by_username": created_by_username,
         "can_edit": t.owner_account_id == current_user_id,
+        "checkout_available": (
+            get_settings().tournament_payment_merchant_account_id == t.owner_account_id
+        ),
         "created_at": t.created_at,
         "updated_at": t.updated_at,
     }

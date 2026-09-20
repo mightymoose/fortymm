@@ -150,6 +150,7 @@ const checkoutSchema = z.object({
   total_cents: z.number().int().positive(),
   created_at: z.iso.datetime({ offset: true }),
   expires_at: z.iso.datetime({ offset: true }),
+  remaining_seconds: z.number().int().nonnegative(),
   lines: z.array(
     z.object({
       event_id: z.string().uuid(),
@@ -174,6 +175,7 @@ function apiToCheckout(payload: TournamentCheckoutRead) {
     totalCents: checkout.total_cents,
     createdAt: checkout.created_at,
     expiresAt: checkout.expires_at,
+    remainingSeconds: checkout.remaining_seconds,
     lines: checkout.lines.map((line) => ({
       eventId: line.event_id,
       eventName: line.event_name,
@@ -289,6 +291,7 @@ export function apiToTournament(t: TournamentDetailRead): Tournament {
     registrationOpen: t.registration_open,
     registrationGeneration: t.registration_generation,
     canEdit: t.can_edit,
+    checkoutAvailable: t.checkout_available,
     description: t.description ?? '',
     // Carried across UNCHANGED, `null` included: the server derives this from the
     // tournament's own events on every read (#1511), and the client no longer
@@ -680,6 +683,14 @@ function reconcileTournament(qc: QueryClient, id: string): Promise<void> {
   ]).then(() => undefined)
 }
 
+/** Reconcile writes that can invalidate a server-side checkout hold. */
+function reconcileTournamentCheckout(qc: QueryClient, id: string): Promise<void> {
+  return Promise.all([
+    reconcileTournament(qc, id),
+    qc.invalidateQueries({ queryKey: checkoutKey(id) }),
+  ]).then(() => undefined)
+}
+
 /**
  * The same invalidation, **fire and forget** — what every mutation here did before, and
  * what every mutation without an inline refusal to keep on screen still wants. Holding
@@ -941,11 +952,12 @@ export function useCancelCheckout(tournamentId: string) {
 // | ----------------------- | ---------------------------------------- | --------- |
 // | useCreateTournament     | ['tournaments']                          | onSuccess |
 // | useUpdateTournament     | ['tournaments'], ['tournaments', id]     | onSuccess |
-// | useTransitionTournament | ['tournaments'], ['tournaments', id]     | onSettled |
+// | useTransitionTournament | list, detail, ['tournament-checkout', id] | onSettled |
+// | useSetTournamentRegistration | list, detail, checkout              | onSettled |
 // | useDeleteTournament     | ['tournaments'], ['tournaments', id]     | onSuccess |
 // | useCreateEvent          | ['tournaments'], ['tournaments', id]     | onSuccess |
 // | useUpdateEvent          | ['tournaments'], ['tournaments', id]     | onSettled |
-// | useDeleteEvent          | ['tournaments'], ['tournaments', id]     | onSuccess |
+// | useDeleteEvent          | list, detail, ['tournament-checkout', id] | onSuccess |
 // | useEnterEvent           | ['tournaments'], ['tournaments', id]     | onSettled |
 // | useWithdrawEntry        | ['tournaments'], ['tournaments', id]     | onSettled |
 // | useCutDraw              | ['tournaments'], ['tournaments', id]     | onSettled |
@@ -953,12 +965,13 @@ export function useCancelCheckout(tournamentId: string) {
 // | usePlaceFixture         | ['tournaments'], ['tournaments', id]     | onSettled |
 // | useRequestScheduleSolve | ['tournaments'], ['tournaments', id]     | onSettled |
 //
-// There are only two keys, because there are only two queries: the list and one
-// tournament's detail (events, entrants, the table catalogue AND every event's draw all
+// Most mutations touch only the list and detail. Lifecycle/registration changes and
+// event deletion also refresh the current checkout because those writes can invalidate
+// its server-side hold. Events, entrants, the table catalogue AND every event's draw all
 // arrive nested in the detail — see the queries above; there is deliberately no
 // `GET …/draw`, because a per-event draw fetch would be an N+1 on the server and a
-// suspense waterfall on the client, ADR-0786). Create is the one mutation that touches
-// only the list: it has no detail entry to stale yet. The five `onSettled` rows
+// suspense waterfall on the client (ADR-0786). Create is the one mutation that touches
+// only the list: it has no detail entry to stale yet. The `onSettled` rows
 // reconcile on FAILURE as well as success, which is deliberate — see the notes on
 // each.
 
@@ -1124,7 +1137,7 @@ export function useTransitionTournament(tournamentId: string) {
     // Reconcile on BOTH paths — the 409 IS the stale-view signal — and **await it**, so
     // the header's inline refusal is written against the state the server judged rather
     // than racing the refetch that proves it (`reconcileTournament`).
-    onSettled: () => reconcileTournament(qc, tournamentId),
+    onSettled: () => reconcileTournamentCheckout(qc, tournamentId),
   })
 }
 
@@ -1141,7 +1154,7 @@ export function useSetTournamentRegistration(tournamentId: string) {
           { params: { path: { tournament_id: tournamentId } } },
         ),
       ),
-    onSettled: () => reconcileTournament(qc, tournamentId),
+    onSettled: () => reconcileTournamentCheckout(qc, tournamentId),
   })
 }
 
@@ -1218,7 +1231,7 @@ export function useDeleteEvent(tournamentId: string) {
         { allowEmpty: true },
       )
     },
-    onSuccess: () => invalidateTournament(qc, tournamentId),
+    onSuccess: () => void reconcileTournamentCheckout(qc, tournamentId),
     onError: notifyError('delete the event'),
   })
 }

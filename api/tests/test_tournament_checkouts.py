@@ -2,6 +2,7 @@
 
 import asyncio
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -16,6 +17,7 @@ from app.leagues import get_default_league
 from app.models import (
     DrawType,
     EventFormat,
+    Player,
     Tournament,
     TournamentCheckout,
     TournamentCheckoutLine,
@@ -99,6 +101,7 @@ async def test_starting_combined_checkout_snapshots_quote_and_resumes_deadline(
     assert quote["currency"] == "USD"
     assert quote["total_cents"] == 5500
     assert quote["registration_generation"] == 1
+    assert 0 < quote["remaining_seconds"] <= 600
     assert [line["event_id"] for line in quote["lines"]] == sorted(
         str(event.id) for event in events
     )
@@ -297,6 +300,9 @@ async def test_checkout_is_limited_to_the_configured_merchant_owner(
     body = {"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]}
 
     monkeypatch.delenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", raising=False)
+    detail = await api_client.get(f"/v1/tournaments/{tournament.id}")
+    assert detail.status_code == 200
+    assert detail.json()["checkout_available"] is False
     unavailable = await api_client.post(url, json=body)
     assert unavailable.status_code == 409
     assert unavailable.json()["detail"]["code"] == "merchant_unavailable"
@@ -309,6 +315,59 @@ async def test_checkout_is_limited_to_the_configured_merchant_owner(
     assert wrong_owner.status_code == 409
     assert wrong_owner.json()["detail"]["code"] == "merchant_unavailable"
     assert await db_session.scalar(select(TournamentCheckout)) is None
+
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    available = await api_client.get(f"/v1/tournaments/{tournament.id}")
+    assert available.status_code == 200
+    assert available.json()["checkout_available"] is True
+
+
+async def test_retired_player_cannot_reserve_capacity(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    payer = await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("10.00"),), capacities=(1,)
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    player = await db_session.get(Player, payer.player_id)
+    assert player is not None
+    player.retired_at = datetime.now(UTC)
+    await db_session.commit()
+
+    response = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]},
+    )
+
+    assert response.status_code == 404
+    assert await db_session.scalar(select(TournamentCheckout)) is None
+
+
+async def test_combined_total_exceeding_int32_is_stored_exactly(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    fees = tuple(Decimal("999999.99") for _ in range(22))
+    tournament, events = await _paid_tournament(db_session, owner=owner, fees=fees)
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+
+    response = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={
+            "request_id": str(uuid.uuid4()),
+            "event_ids": [str(event.id) for event in events],
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["total_cents"] == 2_199_999_978
 
 
 async def test_explicit_cancellation_releases_hold_for_another_player(

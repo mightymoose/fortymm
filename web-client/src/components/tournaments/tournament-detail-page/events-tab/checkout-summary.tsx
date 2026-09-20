@@ -20,17 +20,18 @@ import type { TournamentEvent } from '../../data/types'
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
 
-function Countdown({ expiresAt, onExpired }: { expiresAt: string; onExpired: () => void }) {
+function Countdown({ remainingSeconds, onExpired }: { remainingSeconds: number; onExpired: () => void }) {
+  const [deadline] = useState(() => Date.now() + remainingSeconds * 1_000)
   const [now, setNow] = useState(() => Date.now())
   const notified = useRef(false)
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000)
     return () => window.clearInterval(timer)
   }, [])
-  const seconds = Math.max(0, Math.ceil((Date.parse(expiresAt) - now) / 1_000))
+  const seconds = Math.max(0, Math.ceil((deadline - now) / 1_000))
   useEffect(() => {
     notified.current = false
-  }, [expiresAt])
+  }, [deadline])
   useEffect(() => {
     if (seconds === 0 && !notified.current) {
       notified.current = true
@@ -57,6 +58,7 @@ export function CheckoutSummary({
   onCancel,
   onChange,
   onExpired,
+  onRemoveSelection,
 }: {
   selection: TournamentEvent[]
   checkout: TournamentCheckout | null
@@ -65,6 +67,7 @@ export function CheckoutSummary({
   onCancel: () => void
   onChange: () => void
   onExpired: () => void
+  onRemoveSelection: (eventId: string) => void
 }) {
   if (!checkout && selection.length === 0) return null
   const lines = checkout?.lines ?? selection.map((event) => ({
@@ -85,9 +88,19 @@ export function CheckoutSummary({
           <div>
             <ul className="divide-y divide-border/70">
               {lines.map((line) => (
-                <li key={line.eventId} className="flex justify-between gap-4 py-2.5">
+                <li key={line.eventId} className="flex items-center justify-between gap-4 py-2.5">
                   <span className="font-medium">{line.eventName}</span>
-                  <span className="tabular-nums">{usd.format(line.priceCents / 100)}</span>
+                  <span className="ml-auto tabular-nums">{usd.format(line.priceCents / 100)}</span>
+                  {!checkout && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label={`Remove ${line.eventName} from entry summary`}
+                      onClick={() => onRemoveSelection(line.eventId)}
+                    >
+                      Remove
+                    </Button>
+                  )}
                 </li>
               ))}
             </ul>
@@ -104,7 +117,11 @@ export function CheckoutSummary({
           <div className="flex flex-col gap-3">
             {checkout ? (
               <>
-                <Countdown expiresAt={checkout.expiresAt} onExpired={onExpired} />
+                <Countdown
+                  key={checkout.id}
+                  remainingSeconds={checkout.remainingSeconds}
+                  onExpired={onExpired}
+                />
                 <AlertDialog>
                   <AlertDialogTrigger asChild><Button variant="outline" disabled={pending}>Change selection</Button></AlertDialogTrigger>
                   <AlertDialogContent size="sm">

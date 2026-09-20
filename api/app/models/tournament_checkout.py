@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     Enum,
@@ -90,7 +91,7 @@ class TournamentCheckout(Base):
     currency: Mapped[str] = mapped_column(
         String(3), nullable=False, server_default="USD"
     )
-    total_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
     status: Mapped[TournamentCheckoutStatus] = mapped_column(
         Enum(
             TournamentCheckoutStatus,

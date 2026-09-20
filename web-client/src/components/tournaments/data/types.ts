@@ -846,6 +846,8 @@ export interface Tournament {
    * `can_edit`. Gates every mutation affordance — a non-creator sees the
    * read-only view. */
   canEdit: boolean
+  /** Whether this tournament's owner is the configured launch merchant. */
+  checkoutAvailable: boolean
   /** This tournament's real date span — the min/max of its events' own
    * `slot.date` — **derived by the server on every read** (#1511, "A tournament's
    * dates run backwards, and an event can sit outside them"), never a stored,

@@ -11383,6 +11383,8 @@ internal enum Components {
             internal var createdAt: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/TournamentCheckoutRead/expires_at`.
             internal var expiresAt: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/TournamentCheckoutRead/remaining_seconds`.
+            internal var remainingSeconds: Swift.Int
             /// - Remark: Generated from `#/components/schemas/TournamentCheckoutRead/lines`.
             internal var lines: [Components.Schemas.TournamentCheckoutLineRead]
             /// Creates a new `TournamentCheckoutRead`.
@@ -11398,6 +11400,7 @@ internal enum Components {
             ///   - totalCents:
             ///   - createdAt:
             ///   - expiresAt:
+            ///   - remainingSeconds:
             ///   - lines:
             internal init(
                 id: Swift.String,
@@ -11410,6 +11413,7 @@ internal enum Components {
                 totalCents: Swift.Int,
                 createdAt: Foundation.Date,
                 expiresAt: Foundation.Date,
+                remainingSeconds: Swift.Int,
                 lines: [Components.Schemas.TournamentCheckoutLineRead]
             ) {
                 self.id = id
@@ -11422,6 +11426,7 @@ internal enum Components {
                 self.totalCents = totalCents
                 self.createdAt = createdAt
                 self.expiresAt = expiresAt
+                self.remainingSeconds = remainingSeconds
                 self.lines = lines
             }
             internal enum CodingKeys: String, CodingKey {
@@ -11435,6 +11440,7 @@ internal enum Components {
                 case totalCents = "total_cents"
                 case createdAt = "created_at"
                 case expiresAt = "expires_at"
+                case remainingSeconds = "remaining_seconds"
                 case lines
             }
         }
@@ -11593,6 +11599,8 @@ internal enum Components {
             internal var createdByUsername: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/can_edit`.
             internal var canEdit: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/checkout_available`.
+            internal var checkoutAvailable: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/created_at`.
             internal var createdAt: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/TournamentDetailRead/updated_at`.
@@ -11659,6 +11667,7 @@ internal enum Components {
             ///   - createdByUserId:
             ///   - createdByUsername:
             ///   - canEdit:
+            ///   - checkoutAvailable:
             ///   - createdAt:
             ///   - updatedAt:
             ///   - events:
@@ -11680,6 +11689,7 @@ internal enum Components {
                 createdByUserId: Swift.String,
                 createdByUsername: Swift.String,
                 canEdit: Swift.Bool,
+                checkoutAvailable: Swift.Bool,
                 createdAt: Foundation.Date,
                 updatedAt: Foundation.Date,
                 events: [Components.Schemas.TournamentEventRead],
@@ -11701,6 +11711,7 @@ internal enum Components {
                 self.createdByUserId = createdByUserId
                 self.createdByUsername = createdByUsername
                 self.canEdit = canEdit
+                self.checkoutAvailable = checkoutAvailable
                 self.createdAt = createdAt
                 self.updatedAt = updatedAt
                 self.events = events
@@ -11723,6 +11734,7 @@ internal enum Components {
                 case createdByUserId = "created_by_user_id"
                 case createdByUsername = "created_by_username"
                 case canEdit = "can_edit"
+                case checkoutAvailable = "checkout_available"
                 case createdAt = "created_at"
                 case updatedAt = "updated_at"
                 case events
@@ -12956,6 +12968,8 @@ internal enum Components {
             internal var createdByUsername: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentRead/can_edit`.
             internal var canEdit: Swift.Bool
+            /// - Remark: Generated from `#/components/schemas/TournamentRead/checkout_available`.
+            internal var checkoutAvailable: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/TournamentRead/created_at`.
             internal var createdAt: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/TournamentRead/updated_at`.
@@ -12976,6 +12990,7 @@ internal enum Components {
             ///   - createdByUserId:
             ///   - createdByUsername:
             ///   - canEdit:
+            ///   - checkoutAvailable:
             ///   - createdAt:
             ///   - updatedAt:
             internal init(
@@ -12992,6 +13007,7 @@ internal enum Components {
                 createdByUserId: Swift.String,
                 createdByUsername: Swift.String,
                 canEdit: Swift.Bool,
+                checkoutAvailable: Swift.Bool,
                 createdAt: Foundation.Date,
                 updatedAt: Foundation.Date
             ) {
@@ -13008,6 +13024,7 @@ internal enum Components {
                 self.createdByUserId = createdByUserId
                 self.createdByUsername = createdByUsername
                 self.canEdit = canEdit
+                self.checkoutAvailable = checkoutAvailable
                 self.createdAt = createdAt
                 self.updatedAt = updatedAt
             }
@@ -13025,6 +13042,7 @@ internal enum Components {
                 case createdByUserId = "created_by_user_id"
                 case createdByUsername = "created_by_username"
                 case canEdit = "can_edit"
+                case checkoutAvailable = "checkout_available"
                 case createdAt = "created_at"
                 case updatedAt = "updated_at"
             }

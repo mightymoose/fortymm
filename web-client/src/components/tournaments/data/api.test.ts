@@ -619,6 +619,7 @@ const draft: Omit<Tournament, 'id'> = {
   name: 'Autumn Cup',
   status: 'draft',
   canEdit: true,
+  checkoutAvailable: false,
   dateRange: { start: '2026-09-01', end: '2026-09-02' },
   description: 'A new draft.',
   // A read `Address` carries the server-geocoded coordinates (NOT NULL). The

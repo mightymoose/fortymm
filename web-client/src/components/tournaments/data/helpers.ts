@@ -437,6 +437,7 @@ export function emptyTournament(): Omit<Tournament, 'id'> {
     status: 'draft',
     // A brand-new tournament is created by, hence owned by, the current user.
     canEdit: true,
+    checkoutAvailable: false,
     // No events yet, so no date span — the server derives `dateRange` from the
     // events an org has not created, and this draft has never been fetched
     // besides (ADR 20260726's "not yet fetched" rule, applied here too).

@@ -44,7 +44,7 @@ def upgrade() -> None:
         sa.Column(
             "currency", sa.String(length=3), server_default="USD", nullable=False
         ),
-        sa.Column("total_cents", sa.Integer(), nullable=False),
+        sa.Column("total_cents", sa.BigInteger(), nullable=False),
         sa.Column("status", checkout_status, server_default="active", nullable=False),
         sa.Column(
             "created_at",

@@ -104,6 +104,7 @@ export const EventsTab = ({
           })
         }}
         onExpired={refreshCheckout}
+        onRemoveSelection={(eventId) => togglePaid(eventId)}
       />
       {tournament.events.length === 0 ? (
         <EmptyState

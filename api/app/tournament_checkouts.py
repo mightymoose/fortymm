@@ -3,6 +3,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from math import ceil
 from typing import cast
 
 from pyrate_limiter import Duration, Rate
@@ -104,6 +105,7 @@ def _read(
         total_cents=checkout.total_cents,
         created_at=checkout.created_at,
         expires_at=checkout.expires_at,
+        remaining_seconds=max(0, ceil((checkout.expires_at - now).total_seconds())),
         lines=[
             TournamentCheckoutLineRead(
                 event_id=line.event_id,
@@ -180,7 +182,7 @@ async def start_checkout(
     client_ip: str,
 ) -> TournamentCheckoutRead:
     player = actor.primary_player
-    if player is None:
+    if player is None or player.retired_at is not None:
         raise CheckoutNotFoundError()
 
     await db.execute(

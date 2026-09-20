@@ -145,6 +145,17 @@ export const EnterEventControl = ({
       )
 
     case 'enter':
+      if (event.entryFee > 0 && !tournament.checkoutAvailable) {
+        return (
+          <LeadReason
+            testId="checkout-unavailable-notice"
+            layout="stacked"
+            lead="Paid entry unavailable"
+            reason="Checkout is not available for this tournament."
+            className="max-w-[190px] text-right"
+          />
+        )
+      }
       if (event.entryFee > 0 && onTogglePaid) {
         return (
           <Button

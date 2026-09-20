@@ -1259,6 +1259,7 @@ export const handlers = [
       total_cents: lines.reduce((total, line) => total + line.price_cents, 0),
       created_at: new Date().toISOString(),
       expires_at: new Date(Date.now() + 600_000).toISOString(),
+      remaining_seconds: 600,
       lines,
     }
     checkoutByTournament.set(tournamentId, checkout)

@@ -47,6 +47,7 @@ class TournamentCheckoutRead(BaseModel):
     total_cents: int
     created_at: datetime
     expires_at: datetime
+    remaining_seconds: int = Field(ge=0)
     lines: list[TournamentCheckoutLineRead]
 
 
