@@ -36,7 +36,8 @@ This is the highest-nuance tournament verb, and every nuance is preserved exactl
   **locked first** (the capacity lock — the row whose status decides this request must
   not change between the checks and the INSERT), then the event. Then, in order: the
   **singles-only 400** (:class:`NonSinglesEntryError`) → the **registration-window 409**
-  (``registration_closed``) → the **rating-eligibility 409** (``rating_ineligible``) →
+  (``registration_closed``) → the self-registration-only **paid-checkout 409**
+  (``payment_required``) → the **rating-eligibility 409** (``rating_ineligible``) →
   the **capacity 409** (``event_full``) → the **already-entered 409**
   (``already_entered``, caught from the deferred uniqueness constraint inside the
   admission savepoint). The permanent refusals precede the transient ones (a doubles
@@ -401,7 +402,11 @@ async def admit_to_event(
     # beside their name, read once. Capacity is counted UNDER THE LOCK taken above, and
     # nothing between its count and the commit may take a lock of its own.
     _enforce_entry_registration_open(tournament, event)
-    if Decimal(event.entry_fee) > 0:
+    # Paid self-entry belongs to checkout, but directors retain the established
+    # manual arm for phone, offline and complimentary registrations. Checkout can
+    # only reserve the signed-in player's own place, so applying this guard to the
+    # director arm would make those entrants impossible to record.
+    if self_registration and Decimal(event.entry_fee) > 0:
         raise EntryRefusedError(
             EntryRefusal.payment_required,
             "This event requires paid checkout.",
