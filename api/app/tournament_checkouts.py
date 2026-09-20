@@ -225,6 +225,7 @@ async def start_checkout(
     request: TournamentCheckoutCreate,
     client_ip: str,
 ) -> TournamentCheckoutRead:
+    actor_account_id = actor.id
     # A durable request replay does not consume admission budget. Check for its
     # existence without a row lock first; genuinely new requests charge the
     # fail-closed Redis budget before taking Account, Tournament, or Player locks.
@@ -232,7 +233,7 @@ async def start_checkout(
     prior_request = await db.scalar(
         select(TournamentCheckout)
         .where(
-            TournamentCheckout.payer_account_id == actor.id,
+            TournamentCheckout.payer_account_id == actor_account_id,
             TournamentCheckout.request_id == request.request_id,
         )
         .options(selectinload(TournamentCheckout.lines))
@@ -252,7 +253,7 @@ async def start_checkout(
     while not exact_durable_replay:
         admission = await _enforce_checkout_rate_limit(
             client_ip,
-            payer_account_id=actor.id,
+            payer_account_id=actor_account_id,
             request_id=request.request_id,
             tournament_id=tournament_id,
             event_ids=request.event_ids,
@@ -264,6 +265,10 @@ async def start_checkout(
         # An identical request is already admitted. Wait without database locks,
         # then replay its durable result. If it refused and wrote nothing, loop so
         # only one follower can claim and charge the next lease; the rest follow it.
+        # End the read-only precheck transaction first so the wait retains neither
+        # a pooled connection nor an MVCC snapshot. Commit preserves already-loaded
+        # request objects because application sessions disable expiry on commit.
+        await db.commit()
         try:
             changed = await wait_for_idempotent_budget_marker_change(
                 admission.marker_key, admission.marker_token
@@ -275,7 +280,7 @@ async def start_checkout(
         prior_request = await db.scalar(
             select(TournamentCheckout)
             .where(
-                TournamentCheckout.payer_account_id == actor.id,
+                TournamentCheckout.payer_account_id == actor_account_id,
                 TournamentCheckout.request_id == request.request_id,
             )
             .options(selectinload(TournamentCheckout.lines))
@@ -286,7 +291,7 @@ async def start_checkout(
         return await _start_checkout_after_admission(
             db,
             tournament_id=tournament_id,
-            actor=actor,
+            actor_account_id=actor_account_id,
             request=request,
         )
     finally:
@@ -298,7 +303,7 @@ async def _start_checkout_after_admission(
     db: AsyncSession,
     *,
     tournament_id: uuid.UUID,
-    actor: User,
+    actor_account_id: uuid.UUID,
     request: TournamentCheckoutCreate,
 ) -> TournamentCheckoutRead:
     merchant_account_id = get_settings().tournament_payment_merchant_account_id
@@ -306,7 +311,7 @@ async def _start_checkout_after_admission(
     # strength each role needs. The payer is exclusive so request IDs serialize;
     # the shared merchant lock still conflicts with lifecycle/merge writes while
     # allowing unrelated buyers across the merchant's catalogue to proceed.
-    account_ids = {actor.id}
+    account_ids = {actor_account_id}
     if merchant_account_id is not None:
         account_ids.add(merchant_account_id)
     locked_accounts: dict[uuid.UUID, User] = {}
@@ -314,12 +319,12 @@ async def _start_checkout_after_admission(
         account = await db.scalar(
             select(User)
             .where(User.id == account_id)
-            .with_for_update(read=account_id != actor.id)
+            .with_for_update(read=account_id != actor_account_id)
             .execution_options(populate_existing=True)
         )
         if account is not None:
             locked_accounts[account.id] = account
-    locked_actor = locked_accounts.get(actor.id)
+    locked_actor = locked_accounts.get(actor_account_id)
     locked_merchant = (
         locked_accounts.get(merchant_account_id)
         if merchant_account_id is not None

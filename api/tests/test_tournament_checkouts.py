@@ -1412,6 +1412,58 @@ async def test_concurrent_refused_replays_do_not_repeat_database_validation(
     assert validation_calls == 1
 
 
+async def test_inflight_follower_releases_precheck_transaction_before_waiting(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch,
+    rate_limiter_fakeredis,
+) -> None:
+    payer = await make_user(db_session, f"buyer-{uuid.uuid4().hex[:8]}")
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("10.00"),)
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    request = TournamentCheckoutCreate(
+        request_id=uuid.uuid4(), event_ids=[event.id]
+    )
+    admission = await checkout_module._enforce_checkout_rate_limit(
+        "203.0.113.24",
+        payer_account_id=payer.id,
+        request_id=request.request_id,
+        tournament_id=tournament.id,
+        event_ids=request.event_ids,
+    )
+    assert admission.owns_marker
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+    async with make_session() as follower:
+        actor = await follower.get(User, payer.id)
+        assert actor is not None
+
+        async def observe_released_connection(*_args, **_kwargs) -> bool:
+            assert not follower.in_transaction()
+            return False
+
+        monkeypatch.setattr(
+            checkout_module,
+            "wait_for_idempotent_budget_marker_change",
+            observe_released_connection,
+        )
+        try:
+            with pytest.raises(CheckoutRateLimitedError):
+                await start_checkout(
+                    follower,
+                    tournament_id=tournament.id,
+                    actor=actor,
+                    request=request,
+                    client_ip="203.0.113.24",
+                )
+        finally:
+            await checkout_module.release_idempotent_budget_marker(
+                admission.marker_key, admission.marker_token
+            )
+
+
 async def test_concurrent_mismatched_payloads_charge_separate_admission_tokens(
     db_session: AsyncSession,
     engine: AsyncEngine,

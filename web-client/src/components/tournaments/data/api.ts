@@ -881,7 +881,8 @@ export function useTables(id: string): TournamentTable[] {
 export function checkoutRefreshInterval(
   checkout: TournamentCheckout | null | undefined,
 ): number | false {
-  return checkout?.status === 'active' ? 5_000 : false
+  if (checkout === undefined) return false
+  return checkout === null || checkout.status === 'active' ? 5_000 : false
 }
 
 export function useCurrentCheckout(tournamentId: string, sessionLoaded = true) {
