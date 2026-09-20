@@ -116,6 +116,14 @@ export class EventEditorPage {
     await expect(this.playerLimitInput).toHaveValue(String(count))
   }
 
+  /** Type the event fee. Browser-authored tournament lifecycle specs use `0` because
+   * they exercise the free-entry action; the editor's product default is paid. */
+  async setEntryFee(amount: number): Promise<void> {
+    const input = this.page.getByLabel(/^Entry fee/)
+    await input.fill(String(amount))
+    await expect(input).toHaveValue(String(amount))
+  }
+
   // ----- the sheet's tabs ---------------------------------------------------
 
   /** One of the sheet's section tabs, by the word on it.

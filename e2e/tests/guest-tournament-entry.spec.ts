@@ -51,7 +51,7 @@ test.describe('guest tournament access (#1092)', () => {
     ).toBeVisible()
 
     // Enter the singles event — self-registration, no permission asked.
-    const enter = page.getByRole('button', { name: 'Enter Open Singles' })
+    const enter = page.getByRole('button', { name: 'Enter free Open Singles' })
     await expect(enter).toBeVisible()
     await enter.click()
 
