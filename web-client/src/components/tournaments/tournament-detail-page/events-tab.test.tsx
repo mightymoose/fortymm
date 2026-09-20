@@ -1,5 +1,6 @@
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
+import { useState } from 'react'
 import { toast } from 'sonner'
 
 import { mockEventEnterEndpoint } from '@/mocks/endpoints/tournaments/tournaments.endpoint'
@@ -194,14 +195,27 @@ describe('EventsTab', () => {
       const props = buildEventsTabProps({
         tournament: buildTournament({ events: [paidEvent] }),
       })
-      const view = render(<EventsTab {...props} />)
+      const renderError = vi.spyOn(console, 'error').mockImplementation(() => {})
+      function ControlledEventsTab({
+        tournament,
+      }: Pick<typeof props, 'tournament'>) {
+        const [draft, setDraft] = useState<Set<string>>(() => new Set())
+        return (
+          <EventsTab
+            {...props}
+            tournament={tournament}
+            checkoutDraftIds={draft}
+            onCheckoutDraftChange={setDraft}
+          />
+        )
+      }
+      const view = render(<ControlledEventsTab tournament={props.tournament} />)
 
       await userEvent.click(await eventsTabPage.findSelectButton('Open Singles'))
       expect(screen.getByText('Entry summary')).toBeInTheDocument()
 
       view.rerender(
-        <EventsTab
-          {...props}
+        <ControlledEventsTab
           tournament={buildTournament({
             events: [{ ...paidEvent, format: 'doubles' }],
           })}
@@ -209,6 +223,10 @@ describe('EventsTab', () => {
       )
 
       await waitFor(() => expect(screen.queryByText('Entry summary')).toBeNull())
+      expect(renderError.mock.calls.flat().join(' ')).not.toContain(
+        'Cannot update a component while rendering',
+      )
+      renderError.mockRestore()
     })
 
     it('holds multiple paid events as one itemized checkout', async () => {

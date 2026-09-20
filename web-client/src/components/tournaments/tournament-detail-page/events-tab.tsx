@@ -1,5 +1,11 @@
 import { Plus, Trophy } from 'lucide-react'
-import { type Dispatch, type SetStateAction, useState } from 'react'
+import {
+  type Dispatch,
+  type SetStateAction,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
 
 import { useSession } from '@/api/session'
 import { Button } from '@/components/ui/button'
@@ -60,7 +66,6 @@ export const EventsTab = ({
   const [localSelectedIds, setLocalSelectedIds] = useState<Set<string>>(() => new Set())
   const selectedIds = checkoutDraftIds ?? localSelectedIds
   const setSelectedIds = onCheckoutDraftChange ?? setLocalSelectedIds
-  const [adoptedCheckoutId, setAdoptedCheckoutId] = useState<string | null>(null)
   const checkoutDiscoveryEnabled =
     tournament.checkoutAvailable &&
     tournament.status === 'published' &&
@@ -77,24 +82,35 @@ export const EventsTab = ({
   const activeCheckoutId = checkout?.id
   // The POST response can be lost after the server commits. The mutation's
   // reconciliation then discovers the durable checkout; adopt that server state
-  // and discard the draft before rendering so it cannot reappear after release.
-  if (activeCheckoutId && activeCheckoutId !== adoptedCheckoutId) {
-    setAdoptedCheckoutId(activeCheckoutId)
-    setSelectedIds(new Set())
-  }
+  // and discard the draft after commit so a controlled draft does not update its
+  // parent while this child is rendering.
+  useEffect(() => {
+    if (activeCheckoutId && selectedIds.size > 0) {
+      setSelectedIds(new Set())
+    }
+  }, [activeCheckoutId, selectedIds, setSelectedIds])
   const hidePaidSelection = checkout !== null || startCheckout.isPending
   const disablePaidSelection = currentCheckout.isFetching
-  const selectedEvents = tournament.events.filter(
-    (event) =>
-      selectedIds.has(event.id) &&
-      isCheckoutEventEligible(tournament, event, username),
+  const selectedEvents = useMemo(
+    () =>
+      tournament.events.filter(
+        (event) =>
+          selectedIds.has(event.id) &&
+          isCheckoutEventEligible(tournament, event, username),
+      ),
+    [selectedIds, tournament, username],
   )
-  const effectiveSelectedIds = new Set(selectedEvents.map((event) => event.id))
-  if (effectiveSelectedIds.size !== selectedIds.size) {
-    // Editing or externally updating an event can make a local draft impossible
-    // to submit. Permanently prune those IDs before the summary can offer Hold.
-    setSelectedIds(effectiveSelectedIds)
-  }
+  const effectiveSelectedIds = useMemo(
+    () => new Set(selectedEvents.map((event) => event.id)),
+    [selectedEvents],
+  )
+  useEffect(() => {
+    if (!activeCheckoutId && effectiveSelectedIds.size !== selectedIds.size) {
+      // Editing or externally updating an event can make a draft impossible to
+      // submit. Prune it after commit; controlled state belongs to the parent.
+      setSelectedIds(effectiveSelectedIds)
+    }
+  }, [activeCheckoutId, effectiveSelectedIds, selectedIds, setSelectedIds])
   const togglePaid = (eventId: string) => {
     if (hidePaidSelection || disablePaidSelection) return
     setSelectedIds((current) => toggleCheckoutEvent(current, eventId))

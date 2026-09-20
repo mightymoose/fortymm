@@ -1,4 +1,9 @@
-import { type Dispatch, type SetStateAction, useState } from 'react'
+import {
+  type Dispatch,
+  type SetStateAction,
+  useCallback,
+  useState,
+} from 'react'
 import { Calendar, Layers, MapPin, Table2, Trophy, Users } from 'lucide-react'
 
 import { LocationMap } from '@/components/maps/location-map'
@@ -179,12 +184,15 @@ export const TournamentDetailPage = ({
   const [pendingDelete, setPendingDelete] = useState<TournamentEvent | null>(null)
   const [checkoutDrafts, setCheckoutDrafts] = useState<Record<string, Set<string>>>({})
   const checkoutDraftIds = checkoutDrafts[tournament.id] ?? new Set<string>()
-  const setCheckoutDraftIds: Dispatch<SetStateAction<Set<string>>> =
-    (next) => setCheckoutDrafts((current) => {
+  const setCheckoutDraftIds = useCallback<
+    Dispatch<SetStateAction<Set<string>>>
+  >((next) => {
+    setCheckoutDrafts((current) => {
       const previous = current[tournament.id] ?? new Set<string>()
       const value = typeof next === 'function' ? next(previous) : next
       return { ...current, [tournament.id]: value }
     })
+  }, [tournament.id])
 
   const tournamentTables = tournament.tableIds
     .map((id) => allTables.find((t) => t.id === id))
