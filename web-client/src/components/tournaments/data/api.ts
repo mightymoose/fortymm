@@ -61,6 +61,7 @@ type ApiPredicate = components['schemas']['Predicate']
 type ApiEntryState = TournamentEventRead['entry_state']
 type TournamentFixturePlacementUpdate =
   components['schemas']['TournamentFixturePlacementUpdate']
+type TournamentCheckoutRead = components['schemas']['TournamentCheckoutRead']
 
 /** The API types a `between` predicate's value as a variable-length
  * `(number | null)[]`; the prototype narrows it to a `[min, max]` tuple. Coerce
@@ -71,7 +72,6 @@ function apiToPredicateValue(value: ApiPredicate['value']): PredicateValue {
   }
   return value
 }
-
 function apiToPredicate(p: ApiPredicate): Predicate {
   return { id: p.id, field: p.field, op: p.op, value: apiToPredicateValue(p.value) }
 }
@@ -139,6 +139,49 @@ export function apiToEntrant(payload: TournamentEntrantRead): Entrant {
   }
 }
 
+const checkoutSchema = z.object({
+  id: z.string().uuid(),
+  request_id: z.string().uuid(),
+  tournament_id: z.string().uuid(),
+  registration_generation: z.number().int().nonnegative(),
+  status: z.enum(['active', 'cancelled', 'expired', 'invalidated']),
+  payment_state: z.literal('unavailable'),
+  currency: z.literal('USD'),
+  total_cents: z.number().int().positive(),
+  created_at: z.iso.datetime({ offset: true }),
+  expires_at: z.iso.datetime({ offset: true }),
+  lines: z.array(
+    z.object({
+      event_id: z.string().uuid(),
+      event_name: z.string(),
+      price_cents: z.number().int().positive(),
+    }),
+  ),
+})
+
+export type TournamentCheckout = ReturnType<typeof apiToCheckout>
+
+function apiToCheckout(payload: TournamentCheckoutRead) {
+  const checkout = checkoutSchema.parse(payload)
+  return {
+    id: checkout.id,
+    requestId: checkout.request_id,
+    tournamentId: checkout.tournament_id,
+    registrationGeneration: checkout.registration_generation,
+    status: checkout.status,
+    paymentState: checkout.payment_state,
+    currency: checkout.currency,
+    totalCents: checkout.total_cents,
+    createdAt: checkout.created_at,
+    expiresAt: checkout.expires_at,
+    lines: checkout.lines.map((line) => ({
+      eventId: line.event_id,
+      eventName: line.event_name,
+      priceCents: line.price_cents,
+    })),
+  }
+}
+
 const retainedEntrantsSchema = z.object({
   retained_entrants: z.array(entrantSchema).default([]),
 })
@@ -175,6 +218,8 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
     entryFee: e.entry_fee,
     timezone: e.timezone,
     entered: e.entered,
+    heldPlaces: e.held_places,
+    availablePlaces: e.available_places,
     entrants: e.entrants.map(apiToEntrant),
     retainedEntrants: retainedEntrantsSchema.parse(e).retained_entrants.map(apiToEntrant),
     entryState: apiToEntryState(e.entry_state),
@@ -581,6 +626,7 @@ export function eventToUpdateBody(ev: EditedEvent): TournamentEventUpdate {
 
 const TOURNAMENTS_KEY = ['tournaments'] as const
 const tournamentKey = (id: string) => ['tournaments', id] as const
+const checkoutKey = (id: string) => ['tournament-checkout', id] as const
 
 /** A location + radius to filter the list to tournaments **near a point**. All three
  * are sent together or not at all — the API's `lat`/`lng`/`radius_miles` triple is
@@ -813,6 +859,78 @@ export function useTables(id: string): TournamentTable[] {
     select: (data) => data.tables,
   })
   return data ?? []
+}
+
+/** The caller's one active reservation for this tournament. A 404 is the normal
+ * "no reservation" state, not an error screen. */
+export function useCurrentCheckout(tournamentId: string) {
+  return useQuery({
+    queryKey: checkoutKey(tournamentId),
+    queryFn: async (): Promise<TournamentCheckout | null> => {
+      const result = await api.GET(
+        '/v1/tournaments/{tournament_id}/checkouts/current',
+        { params: { path: { tournament_id: tournamentId } } },
+      )
+      if (result.response.status === 404) return null
+      return apiToCheckout(unwrap('load your reserved places', result))
+    },
+    throwOnError: (_error, query) => query.state.data === undefined,
+    retry: false,
+  })
+}
+
+/** Reconcile both the server-owned deadline and the capacity projection when a
+ * locally displayed checkout timer reaches zero. */
+export function useRefreshTournamentCheckout(tournamentId: string) {
+  const qc = useQueryClient()
+  return () => {
+    void Promise.all([
+      qc.invalidateQueries({ queryKey: checkoutKey(tournamentId) }),
+      reconcileTournament(qc, tournamentId),
+    ])
+  }
+}
+
+export function useStartCheckout(tournamentId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (eventIds: string[]): Promise<TournamentCheckout> =>
+      apiToCheckout(
+        unwrap(
+          'reserve your places',
+          await api.POST('/v1/tournaments/{tournament_id}/checkouts', {
+            params: { path: { tournament_id: tournamentId } },
+            body: { request_id: crypto.randomUUID(), event_ids: eventIds },
+          }),
+        ),
+      ),
+    onSuccess: (checkout) => qc.setQueryData(checkoutKey(tournamentId), checkout),
+    onSettled: () => invalidateTournament(qc, tournamentId),
+    onError: notifyError('reserve your places'),
+  })
+}
+
+export function useCancelCheckout(tournamentId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (checkoutId: string): Promise<TournamentCheckout> =>
+      apiToCheckout(
+        unwrap(
+          'cancel your reservation',
+          await api.DELETE(
+            '/v1/tournaments/{tournament_id}/checkouts/{checkout_id}',
+            {
+              params: {
+                path: { tournament_id: tournamentId, checkout_id: checkoutId },
+              },
+            },
+          ),
+        ),
+      ),
+    onSuccess: () => qc.setQueryData(checkoutKey(tournamentId), null),
+    onSettled: () => invalidateTournament(qc, tournamentId),
+    onError: notifyError('cancel your reservation'),
+  })
 }
 
 // ----- mutations -----------------------------------------------------------

@@ -26,6 +26,13 @@ describe('eventCapacity', () => {
     expect(capacityOf(0, 48)).toEqual({ state: 'places-left', remaining: 48 })
   })
 
+  it('counts valid checkout holds as occupied without calling them entrants', () => {
+    const held = { entered: 6, heldPlaces: 2, maxPlayers: 10 }
+    expect(eventCapacity(held)).toEqual({ state: 'places-left', remaining: 2 })
+    expect(enteredSummary(held)).toBe('6 of 10 entered')
+    expect(capacityFillPercent(held)).toBe(80)
+  })
+
   // THE BOUNDARY. `entered === maxPlayers` is where "places left" stops being a
   // number: it is not a remainder of zero, it is a different fact. The sum type is
   // what makes that unsayable — `full` carries no `remaining` to be zero.

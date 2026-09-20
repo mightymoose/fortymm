@@ -122,6 +122,7 @@ export const MOCK_AGENT_ACCESS = buildAgentAccess({
  * round trip.
  */
 let agentAccessNow = MOCK_AGENT_ACCESS
+const checkoutByTournament = new Map<string, components['schemas']['TournamentCheckoutRead']>()
 
 /** The dev world's cross-tournament solve ledger (see the handler below). */
 const mockAdminSolveLedger = buildAdminSolveLedgerSeed()
@@ -135,7 +136,6 @@ export const mockPlayers = [
   player({ username: 'chen.w', rating: 1547 }),
   player({ username: 'park.j', rating: null }),
 ]
-
 /**
  * The roster players who have **never played a match** — the shape production is
  * full of, and the one the mock world could not express, which is how a
@@ -1227,6 +1227,55 @@ function parseNearMe(params: URLSearchParams):
 }
 
 export const handlers = [
+  http.get('*/v1/tournaments/:tournamentId/checkouts/current', ({ params }) => {
+    const checkout = checkoutByTournament.get(String(params.tournamentId))
+    return checkout
+      ? HttpResponse.json(checkout)
+      : HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 })
+  }),
+  http.post('*/v1/tournaments/:tournamentId/checkouts', async ({ params, request }) => {
+    const tournamentId = String(params.tournamentId)
+    const body = await request.json() as { request_id: string; event_ids: string[] }
+    const tournament = findTournament(tournamentId)
+    const events = body.event_ids.map((eventId) =>
+      tournament?.events.find((event) => event.id === eventId),
+    )
+    if (events.some((event) => event === undefined)) {
+      return HttpResponse.json({ detail: 'Event not found.' }, { status: 409 })
+    }
+    const lines = events.map((event) => ({
+      event_id: event!.id,
+      event_name: event!.name,
+      price_cents: Math.round(event!.entry_fee * 100),
+    }))
+    const checkout: components['schemas']['TournamentCheckoutRead'] = {
+      id: crypto.randomUUID(),
+      request_id: body.request_id,
+      tournament_id: tournamentId,
+      registration_generation: 0,
+      status: 'active',
+      payment_state: 'unavailable',
+      currency: 'USD',
+      total_cents: lines.reduce((total, line) => total + line.price_cents, 0),
+      created_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 600_000).toISOString(),
+      lines,
+    }
+    checkoutByTournament.set(tournamentId, checkout)
+    return HttpResponse.json(checkout, { status: 201 })
+  }),
+  http.delete(
+    '*/v1/tournaments/:tournamentId/checkouts/:checkoutId',
+    ({ params }) => {
+      const tournamentId = String(params.tournamentId)
+      const checkout = checkoutByTournament.get(tournamentId)
+      if (!checkout || checkout.id !== String(params.checkoutId)) {
+        return HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 })
+      }
+      checkoutByTournament.delete(tournamentId)
+      return HttpResponse.json({ ...checkout, status: 'cancelled' })
+    },
+  ),
   http.get('*/v1/health', async () => {
     await delay(400)
     return HttpResponse.json(mockHealthy)

@@ -284,6 +284,9 @@ async def delete_event(
     await _load_owned_tournament_for_update(db, tournament_id, actor)
     event = await _load_event(db, tournament_id, event_id)
     await require_no_recorded_play(db, tournament_id=tournament_id, event_id=event.id)
+    from app.tournament_checkouts import invalidate_checkouts_for_event
+
+    await invalidate_checkouts_for_event(db, event.id)
     # The explicit parent deletion owns its entire history. Let database cascades
     # remove children after the event disappears, even when ORM collections are loaded.
     await db.execute(delete(TournamentEvent).where(TournamentEvent.id == event.id))

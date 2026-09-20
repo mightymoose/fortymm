@@ -33,6 +33,9 @@ from app.models import (
     MatchStatus,
     Player,
     Tournament,
+    TournamentCheckout,
+    TournamentCheckoutLine,
+    TournamentCheckoutStatus,
     TournamentEntry,
     TournamentEntryRegistration,
     TournamentEntryStatus,
@@ -862,6 +865,39 @@ async def active_entry_count(db: AsyncSession, event_id: uuid.UUID) -> int:
             )
         )
     ).scalar_one()
+
+
+async def valid_hold_counts_by_event(
+    db: AsyncSession, event_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, int]:
+    """Valid checkout holds by event, using database time even before cleanup."""
+    counts = {event_id: 0 for event_id in event_ids}
+    if not counts:
+        return counts
+    rows = (
+        await db.execute(
+            select(TournamentCheckoutLine.event_id, func.count())
+            .join(
+                TournamentCheckout,
+                TournamentCheckout.id == TournamentCheckoutLine.checkout_id,
+            )
+            .join(Tournament, Tournament.id == TournamentCheckout.tournament_id)
+            .where(
+                TournamentCheckoutLine.event_id.in_(counts),
+                TournamentCheckout.status == TournamentCheckoutStatus.active,
+                TournamentCheckout.expires_at > func.clock_timestamp(),
+                TournamentCheckout.registration_generation
+                == Tournament.registration_generation,
+            )
+            .group_by(TournamentCheckoutLine.event_id)
+        )
+    ).all()
+    counts.update({event_id: count for event_id, count in rows})
+    return counts
+
+
+async def valid_hold_count(db: AsyncSession, event_id: uuid.UUID) -> int:
+    return (await valid_hold_counts_by_event(db, [event_id]))[event_id]
 
 
 async def entrant_rating(

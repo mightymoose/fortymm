@@ -250,6 +250,13 @@ export const entryFeeSchema = z
       ctx.addIssue({ code: 'custom', message: 'The entry fee cannot be negative.' })
       return
     }
+    if (value > 0 && value < 0.5) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'A paid entry fee must be at least $0.50 USD.',
+      })
+      return
+    }
     if (value > ENTRY_FEE_MAX) {
       ctx.addIssue({
         code: 'custom',

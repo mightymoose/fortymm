@@ -48,7 +48,9 @@ export type EventCapacity =
 
 /** The two values a capacity reading needs. Narrower than `TournamentEvent` so
  * the tests can state a case in the numbers it is about. */
-type Capacity = Pick<TournamentEvent, 'entered' | 'maxPlayers'>
+type Capacity = Pick<TournamentEvent, 'entered' | 'maxPlayers'> & {
+  heldPlaces?: number
+}
 
 /**
  * What this event has left.
@@ -70,7 +72,7 @@ type Capacity = Pick<TournamentEvent, 'entered' | 'maxPlayers'>
  */
 export function eventCapacity(event: Capacity): EventCapacity {
   if (event.maxPlayers === null) return { state: 'uncapped' }
-  const remaining = event.maxPlayers - event.entered
+  const remaining = event.maxPlayers - event.entered - (event.heldPlaces ?? 0)
   return remaining > 0 ? { state: 'places-left', remaining } : { state: 'full' }
 }
 
@@ -121,6 +123,8 @@ export function capacityFillPercent(event: Capacity): number | null {
   // The DB's `CHECK (max_players > 0)` makes a zero cap unrepresentable server-side
   // (ADR-0935); this is the client's own guard against dividing by one regardless.
   if (event.maxPlayers <= 0) return 100
-  const pct = Math.round((event.entered / event.maxPlayers) * 100)
+  const pct = Math.round(
+    ((event.entered + (event.heldPlaces ?? 0)) / event.maxPlayers) * 100,
+  )
   return Math.min(100, Math.max(0, pct))
 }

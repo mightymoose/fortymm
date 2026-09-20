@@ -32,10 +32,16 @@ const scoped = (container: Container) => ({
    * `Edit`/`View <event>` open target. Absent for an unpermitted player and on
    * non-singles events. */
   findEnterButton(eventName: string) {
-    return container.findByRole('button', { name: `Enter ${eventName}` })
+    return container.findByRole('button', { name: `Enter free ${eventName}` })
   },
   queryEnterButton(eventName: string) {
-    return container.queryByRole('button', { name: `Enter ${eventName}` })
+    return container.queryByRole('button', { name: `Enter free ${eventName}` })
+  },
+  findSelectButton(eventName: string) {
+    return container.findByRole('button', { name: `Select ${eventName}` })
+  },
+  querySelectButton(eventName: string) {
+    return container.queryByRole('button', { name: `Select ${eventName}` })
   },
   findWithdrawButton(eventName: string) {
     return container.findByRole('button', { name: `Withdraw from ${eventName}` })

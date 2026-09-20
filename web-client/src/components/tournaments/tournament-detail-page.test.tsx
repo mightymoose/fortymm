@@ -799,10 +799,16 @@ describe('TournamentDetailPage', () => {
       // "New event", no Generate/Re-cut/Delete draw verbs, and no Withdraw (the
       // spectator is not among the entrants).
       expect(controls.length).toBeGreaterThan(0)
+      expect(controls.map((el) => el.getAttribute('aria-label') ?? el.textContent)).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/^View /),
+          expect.stringMatching(/^(Enter free|Select) /),
+        ]),
+      )
       expect(
         controls.every((el) => {
           const label = el.getAttribute('aria-label') ?? ''
-          return /^View /.test(label) || /^Enter /.test(label)
+          return /^View /.test(label) || /^(Enter free|Select) /.test(label)
         }),
       ).toBe(true)
       expect(tournamentDetailPagePage.queryNewEventButtons()).toHaveLength(0)

@@ -1,14 +1,22 @@
 import { Plus, Trophy } from 'lucide-react'
+import { useState } from 'react'
 
 import { useSession } from '@/api/session'
 import { Button } from '@/components/ui/button'
 
 import type { Tournament, TournamentEvent } from '../data/types'
+import {
+  useCancelCheckout,
+  useCurrentCheckout,
+  useRefreshTournamentCheckout,
+  useStartCheckout,
+} from '../data/api'
 import { EmptyState } from '../empty-state'
 import { SectionHeader } from './section-header'
 import { DrawPanel } from './events-tab/draw-panel'
 import { EventCard } from './events-tab/event-card'
 import { EnterEventControl } from './events-tab/enter-event-control'
+import { CheckoutSummary } from './events-tab/checkout-summary'
 
 export interface EventsTabProps {
   tournament: Tournament
@@ -18,7 +26,6 @@ export interface EventsTabProps {
   onOpenEvent: (event: TournamentEvent) => void
   onNewEvent: () => void
 }
-
 /** The Events tab: a list of event row-cards with a "New event" action and an
  * empty state. */
 export const EventsTab = ({
@@ -40,6 +47,21 @@ export const EventsTab = ({
   // user id (see `myEntrant`). `EnterEventControl` reads the same session for the
   // same join, so the chip and the Enter/Withdraw control can never disagree.
   const username = useSession().data?.data.user.username
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  const currentCheckout = useCurrentCheckout(tournament.id)
+  const startCheckout = useStartCheckout(tournament.id)
+  const cancelCheckout = useCancelCheckout(tournament.id)
+  const refreshCheckout = useRefreshTournamentCheckout(tournament.id)
+  const checkout = currentCheckout.data?.status === 'active' ? currentCheckout.data : null
+  const selectedEvents = tournament.events.filter((event) => selectedIds.has(event.id))
+  const togglePaid = (eventId: string) => {
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      if (next.has(eventId)) next.delete(eventId)
+      else next.add(eventId)
+      return next
+    })
+  }
 
   return (
     <div>
@@ -61,6 +83,27 @@ export const EventsTab = ({
             </Button>
           )
         }
+      />
+      <CheckoutSummary
+        selection={selectedEvents}
+        checkout={checkout}
+        pending={startCheckout.isPending || cancelCheckout.isPending}
+        onReserve={() => {
+          startCheckout.mutate(selectedEvents.map((event) => event.id), {
+            onSuccess: () => setSelectedIds(new Set()),
+          })
+        }}
+        onCancel={() => {
+          if (checkout) cancelCheckout.mutate(checkout.id)
+        }}
+        onChange={() => {
+          if (!checkout) return
+          const previous = new Set(checkout.lines.map((line) => line.eventId))
+          cancelCheckout.mutate(checkout.id, {
+            onSuccess: () => setSelectedIds(previous),
+          })
+        }}
+        onExpired={refreshCheckout}
       />
       {tournament.events.length === 0 ? (
         <EmptyState
@@ -93,7 +136,14 @@ export const EventsTab = ({
               // and renders nothing when it doesn't — and it takes the whole
               // tournament, not just its id, because whether registration is open
               // at all is a property of the tournament's STATUS (ADR-0017).
-              action={<EnterEventControl tournament={tournament} event={ev} />}
+              action={
+                <EnterEventControl
+                  tournament={tournament}
+                  event={ev}
+                  selected={selectedIds.has(ev.id)}
+                  onTogglePaid={() => togglePaid(ev.id)}
+                />
+              }
               // The event's draw (ADR-0786): its groups and fixtures for everyone, its
               // three verbs for the director alone. It hangs off the EVENT, not off a
               // tab of its own — a draw belongs to one event, and a "Draw" tab would

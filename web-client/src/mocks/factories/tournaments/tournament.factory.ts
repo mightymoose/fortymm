@@ -1347,6 +1347,8 @@ export function buildTournamentEventRead(
     draw_type: 'round-robin',
     max_players: 64,
     entry_fee: 45,
+    held_places: 0,
+    available_places: 64,
     timezone: 'America/Chicago',
     entrants: [],
     retained_entrants: [],

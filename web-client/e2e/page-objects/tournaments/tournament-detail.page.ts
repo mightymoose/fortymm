@@ -387,7 +387,7 @@ export class TournamentDetailPage {
   // ----- the event card's entry control ------------------------------------
 
   enterButton(eventName: string): Locator {
-    return this.page.getByRole('button', { name: `Enter ${eventName}` })
+    return this.page.getByRole('button', { name: `Enter free ${eventName}` })
   }
 
   /** The closed-window notice on one event card — the designed state the entry

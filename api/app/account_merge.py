@@ -34,6 +34,8 @@ from app.models import (
     RatingHistory,
     ScheduleSolveTrigger,
     Tournament,
+    TournamentCheckout,
+    TournamentCheckoutStatus,
     TournamentEntry,
     TournamentEntryRegistration,
     TournamentEntryStatus,
@@ -375,6 +377,19 @@ async def _merge_players(
     )
     await db.execute(
         delete(LeagueMembership).where(LeagueMembership.user_id == from_user_id)
+    )
+    # A checkout is a temporary capacity claim owned by a Player. It cannot be
+    # re-pointed during reconciliation: the survivor may already hold a checkout
+    # for the same tournament, and combining immutable selections would invent a
+    # quote nobody accepted. Invalidate the source identity's active claims; the
+    # survivor can create a fresh checkout against current capacity.
+    await db.execute(
+        update(TournamentCheckout)
+        .where(
+            TournamentCheckout.entrant_player_id == from_user_id,
+            TournamentCheckout.status == TournamentCheckoutStatus.active,
+        )
+        .values(status=TournamentCheckoutStatus.invalidated)
     )
     # Recording the Player merge atomically repoints proposal representation
     # through the database trigger; original Account actors remain immutable.

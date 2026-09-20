@@ -54,6 +54,7 @@ to the exact response it produced before.
 """
 
 import uuid
+from decimal import Decimal
 from typing import assert_never
 
 from pyrate_limiter import Duration, Rate
@@ -104,7 +105,7 @@ from app.tournament_participation import (
     close_registration,
     restore_event_eligibility,
 )
-from app.tournament_queries import active_entry_count, entrant_rating
+from app.tournament_queries import active_entry_count, entrant_rating, valid_hold_count
 
 
 def _entry_ip_limiter(limit: int) -> RedisRateLimiter:
@@ -261,7 +262,8 @@ async def _enforce_event_has_room(db: AsyncSession, event: TournamentEvent) -> N
     if max_players is None:
         return
     entered = await active_entry_count(db, event.id)
-    if not event_is_full(entered=entered, max_players=max_players):
+    held = await valid_hold_count(db, event.id)
+    if not event_is_full(entered=entered + held, max_players=max_players):
         return
     raise EntryRefusedError(
         EntryRefusal.event_full,
@@ -399,6 +401,11 @@ async def admit_to_event(
     # beside their name, read once. Capacity is counted UNDER THE LOCK taken above, and
     # nothing between its count and the commit may take a lock of its own.
     _enforce_entry_registration_open(tournament, event)
+    if Decimal(event.entry_fee) > 0:
+        raise EntryRefusedError(
+            EntryRefusal.payment_required,
+            "This event requires paid checkout.",
+        )
     rating = await _enforce_rating_eligible(db, tournament, event, entrant)
     await _enforce_event_has_room(db, event)
 

@@ -11,7 +11,7 @@ export function buildEnterEventControlProps(
 ): EnterEventControlProps {
   return {
     tournament: buildTournament(),
-    event: buildEvent(),
+    event: buildEvent({ entryFee: 0 }),
     ...overrides,
   }
 }

@@ -128,6 +128,9 @@ export const EventCard = ({
               <Badge variant="outline" className="font-mono">
                 Bo{ev.match.lengthGames}
               </Badge>
+              <Badge variant="outline" className="font-mono tabular-nums">
+                {ev.entryFee === 0 ? 'Free' : `$${ev.entryFee.toFixed(2)}`}
+              </Badge>
             </div>
             <div className="flex items-center gap-2 text-[13px] whitespace-nowrap text-[color:var(--fg-3)]">
               <span>{formatLabel}</span>

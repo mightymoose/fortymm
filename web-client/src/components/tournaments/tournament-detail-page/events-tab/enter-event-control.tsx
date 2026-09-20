@@ -1,4 +1,4 @@
-import { LogIn, LogOut } from 'lucide-react'
+import { Check, LogIn, LogOut } from 'lucide-react'
 
 import { useSession } from '@/api/session'
 import { Button } from '@/components/ui/button'
@@ -14,6 +14,8 @@ export interface EnterEventControlProps {
    * is how they come apart. */
   tournament: Tournament
   event: TournamentEvent
+  selected?: boolean
+  onTogglePaid?: () => void
 }
 
 /**
@@ -54,6 +56,8 @@ export interface EnterEventControlProps {
 export const EnterEventControl = ({
   tournament,
   event,
+  selected = false,
+  onTogglePaid,
 }: EnterEventControlProps) => {
   // Entering needs no permission (#1092) — what the control waits on is the
   // session itself settling: `username` is undefined while it is in flight, so
@@ -141,15 +145,29 @@ export const EnterEventControl = ({
       )
 
     case 'enter':
+      if (event.entryFee > 0 && onTogglePaid) {
+        return (
+          <Button
+            variant={selected ? 'secondary' : 'outline'}
+            size="sm"
+            aria-pressed={selected}
+            aria-label={`${selected ? 'Remove' : 'Select'} ${event.name}`}
+            onClick={onTogglePaid}
+          >
+            {selected && <Check size={14} />}
+            {selected ? 'Selected' : 'Select'}
+          </Button>
+        )
+      }
       return (
         <Button
           size="sm"
-          aria-label={`Enter ${event.name}`}
+          aria-label={`Enter free ${event.name}`}
           disabled={isPending}
           onClick={() => enter.mutate(event.id)}
         >
           <LogIn size={14} />
-          Enter
+          Enter free
         </Button>
       )
 

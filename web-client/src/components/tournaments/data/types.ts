@@ -741,6 +741,10 @@ export interface TournamentEvent {
   timezone: string
   /** Server-derived held registration count, including retained entrants. */
   entered: number
+  /** Valid checkout holds consuming capacity without appearing on the roster. */
+  heldPlaces: number
+  /** Places free after entrants and holds, or null when the event is uncapped. */
+  availablePlaces: number | null
   entrants: Entrant[]
   /** Still-entered players hidden from the active roster; retained for historical joins. */
   retainedEntrants: Entrant[]

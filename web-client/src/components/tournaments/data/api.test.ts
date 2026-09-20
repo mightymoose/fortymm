@@ -901,6 +901,8 @@ const event: TournamentEvent = {
   // the same fact, and a fixture that disagreed with itself would be a lie the
   // server cannot tell.
   entered: 2,
+  heldPlaces: 0,
+  availablePlaces: 46,
   retainedEntrants: [],
   // One rated, one UNRATED (`rating: null` — they hold no rating on the
   // tournament's ladder, ADR-0783 §3). The round-trip below therefore proves the
@@ -1052,6 +1054,8 @@ describe('eventToCreateBody', () => {
       rounds: null,
       id: event.id,
       tournament_id: 't-1',
+      held_places: 0,
+      available_places: 46,
       // Absent from the create body — `TournamentEventCreate` has no such field at all
       // (`extra="forbid"` would 422 one) — so it is supplied here, off the READ shape,
       // for the round trip to land back on `event`'s own `lockVersion`.

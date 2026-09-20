@@ -269,6 +269,14 @@ export function buildEvent(
     // `buildEventResults` override (or use `buildStandingsEvent`).
     results: null,
     ...overrides,
+    heldPlaces: overrides.heldPlaces ?? 0,
+    availablePlaces:
+      overrides.availablePlaces ??
+      (overrides.maxPlayers === null
+        ? null
+        : (overrides.maxPlayers ?? 64) -
+          (overrides.entrants?.length ?? 52) -
+          (overrides.heldPlaces ?? 0)),
     // **No knockout stage to qualify for, so no qualifier count** (ADR 20260727) —
     // `null` is the only value a round-robin, single-elim or swiss event's draw settings
     // admit, and it is not "unset". Stated AFTER the spread because `Partial<…>` admits an

@@ -491,6 +491,8 @@ export function emptyEvent(t: Tournament): TournamentEvent {
     timezone: browserTimezone(),
     // A draft event nobody has entered: no entrants, so the derived count is 0.
     entered: 0,
+    heldPlaces: 0,
+    availablePlaces: 32,
     entrants: [],
     retainedEntrants: [],
     // Nothing about an unsaved event refuses anybody: it has room (nobody is in

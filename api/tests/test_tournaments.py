@@ -3131,7 +3131,8 @@ async def test_patch_event_answers_with_its_existing_entrants(
 # (``Tournament.tables``, ``lazy="selectin"`` — the catalogue is rows now,
 # ADR 20260801, and selectin batches it across the whole page rather than one query
 # per card), the events, ONE batched load of every event's active entrants, ONE
-# batched load of every event's fixtures — its draw (ADR-0786) — and ONE batched load
+# batched load of every event's fixtures — its draw (ADR-0786) — ONE batched load
+# of every event's valid checkout holds, and ONE batched load
 # of the caller's rating on every league those tournaments run on (which each event's
 # ``entry_state`` is judged against, ADR-0783), ONE batched load of every event's
 # groups (``TournamentEvent.groups``, ``lazy="selectin"`` — groups are rows now,
@@ -3152,7 +3153,7 @@ async def test_patch_event_answers_with_its_existing_entrants(
 # One additional flat query reads the caller's primary Player retirement.
 # Twelve, whatever the number of tournaments, tables, events, groups, reservations
 # and stages.
-EXPECTED_TOURNAMENT_LIST_STATEMENTS = 12
+EXPECTED_TOURNAMENT_LIST_STATEMENTS = 13
 
 
 @pytest.mark.parametrize("event_count", [1, 4])
@@ -5894,17 +5895,18 @@ async def test_the_tournaments_list_does_not_carry_the_draw_type_catalogue(
 # load of every event's STAGES (``selectinload(TournamentEvent.stages)`` at the
 # ``tournament_detail`` read site — ADR 20260815 — riding
 # ``TournamentEventStage.draw_type_option``'s own ``lazy="joined"`` along on that same
-# statement), plus one flat primary Player retirement read. Fourteen, whatever the
+# statement), plus one flat primary Player retirement read and one batched read of
+# valid checkout holds. Fifteen, whatever the
 # number of
 # events, whatever the number of entrants in them, whatever the size of their draws,
 # whatever the size of the venue, whatever the number of stages, and whatever the
 # length of the day's solve ledger.
 #
-# Two of the fourteen are deliberate flat reads that grow with nothing: the draw-type
+# Two of the fifteen are deliberate flat reads that grow with nothing: the draw-type
 # catalogue is global reference data with nothing to key off the page, and the venue
 # tables are one batched read per *page*, not per card — which is exactly what the
 # parametrized cases below check by measuring the same number at one event and at four.
-EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 14
+EXPECTED_TOURNAMENT_DETAIL_STATEMENTS = 15
 
 
 @pytest.mark.parametrize("event_count", [1, 4])

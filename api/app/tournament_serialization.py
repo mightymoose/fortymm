@@ -99,6 +99,7 @@ from app.tournament_queries import (
     entrant_rating,
     fixtures_by_event,
     game_counts_by_match,
+    valid_hold_count,
 )
 
 # Public shared surface: the serializers both the HTTP router (``tournaments.py``)
@@ -747,6 +748,7 @@ def serialize_event(
     fixtures: list[TournamentFixtureRead],
     rating: float | None,
     game_counts: dict[uuid.UUID, tuple[int, int]] | None,
+    held_places: int = 0,
     retired: bool = False,
 ) -> TournamentEventRead:
     # ``entrants`` is not on the ORM row in the shape the read model wants (it
@@ -838,8 +840,12 @@ def serialize_event(
             "created_at": e.created_at,
             "updated_at": e.updated_at,
             "entrants": entrants,
+            "held_places": held_places,
             "entry_state": _entry_state(
-                e, entered=len(entrants), rating=rating, retired=retired
+                e,
+                entered=len(entrants) + held_places,
+                rating=rating,
+                retired=retired,
             ),
             "fixtures": fixtures,
             # The results, projected here from the fixtures' completed matches plus
@@ -928,6 +934,7 @@ def serialize_detail(
     events: list[TournamentEvent],
     entrants_by_event: dict[uuid.UUID, list[TournamentEntrantRead]],
     fixtures_by_event: dict[uuid.UUID, list[TournamentFixtureRead]],
+    holds_by_event: dict[uuid.UUID, int],
     game_counts: dict[uuid.UUID, tuple[int, int]] | None,
     rating: float | None,
     latest_schedule_solve: ScheduleSolve | None,
@@ -976,6 +983,7 @@ def serialize_detail(
                     entrants=entrants_by_event[e.id],
                     fixtures=fixtures_by_event[e.id],
                     rating=rating,
+                    held_places=holds_by_event[e.id],
                     retired=retired,
                     game_counts=game_counts,
                 )
@@ -1011,7 +1019,13 @@ async def shape_created_event_read(
     rating = await entrant_rating(db, league_id, primary_player_reference(viewer_id))
     retired = await entrant_is_retired(db, viewer_id)
     return serialize_event(
-        event, entrants=[], fixtures=[], rating=rating, game_counts={}, retired=retired
+        event,
+        entrants=[],
+        fixtures=[],
+        rating=rating,
+        held_places=0,
+        game_counts={},
+        retired=retired,
     )
 
 
@@ -1040,6 +1054,7 @@ async def shape_event_read(
     game_counts = await game_counts_by_match(db, completed_match_ids(event_fixtures))
     rating = await entrant_rating(db, league_id, primary_player_reference(viewer_id))
     retired = await entrant_is_retired(db, viewer_id)
+    held_places = await valid_hold_count(db, event.id)
     # Its stages ride along for free, same as ``shape_created_event_read`` above:
     # ``update_event``'s own ``db.refresh(event)`` repopulates the ``lazy="selectin"``
     # collection, so ``serialize_event`` reads real rows off ``event.stages`` — and
@@ -1050,6 +1065,7 @@ async def shape_event_read(
         entrants=entrants,
         fixtures=fixtures,
         rating=rating,
+        held_places=held_places,
         game_counts=game_counts,
         retired=retired,
     )

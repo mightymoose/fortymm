@@ -39,6 +39,7 @@ from app.tournament_queries import (
     entrant_ratings_by_league,
     fixtures_by_event,
     game_counts_by_match,
+    valid_hold_counts_by_event,
 )
 from app.tournament_serialization import serialize_detail
 
@@ -235,6 +236,7 @@ async def list_tournament_details(
             events_by_tournament[event.tournament_id].append(event)
     event_ids = [e.id for e in events]
     entrants_by_event = await active_entrants_by_event(db, event_ids)
+    holds_by_event = await valid_hold_counts_by_event(db, event_ids)
     # And ONE batch for every one of those events' fixtures — its draw (ADR-0786).
     # Batched for the same reason the entrants are: the list returns every event of
     # every tournament, so reading ``event.fixtures`` in the loop would be a SELECT
@@ -264,6 +266,7 @@ async def list_tournament_details(
             events=events_by_tournament[tournament.id],
             entrants_by_event=entrants_by_event,
             fixtures_by_event=event_fixtures,
+            holds_by_event=holds_by_event,
             game_counts=None,
             rating=ratings[tournament.league_id],
             retired=retired,
@@ -337,6 +340,7 @@ async def tournament_detail(
     )
     event_ids = [e.id for e in events]
     entrants_by_event = await active_entrants_by_event(db, event_ids)
+    holds_by_event = await valid_hold_counts_by_event(db, event_ids)
     event_fixtures = await fixtures_by_event(db, event_ids)
     game_counts = await game_counts_by_match(db, completed_match_ids(event_fixtures))
     rating = await entrant_rating(
@@ -352,6 +356,7 @@ async def tournament_detail(
         events=events,
         entrants_by_event=entrants_by_event,
         fixtures_by_event=event_fixtures,
+        holds_by_event=holds_by_event,
         game_counts=game_counts,
         rating=rating,
         retired=retired,
