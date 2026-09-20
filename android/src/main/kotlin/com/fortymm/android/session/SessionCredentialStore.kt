@@ -62,23 +62,17 @@ class AndroidSessionCredentialStore(context: Context) : SessionCredentialStore {
 
     override fun load(): CredentialLoadResult = synchronized(processWideStorageLock) {
         try {
-            val sourceFile = when {
-                credentialFile.exists() -> credentialFile
-                temporaryCredentialFile.exists() -> temporaryCredentialFile
-                else -> null
-            }
-            if (sourceFile == null) {
-                CredentialLoadResult.Absent
-            } else {
-                val (initializationVector, ciphertext) = readCiphertext(sourceFile)
-                val plaintext = decrypt(initializationVector, ciphertext).toString(Charsets.UTF_8)
-                val loaded = decodeStoredSession(plaintext)
-                if (sourceFile == temporaryCredentialFile && loaded != CredentialLoadResult.UnreadableStorage) {
-                    check(temporaryCredentialFile.renameTo(credentialFile)) {
-                        "Unable to recover temporary session credential"
-                    }
+            val temporary = temporaryCredentialFile
+                .takeIf(File::exists)
+                ?.let(::readStoredSession)
+            when {
+                temporary != null && temporary != CredentialLoadResult.UnreadableStorage -> {
+                    promoteTemporaryCredential()
+                    temporary
                 }
-                loaded
+                credentialFile.exists() -> readStoredSession(credentialFile)
+                temporary != null -> temporary
+                else -> CredentialLoadResult.Absent
             }
         } catch (_: Exception) {
             CredentialLoadResult.UnreadableStorage
@@ -134,15 +128,32 @@ class AndroidSessionCredentialStore(context: Context) : SessionCredentialStore {
         }
     }
 
+    private fun readStoredSession(file: File): CredentialLoadResult = try {
+        val (initializationVector, ciphertext) = readCiphertext(file)
+        val plaintext = decrypt(initializationVector, ciphertext).toString(Charsets.UTF_8)
+        decodeStoredSession(plaintext)
+    } catch (_: Exception) {
+        CredentialLoadResult.UnreadableStorage
+    }
+
+    private fun promoteTemporaryCredential() {
+        if (credentialFile.exists()) {
+            check(credentialFile.delete()) { "Unable to replace stale session credential" }
+        }
+        check(temporaryCredentialFile.renameTo(credentialFile)) {
+            "Unable to recover temporary session credential"
+        }
+    }
+
     override fun clear(): CredentialClearResult = synchronized(processWideStorageLock) {
         try {
+            val keyStore = KeyStore.getInstance(ANDROID_KEY_STORE).apply { load(null) }
+            if (keyStore.containsAlias(keyAlias)) {
+                keyStore.deleteEntry(keyAlias)
+            }
             if (!deleteIfPresent(credentialFile) || !deleteIfPresent(temporaryCredentialFile)) {
                 CredentialClearResult.Failed
             } else {
-                val keyStore = KeyStore.getInstance(ANDROID_KEY_STORE).apply { load(null) }
-                if (keyStore.containsAlias(keyAlias)) {
-                    keyStore.deleteEntry(keyAlias)
-                }
                 CredentialClearResult.Cleared
             }
         } catch (_: Exception) {

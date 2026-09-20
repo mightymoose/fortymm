@@ -94,6 +94,32 @@ class AndroidSessionCredentialStoreTest {
     }
 
     @Test
+    fun syncedTemporarySessionEndReplacesAStalePrimaryAfterProcessDeathBeforeRename() {
+        val store = AndroidSessionCredentialStore(context)
+        val reason = SessionEndReason(
+            message = "This guest session expired. Start a new guest to continue.",
+            email = null,
+        )
+        assertEquals(CredentialSaveResult.Saved, store.save("stale-rejected-credential"))
+        val credentialFile = File(credentialDirectory, "credential.bin")
+        val stalePrimary = credentialFile.readBytes()
+        assertEquals(CredentialSaveResult.Saved, store.markSessionEnded(reason))
+        val temporaryFile = File(credentialDirectory, "credential.bin.tmp")
+        assertTrue(credentialFile.renameTo(temporaryFile))
+        credentialFile.writeBytes(stalePrimary)
+
+        assertEquals(
+            CredentialLoadResult.SessionEnded(reason),
+            AndroidSessionCredentialStore(context).load(),
+        )
+        assertFalse(temporaryFile.exists())
+        assertEquals(
+            CredentialLoadResult.SessionEnded(reason),
+            AndroidSessionCredentialStore(context).load(),
+        )
+    }
+
+    @Test
     fun unreadableStorageAndAFailedWriteAreNotReportedAsAnEmptyStore() {
         val credentialFile = File(credentialDirectory, "credential.bin")
         credentialFile.parentFile?.mkdirs()
@@ -106,6 +132,21 @@ class AndroidSessionCredentialStoreTest {
         credentialFile.mkdirs()
         assertEquals(CredentialSaveResult.Failed, AndroidSessionCredentialStore(context).save("credential"))
         assertEquals(CredentialClearResult.Cleared, AndroidSessionCredentialStore(context).clear())
+    }
+
+    @Test
+    fun clearDeletesTheKeystoreAliasBeforeAFileDeletionFailure() {
+        val alias = "${context.packageName}.session-credential.v1"
+        val store = AndroidSessionCredentialStore(context)
+        assertEquals(CredentialSaveResult.Saved, store.save("credential-with-invalidated-key"))
+        val credentialFile = File(credentialDirectory, "credential.bin")
+        assertTrue(credentialFile.delete())
+        assertTrue(credentialFile.mkdirs())
+        File(credentialFile, "blocks-directory-deletion").writeText("still present")
+
+        assertEquals(CredentialClearResult.Failed, store.clear())
+
+        assertFalse(androidKeyStore().containsAlias(alias))
     }
 
     @Test
