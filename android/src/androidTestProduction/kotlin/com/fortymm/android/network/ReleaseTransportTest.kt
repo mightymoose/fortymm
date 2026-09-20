@@ -1,31 +1,35 @@
 package com.fortymm.android.network
 
+import com.fortymm.android.BuildConfig
 import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
+import kotlinx.coroutines.runBlocking
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReleaseTransportTest {
     @Test
     fun releaseClientIsPinnedToTheUatHttpsEndpoint() {
-        assertEquals("https", ConfiguredApiClient().baseUrl.protocol)
-        assertEquals("uat.fortymm.com", ConfiguredApiClient().baseUrl.host)
-        assertEquals(-1, ConfiguredApiClient().baseUrl.port)
+        val baseUrl = BuildConfig.API_BASE_URL.toHttpUrl()
+        assertEquals("https", baseUrl.scheme)
+        assertEquals("uat.fortymm.com", baseUrl.host)
+        assertEquals(443, baseUrl.port)
     }
 
     @Test
-    fun releaseTransportRefusesTheControlledLocalHttpServer() {
+    fun releaseTransportRefusesTheControlledLocalHttpServer() = runBlocking {
         MockWebServer().use { server ->
             server.start(8081)
             server.enqueue(MockResponse().setResponseCode(204))
 
-            assertThrows(IOException::class.java) {
-                (URL(server.url("/").toString()).openConnection() as HttpURLConnection).responseCode
-            }
+            val failure = runCatching {
+                FortyMMApiClient(server.url("/")).bootstrap(null)
+            }.exceptionOrNull()
+
+            assertTrue(failure is IOException)
             assertEquals(0, server.requestCount)
         }
     }
