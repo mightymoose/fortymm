@@ -36,6 +36,7 @@ from app.schemas.tournament_checkout import TournamentCheckoutCreate
 from app.tournament_authority import transfer_ownership
 from app.tournament_checkout_errors import (
     CheckoutNotFoundError,
+    CheckoutRateLimitedError,
     CheckoutRefusal,
     CheckoutRefusedError,
 )
@@ -459,6 +460,64 @@ async def test_checkout_waiting_for_tournament_does_not_lock_player_first(
                 await asyncio.gather(attempt, return_exceptions=True)
 
 
+async def test_checkout_waiting_for_one_tournament_does_not_lock_shared_merchant(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch,
+) -> None:
+    first_payer = await make_user(db_session, f"buyer-{uuid.uuid4().hex[:8]}")
+    second_payer = await make_user(db_session, f"buyer-{uuid.uuid4().hex[:8]}")
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    first_tournament, (first_event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("10.00"),)
+    )
+    second_tournament, (second_event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("12.00"),)
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with make_session() as gatekeeper, make_session() as first_session:
+        await gatekeeper.execute(
+            select(Tournament)
+            .where(Tournament.id == first_tournament.id)
+            .with_for_update()
+        )
+        first_actor = await first_session.get(User, first_payer.id)
+        assert first_actor is not None
+        first_attempt = asyncio.create_task(
+            start_checkout(
+                first_session,
+                tournament_id=first_tournament.id,
+                actor=first_actor,
+                request=TournamentCheckoutCreate(
+                    request_id=uuid.uuid4(), event_ids=[first_event.id]
+                ),
+                client_ip="203.0.113.41",
+            )
+        )
+        await asyncio.sleep(0.25)
+        assert not first_attempt.done()
+
+        async with make_session() as second_session:
+            second_actor = await second_session.get(User, second_payer.id)
+            assert second_actor is not None
+            async with asyncio.timeout(5):
+                second = await start_checkout(
+                    second_session,
+                    tournament_id=second_tournament.id,
+                    actor=second_actor,
+                    request=TournamentCheckoutCreate(
+                        request_id=uuid.uuid4(), event_ids=[second_event.id]
+                    ),
+                    client_ip="203.0.113.42",
+                )
+            assert second.status.value == "active"
+
+        await gatekeeper.rollback()
+        await first_attempt
+
+
 async def test_checkout_is_limited_to_the_configured_merchant_owner(
     api_client: AsyncClient,
     db_session: AsyncSession,
@@ -637,6 +696,37 @@ async def test_retiring_player_invalidates_active_checkout_and_releases_hold(
     detail = await api_client.get(f"/v1/tournaments/{tournament.id}")
     assert detail.status_code == 200
     assert detail.json()["events"][0]["held_places"] == 0
+
+
+async def test_durable_checkout_replays_after_player_retirement(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    payer = await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("10.00"),)
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    payload = {
+        "request_id": str(uuid.uuid4()),
+        "event_ids": [str(event.id)],
+    }
+    created = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts", json=payload
+    )
+    assert created.status_code == 201
+
+    await retire_player(db_session, payer.player_id)
+    await db_session.commit()
+    replayed = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts", json=payload
+    )
+
+    assert replayed.status_code == 201
+    assert replayed.json()["id"] == created.json()["id"]
+    assert replayed.json()["status"] == "invalidated"
 
 
 async def test_checkout_creation_queues_behind_player_retirement(
@@ -1253,6 +1343,46 @@ async def test_concurrent_request_replay_consumes_one_admission_token(
         int(await rate_limiter_fakeredis.get("tournament-checkout-ip:203.0.113.21"))
         == 1
     )
+
+
+async def test_concurrent_mismatched_payloads_charge_separate_admission_tokens(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch,
+    rate_limiter_fakeredis,
+) -> None:
+    payer = await make_user(db_session, f"buyer-{uuid.uuid4().hex[:8]}")
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, events = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("10.00"), Decimal("12.00"))
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    monkeypatch.setenv("TOURNAMENT_CHECKOUT_IP_PER_HOUR", "1")
+    request_id = uuid.uuid4()
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def reserve(event_id: uuid.UUID) -> str:
+        async with make_session() as session:
+            actor = await session.get(User, payer.id)
+            assert actor is not None
+            try:
+                await start_checkout(
+                    session,
+                    tournament_id=tournament.id,
+                    actor=actor,
+                    request=TournamentCheckoutCreate(
+                        request_id=request_id, event_ids=[event_id]
+                    ),
+                    client_ip="203.0.113.22",
+                )
+                return "reserved"
+            except CheckoutRateLimitedError:
+                await session.rollback()
+                return "rate_limited"
+
+    outcomes = await asyncio.gather(*(reserve(event.id) for event in events))
+
+    assert sorted(outcomes) == ["rate_limited", "reserved"]
 
 
 async def test_cancelled_checkout_history_does_not_prevent_event_deletion(

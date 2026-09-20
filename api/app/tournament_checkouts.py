@@ -1,5 +1,6 @@
 """Transport-neutral combined paid-event checkout operations."""
 
+import hashlib
 import uuid
 from datetime import datetime
 from decimal import Decimal
@@ -58,10 +59,21 @@ from app.tournament_registration import registration_open
 
 
 async def _enforce_checkout_rate_limit(
-    client_ip: str, *, payer_account_id: uuid.UUID, request_id: uuid.UUID
+    client_ip: str,
+    *,
+    payer_account_id: uuid.UUID,
+    request_id: uuid.UUID,
+    tournament_id: uuid.UUID,
+    event_ids: list[uuid.UUID],
 ) -> tuple[str, str] | None:
     limit = get_settings().tournament_checkout_ip_per_hour
-    marker_key = f"tournament-checkout-request:{payer_account_id}:{request_id}"
+    normalized_payload = ":".join(
+        [str(tournament_id), *(str(event_id) for event_id in sorted(event_ids))]
+    )
+    payload_digest = hashlib.sha256(normalized_payload.encode()).hexdigest()
+    marker_key = (
+        f"tournament-checkout-request:{payer_account_id}:{request_id}:{payload_digest}"
+    )
     try:
         allowed, lease_token = await check_idempotent_expiring_budget(
             f"tournament-checkout-ip:{client_ip}",
@@ -227,6 +239,8 @@ async def start_checkout(
             client_ip,
             payer_account_id=actor.id,
             request_id=request.request_id,
+            tournament_id=tournament_id,
+            event_ids=request.event_ids,
         )
 
     try:
@@ -249,31 +263,28 @@ async def _start_checkout_after_admission(
     request: TournamentCheckoutCreate,
 ) -> TournamentCheckoutRead:
     merchant_account_id = get_settings().tournament_payment_merchant_account_id
-    # Lock both Accounts in stable order before the Tournament. This serializes a
-    # new checkout with payer merges and merchant lifecycle transitions without
-    # holding any database lock across the Redis admission check above.
+    # Lock Accounts in UUID order, matching account merges, but use the narrowest
+    # strength each role needs. The payer is exclusive so request IDs serialize;
+    # the shared merchant lock still conflicts with lifecycle/merge writes while
+    # allowing unrelated buyers across the merchant's catalogue to proceed.
     account_ids = {actor.id}
     if merchant_account_id is not None:
         account_ids.add(merchant_account_id)
-    locked_accounts = list(
-        await db.scalars(
+    locked_accounts: dict[uuid.UUID, User] = {}
+    for account_id in sorted(account_ids):
+        account = await db.scalar(
             select(User)
-            .where(User.id.in_(account_ids))
-            .order_by(User.id)
-            .with_for_update()
+            .where(User.id == account_id)
+            .with_for_update(read=account_id != actor.id)
             .execution_options(populate_existing=True)
         )
-    )
-    locked_actor = next(
-        (account for account in locked_accounts if account.id == actor.id), None
-    )
-    locked_merchant = next(
-        (
-            account
-            for account in locked_accounts
-            if merchant_account_id is not None and account.id == merchant_account_id
-        ),
-        None,
+        if account is not None:
+            locked_accounts[account.id] = account
+    locked_actor = locked_accounts.get(actor.id)
+    locked_merchant = (
+        locked_accounts.get(merchant_account_id)
+        if merchant_account_id is not None
+        else None
     )
     primary_player = locked_actor.primary_player if locked_actor is not None else None
     if (
@@ -285,19 +296,6 @@ async def _start_checkout_after_admission(
         raise CheckoutNotFoundError()
 
     tournament = await _load_tournament_locked(db, tournament_id, locked_actor.id)
-    # Account → Tournament → Player is the shared registration lock order. Taking
-    # Player before Tournament can deadlock against free entry by another account
-    # that manages the same Player (entry already holds Tournament when it resolves
-    # and locks the entrant). Reload after both preceding locks so retirement and
-    # account-identity changes cannot race this checkout.
-    player = await db.scalar(
-        select(Player)
-        .where(Player.id == primary_player.id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    )
-    if player is None or player.retired_at is not None:
-        raise CheckoutNotFoundError()
     requested_ids = set(request.event_ids)
     prior_request = await db.scalar(
         select(TournamentCheckout)
@@ -319,13 +317,28 @@ async def _start_checkout_after_admission(
                 CheckoutRefusal.request_payload_conflict,
                 "That request ID was already used for a different selection.",
             )
-        # A durable result wins over mutable admission gates.  A retry after a
-        # lost response must replay even if registration closed in the meantime.
+        # A durable result wins over mutable admission gates, including later
+        # player retirement. A retry after a lost response must replay the terminal
+        # result rather than masquerading as a new checkout.
         effective = _effective_state(prior_request, tournament, now)
         if effective is not TournamentCheckoutState.active:
             prior_request.status = TournamentCheckoutStatus(effective.value)
             await db.commit()
         return _read(prior_request, tournament, now)
+
+    # Account → Tournament → Player is the shared registration lock order. Taking
+    # Player before Tournament can deadlock against free entry by another account
+    # that manages the same Player (entry already holds Tournament when it resolves
+    # and locks the entrant). Reload after both preceding locks so retirement and
+    # account-identity changes cannot race this checkout.
+    player = await db.scalar(
+        select(Player)
+        .where(Player.id == primary_player.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if player is None or player.retired_at is not None:
+        raise CheckoutNotFoundError()
 
     if (
         merchant_account_id is None
