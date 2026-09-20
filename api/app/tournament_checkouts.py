@@ -181,14 +181,52 @@ async def start_checkout(
     request: TournamentCheckoutCreate,
     client_ip: str,
 ) -> TournamentCheckoutRead:
-    player = actor.primary_player
-    if player is None or player.retired_at is not None:
+    # An exclusive account lock serializes request ids across every tournament and
+    # queues behind account merges.  Reload after acquiring it: the dependency's
+    # actor may have been authenticated before a merge tombstoned this account or
+    # moved its primary-player grant.
+    locked_actor = await db.scalar(
+        select(User)
+        .where(User.id == actor.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    player = locked_actor.primary_player if locked_actor is not None else None
+    if (
+        locked_actor is None
+        or not locked_actor.is_active
+        or locked_actor.merged_into_user_id is not None
+        or player is None
+        or player.retired_at is not None
+    ):
         raise CheckoutNotFoundError()
 
-    await db.execute(
-        select(User.id).where(User.id == actor.id).with_for_update(read=True)
-    )
     tournament = await _load_tournament_locked(db, tournament_id)
+    requested_ids = set(request.event_ids)
+    prior_request = await db.scalar(
+        select(TournamentCheckout)
+        .where(
+            TournamentCheckout.payer_account_id == locked_actor.id,
+            TournamentCheckout.request_id == request.request_id,
+        )
+        .options(selectinload(TournamentCheckout.lines))
+    )
+    now = await _database_now(db)
+    if prior_request is not None:
+        if prior_request.tournament_id != tournament.id:
+            raise CheckoutRefusedError(
+                CheckoutRefusal.request_payload_conflict,
+                "That request ID was already used for another tournament.",
+            )
+        if {line.event_id for line in prior_request.lines} != requested_ids:
+            raise CheckoutRefusedError(
+                CheckoutRefusal.request_payload_conflict,
+                "That request ID was already used for a different selection.",
+            )
+        # A durable result wins over mutable admission gates.  A retry after a
+        # lost response must replay even if registration closed in the meantime.
+        return _read(prior_request, tournament, now)
+
     merchant_account_id = get_settings().tournament_payment_merchant_account_id
     if (
         merchant_account_id is None
@@ -205,29 +243,6 @@ async def start_checkout(
         )
 
     await _expire_stale_checkouts(db, tournament, player.id)
-    prior_request = await db.scalar(
-        select(TournamentCheckout)
-        .where(
-            TournamentCheckout.payer_account_id == actor.id,
-            TournamentCheckout.request_id == request.request_id,
-        )
-        .options(selectinload(TournamentCheckout.lines))
-    )
-    requested_ids = set(request.event_ids)
-    now = await _database_now(db)
-    if prior_request is not None:
-        if prior_request.tournament_id != tournament.id:
-            raise CheckoutRefusedError(
-                CheckoutRefusal.request_payload_conflict,
-                "That request ID was already used for another tournament.",
-            )
-        if {line.event_id for line in prior_request.lines} != requested_ids:
-            raise CheckoutRefusedError(
-                CheckoutRefusal.request_payload_conflict,
-                "That request ID was already used for a different selection.",
-            )
-        return _read(prior_request, tournament, now)
-
     active = await db.scalar(
         select(TournamentCheckout)
         .where(
@@ -340,7 +355,7 @@ async def start_checkout(
 
     checkout = TournamentCheckout(
         request_id=request.request_id,
-        payer_account_id=actor.id,
+        payer_account_id=locked_actor.id,
         entrant_player_id=player.id,
         tournament_id=tournament.id,
         merchant_account_id=merchant_account_id,

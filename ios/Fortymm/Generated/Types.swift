@@ -11444,6 +11444,52 @@ internal enum Components {
                 case lines
             }
         }
+        /// - Remark: Generated from `#/components/schemas/TournamentCheckoutRefusal`.
+        internal struct TournamentCheckoutRefusal: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TournamentCheckoutRefusal/code`.
+            internal var code: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentCheckoutRefusal/message`.
+            internal var message: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentCheckoutRefusal/event_id`.
+            internal var eventId: Swift.String?
+            /// Creates a new `TournamentCheckoutRefusal`.
+            ///
+            /// - Parameters:
+            ///   - code:
+            ///   - message:
+            ///   - eventId:
+            internal init(
+                code: Swift.String,
+                message: Swift.String,
+                eventId: Swift.String? = nil
+            ) {
+                self.code = code
+                self.message = message
+                self.eventId = eventId
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case code
+                case message
+                case eventId = "event_id"
+            }
+        }
+        /// The FastAPI ``HTTPException`` envelope for a checkout conflict.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TournamentCheckoutRefusalResponse`.
+        internal struct TournamentCheckoutRefusalResponse: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TournamentCheckoutRefusalResponse/detail`.
+            internal var detail: Components.Schemas.TournamentCheckoutRefusal
+            /// Creates a new `TournamentCheckoutRefusalResponse`.
+            ///
+            /// - Parameters:
+            ///   - detail:
+            internal init(detail: Components.Schemas.TournamentCheckoutRefusal) {
+                self.detail = detail
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case detail
+            }
+        }
         /// - Remark: Generated from `#/components/schemas/TournamentCheckoutState`.
         internal enum TournamentCheckoutState: String, Codable, Hashable, Sendable, CaseIterable {
             case active = "active"
@@ -28305,6 +28351,57 @@ internal enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "created",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct Conflict: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/POST/responses/409/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/POST/responses/409/content/application\/json`.
+                    case json(Components.Schemas.TournamentCheckoutRefusalResponse)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.TournamentCheckoutRefusalResponse {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.StartTournamentCheckoutV1TournamentsTournamentIdCheckoutsPost.Output.Conflict.Body
+                /// Creates a new `Conflict`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.StartTournamentCheckoutV1TournamentsTournamentIdCheckoutsPost.Output.Conflict.Body) {
+                    self.body = body
+                }
+            }
+            /// Conflict
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/post(start_tournament_checkout_v1_tournaments__tournament_id__checkouts_post)/responses/409`.
+            ///
+            /// HTTP response code: `409 conflict`.
+            case conflict(Operations.StartTournamentCheckoutV1TournamentsTournamentIdCheckoutsPost.Output.Conflict)
+            /// The associated value of the enum case if `self` is `.conflict`.
+            ///
+            /// - Throws: An error if `self` is not `.conflict`.
+            /// - SeeAlso: `.conflict`.
+            internal var conflict: Operations.StartTournamentCheckoutV1TournamentsTournamentIdCheckoutsPost.Output.Conflict {
+                get throws {
+                    switch self {
+                    case let .conflict(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "conflict",
                             response: self
                         )
                     }

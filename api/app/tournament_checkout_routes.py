@@ -10,6 +10,7 @@ from app.models import User
 from app.schemas.tournament_checkout import (
     TournamentCheckoutCreate,
     TournamentCheckoutRead,
+    TournamentCheckoutRefusalResponse,
 )
 from app.sessions import get_current_user
 from app.tournament_checkout_errors import (
@@ -41,6 +42,7 @@ def _checkout_refusal(error: CheckoutRefusedError) -> HTTPException:
     "/tournaments/{tournament_id}/checkouts",
     response_model=TournamentCheckoutRead,
     status_code=status.HTTP_201_CREATED,
+    responses={409: {"model": TournamentCheckoutRefusalResponse}},
 )
 async def start_tournament_checkout(
     tournament_id: uuid.UUID,

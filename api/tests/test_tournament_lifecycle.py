@@ -874,6 +874,11 @@ async def test_transition_published_to_live_materializes_matches_and_queues_a_so
     )
 
     assert moved.status is TournamentStatus.live
+    # Directly constructed legacy published rows use false/generation-zero to
+    # mean effectively open.  Going live must still advance the generation so
+    # any checkout created against that compatibility state is invalidated.
+    assert moved.registration_open is False
+    assert moved.registration_generation == 1
 
     # Every fixture materialized into a real match (idempotent on ``match_id``).
     db_session.expire_all()

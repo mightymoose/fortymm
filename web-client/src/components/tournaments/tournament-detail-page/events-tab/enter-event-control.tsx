@@ -16,6 +16,7 @@ export interface EnterEventControlProps {
   event: TournamentEvent
   selected?: boolean
   onTogglePaid?: () => void
+  paidSelectionLocked?: boolean
 }
 
 /**
@@ -58,6 +59,7 @@ export const EnterEventControl = ({
   event,
   selected = false,
   onTogglePaid,
+  paidSelectionLocked = false,
 }: EnterEventControlProps) => {
   // Entering needs no permission (#1092) — what the control waits on is the
   // session itself settling: `username` is undefined while it is in flight, so
@@ -145,6 +147,10 @@ export const EnterEventControl = ({
       )
 
     case 'enter':
+      // The active checkout is the one visible selection. Hiding other paid
+      // toggles keeps Cancel from revealing a second, previously invisible draft
+      // and leaves Change selection as the sole path that seeds a replacement.
+      if (event.entryFee > 0 && paidSelectionLocked) return null
       if (event.entryFee > 0 && !tournament.checkoutAvailable) {
         return (
           <LeadReason

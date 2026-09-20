@@ -618,6 +618,38 @@ async def test_request_identity_selection_conflicts_and_checkout_is_private(
     assert unknown.json()["detail"]["code"] == "event_not_found"
 
 
+async def test_request_identity_replays_after_registration_closes(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("10.00"),)
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    payload = {
+        "request_id": str(uuid.uuid4()),
+        "event_ids": [str(event.id)],
+    }
+    created = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts", json=payload
+    )
+    assert created.status_code == 201
+
+    tournament.registration_open = False
+    tournament.registration_generation += 1
+    await db_session.commit()
+    replayed = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts", json=payload
+    )
+
+    assert replayed.status_code == 201
+    assert replayed.json()["id"] == created.json()["id"]
+    assert replayed.json()["status"] == "invalidated"
+
+
 async def test_request_identity_cannot_resume_checkout_under_another_tournament(
     api_client: AsyncClient,
     db_session: AsyncSession,
@@ -649,6 +681,54 @@ async def test_request_identity_cannot_resume_checkout_under_another_tournament(
     assert crossed.json()["detail"]["message"] == (
         "That request ID was already used for another tournament."
     )
+
+
+async def test_request_identity_is_serialized_across_tournaments(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch,
+) -> None:
+    payer = await make_user(db_session, f"buyer-{uuid.uuid4().hex[:8]}")
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    first_tournament, (first_event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("10.00"),)
+    )
+    second_tournament, (second_event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("12.00"),)
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    request_id = uuid.uuid4()
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def reserve(tournament_id: uuid.UUID, event_id: uuid.UUID) -> str:
+        async with make_session() as session:
+            actor = await session.scalar(select(User).where(User.id == payer.id))
+            assert actor is not None
+            try:
+                await start_checkout(
+                    session,
+                    tournament_id=tournament_id,
+                    actor=actor,
+                    request=TournamentCheckoutCreate(
+                        request_id=request_id, event_ids=[event_id]
+                    ),
+                    client_ip="203.0.113.20",
+                )
+                return "reserved"
+            except CheckoutRefusedError as error:
+                await session.rollback()
+                assert error.refusal is CheckoutRefusal.request_payload_conflict
+                return error.refusal.value
+
+    outcomes = await asyncio.gather(
+        reserve(first_tournament.id, first_event.id),
+        reserve(second_tournament.id, second_event.id),
+    )
+
+    assert sorted(outcomes) == ["request_payload_conflict", "reserved"]
+    async with make_session() as verify:
+        rows = list(await verify.scalars(select(TournamentCheckout)))
+        assert len(rows) == 1
 
 
 async def test_cancelled_checkout_history_does_not_prevent_event_deletion(

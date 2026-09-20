@@ -214,6 +214,46 @@ describe('EventsTab', () => {
       await waitFor(() => expect(screen.queryByText('Your reserved places')).toBeNull())
     })
 
+    it('hides paid selection toggles while a checkout is active', async () => {
+      const eventId = '00000000-0000-4000-8000-000000000041'
+      server.use(
+        http.get('*/v1/tournaments/:tournamentId/checkouts/current', () =>
+          HttpResponse.json({
+            id: '00000000-0000-4000-8000-000000000042',
+            request_id: '00000000-0000-4000-8000-000000000043',
+            tournament_id: '00000000-0000-4000-8000-000000000020',
+            registration_generation: 0,
+            status: 'active',
+            payment_state: 'unavailable',
+            currency: 'USD',
+            total_cents: 4500,
+            created_at: new Date().toISOString(),
+            expires_at: new Date(Date.now() + 600_000).toISOString(),
+            remaining_seconds: 600,
+            lines: [
+              {
+                event_id: eventId,
+                event_name: 'Open Singles',
+                price_cents: 4500,
+              },
+            ],
+          }),
+        ),
+      )
+      eventsTabPage.render({
+        tournament: buildTournament({
+          events: [
+            buildEvent({ id: eventId, name: 'Open Singles', entryFee: 45 }),
+            buildEvent({ name: 'U1500', entryFee: 30 }),
+          ],
+        }),
+      })
+
+      expect(await screen.findByText('Your reserved places')).toBeInTheDocument()
+      expect(eventsTabPage.querySelectButton('Open Singles')).toBeNull()
+      expect(eventsTabPage.querySelectButton('U1500')).toBeNull()
+    })
+
     it('offers none on a doubles event', async () => {
       eventsTabPage.render({
         tournament: buildTournament({

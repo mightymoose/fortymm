@@ -5453,6 +5453,22 @@ export interface components {
             /** Lines */
             lines: components["schemas"]["TournamentCheckoutLineRead"][];
         };
+        /** TournamentCheckoutRefusal */
+        TournamentCheckoutRefusal: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Event Id */
+            event_id?: string | null;
+        };
+        /**
+         * TournamentCheckoutRefusalResponse
+         * @description The FastAPI ``HTTPException`` envelope for a checkout conflict.
+         */
+        TournamentCheckoutRefusalResponse: {
+            detail: components["schemas"]["TournamentCheckoutRefusal"];
+        };
         /**
          * TournamentCheckoutState
          * @enum {string}
@@ -8969,6 +8985,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TournamentCheckoutRead"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentCheckoutRefusalResponse"];
                 };
             };
             /** @description Validation Error */

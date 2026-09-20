@@ -143,6 +143,7 @@ export const EventsTab = ({
                   event={ev}
                   selected={selectedIds.has(ev.id)}
                   onTogglePaid={() => togglePaid(ev.id)}
+                  paidSelectionLocked={checkout !== null}
                 />
               }
               // The event's draw (ADR-0786): its groups and fixtures for everyone, its

@@ -55,3 +55,9 @@ class TournamentCheckoutRefusal(BaseModel):
     code: str
     message: str
     event_id: uuid.UUID | None = None
+
+
+class TournamentCheckoutRefusalResponse(BaseModel):
+    """The FastAPI ``HTTPException`` envelope for a checkout conflict."""
+
+    detail: TournamentCheckoutRefusal
