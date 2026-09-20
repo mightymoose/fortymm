@@ -931,10 +931,19 @@ export function useStartCheckout(tournamentId: string) {
         ),
       ),
     onSuccess: (checkout) => qc.setQueryData(checkoutKey(tournamentId), checkout),
-    // Re-read the durable checkout even on a transport error: the POST may have
-    // committed before its response was lost.
-    onSettled: () => reconcileTournamentCheckout(qc, tournamentId),
-    onError: notifyError('start checkout'),
+    // Re-read durable state before reporting a transport error: the POST may have
+    // committed before its response was lost. Only report failure when the
+    // authoritative read confirms there is still no active checkout.
+    onSettled: async (_data, error) => {
+      await reconcileTournamentCheckout(qc, tournamentId)
+      if (
+        error &&
+        qc.getQueryData<TournamentCheckout | null>(checkoutKey(tournamentId))
+          ?.status !== 'active'
+      ) {
+        notifyError('start checkout')(error)
+      }
+    },
   })
 }
 
@@ -959,10 +968,21 @@ export function useCancelCheckout(tournamentId: string) {
         ),
       ),
     onSuccess: () => qc.setQueryData(checkoutKey(tournamentId), null),
-    // A lost DELETE response is equally ambiguous, so reconcile the checkout
-    // cache as well as tournament capacity on every settlement.
-    onSettled: () => reconcileTournamentCheckout(qc, tournamentId),
-    onError: notifyError('release your checkout hold'),
+    // A lost DELETE response is equally ambiguous. Reconcile first, and only
+    // report failure if the exact hold we tried to release is still active.
+    onSettled: async (_data, error, checkoutId) => {
+      await reconcileTournamentCheckout(qc, tournamentId)
+      if (!error) return
+      const current = qc.getQueryData<TournamentCheckout | null>(
+        checkoutKey(tournamentId),
+      )
+      if (
+        current === undefined ||
+        (current?.status === 'active' && current.id === checkoutId)
+      ) {
+        notifyError('release your checkout hold')(error)
+      }
+    },
   })
 }
 

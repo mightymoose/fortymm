@@ -2,7 +2,7 @@
 
 import uuid
 
-from sqlalchemy import update
+from sqlalchemy import or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -35,14 +35,17 @@ async def invalidate_checkouts_for_player(
     )
 
 
-async def invalidate_checkouts_for_merchant_account(
+async def invalidate_checkouts_for_account_lifecycle(
     db: AsyncSession, account_id: uuid.UUID
 ) -> None:
-    """Release every hold sold under an Account whose lifecycle has ended."""
+    """Release every hold bought or sold by an Account whose lifecycle ended."""
     await db.execute(
         update(TournamentCheckout)
         .where(
-            TournamentCheckout.merchant_account_id == account_id,
+            or_(
+                TournamentCheckout.merchant_account_id == account_id,
+                TournamentCheckout.payer_account_id == account_id,
+            ),
             TournamentCheckout.status == TournamentCheckoutStatus.active,
         )
         .values(status=TournamentCheckoutStatus.invalidated)

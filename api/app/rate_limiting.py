@@ -27,6 +27,7 @@ a long-running production process would want an LRU on ``_limiters`` and a
 TTL on the underlying ZSETs.
 """
 
+import uuid
 from collections.abc import Awaitable, Callable
 
 import redis.asyncio as redis_asyncio
@@ -160,33 +161,60 @@ async def check_idempotent_expiring_budget(
     idempotency_key: str,
     limit: int,
     seconds: int,
-) -> bool:
+) -> tuple[bool, str | None]:
     """Charge a fixed-window budget once for a logical request.
 
     The idempotency marker and counter mutation are one Redis script so concurrent
     retries cannot both consume capacity, and an unavailable Redis still fails
-    closed. Refused requests do not receive a marker: changing the request id cannot
-    turn an exhausted network budget into an admitted request.
+    closed. Exhausted requests do not receive a marker, and the owner token lets the
+    caller clear an admitted marker after durable success or refusal.
+
+    Returns ``(allowed, lease_token)``. Only the caller that created the marker gets
+    its token; concurrent replays are allowed with ``None`` and must not clear a
+    marker owned by the in-flight request they are following.
     """
     if _redis is None:
         raise RateLimitUnavailable()
     try:
-        allowed = await _redis.eval(
+        lease_token = uuid.uuid4().hex
+        result = await _redis.eval(
             "if redis.call('EXISTS', KEYS[2]) == 1 then return 1 end; "
             "local n = redis.call('INCR', KEYS[1]); "
             "if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end; "
             "if n <= tonumber(ARGV[2]) then "
-            "redis.call('SET', KEYS[2], '1', 'EX', ARGV[1]); return 1 end; "
+            "redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[1]); return 2 end; "
             "return 0",
             2,
             key,
             idempotency_key,
             seconds,
             limit,
+            lease_token,
         )
-        return bool(allowed)
+        return int(result) > 0, lease_token if int(result) == 2 else None
     except redis_asyncio.RedisError as error:
         raise RateLimitUnavailable() from error
+
+
+async def release_idempotent_budget_marker(key: str, lease_token: str) -> None:
+    """Clear only the marker claimed by ``lease_token``.
+
+    Cleanup is best-effort: losing Redis after admission must not replace the
+    checkout's real success or domain refusal with a cleanup error. The marker has
+    the same bounded TTL as the budget if cleanup cannot be confirmed.
+    """
+    if _redis is None:
+        return
+    try:
+        await _redis.eval(
+            "if redis.call('GET', KEYS[1]) == ARGV[1] then "
+            "return redis.call('DEL', KEYS[1]) end; return 0",
+            1,
+            key,
+            lease_token,
+        )
+    except redis_asyncio.RedisError:
+        return
 
 
 async def identity_creation_retry_after(

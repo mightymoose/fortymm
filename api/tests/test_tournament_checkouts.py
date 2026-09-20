@@ -535,6 +535,33 @@ async def test_inactive_merchant_disables_checkout_and_releases_holds(
     assert refused.json()["detail"]["code"] == "merchant_unavailable"
 
 
+async def test_deactivating_payer_releases_checkout_hold(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    payer = await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("10.00"),), capacities=(1,)
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    created = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]},
+    )
+    assert created.status_code == 201
+
+    await deactivate_account(db_session, payer.id)
+    await db_session.commit()
+
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(created.json()["id"]))
+    assert stored is not None
+    assert stored.status is TournamentCheckoutStatus.invalidated
+    holds = await valid_hold_counts_by_event(db_session, [event.id])
+    assert holds.get(event.id, 0) == 0
+
+
 async def test_checkout_does_not_reveal_another_owners_draft(
     api_client: AsyncClient,
     db_session: AsyncSession,
@@ -1451,6 +1478,36 @@ async def test_checkout_creation_is_rate_limited_per_network(
 
     assert refused.status_code == 429
     assert "retry shortly" in refused.json()["detail"]
+
+
+async def test_refused_checkout_releases_request_admission_marker(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+    rate_limiter_fakeredis,
+) -> None:
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, _ = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("10.00"),)
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    monkeypatch.setenv("TOURNAMENT_CHECKOUT_IP_PER_HOUR", "1")
+    payer = await start_session(api_client, db_session)
+    request_id = str(uuid.uuid4())
+    marker_key = f"tournament-checkout-request:{payer.id}:{request_id}"
+
+    refused = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={"request_id": request_id, "event_ids": [str(uuid.uuid4())]},
+    )
+    assert refused.status_code == 409
+    assert await rate_limiter_fakeredis.exists(marker_key) == 0
+
+    retried = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={"request_id": request_id, "event_ids": [str(uuid.uuid4())]},
+    )
+    assert retried.status_code == 429
 
 
 async def test_checkout_budget_fails_closed_before_taking_database_locks(

@@ -68,7 +68,8 @@ export const EventsTab = ({
     setAdoptedCheckoutId(activeCheckoutId)
     setSelectedIds(new Set())
   }
-  const paidSelectionLocked = checkout !== null || startCheckout.isPending
+  const paidSelectionLocked =
+    checkout !== null || currentCheckout.isFetching || startCheckout.isPending
   const selectedEvents = tournament.events.filter(
     (event) =>
       selectedIds.has(event.id) &&
@@ -109,7 +110,11 @@ export const EventsTab = ({
       <CheckoutSummary
         selection={selectedEvents}
         checkout={checkout}
-        pending={startCheckout.isPending || cancelCheckout.isPending}
+        pending={
+          currentCheckout.isFetching ||
+          startCheckout.isPending ||
+          cancelCheckout.isPending
+        }
         onHold={() => {
           startCheckout.mutate(selectedEvents.map((event) => event.id), {
             onSuccess: () => setSelectedIds(new Set()),

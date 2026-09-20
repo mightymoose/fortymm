@@ -24,7 +24,11 @@ from app.models import (
     TournamentEvent,
     User,
 )
-from app.rate_limiting import RateLimitUnavailable, check_idempotent_expiring_budget
+from app.rate_limiting import (
+    RateLimitUnavailable,
+    check_idempotent_expiring_budget,
+    release_idempotent_budget_marker,
+)
 from app.schemas.tournament_checkout import (
     TournamentCheckoutCreate,
     TournamentCheckoutLineRead,
@@ -51,14 +55,13 @@ from app.tournament_registration import registration_open
 
 async def _enforce_checkout_rate_limit(
     client_ip: str, *, payer_account_id: uuid.UUID, request_id: uuid.UUID
-) -> None:
+) -> tuple[str, str] | None:
     limit = get_settings().tournament_checkout_ip_per_hour
+    marker_key = f"tournament-checkout-request:{payer_account_id}:{request_id}"
     try:
-        allowed = await check_idempotent_expiring_budget(
+        allowed, lease_token = await check_idempotent_expiring_budget(
             f"tournament-checkout-ip:{client_ip}",
-            idempotency_key=(
-                f"tournament-checkout-request:{payer_account_id}:{request_id}"
-            ),
+            idempotency_key=marker_key,
             limit=limit,
             seconds=3600,
         )
@@ -66,6 +69,7 @@ async def _enforce_checkout_rate_limit(
         raise CheckoutRateLimitUnavailableError() from error
     if not allowed:
         raise CheckoutRateLimitedError()
+    return (marker_key, lease_token) if lease_token is not None else None
 
 
 def _price_cents(price: Decimal) -> int:
@@ -204,13 +208,33 @@ async def start_checkout(
             TournamentCheckout.request_id == request.request_id,
         )
     )
+    admission_lease = None
     if prior_request_exists is None:
-        await _enforce_checkout_rate_limit(
+        admission_lease = await _enforce_checkout_rate_limit(
             client_ip,
             payer_account_id=actor.id,
             request_id=request.request_id,
         )
 
+    try:
+        return await _start_checkout_after_admission(
+            db,
+            tournament_id=tournament_id,
+            actor=actor,
+            request=request,
+        )
+    finally:
+        if admission_lease is not None:
+            await release_idempotent_budget_marker(*admission_lease)
+
+
+async def _start_checkout_after_admission(
+    db: AsyncSession,
+    *,
+    tournament_id: uuid.UUID,
+    actor: User,
+    request: TournamentCheckoutCreate,
+) -> TournamentCheckoutRead:
     merchant_account_id = get_settings().tournament_payment_merchant_account_id
     # Lock both Accounts in stable order before the Tournament. This serializes a
     # new checkout with payer merges and merchant lifecycle transitions without

@@ -1,5 +1,6 @@
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
+import { toast } from 'sonner'
 
 import { mockEventEnterEndpoint } from '@/mocks/endpoints/tournaments/tournaments.endpoint'
 import { buildTournamentEntrantRead } from '@/mocks/factories/tournaments/tournament.factory'
@@ -17,6 +18,18 @@ import {
 import { eventsTabPage } from './events-tab.page'
 import { EventsTab } from './events-tab'
 import { buildEventsTabProps } from './events-tab.factory'
+
+vi.mock('sonner', async () => {
+  const actual = await vi.importActual<typeof import('sonner')>('sonner')
+  return {
+    ...actual,
+    toast: { ...actual.toast, error: vi.fn() },
+  }
+})
+
+beforeEach(() => {
+  vi.mocked(toast.error).mockClear()
+})
 
 describe('EventsTab', () => {
   it('opens an event from its card', async () => {
@@ -86,6 +99,38 @@ describe('EventsTab', () => {
         }),
       })
 
+      expect(
+        await eventsTabPage.findSelectButton('Open Singles'),
+      ).toBeInTheDocument()
+    })
+
+    it('locks paid selection until the current checkout read settles', async () => {
+      let releaseRead!: () => void
+      const readGate = new Promise<void>((resolve) => {
+        releaseRead = resolve
+      })
+      server.use(
+        http.get(
+          '*/v1/tournaments/:tournamentId/checkouts/current',
+          async () => {
+            await readGate
+            return HttpResponse.json(
+              { detail: 'Checkout not found.' },
+              { status: 404 },
+            )
+          },
+        ),
+      )
+      eventsTabPage.render({
+        tournament: buildTournament({
+          events: [buildEvent({ name: 'Open Singles', entryFee: 45 })],
+        }),
+      })
+
+      await screen.findByText('Open Singles')
+      expect(eventsTabPage.querySelectButton('Open Singles')).toBeNull()
+
+      releaseRead()
       expect(
         await eventsTabPage.findSelectButton('Open Singles'),
       ).toBeInTheDocument()
@@ -372,6 +417,7 @@ describe('EventsTab', () => {
 
       expect(await screen.findByText('Entry summary')).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Hold 1 place' })).toBeInTheDocument()
+      expect(toast.error).not.toHaveBeenCalled()
     })
 
     it('discards the draft when reconciliation finds a checkout after a lost create response', async () => {
@@ -421,6 +467,7 @@ describe('EventsTab', () => {
       await userEvent.click(await eventsTabPage.findSelectButton('Open Singles'))
       await userEvent.click(screen.getByRole('button', { name: 'Hold 1 place' }))
       expect(await screen.findByText('Your held places')).toBeInTheDocument()
+      expect(toast.error).not.toHaveBeenCalled()
 
       await userEvent.click(screen.getByRole('button', { name: 'Release hold' }))
       await waitFor(() => expect(screen.queryByText('Your held places')).toBeNull())
