@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest'
 
 import type { components } from '@/api/schema'
-import { currentMockCheckout } from './handlers'
+import {
+  cancelMockCheckout,
+  currentMockCheckout,
+  findTournament,
+  resetTournamentsStore,
+  storeMockCheckout,
+  updateEvent,
+} from './tournaments-store'
+import { BAY_AREA_OPEN_ID } from './factories/tournaments/tournament-ids'
+import { mockUuid } from './mock-uuid'
 
 type Checkout = components['schemas']['TournamentCheckoutRead']
 
@@ -32,5 +41,63 @@ describe('currentMockCheckout', () => {
     expect(
       currentMockCheckout(checkout, Date.parse('2030-04-20T14:10:00Z')),
     ).toBeNull()
+  })
+})
+
+describe('mock checkout capacity projection', () => {
+  const eventId = mockUuid('ev-open-singles')
+
+  beforeEach(() => resetTournamentsStore())
+
+  it('projects active holds into tournament capacity and releases them on cancellation', () => {
+    const original = findTournament(BAY_AREA_OPEN_ID)!.events.find(
+      (event) => event.id === eventId,
+    )!
+    const resized = updateEvent(BAY_AREA_OPEN_ID, eventId, {
+      lock_version: original.lock_version,
+      max_players: original.entered + 1,
+    })
+    expect(resized.ok).toBe(true)
+    const before = findTournament(BAY_AREA_OPEN_ID)!.events.find(
+      (event) => event.id === eventId,
+    )!
+    const heldCheckout = {
+      ...checkout,
+      tournament_id: BAY_AREA_OPEN_ID,
+      expires_at: new Date(Date.now() + 600_000).toISOString(),
+      lines: [{ event_id: eventId, event_name: before.name, price_cents: 4_500 }],
+    }
+    storeMockCheckout(heldCheckout)
+
+    const held = findTournament(BAY_AREA_OPEN_ID)!.events.find(
+      (event) => event.id === eventId,
+    )!
+    expect(held.held_places).toBe(1)
+    expect(held.available_places).toBe(0)
+    expect(held.entry_state).toEqual({ state: 'event_full' })
+
+    expect(cancelMockCheckout(BAY_AREA_OPEN_ID, heldCheckout.id)?.status).toBe(
+      'cancelled',
+    )
+    const released = findTournament(BAY_AREA_OPEN_ID)!.events.find(
+      (event) => event.id === eventId,
+    )!
+    expect(released.held_places).toBe(0)
+    expect(released.available_places).toBe(before.available_places)
+    expect(released.entry_state).toEqual({ state: 'open' })
+  })
+
+  it('drops expired holds from tournament reads', () => {
+    storeMockCheckout({
+      ...checkout,
+      tournament_id: BAY_AREA_OPEN_ID,
+      expires_at: new Date(Date.now() - 1).toISOString(),
+      lines: [{ event_id: eventId, event_name: 'Open Singles', price_cents: 4_500 }],
+    })
+
+    const event = findTournament(BAY_AREA_OPEN_ID)!.events.find(
+      (candidate) => candidate.id === eventId,
+    )!
+    expect(event.held_places).toBe(0)
   })
 })

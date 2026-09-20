@@ -243,10 +243,10 @@ struct TournamentEventDTO: Decodable, Identifiable {
     }
     var formatLabel: String { drawType.replacingOccurrences(of: "-", with: " ").capitalized }
     var capacityLabel: String {
-        maxPlayers.map { maximum in
-            let occupied = entryCount + (heldPlaces ?? 0)
+        let occupied = entryCount + (heldPlaces ?? 0)
+        return maxPlayers.map { maximum in
             return "\(occupied)/\(maximum) players"
-        } ?? TournamentCopy.count(entryCount, "player")
+        } ?? TournamentCopy.count(occupied, "player")
     }
     var rosterEmptyMessage: String? {
         guard entrants.isEmpty else { return nil }

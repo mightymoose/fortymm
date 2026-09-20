@@ -41,7 +41,7 @@ from app.tournament_checkout_errors import (
     CheckoutRefusal,
     CheckoutRefusedError,
 )
-from app.tournament_checkouts import start_checkout
+from app.tournament_checkouts import cancel_checkout, start_checkout
 from app.tournament_event_stages import mint_stages
 from app.tournament_events import update_event
 from app.tournament_queries import (
@@ -847,6 +847,60 @@ async def test_explicit_cancellation_releases_hold_for_another_player(
             json={"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]},
         )
         assert available.status_code == 201
+
+
+@pytest.mark.parametrize("lifecycle_state", ["deactivated", "merged"])
+async def test_cancellation_reloads_a_manager_changed_after_authentication(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch,
+    lifecycle_state: str,
+) -> None:
+    payer = await start_session(api_client, db_session)
+    manager = User(email=f"manager-{uuid.uuid4().hex[:8]}@example.com")
+    manager.player_grants.append(
+        AccountPlayer(player_id=payer.player_id, is_primary=True)
+    )
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("12.00"),), capacities=(1,)
+    )
+    db_session.add(manager)
+    await db_session.commit()
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    created = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]},
+    )
+    assert created.status_code == 201
+
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+    async with make_session() as cancelling, make_session() as lifecycle:
+        stale_actor = await cancelling.get(User, manager.id)
+        assert stale_actor is not None and stale_actor.is_active
+        if lifecycle_state == "deactivated":
+            await deactivate_account(lifecycle, manager.id)
+        else:
+            changed = await lifecycle.get(User, manager.id)
+            assert changed is not None
+            changed.merged_into_user_id = owner.id
+            changed.merged_at = datetime.now(UTC)
+        await lifecycle.commit()
+
+        with pytest.raises(CheckoutNotFoundError):
+            await cancel_checkout(
+                cancelling,
+                tournament_id=tournament.id,
+                checkout_id=uuid.UUID(created.json()["id"]),
+                actor=stale_actor,
+            )
+
+    stored = await db_session.get(
+        TournamentCheckout, uuid.UUID(created.json()["id"])
+    )
+    assert stored is not None
+    assert stored.status is TournamentCheckoutStatus.active
 
 
 async def test_paid_event_requires_checkout_while_zero_fee_event_enters_free(

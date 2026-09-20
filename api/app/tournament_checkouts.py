@@ -643,10 +643,19 @@ async def cancel_checkout(
     checkout_id: uuid.UUID,
     actor: User,
 ) -> TournamentCheckoutRead:
-    await db.execute(
-        select(User.id).where(User.id == actor.id).with_for_update(read=True)
+    locked_actor = await db.scalar(
+        select(User)
+        .where(User.id == actor.id)
+        .with_for_update(read=True)
+        .execution_options(populate_existing=True)
     )
-    tournament = await _load_tournament_locked(db, tournament_id, actor.id)
+    if (
+        locked_actor is None
+        or not locked_actor.is_active
+        or locked_actor.merged_into_user_id is not None
+    ):
+        raise CheckoutNotFoundError()
+    tournament = await _load_tournament_locked(db, tournament_id, locked_actor.id)
     checkout = await db.scalar(
         select(TournamentCheckout)
         .where(
@@ -655,9 +664,9 @@ async def cancel_checkout(
         )
         .options(selectinload(TournamentCheckout.lines))
     )
-    player = actor.primary_player
+    player = locked_actor.primary_player
     if checkout is None or (
-        checkout.payer_account_id != actor.id
+        checkout.payer_account_id != locked_actor.id
         and (player is None or checkout.entrant_player_id != player.id)
     ):
         raise CheckoutNotFoundError()

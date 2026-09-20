@@ -133,6 +133,18 @@ private final class TestLocationManager: CLLocationManager {
         precondition(heldTournament.hasHeldPlaces, "Tournament detail must poll while any checkout hold is active")
         precondition(heldTournament.holdPollSeconds == 5, "Active holds must use the fast refresh cadence")
         precondition(retainedTournament.holdPollSeconds == 30, "Zero-hold snapshots must retain a discovery refresh")
+        var uncappedHeldPayload = retainedPayload
+        var uncappedHeldEvent = retainedEvent
+        uncappedHeldEvent["max_players"] = NSNull()
+        uncappedHeldEvent["entered"] = 0
+        uncappedHeldEvent["entrants"] = []
+        uncappedHeldEvent["retained_entrants"] = []
+        uncappedHeldEvent["held_places"] = 1
+        uncappedHeldEvent["available_places"] = NSNull()
+        uncappedHeldPayload[0]["events"] = [uncappedHeldEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: uncappedHeldPayload), encoding: .utf8)!
+        let uncappedHeldCapacity = try await service.list()[0].events[0]
+        precondition(uncappedHeldCapacity.capacityLabel == "1 player", "Uncapped capacity must include checkout holds")
         var overCapacityPayload = retainedPayload
         var overCapacityEvent = retainedEvent
         overCapacityEvent["entered"] = 6

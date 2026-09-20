@@ -48,17 +48,20 @@ import { DEMO_SEED } from './rbac-store'
 import {
   createEvent as createTournamentEvent,
   createTournament,
+  cancelMockCheckout,
   cutDraw as cutTournamentDraw,
   deleteEvent as deleteTournamentEvent,
   deleteTournament as deleteTournamentSeed,
   enterEvent as enterTournamentEvent,
   findTournament,
+  readCurrentMockCheckout,
   listTournaments,
   namedList,
   type NearMeFilter,
   placeFixture as placeTournamentFixture,
   requestScheduleSolve as requestTournamentScheduleSolve,
   setTournamentRegistration,
+  storeMockCheckout,
   transitionTournament,
   uncutDraw as uncutTournamentDraw,
   updateEvent as updateTournamentEvent,
@@ -122,20 +125,6 @@ export const MOCK_AGENT_ACCESS = buildAgentAccess({
  * round trip.
  */
 let agentAccessNow = MOCK_AGENT_ACCESS
-const checkoutByTournament = new Map<string, components['schemas']['TournamentCheckoutRead']>()
-
-export function currentMockCheckout(
-  checkout: components['schemas']['TournamentCheckoutRead'],
-  now = Date.now(),
-): components['schemas']['TournamentCheckoutRead'] | null {
-  const remainingSeconds = Math.max(
-    0,
-    Math.ceil((Date.parse(checkout.expires_at) - now) / 1_000),
-  )
-  return remainingSeconds === 0
-    ? null
-    : { ...checkout, remaining_seconds: remainingSeconds }
-}
 
 /** The dev world's cross-tournament solve ledger (see the handler below). */
 const mockAdminSolveLedger = buildAdminSolveLedgerSeed()
@@ -1242,10 +1231,8 @@ function parseNearMe(params: URLSearchParams):
 export const handlers = [
   http.get('*/v1/tournaments/:tournamentId/checkouts/current', ({ params }) => {
     const tournamentId = String(params.tournamentId)
-    const stored = checkoutByTournament.get(tournamentId)
-    const checkout = stored ? currentMockCheckout(stored) : null
+    const checkout = readCurrentMockCheckout(tournamentId)
     if (checkout) return HttpResponse.json(checkout)
-    checkoutByTournament.delete(tournamentId)
     return HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 })
   }),
   http.post('*/v1/tournaments/:tournamentId/checkouts', async ({ params, request }) => {
@@ -1277,19 +1264,21 @@ export const handlers = [
       remaining_seconds: 600,
       lines,
     }
-    checkoutByTournament.set(tournamentId, checkout)
+    storeMockCheckout(checkout)
     return HttpResponse.json(checkout, { status: 201 })
   }),
   http.delete(
     '*/v1/tournaments/:tournamentId/checkouts/:checkoutId',
     ({ params }) => {
       const tournamentId = String(params.tournamentId)
-      const checkout = checkoutByTournament.get(tournamentId)
-      if (!checkout || checkout.id !== String(params.checkoutId)) {
+      const checkout = cancelMockCheckout(
+        tournamentId,
+        String(params.checkoutId),
+      )
+      if (!checkout) {
         return HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 })
       }
-      checkoutByTournament.delete(tournamentId)
-      return HttpResponse.json({ ...checkout, status: 'cancelled' })
+      return HttpResponse.json(checkout)
     },
   ),
   http.get('*/v1/health', async () => {
