@@ -1034,9 +1034,7 @@ async def test_ownership_transfer_invalidates_checkout_and_releases_hold(
     )
     await db_session.commit()
 
-    stored = await db_session.get(
-        TournamentCheckout, uuid.UUID(created.json()["id"])
-    )
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(created.json()["id"]))
     assert stored is not None
     assert stored.status is TournamentCheckoutStatus.invalidated
     checkout = await api_client.get(
