@@ -568,6 +568,7 @@ function drawableEvents(options: TournamentsStoreOptions): TournamentEventRead[]
       format: 'singles',
       draw_type: 'round-robin',
       max_players: 32,
+      entry_fee: 0,
       entrants: crowd(PLAY_FIELD),
       reservations: PLAY_RESERVATIONS,
     }),
