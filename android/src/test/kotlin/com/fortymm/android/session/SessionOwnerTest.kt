@@ -74,6 +74,38 @@ class SessionOwnerTest {
     }
 
     @Test
+    fun expiredCookieIsPersistedAsSessionEndedWithoutSendingTheStaleCredential() = runBlocking {
+        val userId = UUID.fromString("278658cc-d50d-455a-beb1-fe189668c141")
+        val credentialStore = MemoryCredentialStore()
+        server.enqueue(
+            sessionResponse(userId, "expiring-guest")
+                .addHeader("Set-Cookie", "session=expiring-session; Max-Age=2592000; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=expiring-csrf; Max-Age=2592000; Path=/"),
+        )
+        SessionOwner(
+            apiClient = FortyMMApiClient(server.url("/")),
+            credentialStore = credentialStore,
+        ).bootstrap()
+        val expiresAt = requireNotNull(credentialStore.expiresAtEpochMillis)
+
+        val laterProcess = SessionOwner(
+            apiClient = FortyMMApiClient(server.url("/")),
+            credentialStore = credentialStore,
+            currentTimeMillis = { expiresAt + 1 },
+        )
+        laterProcess.bootstrap()
+
+        assertEquals(
+            SessionState.SessionEnded(
+                "Your saved session has expired. Start a new guest to continue.",
+                email = null,
+            ),
+            laterProcess.state.value,
+        )
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
     fun cancelledUiCallerDoesNotRestartGuestCreation() = runBlocking {
         val firstUserId = UUID.fromString("0b47aab8-7453-49ae-a359-b78cd77151c2")
         val replacementUserId = UUID.fromString("693f6573-cae1-49cc-9d4d-f1dbc7c652a6")
@@ -354,35 +386,39 @@ class SessionOwnerTest {
         var unreadable: Boolean = false,
     ) : SessionCredentialStore {
         var credential: String? = null
+        var expiresAtEpochMillis: Long? = Long.MAX_VALUE
         var sessionEndReason: SessionEndReason? = null
         var saveCount = 0
 
         override fun load(): CredentialLoadResult = when {
             unreadable -> CredentialLoadResult.UnreadableStorage
             sessionEndReason != null -> CredentialLoadResult.SessionEnded(sessionEndReason!!)
-            credential != null -> CredentialLoadResult.Credential(credential!!)
+            credential != null -> CredentialLoadResult.Credential(credential!!, expiresAtEpochMillis)
             else -> CredentialLoadResult.Absent
         }
 
-        override fun save(credential: String): CredentialSaveResult {
+        override fun save(credential: String, expiresAtEpochMillis: Long): CredentialSaveResult {
             saveCount += 1
             if (failedSavesRemaining > 0) {
                 failedSavesRemaining -= 1
                 return CredentialSaveResult.Failed
             }
             this.credential = credential
+            this.expiresAtEpochMillis = expiresAtEpochMillis
             sessionEndReason = null
             return CredentialSaveResult.Saved
         }
 
         override fun markSessionEnded(reason: SessionEndReason): CredentialSaveResult {
             credential = null
+            expiresAtEpochMillis = null
             sessionEndReason = reason
             return CredentialSaveResult.Saved
         }
 
         override fun clear(): CredentialClearResult {
             credential = null
+            expiresAtEpochMillis = null
             unreadable = false
             sessionEndReason = null
             return CredentialClearResult.Cleared

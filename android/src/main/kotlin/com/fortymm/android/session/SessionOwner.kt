@@ -43,11 +43,12 @@ class SessionOwner(
     private val apiClient: FortyMMApiClient,
     private val credentialStore: SessionCredentialStore,
     private val applicationScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+    private val currentTimeMillis: () -> Long = System::currentTimeMillis,
 ) {
     private val mutableState = MutableStateFlow<SessionState>(SessionState.Loading)
     private val bootstrapLock = Any()
     private var bootstrapJob: Deferred<Unit>? = null
-    private var pendingCredentialRecovery: String? = null
+    private var pendingCredentialRecovery: IncompleteSession? = null
     private var pendingPersistence: SessionBootstrap? = null
     private var pendingSessionEnd: SessionEndReason? = null
 
@@ -77,8 +78,8 @@ class SessionOwner(
         if (mutableState.value is SessionState.Ready || mutableState.value is SessionState.SessionEnded) return
         mutableState.value = SessionState.Loading
 
-        pendingCredentialRecovery?.let { credential ->
-            persistRecoveredCredential(credential)
+        pendingCredentialRecovery?.let { session ->
+            persistRecoveredCredential(session)
             return
         }
         pendingSessionEnd?.let { reason ->
@@ -91,7 +92,18 @@ class SessionOwner(
         }
 
         val storedCredential = when (val loaded = withContext(Dispatchers.IO) { credentialStore.load() }) {
-            is CredentialLoadResult.Credential -> loaded.value
+            is CredentialLoadResult.Credential -> {
+                if (loaded.expiresAtEpochMillis == null || loaded.expiresAtEpochMillis <= currentTimeMillis()) {
+                    val reason = SessionEndReason(
+                        message = "Your saved session has expired. Start a new guest to continue.",
+                        email = null,
+                    )
+                    pendingSessionEnd = reason
+                    persistSessionEnd(reason)
+                    return
+                }
+                loaded
+            }
             CredentialLoadResult.Absent -> null
             is CredentialLoadResult.SessionEnded -> {
                 mutableState.value = SessionState.SessionEnded(
@@ -109,15 +121,15 @@ class SessionOwner(
         }
 
         try {
-            when (val result = apiClient.bootstrap(storedCredential)) {
+            when (val result = apiClient.bootstrap(storedCredential?.value)) {
                 is SessionBootstrap -> finishBootstrap(result, storedCredential)
                 is EndedSession -> {
                     pendingSessionEnd = result.reason
                     persistSessionEnd(result.reason)
                 }
                 is IncompleteSession -> {
-                    pendingCredentialRecovery = result.credential
-                    persistRecoveredCredential(result.credential)
+                    pendingCredentialRecovery = result
+                    persistRecoveredCredential(result)
                 }
             }
         } catch (error: CancellationException) {
@@ -129,10 +141,19 @@ class SessionOwner(
         }
     }
 
-    private suspend fun finishBootstrap(session: SessionBootstrap, storedCredential: String?) {
-        if (session.credential != storedCredential) {
-            pendingPersistence = session
-            persistPendingSession(session)
+    private suspend fun finishBootstrap(
+        session: SessionBootstrap,
+        storedCredential: CredentialLoadResult.Credential?,
+    ) {
+        val resolvedSession = session.copy(
+            expiresAtEpochMillis = session.expiresAtEpochMillis ?: storedCredential?.expiresAtEpochMillis,
+        )
+        if (
+            resolvedSession.credential != storedCredential?.value ||
+            session.expiresAtEpochMillis != null
+        ) {
+            pendingPersistence = resolvedSession
+            persistPendingSession(resolvedSession)
             return
         }
         mutableState.value = SessionState.Ready(session.user)
@@ -140,7 +161,10 @@ class SessionOwner(
 
     private suspend fun persistPendingSession(session: SessionBootstrap) {
         val saved = withContext(Dispatchers.IO) {
-            credentialStore.save(session.credential)
+            credentialStore.save(
+                credential = session.credential,
+                expiresAtEpochMillis = requireNotNull(session.expiresAtEpochMillis),
+            )
         }
         if (saved == CredentialSaveResult.Saved) {
             pendingPersistence = null
@@ -167,9 +191,9 @@ class SessionOwner(
         }
     }
 
-    private suspend fun persistRecoveredCredential(credential: String) {
+    private suspend fun persistRecoveredCredential(session: IncompleteSession) {
         val saved = withContext(Dispatchers.IO) {
-            credentialStore.save(credential)
+            credentialStore.save(session.credential, session.expiresAtEpochMillis)
         }
         if (saved == CredentialSaveResult.Saved) {
             pendingCredentialRecovery = null

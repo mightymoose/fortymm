@@ -1,5 +1,6 @@
 package com.fortymm.android.session
 
+import android.content.ContextWrapper
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
@@ -17,7 +18,13 @@ import java.util.concurrent.TimeUnit
 
 @RunWith(AndroidJUnit4::class)
 class AndroidSessionCredentialStoreTest {
-    private val context = InstrumentationRegistry.getInstrumentation().targetContext
+    private val targetContext = InstrumentationRegistry.getInstrumentation().targetContext
+    private val context = object : ContextWrapper(targetContext) {
+        override fun getFilesDir(): File =
+            File(targetContext.filesDir, "credential-store-tests").apply(File::mkdirs)
+
+        override fun getPackageName(): String = "${targetContext.packageName}.credential-store-tests"
+    }
     private val credentialDirectory = File(context.filesDir, "session-credentials")
 
     @Before
@@ -36,7 +43,7 @@ class AndroidSessionCredentialStoreTest {
         assertFalse(File(credentialDirectory, "credential.bin").readText().contains(credential))
 
         val reader = AndroidSessionCredentialStore(context)
-        assertEquals(CredentialLoadResult.Credential(credential), reader.load())
+        assertEquals(CredentialLoadResult.Credential(credential, Long.MAX_VALUE), reader.load())
 
         assertEquals(CredentialClearResult.Cleared, reader.clear())
         assertEquals(CredentialLoadResult.Absent, AndroidSessionCredentialStore(context).load())
@@ -54,7 +61,7 @@ class AndroidSessionCredentialStoreTest {
         assertFalse(androidKeyStore().containsAlias(alias))
         assertEquals(CredentialSaveResult.Saved, store.save("credential-with-fresh-key"))
         assertEquals(
-            CredentialLoadResult.Credential("credential-with-fresh-key"),
+            CredentialLoadResult.Credential("credential-with-fresh-key", Long.MAX_VALUE),
             AndroidSessionCredentialStore(context).load(),
         )
     }
@@ -86,11 +93,36 @@ class AndroidSessionCredentialStoreTest {
         assertTrue(credentialFile.renameTo(temporaryFile))
 
         assertEquals(
-            CredentialLoadResult.Credential(credential),
+            CredentialLoadResult.Credential(credential, Long.MAX_VALUE),
             AndroidSessionCredentialStore(context).load(),
         )
         assertTrue(credentialFile.exists())
         assertFalse(temporaryFile.exists())
+    }
+
+    @Test
+    fun credentialCommitAndTemporaryPromotionSyncTheParentDirectory() {
+        var saveSyncCount = 0
+        val writer = AndroidSessionCredentialStore(context) { directory ->
+            assertEquals(credentialDirectory, directory)
+            saveSyncCount += 1
+        }
+        assertEquals(CredentialSaveResult.Saved, writer.save("directory-synced-credential"))
+        assertEquals(1, saveSyncCount)
+        val credentialFile = File(credentialDirectory, "credential.bin")
+        val temporaryFile = File(credentialDirectory, "credential.bin.tmp")
+        assertTrue(credentialFile.renameTo(temporaryFile))
+
+        var recoverySyncCount = 0
+        val reader = AndroidSessionCredentialStore(context) { directory ->
+            assertEquals(credentialDirectory, directory)
+            recoverySyncCount += 1
+        }
+        assertEquals(
+            CredentialLoadResult.Credential("directory-synced-credential", Long.MAX_VALUE),
+            reader.load(),
+        )
+        assertEquals(1, recoverySyncCount)
     }
 
     @Test

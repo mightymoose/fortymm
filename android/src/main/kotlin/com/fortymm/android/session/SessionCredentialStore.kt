@@ -3,6 +3,8 @@ package com.fortymm.android.session
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import android.system.Os
+import android.system.OsConstants
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.BufferedInputStream
@@ -26,7 +28,10 @@ import javax.crypto.spec.GCMParameterSpec
 interface SessionCredentialStore {
     fun load(): CredentialLoadResult
 
-    fun save(credential: String): CredentialSaveResult
+    fun save(
+        credential: String,
+        expiresAtEpochMillis: Long = Long.MAX_VALUE,
+    ): CredentialSaveResult
 
     fun markSessionEnded(reason: SessionEndReason): CredentialSaveResult
 
@@ -34,7 +39,10 @@ interface SessionCredentialStore {
 }
 
 sealed interface CredentialLoadResult {
-    data class Credential(val value: String) : CredentialLoadResult
+    data class Credential(
+        val value: String,
+        val expiresAtEpochMillis: Long?,
+    ) : CredentialLoadResult
 
     data class SessionEnded(val reason: SessionEndReason) : CredentialLoadResult
 
@@ -54,7 +62,12 @@ enum class CredentialClearResult {
 }
 
 /** Android Keystore-backed implementation of [SessionCredentialStore]. */
-class AndroidSessionCredentialStore(context: Context) : SessionCredentialStore {
+class AndroidSessionCredentialStore internal constructor(
+    context: Context,
+    private val syncDirectory: (File) -> Unit,
+) : SessionCredentialStore {
+    constructor(context: Context) : this(context, ::syncDirectoryEntry)
+
     private val credentialFile = File(context.filesDir, CREDENTIAL_DIRECTORY).resolve(CREDENTIAL_FILE)
     private val temporaryCredentialFile = File(credentialFile.parentFile, "$CREDENTIAL_FILE.tmp")
     private val keyAlias = "${context.packageName}.session-credential.v1"
@@ -79,9 +92,18 @@ class AndroidSessionCredentialStore(context: Context) : SessionCredentialStore {
         }
     }
 
-    override fun save(credential: String): CredentialSaveResult = synchronized(processWideStorageLock) {
+    override fun save(
+        credential: String,
+        expiresAtEpochMillis: Long,
+    ): CredentialSaveResult = synchronized(processWideStorageLock) {
         writeProtectedPayload(
-            json.encodeToString(StoredSessionDto(kind = CREDENTIAL_KIND, credential = credential)),
+            json.encodeToString(
+                StoredSessionDto(
+                    kind = CREDENTIAL_KIND,
+                    credential = credential,
+                    expiresAtEpochMillis = expiresAtEpochMillis,
+                ),
+            ),
         )
     }
 
@@ -112,11 +134,11 @@ class AndroidSessionCredentialStore(context: Context) : SessionCredentialStore {
         val stored = try {
             json.decodeFromString<StoredSessionDto>(payload)
         } catch (_: Exception) {
-            return CredentialLoadResult.Credential(payload)
+            return CredentialLoadResult.Credential(payload, expiresAtEpochMillis = null)
         }
         return when (stored.kind) {
             CREDENTIAL_KIND -> stored.credential
-                ?.let(CredentialLoadResult::Credential)
+                ?.let { CredentialLoadResult.Credential(it, stored.expiresAtEpochMillis) }
                 ?: CredentialLoadResult.UnreadableStorage
             SESSION_ENDED_KIND -> CredentialLoadResult.SessionEnded(
                 SessionEndReason(
@@ -143,6 +165,7 @@ class AndroidSessionCredentialStore(context: Context) : SessionCredentialStore {
         check(temporaryCredentialFile.renameTo(credentialFile)) {
             "Unable to recover temporary session credential"
         }
+        syncDirectory(requireNotNull(credentialFile.parentFile))
     }
 
     override fun clear(): CredentialClearResult = synchronized(processWideStorageLock) {
@@ -217,6 +240,7 @@ class AndroidSessionCredentialStore(context: Context) : SessionCredentialStore {
             fileOutput.fd.sync()
         }
         check(temporaryCredentialFile.renameTo(credentialFile)) { "Unable to save credential" }
+        syncDirectory(requireNotNull(credentialFile.parentFile))
     }
 
     private fun deleteIfPresent(file: File): Boolean = !file.exists() || file.delete()
@@ -239,10 +263,24 @@ class AndroidSessionCredentialStore(context: Context) : SessionCredentialStore {
     }
 }
 
+private fun syncDirectoryEntry(directory: File) {
+    val descriptor = Os.open(
+        directory.absolutePath,
+        OsConstants.O_RDONLY,
+        0,
+    )
+    try {
+        Os.fsync(descriptor)
+    } finally {
+        Os.close(descriptor)
+    }
+}
+
 @Serializable
 private data class StoredSessionDto(
     val kind: String,
     val credential: String? = null,
+    val expiresAtEpochMillis: Long? = null,
     val message: String? = null,
     val email: String? = null,
 )

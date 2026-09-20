@@ -62,9 +62,9 @@ class FortyMMApiClient(
             val cookies = response.headers.values("Set-Cookie")
                 .mapNotNull { Cookie.parse(responseUrl, it) }
                 .filter { it.matches(apiRoot) }
-            val receivedCredential = cookies
+            val receivedSessionCookie = cookies
                 .lastOrNull { it.name == SESSION_COOKIE_NAME && it.value.isNotEmpty() }
-                ?.value
+            val receivedCredential = receivedSessionCookie?.value
             val receivedCsrfToken = cookies
                 .lastOrNull { it.name == CSRF_COOKIE_NAME && it.value.isNotEmpty() }
                 ?.value
@@ -74,6 +74,7 @@ class FortyMMApiClient(
                 if (response.isSuccessful) {
                     return@withContext incompleteSessionOrThrow(
                         receivedCredential = receivedCredential,
+                        receivedCredentialExpiresAt = receivedSessionCookie?.expiresAt,
                         sentCredential = credential,
                         receivedCsrfToken = receivedCsrfToken,
                         message = "Session bootstrap response ended before its body was read",
@@ -108,6 +109,7 @@ class FortyMMApiClient(
             } catch (error: Exception) {
                 return@withContext incompleteSessionOrThrow(
                     receivedCredential = receivedCredential,
+                    receivedCredentialExpiresAt = receivedSessionCookie?.expiresAt,
                     sentCredential = credential,
                     receivedCsrfToken = receivedCsrfToken,
                     message = "Session bootstrap returned an unreadable response",
@@ -120,6 +122,7 @@ class FortyMMApiClient(
             val csrfToken = receivedCsrfToken
                 ?: return@withContext incompleteSessionOrThrow(
                     receivedCredential = receivedCredential,
+                    receivedCredentialExpiresAt = receivedSessionCookie?.expiresAt,
                     sentCredential = credential,
                     receivedCsrfToken = null,
                     message = "Session bootstrap returned no CSRF companion",
@@ -129,6 +132,7 @@ class FortyMMApiClient(
             } catch (error: IllegalArgumentException) {
                 return@withContext incompleteSessionOrThrow(
                     receivedCredential = receivedCredential,
+                    receivedCredentialExpiresAt = receivedSessionCookie?.expiresAt,
                     sentCredential = credential,
                     receivedCsrfToken = receivedCsrfToken,
                     message = "Session bootstrap returned an invalid user id",
@@ -140,12 +144,14 @@ class FortyMMApiClient(
             SessionBootstrap(
                 user = SessionUser(id = userId, username = dto.data.user.username),
                 credential = resolvedCredential,
+                expiresAtEpochMillis = receivedSessionCookie?.expiresAt,
             )
         }
     }
 
     private fun incompleteSessionOrThrow(
         receivedCredential: String?,
+        receivedCredentialExpiresAt: Long?,
         sentCredential: String?,
         receivedCsrfToken: String?,
         message: String,
@@ -154,7 +160,10 @@ class FortyMMApiClient(
         if (receivedCredential != null && receivedCredential != sentCredential) {
             sessionCredential = receivedCredential
             csrfToken = receivedCsrfToken
-            return IncompleteSession(receivedCredential)
+            return IncompleteSession(
+                credential = receivedCredential,
+                expiresAtEpochMillis = requireNotNull(receivedCredentialExpiresAt),
+            )
         }
         throw IOException(message, cause)
     }
@@ -178,6 +187,7 @@ sealed interface SessionBootstrapResult
 data class SessionBootstrap(
     val user: SessionUser,
     val credential: String,
+    val expiresAtEpochMillis: Long?,
 ) : SessionBootstrapResult
 
 data class EndedSession(
@@ -186,6 +196,7 @@ data class EndedSession(
 
 data class IncompleteSession(
     val credential: String,
+    val expiresAtEpochMillis: Long,
 ) : SessionBootstrapResult
 
 @Serializable

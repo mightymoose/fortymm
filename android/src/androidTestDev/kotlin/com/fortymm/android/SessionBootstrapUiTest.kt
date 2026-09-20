@@ -55,13 +55,15 @@ class SessionBootstrapUiTest {
 
     private class MemoryCredentialStore : SessionCredentialStore {
         private var credential: String? = null
+        private var expiresAtEpochMillis: Long? = null
 
         override fun load(): CredentialLoadResult = credential
-            ?.let(CredentialLoadResult::Credential)
+            ?.let { CredentialLoadResult.Credential(it, expiresAtEpochMillis) }
             ?: CredentialLoadResult.Absent
 
-        override fun save(credential: String): CredentialSaveResult {
+        override fun save(credential: String, expiresAtEpochMillis: Long): CredentialSaveResult {
             this.credential = credential
+            this.expiresAtEpochMillis = expiresAtEpochMillis
             return CredentialSaveResult.Saved
         }
 
@@ -70,6 +72,7 @@ class SessionBootstrapUiTest {
 
         override fun clear(): CredentialClearResult {
             credential = null
+            expiresAtEpochMillis = null
             return CredentialClearResult.Cleared
         }
     }
