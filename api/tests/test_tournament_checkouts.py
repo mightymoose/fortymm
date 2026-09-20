@@ -1040,6 +1040,36 @@ async def test_request_identity_selection_conflicts_and_checkout_is_private(
     assert unknown.json()["detail"]["code"] == "event_not_found"
 
 
+async def test_only_exact_durable_replay_skips_admission_budget(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+    rate_limiter_fakeredis,
+) -> None:
+    await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, events = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("10.00"), Decimal("12.00"))
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    monkeypatch.setenv("TOURNAMENT_CHECKOUT_IP_PER_HOUR", "1")
+    request_id = str(uuid.uuid4())
+    url = f"/v1/tournaments/{tournament.id}/checkouts"
+    original = {"request_id": request_id, "event_ids": [str(events[0].id)]}
+
+    created = await api_client.post(url, json=original)
+    assert created.status_code == 201
+    replayed = await api_client.post(url, json=original)
+    assert replayed.status_code == 201
+    assert replayed.json()["id"] == created.json()["id"]
+
+    conflicting = await api_client.post(
+        url,
+        json={"request_id": request_id, "event_ids": [str(events[1].id)]},
+    )
+    assert conflicting.status_code == 429
+
+
 async def test_request_identity_replays_after_registration_closes(
     api_client: AsyncClient,
     db_session: AsyncSession,

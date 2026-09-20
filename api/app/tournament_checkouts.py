@@ -43,7 +43,11 @@ from app.tournament_checkout_errors import (
     CheckoutRefusal,
     CheckoutRefusedError,
 )
-from app.tournament_eligibility import Eligible, evaluate_rating_eligibility
+from app.tournament_eligibility import (
+    Eligible,
+    evaluate_rating_eligibility,
+    event_is_full,
+)
 from app.tournament_queries import (
     active_entry_counts_by_event,
     entrant_rating,
@@ -202,14 +206,23 @@ async def start_checkout(
     # existence without a row lock first; genuinely new requests charge the
     # fail-closed Redis budget before taking Account, Tournament, or Player locks.
     # The request is loaded and validated again under the account lock below.
-    prior_request_exists = await db.scalar(
-        select(TournamentCheckout.id).where(
+    prior_request = await db.scalar(
+        select(TournamentCheckout)
+        .where(
             TournamentCheckout.payer_account_id == actor.id,
             TournamentCheckout.request_id == request.request_id,
         )
+        .options(selectinload(TournamentCheckout.lines))
     )
     admission_lease = None
-    if prior_request_exists is None:
+    exact_durable_replay = prior_request is not None and (
+        prior_request.tournament_id == tournament_id
+        and {line.event_id for line in prior_request.lines} == set(request.event_ids)
+    )
+    # Only a byte-for-byte logical replay is exempt. Reusing a durable request ID
+    # for another tournament or selection still charges before database locks; the
+    # locked validation below then returns the stable payload-conflict refusal.
+    if not exact_durable_replay:
         admission_lease = await _enforce_checkout_rate_limit(
             client_ip,
             payer_account_id=actor.id,
@@ -420,15 +433,17 @@ async def _start_checkout_after_admission(
                 "You are not eligible for this event.",
                 event_id=event.id,
             )
-        if event.max_players is not None:
-            entered = entered_counts[event.id]
-            held = hold_counts[event.id]
-            if entered + held >= event.max_players:
-                raise CheckoutRefusedError(
-                    CheckoutRefusal.event_full,
-                    "This event has no places available.",
-                    event_id=event.id,
-                )
+        entered = entered_counts.get(event.id, 0)
+        held = hold_counts.get(event.id, 0)
+        if event_is_full(
+            entered=entered + held,
+            max_players=event.max_players,
+        ):
+            raise CheckoutRefusedError(
+                CheckoutRefusal.event_full,
+                "This event has no places available.",
+                event_id=event.id,
+            )
         prices.append(cents)
 
     checkout = TournamentCheckout(
