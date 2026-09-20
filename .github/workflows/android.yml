@@ -41,7 +41,7 @@ jobs:
           distribution: temurin
           java-version: '17.0.17+10'
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
         with:
           # The legacy SDK "tools" package no longer exists. Install only the
           # package this setup step needs; the exact build/image packages follow.
