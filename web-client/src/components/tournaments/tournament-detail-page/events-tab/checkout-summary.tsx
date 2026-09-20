@@ -118,7 +118,7 @@ export function CheckoutSummary({
             {checkout ? (
               <>
                 <Countdown
-                  key={checkout.id}
+                  key={`${checkout.id}:${checkout.remainingSeconds}`}
                   remainingSeconds={checkout.remainingSeconds}
                   onExpired={onExpired}
                 />
