@@ -113,18 +113,31 @@ struct TournamentEventView: View {
             } else if event.isCancelled {
                 TournamentNotice(message: "This event is cancelled and cannot accept new entries.")
             } else if event.requiresCheckout {
-                TournamentNotice(message: "Paid entry is currently available on fortymm.com.")
+                if event.canStartCheckout(checkoutAvailable: tournament.checkoutAvailable) {
+                    TournamentNotice(message: "Paid entry is currently available on fortymm.com.")
+                } else if event.entryState.state == .open {
+                    TournamentNotice(message: "Checkout is not available for this tournament.")
+                } else {
+                    entryRefusal(event)
+                }
             } else {
-                switch event.entryState.state {
-                case .open:
+                if event.entryState.state == .open {
                     Button("Enter event") { mutate { try await service.enter(tournament.id, event: event.id) } }
                         .buttonStyle(.borderedProminent).disabled(busy)
-                case .full: TournamentNotice(message: "This event is full. A place may open if another player withdraws.")
-                case .ineligible: TournamentNotice(message: event.ineligibilityMessage)
-                case .retired: TournamentNotice(message: "This player is retired.")
-                case .unknown: TournamentNotice(message: "Entry is currently unavailable. Refresh to check again.")
+                } else {
+                    entryRefusal(event)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func entryRefusal(_ event: TournamentEventDTO) -> some View {
+        switch event.entryState.state {
+        case .full: TournamentNotice(message: "This event is full. A place may open if another player withdraws.")
+        case .ineligible: TournamentNotice(message: event.ineligibilityMessage)
+        case .retired: TournamentNotice(message: "This player is retired.")
+        case .open, .unknown: TournamentNotice(message: "Entry is currently unavailable. Refresh to check again.")
         }
     }
 

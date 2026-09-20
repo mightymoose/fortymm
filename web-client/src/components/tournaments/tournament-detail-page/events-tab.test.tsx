@@ -332,6 +332,60 @@ describe('EventsTab', () => {
       expect(screen.getByRole('button', { name: 'Hold 1 place' })).toBeInTheDocument()
     })
 
+    it('discards the draft when reconciliation finds a checkout after a lost create response', async () => {
+      const eventId = '00000000-0000-4000-8000-000000000037'
+      let created = false
+      let cancelled = false
+      const activeCheckout = {
+        id: '00000000-0000-4000-8000-000000000038',
+        request_id: '00000000-0000-4000-8000-000000000039',
+        tournament_id: '00000000-0000-4000-8000-000000000020',
+        registration_generation: 0,
+        status: 'active',
+        payment_state: 'unavailable',
+        currency: 'USD',
+        total_cents: 4500,
+        created_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 600_000).toISOString(),
+        remaining_seconds: 600,
+        lines: [
+          { event_id: eventId, event_name: 'Open Singles', price_cents: 4500 },
+        ],
+      }
+      server.use(
+        http.get('*/v1/tournaments/:tournamentId/checkouts/current', () =>
+          created && !cancelled
+            ? HttpResponse.json(activeCheckout)
+            : HttpResponse.json(
+                { detail: 'Checkout not found.' },
+                { status: 404 },
+              ),
+        ),
+        http.post('*/v1/tournaments/:tournamentId/checkouts', () => {
+          created = true
+          return HttpResponse.error()
+        }),
+        http.delete('*/v1/tournaments/:tournamentId/checkouts/:checkoutId', () => {
+          cancelled = true
+          return HttpResponse.json({ ...activeCheckout, status: 'cancelled' })
+        }),
+      )
+      eventsTabPage.render({
+        tournament: buildTournament({
+          events: [buildEvent({ id: eventId, name: 'Open Singles', entryFee: 45 })],
+        }),
+      })
+
+      await userEvent.click(await eventsTabPage.findSelectButton('Open Singles'))
+      await userEvent.click(screen.getByRole('button', { name: 'Hold 1 place' }))
+      expect(await screen.findByText('Your held places')).toBeInTheDocument()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Release hold' }))
+      await waitFor(() => expect(screen.queryByText('Your held places')).toBeNull())
+      expect(screen.queryByText('Entry summary')).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Hold 1 place' })).toBeNull()
+    })
+
     it('hides paid selection toggles while a checkout is active', async () => {
       const eventId = '00000000-0000-4000-8000-000000000041'
       server.use(

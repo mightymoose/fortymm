@@ -45,6 +45,7 @@ struct TournamentDTO: Decodable, Identifiable {
     let status: TournamentStatus
     let registrationOpen: Bool
     let registrationGeneration: Int
+    let checkoutAvailable: Bool
     let canEdit: Bool
     let distanceMiles: Double?
     let createdByUsername: String
@@ -139,6 +140,9 @@ struct TournamentEventDTO: Decodable, Identifiable {
     let entryFee: Double
     var isCancelled: Bool { lifecycleState == "cancelled" }
     var requiresCheckout: Bool { entryFee > 0 }
+    func canStartCheckout(checkoutAvailable: Bool) -> Bool {
+        requiresCheckout && checkoutAvailable && entryState.state == .open && !isCancelled
+    }
     let slot: Slot
     let entrants: [Entrant]
     private let entered: Int?

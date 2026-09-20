@@ -17,6 +17,7 @@ import { DrawPanel } from './events-tab/draw-panel'
 import { EventCard } from './events-tab/event-card'
 import { EnterEventControl } from './events-tab/enter-event-control'
 import { CheckoutSummary } from './events-tab/checkout-summary'
+import { MAX_CHECKOUT_EVENTS, toggleCheckoutEvent } from './events-tab/checkout-policy'
 
 export interface EventsTabProps {
   tournament: Tournament
@@ -49,21 +50,25 @@ export const EventsTab = ({
   const session = useSession()
   const username = session.data?.data.user.username
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  const [adoptedCheckoutId, setAdoptedCheckoutId] = useState<string | null>(null)
   const currentCheckout = useCurrentCheckout(tournament.id, session.isSuccess)
   const startCheckout = useStartCheckout(tournament.id)
   const cancelCheckout = useCancelCheckout(tournament.id)
   const refreshCheckout = useRefreshTournamentCheckout(tournament.id)
   const checkout = currentCheckout.data?.status === 'active' ? currentCheckout.data : null
+  const activeCheckoutId = checkout?.id
+  // The POST response can be lost after the server commits. The mutation's
+  // reconciliation then discovers the durable checkout; adopt that server state
+  // and discard the draft before rendering so it cannot reappear after release.
+  if (activeCheckoutId && activeCheckoutId !== adoptedCheckoutId) {
+    setAdoptedCheckoutId(activeCheckoutId)
+    setSelectedIds(new Set())
+  }
   const paidSelectionLocked = checkout !== null || startCheckout.isPending
   const selectedEvents = tournament.events.filter((event) => selectedIds.has(event.id))
   const togglePaid = (eventId: string) => {
     if (paidSelectionLocked) return
-    setSelectedIds((current) => {
-      const next = new Set(current)
-      if (next.has(eventId)) next.delete(eventId)
-      else next.add(eventId)
-      return next
-    })
+    setSelectedIds((current) => toggleCheckoutEvent(current, eventId))
   }
 
   return (
@@ -153,7 +158,10 @@ export const EventsTab = ({
                   event={ev}
                   selected={selectedIds.has(ev.id)}
                   onTogglePaid={() => togglePaid(ev.id)}
-                  paidSelectionLocked={paidSelectionLocked}
+                  paidSelectionLocked={
+                    paidSelectionLocked ||
+                    (selectedIds.size >= MAX_CHECKOUT_EVENTS && !selectedIds.has(ev.id))
+                  }
                 />
               }
               // The event's draw (ADR-0786): its groups and fixtures for everyone, its

@@ -17,6 +17,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 import type { TournamentCheckout } from '../../data/api'
 import type { TournamentEvent } from '../../data/types'
+import { MAX_CHECKOUT_EVENTS } from './checkout-policy'
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
 
@@ -108,6 +109,11 @@ export function CheckoutSummary({
             <div className="mt-2 flex justify-between border-t pt-3 text-base font-semibold">
               <span>Total</span><span className="tabular-nums">{usd.format(total / 100)}</span>
             </div>
+            {!checkout && selection.length === MAX_CHECKOUT_EVENTS && (
+              <p className="mt-3 text-sm text-muted-foreground" role="status">
+                You can hold up to {MAX_CHECKOUT_EVENTS} events in one checkout.
+              </p>
+            )}
             {checkout && (
               <p className="mt-3 flex gap-2 text-sm text-muted-foreground">
                 <ShieldCheck className="mt-0.5 shrink-0" size={15} />

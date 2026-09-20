@@ -40,7 +40,7 @@ private final class TestLocationManager: CLLocationManager {
         let client = APIClient(session: URLSession(configuration: configuration), tokens: SessionTokenStore(keychain: TestKeychain()))
         let service = TournamentService(client: client)
         TournamentTransport.body = #"""
-        [{"id":"00000000-0000-0000-0000-000000000001","name":"Open","description":null,"status":"published","registration_open":true,"registration_generation":0,"can_edit":false,"created_by_username":"director","address":null,"date_range":null,"table_catalogue":[],"draw_type_catalogue":null,"events":[{"id":"00000000-0000-0000-0000-000000000002","name":"Singles","format":"singles","draw_type":"swiss","timezone":"America/Chicago","max_players":null,"entry_fee":0,"slot":{"date":"2026-09-05","start":"09:00","end":"17:00"},"entrants":[{"id":"00000000-0000-0000-0000-000000000003","user_id":"00000000-0000-0000-0000-000000000004","username":"alex","seed":null,"rating":null}],"entry_state":{"state":"open"},"stages":[{"id":"00000000-0000-0000-0000-000000000005","position":0,"draw_type":"swiss"}],"groups":[{"id":"00000000-0000-0000-0000-000000000006","stage_id":"00000000-0000-0000-0000-000000000005","position":0}],"fixtures":[{"id":"00000000-0000-0000-0000-000000000007","stage_id":"00000000-0000-0000-0000-000000000005","group_id":"00000000-0000-0000-0000-000000000006","round":1,"position":0,"entry_a_id":"00000000-0000-0000-0000-000000000003","entry_b_id":null,"winner_entry_id":null,"match_id":null,"match_status":null,"table_id":null,"scheduled_start":{"instant":"2026-09-05T14:00:00Z","local_label":"9:00 AM","tz_abbrev":"CDT"},"pinned_at":null}],"results":{"kind":"swiss_standings","rows":[{"entry_id":"00000000-0000-0000-0000-000000000003","rank":1,"played":0,"wins":0,"losses":0,"games_won":0,"games_lost":0}],"complete":false,"champion":null}}]}]
+        [{"id":"00000000-0000-0000-0000-000000000001","name":"Open","description":null,"status":"published","registration_open":true,"registration_generation":0,"checkout_available":true,"can_edit":false,"created_by_username":"director","address":null,"date_range":null,"table_catalogue":[],"draw_type_catalogue":null,"events":[{"id":"00000000-0000-0000-0000-000000000002","name":"Singles","format":"singles","draw_type":"swiss","timezone":"America/Chicago","max_players":null,"entry_fee":0,"slot":{"date":"2026-09-05","start":"09:00","end":"17:00"},"entrants":[{"id":"00000000-0000-0000-0000-000000000003","user_id":"00000000-0000-0000-0000-000000000004","username":"alex","seed":null,"rating":null}],"entry_state":{"state":"open"},"stages":[{"id":"00000000-0000-0000-0000-000000000005","position":0,"draw_type":"swiss"}],"groups":[{"id":"00000000-0000-0000-0000-000000000006","stage_id":"00000000-0000-0000-0000-000000000005","position":0}],"fixtures":[{"id":"00000000-0000-0000-0000-000000000007","stage_id":"00000000-0000-0000-0000-000000000005","group_id":"00000000-0000-0000-0000-000000000006","round":1,"position":0,"entry_a_id":"00000000-0000-0000-0000-000000000003","entry_b_id":null,"winner_entry_id":null,"match_id":null,"match_status":null,"table_id":null,"scheduled_start":{"instant":"2026-09-05T14:00:00Z","local_label":"9:00 AM","tz_abbrev":"CDT"},"pinned_at":null}],"results":{"kind":"swiss_standings","rows":[{"entry_id":"00000000-0000-0000-0000-000000000003","rank":1,"played":0,"wins":0,"losses":0,"games_won":0,"games_lost":0}],"complete":false,"champion":null}}]}]
         """#
         var payload = try JSONSerialization.jsonObject(with: Data(TournamentTransport.body.utf8)) as! [[String: Any]]
         var eventPayload = (payload[0]["events"] as! [[String: Any]])[0]
@@ -78,8 +78,25 @@ private final class TestLocationManager: CLLocationManager {
         TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: unavailablePayload), encoding: .utf8)!
         let unavailable = try await service.list()[0].events[0]
         precondition(unavailable.requiresCheckout && unavailable.isCancelled, "Paid and cancelled entry states must survive decoding")
+        precondition(!unavailable.canStartCheckout(checkoutAvailable: true), "Cancelled paid events must not advertise checkout")
+        unavailableEvent["lifecycle_state"] = NSNull()
+        unavailableEvent["entry_state"] = ["state": "event_full"]
+        unavailablePayload[0]["events"] = [unavailableEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: unavailablePayload), encoding: .utf8)!
+        let full = try await service.list()[0]
+        precondition(full.checkoutAvailable, "Tournament checkout eligibility must survive decoding")
+        precondition(!full.events[0].canStartCheckout(checkoutAvailable: full.checkoutAvailable), "Full paid events must not advertise checkout")
+        precondition(event.canStartCheckout(checkoutAvailable: true) == false, "Free events must not advertise checkout")
+        var openPaidPayload = unavailablePayload
+        var openPaidEvent = unavailableEvent
+        openPaidEvent["entry_state"] = ["state": "open"]
+        openPaidPayload[0]["events"] = [openPaidEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: openPaidPayload), encoding: .utf8)!
+        let openPaid = try await service.list()[0]
+        precondition(openPaid.events[0].canStartCheckout(checkoutAvailable: openPaid.checkoutAvailable), "Eligible open paid events must advertise checkout")
+        precondition(!openPaid.events[0].canStartCheckout(checkoutAvailable: false), "Ineligible merchants must not advertise checkout")
         TournamentTransport.body = availableBody
-        print("PASS: paid checkout and cancelled-event availability survive decoding")
+        print("PASS: paid checkout guidance requires an eligible tournament and an open event")
         var retainedPayload = payload
         var retainedEvent = eventPayload
         retainedEvent["retained_entrants"] = retainedEvent["entrants"]

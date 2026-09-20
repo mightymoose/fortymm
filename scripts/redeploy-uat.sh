@@ -331,6 +331,16 @@ echo "==> Syncing secrets from .env and $APNS_KEY"
 [ -f .env ] || { echo "ERROR: .env not found (copy .env.example and fill in)." >&2; exit 1; }
 [ -f "$APNS_KEY" ] || { echo "ERROR: $APNS_KEY not found." >&2; exit 1; }
 
+# Paid entry is a launch feature, but the API deliberately fails closed unless
+# the one eligible merchant Account is explicit. Refuse the deploy before any
+# cluster mutation rather than publishing a UAT where every paid event silently
+# says checkout is unavailable.
+grep -qE '^TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID=.' .env || {
+  echo "ERROR: TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID missing/empty in .env." >&2
+  echo "       Add Ryan's launch merchant Account UUID; see .env.example." >&2
+  exit 1
+}
+
 # The tailscale proxy reads TS_AUTHKEY from the .env-backed secret. When it's
 # enabled, fail fast with a clear message rather than a CrashLooping pod. The
 # chart defaults tailscale.enabled to FALSE, so this file is the only thing that

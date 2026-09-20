@@ -3,6 +3,7 @@ import { act, render, screen } from '@/test/utilities'
 import type { TournamentCheckout } from '../../data/api'
 import { buildEvent } from '../../data/seed.factory'
 import { CheckoutSummary } from './checkout-summary'
+import { MAX_CHECKOUT_EVENTS } from './checkout-policy'
 
 const checkout: TournamentCheckout = {
   id: '00000000-0000-4000-8000-000000000001',
@@ -48,6 +49,24 @@ it('locks selection removal while checkout creation is pending', () => {
     }),
   ).toBeDisabled()
   expect(screen.getByRole('button', { name: 'Hold 1 place' })).toBeDisabled()
+})
+
+it('explains the checkout selection limit at 100 events', () => {
+  render(
+    <CheckoutSummary
+      selection={Array.from({ length: MAX_CHECKOUT_EVENTS }, (_, index) =>
+        buildEvent({ id: `event-${index}`, name: `Event ${index}` }),
+      )}
+      checkout={null}
+      pending={false}
+      {...callbacks}
+    />,
+  )
+
+  expect(screen.getByRole('status')).toHaveTextContent(
+    'You can hold up to 100 events in one checkout.',
+  )
+  expect(screen.getByRole('button', { name: 'Hold 100 places' })).toBeEnabled()
 })
 
 it('adopts a shorter authoritative duration when the checkout refreshes', async () => {
