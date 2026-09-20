@@ -15,6 +15,7 @@ from app.models import Account, Player
 from app.models.device_token import DeviceToken
 from app.models.email_intent import EmailIntent, FirstSignInIntent
 from app.models.user_token import EmailToken, SessionToken
+from app.tournament_checkout_invalidation import invalidate_checkouts_for_player
 
 
 class IdentityLifecycleError(ValueError):
@@ -117,6 +118,7 @@ async def _player(db: AsyncSession, player_id: uuid.UUID) -> Player:
 async def retire_player(db: AsyncSession, player_id: uuid.UUID) -> None:
     player = await _player(db, player_id)
     player.retired_at = player.retired_at or datetime.now(UTC)
+    await invalidate_checkouts_for_player(db, player.id)
 
 
 async def restore_player(db: AsyncSession, player_id: uuid.UUID) -> None:

@@ -18,6 +18,7 @@ from app.models.tournament_account_grant import (
     TournamentAccountRole,
     TournamentOwnershipTransfer,
 )
+from app.tournament_checkout_invalidation import invalidate_checkouts_for_tournament
 from app.tournament_errors import NotTournamentOwnerError, TournamentNotFoundError
 
 
@@ -180,6 +181,7 @@ async def transfer_ownership(
     await db.refresh(
         tournament, attribute_names=["owner_account_id", "ownership_revision"]
     )
+    await invalidate_checkouts_for_tournament(db, tournament.id)
 
 
 async def _lock_accounts(
@@ -241,6 +243,7 @@ async def merge_authority(
             await db.refresh(
                 tournament, attribute_names=["owner_account_id", "ownership_revision"]
             )
+            await invalidate_checkouts_for_tournament(db, tournament.id)
         grants = list(
             await db.scalars(
                 select(TournamentAccountGrant).where(

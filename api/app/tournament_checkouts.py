@@ -15,6 +15,7 @@ from app.config import get_settings
 from app.models import (
     EventFormat,
     EventLifecycleState,
+    Player,
     Tournament,
     TournamentCheckout,
     TournamentCheckoutLine,
@@ -198,7 +199,17 @@ async def start_checkout(
         .with_for_update()
         .execution_options(populate_existing=True)
     )
-    player = locked_actor.primary_player if locked_actor is not None else None
+    primary_player = locked_actor.primary_player if locked_actor is not None else None
+    player = (
+        await db.scalar(
+            select(Player)
+            .where(Player.id == primary_player.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if primary_player is not None
+        else None
+    )
     if (
         locked_actor is None
         or not locked_actor.is_active

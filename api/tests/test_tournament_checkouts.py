@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.account_merge import merge_user
 from app.event_lifecycle import cancel_event
+from app.identity_lifecycle import retire_player
 from app.leagues import get_default_league
 from app.models import (
     DrawType,
@@ -30,7 +31,11 @@ from app.models import (
 )
 from app.schemas.tournament_checkout import TournamentCheckoutCreate
 from app.tournament_authority import transfer_ownership
-from app.tournament_checkout_errors import CheckoutRefusal, CheckoutRefusedError
+from app.tournament_checkout_errors import (
+    CheckoutNotFoundError,
+    CheckoutRefusal,
+    CheckoutRefusedError,
+)
 from app.tournament_checkouts import start_checkout
 from tests._helpers import make_client, make_user, start_session
 
@@ -388,6 +393,88 @@ async def test_retired_player_cannot_reserve_capacity(
     )
 
     assert response.status_code == 404
+    assert await db_session.scalar(select(TournamentCheckout)) is None
+
+
+async def test_retiring_player_invalidates_active_checkout_and_releases_hold(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    payer = await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("10.00"),), capacities=(1,)
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    created = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]},
+    )
+    assert created.status_code == 201
+
+    await retire_player(db_session, payer.player_id)
+    await db_session.commit()
+
+    checkout = await db_session.get(TournamentCheckout, uuid.UUID(created.json()["id"]))
+    assert checkout is not None
+    assert checkout.status is TournamentCheckoutStatus.invalidated
+    detail = await api_client.get(f"/v1/tournaments/{tournament.id}")
+    assert detail.status_code == 200
+    assert detail.json()["events"][0]["held_places"] == 0
+
+
+async def test_checkout_creation_queues_behind_player_retirement(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch,
+) -> None:
+    payer = await make_user(db_session, f"buyer-{uuid.uuid4().hex[:8]}")
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("10.00"),), capacities=(1,)
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with make_session() as retiring, make_session() as checking_out:
+        await retire_player(retiring, payer.player_id)
+        await retiring.flush()
+        actor = await checking_out.scalar(select(User).where(User.id == payer.id))
+        assert actor is not None
+        checking_out_pid = await checking_out.scalar(text("SELECT pg_backend_pid()"))
+        retiring_pid = await retiring.scalar(text("SELECT pg_backend_pid()"))
+        attempt = asyncio.create_task(
+            start_checkout(
+                checking_out,
+                tournament_id=tournament.id,
+                actor=actor,
+                request=TournamentCheckoutCreate(
+                    request_id=uuid.uuid4(), event_ids=[event.id]
+                ),
+                client_ip="203.0.113.30",
+            )
+        )
+        try:
+            async with asyncio.timeout(5):
+                while retiring_pid not in (
+                    await db_session.scalar(
+                        text("SELECT pg_blocking_pids(:pid)"),
+                        {"pid": checking_out_pid},
+                    )
+                ):
+                    if attempt.done():
+                        await attempt
+                        pytest.fail("checkout ignored concurrent Player retirement")
+                    await asyncio.sleep(0.01)
+            await retiring.commit()
+            with pytest.raises(CheckoutNotFoundError):
+                await attempt
+        finally:
+            if not attempt.done():
+                attempt.cancel()
+                await asyncio.gather(attempt, return_exceptions=True)
+
     assert await db_session.scalar(select(TournamentCheckout)) is None
 
 
@@ -939,8 +1026,19 @@ async def test_ownership_transfer_invalidates_checkout_and_releases_hold(
         actor_id=merchant.id,
         account_id=successor.id,
     )
+    await transfer_ownership(
+        db_session,
+        tournament.id,
+        actor_id=successor.id,
+        account_id=merchant.id,
+    )
     await db_session.commit()
 
+    stored = await db_session.get(
+        TournamentCheckout, uuid.UUID(created.json()["id"])
+    )
+    assert stored is not None
+    assert stored.status is TournamentCheckoutStatus.invalidated
     checkout = await api_client.get(
         f"/v1/tournaments/{tournament.id}/checkouts/{created.json()['id']}"
     )
