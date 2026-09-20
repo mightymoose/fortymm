@@ -2,6 +2,7 @@
 
 import hashlib
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from math import ceil
@@ -29,6 +30,7 @@ from app.rate_limiting import (
     RateLimitUnavailable,
     check_idempotent_expiring_budget,
     release_idempotent_budget_marker,
+    wait_for_idempotent_budget_marker_change,
 )
 from app.schemas.tournament_checkout import (
     TournamentCheckoutCreate,
@@ -58,6 +60,13 @@ from app.tournament_queries import (
 from app.tournament_registration import registration_open
 
 
+@dataclass(frozen=True)
+class _CheckoutAdmission:
+    marker_key: str
+    marker_token: str
+    owns_marker: bool
+
+
 async def _enforce_checkout_rate_limit(
     client_ip: str,
     *,
@@ -65,7 +74,7 @@ async def _enforce_checkout_rate_limit(
     request_id: uuid.UUID,
     tournament_id: uuid.UUID,
     event_ids: list[uuid.UUID],
-) -> tuple[str, str] | None:
+) -> _CheckoutAdmission:
     limit = get_settings().tournament_checkout_ip_per_hour
     normalized_payload = ":".join(
         [str(tournament_id), *(str(event_id) for event_id in sorted(event_ids))]
@@ -75,7 +84,7 @@ async def _enforce_checkout_rate_limit(
         f"tournament-checkout-request:{payer_account_id}:{request_id}:{payload_digest}"
     )
     try:
-        allowed, lease_token = await check_idempotent_expiring_budget(
+        allowed, marker_token, owns_marker = await check_idempotent_expiring_budget(
             f"tournament-checkout-ip:{client_ip}",
             idempotency_key=marker_key,
             limit=limit,
@@ -85,7 +94,9 @@ async def _enforce_checkout_rate_limit(
         raise CheckoutRateLimitUnavailableError() from error
     if not allowed:
         raise CheckoutRateLimitedError()
-    return (marker_key, lease_token) if lease_token is not None else None
+    if marker_token is None:
+        raise CheckoutRateLimitUnavailableError()
+    return _CheckoutAdmission(marker_key, marker_token, owns_marker)
 
 
 def _price_cents(price: Decimal) -> int:
@@ -226,22 +237,50 @@ async def start_checkout(
         )
         .options(selectinload(TournamentCheckout.lines))
     )
-    admission_lease = None
-    exact_durable_replay = prior_request is not None and (
-        prior_request.tournament_id == tournament_id
-        and {line.event_id for line in prior_request.lines} == set(request.event_ids)
-    )
+    admission_lease: tuple[str, str] | None = None
+
+    def is_exact_replay(checkout: TournamentCheckout | None) -> bool:
+        return checkout is not None and (
+            checkout.tournament_id == tournament_id
+            and {line.event_id for line in checkout.lines} == set(request.event_ids)
+        )
+
+    exact_durable_replay = is_exact_replay(prior_request)
     # Only a byte-for-byte logical replay is exempt. Reusing a durable request ID
     # for another tournament or selection still charges before database locks; the
     # locked validation below then returns the stable payload-conflict refusal.
-    if not exact_durable_replay:
-        admission_lease = await _enforce_checkout_rate_limit(
+    while not exact_durable_replay:
+        admission = await _enforce_checkout_rate_limit(
             client_ip,
             payer_account_id=actor.id,
             request_id=request.request_id,
             tournament_id=tournament_id,
             event_ids=request.event_ids,
         )
+        if admission.owns_marker:
+            admission_lease = (admission.marker_key, admission.marker_token)
+            break
+
+        # An identical request is already admitted. Wait without database locks,
+        # then replay its durable result. If it refused and wrote nothing, loop so
+        # only one follower can claim and charge the next lease; the rest follow it.
+        try:
+            changed = await wait_for_idempotent_budget_marker_change(
+                admission.marker_key, admission.marker_token
+            )
+        except RateLimitUnavailable as error:
+            raise CheckoutRateLimitUnavailableError() from error
+        if not changed:
+            raise CheckoutRateLimitedError()
+        prior_request = await db.scalar(
+            select(TournamentCheckout)
+            .where(
+                TournamentCheckout.payer_account_id == actor.id,
+                TournamentCheckout.request_id == request.request_id,
+            )
+            .options(selectinload(TournamentCheckout.lines))
+        )
+        exact_durable_replay = is_exact_replay(prior_request)
 
     try:
         return await _start_checkout_after_admission(

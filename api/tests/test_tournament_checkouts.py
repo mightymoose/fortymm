@@ -11,6 +11,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from app import tournament_checkouts as checkout_module
 from app.account_merge import merge_user
 from app.event_lifecycle import cancel_event
 from app.identity_lifecycle import deactivate_account, erase_account, retire_player
@@ -1345,6 +1346,72 @@ async def test_concurrent_request_replay_consumes_one_admission_token(
     )
 
 
+async def test_concurrent_refused_replays_do_not_repeat_database_validation(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch,
+    rate_limiter_fakeredis,
+) -> None:
+    payer = await make_user(db_session, f"buyer-{uuid.uuid4().hex[:8]}")
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, _ = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("10.00"),)
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    monkeypatch.setenv("TOURNAMENT_CHECKOUT_IP_PER_HOUR", "1")
+    request = TournamentCheckoutCreate(
+        request_id=uuid.uuid4(), event_ids=[uuid.uuid4()]
+    )
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+    owner_admitted = asyncio.Event()
+    release_owner = asyncio.Event()
+    validation_calls = 0
+    original = checkout_module._start_checkout_after_admission
+
+    async def guarded_validation(*args, **kwargs):
+        nonlocal validation_calls
+        validation_calls += 1
+        if validation_calls == 1:
+            owner_admitted.set()
+            await release_owner.wait()
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(
+        checkout_module, "_start_checkout_after_admission", guarded_validation
+    )
+
+    async def reserve() -> str:
+        async with make_session() as session:
+            actor = await session.get(User, payer.id)
+            assert actor is not None
+            try:
+                await start_checkout(
+                    session,
+                    tournament_id=tournament.id,
+                    actor=actor,
+                    request=request,
+                    client_ip="203.0.113.23",
+                )
+            except CheckoutRefusedError as error:
+                await session.rollback()
+                return error.refusal.value
+            except CheckoutRateLimitedError:
+                await session.rollback()
+                return "rate_limited"
+            raise AssertionError("the nonexistent event must be refused")
+
+    first = asyncio.create_task(reserve())
+    await owner_admitted.wait()
+    followers = [asyncio.create_task(reserve()) for _ in range(8)]
+    await asyncio.sleep(0.1)
+    release_owner.set()
+    outcomes = await asyncio.gather(first, *followers)
+
+    assert outcomes.count(CheckoutRefusal.event_not_found.value) == 1
+    assert outcomes.count("rate_limited") == 8
+    assert validation_calls == 1
+
+
 async def test_concurrent_mismatched_payloads_charge_separate_admission_tokens(
     db_session: AsyncSession,
     engine: AsyncEngine,
@@ -1654,14 +1721,14 @@ async def test_refused_checkout_releases_request_admission_marker(
     monkeypatch.setenv("TOURNAMENT_CHECKOUT_IP_PER_HOUR", "1")
     payer = await start_session(api_client, db_session)
     request_id = str(uuid.uuid4())
-    marker_key = f"tournament-checkout-request:{payer.id}:{request_id}"
+    marker_prefix = f"tournament-checkout-request:{payer.id}:{request_id}:"
 
     refused = await api_client.post(
         f"/v1/tournaments/{tournament.id}/checkouts",
         json={"request_id": request_id, "event_ids": [str(uuid.uuid4())]},
     )
     assert refused.status_code == 409
-    assert await rate_limiter_fakeredis.exists(marker_key) == 0
+    assert await rate_limiter_fakeredis.keys(f"{marker_prefix}*") == []
 
     retried = await api_client.post(
         f"/v1/tournaments/{tournament.id}/checkouts",

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct TournamentEventView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var tournamentStore: TournamentStore<TournamentDTO>
     let eventId: UUID
     let service: TournamentService
@@ -88,6 +89,14 @@ struct TournamentEventView: View {
         }
         .background(FMColor.bgApp.ignoresSafeArea()).foregroundStyle(FMColor.fg1)
         .navigationTitle("Event").navigationBarTitleDisplayMode(.inline)
+        .task(id: "holds-\(scenePhase == .active)-\(tournamentStore.value?.hasHeldPlaces ?? false)") {
+            guard scenePhase == .active else { return }
+            while !Task.isCancelled, tournamentStore.value?.hasHeldPlaces == true {
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                guard !Task.isCancelled else { return }
+                await tournamentStore.load(force: true)
+            }
+        }
         .refreshable {
             await tournamentStore.load(force: true)
             if tournamentStore.refreshError == nil { error = nil }

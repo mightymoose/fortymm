@@ -27,6 +27,7 @@ a long-running production process would want an LRU on ``_limiters`` and a
 TTL on the underlying ZSETs.
 """
 
+import asyncio
 import uuid
 from collections.abc import Awaitable, Callable
 
@@ -161,7 +162,7 @@ async def check_idempotent_expiring_budget(
     idempotency_key: str,
     limit: int,
     seconds: int,
-) -> tuple[bool, str | None]:
+) -> tuple[bool, str | None, bool]:
     """Charge a fixed-window budget once for a logical request.
 
     The idempotency marker and counter mutation are one Redis script so concurrent
@@ -169,21 +170,23 @@ async def check_idempotent_expiring_budget(
     closed. Exhausted requests do not receive a marker, and the owner token lets the
     caller clear an admitted marker after durable success or refusal.
 
-    Returns ``(allowed, lease_token)``. Only the caller that created the marker gets
-    its token; concurrent replays are allowed with ``None`` and must not clear a
-    marker owned by the in-flight request they are following.
+    Returns ``(allowed, marker_token, owns_marker)``. Followers receive the current
+    owner's token so they can wait for that specific attempt to finish without
+    entering database validation themselves.
     """
     if _redis is None:
         raise RateLimitUnavailable()
     try:
         lease_token = uuid.uuid4().hex
         result = await _redis.eval(
-            "if redis.call('EXISTS', KEYS[2]) == 1 then return 1 end; "
+            "local existing = redis.call('GET', KEYS[2]); "
+            "if existing then return {1, existing} end; "
             "local n = redis.call('INCR', KEYS[1]); "
             "if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end; "
             "if n <= tonumber(ARGV[2]) then "
-            "redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[1]); return 2 end; "
-            "return 0",
+            "redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[1]); "
+            "return {2, ARGV[3]} end; "
+            "return {0, ''}",
             2,
             key,
             idempotency_key,
@@ -191,7 +194,39 @@ async def check_idempotent_expiring_budget(
             limit,
             lease_token,
         )
-        return int(result) > 0, lease_token if int(result) == 2 else None
+        code = int(result[0])
+        marker_token = result[1]
+        if isinstance(marker_token, bytes):
+            marker_token = marker_token.decode()
+        return code > 0, marker_token or None, code == 2
+    except redis_asyncio.RedisError as error:
+        raise RateLimitUnavailable() from error
+
+
+async def wait_for_idempotent_budget_marker_change(
+    key: str, marker_token: str, *, timeout_seconds: float = 5.0
+) -> bool:
+    """Wait outside database locks for one admitted attempt to finish.
+
+    Comparing the token instead of merely waiting for key deletion avoids missing
+    the brief gap when another follower immediately claims a new charged lease.
+    ``False`` is a bounded-wait refusal; Redis failures remain fail-closed.
+    """
+    if _redis is None:
+        raise RateLimitUnavailable()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_seconds
+    try:
+        while True:
+            current = await _redis.get(key)
+            if isinstance(current, bytes):
+                current = current.decode()
+            if current != marker_token:
+                return True
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return False
+            await asyncio.sleep(min(0.05, remaining))
     except redis_asyncio.RedisError as error:
         raise RateLimitUnavailable() from error
 
