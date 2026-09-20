@@ -69,6 +69,7 @@ struct TournamentDTO: Decodable, Identifiable {
         return status == .live ? 15 : nil
     }
     var hasHeldPlaces: Bool { events.contains { $0.hasHeldPlaces } }
+    var holdPollSeconds: Int { hasHeldPlaces ? 5 : 30 }
     func drawName(_ event: TournamentEventDTO) -> String {
         drawTypeCatalogue?.first { $0.key == event.drawType }?.name ?? event.formatLabel
     }

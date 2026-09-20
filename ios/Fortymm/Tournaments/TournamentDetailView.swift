@@ -104,10 +104,10 @@ struct TournamentDetailView: View {
                     await store.load(force: true)
                 }
             }
-            .task(id: "holds-\(scenePhase == .active)-\(store.value?.hasHeldPlaces ?? false)") {
+            .task(id: "holds-\(scenePhase == .active)-\(store.value?.holdPollSeconds ?? 0)") {
                 guard scenePhase == .active else { return }
-                while !Task.isCancelled, store.value?.hasHeldPlaces == true {
-                    do { try await Task.sleep(for: .seconds(5)) } catch { return }
+                while !Task.isCancelled, let seconds = store.value?.holdPollSeconds {
+                    do { try await Task.sleep(for: .seconds(seconds)) } catch { return }
                     guard !Task.isCancelled else { return }
                     await store.load(force: true)
                 }

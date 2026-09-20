@@ -131,6 +131,8 @@ private final class TestLocationManager: CLLocationManager {
         precondition(heldCapacity.capacityLabel == "2/2 players", "Capacity must include checkout holds")
         precondition(heldCapacity.hasHeldPlaces, "Events with active holds must request capacity refreshes")
         precondition(heldTournament.hasHeldPlaces, "Tournament detail must poll while any checkout hold is active")
+        precondition(heldTournament.holdPollSeconds == 5, "Active holds must use the fast refresh cadence")
+        precondition(retainedTournament.holdPollSeconds == 30, "Zero-hold snapshots must retain a discovery refresh")
         var overCapacityPayload = retainedPayload
         var overCapacityEvent = retainedEvent
         overCapacityEvent["entered"] = 6

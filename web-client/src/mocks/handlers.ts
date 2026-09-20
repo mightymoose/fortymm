@@ -124,6 +124,19 @@ export const MOCK_AGENT_ACCESS = buildAgentAccess({
 let agentAccessNow = MOCK_AGENT_ACCESS
 const checkoutByTournament = new Map<string, components['schemas']['TournamentCheckoutRead']>()
 
+export function currentMockCheckout(
+  checkout: components['schemas']['TournamentCheckoutRead'],
+  now = Date.now(),
+): components['schemas']['TournamentCheckoutRead'] | null {
+  const remainingSeconds = Math.max(
+    0,
+    Math.ceil((Date.parse(checkout.expires_at) - now) / 1_000),
+  )
+  return remainingSeconds === 0
+    ? null
+    : { ...checkout, remaining_seconds: remainingSeconds }
+}
+
 /** The dev world's cross-tournament solve ledger (see the handler below). */
 const mockAdminSolveLedger = buildAdminSolveLedgerSeed()
 
@@ -1228,10 +1241,12 @@ function parseNearMe(params: URLSearchParams):
 
 export const handlers = [
   http.get('*/v1/tournaments/:tournamentId/checkouts/current', ({ params }) => {
-    const checkout = checkoutByTournament.get(String(params.tournamentId))
-    return checkout
-      ? HttpResponse.json(checkout)
-      : HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 })
+    const tournamentId = String(params.tournamentId)
+    const stored = checkoutByTournament.get(tournamentId)
+    const checkout = stored ? currentMockCheckout(stored) : null
+    if (checkout) return HttpResponse.json(checkout)
+    checkoutByTournament.delete(tournamentId)
+    return HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 })
   }),
   http.post('*/v1/tournaments/:tournamentId/checkouts', async ({ params, request }) => {
     const tournamentId = String(params.tournamentId)

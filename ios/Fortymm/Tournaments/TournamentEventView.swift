@@ -89,10 +89,10 @@ struct TournamentEventView: View {
         }
         .background(FMColor.bgApp.ignoresSafeArea()).foregroundStyle(FMColor.fg1)
         .navigationTitle("Event").navigationBarTitleDisplayMode(.inline)
-        .task(id: "holds-\(scenePhase == .active)-\(tournamentStore.value?.hasHeldPlaces ?? false)") {
+        .task(id: "holds-\(scenePhase == .active)-\(tournamentStore.value?.holdPollSeconds ?? 0)") {
             guard scenePhase == .active else { return }
-            while !Task.isCancelled, tournamentStore.value?.hasHeldPlaces == true {
-                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+            while !Task.isCancelled, let seconds = tournamentStore.value?.holdPollSeconds {
+                do { try await Task.sleep(for: .seconds(seconds)) } catch { return }
                 guard !Task.isCancelled else { return }
                 await tournamentStore.load(force: true)
             }
