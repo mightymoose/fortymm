@@ -37,6 +37,7 @@ from pyrate_limiter import Limiter, Rate, RedisBucket
 
 _redis: redis_asyncio.Redis | None = None
 _instances: list["RedisRateLimiter"] = []
+IDEMPOTENT_BUDGET_LEASE_SECONDS = 15
 
 
 def init_rate_limit_redis(connection: redis_asyncio.Redis) -> None:
@@ -162,6 +163,7 @@ async def check_idempotent_expiring_budget(
     idempotency_key: str,
     limit: int,
     seconds: int,
+    lease_seconds: int = IDEMPOTENT_BUDGET_LEASE_SECONDS,
 ) -> tuple[bool, str | None, bool]:
     """Charge a fixed-window budget once for a logical request.
 
@@ -184,7 +186,7 @@ async def check_idempotent_expiring_budget(
             "local n = redis.call('INCR', KEYS[1]); "
             "if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end; "
             "if n <= tonumber(ARGV[2]) then "
-            "redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[1]); "
+            "redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[4]); "
             "return {2, ARGV[3]} end; "
             "return {0, ''}",
             2,
@@ -193,12 +195,36 @@ async def check_idempotent_expiring_budget(
             seconds,
             limit,
             lease_token,
+            lease_seconds,
         )
         code = int(result[0])
         marker_token = result[1]
         if isinstance(marker_token, bytes):
             marker_token = marker_token.decode()
         return code > 0, marker_token or None, code == 2
+    except redis_asyncio.RedisError as error:
+        raise RateLimitUnavailable() from error
+
+
+async def renew_idempotent_budget_marker(
+    key: str,
+    lease_token: str,
+    *,
+    seconds: int = IDEMPOTENT_BUDGET_LEASE_SECONDS,
+) -> bool:
+    """Extend an owned marker's short lease without reviving a replaced marker."""
+    if _redis is None:
+        raise RateLimitUnavailable()
+    try:
+        renewed = await _redis.eval(
+            "if redis.call('GET', KEYS[1]) == ARGV[1] then "
+            "return redis.call('EXPIRE', KEYS[1], ARGV[2]) end; return 0",
+            1,
+            key,
+            lease_token,
+            seconds,
+        )
+        return bool(renewed)
     except redis_asyncio.RedisError as error:
         raise RateLimitUnavailable() from error
 
@@ -235,8 +261,8 @@ async def release_idempotent_budget_marker(key: str, lease_token: str) -> None:
     """Clear only the marker claimed by ``lease_token``.
 
     Cleanup is best-effort: losing Redis after admission must not replace the
-    checkout's real success or domain refusal with a cleanup error. The marker has
-    the same bounded TTL as the budget if cleanup cannot be confirmed.
+    checkout's real success or domain refusal with a cleanup error. The independently
+    short lease bounds stale ownership if cleanup cannot be confirmed.
     """
     if _redis is None:
         return

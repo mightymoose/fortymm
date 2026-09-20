@@ -1,7 +1,9 @@
 """Transport-neutral combined paid-event checkout operations."""
 
+import asyncio
 import hashlib
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -27,9 +29,11 @@ from app.models import (
     User,
 )
 from app.rate_limiting import (
+    IDEMPOTENT_BUDGET_LEASE_SECONDS,
     RateLimitUnavailable,
     check_idempotent_expiring_budget,
     release_idempotent_budget_marker,
+    renew_idempotent_budget_marker,
     wait_for_idempotent_budget_marker_change,
 )
 from app.schemas.tournament_checkout import (
@@ -65,6 +69,20 @@ class _CheckoutAdmission:
     marker_key: str
     marker_token: str
     owns_marker: bool
+
+
+async def _renew_checkout_admission_lease(key: str, token: str) -> None:
+    """Keep a live checkout owner from losing its short Redis lease mid-write."""
+    interval = IDEMPOTENT_BUDGET_LEASE_SECONDS / 3
+    while True:
+        await asyncio.sleep(interval)
+        try:
+            if not await renew_idempotent_budget_marker(key, token):
+                return
+        except RateLimitUnavailable:
+            # Admission already succeeded. A Redis outage must not replace the
+            # checkout's real result; the short TTL still bounds a stale marker.
+            continue
 
 
 async def _enforce_checkout_rate_limit(
@@ -315,6 +333,11 @@ async def start_checkout(
         )
         exact_durable_replay = is_exact_replay(prior_request)
 
+    lease_renewer = (
+        asyncio.create_task(_renew_checkout_admission_lease(*admission_lease))
+        if admission_lease is not None
+        else None
+    )
     try:
         return await _start_checkout_after_admission(
             db,
@@ -323,6 +346,10 @@ async def start_checkout(
             request=request,
         )
     finally:
+        if lease_renewer is not None:
+            lease_renewer.cancel()
+            with suppress(asyncio.CancelledError):
+                await lease_renewer
         if admission_lease is not None:
             await release_idempotent_budget_marker(*admission_lease)
 

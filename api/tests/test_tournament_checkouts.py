@@ -1505,6 +1505,29 @@ async def test_inflight_follower_releases_precheck_transaction_before_waiting(
             )
 
 
+async def test_admission_marker_uses_a_short_lease_not_the_hourly_budget_ttl(
+    db_session: AsyncSession,
+    monkeypatch,
+    rate_limiter_fakeredis,
+) -> None:
+    payer = await make_user(db_session, f"buyer-{uuid.uuid4().hex[:8]}")
+    request_id = uuid.uuid4()
+    event_id = uuid.uuid4()
+    admission = await checkout_module._enforce_checkout_rate_limit(
+        "203.0.113.25",
+        payer_account_id=payer.id,
+        request_id=request_id,
+        tournament_id=uuid.uuid4(),
+        event_ids=[event_id],
+    )
+    assert admission.owns_marker
+
+    marker_ttl = await rate_limiter_fakeredis.ttl(admission.marker_key)
+    assert 0 < marker_ttl <= checkout_module.IDEMPOTENT_BUDGET_LEASE_SECONDS
+    budget_ttl = await rate_limiter_fakeredis.ttl("tournament-checkout-ip:203.0.113.25")
+    assert budget_ttl > checkout_module.IDEMPOTENT_BUDGET_LEASE_SECONDS
+
+
 async def test_concurrent_mismatched_payloads_charge_separate_admission_tokens(
     db_session: AsyncSession,
     engine: AsyncEngine,
