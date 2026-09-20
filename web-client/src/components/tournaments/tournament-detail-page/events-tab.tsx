@@ -99,9 +99,16 @@ export const EventsTab = ({
         onChange={() => {
           if (!checkout) return
           const previous = new Set(checkout.lines.map((line) => line.eventId))
-          cancelCheckout.mutate(checkout.id, {
-            onSuccess: () => setSelectedIds(previous),
-          })
+          void cancelCheckout
+            .mutateAsync(checkout.id)
+            .catch(() => undefined)
+            .then(async () => {
+              // A DELETE response can be lost after the server commits. Restore
+              // the editable selection from durable reconciled state, not only
+              // from the mutation's success callback.
+              const reconciled = await currentCheckout.refetch()
+              if (reconciled.data === null) setSelectedIds(previous)
+            })
         }}
         onExpired={refreshCheckout}
         onRemoveSelection={(eventId) => togglePaid(eventId)}

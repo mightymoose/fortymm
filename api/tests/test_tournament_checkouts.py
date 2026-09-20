@@ -7,7 +7,7 @@ from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -38,6 +38,7 @@ from app.tournament_checkout_errors import (
 )
 from app.tournament_checkouts import start_checkout
 from tests._helpers import make_client, make_user, start_session
+from tests._migration_database import empty_database, run_alembic
 
 
 async def _paid_tournament(
@@ -81,6 +82,35 @@ async def _paid_tournament(
     db.add_all(events)
     await db.commit()
     return tournament, events
+
+
+async def test_checkout_migration_normalizes_legacy_subminimum_fees(
+    postgres_url: str,
+) -> None:
+    async with empty_database(postgres_url) as migrated:
+        run_alembic(migrated.url, "upgrade", "20260919_0000")
+        make_session = async_sessionmaker(migrated, expire_on_commit=False)
+        async with make_session() as session:
+            await session.execute(
+                text(
+                    "INSERT INTO leagues (name, is_default, rating_strategy_id) "
+                    "SELECT 'Migration league', true, id FROM rating_strategies "
+                    "ORDER BY id LIMIT 1"
+                )
+            )
+            await session.commit()
+            owner = await make_user(session, f"legacy-fee-{uuid.uuid4().hex[:8]}")
+            _, (event,) = await _paid_tournament(
+                session, owner=owner, fees=(Decimal("0.25"),)
+            )
+            event_id = event.id
+
+        run_alembic(migrated.url, "upgrade", "head")
+        async with migrated.connect() as connection:
+            assert await connection.scalar(
+                text("SELECT entry_fee FROM tournament_events WHERE id = :id"),
+                {"id": event_id},
+            ) == Decimal("0.00")
 
 
 async def test_starting_combined_checkout_snapshots_quote_and_resumes_deadline(
@@ -779,6 +809,34 @@ async def test_request_identity_replays_after_registration_closes(
     assert replayed.status_code == 201
     assert replayed.json()["id"] == created.json()["id"]
     assert replayed.json()["status"] == "invalidated"
+
+
+async def test_new_request_id_cannot_alias_an_active_checkout(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("10.00"),)
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    url = f"/v1/tournaments/{tournament.id}/checkouts"
+    created = await api_client.post(
+        url,
+        json={"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]},
+    )
+    assert created.status_code == 201
+
+    aliased = await api_client.post(
+        url,
+        json={"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]},
+    )
+
+    assert aliased.status_code == 409
+    assert aliased.json()["detail"]["code"] == "active_checkout_conflict"
+    assert await db_session.scalar(select(func.count(TournamentCheckout.id))) == 1
 
 
 async def test_request_identity_cannot_resume_checkout_under_another_tournament(

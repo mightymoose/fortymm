@@ -84,6 +84,14 @@ private final class TestLocationManager: CLLocationManager {
         precondition(retained.player(retained.results?.rows?.first?.entryId) == "alex", "Results must retain historical player names")
         precondition(retainedTournament.entryCount == 1, "Tournament counts must include retained registrations")
         precondition(retained.capacityLabel == "1/2 players", "Capacity must use the server entered count")
+        var heldCapacityPayload = retainedPayload
+        var heldCapacityEvent = retainedEvent
+        heldCapacityEvent["held_places"] = 1
+        heldCapacityEvent["available_places"] = 0
+        heldCapacityPayload[0]["events"] = [heldCapacityEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: heldCapacityPayload), encoding: .utf8)!
+        let heldCapacity = try await service.list()[0].events[0]
+        precondition(heldCapacity.capacityLabel == "2/2 players", "Capacity must include checkout holds")
         let heldEntry = retained.entry(for: event.entrants[0].userId)
         precondition(heldEntry != nil, "A hidden held registration must offer withdrawal instead of entry")
         TournamentTransport.status = 204

@@ -139,6 +139,8 @@ struct TournamentEventDTO: Decodable, Identifiable {
     let slot: Slot
     let entrants: [Entrant]
     private let entered: Int?
+    private let heldPlaces: Int?
+    private let availablePlaces: Int?
     var entryCount: Int { entered ?? historicalEntrants.count }
     private let retainedEntrants: [Entrant]?
     var historicalEntrants: [Entrant] {
@@ -231,7 +233,12 @@ struct TournamentEventDTO: Decodable, Identifiable {
         canEdit && !fixtures.contains { $0.winnerEntryId != nil || $0.matchId != nil }
     }
     var formatLabel: String { drawType.replacingOccurrences(of: "-", with: " ").capitalized }
-    var capacityLabel: String { maxPlayers.map { "\(entryCount)/\($0) players" } ?? TournamentCopy.count(entryCount, "player") }
+    var capacityLabel: String {
+        maxPlayers.map { maximum in
+            let occupied = availablePlaces.map { maximum - $0 } ?? entryCount + (heldPlaces ?? 0)
+            return "\(occupied)/\(maximum) players"
+        } ?? TournamentCopy.count(entryCount, "player")
+    }
     var rosterEmptyMessage: String? {
         guard entrants.isEmpty else { return nil }
         return entryCount == 0 ? "No players entered yet." : "No active players to display."

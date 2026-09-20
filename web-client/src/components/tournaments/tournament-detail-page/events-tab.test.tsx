@@ -225,6 +225,53 @@ describe('EventsTab', () => {
       await waitFor(() => expect(screen.queryByText('Your reserved places')).toBeNull())
     })
 
+    it('restores choices when a committed change cancellation loses its response', async () => {
+      const eventId = '00000000-0000-4000-8000-000000000034'
+      let cancelled = false
+      server.use(
+        http.get('*/v1/tournaments/:tournamentId/checkouts/current', () =>
+          cancelled
+            ? HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 })
+            : HttpResponse.json({
+                id: '00000000-0000-4000-8000-000000000035',
+                request_id: '00000000-0000-4000-8000-000000000036',
+                tournament_id: '00000000-0000-4000-8000-000000000020',
+                registration_generation: 0,
+                status: 'active',
+                payment_state: 'unavailable',
+                currency: 'USD',
+                total_cents: 4500,
+                created_at: new Date().toISOString(),
+                expires_at: new Date(Date.now() + 600_000).toISOString(),
+                remaining_seconds: 600,
+                lines: [
+                  {
+                    event_id: eventId,
+                    event_name: 'Open Singles',
+                    price_cents: 4500,
+                  },
+                ],
+              }),
+        ),
+        http.delete('*/v1/tournaments/:tournamentId/checkouts/:checkoutId', () => {
+          cancelled = true
+          return HttpResponse.error()
+        }),
+      )
+      eventsTabPage.render({
+        tournament: buildTournament({
+          events: [buildEvent({ id: eventId, name: 'Open Singles', entryFee: 45 })],
+        }),
+      })
+
+      expect(await screen.findByText('Your reserved places')).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Change selection' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Release and change' }))
+
+      expect(await screen.findByText('Entry summary')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Reserve 1 place' })).toBeInTheDocument()
+    })
+
     it('hides paid selection toggles while a checkout is active', async () => {
       const eventId = '00000000-0000-4000-8000-000000000041'
       server.use(

@@ -271,8 +271,6 @@ async def start_checkout(
         .options(selectinload(TournamentCheckout.lines))
     )
     if active is not None:
-        if {line.event_id for line in active.lines} == requested_ids:
-            return _read(active, tournament, now)
         raise CheckoutRefusedError(
             CheckoutRefusal.active_checkout_conflict,
             "Cancel the active checkout before changing the event selection.",
