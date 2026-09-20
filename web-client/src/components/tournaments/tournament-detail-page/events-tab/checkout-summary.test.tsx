@@ -1,6 +1,7 @@
 import { act, render, screen } from '@/test/utilities'
 
 import type { TournamentCheckout } from '../../data/api'
+import { buildEvent } from '../../data/seed.factory'
 import { CheckoutSummary } from './checkout-summary'
 
 const checkout: TournamentCheckout = {
@@ -29,6 +30,24 @@ const callbacks = {
 afterEach(() => {
   vi.useRealTimers()
   vi.clearAllMocks()
+})
+
+it('locks selection removal while reservation creation is pending', () => {
+  render(
+    <CheckoutSummary
+      selection={[buildEvent({ name: 'Open Singles', entryFee: 45 })]}
+      checkout={null}
+      pending
+      {...callbacks}
+    />,
+  )
+
+  expect(
+    screen.getByRole('button', {
+      name: 'Remove Open Singles from entry summary',
+    }),
+  ).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Reserve 1 place' })).toBeDisabled()
 })
 
 it('adopts a shorter authoritative duration when the checkout refreshes', async () => {

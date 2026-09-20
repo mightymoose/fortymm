@@ -3,6 +3,8 @@ import {
   capacityLabel,
   enteredSummary,
   eventCapacity,
+  HOLD_REFRESH_INTERVAL_MS,
+  holdRefreshInterval,
 } from './capacity'
 import { buildEntrants, buildEvent } from './seed.factory'
 
@@ -68,6 +70,19 @@ describe('eventCapacity', () => {
     it('stays uncapped however many have entered', () => {
       expect(capacityOf(250, null)).toEqual({ state: 'uncapped' })
     })
+  })
+})
+
+describe('holdRefreshInterval', () => {
+  it('polls while any checkout hold can affect capacity', () => {
+    expect(holdRefreshInterval([{ heldPlaces: 0 }, { heldPlaces: 2 }])).toBe(
+      HOLD_REFRESH_INTERVAL_MS,
+    )
+  })
+
+  it('stops once refreshed events contain no holds', () => {
+    expect(holdRefreshInterval([{ heldPlaces: 0 }])).toBe(false)
+    expect(holdRefreshInterval(undefined)).toBe(false)
   })
 })
 

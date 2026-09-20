@@ -1022,7 +1022,7 @@ async def update_event(
     scalar columns alike — with ``groups`` taken out of it and applied as an id-keyed
     diff over the event's group **rows**,
     :func:`app.tournament_reservations.apply_event_reservations`), with three side
-    effects — the first new, the other two preserved exactly from the router:
+    effects:
 
     * a **draw-configuration** edit (the draw type and, for ``rr-then-ko``, its
       qualifier count) is applied to the event's ``draw_settings`` value, the only place
@@ -1033,6 +1033,9 @@ async def update_event(
       wall-clock reading is unchanged and only its stored instant shifts
       (:func:`_reanchor_placements_for_timezone_change`), captured against the OLD zone
       before the ``setattr`` loop overwrites it;
+    * a transition from a **paid fee to free** invalidates every active combined
+      checkout containing this event, because the free-entry path cannot consume a
+      checkout hold and must not count that stale hold against its owner;
     * when the solver-visible facts (:func:`_event_scheduling_facts`) changed AND this
       event has a cut draw, a ``settings_changed`` solve is requested inside this
       transaction under the row lock. A ``None`` return (Redis down) is deliberately
@@ -1114,6 +1117,7 @@ async def update_event(
     # at all still answers a freeze's 409 first.
     _enforce_reservation_containment(event, updates)
     facts_before = _event_scheduling_facts(event)
+    old_entry_fee = event.entry_fee
     # Captured BEFORE the setattr loop overwrites it: a timezone edit preserves the
     # wall-clock of already-placed fixtures, which needs the zone they were placed IN to
     # recover it.
@@ -1166,6 +1170,13 @@ async def update_event(
     draw_settings = updates.draw_settings
     for key, value in changes.items():
         setattr(event, key, value)
+    if old_entry_fee > 0 and event.entry_fee == 0:
+        # A free entry no longer has a checkout step in which to consume its hold.
+        # Release every combined quote containing this event before the free-entry
+        # path can count the stale hold against its owner (or against anybody else).
+        from app.tournament_checkouts import invalidate_checkouts_for_event
+
+        await invalidate_checkouts_for_event(db, event.id)
     # Every accepted PATCH moves the token, unconditionally — including one whose
     # payload equals what the event already holds. One sentence and one test, at the
     # cost of a true no-op save invalidating another open editor; the editor always

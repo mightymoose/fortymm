@@ -96,6 +96,7 @@ export function CheckoutSummary({
                       variant="ghost"
                       size="sm"
                       aria-label={`Remove ${line.eventName} from entry summary`}
+                      disabled={pending}
                       onClick={() => onRemoveSelection(line.eventId)}
                     >
                       Remove

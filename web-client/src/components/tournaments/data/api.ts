@@ -20,6 +20,7 @@ import { ApiError, api, unwrap } from '@/api/client'
 import { notifyError } from '@/lib/notify-error'
 import type { components } from '@/api/schema'
 import { parseDrawTypeCatalogue } from './draw-types'
+import { holdRefreshInterval } from './capacity'
 import { entryRefusalNotice } from './entry-refusal'
 import { hasVenue } from './helpers'
 import { parseFixtures } from './fixtures'
@@ -856,6 +857,8 @@ function tournamentDetailQuery(id: string) {
 export function useTournament(id: string) {
   return useQuery({
     ...tournamentDetailQuery(id),
+    refetchInterval: (query) =>
+      holdRefreshInterval(query.state.data?.tournament.events),
     select: (data) => data.tournament,
   })
 }

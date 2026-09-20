@@ -16,6 +16,7 @@ from app.event_lifecycle import cancel_event
 from app.identity_lifecycle import retire_player
 from app.leagues import get_default_league
 from app.models import (
+    AccountPlayer,
     DrawType,
     EventFormat,
     Player,
@@ -29,6 +30,7 @@ from app.models import (
     TournamentStatus,
     User,
 )
+from app.schemas.tournament import TournamentEventUpdate
 from app.schemas.tournament_checkout import TournamentCheckoutCreate
 from app.tournament_authority import transfer_ownership
 from app.tournament_checkout_errors import (
@@ -37,6 +39,8 @@ from app.tournament_checkout_errors import (
     CheckoutRefusedError,
 )
 from app.tournament_checkouts import start_checkout
+from app.tournament_event_stages import mint_stages
+from app.tournament_events import update_event
 from app.tournament_queries import (
     active_entry_counts_by_event,
     valid_hold_counts_by_event,
@@ -74,6 +78,7 @@ async def _paid_tournament(
             draw_settings=TournamentEventDrawSettings.for_draw_type(
                 DrawType.single_elim
             ),
+            stages=mint_stages(DrawType.single_elim),
             max_players=limit,
             entry_fee=fee,
             timezone="America/Chicago",
@@ -377,6 +382,82 @@ async def test_two_players_racing_for_last_checkout_hold_yield_one_checkout(
         assert len(rows) == 1
 
 
+async def test_checkout_waiting_for_tournament_does_not_lock_player_first(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch,
+) -> None:
+    payer = await make_user(db_session, f"buyer-{uuid.uuid4().hex[:8]}")
+    # A second account managing the same Player is the cross-route deadlock case:
+    # free entry locks its own Account, then Tournament, then this shared Player.
+    manager = User(email=f"manager-{uuid.uuid4().hex[:8]}@example.com")
+    manager.player_grants.append(
+        AccountPlayer(player_id=payer.player_id, is_primary=True)
+    )
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session,
+        owner=owner,
+        fees=(Decimal("10.00"),),
+        capacities=(2,),
+    )
+    db_session.add(manager)
+    await db_session.commit()
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with (
+        make_session() as gatekeeper,
+        make_session() as checking_out,
+        make_session() as observer,
+    ):
+        await gatekeeper.execute(
+            select(Tournament).where(Tournament.id == tournament.id).with_for_update()
+        )
+        actor = await checking_out.scalar(select(User).where(User.id == payer.id))
+        assert actor is not None
+        checking_out_pid = await checking_out.scalar(text("SELECT pg_backend_pid()"))
+        gatekeeper_pid = await gatekeeper.scalar(text("SELECT pg_backend_pid()"))
+        attempt = asyncio.create_task(
+            start_checkout(
+                checking_out,
+                tournament_id=tournament.id,
+                actor=actor,
+                request=TournamentCheckoutCreate(
+                    request_id=uuid.uuid4(), event_ids=[event.id]
+                ),
+                client_ip="203.0.113.31",
+            )
+        )
+        try:
+            async with asyncio.timeout(5):
+                while gatekeeper_pid not in (
+                    await db_session.scalar(
+                        text("SELECT pg_blocking_pids(:pid)"),
+                        {"pid": checking_out_pid},
+                    )
+                ):
+                    if attempt.done():
+                        await attempt
+                        pytest.fail("checkout did not wait for the tournament lock")
+                    await asyncio.sleep(0.01)
+
+            # NOWAIT succeeds only if checkout has not taken Player before reaching
+            # the blocked Tournament lock.
+            await observer.execute(
+                select(Player)
+                .where(Player.id == payer.player_id)
+                .with_for_update(nowait=True)
+            )
+            await observer.rollback()
+            await gatekeeper.rollback()
+            await attempt
+        finally:
+            if not attempt.done():
+                attempt.cancel()
+                await asyncio.gather(attempt, return_exceptions=True)
+
+
 async def test_checkout_is_limited_to_the_configured_merchant_owner(
     api_client: AsyncClient,
     db_session: AsyncSession,
@@ -633,6 +714,47 @@ async def test_paid_event_requires_checkout_while_zero_fee_event_enters_free(
     )
     assert free.status_code == 201
     assert free.json()["user_id"] == str(player.player_id)
+
+
+async def test_changing_a_paid_event_to_free_invalidates_its_active_checkout(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    payer = await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session,
+        owner=owner,
+        fees=(Decimal("10.00"),),
+        capacities=(1,),
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    created = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]},
+    )
+    assert created.status_code == 201
+
+    await update_event(
+        db_session,
+        tournament_id=tournament.id,
+        event_id=event.id,
+        actor=owner,
+        updates=TournamentEventUpdate(
+            lock_version=event.lock_version,
+            entry_fee=Decimal("0.00"),
+        ),
+    )
+
+    checkout = await db_session.get(TournamentCheckout, uuid.UUID(created.json()["id"]))
+    assert checkout is not None
+    assert checkout.status is TournamentCheckoutStatus.invalidated
+    entered = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/events/{event.id}/entries"
+    )
+    assert entered.status_code == 201
+    assert entered.json()["user_id"] == str(payer.player_id)
 
 
 async def test_checkout_refuses_a_positive_fee_below_fifty_cents(

@@ -205,26 +205,28 @@ async def start_checkout(
         .execution_options(populate_existing=True)
     )
     primary_player = locked_actor.primary_player if locked_actor is not None else None
-    player = (
-        await db.scalar(
-            select(Player)
-            .where(Player.id == primary_player.id)
-            .with_for_update()
-            .execution_options(populate_existing=True)
-        )
-        if primary_player is not None
-        else None
-    )
     if (
         locked_actor is None
         or not locked_actor.is_active
         or locked_actor.merged_into_user_id is not None
-        or player is None
-        or player.retired_at is not None
+        or primary_player is None
     ):
         raise CheckoutNotFoundError()
 
     tournament = await _load_tournament_locked(db, tournament_id, locked_actor.id)
+    # Account → Tournament → Player is the shared registration lock order. Taking
+    # Player before Tournament can deadlock against free entry by another account
+    # that manages the same Player (entry already holds Tournament when it resolves
+    # and locks the entrant). Reload after both preceding locks so retirement and
+    # account-identity changes cannot race this checkout.
+    player = await db.scalar(
+        select(Player)
+        .where(Player.id == primary_player.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if player is None or player.retired_at is not None:
+        raise CheckoutNotFoundError()
     requested_ids = set(request.event_ids)
     prior_request = await db.scalar(
         select(TournamentCheckout)

@@ -53,8 +53,10 @@ export const EventsTab = ({
   const cancelCheckout = useCancelCheckout(tournament.id)
   const refreshCheckout = useRefreshTournamentCheckout(tournament.id)
   const checkout = currentCheckout.data?.status === 'active' ? currentCheckout.data : null
+  const paidSelectionLocked = checkout !== null || startCheckout.isPending
   const selectedEvents = tournament.events.filter((event) => selectedIds.has(event.id))
   const togglePaid = (eventId: string) => {
+    if (paidSelectionLocked) return
     setSelectedIds((current) => {
       const next = new Set(current)
       if (next.has(eventId)) next.delete(eventId)
@@ -150,7 +152,7 @@ export const EventsTab = ({
                   event={ev}
                   selected={selectedIds.has(ev.id)}
                   onTogglePaid={() => togglePaid(ev.id)}
-                  paidSelectionLocked={checkout !== null}
+                  paidSelectionLocked={paidSelectionLocked}
                 />
               }
               // The event's draw (ADR-0786): its groups and fixtures for everyone, its

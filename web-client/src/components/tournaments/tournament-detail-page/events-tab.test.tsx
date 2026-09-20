@@ -312,6 +312,98 @@ describe('EventsTab', () => {
       expect(eventsTabPage.querySelectButton('U1500')).toBeNull()
     })
 
+    it('locks the submitted selection until checkout creation finishes', async () => {
+      const firstId = '00000000-0000-4000-8000-000000000051'
+      let releaseRequest!: () => void
+      let created = false
+      const requestGate = new Promise<void>((resolve) => {
+        releaseRequest = resolve
+      })
+      server.use(
+        http.get('*/v1/tournaments/:tournamentId/checkouts/current', () =>
+          created
+            ? HttpResponse.json({
+                id: '00000000-0000-4000-8000-000000000052',
+                request_id: '00000000-0000-4000-8000-000000000053',
+                tournament_id: '00000000-0000-4000-8000-000000000020',
+                registration_generation: 0,
+                status: 'active',
+                payment_state: 'unavailable',
+                currency: 'USD',
+                total_cents: 4500,
+                created_at: new Date().toISOString(),
+                expires_at: new Date(Date.now() + 600_000).toISOString(),
+                remaining_seconds: 600,
+                lines: [
+                  {
+                    event_id: firstId,
+                    event_name: 'Open Singles',
+                    price_cents: 4500,
+                  },
+                ],
+              })
+            : HttpResponse.json(
+                { detail: 'Checkout not found.' },
+                { status: 404 },
+              ),
+        ),
+        http.post('*/v1/tournaments/:tournamentId/checkouts', async ({ request }) => {
+          const body = (await request.json()) as {
+            event_ids: string[]
+            request_id: string
+          }
+          await requestGate
+          created = true
+          return HttpResponse.json(
+            {
+              id: '00000000-0000-4000-8000-000000000052',
+              request_id: body.request_id,
+              tournament_id: '00000000-0000-4000-8000-000000000020',
+              registration_generation: 0,
+              status: 'active',
+              payment_state: 'unavailable',
+              currency: 'USD',
+              total_cents: 4500,
+              created_at: new Date().toISOString(),
+              expires_at: new Date(Date.now() + 600_000).toISOString(),
+              remaining_seconds: 600,
+              lines: [
+                {
+                  event_id: firstId,
+                  event_name: 'Open Singles',
+                  price_cents: 4500,
+                },
+              ],
+            },
+            { status: 201 },
+          )
+        }),
+      )
+      eventsTabPage.render({
+        tournament: buildTournament({
+          events: [
+            buildEvent({ id: firstId, name: 'Open Singles', entryFee: 45 }),
+            buildEvent({ name: 'U1500', entryFee: 30 }),
+          ],
+        }),
+      })
+
+      await userEvent.click(await eventsTabPage.findSelectButton('Open Singles'))
+      await userEvent.click(screen.getByRole('button', { name: 'Reserve 1 place' }))
+
+      await waitFor(() =>
+        expect(
+          screen.getByRole('button', {
+            name: 'Remove Open Singles from entry summary',
+          }),
+        ).toBeDisabled(),
+      )
+      expect(eventsTabPage.querySelectButton('U1500')).toBeNull()
+
+      releaseRequest()
+      expect(await screen.findByText('Your reserved places')).toBeInTheDocument()
+    })
+
     it('offers none on a doubles event', async () => {
       eventsTabPage.render({
         tournament: buildTournament({
