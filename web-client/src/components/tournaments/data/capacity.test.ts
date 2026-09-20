@@ -7,7 +7,7 @@ import {
   HOLD_REFRESH_INTERVAL_MS,
   holdRefreshInterval,
 } from './capacity'
-import { buildEntrants, buildEvent } from './seed.factory'
+import { buildEntrants, buildEvent, buildTournament } from './seed.factory'
 
 /** The capacity of an event holding `entered` of `maxPlayers` — stated in the two
  * numbers the reading is about, but built through the real factory, so `entered`
@@ -76,17 +76,32 @@ describe('eventCapacity', () => {
 
 describe('holdRefreshInterval', () => {
   it('polls while any checkout hold can affect capacity', () => {
-    expect(holdRefreshInterval([{ heldPlaces: 0 }, { heldPlaces: 2 }])).toBe(
-      HOLD_REFRESH_INTERVAL_MS,
-    )
+    const held = buildTournament({
+      status: 'archived',
+      checkoutAvailable: false,
+      events: [buildEvent({ heldPlaces: 2 })],
+    })
+    expect(holdRefreshInterval(held)).toBe(HOLD_REFRESH_INTERVAL_MS)
   })
 
-  it('keeps a slower discovery poll when the current snapshot has no holds', () => {
-    expect(holdRefreshInterval([{ heldPlaces: 0 }])).toBe(
-      HOLD_DISCOVERY_INTERVAL_MS,
-    )
-    expect(holdRefreshInterval([])).toBe(HOLD_DISCOVERY_INTERVAL_MS)
+  it('keeps a slower discovery poll for an eligible paid event with no holds', () => {
+    expect(holdRefreshInterval(buildTournament())).toBe(HOLD_DISCOVERY_INTERVAL_MS)
     expect(holdRefreshInterval(undefined)).toBe(false)
+  })
+
+  it.each([
+    ['draft', buildTournament({ status: 'draft' })],
+    ['live', buildTournament({ status: 'live' })],
+    ['archived', buildTournament({ status: 'archived' })],
+    ['closed', buildTournament({ registrationOpen: false })],
+    ['checkout-disabled', buildTournament({ checkoutAvailable: false })],
+    ['no events', buildTournament({ events: [] })],
+    ['free-only', buildTournament({ events: [buildEvent({ entryFee: 0 })] })],
+    ['subminimum fee', buildTournament({ events: [buildEvent({ entryFee: 0.25 })] })],
+    ['doubles-only', buildTournament({ events: [buildEvent({ format: 'doubles' })] })],
+    ['cancelled-only', buildTournament({ events: [buildEvent({ lifecycleState: 'cancelled' })] })],
+  ])('stops zero-hold discovery for %s tournaments', (_label, tournament) => {
+    expect(holdRefreshInterval(tournament)).toBe(false)
   })
 })
 

@@ -1,7 +1,8 @@
 import type { Tournament, TournamentEvent } from '../../data/types'
+import { MIN_CHECKOUT_FEE } from '../../data/capacity'
 
 export const MAX_CHECKOUT_EVENTS = 100
-export const MIN_CHECKOUT_FEE = 0.5
+export { MIN_CHECKOUT_FEE }
 
 export function isCheckoutEventEligible(
   tournament: Tournament,

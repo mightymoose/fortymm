@@ -859,7 +859,7 @@ export function useTournament(id: string) {
   return useQuery({
     ...tournamentDetailQuery(id),
     refetchInterval: (query) =>
-      holdRefreshInterval(query.state.data?.tournament.events),
+      holdRefreshInterval(query.state.data?.tournament),
     select: (data) => data.tournament,
   })
 }

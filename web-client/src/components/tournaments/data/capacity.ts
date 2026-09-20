@@ -22,7 +22,7 @@
 // consulted about whether an Enter button appears. It is the client reading two
 // integers it was sent, which is all "how many places are left" has ever been.
 
-import type { TournamentEvent } from './types'
+import type { Tournament, TournamentEvent } from './types'
 
 /** The three — mutually exclusive — things an event's capacity can say, as a sum
  * type rather than a `remaining: number` a caller must remember to clamp and
@@ -54,17 +54,39 @@ type Capacity = Pick<TournamentEvent, 'entered' | 'maxPlayers'> & {
 
 export const HOLD_REFRESH_INTERVAL_MS = 5_000
 export const HOLD_DISCOVERY_INTERVAL_MS = 30_000
+export const MIN_CHECKOUT_FEE = 0.5
 
-/** Keep detail capacity current quickly while a hold exists, and keep a slower
- * discovery poll after a zero-hold snapshot so holds created by other players can
- * still make this mounted page current. */
+type HoldRefreshTournament = Pick<
+  Tournament,
+  'checkoutAvailable' | 'events' | 'registrationOpen' | 'status'
+>
+
+/** Keep detail capacity current quickly while a hold exists. After a zero-hold
+ * snapshot, discover holds only while the tournament can actually create one; drafts,
+ * closed/live/archived tournaments, unavailable merchants, and free-only event lists
+ * otherwise turn a mounted detail page into a permanent background poll. */
 export function holdRefreshInterval(
-  events: readonly Pick<TournamentEvent, 'heldPlaces'>[] | undefined,
+  tournament: HoldRefreshTournament | undefined,
 ): number | false {
-  if (events === undefined) return false
-  return events.some((event) => event.heldPlaces > 0)
-    ? HOLD_REFRESH_INTERVAL_MS
-    : HOLD_DISCOVERY_INTERVAL_MS
+  if (tournament === undefined) return false
+  if (tournament.events.some((event) => event.heldPlaces > 0)) {
+    return HOLD_REFRESH_INTERVAL_MS
+  }
+  if (
+    !tournament.checkoutAvailable ||
+    tournament.status !== 'published' ||
+    tournament.registrationOpen === false
+  ) {
+    return false
+  }
+  return tournament.events.some(
+    (event) =>
+      event.format === 'singles' &&
+      event.lifecycleState !== 'cancelled' &&
+      event.entryFee >= MIN_CHECKOUT_FEE,
+  )
+    ? HOLD_DISCOVERY_INTERVAL_MS
+    : false
 }
 
 /**
