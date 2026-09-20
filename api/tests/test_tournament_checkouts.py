@@ -874,6 +874,49 @@ async def test_paid_event_requires_checkout_while_zero_fee_event_enters_free(
     assert free.json()["user_id"] == str(player.player_id)
 
 
+async def test_director_entry_releases_the_players_combined_checkout(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    owner = await start_session(api_client, db_session)
+    tournament, events = await _paid_tournament(
+        db_session,
+        owner=owner,
+        capacities=(1, 1),
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+
+    async with make_client() as payer_client:
+        payer = await start_session(payer_client, db_session)
+        checkout = await payer_client.post(
+            f"/v1/tournaments/{tournament.id}/checkouts",
+            json={
+                "request_id": str(uuid.uuid4()),
+                "event_ids": [str(event.id) for event in events],
+            },
+        )
+        assert checkout.status_code == 201, checkout.text
+
+        entered = await api_client.post(
+            f"/v1/tournaments/{tournament.id}/events/{events[0].id}/entries",
+            json={"user_id": str(payer.player_id)},
+        )
+
+    assert entered.status_code == 201, entered.text
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout.json()["id"]))
+    assert stored is not None
+    assert stored.status is TournamentCheckoutStatus.invalidated
+    assert await valid_hold_counts_by_event(
+        db_session, [event.id for event in events]
+    ) == {event.id: 0 for event in events}
+    entry = await db_session.scalar(
+        select(TournamentEntry).where(TournamentEntry.event_id == events[0].id)
+    )
+    assert entry is not None
+    assert entry.user_id == payer.player_id
+
+
 async def test_changing_a_paid_event_to_free_invalidates_its_active_checkout(
     api_client: AsyncClient,
     db_session: AsyncSession,

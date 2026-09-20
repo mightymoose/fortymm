@@ -204,6 +204,34 @@ async def invalidate_checkouts_for_event(db: AsyncSession, event_id: uuid.UUID) 
     )
 
 
+async def invalidate_checkout_for_entrant_event(
+    db: AsyncSession,
+    *,
+    tournament_id: uuid.UUID,
+    entrant_player_id: uuid.UUID,
+    event_id: uuid.UUID,
+) -> None:
+    """Release an entrant's all-or-nothing quote when a director enters them.
+
+    The caller owns the tournament lock, which serializes this transition with
+    checkout admission. Only a quote containing the manually entered event is
+    invalidated; an unrelated paid selection in the same tournament survives.
+    """
+    checkout_ids = select(TournamentCheckoutLine.checkout_id).where(
+        TournamentCheckoutLine.event_id == event_id
+    )
+    await db.execute(
+        update(TournamentCheckout)
+        .where(
+            TournamentCheckout.id.in_(checkout_ids),
+            TournamentCheckout.tournament_id == tournament_id,
+            TournamentCheckout.entrant_player_id == entrant_player_id,
+            TournamentCheckout.status == TournamentCheckoutStatus.active,
+        )
+        .values(status=TournamentCheckoutStatus.invalidated)
+    )
+
+
 async def _load_tournament_locked(
     db: AsyncSession, tournament_id: uuid.UUID, viewer_account_id: uuid.UUID
 ) -> Tournament:

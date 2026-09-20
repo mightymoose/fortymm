@@ -82,6 +82,7 @@ from app.rate_limiting import RedisRateLimiter
 from app.schedule_solves import request_solve
 from app.schemas.tournament import TournamentEntrantRead
 from app.tournament_authority import can_direct
+from app.tournament_checkouts import invalidate_checkout_for_entrant_event
 from app.tournament_edit import _load_tournament_for_update
 from app.tournament_eligibility import (
     Eligible,
@@ -412,6 +413,17 @@ async def admit_to_event(
             "This event requires paid checkout.",
         )
     rating = await _enforce_rating_eligible(db, tournament, event, entrant)
+    if not self_registration:
+        # A director entry supersedes this player's hold for the same event. The
+        # quote is all-or-nothing, so invalidate the combined checkout before
+        # counting capacity; otherwise the player's own hold can falsely consume
+        # the final place or keep reserving its other lines after admission.
+        await invalidate_checkout_for_entrant_event(
+            db,
+            tournament_id=tournament.id,
+            entrant_player_id=entrant.id,
+            event_id=event.id,
+        )
     await _enforce_event_has_room(db, event)
 
     # ``added_by_user_id`` is the fork's one lasting trace: NULL on the self path, the
