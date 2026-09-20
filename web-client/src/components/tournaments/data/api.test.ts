@@ -46,11 +46,16 @@ const activeCheckout: TournamentCheckout = {
 }
 
 describe('checkoutRefreshInterval', () => {
-  it('polls every settled state so another tab’s replacement hold is discovered', () => {
+  it('keeps an active hold current even after checkout discovery closes', () => {
     expect(checkoutRefreshInterval(activeCheckout)).toBe(5_000)
+    expect(checkoutRefreshInterval(activeCheckout, false)).toBe(5_000)
+  })
+
+  it('discovers replacement holds only while checkout can be created', () => {
     expect(checkoutRefreshInterval({ ...activeCheckout, status: 'expired' })).toBe(5_000)
-    expect(checkoutRefreshInterval({ ...activeCheckout, status: 'invalidated' })).toBe(5_000)
+    expect(checkoutRefreshInterval({ ...activeCheckout, status: 'expired' }, false)).toBe(false)
     expect(checkoutRefreshInterval(null)).toBe(5_000)
+    expect(checkoutRefreshInterval(null, false)).toBe(false)
     expect(checkoutRefreshInterval(undefined)).toBe(false)
   })
 })

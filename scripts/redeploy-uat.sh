@@ -93,12 +93,21 @@ OBS_RELEASE="observability"
 OBS_CHART="observability"
 DEPLOY_OBSERVABILITY="${DEPLOY_OBSERVABILITY:-true}"
 
+# Read a single value from .env, stripping one layer of surrounding quotes.
+read_env() { grep "^$1=" .env | head -1 | cut -d= -f2- | sed -e "s/^[\"']//" -e "s/[\"']\$//"; }
+
 # Refuse missing launch configuration before fetching/merging, starting k3d, or
 # touching Kubernetes. Checkout deliberately fails closed without this Account.
 [ -f .env ] || { echo "ERROR: .env not found (copy .env.example and fill in)." >&2; exit 1; }
-grep -qE '^TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID=.' .env || {
+MERCHANT_ACCOUNT_ID="$(read_env TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID || true)"
+[ -n "$MERCHANT_ACCOUNT_ID" ] || {
   echo "ERROR: TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID missing/empty in .env." >&2
   echo "       Add Ryan's launch merchant Account UUID; see .env.example." >&2
+  exit 1
+}
+[[ "$MERCHANT_ACCOUNT_ID" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]] || {
+  echo "ERROR: TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID must be a UUID." >&2
+  echo "       Fix the value in .env before deploying UAT." >&2
   exit 1
 }
 
@@ -108,9 +117,6 @@ grep -qE '^TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID=.' .env || {
 # from the registry by digest, not from these files.
 CHART_DIR="$(mktemp -d)"
 trap 'rm -rf "$CHART_DIR"' EXIT
-
-# Read a single value from .env, stripping one layer of surrounding quotes.
-read_env() { grep "^$1=" .env | head -1 | cut -d= -f2- | sed -e "s/^[\"']//" -e "s/[\"']\$//"; }
 
 for bin in docker curl kubectl helm k3d; do
   command -v "$bin" >/dev/null 2>&1 || { echo "ERROR: '$bin' not found on PATH." >&2; exit 1; }

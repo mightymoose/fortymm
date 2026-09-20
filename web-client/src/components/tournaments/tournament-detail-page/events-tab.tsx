@@ -55,7 +55,15 @@ export const EventsTab = ({
   const username = session.data?.data.user.username
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   const [adoptedCheckoutId, setAdoptedCheckoutId] = useState<string | null>(null)
-  const currentCheckout = useCurrentCheckout(tournament.id, session.isSuccess)
+  const checkoutDiscoveryEnabled =
+    tournament.checkoutAvailable &&
+    tournament.status === 'published' &&
+    tournament.registrationOpen !== false
+  const currentCheckout = useCurrentCheckout(
+    tournament.id,
+    session.isSuccess,
+    checkoutDiscoveryEnabled,
+  )
   const startCheckout = useStartCheckout(tournament.id)
   const cancelCheckout = useCancelCheckout(tournament.id)
   const refreshCheckout = useRefreshTournamentCheckout(tournament.id)
@@ -68,8 +76,8 @@ export const EventsTab = ({
     setAdoptedCheckoutId(activeCheckoutId)
     setSelectedIds(new Set())
   }
-  const paidSelectionLocked =
-    checkout !== null || currentCheckout.isFetching || startCheckout.isPending
+  const hidePaidSelection = checkout !== null || startCheckout.isPending
+  const disablePaidSelection = currentCheckout.isFetching
   const selectedEvents = tournament.events.filter(
     (event) =>
       selectedIds.has(event.id) &&
@@ -82,7 +90,7 @@ export const EventsTab = ({
     setSelectedIds(effectiveSelectedIds)
   }
   const togglePaid = (eventId: string) => {
-    if (paidSelectionLocked) return
+    if (hidePaidSelection || disablePaidSelection) return
     setSelectedIds((current) => toggleCheckoutEvent(current, eventId))
   }
 
@@ -178,10 +186,11 @@ export const EventsTab = ({
                   selected={effectiveSelectedIds.has(ev.id)}
                   onTogglePaid={() => togglePaid(ev.id)}
                   paidSelectionLocked={
-                    paidSelectionLocked ||
+                    hidePaidSelection ||
                     (effectiveSelectedIds.size >= MAX_CHECKOUT_EVENTS &&
                       !effectiveSelectedIds.has(ev.id))
                   }
+                  paidSelectionDisabled={disablePaidSelection}
                 />
               }
               // The event's draw (ADR-0786): its groups and fixtures for everyone, its

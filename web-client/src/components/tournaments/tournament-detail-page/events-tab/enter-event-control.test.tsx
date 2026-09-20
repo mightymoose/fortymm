@@ -45,6 +45,19 @@ describe('EnterEventControl', () => {
     expect(page.queryWithdrawButton('Open Singles')).toBeNull()
   })
 
+  it('keeps a paid selection control mounted but disabled during a background read', async () => {
+    page.render({
+      event: buildEvent({ name: 'Open Singles', entryFee: 45 }),
+      onTogglePaid: vi.fn(),
+      paidSelectionDisabled: true,
+    })
+
+    await page.findSessionReady()
+    expect(page.getButtons()).toHaveLength(1)
+    expect(page.getButtons()[0]).toHaveAccessibleName('Select Open Singles')
+    expect(page.getButtons()[0]).toBeDisabled()
+  })
+
   it('explains a cancelled paid event instead of offering checkout selection', async () => {
     page.render({
       event: buildEvent({

@@ -880,15 +880,24 @@ export function useTables(id: string): TournamentTable[] {
  * "no active checkout" state, not an error screen. */
 export function checkoutRefreshInterval(
   checkout: TournamentCheckout | null | undefined,
+  discoveryEnabled = true,
 ): number | false {
   if (checkout === undefined) return false
-  // A terminal row is only the latest checkout this tab knows about. Another tab
-  // can create a replacement hold while this page stays mounted, so terminal and
-  // cached-empty snapshots must keep discovering the player's current checkout.
-  return 5_000
+  // Keep a displayed hold current even if registration closes underneath it.
+  // Empty and terminal snapshots only need discovery polling while this
+  // tournament can actually create a replacement checkout.
+  return checkout?.status === 'active' || discoveryEnabled ? 5_000 : false
 }
 
-export function useCurrentCheckout(tournamentId: string, sessionLoaded = true) {
+export function useCurrentCheckout(
+  tournamentId: string,
+  sessionLoaded = true,
+  discoveryEnabled = true,
+) {
+  const qc = useQueryClient()
+  const cachedCheckout = qc.getQueryData<TournamentCheckout | null>(
+    checkoutKey(tournamentId),
+  )
   return useQuery({
     queryKey: checkoutKey(tournamentId),
     queryFn: async (): Promise<TournamentCheckout | null> => {
@@ -899,8 +908,11 @@ export function useCurrentCheckout(tournamentId: string, sessionLoaded = true) {
       if (result.response.status === 404) return null
       return apiToCheckout(unwrap('load your held places', result))
     },
-    enabled: sessionLoaded,
-    refetchInterval: (query) => checkoutRefreshInterval(query.state.data),
+    enabled:
+      sessionLoaded &&
+      (discoveryEnabled || cachedCheckout?.status === 'active'),
+    refetchInterval: (query) =>
+      checkoutRefreshInterval(query.state.data, discoveryEnabled),
     throwOnError: (_error, query) => query.state.data === undefined,
     retry: false,
   })

@@ -104,7 +104,7 @@ describe('EventsTab', () => {
       ).toBeInTheDocument()
     })
 
-    it('locks paid selection until the current checkout read settles', async () => {
+    it('keeps paid selection mounted but disabled until the checkout read settles', async () => {
       let releaseRead!: () => void
       const readGate = new Promise<void>((resolve) => {
         releaseRead = resolve
@@ -127,13 +127,34 @@ describe('EventsTab', () => {
         }),
       })
 
-      await screen.findByText('Open Singles')
-      expect(eventsTabPage.querySelectButton('Open Singles')).toBeNull()
+      const selectButton = await eventsTabPage.findSelectButton('Open Singles')
+      expect(selectButton).toBeDisabled()
 
       releaseRead()
-      expect(
-        await eventsTabPage.findSelectButton('Open Singles'),
-      ).toBeInTheDocument()
+      await waitFor(() => expect(selectButton).toBeEnabled())
+    })
+
+    it.each([
+      ['checkout is unavailable', { checkoutAvailable: false }],
+      ['the tournament is a draft', { status: 'draft' as const }],
+      ['registration is closed', { registrationOpen: false }],
+    ])('does not read checkout state when %s', async (_label, overrides) => {
+      let checkoutReads = 0
+      server.use(
+        http.get('*/v1/tournaments/:tournamentId/checkouts/current', () => {
+          checkoutReads += 1
+          return HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 })
+        }),
+      )
+      eventsTabPage.render({
+        tournament: buildTournament({
+          ...overrides,
+          events: [buildEvent({ name: 'Open Singles', entryFee: 45 })],
+        }),
+      })
+
+      await new Promise((resolve) => window.setTimeout(resolve, 50))
+      expect(checkoutReads).toBe(0)
     })
 
     it('explains when paid checkout is unavailable for this organizer', async () => {

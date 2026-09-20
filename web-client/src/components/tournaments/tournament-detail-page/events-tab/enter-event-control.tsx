@@ -18,6 +18,7 @@ export interface EnterEventControlProps {
   selected?: boolean
   onTogglePaid?: () => void
   paidSelectionLocked?: boolean
+  paidSelectionDisabled?: boolean
 }
 
 /**
@@ -61,6 +62,7 @@ export const EnterEventControl = ({
   selected = false,
   onTogglePaid,
   paidSelectionLocked = false,
+  paidSelectionDisabled = false,
 }: EnterEventControlProps) => {
   // Entering needs no permission (#1092) — what the control waits on is the
   // session itself settling: `username` is undefined while it is in flight, so
@@ -179,6 +181,7 @@ export const EnterEventControl = ({
           <Button
             variant={selected ? 'secondary' : 'outline'}
             size="sm"
+            disabled={paidSelectionDisabled}
             aria-pressed={selected}
             aria-label={`${selected ? 'Remove' : 'Select'} ${event.name}`}
             onClick={onTogglePaid}
