@@ -109,6 +109,17 @@ describe('EventsTab', () => {
         ],
       })
       server.use(
+        http.get('*/v1/tournaments/:tournamentId/checkouts/current', () => {
+          if (createdCheckoutIds.length === cancelled) {
+            return HttpResponse.json(
+              { detail: 'Checkout not found.' },
+              { status: 404 },
+            )
+          }
+          return HttpResponse.json(
+            checkoutRead(crypto.randomUUID(), createdCheckoutIds.at(-1)!),
+          )
+        }),
         http.post('*/v1/tournaments/:tournamentId/checkouts', async ({ request }) => {
           const body = (await request.json()) as {
             event_ids: string[]

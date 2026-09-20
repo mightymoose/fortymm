@@ -39,7 +39,7 @@ from app.tournament_checkout_errors import (
     CheckoutRefusedError,
 )
 from app.tournament_eligibility import Eligible, evaluate_rating_eligibility
-from app.tournament_queries import entrant_rating, valid_hold_count
+from app.tournament_queries import entrant_rating, valid_hold_count, visible_to
 from app.tournament_registration import registration_open
 
 _checkout_ip_limiters: dict[int, RedisRateLimiter] = {}
@@ -168,10 +168,12 @@ async def invalidate_checkouts_for_event(db: AsyncSession, event_id: uuid.UUID) 
 
 
 async def _load_tournament_locked(
-    db: AsyncSession, tournament_id: uuid.UUID
+    db: AsyncSession, tournament_id: uuid.UUID, viewer_account_id: uuid.UUID
 ) -> Tournament:
     tournament = await db.scalar(
-        select(Tournament).where(Tournament.id == tournament_id).with_for_update()
+        select(Tournament)
+        .where(Tournament.id == tournament_id, visible_to(viewer_account_id))
+        .with_for_update()
     )
     if tournament is None:
         raise CheckoutNotFoundError()
@@ -206,7 +208,7 @@ async def start_checkout(
     ):
         raise CheckoutNotFoundError()
 
-    tournament = await _load_tournament_locked(db, tournament_id)
+    tournament = await _load_tournament_locked(db, tournament_id, locked_actor.id)
     requested_ids = set(request.event_ids)
     prior_request = await db.scalar(
         select(TournamentCheckout)
@@ -446,7 +448,7 @@ async def cancel_checkout(
     await db.execute(
         select(User.id).where(User.id == actor.id).with_for_update(read=True)
     )
-    tournament = await _load_tournament_locked(db, tournament_id)
+    tournament = await _load_tournament_locked(db, tournament_id, actor.id)
     checkout = await db.scalar(
         select(TournamentCheckout)
         .where(

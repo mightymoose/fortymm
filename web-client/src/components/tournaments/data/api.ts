@@ -919,7 +919,9 @@ export function useStartCheckout(tournamentId: string) {
         ),
       ),
     onSuccess: (checkout) => qc.setQueryData(checkoutKey(tournamentId), checkout),
-    onSettled: () => invalidateTournament(qc, tournamentId),
+    // Re-read the durable checkout even on a transport error: the POST may have
+    // committed before its response was lost.
+    onSettled: () => reconcileTournamentCheckout(qc, tournamentId),
     onError: notifyError('reserve your places'),
   })
 }
@@ -945,7 +947,9 @@ export function useCancelCheckout(tournamentId: string) {
         ),
       ),
     onSuccess: () => qc.setQueryData(checkoutKey(tournamentId), null),
-    onSettled: () => invalidateTournament(qc, tournamentId),
+    // A lost DELETE response is equally ambiguous, so reconcile the checkout
+    // cache as well as tournament capacity on every settlement.
+    onSettled: () => reconcileTournamentCheckout(qc, tournamentId),
     onError: notifyError('cancel your reservation'),
   })
 }

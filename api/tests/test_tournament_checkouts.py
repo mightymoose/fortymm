@@ -41,14 +41,15 @@ async def _paid_tournament(
     owner: User,
     fees: tuple[Decimal, ...] = (Decimal("20.00"), Decimal("35.00")),
     capacities: tuple[int | None, ...] | None = None,
+    status: TournamentStatus = TournamentStatus.published,
 ) -> tuple[Tournament, list[TournamentEvent]]:
     league = await get_default_league(db)
     assert league is not None
     tournament = Tournament(
         name="Checkout Open",
-        status=TournamentStatus.published,
-        registration_open=True,
-        registration_generation=1,
+        status=status,
+        registration_open=status is TournamentStatus.published,
+        registration_generation=1 if status is TournamentStatus.published else 0,
         league_id=league.id,
         created_by_user_id=owner.id,
     )
@@ -339,6 +340,30 @@ async def test_checkout_is_limited_to_the_configured_merchant_owner(
     available = await api_client.get(f"/v1/tournaments/{tournament.id}")
     assert available.status_code == 200
     assert available.json()["checkout_available"] is True
+
+
+async def test_checkout_does_not_reveal_another_owners_draft(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session,
+        owner=owner,
+        fees=(Decimal("10.00"),),
+        status=TournamentStatus.draft,
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+
+    response = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Checkout target not found."
 
 
 async def test_retired_player_cannot_reserve_capacity(
