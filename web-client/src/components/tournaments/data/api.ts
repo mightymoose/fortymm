@@ -882,7 +882,10 @@ export function checkoutRefreshInterval(
   checkout: TournamentCheckout | null | undefined,
 ): number | false {
   if (checkout === undefined) return false
-  return checkout === null || checkout.status === 'active' ? 5_000 : false
+  // A terminal row is only the latest checkout this tab knows about. Another tab
+  // can create a replacement hold while this page stays mounted, so terminal and
+  // cached-empty snapshots must keep discovering the player's current checkout.
+  return 5_000
 }
 
 export function useCurrentCheckout(tournamentId: string, sessionLoaded = true) {

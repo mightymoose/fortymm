@@ -46,9 +46,10 @@ const activeCheckout: TournamentCheckout = {
 }
 
 describe('checkoutRefreshInterval', () => {
-  it('polls active and cached-empty state but stops for terminal history', () => {
+  it('polls every settled state so another tab’s replacement hold is discovered', () => {
     expect(checkoutRefreshInterval(activeCheckout)).toBe(5_000)
-    expect(checkoutRefreshInterval({ ...activeCheckout, status: 'invalidated' })).toBe(false)
+    expect(checkoutRefreshInterval({ ...activeCheckout, status: 'expired' })).toBe(5_000)
+    expect(checkoutRefreshInterval({ ...activeCheckout, status: 'invalidated' })).toBe(5_000)
     expect(checkoutRefreshInterval(null)).toBe(5_000)
     expect(checkoutRefreshInterval(undefined)).toBe(false)
   })
