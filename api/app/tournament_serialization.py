@@ -94,13 +94,12 @@ from app.tournament_eligibility import (
     event_is_full,
 )
 from app.tournament_queries import (
-    active_entrants_by_event,
+    active_entrants_and_hold_counts_by_event,
     completed_match_ids,
     entrant_is_retired,
     entrant_rating,
     fixtures_by_event,
     game_counts_by_match,
-    valid_hold_count,
 )
 
 # Public shared surface: the serializers both the HTTP router (``tournaments.py``)
@@ -1054,13 +1053,16 @@ async def shape_event_read(
     event as it now stands, judged on the caller's one ladder ``rating`` on
     ``league_id`` — the tournament's league, passed in by the verb rather than
     re-queried here."""
-    entrants = (await active_entrants_by_event(db, [event.id]))[event.id]
+    entrants_by_event, holds_by_event = await active_entrants_and_hold_counts_by_event(
+        db, [event.id]
+    )
+    entrants = entrants_by_event[event.id]
     event_fixtures = await fixtures_by_event(db, [event.id])
     fixtures = event_fixtures[event.id]
     game_counts = await game_counts_by_match(db, completed_match_ids(event_fixtures))
     rating = await entrant_rating(db, league_id, primary_player_reference(viewer_id))
     retired = await entrant_is_retired(db, viewer_id)
-    held_places = await valid_hold_count(db, event.id)
+    held_places = holds_by_event[event.id]
     # Its stages ride along for free, same as ``shape_created_event_read`` above:
     # ``update_event``'s own ``db.refresh(event)`` repopulates the ``lazy="selectin"``
     # collection, so ``serialize_event`` reads real rows off ``event.stages`` — and

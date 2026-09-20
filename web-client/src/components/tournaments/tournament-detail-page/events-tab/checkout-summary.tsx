@@ -21,8 +21,8 @@ import { MAX_CHECKOUT_EVENTS } from './checkout-policy'
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
 
-function Countdown({ remainingSeconds, onExpired }: { remainingSeconds: number; onExpired: () => void }) {
-  const [deadline] = useState(() => Date.now() + remainingSeconds * 1_000)
+function Countdown({ expiresAt, onExpired }: { expiresAt: string; onExpired: () => void }) {
+  const deadline = Date.parse(expiresAt)
   const [now, setNow] = useState(() => Date.now())
   const notified = useRef(false)
   useEffect(() => {
@@ -32,7 +32,7 @@ function Countdown({ remainingSeconds, onExpired }: { remainingSeconds: number; 
   const seconds = Math.max(0, Math.ceil((deadline - now) / 1_000))
   useEffect(() => {
     notified.current = false
-  }, [deadline])
+  }, [expiresAt])
   useEffect(() => {
     if (seconds === 0 && !notified.current) {
       notified.current = true
@@ -125,8 +125,8 @@ export function CheckoutSummary({
             {checkout ? (
               <>
                 <Countdown
-                  key={`${checkout.id}:${checkout.remainingSeconds}`}
-                  remainingSeconds={checkout.remainingSeconds}
+                  key={checkout.id}
+                  expiresAt={checkout.expiresAt}
                   onExpired={onExpired}
                 />
                 <AlertDialog>

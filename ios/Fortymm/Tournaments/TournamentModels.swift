@@ -150,7 +150,7 @@ struct TournamentEventDTO: Decodable, Identifiable {
     var requiresCheckout: Bool { entryFee > 0 }
     var hasHeldPlaces: Bool { (heldPlaces ?? 0) > 0 }
     func canStartCheckout(checkoutAvailable: Bool) -> Bool {
-        entryFee >= 0.50 && checkoutAvailable && entryState.state == .open && !isCancelled
+        format == "singles" && entryFee >= 0.50 && checkoutAvailable && entryState.state == .open && !isCancelled
     }
     let slot: Slot
     let entrants: [Entrant]

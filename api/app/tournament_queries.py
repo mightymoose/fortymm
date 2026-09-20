@@ -330,6 +330,115 @@ async def active_entrants_by_event(
     return entrants
 
 
+async def active_entrants_and_hold_counts_by_event(
+    db: AsyncSession, event_ids: Sequence[uuid.UUID]
+) -> tuple[
+    dict[uuid.UUID, list[TournamentEntrantRead]],
+    dict[uuid.UUID, int],
+]:
+    """Read both components of event occupancy from one PostgreSQL snapshot.
+
+    A director admission can atomically replace a checkout hold with an entry. Under
+    READ COMMITTED, two separate statements can straddle that commit and observe neither
+    side. This statement starts from every requested event, outer-joins its entrants,
+    and carries a correlated valid-hold count, so the roster and reserved capacity are
+    one indivisible read while retaining one row for an empty event.
+    """
+    entrants: dict[uuid.UUID, list[TournamentEntrantRead]] = {
+        event_id: [] for event_id in event_ids
+    }
+    holds = {event_id: 0 for event_id in event_ids}
+    if not entrants:
+        return entrants, holds
+
+    hold_tournament = aliased(Tournament)
+    hold_count = (
+        select(func.count())
+        .select_from(TournamentCheckoutLine)
+        .join(
+            TournamentCheckout,
+            TournamentCheckout.id == TournamentCheckoutLine.checkout_id,
+        )
+        .join(
+            hold_tournament,
+            hold_tournament.id == TournamentCheckout.tournament_id,
+        )
+        .where(
+            TournamentCheckoutLine.event_id == TournamentEvent.id,
+            TournamentCheckout.status == TournamentCheckoutStatus.active,
+            TournamentCheckout.expires_at > func.clock_timestamp(),
+            TournamentCheckout.registration_generation
+            == hold_tournament.registration_generation,
+            TournamentCheckout.merchant_account_id == hold_tournament.owner_account_id,
+        )
+        .correlate(TournamentEvent)
+        .scalar_subquery()
+    )
+    rows = (
+        await db.execute(
+            select(
+                TournamentEvent.id,
+                TournamentEntry.id,
+                TournamentEntry.user_id,
+                Player.username,
+                TournamentEntry.seed,
+                UserLeagueRating.rating_value,
+                Player.retired_at,
+                Player.merged_at,
+                hold_count,
+            )
+            .select_from(TournamentEvent)
+            .join(Tournament, Tournament.id == TournamentEvent.tournament_id)
+            .outerjoin(
+                TournamentEntry,
+                and_(
+                    TournamentEntry.event_id == TournamentEvent.id,
+                    TournamentEntry.status == TournamentEntryStatus.entered,
+                ),
+            )
+            .outerjoin(Player, Player.id == TournamentEntry.user_id)
+            .outerjoin(
+                UserLeagueRating,
+                and_(
+                    UserLeagueRating.user_id == TournamentEntry.user_id,
+                    UserLeagueRating.league_id == Tournament.league_id,
+                    is_rated_member(),
+                ),
+            )
+            .where(TournamentEvent.id.in_(entrants.keys()))
+            .order_by(
+                TournamentEvent.id,
+                registration_order().nulls_last(),
+                TournamentEntry.id,
+            )
+        )
+    ).all()
+    for (
+        event_id,
+        entry_id,
+        user_id,
+        username,
+        seed,
+        rating,
+        retired_at,
+        merged_at,
+        held_places,
+    ) in rows:
+        holds[event_id] = held_places
+        if entry_id is None:
+            continue
+        entrant = TournamentEntrantRead(
+            id=entry_id,
+            user_id=user_id,
+            username=username,
+            seed=seed,
+            rating=rating,
+        )
+        entrant._visible_on_roster = retired_at is None and merged_at is None
+        entrants[event_id].append(entrant)
+    return entrants, holds
+
+
 def _group_position() -> ScalarSelect[int | None]:
     """The ``position`` of a fixture's group within its own event — the correlated
     subquery the draw order below sorts on.

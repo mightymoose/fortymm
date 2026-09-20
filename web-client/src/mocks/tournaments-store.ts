@@ -175,6 +175,7 @@ type StoredTournament = Omit<
   events: StoredEvent[]
   registration_open?: boolean
   registration_generation?: number
+  checkout_available?: boolean
 }
 
 // The dev current user — must line up with the mocked session in handlers.ts so
@@ -601,6 +602,7 @@ function seed(): StoredTournament[] {
       name: 'Bay Area Open 2026',
       description: 'Two-day open. USATT-sanctioned, ratings-eligible.',
       status: 'published',
+      checkout_available: true,
       league_id: DEFAULT_LEAGUE_ID,
       address: {
         venue: 'Berkeley TT Club',
@@ -1494,7 +1496,7 @@ function readDetail(t: StoredTournament): TournamentDetailRead {
     ...t,
     registration_open: t.registration_open ?? t.status === 'published',
     registration_generation: t.registration_generation ?? (t.status === 'draft' ? 0 : 1),
-    checkout_available: false,
+    checkout_available: t.checkout_available ?? false,
     events: t.events.map((event) =>
       readEvent(event, heldPlacesFor(t.id, event.id)),
     ),
@@ -2031,7 +2033,7 @@ function readOf({ events, ...read }: StoredTournament): TournamentRead {
     ...read,
     registration_open: read.registration_open ?? read.status === 'published',
     registration_generation: read.registration_generation ?? (read.status === 'draft' ? 0 : 1),
-    checkout_available: false,
+    checkout_available: read.checkout_available ?? false,
   }
 }
 

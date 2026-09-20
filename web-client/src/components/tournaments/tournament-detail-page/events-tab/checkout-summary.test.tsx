@@ -69,9 +69,9 @@ it('explains the checkout selection limit at 100 events', () => {
   expect(screen.getByRole('button', { name: 'Hold 100 places' })).toBeEnabled()
 })
 
-it('adopts a shorter authoritative duration when the checkout refreshes', async () => {
+it('keeps the countdown tied to the authoritative expiry across delayed refreshes', async () => {
   vi.useFakeTimers()
-  vi.setSystemTime(new Date('2030-04-20T14:00:00Z'))
+  vi.setSystemTime(new Date('2030-04-20T14:00:05Z'))
   const view = render(
     <CheckoutSummary
       selection={[]}
@@ -80,7 +80,7 @@ it('adopts a shorter authoritative duration when the checkout refreshes', async 
       {...callbacks}
     />,
   )
-  expect(screen.getByLabelText('10:00 remaining')).toBeInTheDocument()
+  expect(screen.getByLabelText('09:55 remaining')).toBeInTheDocument()
 
   view.rerender(
     <CheckoutSummary
@@ -90,8 +90,8 @@ it('adopts a shorter authoritative duration when the checkout refreshes', async 
       {...callbacks}
     />,
   )
-  expect(screen.getByLabelText('00:01 remaining')).toBeInTheDocument()
+  expect(screen.getByLabelText('09:55 remaining')).toBeInTheDocument()
 
-  await act(() => vi.advanceTimersByTimeAsync(1_000))
+  await act(() => vi.advanceTimersByTimeAsync(595_000))
   expect(callbacks.onExpired).toHaveBeenCalledTimes(1)
 })

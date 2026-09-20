@@ -1,5 +1,5 @@
 import { Plus, Trophy } from 'lucide-react'
-import { useState } from 'react'
+import { type Dispatch, type SetStateAction, useState } from 'react'
 
 import { useSession } from '@/api/session'
 import { Button } from '@/components/ui/button'
@@ -30,6 +30,8 @@ export interface EventsTabProps {
   canEdit: boolean
   onOpenEvent: (event: TournamentEvent) => void
   onNewEvent: () => void
+  checkoutDraftIds?: Set<string>
+  onCheckoutDraftChange?: Dispatch<SetStateAction<Set<string>>>
 }
 /** The Events tab: a list of event row-cards with a "New event" action and an
  * empty state. */
@@ -38,6 +40,8 @@ export const EventsTab = ({
   canEdit,
   onOpenEvent,
   onNewEvent,
+  checkoutDraftIds,
+  onCheckoutDraftChange,
 }: EventsTabProps) => {
   // The draw formats the server offers (ADR 20260726), handed to each card so it can
   // name the event's draw type in the server's words. Read off the tournament rather
@@ -53,7 +57,9 @@ export const EventsTab = ({
   // same join, so the chip and the Enter/Withdraw control can never disagree.
   const session = useSession()
   const username = session.data?.data.user.username
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
+  const [localSelectedIds, setLocalSelectedIds] = useState<Set<string>>(() => new Set())
+  const selectedIds = checkoutDraftIds ?? localSelectedIds
+  const setSelectedIds = onCheckoutDraftChange ?? setLocalSelectedIds
   const [adoptedCheckoutId, setAdoptedCheckoutId] = useState<string | null>(null)
   const checkoutDiscoveryEnabled =
     tournament.checkoutAvailable &&

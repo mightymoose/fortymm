@@ -96,6 +96,14 @@ private final class TestLocationManager: CLLocationManager {
         precondition(openPaid.events[0].canStartCheckout(checkoutAvailable: openPaid.checkoutAvailable), "Eligible open paid events must advertise checkout")
         precondition(openPaid.holdPollSeconds == 30, "Eligible paid events must poll to discover new checkout holds")
         precondition(!openPaid.events[0].canStartCheckout(checkoutAvailable: false), "Ineligible merchants must not advertise checkout")
+        var paidDoublesPayload = openPaidPayload
+        var paidDoublesEvent = openPaidEvent
+        paidDoublesEvent["format"] = "doubles"
+        paidDoublesPayload[0]["events"] = [paidDoublesEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: paidDoublesPayload), encoding: .utf8)!
+        let paidDoubles = try await service.list()[0]
+        precondition(!paidDoubles.events[0].canStartCheckout(checkoutAvailable: true), "Paid doubles must not advertise unsupported checkout")
+        precondition(paidDoubles.holdPollSeconds == nil, "Paid doubles must not poll for checkout discovery")
         var merchantUnavailablePayload = openPaidPayload
         merchantUnavailablePayload[0]["checkout_available"] = false
         TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: merchantUnavailablePayload), encoding: .utf8)!
