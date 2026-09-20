@@ -896,9 +896,7 @@ async def test_cancellation_reloads_a_manager_changed_after_authentication(
                 actor=stale_actor,
             )
 
-    stored = await db_session.get(
-        TournamentCheckout, uuid.UUID(created.json()["id"])
-    )
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(created.json()["id"]))
     assert stored is not None
     assert stored.status is TournamentCheckoutStatus.active
 
