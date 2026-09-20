@@ -53,15 +53,18 @@ type Capacity = Pick<TournamentEvent, 'entered' | 'maxPlayers'> & {
 }
 
 export const HOLD_REFRESH_INTERVAL_MS = 5_000
+export const HOLD_DISCOVERY_INTERVAL_MS = 30_000
 
-/** Keep detail capacity current while any temporary checkout hold exists. Once a
- * refresh observes zero holds the query stops polling on its own. */
+/** Keep detail capacity current quickly while a hold exists, and keep a slower
+ * discovery poll after a zero-hold snapshot so holds created by other players can
+ * still make this mounted page current. */
 export function holdRefreshInterval(
   events: readonly Pick<TournamentEvent, 'heldPlaces'>[] | undefined,
 ): number | false {
-  return events?.some((event) => event.heldPlaces > 0)
+  if (events === undefined) return false
+  return events.some((event) => event.heldPlaces > 0)
     ? HOLD_REFRESH_INTERVAL_MS
-    : false
+    : HOLD_DISCOVERY_INTERVAL_MS
 }
 
 /**

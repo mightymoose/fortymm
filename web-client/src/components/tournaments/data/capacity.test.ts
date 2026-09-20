@@ -3,6 +3,7 @@ import {
   capacityLabel,
   enteredSummary,
   eventCapacity,
+  HOLD_DISCOVERY_INTERVAL_MS,
   HOLD_REFRESH_INTERVAL_MS,
   holdRefreshInterval,
 } from './capacity'
@@ -80,8 +81,11 @@ describe('holdRefreshInterval', () => {
     )
   })
 
-  it('stops once refreshed events contain no holds', () => {
-    expect(holdRefreshInterval([{ heldPlaces: 0 }])).toBe(false)
+  it('keeps a slower discovery poll when the current snapshot has no holds', () => {
+    expect(holdRefreshInterval([{ heldPlaces: 0 }])).toBe(
+      HOLD_DISCOVERY_INTERVAL_MS,
+    )
+    expect(holdRefreshInterval([])).toBe(HOLD_DISCOVERY_INTERVAL_MS)
     expect(holdRefreshInterval(undefined)).toBe(false)
   })
 })
