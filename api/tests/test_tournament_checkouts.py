@@ -1220,6 +1220,41 @@ async def test_player_merge_invalidates_source_checkout_hold(
     assert checkout.status is TournamentCheckoutStatus.invalidated
 
 
+async def test_player_merge_invalidates_survivor_hold_colliding_with_source_entry(
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    source = await make_user(db_session, f"source-{uuid.uuid4().hex[:8]}")
+    survivor = await make_user(db_session, f"survivor-{uuid.uuid4().hex[:8]}")
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("10.00"),), capacities=(2,)
+    )
+    db_session.add(TournamentEntry(event_id=event.id, user_id=source.player_id))
+    await db_session.commit()
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    created = await start_checkout(
+        db_session,
+        tournament_id=tournament.id,
+        actor=survivor,
+        request=TournamentCheckoutCreate(request_id=uuid.uuid4(), event_ids=[event.id]),
+        client_ip="127.0.0.1",
+    )
+
+    await merge_user(
+        db_session,
+        from_user_id=source.id,
+        to_user_id=survivor.id,
+    )
+    await db_session.commit()
+
+    checkout = await db_session.get(TournamentCheckout, created.id)
+    assert checkout is not None
+    assert checkout.status is TournamentCheckoutStatus.invalidated
+    holds = await valid_hold_counts_by_event(db_session, [event.id])
+    assert holds.get(event.id, 0) == 0
+
+
 async def test_ownership_transfer_invalidates_checkout_and_releases_hold(
     api_client: AsyncClient,
     db_session: AsyncSession,

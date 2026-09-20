@@ -381,12 +381,14 @@ async def _merge_players(
     # A checkout is a temporary capacity claim owned by a Player. It cannot be
     # re-pointed during reconciliation: the survivor may already hold a checkout
     # for the same tournament, and combining immutable selections would invent a
-    # quote nobody accepted. Invalidate the source identity's active claims; the
-    # survivor can create a fresh checkout against current capacity.
+    # quote nobody accepted. Invalidate both identities' active claims: an entry
+    # carried over from the source can collide with an event held by the survivor,
+    # which would otherwise count the merged Player once as an entrant and once as
+    # a hold. The survivor can create a fresh checkout against reconciled capacity.
     await db.execute(
         update(TournamentCheckout)
         .where(
-            TournamentCheckout.entrant_player_id == from_user_id,
+            TournamentCheckout.entrant_player_id.in_([from_user_id, to_user_id]),
             TournamentCheckout.status == TournamentCheckoutStatus.active,
         )
         .values(status=TournamentCheckoutStatus.invalidated)
