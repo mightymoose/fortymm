@@ -143,7 +143,6 @@ struct TournamentEventDTO: Decodable, Identifiable {
     let entrants: [Entrant]
     private let entered: Int?
     private let heldPlaces: Int?
-    private let availablePlaces: Int?
     var entryCount: Int { entered ?? historicalEntrants.count }
     private let retainedEntrants: [Entrant]?
     var historicalEntrants: [Entrant] {
@@ -238,7 +237,7 @@ struct TournamentEventDTO: Decodable, Identifiable {
     var formatLabel: String { drawType.replacingOccurrences(of: "-", with: " ").capitalized }
     var capacityLabel: String {
         maxPlayers.map { maximum in
-            let occupied = availablePlaces.map { maximum - $0 } ?? entryCount + (heldPlaces ?? 0)
+            let occupied = entryCount + (heldPlaces ?? 0)
             return "\(occupied)/\(maximum) players"
         } ?? TournamentCopy.count(entryCount, "player")
     }

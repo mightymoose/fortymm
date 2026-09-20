@@ -104,6 +104,16 @@ private final class TestLocationManager: CLLocationManager {
         TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: heldCapacityPayload), encoding: .utf8)!
         let heldCapacity = try await service.list()[0].events[0]
         precondition(heldCapacity.capacityLabel == "2/2 players", "Capacity must include checkout holds")
+        var overCapacityPayload = retainedPayload
+        var overCapacityEvent = retainedEvent
+        overCapacityEvent["entered"] = 6
+        overCapacityEvent["max_players"] = 4
+        overCapacityEvent["held_places"] = 0
+        overCapacityEvent["available_places"] = 0
+        overCapacityPayload[0]["events"] = [overCapacityEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: overCapacityPayload), encoding: .utf8)!
+        let overCapacity = try await service.list()[0].events[0]
+        precondition(overCapacity.capacityLabel == "6/4 players", "Capacity must preserve over-cap occupancy")
         let heldEntry = retained.entry(for: event.entrants[0].userId)
         precondition(heldEntry != nil, "A hidden held registration must offer withdrawal instead of entry")
         TournamentTransport.status = 204
