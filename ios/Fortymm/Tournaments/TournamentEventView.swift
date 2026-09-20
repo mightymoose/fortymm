@@ -110,6 +110,10 @@ struct TournamentEventView: View {
                     Spacer()
                     Button("Withdraw", role: .destructive) { confirmingWithdrawal = true }.disabled(busy)
                 }.font(FMFont.ui(14))
+            } else if event.isCancelled {
+                TournamentNotice(message: "This event is cancelled and cannot accept new entries.")
+            } else if event.requiresCheckout {
+                TournamentNotice(message: "Paid entry is currently available on fortymm.com.")
             } else {
                 switch event.entryState.state {
                 case .open:

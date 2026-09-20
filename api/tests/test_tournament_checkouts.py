@@ -1146,9 +1146,13 @@ async def test_cancelling_one_selected_event_invalidates_the_combined_checkout(
     assert checkout.status_code == 200
     assert checkout.json()["status"] == "invalidated"
     detail = await api_client.get(f"/v1/tournaments/{tournament.id}")
+    cancelled = next(
+        item for item in detail.json()["events"] if item["id"] == str(events[0].id)
+    )
     remaining = next(
         item for item in detail.json()["events"] if item["id"] == str(events[1].id)
     )
+    assert cancelled["lifecycle_state"] == "cancelled"
     assert remaining["held_places"] == 0
 
 

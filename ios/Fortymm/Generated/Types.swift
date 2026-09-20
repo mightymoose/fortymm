@@ -5291,6 +5291,13 @@ internal enum Components {
             case doubles = "doubles"
             case teams = "teams"
         }
+        /// - Remark: Generated from `#/components/schemas/EventLifecycleState`.
+        internal enum EventLifecycleState: String, Codable, Hashable, Sendable, CaseIterable {
+            case unstarted = "unstarted"
+            case inProgress = "in_progress"
+            case finished = "finished"
+            case cancelled = "cancelled"
+        }
         /// One stage of an event's draw — a row the event owns (ADR 20260815 decision 1,
         /// "a stage is a row the event owns"). A director never authors these; the system
         /// mints them from a template keyed on the event's draw type
@@ -12061,6 +12068,8 @@ internal enum Components {
             internal var id: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/tournament_id`.
             internal var tournamentId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentEventRead/lifecycle_state`.
+            internal var lifecycleState: Components.Schemas.EventLifecycleState
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/name`.
             internal var name: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentEventRead/format`.
@@ -12220,6 +12229,7 @@ internal enum Components {
             /// - Parameters:
             ///   - id:
             ///   - tournamentId:
+            ///   - lifecycleState:
             ///   - name:
             ///   - format:
             ///   - drawType:
@@ -12248,6 +12258,7 @@ internal enum Components {
             internal init(
                 id: Swift.String,
                 tournamentId: Swift.String,
+                lifecycleState: Components.Schemas.EventLifecycleState,
                 name: Swift.String,
                 format: Components.Schemas.EventFormat,
                 drawType: Components.Schemas.DrawType,
@@ -12276,6 +12287,7 @@ internal enum Components {
             ) {
                 self.id = id
                 self.tournamentId = tournamentId
+                self.lifecycleState = lifecycleState
                 self.name = name
                 self.format = format
                 self.drawType = drawType
@@ -12305,6 +12317,7 @@ internal enum Components {
             internal enum CodingKeys: String, CodingKey {
                 case id
                 case tournamentId = "tournament_id"
+                case lifecycleState = "lifecycle_state"
                 case name
                 case format
                 case drawType = "draw_type"

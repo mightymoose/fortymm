@@ -45,6 +45,27 @@ describe('EnterEventControl', () => {
     expect(page.queryWithdrawButton('Open Singles')).toBeNull()
   })
 
+  it('explains a cancelled paid event instead of offering checkout selection', async () => {
+    page.render({
+      event: buildEvent({
+        name: 'Cancelled Singles',
+        lifecycleState: 'cancelled',
+        entryFee: 20,
+      }),
+    })
+
+    expect(await page.findRegistrationNotice()).toHaveTextContent('Event cancelled')
+    expect(page.queryEnterButton('Cancelled Singles')).toBeNull()
+    expect(page.getButtons()).toHaveLength(0)
+  })
+
+  it('still offers withdrawal to an entrant in a cancelled event', async () => {
+    page.render({ event: { ...enteredEvent, lifecycleState: 'cancelled' } })
+
+    expect(await page.findWithdrawButton('Open Singles')).toBeInTheDocument()
+    expect(page.queryRegistrationNotice()).toBeNull()
+  })
+
   it('explains retirement instead of offering a new entry', async () => {
     page.render({ event: buildEvent({ name: 'Open Singles', entryState: { state: 'retired' } }) })
 

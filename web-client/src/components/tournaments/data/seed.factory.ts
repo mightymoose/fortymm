@@ -243,6 +243,7 @@ export function buildEvent(
   const event = {
     id: 'ev-open-singles',
     name: 'Open Singles',
+    lifecycleState: 'unstarted',
     format: 'singles',
     // Round-robin, and grouped to match — see the wire-side twin in
     // `mocks/factories/tournaments/tournament.factory.ts`. `DrawType` holds only the two

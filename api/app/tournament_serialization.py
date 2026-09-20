@@ -787,6 +787,7 @@ def serialize_event(
         {
             "id": e.id,
             "tournament_id": e.tournament_id,
+            "lifecycle_state": e.lifecycle_state,
             "name": e.name,
             "format": e.format,
             # The owned value is loaded with the event; no settings query is needed.

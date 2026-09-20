@@ -2830,6 +2830,11 @@ export interface components {
          */
         EventFormat: "singles" | "doubles" | "teams";
         /**
+         * EventLifecycleState
+         * @enum {string}
+         */
+        EventLifecycleState: "unstarted" | "in_progress" | "finished" | "cancelled";
+        /**
          * EventStageRead
          * @description One stage of an event's draw — a row the event owns (ADR 20260815 decision 1,
          *     "a stage is a row the event owns"). A director never authors these; the system
@@ -5668,6 +5673,7 @@ export interface components {
              * Format: uuid
              */
             tournament_id: string;
+            lifecycle_state: components["schemas"]["EventLifecycleState"];
             /** Name */
             name: string;
             format: components["schemas"]["EventFormat"];

@@ -1339,6 +1339,7 @@ export function buildTournamentEventRead(
     id: 'ev-open-singles',
     tournament_id: 'bay-area-open-2026',
     name: 'Open Singles',
+    lifecycle_state: 'unstarted',
     format: 'singles',
     // Round-robin, and grouped to match: `DrawType` holds only the two types the server
     // can actually plan (ADR 20260726), and a grouped event is what this fixture's single

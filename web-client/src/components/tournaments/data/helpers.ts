@@ -472,6 +472,7 @@ export function emptyEvent(t: Tournament): TournamentEvent {
   return {
     id: genId('new'),
     name: '',
+    lifecycleState: 'unstarted',
     format: 'singles',
     drawType: 'single-elim',
     // A bracket has no groups to qualify out of, so it carries NO qualifier count — and

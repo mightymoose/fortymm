@@ -68,6 +68,18 @@ private final class TestLocationManager: CLLocationManager {
         precondition(tournaments[0].schedulePollSeconds == nil)
         print("PASS: near-me query, distances, eligibility rules, reservations, match settings and Swiss tiebreaks")
         let event = tournaments[0].events[0]
+        precondition(!event.requiresCheckout && !event.isCancelled)
+        let availableBody = TournamentTransport.body
+        var unavailablePayload = payload
+        var unavailableEvent = eventPayload
+        unavailableEvent["entry_fee"] = 12.0
+        unavailableEvent["lifecycle_state"] = "cancelled"
+        unavailablePayload[0]["events"] = [unavailableEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: unavailablePayload), encoding: .utf8)!
+        let unavailable = try await service.list()[0].events[0]
+        precondition(unavailable.requiresCheckout && unavailable.isCancelled, "Paid and cancelled entry states must survive decoding")
+        TournamentTransport.body = availableBody
+        print("PASS: paid checkout and cancelled-event availability survive decoding")
         var retainedPayload = payload
         var retainedEvent = eventPayload
         retainedEvent["retained_entrants"] = retainedEvent["entrants"]

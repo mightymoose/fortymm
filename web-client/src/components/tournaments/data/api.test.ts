@@ -884,6 +884,7 @@ describe('catalogueToUpdateBody', () => {
 const event: TournamentEvent = {
   id: 'ev-1',
   name: 'U1500 Singles',
+  lifecycleState: 'unstarted',
   format: 'singles',
   drawType: 'round-robin',
   // A round-robin event has no knockout stage to qualify for, so it carries NO qualifier
@@ -1055,6 +1056,7 @@ describe('eventToCreateBody', () => {
       rounds: null,
       id: event.id,
       tournament_id: 't-1',
+      lifecycle_state: event.lifecycleState,
       held_places: 0,
       available_places: 46,
       // Absent from the create body — `TournamentEventCreate` has no such field at all

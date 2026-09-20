@@ -26,7 +26,12 @@ from app.models.schedule_solve import (
     ScheduleSolveTrigger,
     SolverVerdict,
 )
-from app.models.tournament import DrawType, EventFormat, TournamentStatus
+from app.models.tournament import (
+    DrawType,
+    EventFormat,
+    EventLifecycleState,
+    TournamentStatus,
+)
 from app.schemas.schedule_solve import (
     ResolvedConflict,
     ResolvedReason,
@@ -1963,6 +1968,7 @@ class TournamentEventRead(BaseModel):
 
     id: uuid.UUID
     tournament_id: uuid.UUID
+    lifecycle_state: EventLifecycleState
     name: str
     format: EventFormat
     draw_type: DrawType

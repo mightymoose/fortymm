@@ -205,6 +205,7 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
   return {
     id: e.id,
     name: e.name,
+    lifecycleState: e.lifecycle_state,
     format: e.format,
     drawType: e.draw_type,
     // Carried across UNCHANGED, `null` included (ADR 20260727): `null` is not missing

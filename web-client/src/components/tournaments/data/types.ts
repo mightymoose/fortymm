@@ -686,6 +686,7 @@ export type EventEntryState =
 export interface TournamentEvent {
   id: string
   name: string
+  lifecycleState: 'unstarted' | 'in_progress' | 'finished' | 'cancelled'
   format: EventFormat
   drawType: DrawType
   /** **K** — how many of each group's finishers advance into the knockout stage of an

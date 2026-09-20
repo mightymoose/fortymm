@@ -100,6 +100,7 @@ struct TournamentDTO: Decodable, Identifiable {
 struct TournamentEventDTO: Decodable, Identifiable {
     let id: UUID
     let name, format, drawType, timezone: String
+    private let lifecycleState: String?
     let maxPlayers: Int?
     let matchSettings: MatchSettings?
     let predicates: [Predicate]?
@@ -136,6 +137,8 @@ struct TournamentEventDTO: Decodable, Identifiable {
         }
     }
     let entryFee: Double
+    var isCancelled: Bool { lifecycleState == "cancelled" }
+    var requiresCheckout: Bool { entryFee > 0 }
     let slot: Slot
     let entrants: [Entrant]
     private let entered: Int?

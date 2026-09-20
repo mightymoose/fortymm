@@ -137,7 +137,9 @@ type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
  * every draw type but `swiss`, and `null` is not "unset" there either — a round-robin's
  * rounds come off the circle method and a bracket's depth follows from the field, so
  * neither is a number anybody chooses. */
-type StoredEvent = Omit<TournamentEventRead, 'entered' | 'held_places' | 'available_places' | 'entry_state' | 'groups'> & {
+type StoredEvent = Omit<TournamentEventRead, 'entered' | 'held_places' | 'available_places' | 'entry_state' | 'groups' | 'lifecycle_state'> & {
+  /** Older mock seeds predate lifecycle reads; they represent unstarted events. */
+  lifecycle_state?: TournamentEventRead['lifecycle_state']
   /** Seeded: the dev user is refused by this rule, at this rating. */
   ineligible?: { predicate_id: string; rating: number }
 }
@@ -1392,6 +1394,7 @@ function readEvent(event: StoredEvent): TournamentEventRead {
   void ineligible
   return {
     ...wire,
+    lifecycle_state: event.lifecycle_state ?? 'unstarted',
     groups: groupsForEvent(event),
     entered: event.entrants.length + (event.retained_entrants?.length ?? 0),
     held_places: 0,
