@@ -413,37 +413,39 @@ async def admit_to_event(
             "This event requires paid checkout.",
         )
     rating = await _enforce_rating_eligible(db, tournament, event, entrant)
-    if not self_registration:
-        # A director entry supersedes this player's hold for the same event. The
-        # quote is all-or-nothing, so invalidate the combined checkout before
-        # counting capacity; otherwise the player's own hold can falsely consume
-        # the final place or keep reserving its other lines after admission.
-        await invalidate_checkout_for_entrant_event(
-            db,
-            tournament_id=tournament.id,
-            entrant_player_id=entrant.id,
-            event_id=event.id,
-        )
-    await _enforce_event_has_room(db, event)
-
-    # ``added_by_user_id`` is the fork's one lasting trace: NULL on the self path, the
-    # director's id on the other (ADR-0784). A fact about the past, stored now.
-    entry = await db.scalar(
-        select(TournamentEntry)
-        .where(
-            TournamentEntry.event_id == event.id,
-            TournamentEntry.user_id == entrant.id,
-            TournamentEntry.status == TournamentEntryStatus.withdrawn,
-            TournamentEntry.superseded_by_entry_id.is_(None),
-        )
-        .order_by(TournamentEntry.created_at, TournamentEntry.id)
-        .limit(1)
-    )
     try:
-        # A savepoint lets this domain verb translate the duplicate active-entry index
-        # without poisoning its caller's transaction. The outer transaction still owns
-        # whether earlier or later admissions commit together.
+        # A savepoint makes the checkout release and admission one composable unit. A
+        # director's entry must release the entrant's own hold before counting capacity,
+        # but a later refusal must not leak that invalidation into a caller-owned
+        # transaction which catches the refusal and commits other work.
         async with db.begin_nested():
+            if not self_registration:
+                # A director entry supersedes this player's hold for the same event. The
+                # quote is all-or-nothing, so invalidate the combined checkout before
+                # counting capacity; otherwise the player's own hold can falsely consume
+                # the final place or keep reserving its other lines after admission.
+                await invalidate_checkout_for_entrant_event(
+                    db,
+                    tournament_id=tournament.id,
+                    entrant_player_id=entrant.id,
+                    event_id=event.id,
+                )
+            await _enforce_event_has_room(db, event)
+
+            # ``added_by_user_id`` is the fork's one lasting trace: NULL on the self
+            # path, the director's id on the other (ADR-0784). A fact about the past,
+            # stored now.
+            entry = await db.scalar(
+                select(TournamentEntry)
+                .where(
+                    TournamentEntry.event_id == event.id,
+                    TournamentEntry.user_id == entrant.id,
+                    TournamentEntry.status == TournamentEntryStatus.withdrawn,
+                    TournamentEntry.superseded_by_entry_id.is_(None),
+                )
+                .order_by(TournamentEntry.created_at, TournamentEntry.id)
+                .limit(1)
+            )
             if entry is None:
                 entry = TournamentEntry(
                     event_id=event.id,

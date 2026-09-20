@@ -42,6 +42,8 @@ from app.tournament_checkout_errors import (
     CheckoutRefusedError,
 )
 from app.tournament_checkouts import cancel_checkout, start_checkout
+from app.tournament_entries import admit_to_event
+from app.tournament_errors import EntryRefusal, EntryRefusedError
 from app.tournament_event_stages import mint_stages
 from app.tournament_events import update_event
 from app.tournament_queries import (
@@ -967,6 +969,53 @@ async def test_director_entry_releases_the_players_combined_checkout(
     )
     assert entry is not None
     assert entry.user_id == payer.player_id
+
+
+async def test_refused_director_entry_keeps_the_players_checkout_active(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    owner = await start_session(api_client, db_session)
+    tournament, (event,) = await _paid_tournament(
+        db_session,
+        owner=owner,
+        fees=(Decimal("20.00"),),
+        capacities=(1,),
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+
+    async with make_client() as payer_client:
+        payer = await start_session(payer_client, db_session)
+        checkout = await payer_client.post(
+            f"/v1/tournaments/{tournament.id}/checkouts",
+            json={
+                "request_id": str(uuid.uuid4()),
+                "event_ids": [str(event.id)],
+            },
+        )
+        assert checkout.status_code == 201, checkout.text
+
+    other = await make_user(db_session, f"existing-{uuid.uuid4().hex[:8]}")
+    db_session.add(TournamentEntry(event_id=event.id, user_id=other.player_id))
+    await db_session.commit()
+
+    # Composable callers may catch a domain refusal and still commit their outer
+    # transaction. The failed admission must not persist its tentative hold release.
+    async with db_session.begin():
+        with pytest.raises(EntryRefusedError) as exc_info:
+            await admit_to_event(
+                db_session,
+                tournament_id=tournament.id,
+                event_id=event.id,
+                actor=owner,
+                user_id=payer.player_id,
+            )
+        assert exc_info.value.refusal is EntryRefusal.event_full
+
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout.json()["id"]))
+    assert stored is not None
+    assert stored.status is TournamentCheckoutStatus.active
 
 
 async def test_changing_a_paid_event_to_free_invalidates_its_active_checkout(

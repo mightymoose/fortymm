@@ -5,6 +5,7 @@ import {
   cancelMockCheckout,
   currentMockCheckout,
   findTournament,
+  readCurrentMockCheckout,
   resetTournamentsStore,
   storeMockCheckout,
   updateEvent,
@@ -99,5 +100,42 @@ describe('mock checkout capacity projection', () => {
       (candidate) => candidate.id === eventId,
     )!
     expect(event.held_places).toBe(0)
+  })
+})
+
+describe('POST /v1/tournaments/:tournamentId/checkouts', () => {
+  const eventId = mockUuid('ev-open-singles')
+
+  beforeEach(() => resetTournamentsStore())
+
+  it('preserves the first active checkout and rejects a second request id', async () => {
+    const url = `http://localhost/v1/tournaments/${BAY_AREA_OPEN_ID}/checkouts`
+    const first = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        request_id: '00000000-0000-4000-8000-000000000010',
+        event_ids: [eventId],
+      }),
+    })
+    expect(first.status).toBe(201)
+    const created = await first.json() as Checkout
+
+    const second = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        request_id: '00000000-0000-4000-8000-000000000011',
+        event_ids: [eventId],
+      }),
+    })
+    expect(second.status).toBe(409)
+    await expect(second.json()).resolves.toEqual({
+      detail: {
+        code: 'active_checkout_conflict',
+        message: 'Cancel the active checkout before changing the event selection.',
+      },
+    })
+    expect(readCurrentMockCheckout(BAY_AREA_OPEN_ID)?.id).toBe(created.id)
   })
 })

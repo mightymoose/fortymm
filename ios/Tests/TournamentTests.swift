@@ -94,7 +94,13 @@ private final class TestLocationManager: CLLocationManager {
         TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: openPaidPayload), encoding: .utf8)!
         let openPaid = try await service.list()[0]
         precondition(openPaid.events[0].canStartCheckout(checkoutAvailable: openPaid.checkoutAvailable), "Eligible open paid events must advertise checkout")
+        precondition(openPaid.holdPollSeconds == 30, "Eligible paid events must poll to discover new checkout holds")
         precondition(!openPaid.events[0].canStartCheckout(checkoutAvailable: false), "Ineligible merchants must not advertise checkout")
+        var merchantUnavailablePayload = openPaidPayload
+        merchantUnavailablePayload[0]["checkout_available"] = false
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: merchantUnavailablePayload), encoding: .utf8)!
+        let merchantUnavailable = try await service.list()[0]
+        precondition(merchantUnavailable.holdPollSeconds == nil, "Merchant-unavailable tournaments must not poll for checkout discovery")
         var legacyFeePayload = openPaidPayload
         var legacyFeeEvent = openPaidEvent
         legacyFeeEvent["entry_fee"] = 0.25
@@ -132,7 +138,8 @@ private final class TestLocationManager: CLLocationManager {
         precondition(heldCapacity.hasHeldPlaces, "Events with active holds must request capacity refreshes")
         precondition(heldTournament.hasHeldPlaces, "Tournament detail must poll while any checkout hold is active")
         precondition(heldTournament.holdPollSeconds == 5, "Active holds must use the fast refresh cadence")
-        precondition(retainedTournament.holdPollSeconds == 30, "Zero-hold snapshots must retain a discovery refresh")
+        precondition(retainedTournament.holdPollSeconds == nil, "Free-only tournaments must not poll for checkout holds")
+        precondition(full.holdPollSeconds == nil, "Full tournaments without a hold must not poll for checkout discovery")
         var uncappedHeldPayload = retainedPayload
         var uncappedHeldEvent = retainedEvent
         uncappedHeldEvent["max_players"] = NSNull()

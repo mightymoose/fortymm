@@ -69,7 +69,13 @@ struct TournamentDTO: Decodable, Identifiable {
         return status == .live ? 15 : nil
     }
     var hasHeldPlaces: Bool { events.contains { $0.hasHeldPlaces } }
-    var holdPollSeconds: Int { hasHeldPlaces ? 5 : 30 }
+    var holdPollSeconds: Int? {
+        if hasHeldPlaces { return 5 }
+        guard status == .published, registrationOpen, checkoutAvailable,
+              events.contains(where: { $0.canStartCheckout(checkoutAvailable: true) })
+        else { return nil }
+        return 30
+    }
     func drawName(_ event: TournamentEventDTO) -> String {
         drawTypeCatalogue?.first { $0.key == event.drawType }?.name ?? event.formatLabel
     }

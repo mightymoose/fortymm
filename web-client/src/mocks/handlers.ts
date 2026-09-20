@@ -1238,6 +1238,21 @@ export const handlers = [
   http.post('*/v1/tournaments/:tournamentId/checkouts', async ({ params, request }) => {
     const tournamentId = String(params.tournamentId)
     const body = await request.json() as { request_id: string; event_ids: string[] }
+    const activeCheckout = readCurrentMockCheckout(tournamentId)
+    if (activeCheckout?.request_id === body.request_id) {
+      return HttpResponse.json(activeCheckout, { status: 201 })
+    }
+    if (activeCheckout) {
+      return HttpResponse.json(
+        {
+          detail: {
+            code: 'active_checkout_conflict',
+            message: 'Cancel the active checkout before changing the event selection.',
+          },
+        },
+        { status: 409 },
+      )
+    }
     const tournament = findTournament(tournamentId)
     const events = body.event_ids.map((eventId) =>
       tournament?.events.find((event) => event.id === eventId),
