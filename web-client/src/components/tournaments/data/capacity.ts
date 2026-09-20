@@ -106,8 +106,16 @@ export function capacityLabel(capacity: EventCapacity): string {
  * An uncapped event has no denominator to read out, so the sentence gives the count
  * and then says *why* there is no second number — rather than inventing one. */
 export function enteredSummary(event: Capacity): string {
-  if (event.maxPlayers === null) return `${event.entered} entered, no entry limit`
-  return `${event.entered} of ${event.maxPlayers} entered`
+  const held = event.heldPlaces ?? 0
+  const occupied = event.entered + held
+  if (event.maxPlayers === null) {
+    return held > 0
+      ? `${event.entered} entered and ${held} held, no entry limit`
+      : `${event.entered} entered, no entry limit`
+  }
+  return held > 0
+    ? `${event.entered} entered and ${held} held, ${occupied} of ${event.maxPlayers} places occupied`
+    : `${event.entered} of ${event.maxPlayers} entered`
 }
 
 /** How full the fill bar is drawn, 0–100 — or **`null` when there is no bar to

@@ -213,6 +213,11 @@ export const EventCard = ({
               >
                 {ev.entered}
               </span>
+              {ev.heldPlaces > 0 && (
+                <span className="font-mono text-[13px] text-[color:var(--fg-3)]">
+                  + {ev.heldPlaces} held
+                </span>
+              )}
               <span className="font-mono text-[13px] text-[color:var(--fg-3)]">
                 {uncapped ? 'entered' : `/ ${ev.maxPlayers}`}
               </span>

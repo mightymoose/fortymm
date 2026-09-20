@@ -37,7 +37,11 @@ from app.tournament_checkout_errors import (
     CheckoutRefusedError,
 )
 from app.tournament_checkouts import start_checkout
-from tests._helpers import make_client, make_user, start_session
+from app.tournament_queries import (
+    active_entry_counts_by_event,
+    valid_hold_counts_by_event,
+)
+from tests._helpers import counted_statements, make_client, make_user, start_session
 from tests._migration_database import empty_database, run_alembic
 
 
@@ -84,7 +88,7 @@ async def _paid_tournament(
     return tournament, events
 
 
-async def test_checkout_migration_normalizes_legacy_subminimum_fees(
+async def test_checkout_migration_preserves_legacy_subminimum_fees(
     postgres_url: str,
 ) -> None:
     async with empty_database(postgres_url) as migrated:
@@ -110,7 +114,7 @@ async def test_checkout_migration_normalizes_legacy_subminimum_fees(
             assert await connection.scalar(
                 text("SELECT entry_fee FROM tournament_events WHERE id = :id"),
                 {"id": event_id},
-            ) == Decimal("0.00")
+            ) == Decimal("0.25")
 
 
 async def test_starting_combined_checkout_snapshots_quote_and_resumes_deadline(
@@ -229,6 +233,39 @@ async def test_combined_checkout_acquires_every_hold_or_none_and_names_full_even
     }
     assert await db_session.scalar(select(TournamentCheckout)) is None
     assert payer.player_id != existing.player_id
+
+
+async def test_capacity_counts_for_a_combined_selection_use_two_queries(
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+) -> None:
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    _, events = await _paid_tournament(
+        db_session,
+        owner=owner,
+        fees=(Decimal("10.00"), Decimal("11.00"), Decimal("12.00")),
+        capacities=(8, 8, 8),
+    )
+    entrants = [
+        await make_user(db_session, f"entered-{uuid.uuid4().hex[:8]}") for _ in range(3)
+    ]
+    db_session.add_all(
+        [
+            TournamentEntry(event_id=events[0].id, user_id=entrants[0].player_id),
+            TournamentEntry(event_id=events[1].id, user_id=entrants[1].player_id),
+            TournamentEntry(event_id=events[1].id, user_id=entrants[2].player_id),
+        ]
+    )
+    await db_session.commit()
+    event_ids = [event.id for event in events]
+
+    async with counted_statements(engine) as (session, statements):
+        entered = await active_entry_counts_by_event(session, event_ids)
+        held = await valid_hold_counts_by_event(session, event_ids)
+
+    assert entered == {events[0].id: 1, events[1].id: 2, events[2].id: 0}
+    assert held == {event.id: 0 for event in events}
+    assert len(statements) == 2, statements
 
 
 async def test_checkout_refuses_an_event_the_player_already_entered(

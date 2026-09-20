@@ -839,6 +839,27 @@ async def game_counts_by_match(
     return {match_id: (side_1, side_2) for match_id, (side_1, side_2) in counts.items()}
 
 
+async def active_entry_counts_by_event(
+    db: AsyncSession, event_ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, int]:
+    """Active entrant counts for a set of events in one database round trip."""
+    counts = {event_id: 0 for event_id in event_ids}
+    if not counts:
+        return counts
+    rows = (
+        await db.execute(
+            select(TournamentEntry.event_id, func.count())
+            .where(
+                TournamentEntry.event_id.in_(counts),
+                TournamentEntry.status == TournamentEntryStatus.entered,
+            )
+            .group_by(TournamentEntry.event_id)
+        )
+    ).all()
+    counts.update({event_id: count for event_id, count in rows})
+    return counts
+
+
 async def active_entry_count(db: AsyncSession, event_id: uuid.UUID) -> int:
     """How many players hold an **active** entry in this event, right now.
 
@@ -855,16 +876,7 @@ async def active_entry_count(db: AsyncSession, event_id: uuid.UUID) -> int:
     guard's cost grow with the field it is guarding, for a number Postgres will hand
     us in one row.
     """
-    return (
-        await db.execute(
-            select(func.count())
-            .select_from(TournamentEntry)
-            .where(
-                TournamentEntry.event_id == event_id,
-                TournamentEntry.status == TournamentEntryStatus.entered,
-            )
-        )
-    ).scalar_one()
+    return (await active_entry_counts_by_event(db, [event_id]))[event_id]
 
 
 async def valid_hold_counts_by_event(

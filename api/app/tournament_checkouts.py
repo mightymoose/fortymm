@@ -40,7 +40,12 @@ from app.tournament_checkout_errors import (
     CheckoutRefusedError,
 )
 from app.tournament_eligibility import Eligible, evaluate_rating_eligibility
-from app.tournament_queries import entrant_rating, valid_hold_count, visible_to
+from app.tournament_queries import (
+    active_entry_counts_by_event,
+    entrant_rating,
+    valid_hold_counts_by_event,
+    visible_to,
+)
 from app.tournament_registration import registration_open
 
 _checkout_ip_limiters: dict[int, RedisRateLimiter] = {}
@@ -307,6 +312,9 @@ async def start_checkout(
         )
     )
     rating = await entrant_rating(db, tournament.league_id, player.id)
+    capped_event_ids = [event.id for event in events if event.max_players is not None]
+    entered_counts = await active_entry_counts_by_event(db, capped_event_ids)
+    hold_counts = await valid_hold_counts_by_event(db, capped_event_ids)
     prices: list[int] = []
     for event in events:
         if event.lifecycle_state is EventLifecycleState.cancelled:
@@ -350,17 +358,8 @@ async def start_checkout(
                 event_id=event.id,
             )
         if event.max_players is not None:
-            entered = (
-                await db.execute(
-                    select(func.count())
-                    .select_from(TournamentEntry)
-                    .where(
-                        TournamentEntry.event_id == event.id,
-                        TournamentEntry.status == TournamentEntryStatus.entered,
-                    )
-                )
-            ).scalar_one()
-            held = await valid_hold_count(db, event.id)
+            entered = entered_counts[event.id]
+            held = hold_counts[event.id]
             if entered + held >= event.max_players:
                 raise CheckoutRefusedError(
                     CheckoutRefusal.event_full,

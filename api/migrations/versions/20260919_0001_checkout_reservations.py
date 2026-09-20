@@ -15,16 +15,6 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # The previous API accepted any non-negative fee, but the checkout processor
-    # cannot charge less than fifty cents.  Normalize those legacy rows to free
-    # before the application starts enforcing the processor floor; otherwise they
-    # can neither be entered nor edited without an unrelated validation failure.
-    op.execute(
-        sa.text(
-            "UPDATE tournament_events SET entry_fee = 0 "
-            "WHERE entry_fee > 0 AND entry_fee < 0.50"
-        )
-    )
     checkout_status = postgresql.ENUM(
         "active",
         "cancelled",

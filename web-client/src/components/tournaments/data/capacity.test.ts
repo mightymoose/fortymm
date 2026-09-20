@@ -29,7 +29,9 @@ describe('eventCapacity', () => {
   it('counts valid checkout holds as occupied without calling them entrants', () => {
     const held = { entered: 6, heldPlaces: 2, maxPlayers: 10 }
     expect(eventCapacity(held)).toEqual({ state: 'places-left', remaining: 2 })
-    expect(enteredSummary(held)).toBe('6 of 10 entered')
+    expect(enteredSummary(held)).toBe(
+      '6 entered and 2 held, 8 of 10 places occupied',
+    )
     expect(capacityFillPercent(held)).toBe(80)
   })
 

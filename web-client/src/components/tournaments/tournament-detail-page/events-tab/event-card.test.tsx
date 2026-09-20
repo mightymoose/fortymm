@@ -154,6 +154,23 @@ describe('EventCard', () => {
       ).toBeGreaterThan(0)
     })
 
+    it('shows checkout holds in occupancy when they fill the remaining places', () => {
+      eventCardPage.render({
+        event: buildEvent({
+          entrants: buildEntrants(2),
+          heldPlaces: 2,
+          maxPlayers: 4,
+        }),
+      })
+      expect(document.body).toHaveTextContent('2+ 2 held/ 4')
+      expect(eventCardPage.queryCapacityNote()).toHaveTextContent('Full')
+      expect(
+        eventCardPage.queryEnteredSummary(
+          '2 entered and 2 held, 4 of 4 places occupied',
+        ),
+      ).toBeInTheDocument()
+    })
+
     /**
      * ⚠️ **The uncapped card** (ADR-0935: `maxPlayers === null`). It has no ceiling to
      * count against, so every number the card would ordinarily print is a number it must
