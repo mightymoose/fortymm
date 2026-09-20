@@ -1424,9 +1424,7 @@ async def test_inflight_follower_releases_precheck_transaction_before_waiting(
         db_session, owner=owner, fees=(Decimal("10.00"),)
     )
     monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
-    request = TournamentCheckoutCreate(
-        request_id=uuid.uuid4(), event_ids=[event.id]
-    )
+    request = TournamentCheckoutCreate(request_id=uuid.uuid4(), event_ids=[event.id])
     admission = await checkout_module._enforce_checkout_rate_limit(
         "203.0.113.24",
         payer_account_id=payer.id,
