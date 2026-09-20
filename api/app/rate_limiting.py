@@ -154,6 +154,41 @@ async def check_expiring_budget(key: str, *, limit: int, seconds: int) -> bool:
         raise RateLimitUnavailable() from error
 
 
+async def check_idempotent_expiring_budget(
+    key: str,
+    *,
+    idempotency_key: str,
+    limit: int,
+    seconds: int,
+) -> bool:
+    """Charge a fixed-window budget once for a logical request.
+
+    The idempotency marker and counter mutation are one Redis script so concurrent
+    retries cannot both consume capacity, and an unavailable Redis still fails
+    closed. Refused requests do not receive a marker: changing the request id cannot
+    turn an exhausted network budget into an admitted request.
+    """
+    if _redis is None:
+        raise RateLimitUnavailable()
+    try:
+        allowed = await _redis.eval(
+            "if redis.call('EXISTS', KEYS[2]) == 1 then return 1 end; "
+            "local n = redis.call('INCR', KEYS[1]); "
+            "if n == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end; "
+            "if n <= tonumber(ARGV[2]) then "
+            "redis.call('SET', KEYS[2], '1', 'EX', ARGV[1]); return 1 end; "
+            "return 0",
+            2,
+            key,
+            idempotency_key,
+            seconds,
+            limit,
+        )
+        return bool(allowed)
+    except redis_asyncio.RedisError as error:
+        raise RateLimitUnavailable() from error
+
+
 async def identity_creation_retry_after(
     client_ip: str, *, hourly_limit: int, daily_limit: int
 ) -> int | None:

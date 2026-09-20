@@ -50,6 +50,9 @@ from app.models import (
 from app.models.tournament_entry_participation import WithdrawalReason
 from app.schedule_solves import request_solve, tournament_has_drawn_event
 from app.tournament_authority import lock_merge_tournaments, merge_authority
+from app.tournament_checkout_invalidation import (
+    invalidate_checkouts_for_merchant_account,
+)
 from app.tournament_draws import (
     active_draw_entrants_by_event,
     draw_has_play,
@@ -153,6 +156,7 @@ async def merge_user(
     if len(source.player_grants) > 1:
         raise ValueError("Merging accounts that manage multiple players is not enabled")
     await lock_merge_tournaments(db, source_id=from_user_id, target_id=to_user_id)
+    await invalidate_checkouts_for_merchant_account(db, from_user_id)
     # Lock the repair before any rating rows: workers take repair → ratings too.
     from app.required_repairs import request_rating
 

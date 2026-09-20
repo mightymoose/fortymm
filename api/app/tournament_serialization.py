@@ -164,6 +164,7 @@ def _tournament_fields(
         "can_edit": t.owner_account_id == current_user_id,
         "checkout_available": (
             get_settings().tournament_payment_merchant_account_id == t.owner_account_id
+            and t.owner_account_is_active
         ),
         "created_at": t.created_at,
         "updated_at": t.updated_at,

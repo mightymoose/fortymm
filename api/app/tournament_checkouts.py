@@ -24,7 +24,7 @@ from app.models import (
     TournamentEvent,
     User,
 )
-from app.rate_limiting import RateLimitUnavailable, check_expiring_budget
+from app.rate_limiting import RateLimitUnavailable, check_idempotent_expiring_budget
 from app.schemas.tournament_checkout import (
     TournamentCheckoutCreate,
     TournamentCheckoutLineRead,
@@ -49,11 +49,18 @@ from app.tournament_queries import (
 from app.tournament_registration import registration_open
 
 
-async def _enforce_checkout_rate_limit(client_ip: str) -> None:
+async def _enforce_checkout_rate_limit(
+    client_ip: str, *, payer_account_id: uuid.UUID, request_id: uuid.UUID
+) -> None:
     limit = get_settings().tournament_checkout_ip_per_hour
     try:
-        allowed = await check_expiring_budget(
-            f"tournament-checkout-ip:{client_ip}", limit=limit, seconds=3600
+        allowed = await check_idempotent_expiring_budget(
+            f"tournament-checkout-ip:{client_ip}",
+            idempotency_key=(
+                f"tournament-checkout-request:{payer_account_id}:{request_id}"
+            ),
+            limit=limit,
+            seconds=3600,
         )
     except RateLimitUnavailable as error:
         raise CheckoutRateLimitUnavailableError() from error
@@ -198,17 +205,38 @@ async def start_checkout(
         )
     )
     if prior_request_exists is None:
-        await _enforce_checkout_rate_limit(client_ip)
+        await _enforce_checkout_rate_limit(
+            client_ip,
+            payer_account_id=actor.id,
+            request_id=request.request_id,
+        )
 
-    # An exclusive account lock serializes request ids across every tournament and
-    # queues behind account merges.  Reload after acquiring it: the dependency's
-    # actor may have been authenticated before a merge tombstoned this account or
-    # moved its primary-player grant.
-    locked_actor = await db.scalar(
-        select(User)
-        .where(User.id == actor.id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
+    merchant_account_id = get_settings().tournament_payment_merchant_account_id
+    # Lock both Accounts in stable order before the Tournament. This serializes a
+    # new checkout with payer merges and merchant lifecycle transitions without
+    # holding any database lock across the Redis admission check above.
+    account_ids = {actor.id}
+    if merchant_account_id is not None:
+        account_ids.add(merchant_account_id)
+    locked_accounts = list(
+        await db.scalars(
+            select(User)
+            .where(User.id.in_(account_ids))
+            .order_by(User.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    )
+    locked_actor = next(
+        (account for account in locked_accounts if account.id == actor.id), None
+    )
+    locked_merchant = next(
+        (
+            account
+            for account in locked_accounts
+            if merchant_account_id is not None and account.id == merchant_account_id
+        ),
+        None,
     )
     primary_player = locked_actor.primary_player if locked_actor is not None else None
     if (
@@ -262,10 +290,11 @@ async def start_checkout(
             await db.commit()
         return _read(prior_request, tournament, now)
 
-    merchant_account_id = get_settings().tournament_payment_merchant_account_id
     if (
         merchant_account_id is None
         or tournament.owner_account_id != merchant_account_id
+        or locked_merchant is None
+        or not locked_merchant.is_active
     ):
         raise CheckoutRefusedError(
             CheckoutRefusal.merchant_unavailable,

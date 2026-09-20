@@ -15,7 +15,11 @@ from app.models import Account, Player
 from app.models.device_token import DeviceToken
 from app.models.email_intent import EmailIntent, FirstSignInIntent
 from app.models.user_token import EmailToken, SessionToken
-from app.tournament_checkout_invalidation import invalidate_checkouts_for_player
+from app.tournament_checkout_invalidation import (
+    invalidate_checkouts_for_merchant_account,
+    invalidate_checkouts_for_player,
+    mark_merchant_account_active,
+)
 
 
 class IdentityLifecycleError(ValueError):
@@ -41,6 +45,7 @@ async def _account(db: AsyncSession, account_id: uuid.UUID) -> Account:
 async def deactivate_account(db: AsyncSession, account_id: uuid.UUID) -> None:
     account = await _account(db, account_id)
     account.deactivated_at = account.deactivated_at or datetime.now(UTC)
+    await invalidate_checkouts_for_merchant_account(db, account_id)
     await db.execute(delete(SessionToken).where(SessionToken.user_id == account_id))
     await db.execute(delete(DeviceToken).where(DeviceToken.user_id == account_id))
     await db.execute(
@@ -67,6 +72,7 @@ async def deactivate_account(db: AsyncSession, account_id: uuid.UUID) -> None:
 async def reactivate_account(db: AsyncSession, account_id: uuid.UUID) -> None:
     account = await _account(db, account_id)
     account.deactivated_at = None
+    mark_merchant_account_active(db, account_id)
 
 
 async def erase_account(db: AsyncSession, account_id: uuid.UUID) -> None:
