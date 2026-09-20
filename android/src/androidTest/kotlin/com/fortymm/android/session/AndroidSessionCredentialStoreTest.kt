@@ -10,6 +10,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.security.KeyStore
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -39,6 +40,23 @@ class AndroidSessionCredentialStoreTest {
 
         assertEquals(CredentialClearResult.Cleared, reader.clear())
         assertEquals(CredentialLoadResult.Absent, AndroidSessionCredentialStore(context).load())
+    }
+
+    @Test
+    fun clearDeletesTheKeystoreAliasBeforeTheNextCredentialIsSaved() {
+        val alias = "${context.packageName}.session-credential.v1"
+        val store = AndroidSessionCredentialStore(context)
+        assertEquals(CredentialSaveResult.Saved, store.save("credential-with-old-key"))
+        assertTrue(androidKeyStore().containsAlias(alias))
+
+        assertEquals(CredentialClearResult.Cleared, store.clear())
+
+        assertFalse(androidKeyStore().containsAlias(alias))
+        assertEquals(CredentialSaveResult.Saved, store.save("credential-with-fresh-key"))
+        assertEquals(
+            CredentialLoadResult.Credential("credential-with-fresh-key"),
+            AndroidSessionCredentialStore(context).load(),
+        )
     }
 
     @Test
@@ -117,5 +135,8 @@ class AndroidSessionCredentialStoreTest {
             executor.shutdownNow()
         }
     }
+
+    private fun androidKeyStore(): KeyStore =
+        KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
 }

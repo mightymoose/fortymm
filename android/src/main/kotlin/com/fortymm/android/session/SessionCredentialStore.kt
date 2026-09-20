@@ -139,6 +139,10 @@ class AndroidSessionCredentialStore(context: Context) : SessionCredentialStore {
             if (!deleteIfPresent(credentialFile) || !deleteIfPresent(temporaryCredentialFile)) {
                 CredentialClearResult.Failed
             } else {
+                val keyStore = KeyStore.getInstance(ANDROID_KEY_STORE).apply { load(null) }
+                if (keyStore.containsAlias(keyAlias)) {
+                    keyStore.deleteEntry(keyAlias)
+                }
                 CredentialClearResult.Cleared
             }
         } catch (_: Exception) {
