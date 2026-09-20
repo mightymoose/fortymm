@@ -115,6 +115,8 @@ struct TournamentEventView: View {
             } else if event.requiresCheckout {
                 if event.canStartCheckout(checkoutAvailable: tournament.checkoutAvailable) {
                     TournamentNotice(message: "Paid entry is currently available on fortymm.com.")
+                } else if event.entryFee < 0.50 {
+                    TournamentNotice(message: "This legacy entry fee cannot be checked out. Ask the organizer to update it.")
                 } else if event.entryState.state == .open {
                     TournamentNotice(message: "Checkout is not available for this tournament.")
                 } else {

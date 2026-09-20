@@ -68,6 +68,7 @@ struct TournamentDTO: Decodable, Identifiable {
         if let solve = latestScheduleSolve, ["queued", "running"].contains(solve.status) { return 3 }
         return status == .live ? 15 : nil
     }
+    var hasHeldPlaces: Bool { events.contains { $0.hasHeldPlaces } }
     func drawName(_ event: TournamentEventDTO) -> String {
         drawTypeCatalogue?.first { $0.key == event.drawType }?.name ?? event.formatLabel
     }
@@ -140,8 +141,9 @@ struct TournamentEventDTO: Decodable, Identifiable {
     let entryFee: Double
     var isCancelled: Bool { lifecycleState == "cancelled" }
     var requiresCheckout: Bool { entryFee > 0 }
+    var hasHeldPlaces: Bool { (heldPlaces ?? 0) > 0 }
     func canStartCheckout(checkoutAvailable: Bool) -> Bool {
-        requiresCheckout && checkoutAvailable && entryState.state == .open && !isCancelled
+        entryFee >= 0.50 && checkoutAvailable && entryState.state == .open && !isCancelled
     }
     let slot: Slot
     let entrants: [Entrant]

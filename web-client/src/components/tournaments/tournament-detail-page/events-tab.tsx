@@ -17,7 +17,11 @@ import { DrawPanel } from './events-tab/draw-panel'
 import { EventCard } from './events-tab/event-card'
 import { EnterEventControl } from './events-tab/enter-event-control'
 import { CheckoutSummary } from './events-tab/checkout-summary'
-import { MAX_CHECKOUT_EVENTS, toggleCheckoutEvent } from './events-tab/checkout-policy'
+import {
+  isCheckoutEventEligible,
+  MAX_CHECKOUT_EVENTS,
+  toggleCheckoutEvent,
+} from './events-tab/checkout-policy'
 
 export interface EventsTabProps {
   tournament: Tournament
@@ -65,7 +69,17 @@ export const EventsTab = ({
     setSelectedIds(new Set())
   }
   const paidSelectionLocked = checkout !== null || startCheckout.isPending
-  const selectedEvents = tournament.events.filter((event) => selectedIds.has(event.id))
+  const selectedEvents = tournament.events.filter(
+    (event) =>
+      selectedIds.has(event.id) &&
+      isCheckoutEventEligible(tournament, event, username),
+  )
+  const effectiveSelectedIds = new Set(selectedEvents.map((event) => event.id))
+  if (effectiveSelectedIds.size !== selectedIds.size) {
+    // Editing or externally updating an event can make a local draft impossible
+    // to submit. Permanently prune those IDs before the summary can offer Hold.
+    setSelectedIds(effectiveSelectedIds)
+  }
   const togglePaid = (eventId: string) => {
     if (paidSelectionLocked) return
     setSelectedIds((current) => toggleCheckoutEvent(current, eventId))
@@ -156,11 +170,12 @@ export const EventsTab = ({
                 <EnterEventControl
                   tournament={tournament}
                   event={ev}
-                  selected={selectedIds.has(ev.id)}
+                  selected={effectiveSelectedIds.has(ev.id)}
                   onTogglePaid={() => togglePaid(ev.id)}
                   paidSelectionLocked={
                     paidSelectionLocked ||
-                    (selectedIds.size >= MAX_CHECKOUT_EVENTS && !selectedIds.has(ev.id))
+                    (effectiveSelectedIds.size >= MAX_CHECKOUT_EVENTS &&
+                      !effectiveSelectedIds.has(ev.id))
                   }
                 />
               }

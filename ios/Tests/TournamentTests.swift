@@ -95,6 +95,13 @@ private final class TestLocationManager: CLLocationManager {
         let openPaid = try await service.list()[0]
         precondition(openPaid.events[0].canStartCheckout(checkoutAvailable: openPaid.checkoutAvailable), "Eligible open paid events must advertise checkout")
         precondition(!openPaid.events[0].canStartCheckout(checkoutAvailable: false), "Ineligible merchants must not advertise checkout")
+        var legacyFeePayload = openPaidPayload
+        var legacyFeeEvent = openPaidEvent
+        legacyFeeEvent["entry_fee"] = 0.25
+        legacyFeePayload[0]["events"] = [legacyFeeEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: legacyFeePayload), encoding: .utf8)!
+        let legacyFee = try await service.list()[0]
+        precondition(!legacyFee.events[0].canStartCheckout(checkoutAvailable: true), "Preserved subminimum fees must not advertise checkout")
         TournamentTransport.body = availableBody
         print("PASS: paid checkout guidance requires an eligible tournament and an open event")
         var retainedPayload = payload
@@ -119,8 +126,11 @@ private final class TestLocationManager: CLLocationManager {
         heldCapacityEvent["available_places"] = 0
         heldCapacityPayload[0]["events"] = [heldCapacityEvent]
         TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: heldCapacityPayload), encoding: .utf8)!
-        let heldCapacity = try await service.list()[0].events[0]
+        let heldTournament = try await service.list()[0]
+        let heldCapacity = heldTournament.events[0]
         precondition(heldCapacity.capacityLabel == "2/2 players", "Capacity must include checkout holds")
+        precondition(heldCapacity.hasHeldPlaces, "Events with active holds must request capacity refreshes")
+        precondition(heldTournament.hasHeldPlaces, "Tournament detail must poll while any checkout hold is active")
         var overCapacityPayload = retainedPayload
         var overCapacityEvent = retainedEvent
         overCapacityEvent["entered"] = 6

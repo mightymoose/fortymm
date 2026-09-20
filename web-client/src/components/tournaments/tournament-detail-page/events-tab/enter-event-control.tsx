@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { useEnterEvent, useWithdrawEntry } from '../../data/api'
 import { entryControlState } from '../../data/lifecycle'
 import type { Tournament, TournamentEvent } from '../../data/types'
+import { MIN_CHECKOUT_FEE } from './checkout-policy'
 import { LeadReason } from './lead-reason'
 
 export interface EnterEventControlProps {
@@ -151,6 +152,17 @@ export const EnterEventControl = ({
       // toggles keeps Cancel from revealing a second, previously invisible draft
       // and leaves Change selection as the sole path that seeds a replacement.
       if (event.entryFee > 0 && paidSelectionLocked) return null
+      if (event.entryFee > 0 && event.entryFee < MIN_CHECKOUT_FEE) {
+        return (
+          <LeadReason
+            testId="checkout-unavailable-notice"
+            layout="stacked"
+            lead="Paid entry unavailable"
+            reason="This legacy entry fee must be updated before checkout."
+            className="max-w-[190px] text-right"
+          />
+        )
+      }
       if (event.entryFee > 0 && !tournament.checkoutAvailable) {
         return (
           <LeadReason

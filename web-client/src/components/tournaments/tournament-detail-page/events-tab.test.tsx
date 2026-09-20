@@ -4,7 +4,7 @@ import { http, HttpResponse } from 'msw'
 import { mockEventEnterEndpoint } from '@/mocks/endpoints/tournaments/tournaments.endpoint'
 import { buildTournamentEntrantRead } from '@/mocks/factories/tournaments/tournament.factory'
 import { server } from '@/mocks/server'
-import { screen, waitFor } from '@/test/utilities'
+import { render, screen, waitFor } from '@/test/utilities'
 
 import {
   buildDrawnEvent,
@@ -15,6 +15,8 @@ import {
   groupIdFor,
 } from '../data/seed.factory'
 import { eventsTabPage } from './events-tab.page'
+import { EventsTab } from './events-tab'
+import { buildEventsTabProps } from './events-tab.factory'
 
 describe('EventsTab', () => {
   it('opens an event from its card', async () => {
@@ -101,6 +103,46 @@ describe('EventsTab', () => {
         await screen.findByTestId('checkout-unavailable-notice'),
       ).toHaveTextContent('Checkout is not available for this tournament.')
       expect(eventsTabPage.querySelectButton('Open Singles')).toBeNull()
+    })
+
+    it('does not offer checkout for a preserved subminimum fee', async () => {
+      eventsTabPage.render({
+        tournament: buildTournament({
+          events: [buildEvent({ name: 'Legacy Singles', entryFee: 0.25 })],
+        }),
+      })
+
+      expect(
+        await screen.findByTestId('checkout-unavailable-notice'),
+      ).toHaveTextContent('This legacy entry fee must be updated before checkout.')
+      expect(eventsTabPage.querySelectButton('Legacy Singles')).toBeNull()
+    })
+
+    it('prunes a selected event when refreshed data makes it ineligible', async () => {
+      const eventId = '00000000-0000-4000-8000-000000000060'
+      const paidEvent = buildEvent({
+        id: eventId,
+        name: 'Open Singles',
+        entryFee: 45,
+      })
+      const props = buildEventsTabProps({
+        tournament: buildTournament({ events: [paidEvent] }),
+      })
+      const view = render(<EventsTab {...props} />)
+
+      await userEvent.click(await eventsTabPage.findSelectButton('Open Singles'))
+      expect(screen.getByText('Entry summary')).toBeInTheDocument()
+
+      view.rerender(
+        <EventsTab
+          {...props}
+          tournament={buildTournament({
+            events: [{ ...paidEvent, format: 'doubles' }],
+          })}
+        />,
+      )
+
+      await waitFor(() => expect(screen.queryByText('Entry summary')).toBeNull())
     })
 
     it('holds multiple paid events as one itemized checkout', async () => {

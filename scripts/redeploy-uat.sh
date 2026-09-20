@@ -93,6 +93,15 @@ OBS_RELEASE="observability"
 OBS_CHART="observability"
 DEPLOY_OBSERVABILITY="${DEPLOY_OBSERVABILITY:-true}"
 
+# Refuse missing launch configuration before fetching/merging, starting k3d, or
+# touching Kubernetes. Checkout deliberately fails closed without this Account.
+[ -f .env ] || { echo "ERROR: .env not found (copy .env.example and fill in)." >&2; exit 1; }
+grep -qE '^TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID=.' .env || {
+  echo "ERROR: TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID missing/empty in .env." >&2
+  echo "       Add Ryan's launch merchant Account UUID; see .env.example." >&2
+  exit 1
+}
+
 # Pulled chart packages land here — one tarball per chart, thrown away on exit.
 # The pull is what resolves a version to a digest, and `helm pull` insists on
 # writing the package somewhere; nothing reads the tarballs. The deploy installs
@@ -328,18 +337,7 @@ fi
 # baked into the chart. Re-runnable via apply.
 echo
 echo "==> Syncing secrets from .env and $APNS_KEY"
-[ -f .env ] || { echo "ERROR: .env not found (copy .env.example and fill in)." >&2; exit 1; }
 [ -f "$APNS_KEY" ] || { echo "ERROR: $APNS_KEY not found." >&2; exit 1; }
-
-# Paid entry is a launch feature, but the API deliberately fails closed unless
-# the one eligible merchant Account is explicit. Refuse the deploy before any
-# cluster mutation rather than publishing a UAT where every paid event silently
-# says checkout is unavailable.
-grep -qE '^TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID=.' .env || {
-  echo "ERROR: TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID missing/empty in .env." >&2
-  echo "       Add Ryan's launch merchant Account UUID; see .env.example." >&2
-  exit 1
-}
 
 # The tailscale proxy reads TS_AUTHKEY from the .env-backed secret. When it's
 # enabled, fail fast with a clear message rather than a CrashLooping pod. The
