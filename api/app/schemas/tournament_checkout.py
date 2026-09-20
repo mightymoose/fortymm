@@ -20,7 +20,10 @@ class TournamentCheckoutCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     request_id: uuid.UUID
-    event_ids: list[uuid.UUID] = Field(min_length=1)
+    # A checkout is a human-scale tournament selection, not an unbounded bulk
+    # API. Keep the collection well below PostgreSQL/asyncpg's bind-parameter
+    # ceiling before it is expanded into ``IN (...)`` queries.
+    event_ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
 
     @field_validator("event_ids")
     @classmethod

@@ -280,6 +280,10 @@ enum TournamentCopy {
         guard decimal == cents else { return nil }
         return value
     }
+    static func validEntryFee(_ text: String, locale: Locale = .current) -> Bool {
+        guard let value = entryFee(text, locale: locale) else { return false }
+        return value == 0 || value >= 0.50
+    }
     static func count(_ count: Int, _ noun: String, plural: String? = nil) -> String {
         "\(count) \(count == 1 ? noun : (plural ?? noun + "s"))"
     }

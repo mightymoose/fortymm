@@ -29,6 +29,7 @@ from app.models import (
     User,
 )
 from app.schemas.tournament_checkout import TournamentCheckoutCreate
+from app.tournament_authority import transfer_ownership
 from app.tournament_checkout_errors import CheckoutRefusal, CheckoutRefusedError
 from app.tournament_checkouts import start_checkout
 from tests._helpers import make_client, make_user, start_session
@@ -220,6 +221,24 @@ async def test_checkout_refuses_an_event_the_player_already_entered(
         "event_id": str(event.id),
     }
     assert await db_session.scalar(select(TournamentCheckout)) is None
+
+
+async def test_checkout_request_rejects_more_than_one_hundred_events(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    await start_session(api_client, db_session)
+
+    response = await api_client.post(
+        f"/v1/tournaments/{uuid.uuid4()}/checkouts",
+        json={
+            "request_id": str(uuid.uuid4()),
+            "event_ids": [str(uuid.uuid4()) for _ in range(101)],
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "event_ids"]
 
 
 async def test_two_players_racing_for_last_checkout_hold_yield_one_checkout(
@@ -866,6 +885,46 @@ async def test_player_merge_invalidates_source_checkout_hold(
     checkout = await db_session.get(TournamentCheckout, uuid.UUID(created.json()["id"]))
     assert checkout is not None
     assert checkout.status is TournamentCheckoutStatus.invalidated
+
+
+async def test_ownership_transfer_invalidates_checkout_and_releases_hold(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    payer = await start_session(api_client, db_session)
+    merchant = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    successor = await make_user(db_session, f"successor-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session,
+        owner=merchant,
+        fees=(Decimal("10.00"),),
+        capacities=(1,),
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(merchant.id))
+    created = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]},
+    )
+    assert created.status_code == 201
+
+    await transfer_ownership(
+        db_session,
+        tournament.id,
+        actor_id=merchant.id,
+        account_id=successor.id,
+    )
+    await db_session.commit()
+
+    checkout = await api_client.get(
+        f"/v1/tournaments/{tournament.id}/checkouts/{created.json()['id']}"
+    )
+    assert checkout.status_code == 200
+    assert checkout.json()["status"] == "invalidated"
+    detail = await api_client.get(f"/v1/tournaments/{tournament.id}")
+    assert detail.status_code == 200
+    assert detail.json()["events"][0]["held_places"] == 0
+    assert payer.id not in {merchant.id, successor.id}
 
 
 async def test_checkout_creation_is_rate_limited_per_network(

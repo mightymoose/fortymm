@@ -86,6 +86,8 @@ def _effective_state(
         case TournamentCheckoutStatus.active:
             if checkout.registration_generation != tournament.registration_generation:
                 return TournamentCheckoutState.invalidated
+            if checkout.merchant_account_id != tournament.owner_account_id:
+                return TournamentCheckoutState.invalidated
             if checkout.expires_at <= now:
                 return TournamentCheckoutState.expired
             return TournamentCheckoutState.active
@@ -133,7 +135,10 @@ async def _expire_stale_checkouts(
     )
     now = await _database_now(db)
     for checkout in checkouts:
-        if checkout.registration_generation != tournament.registration_generation:
+        if (
+            checkout.registration_generation != tournament.registration_generation
+            or checkout.merchant_account_id != tournament.owner_account_id
+        ):
             checkout.status = TournamentCheckoutStatus.invalidated
         elif checkout.expires_at <= now:
             checkout.status = TournamentCheckoutStatus.expired

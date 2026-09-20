@@ -888,6 +888,7 @@ async def valid_hold_counts_by_event(
                 TournamentCheckout.expires_at > func.clock_timestamp(),
                 TournamentCheckout.registration_generation
                 == Tournament.registration_generation,
+                TournamentCheckout.merchant_account_id == Tournament.owner_account_id,
             )
             .group_by(TournamentCheckoutLine.event_id)
         )

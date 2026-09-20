@@ -905,6 +905,9 @@ export function useRefreshTournamentCheckout(tournamentId: string) {
 export function useStartCheckout(tournamentId: string) {
   const qc = useQueryClient()
   return useMutation({
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: checkoutKey(tournamentId) })
+    },
     mutationFn: async (eventIds: string[]): Promise<TournamentCheckout> =>
       apiToCheckout(
         unwrap(
@@ -924,6 +927,9 @@ export function useStartCheckout(tournamentId: string) {
 export function useCancelCheckout(tournamentId: string) {
   const qc = useQueryClient()
   return useMutation({
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: checkoutKey(tournamentId) })
+    },
     mutationFn: async (checkoutId: string): Promise<TournamentCheckout> =>
       apiToCheckout(
         unwrap(
