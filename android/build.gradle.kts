@@ -19,6 +19,7 @@ android {
         create("dev") {
             dimension = "environment"
             applicationId = "com.fortymm.android.dev"
+            testInstrumentationRunner = "com.fortymm.android.FortyMMTestRunner"
             buildConfigField(
                 "String",
                 "API_BASE_URL",
