@@ -92,6 +92,7 @@ async def _make_event(
     predicates: list[dict[str, Any]] | None = None,
     league: League | None = None,
     owner: User | None = None,
+    entry_fee: Decimal = Decimal("0.00"),
 ) -> TournamentEvent:
     """An event of ``format`` under a tournament in ``status``, owned by its own
     throwaway director. Written straight to the database rather than through the
@@ -162,7 +163,7 @@ async def _make_event(
         format=format,
         draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.single_elim),
         max_players=max_players,
-        entry_fee=Decimal("20.00"),
+        entry_fee=entry_fee,
         timezone="America/Chicago",
         slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
         match_settings={"rated": True, "length_games": 5},
@@ -1983,6 +1984,30 @@ async def test_the_owner_enters_another_player_who_appears_as_an_entrant(
     assert body["id"] == str(row.id)
 
     assert [e["user_id"] for e in await _entrants_of(client, event)] == [str(player.id)]
+
+
+async def test_the_owner_can_record_an_offline_entry_for_a_paid_event(
+    director_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    player: User,
+) -> None:
+    """Paid checkout is the self-registration path, not a replacement for the
+    owner's established manual-entry arm. A director can still record an offline or
+    complimentary entrant, and the row retains the director provenance."""
+    client, owner = director_client
+    await grant_permissions(db_session, owner, ())
+    event = await _make_event(
+        db_session,
+        owner=owner,
+        entry_fee=Decimal("20.00"),
+    )
+
+    response = await client.post(_entries_url(event), json={"user_id": str(player.id)})
+
+    assert response.status_code == 201, response.text
+    assert response.json()["user_id"] == str(player.id)
+    (row,) = await _active_entries(db_session, event.id)
+    assert (row.user_id, row.added_by_user_id) == (player.id, owner.id)
 
 
 async def test_the_owner_enters_a_never_active_guest(

@@ -1339,6 +1339,7 @@ export function buildTournamentEventRead(
     id: 'ev-open-singles',
     tournament_id: 'bay-area-open-2026',
     name: 'Open Singles',
+    lifecycle_state: 'unstarted',
     format: 'singles',
     // Round-robin, and grouped to match: `DrawType` holds only the two types the server
     // can actually plan (ADR 20260726), and a grouped event is what this fixture's single
@@ -1347,6 +1348,8 @@ export function buildTournamentEventRead(
     draw_type: 'round-robin',
     max_players: 64,
     entry_fee: 45,
+    held_places: 0,
+    available_places: 64,
     timezone: 'America/Chicago',
     entrants: [],
     retained_entrants: [],
@@ -1575,6 +1578,7 @@ export function buildTournamentDetailRead(
     created_by_user_id: 'u-me',
     details_version: 1,    created_by_username: 'rita.kovac',
     can_edit: true,
+    checkout_available: true,
     created_at: '2026-06-01T09:00:00Z',
     updated_at: '2026-06-10T12:00:00Z',
     events: [buildTournamentEventRead()],

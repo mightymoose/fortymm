@@ -22,7 +22,7 @@
 // consulted about whether an Enter button appears. It is the client reading two
 // integers it was sent, which is all "how many places are left" has ever been.
 
-import type { TournamentEvent } from './types'
+import type { Tournament, TournamentEvent } from './types'
 
 /** The three — mutually exclusive — things an event's capacity can say, as a sum
  * type rather than a `remaining: number` a caller must remember to clamp and
@@ -48,7 +48,46 @@ export type EventCapacity =
 
 /** The two values a capacity reading needs. Narrower than `TournamentEvent` so
  * the tests can state a case in the numbers it is about. */
-type Capacity = Pick<TournamentEvent, 'entered' | 'maxPlayers'>
+type Capacity = Pick<TournamentEvent, 'entered' | 'maxPlayers'> & {
+  heldPlaces?: number
+}
+
+export const HOLD_REFRESH_INTERVAL_MS = 5_000
+export const HOLD_DISCOVERY_INTERVAL_MS = 30_000
+export const MIN_CHECKOUT_FEE = 0.5
+
+type HoldRefreshTournament = Pick<
+  Tournament,
+  'checkoutAvailable' | 'events' | 'registrationOpen' | 'status'
+>
+
+/** Keep detail capacity current quickly while a hold exists. After a zero-hold
+ * snapshot, discover holds only while the tournament can actually create one; drafts,
+ * closed/live/archived tournaments, unavailable merchants, and free-only event lists
+ * otherwise turn a mounted detail page into a permanent background poll. */
+export function holdRefreshInterval(
+  tournament: HoldRefreshTournament | undefined,
+): number | false {
+  if (tournament === undefined) return false
+  if (tournament.events.some((event) => event.heldPlaces > 0)) {
+    return HOLD_REFRESH_INTERVAL_MS
+  }
+  if (
+    !tournament.checkoutAvailable ||
+    tournament.status !== 'published' ||
+    tournament.registrationOpen === false
+  ) {
+    return false
+  }
+  return tournament.events.some(
+    (event) =>
+      event.format === 'singles' &&
+      event.lifecycleState !== 'cancelled' &&
+      event.entryFee >= MIN_CHECKOUT_FEE,
+  )
+    ? HOLD_DISCOVERY_INTERVAL_MS
+    : false
+}
 
 /**
  * What this event has left.
@@ -70,7 +109,7 @@ type Capacity = Pick<TournamentEvent, 'entered' | 'maxPlayers'>
  */
 export function eventCapacity(event: Capacity): EventCapacity {
   if (event.maxPlayers === null) return { state: 'uncapped' }
-  const remaining = event.maxPlayers - event.entered
+  const remaining = event.maxPlayers - event.entered - (event.heldPlaces ?? 0)
   return remaining > 0 ? { state: 'places-left', remaining } : { state: 'full' }
 }
 
@@ -104,8 +143,16 @@ export function capacityLabel(capacity: EventCapacity): string {
  * An uncapped event has no denominator to read out, so the sentence gives the count
  * and then says *why* there is no second number — rather than inventing one. */
 export function enteredSummary(event: Capacity): string {
-  if (event.maxPlayers === null) return `${event.entered} entered, no entry limit`
-  return `${event.entered} of ${event.maxPlayers} entered`
+  const held = event.heldPlaces ?? 0
+  const occupied = event.entered + held
+  if (event.maxPlayers === null) {
+    return held > 0
+      ? `${event.entered} entered and ${held} held, no entry limit`
+      : `${event.entered} entered, no entry limit`
+  }
+  return held > 0
+    ? `${event.entered} entered and ${held} held, ${occupied} of ${event.maxPlayers} places occupied`
+    : `${event.entered} of ${event.maxPlayers} entered`
 }
 
 /** How full the fill bar is drawn, 0–100 — or **`null` when there is no bar to
@@ -121,6 +168,8 @@ export function capacityFillPercent(event: Capacity): number | null {
   // The DB's `CHECK (max_players > 0)` makes a zero cap unrepresentable server-side
   // (ADR-0935); this is the client's own guard against dividing by one regardless.
   if (event.maxPlayers <= 0) return 100
-  const pct = Math.round((event.entered / event.maxPlayers) * 100)
+  const pct = Math.round(
+    ((event.entered + (event.heldPlaces ?? 0)) / event.maxPlayers) * 100,
+  )
   return Math.min(100, Math.max(0, pct))
 }

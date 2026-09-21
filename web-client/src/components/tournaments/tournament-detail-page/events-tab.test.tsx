@@ -1,10 +1,12 @@
 import userEvent from '@testing-library/user-event'
-import { HttpResponse } from 'msw'
+import { http, HttpResponse } from 'msw'
+import { useState } from 'react'
+import { toast } from 'sonner'
 
 import { mockEventEnterEndpoint } from '@/mocks/endpoints/tournaments/tournaments.endpoint'
 import { buildTournamentEntrantRead } from '@/mocks/factories/tournaments/tournament.factory'
 import { server } from '@/mocks/server'
-import { screen, waitFor } from '@/test/utilities'
+import { render, screen, waitFor } from '@/test/utilities'
 
 import {
   buildDrawnEvent,
@@ -15,6 +17,20 @@ import {
   groupIdFor,
 } from '../data/seed.factory'
 import { eventsTabPage } from './events-tab.page'
+import { EventsTab } from './events-tab'
+import { buildEventsTabProps } from './events-tab.factory'
+
+vi.mock('sonner', async () => {
+  const actual = await vi.importActual<typeof import('sonner')>('sonner')
+  return {
+    ...actual,
+    toast: { ...actual.toast, error: vi.fn() },
+  }
+})
+
+beforeEach(() => {
+  vi.mocked(toast.error).mockClear()
+})
 
 describe('EventsTab', () => {
   it('opens an event from its card', async () => {
@@ -59,7 +75,25 @@ describe('EventsTab', () => {
   // permissions (entering needs none, #1092) — and she is not among the seeded
   // entrants.
   describe('the self-registration control on each card', () => {
-    it('offers Enter on a singles event', async () => {
+    it('waits for the session before loading the viewer checkout', async () => {
+      let checkoutReads = 0
+      server.use(
+        http.get('*/v1/session', () => new Promise(() => {})),
+        http.get('*/v1/tournaments/:tournamentId/checkouts/current', () => {
+          checkoutReads += 1
+          return HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 })
+        }),
+      )
+
+      eventsTabPage.render({
+        tournament: buildTournament({ events: [buildEvent({ name: 'Open Singles' })] }),
+      })
+
+      await new Promise((resolve) => window.setTimeout(resolve, 50))
+      expect(checkoutReads).toBe(0)
+    })
+
+    it('offers paid selection on a singles event', async () => {
       eventsTabPage.render({
         tournament: buildTournament({
           events: [buildEvent({ name: 'Open Singles' })],
@@ -67,8 +101,549 @@ describe('EventsTab', () => {
       })
 
       expect(
-        await eventsTabPage.findEnterButton('Open Singles'),
+        await eventsTabPage.findSelectButton('Open Singles'),
       ).toBeInTheDocument()
+    })
+
+    it('keeps paid selection mounted but disabled until the checkout read settles', async () => {
+      let releaseRead!: () => void
+      const readGate = new Promise<void>((resolve) => {
+        releaseRead = resolve
+      })
+      server.use(
+        http.get(
+          '*/v1/tournaments/:tournamentId/checkouts/current',
+          async () => {
+            await readGate
+            return HttpResponse.json(
+              { detail: 'Checkout not found.' },
+              { status: 404 },
+            )
+          },
+        ),
+      )
+      eventsTabPage.render({
+        tournament: buildTournament({
+          events: [buildEvent({ name: 'Open Singles', entryFee: 45 })],
+        }),
+      })
+
+      const selectButton = await eventsTabPage.findSelectButton('Open Singles')
+      expect(selectButton).toBeDisabled()
+
+      releaseRead()
+      await waitFor(() => expect(selectButton).toBeEnabled())
+    })
+
+    it.each([
+      ['checkout is unavailable', { checkoutAvailable: false }],
+      ['the tournament is a draft', { status: 'draft' as const }],
+      ['registration is closed', { registrationOpen: false }],
+    ])('does not read checkout state when %s', async (_label, overrides) => {
+      let checkoutReads = 0
+      server.use(
+        http.get('*/v1/tournaments/:tournamentId/checkouts/current', () => {
+          checkoutReads += 1
+          return HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 })
+        }),
+      )
+      eventsTabPage.render({
+        tournament: buildTournament({
+          ...overrides,
+          events: [buildEvent({ name: 'Open Singles', entryFee: 45 })],
+        }),
+      })
+
+      await new Promise((resolve) => window.setTimeout(resolve, 50))
+      expect(checkoutReads).toBe(0)
+    })
+
+    it('explains when paid checkout is unavailable for this organizer', async () => {
+      eventsTabPage.render({
+        tournament: buildTournament({
+          checkoutAvailable: false,
+          events: [buildEvent({ name: 'Open Singles', entryFee: 45 })],
+        }),
+      })
+
+      expect(
+        await screen.findByTestId('checkout-unavailable-notice'),
+      ).toHaveTextContent('Checkout is not available for this tournament.')
+      expect(eventsTabPage.querySelectButton('Open Singles')).toBeNull()
+    })
+
+    it('does not offer checkout for a preserved subminimum fee', async () => {
+      eventsTabPage.render({
+        tournament: buildTournament({
+          events: [buildEvent({ name: 'Legacy Singles', entryFee: 0.25 })],
+        }),
+      })
+
+      expect(
+        await screen.findByTestId('checkout-unavailable-notice'),
+      ).toHaveTextContent('This legacy entry fee must be updated before checkout.')
+      expect(eventsTabPage.querySelectButton('Legacy Singles')).toBeNull()
+    })
+
+    it('prunes a selected event when refreshed data makes it ineligible', async () => {
+      const eventId = '00000000-0000-4000-8000-000000000060'
+      const paidEvent = buildEvent({
+        id: eventId,
+        name: 'Open Singles',
+        entryFee: 45,
+      })
+      const props = buildEventsTabProps({
+        tournament: buildTournament({ events: [paidEvent] }),
+      })
+      const renderError = vi.spyOn(console, 'error').mockImplementation(() => {})
+      function ControlledEventsTab({
+        tournament,
+      }: Pick<typeof props, 'tournament'>) {
+        const [draft, setDraft] = useState<Set<string>>(() => new Set())
+        return (
+          <EventsTab
+            {...props}
+            tournament={tournament}
+            checkoutDraftIds={draft}
+            onCheckoutDraftChange={setDraft}
+          />
+        )
+      }
+      const view = render(<ControlledEventsTab tournament={props.tournament} />)
+
+      await userEvent.click(await eventsTabPage.findSelectButton('Open Singles'))
+      expect(screen.getByText('Entry summary')).toBeInTheDocument()
+
+      view.rerender(
+        <ControlledEventsTab
+          tournament={buildTournament({
+            events: [{ ...paidEvent, format: 'doubles' }],
+          })}
+        />,
+      )
+
+      await waitFor(() => expect(screen.queryByText('Entry summary')).toBeNull())
+      expect(renderError.mock.calls.flat().join(' ')).not.toContain(
+        'Cannot update a component while rendering',
+      )
+      renderError.mockRestore()
+    })
+
+    it('holds multiple paid events as one itemized checkout', async () => {
+      const firstId = '00000000-0000-4000-8000-000000000001'
+      const secondId = '00000000-0000-4000-8000-000000000002'
+      let postedEventIds: string[] = []
+      let cancelled = 0
+      const createdCheckoutIds: string[] = []
+      const checkoutRead = (requestId: string, id: string, status = 'active') => ({
+        id,
+        request_id: requestId,
+        tournament_id: '00000000-0000-4000-8000-000000000020',
+        registration_generation: 0,
+        status,
+        payment_state: 'unavailable',
+        currency: 'USD',
+        total_cents: 7500,
+        created_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 600_000).toISOString(),
+        remaining_seconds: 600,
+        lines: [
+          { event_id: firstId, event_name: 'Open Singles', price_cents: 4500 },
+          { event_id: secondId, event_name: 'U1500', price_cents: 3000 },
+        ],
+      })
+      server.use(
+        http.get('*/v1/tournaments/:tournamentId/checkouts/current', () => {
+          if (createdCheckoutIds.length === cancelled) {
+            return HttpResponse.json(
+              { detail: 'Checkout not found.' },
+              { status: 404 },
+            )
+          }
+          return HttpResponse.json(
+            checkoutRead(crypto.randomUUID(), createdCheckoutIds.at(-1)!),
+          )
+        }),
+        http.post('*/v1/tournaments/:tournamentId/checkouts', async ({ request }) => {
+          const body = (await request.json()) as {
+            event_ids: string[]
+            request_id: string
+          }
+          postedEventIds = body.event_ids
+          const id = `00000000-0000-4000-8000-${String(createdCheckoutIds.length + 10).padStart(12, '0')}`
+          createdCheckoutIds.push(id)
+          return HttpResponse.json(checkoutRead(body.request_id, id), {
+            status: 201,
+          })
+        }),
+        http.delete('*/v1/tournaments/:tournamentId/checkouts/:checkoutId', () => {
+          cancelled += 1
+          return HttpResponse.json(
+            checkoutRead(crypto.randomUUID(), createdCheckoutIds.at(-1)!, 'cancelled'),
+          )
+        }),
+      )
+      eventsTabPage.render({
+        tournament: buildTournament({
+          events: [
+            buildEvent({ id: firstId, name: 'Open Singles', entryFee: 45 }),
+            buildEvent({ id: secondId, name: 'U1500', entryFee: 30 }),
+          ],
+        }),
+      })
+
+      await userEvent.click(await eventsTabPage.findSelectButton('Open Singles'))
+      await userEvent.click(await eventsTabPage.findSelectButton('U1500'))
+      expect(screen.getByText('Entry summary')).toBeInTheDocument()
+      expect(screen.getByText('$75.00')).toBeInTheDocument()
+      await userEvent.click(
+        screen.getByRole('button', {
+          name: 'Remove U1500 from entry summary',
+        }),
+      )
+      expect(screen.getByRole('button', { name: 'Hold 1 place' })).toBeInTheDocument()
+      await userEvent.click(await eventsTabPage.findSelectButton('U1500'))
+      await userEvent.click(screen.getByRole('button', { name: 'Hold 2 places' }))
+
+      await waitFor(() => expect(postedEventIds).toEqual([firstId, secondId]))
+      expect(await screen.findByText('Your held places')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Release hold' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Change selection' })).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Change selection' }))
+      expect(screen.getByText(/releases this checkout hold/i)).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Keep hold' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Change selection' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Release and change' }))
+      await waitFor(() => expect(cancelled).toBe(1))
+      expect(await screen.findByText('Entry summary')).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Hold 2 places' }))
+      await waitFor(() => expect(createdCheckoutIds).toHaveLength(2))
+      expect(createdCheckoutIds[1]).not.toBe(createdCheckoutIds[0])
+      expect(await screen.findByText('Your held places')).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Release hold' }))
+      await waitFor(() => expect(cancelled).toBe(2))
+      expect(screen.queryByText('Your held places')).toBeNull()
+    })
+
+    it('refreshes checkout and tournament state when the hold expires', async () => {
+      const eventId = '00000000-0000-4000-8000-000000000031'
+      let reads = 0
+      server.use(
+        http.get('*/v1/tournaments/:tournamentId/checkouts/current', () => {
+          reads += 1
+          if (reads > 1) {
+            return HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 })
+          }
+          return HttpResponse.json({
+            id: '00000000-0000-4000-8000-000000000032',
+            request_id: '00000000-0000-4000-8000-000000000033',
+            tournament_id: '00000000-0000-4000-8000-000000000020',
+            registration_generation: 0,
+            status: 'active',
+            payment_state: 'unavailable',
+            currency: 'USD',
+            total_cents: 4500,
+            created_at: new Date().toISOString(),
+            expires_at: new Date(Date.now() + 50).toISOString(),
+            remaining_seconds: 1,
+            lines: [
+              {
+                event_id: eventId,
+                event_name: 'Open Singles',
+                price_cents: 4500,
+              },
+            ],
+          })
+        }),
+      )
+      eventsTabPage.render({
+        tournament: buildTournament({
+          events: [buildEvent({ id: eventId, name: 'Open Singles', entryFee: 45 })],
+        }),
+      })
+
+      expect(await screen.findByText('Your held places')).toBeInTheDocument()
+      await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2), {
+        timeout: 2_000,
+      })
+      await waitFor(() => expect(screen.queryByText('Your held places')).toBeNull())
+    })
+
+    it('polls an active checkout so external invalidation releases the UI', async () => {
+      const eventId = '00000000-0000-4000-8000-000000000037'
+      let reads = 0
+      server.use(
+        http.get('*/v1/tournaments/:tournamentId/checkouts/current', () => {
+          reads += 1
+          if (reads > 1) {
+            return HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 })
+          }
+          return HttpResponse.json({
+            id: '00000000-0000-4000-8000-000000000038',
+            request_id: '00000000-0000-4000-8000-000000000039',
+            tournament_id: '00000000-0000-4000-8000-000000000020',
+            registration_generation: 0,
+            status: 'active',
+            payment_state: 'unavailable',
+            currency: 'USD',
+            total_cents: 4500,
+            created_at: new Date().toISOString(),
+            expires_at: new Date(Date.now() + 600_000).toISOString(),
+            remaining_seconds: 600,
+            lines: [
+              {
+                event_id: eventId,
+                event_name: 'Open Singles',
+                price_cents: 4500,
+              },
+            ],
+          })
+        }),
+      )
+      eventsTabPage.render({
+        tournament: buildTournament({
+          events: [buildEvent({ id: eventId, name: 'Open Singles', entryFee: 45 })],
+        }),
+      })
+
+      expect(await screen.findByText('Your held places')).toBeInTheDocument()
+      await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2), { timeout: 6_500 })
+      await waitFor(() => expect(screen.queryByText('Your held places')).toBeNull())
+    }, 8_000)
+
+    it('restores choices when a committed change cancellation loses its response', async () => {
+      const eventId = '00000000-0000-4000-8000-000000000034'
+      let cancelled = false
+      server.use(
+        http.get('*/v1/tournaments/:tournamentId/checkouts/current', () =>
+          cancelled
+            ? HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 })
+            : HttpResponse.json({
+                id: '00000000-0000-4000-8000-000000000035',
+                request_id: '00000000-0000-4000-8000-000000000036',
+                tournament_id: '00000000-0000-4000-8000-000000000020',
+                registration_generation: 0,
+                status: 'active',
+                payment_state: 'unavailable',
+                currency: 'USD',
+                total_cents: 4500,
+                created_at: new Date().toISOString(),
+                expires_at: new Date(Date.now() + 600_000).toISOString(),
+                remaining_seconds: 600,
+                lines: [
+                  {
+                    event_id: eventId,
+                    event_name: 'Open Singles',
+                    price_cents: 4500,
+                  },
+                ],
+              }),
+        ),
+        http.delete('*/v1/tournaments/:tournamentId/checkouts/:checkoutId', () => {
+          cancelled = true
+          return HttpResponse.error()
+        }),
+      )
+      eventsTabPage.render({
+        tournament: buildTournament({
+          events: [buildEvent({ id: eventId, name: 'Open Singles', entryFee: 45 })],
+        }),
+      })
+
+      expect(await screen.findByText('Your held places')).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Change selection' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Release and change' }))
+
+      expect(await screen.findByText('Entry summary')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Hold 1 place' })).toBeInTheDocument()
+      expect(toast.error).not.toHaveBeenCalled()
+    })
+
+    it('discards the draft when reconciliation finds a checkout after a lost create response', async () => {
+      const eventId = '00000000-0000-4000-8000-000000000037'
+      let created = false
+      let cancelled = false
+      const activeCheckout = {
+        id: '00000000-0000-4000-8000-000000000038',
+        request_id: '00000000-0000-4000-8000-000000000039',
+        tournament_id: '00000000-0000-4000-8000-000000000020',
+        registration_generation: 0,
+        status: 'active',
+        payment_state: 'unavailable',
+        currency: 'USD',
+        total_cents: 4500,
+        created_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 600_000).toISOString(),
+        remaining_seconds: 600,
+        lines: [
+          { event_id: eventId, event_name: 'Open Singles', price_cents: 4500 },
+        ],
+      }
+      server.use(
+        http.get('*/v1/tournaments/:tournamentId/checkouts/current', () =>
+          created && !cancelled
+            ? HttpResponse.json(activeCheckout)
+            : HttpResponse.json(
+                { detail: 'Checkout not found.' },
+                { status: 404 },
+              ),
+        ),
+        http.post('*/v1/tournaments/:tournamentId/checkouts', () => {
+          created = true
+          return HttpResponse.error()
+        }),
+        http.delete('*/v1/tournaments/:tournamentId/checkouts/:checkoutId', () => {
+          cancelled = true
+          return HttpResponse.json({ ...activeCheckout, status: 'cancelled' })
+        }),
+      )
+      eventsTabPage.render({
+        tournament: buildTournament({
+          events: [buildEvent({ id: eventId, name: 'Open Singles', entryFee: 45 })],
+        }),
+      })
+
+      await userEvent.click(await eventsTabPage.findSelectButton('Open Singles'))
+      await userEvent.click(screen.getByRole('button', { name: 'Hold 1 place' }))
+      expect(await screen.findByText('Your held places')).toBeInTheDocument()
+      expect(toast.error).not.toHaveBeenCalled()
+
+      await userEvent.click(screen.getByRole('button', { name: 'Release hold' }))
+      await waitFor(() => expect(screen.queryByText('Your held places')).toBeNull())
+      expect(screen.queryByText('Entry summary')).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Hold 1 place' })).toBeNull()
+    })
+
+    it('hides paid selection toggles while a checkout is active', async () => {
+      const eventId = '00000000-0000-4000-8000-000000000041'
+      server.use(
+        http.get('*/v1/tournaments/:tournamentId/checkouts/current', () =>
+          HttpResponse.json({
+            id: '00000000-0000-4000-8000-000000000042',
+            request_id: '00000000-0000-4000-8000-000000000043',
+            tournament_id: '00000000-0000-4000-8000-000000000020',
+            registration_generation: 0,
+            status: 'active',
+            payment_state: 'unavailable',
+            currency: 'USD',
+            total_cents: 4500,
+            created_at: new Date().toISOString(),
+            expires_at: new Date(Date.now() + 600_000).toISOString(),
+            remaining_seconds: 600,
+            lines: [
+              {
+                event_id: eventId,
+                event_name: 'Open Singles',
+                price_cents: 4500,
+              },
+            ],
+          }),
+        ),
+      )
+      eventsTabPage.render({
+        tournament: buildTournament({
+          events: [
+            buildEvent({ id: eventId, name: 'Open Singles', entryFee: 45 }),
+            buildEvent({ name: 'U1500', entryFee: 30 }),
+          ],
+        }),
+      })
+
+      expect(await screen.findByText('Your held places')).toBeInTheDocument()
+      expect(eventsTabPage.querySelectButton('Open Singles')).toBeNull()
+      expect(eventsTabPage.querySelectButton('U1500')).toBeNull()
+    })
+
+    it('locks the submitted selection until checkout creation finishes', async () => {
+      const firstId = '00000000-0000-4000-8000-000000000051'
+      let releaseRequest!: () => void
+      let created = false
+      const requestGate = new Promise<void>((resolve) => {
+        releaseRequest = resolve
+      })
+      server.use(
+        http.get('*/v1/tournaments/:tournamentId/checkouts/current', () =>
+          created
+            ? HttpResponse.json({
+                id: '00000000-0000-4000-8000-000000000052',
+                request_id: '00000000-0000-4000-8000-000000000053',
+                tournament_id: '00000000-0000-4000-8000-000000000020',
+                registration_generation: 0,
+                status: 'active',
+                payment_state: 'unavailable',
+                currency: 'USD',
+                total_cents: 4500,
+                created_at: new Date().toISOString(),
+                expires_at: new Date(Date.now() + 600_000).toISOString(),
+                remaining_seconds: 600,
+                lines: [
+                  {
+                    event_id: firstId,
+                    event_name: 'Open Singles',
+                    price_cents: 4500,
+                  },
+                ],
+              })
+            : HttpResponse.json(
+                { detail: 'Checkout not found.' },
+                { status: 404 },
+              ),
+        ),
+        http.post('*/v1/tournaments/:tournamentId/checkouts', async ({ request }) => {
+          const body = (await request.json()) as {
+            event_ids: string[]
+            request_id: string
+          }
+          await requestGate
+          created = true
+          return HttpResponse.json(
+            {
+              id: '00000000-0000-4000-8000-000000000052',
+              request_id: body.request_id,
+              tournament_id: '00000000-0000-4000-8000-000000000020',
+              registration_generation: 0,
+              status: 'active',
+              payment_state: 'unavailable',
+              currency: 'USD',
+              total_cents: 4500,
+              created_at: new Date().toISOString(),
+              expires_at: new Date(Date.now() + 600_000).toISOString(),
+              remaining_seconds: 600,
+              lines: [
+                {
+                  event_id: firstId,
+                  event_name: 'Open Singles',
+                  price_cents: 4500,
+                },
+              ],
+            },
+            { status: 201 },
+          )
+        }),
+      )
+      eventsTabPage.render({
+        tournament: buildTournament({
+          events: [
+            buildEvent({ id: firstId, name: 'Open Singles', entryFee: 45 }),
+            buildEvent({ name: 'U1500', entryFee: 30 }),
+          ],
+        }),
+      })
+
+      await userEvent.click(await eventsTabPage.findSelectButton('Open Singles'))
+      await userEvent.click(screen.getByRole('button', { name: 'Hold 1 place' }))
+
+      await waitFor(() =>
+        expect(
+          screen.getByRole('button', {
+            name: 'Remove Open Singles from entry summary',
+          }),
+        ).toBeDisabled(),
+      )
+      expect(eventsTabPage.querySelectButton('U1500')).toBeNull()
+
+      releaseRequest()
+      expect(await screen.findByText('Your held places')).toBeInTheDocument()
     })
 
     it('offers none on a doubles event', async () => {
@@ -87,8 +662,8 @@ describe('EventsTab', () => {
 
       // The singles card's control is the gate: once it is on screen the
       // session has landed, so the doubles card's absence is a real absence.
-      await eventsTabPage.findEnterButton('Open Singles')
-      expect(eventsTabPage.queryEnterButton('Open Doubles')).toBeNull()
+      await eventsTabPage.findSelectButton('Open Singles')
+      expect(eventsTabPage.querySelectButton('Open Doubles')).toBeNull()
     })
 
     it('enters the event on click — and does NOT open the editor', async () => {
@@ -101,7 +676,7 @@ describe('EventsTab', () => {
       eventsTabPage.render({
         tournament: buildTournament({
           id: 't-1',
-          events: [buildEvent({ name: 'Open Singles' })],
+          events: [buildEvent({ name: 'Open Singles', entryFee: 0 })],
         }),
         onOpenEvent,
       })
@@ -123,7 +698,7 @@ describe('EventsTab', () => {
     // someone else's tournament. So the non-owner who gets the read-only view
     // must still get Enter. (`EnterEventControl` never reads `canEdit`; this
     // pins that it never starts to.)
-    it('still offers Enter to a non-owner, who gets the read-only view', async () => {
+    it('still offers selection to a non-owner, who gets the read-only view', async () => {
       eventsTabPage.render({
         tournament: buildTournament({
           events: [buildEvent({ name: 'Open Singles' })],
@@ -132,7 +707,7 @@ describe('EventsTab', () => {
       })
 
       expect(
-        await eventsTabPage.findEnterButton('Open Singles'),
+        await eventsTabPage.findSelectButton('Open Singles'),
       ).toBeInTheDocument()
       // The card opens a read-only view, not an editor — ADR 0015 still holds
       // around the control.

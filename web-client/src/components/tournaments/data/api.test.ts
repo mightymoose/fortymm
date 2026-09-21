@@ -14,11 +14,13 @@ import {
   apiToEvent,
   apiToTournament,
   catalogueToUpdateBody,
+  checkoutRefreshInterval,
   draftToCreateBody,
   eventToCreateBody,
   eventToUpdateBody,
   tournamentToUpdateBody,
 } from './api'
+import type { TournamentCheckout } from './api'
 import { blankAddress } from './helpers'
 import { nameByEntryId } from './entrant-names'
 import { addedReservation, keepReservations } from './reservation-entries'
@@ -27,6 +29,36 @@ import { addTable, keepTables } from './table-catalogue'
 import type { Tournament, TournamentEvent } from './types'
 
 type TournamentFixtureRead = components['schemas']['TournamentFixtureRead']
+
+const activeCheckout: TournamentCheckout = {
+  id: '00000000-0000-4000-8000-000000000001',
+  requestId: '00000000-0000-4000-8000-000000000002',
+  tournamentId: '00000000-0000-4000-8000-000000000003',
+  registrationGeneration: 0,
+  status: 'active',
+  paymentState: 'unavailable',
+  currency: 'USD',
+  totalCents: 4500,
+  createdAt: '2030-04-20T14:00:00Z',
+  expiresAt: '2030-04-20T14:10:00Z',
+  remainingSeconds: 600,
+  lines: [{ eventId: 'event-1', eventName: 'Open Singles', priceCents: 4500 }],
+}
+
+describe('checkoutRefreshInterval', () => {
+  it('keeps an active hold current even after checkout discovery closes', () => {
+    expect(checkoutRefreshInterval(activeCheckout)).toBe(5_000)
+    expect(checkoutRefreshInterval(activeCheckout, false)).toBe(5_000)
+  })
+
+  it('discovers replacement holds only while checkout can be created', () => {
+    expect(checkoutRefreshInterval({ ...activeCheckout, status: 'expired' })).toBe(5_000)
+    expect(checkoutRefreshInterval({ ...activeCheckout, status: 'expired' }, false)).toBe(false)
+    expect(checkoutRefreshInterval(null)).toBe(5_000)
+    expect(checkoutRefreshInterval(null, false)).toBe(false)
+    expect(checkoutRefreshInterval(undefined)).toBe(false)
+  })
+})
 
 /** A payload the generated types say cannot exist — which is exactly what the runtime
  * parse is for. The cast is the *point* of these cases, not a shortcut around them:
@@ -619,6 +651,7 @@ const draft: Omit<Tournament, 'id'> = {
   name: 'Autumn Cup',
   status: 'draft',
   canEdit: true,
+  checkoutAvailable: false,
   dateRange: { start: '2026-09-01', end: '2026-09-02' },
   description: 'A new draft.',
   // A read `Address` carries the server-geocoded coordinates (NOT NULL). The
@@ -883,6 +916,7 @@ describe('catalogueToUpdateBody', () => {
 const event: TournamentEvent = {
   id: 'ev-1',
   name: 'U1500 Singles',
+  lifecycleState: 'unstarted',
   format: 'singles',
   drawType: 'round-robin',
   // A round-robin event has no knockout stage to qualify for, so it carries NO qualifier
@@ -901,6 +935,8 @@ const event: TournamentEvent = {
   // the same fact, and a fixture that disagreed with itself would be a lie the
   // server cannot tell.
   entered: 2,
+  heldPlaces: 0,
+  availablePlaces: 46,
   retainedEntrants: [],
   // One rated, one UNRATED (`rating: null` — they hold no rating on the
   // tournament's ladder, ADR-0783 §3). The round-trip below therefore proves the
@@ -1052,6 +1088,9 @@ describe('eventToCreateBody', () => {
       rounds: null,
       id: event.id,
       tournament_id: 't-1',
+      lifecycle_state: event.lifecycleState,
+      held_places: 0,
+      available_places: 46,
       // Absent from the create body — `TournamentEventCreate` has no such field at all
       // (`extra="forbid"` would 422 one) — so it is supplied here, off the READ shape,
       // for the round trip to land back on `event`'s own `lockVersion`.

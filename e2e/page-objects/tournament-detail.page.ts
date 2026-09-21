@@ -256,7 +256,7 @@ export class TournamentDetailPage {
 
   /** The self-registration **Enter** button on an event's card, by event name. */
   enterButton(eventName: string): Locator {
-    return this.page.getByRole('button', { name: `Enter ${eventName}` })
+    return this.page.getByRole('button', { name: `Enter free ${eventName}` })
   }
 
   /** The **Withdraw** button that replaces Enter once the signed-in player is in

@@ -17,12 +17,14 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    select,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, column_property, mapped_column, relationship
 
 from app.db import Base
+from app.models.account import Account
 
 if TYPE_CHECKING:
     from app.models.tournament_draw_revision import TournamentDrawRevision
@@ -200,6 +202,15 @@ class Tournament(Base):
         ForeignKey("accounts.id", ondelete="RESTRICT"),
         nullable=False,
         index=True,
+    )
+    # Read with the tournament row so every serializer can expose payment
+    # capability without an N+1 or trusting a configured UUID after its Account has
+    # been deactivated, erased, or merged away.
+    owner_account_is_active: Mapped[bool] = column_property(
+        select(Account.is_active)
+        .where(Account.id == owner_account_id)
+        .correlate_except(Account)
+        .scalar_subquery()
     )
 
     def __init__(self, **kwargs: Any) -> None:

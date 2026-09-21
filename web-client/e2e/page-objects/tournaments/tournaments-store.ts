@@ -558,6 +558,7 @@ function drawableEvents(options: TournamentsStoreOptions): TournamentEventRead[]
       format: 'singles',
       draw_type: 'round-robin',
       max_players: 64,
+      entry_fee: 0,
       entrants: OTHERS,
       reservations: JOURNEY_RESERVATIONS,
     }),
@@ -567,6 +568,7 @@ function drawableEvents(options: TournamentsStoreOptions): TournamentEventRead[]
       format: 'singles',
       draw_type: 'round-robin',
       max_players: 32,
+      entry_fee: 0,
       entrants: crowd(PLAY_FIELD),
       reservations: PLAY_RESERVATIONS,
     }),
@@ -694,6 +696,7 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
         name: EVENT.JOURNEY,
         format: 'singles',
         max_players: 64,
+        entry_fee: 0,
         entrants: OTHERS,
       }),
       buildTournamentEventRead({
@@ -709,6 +712,7 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
         // thing a mirror of the API must not do.
         draw_type: 'round-robin',
         max_players: 48,
+        entry_fee: 0,
         entrants: [],
         reservations: [],
       }),
@@ -727,6 +731,7 @@ function seed(options: TournamentsStoreOptions): TournamentDetailRead {
               name: EVENT.CROWDED,
               format: 'singles',
               max_players: 64,
+              entry_fee: 0,
               entrants: crowd(CROWD_SIZE),
               reservations: [],
             }),
@@ -776,6 +781,7 @@ function gatedEvents(): TournamentEventRead[] {
       name: EVENT.FULL,
       format: 'singles',
       max_players: SMALL_CAP,
+      entry_fee: 0,
       entrants: crowd(SMALL_CAP),
       reservations: [],
     }),
@@ -784,6 +790,7 @@ function gatedEvents(): TournamentEventRead[] {
       name: EVENT.FULL_WITH_ME,
       format: 'singles',
       max_players: SMALL_CAP,
+      entry_fee: 0,
       // One seat short of full — the spec fills it with ME (`enteredIn`), which is
       // the only honest way to reach "an entrant inside a FULL event".
       entrants: crowd(SMALL_CAP - 1),
@@ -1816,6 +1823,12 @@ export class TournamentsStore {
       // succeeded at the client's own cadence, exactly as the worker would move it.
       this.tickSolve()
       return json(route, 200, this.readDetail())
+    }
+    if (
+      method === 'GET' &&
+      path === `/v1/tournaments/${TOURNAMENT_ID}/checkouts/current`
+    ) {
+      return json(route, 404, { detail: 'Checkout not found.' })
     }
 
     // The schedule solver's one verb (ADR "the schedule is solved"). Matched before

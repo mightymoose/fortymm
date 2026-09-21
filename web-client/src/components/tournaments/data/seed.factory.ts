@@ -243,6 +243,7 @@ export function buildEvent(
   const event = {
     id: 'ev-open-singles',
     name: 'Open Singles',
+    lifecycleState: 'unstarted',
     format: 'singles',
     // Round-robin, and grouped to match — see the wire-side twin in
     // `mocks/factories/tournaments/tournament.factory.ts`. `DrawType` holds only the two
@@ -269,6 +270,14 @@ export function buildEvent(
     // `buildEventResults` override (or use `buildStandingsEvent`).
     results: null,
     ...overrides,
+    heldPlaces: overrides.heldPlaces ?? 0,
+    availablePlaces:
+      overrides.availablePlaces ??
+      (overrides.maxPlayers === null
+        ? null
+        : (overrides.maxPlayers ?? 64) -
+          (overrides.entrants?.length ?? 52) -
+          (overrides.heldPlaces ?? 0)),
     // **No knockout stage to qualify for, so no qualifier count** (ADR 20260727) —
     // `null` is the only value a round-robin, single-elim or swiss event's draw settings
     // admit, and it is not "unset". Stated AFTER the spread because `Partial<…>` admits an
@@ -1699,6 +1708,7 @@ export function buildTournament(
     // Existing component factories/tests build the creator's own tournaments,
     // so default to editable; override `canEdit: false` for the read-only case.
     canEdit: true,
+    checkoutAvailable: true,
     // The min/max of the default `events` below's own `slot.date` (#1511) — the
     // server derives this from the tournament's events on every read; a fixture
     // that wants a different span (or `events: []`) overrides both together.

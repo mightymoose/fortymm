@@ -183,6 +183,13 @@ describe('the entry fee (`EventEntryFee`: required, `ge=0`, whole cents)', () =>
     expect(messageFor(entryFeeSchema, 0)).toBeUndefined()
   })
 
+  it('refuses a positive fee below the processor minimum', () => {
+    expect(messageFor(entryFeeSchema, 0.49)).toBe(
+      'A paid entry fee must be at least $0.50 USD.',
+    )
+    expect(messageFor(entryFeeSchema, 0.5)).toBeUndefined()
+  })
+
   it('refuses a negative fee', () => {
     expect(messageFor(entryFeeSchema, -1)).toBe('The entry fee cannot be negative.')
   })

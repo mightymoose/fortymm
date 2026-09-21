@@ -41,6 +41,7 @@ from app.sessions import (
 )
 from app.sessions import router as sessions_router
 from app.stream import router as stream_router
+from app.tournament_checkout_routes import router as tournament_checkouts_router
 from app.tournaments import router as tournaments_router
 
 # Log on uvicorn's own error logger (not __name__): the app configures no
@@ -242,6 +243,7 @@ app.include_router(players_router)
 app.include_router(dashboard_router)
 app.include_router(notifications_router)
 app.include_router(tournaments_router)
+app.include_router(tournament_checkouts_router)
 app.include_router(admin_schedule_solves_router)
 app.include_router(stream_router)
 app.include_router(agent_access_router)

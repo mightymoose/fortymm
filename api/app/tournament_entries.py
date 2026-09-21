@@ -36,7 +36,8 @@ This is the highest-nuance tournament verb, and every nuance is preserved exactl
   **locked first** (the capacity lock — the row whose status decides this request must
   not change between the checks and the INSERT), then the event. Then, in order: the
   **singles-only 400** (:class:`NonSinglesEntryError`) → the **registration-window 409**
-  (``registration_closed``) → the **rating-eligibility 409** (``rating_ineligible``) →
+  (``registration_closed``) → the self-registration-only **paid-checkout 409**
+  (``payment_required``) → the **rating-eligibility 409** (``rating_ineligible``) →
   the **capacity 409** (``event_full``) → the **already-entered 409**
   (``already_entered``, caught from the deferred uniqueness constraint inside the
   admission savepoint). The permanent refusals precede the transient ones (a doubles
@@ -54,6 +55,7 @@ to the exact response it produced before.
 """
 
 import uuid
+from decimal import Decimal
 from typing import assert_never
 
 from pyrate_limiter import Duration, Rate
@@ -80,6 +82,7 @@ from app.rate_limiting import RedisRateLimiter
 from app.schedule_solves import request_solve
 from app.schemas.tournament import TournamentEntrantRead
 from app.tournament_authority import can_direct
+from app.tournament_checkouts import invalidate_checkout_for_entrant_event
 from app.tournament_edit import _load_tournament_for_update
 from app.tournament_eligibility import (
     Eligible,
@@ -104,7 +107,7 @@ from app.tournament_participation import (
     close_registration,
     restore_event_eligibility,
 )
-from app.tournament_queries import active_entry_count, entrant_rating
+from app.tournament_queries import active_entry_count, entrant_rating, valid_hold_count
 
 
 def _entry_ip_limiter(limit: int) -> RedisRateLimiter:
@@ -261,7 +264,8 @@ async def _enforce_event_has_room(db: AsyncSession, event: TournamentEvent) -> N
     if max_players is None:
         return
     entered = await active_entry_count(db, event.id)
-    if not event_is_full(entered=entered, max_players=max_players):
+    held = await valid_hold_count(db, event.id)
+    if not event_is_full(entered=entered + held, max_players=max_players):
         return
     raise EntryRefusedError(
         EntryRefusal.event_full,
@@ -399,27 +403,49 @@ async def admit_to_event(
     # beside their name, read once. Capacity is counted UNDER THE LOCK taken above, and
     # nothing between its count and the commit may take a lock of its own.
     _enforce_entry_registration_open(tournament, event)
-    rating = await _enforce_rating_eligible(db, tournament, event, entrant)
-    await _enforce_event_has_room(db, event)
-
-    # ``added_by_user_id`` is the fork's one lasting trace: NULL on the self path, the
-    # director's id on the other (ADR-0784). A fact about the past, stored now.
-    entry = await db.scalar(
-        select(TournamentEntry)
-        .where(
-            TournamentEntry.event_id == event.id,
-            TournamentEntry.user_id == entrant.id,
-            TournamentEntry.status == TournamentEntryStatus.withdrawn,
-            TournamentEntry.superseded_by_entry_id.is_(None),
+    # Paid self-entry belongs to checkout, but directors retain the established
+    # manual arm for phone, offline and complimentary registrations. Checkout can
+    # only reserve the signed-in player's own place, so applying this guard to the
+    # director arm would make those entrants impossible to record.
+    if self_registration and Decimal(event.entry_fee) > 0:
+        raise EntryRefusedError(
+            EntryRefusal.payment_required,
+            "This event requires paid checkout.",
         )
-        .order_by(TournamentEntry.created_at, TournamentEntry.id)
-        .limit(1)
-    )
+    rating = await _enforce_rating_eligible(db, tournament, event, entrant)
     try:
-        # A savepoint lets this domain verb translate the duplicate active-entry index
-        # without poisoning its caller's transaction. The outer transaction still owns
-        # whether earlier or later admissions commit together.
+        # A savepoint makes the checkout release and admission one composable unit. A
+        # director's entry must release the entrant's own hold before counting capacity,
+        # but a later refusal must not leak that invalidation into a caller-owned
+        # transaction which catches the refusal and commits other work.
         async with db.begin_nested():
+            if not self_registration:
+                # A director entry supersedes this player's hold for the same event. The
+                # quote is all-or-nothing, so invalidate the combined checkout before
+                # counting capacity; otherwise the player's own hold can falsely consume
+                # the final place or keep reserving its other lines after admission.
+                await invalidate_checkout_for_entrant_event(
+                    db,
+                    tournament_id=tournament.id,
+                    entrant_player_id=entrant.id,
+                    event_id=event.id,
+                )
+            await _enforce_event_has_room(db, event)
+
+            # ``added_by_user_id`` is the fork's one lasting trace: NULL on the self
+            # path, the director's id on the other (ADR-0784). A fact about the past,
+            # stored now.
+            entry = await db.scalar(
+                select(TournamentEntry)
+                .where(
+                    TournamentEntry.event_id == event.id,
+                    TournamentEntry.user_id == entrant.id,
+                    TournamentEntry.status == TournamentEntryStatus.withdrawn,
+                    TournamentEntry.superseded_by_entry_id.is_(None),
+                )
+                .order_by(TournamentEntry.created_at, TournamentEntry.id)
+                .limit(1)
+            )
             if entry is None:
                 entry = TournamentEntry(
                     event_id=event.id,

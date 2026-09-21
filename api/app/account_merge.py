@@ -34,6 +34,8 @@ from app.models import (
     RatingHistory,
     ScheduleSolveTrigger,
     Tournament,
+    TournamentCheckout,
+    TournamentCheckoutStatus,
     TournamentEntry,
     TournamentEntryRegistration,
     TournamentEntryStatus,
@@ -48,6 +50,9 @@ from app.models import (
 from app.models.tournament_entry_participation import WithdrawalReason
 from app.schedule_solves import request_solve, tournament_has_drawn_event
 from app.tournament_authority import lock_merge_tournaments, merge_authority
+from app.tournament_checkout_invalidation import (
+    invalidate_checkouts_for_account_lifecycle,
+)
 from app.tournament_draws import (
     active_draw_entrants_by_event,
     draw_has_play,
@@ -151,6 +156,7 @@ async def merge_user(
     if len(source.player_grants) > 1:
         raise ValueError("Merging accounts that manage multiple players is not enabled")
     await lock_merge_tournaments(db, source_id=from_user_id, target_id=to_user_id)
+    await invalidate_checkouts_for_account_lifecycle(db, from_user_id)
     # Lock the repair before any rating rows: workers take repair → ratings too.
     from app.required_repairs import request_rating
 
@@ -375,6 +381,21 @@ async def _merge_players(
     )
     await db.execute(
         delete(LeagueMembership).where(LeagueMembership.user_id == from_user_id)
+    )
+    # A checkout is a temporary capacity claim owned by a Player. It cannot be
+    # re-pointed during reconciliation: the survivor may already hold a checkout
+    # for the same tournament, and combining immutable selections would invent a
+    # quote nobody accepted. Invalidate both identities' active claims: an entry
+    # carried over from the source can collide with an event held by the survivor,
+    # which would otherwise count the merged Player once as an entrant and once as
+    # a hold. The survivor can create a fresh checkout against reconciled capacity.
+    await db.execute(
+        update(TournamentCheckout)
+        .where(
+            TournamentCheckout.entrant_player_id.in_([from_user_id, to_user_id]),
+            TournamentCheckout.status == TournamentCheckoutStatus.active,
+        )
+        .values(status=TournamentCheckoutStatus.invalidated)
     )
     # Recording the Player merge atomically repoints proposal representation
     # through the database trigger; original Account actors remain immutable.

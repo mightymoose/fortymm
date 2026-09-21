@@ -20,6 +20,7 @@ import { ApiError, api, unwrap } from '@/api/client'
 import { notifyError } from '@/lib/notify-error'
 import type { components } from '@/api/schema'
 import { parseDrawTypeCatalogue } from './draw-types'
+import { holdRefreshInterval } from './capacity'
 import { entryRefusalNotice } from './entry-refusal'
 import { hasVenue } from './helpers'
 import { parseFixtures } from './fixtures'
@@ -61,6 +62,7 @@ type ApiPredicate = components['schemas']['Predicate']
 type ApiEntryState = TournamentEventRead['entry_state']
 type TournamentFixturePlacementUpdate =
   components['schemas']['TournamentFixturePlacementUpdate']
+type TournamentCheckoutRead = components['schemas']['TournamentCheckoutRead']
 
 /** The API types a `between` predicate's value as a variable-length
  * `(number | null)[]`; the prototype narrows it to a `[min, max]` tuple. Coerce
@@ -71,7 +73,6 @@ function apiToPredicateValue(value: ApiPredicate['value']): PredicateValue {
   }
   return value
 }
-
 function apiToPredicate(p: ApiPredicate): Predicate {
   return { id: p.id, field: p.field, op: p.op, value: apiToPredicateValue(p.value) }
 }
@@ -139,6 +140,51 @@ export function apiToEntrant(payload: TournamentEntrantRead): Entrant {
   }
 }
 
+const checkoutSchema = z.object({
+  id: z.string().uuid(),
+  request_id: z.string().uuid(),
+  tournament_id: z.string().uuid(),
+  registration_generation: z.number().int().nonnegative(),
+  status: z.enum(['active', 'cancelled', 'expired', 'invalidated']),
+  payment_state: z.literal('unavailable'),
+  currency: z.literal('USD'),
+  total_cents: z.number().int().positive(),
+  created_at: z.iso.datetime({ offset: true }),
+  expires_at: z.iso.datetime({ offset: true }),
+  remaining_seconds: z.number().int().nonnegative(),
+  lines: z.array(
+    z.object({
+      event_id: z.string().uuid(),
+      event_name: z.string(),
+      price_cents: z.number().int().positive(),
+    }),
+  ),
+})
+
+export type TournamentCheckout = ReturnType<typeof apiToCheckout>
+
+function apiToCheckout(payload: TournamentCheckoutRead) {
+  const checkout = checkoutSchema.parse(payload)
+  return {
+    id: checkout.id,
+    requestId: checkout.request_id,
+    tournamentId: checkout.tournament_id,
+    registrationGeneration: checkout.registration_generation,
+    status: checkout.status,
+    paymentState: checkout.payment_state,
+    currency: checkout.currency,
+    totalCents: checkout.total_cents,
+    createdAt: checkout.created_at,
+    expiresAt: checkout.expires_at,
+    remainingSeconds: checkout.remaining_seconds,
+    lines: checkout.lines.map((line) => ({
+      eventId: line.event_id,
+      eventName: line.event_name,
+      priceCents: line.price_cents,
+    })),
+  }
+}
+
 const retainedEntrantsSchema = z.object({
   retained_entrants: z.array(entrantSchema).default([]),
 })
@@ -159,6 +205,7 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
   return {
     id: e.id,
     name: e.name,
+    lifecycleState: e.lifecycle_state,
     format: e.format,
     drawType: e.draw_type,
     // Carried across UNCHANGED, `null` included (ADR 20260727): `null` is not missing
@@ -175,6 +222,8 @@ export function apiToEvent(e: TournamentEventRead): TournamentEvent {
     entryFee: e.entry_fee,
     timezone: e.timezone,
     entered: e.entered,
+    heldPlaces: e.held_places,
+    availablePlaces: e.available_places,
     entrants: e.entrants.map(apiToEntrant),
     retainedEntrants: retainedEntrantsSchema.parse(e).retained_entrants.map(apiToEntrant),
     entryState: apiToEntryState(e.entry_state),
@@ -244,6 +293,7 @@ export function apiToTournament(t: TournamentDetailRead): Tournament {
     registrationOpen: t.registration_open,
     registrationGeneration: t.registration_generation,
     canEdit: t.can_edit,
+    checkoutAvailable: t.checkout_available,
     description: t.description ?? '',
     // Carried across UNCHANGED, `null` included: the server derives this from the
     // tournament's own events on every read (#1511), and the client no longer
@@ -581,6 +631,7 @@ export function eventToUpdateBody(ev: EditedEvent): TournamentEventUpdate {
 
 const TOURNAMENTS_KEY = ['tournaments'] as const
 const tournamentKey = (id: string) => ['tournaments', id] as const
+const checkoutKey = (id: string) => ['tournament-checkout', id] as const
 
 /** A location + radius to filter the list to tournaments **near a point**. All three
  * are sent together or not at all — the API's `lat`/`lng`/`radius_miles` triple is
@@ -631,6 +682,14 @@ function reconcileTournament(qc: QueryClient, id: string): Promise<void> {
   return Promise.all([
     qc.invalidateQueries({ queryKey: TOURNAMENTS_KEY }),
     qc.invalidateQueries({ queryKey: tournamentKey(id) }),
+  ]).then(() => undefined)
+}
+
+/** Reconcile writes that can invalidate a server-side checkout hold. */
+function reconcileTournamentCheckout(qc: QueryClient, id: string): Promise<void> {
+  return Promise.all([
+    reconcileTournament(qc, id),
+    qc.invalidateQueries({ queryKey: checkoutKey(id) }),
   ]).then(() => undefined)
 }
 
@@ -799,6 +858,8 @@ function tournamentDetailQuery(id: string) {
 export function useTournament(id: string) {
   return useQuery({
     ...tournamentDetailQuery(id),
+    refetchInterval: (query) =>
+      holdRefreshInterval(query.state.data?.tournament),
     select: (data) => data.tournament,
   })
 }
@@ -815,6 +876,132 @@ export function useTables(id: string): TournamentTable[] {
   return data ?? []
 }
 
+/** The caller's one active checkout hold for this tournament. A 404 is the normal
+ * "no active checkout" state, not an error screen. */
+export function checkoutRefreshInterval(
+  checkout: TournamentCheckout | null | undefined,
+  discoveryEnabled = true,
+): number | false {
+  if (checkout === undefined) return false
+  // Keep a displayed hold current even if registration closes underneath it.
+  // Empty and terminal snapshots only need discovery polling while this
+  // tournament can actually create a replacement checkout.
+  return checkout?.status === 'active' || discoveryEnabled ? 5_000 : false
+}
+
+export function useCurrentCheckout(
+  tournamentId: string,
+  sessionLoaded = true,
+  discoveryEnabled = true,
+) {
+  const qc = useQueryClient()
+  const cachedCheckout = qc.getQueryData<TournamentCheckout | null>(
+    checkoutKey(tournamentId),
+  )
+  return useQuery({
+    queryKey: checkoutKey(tournamentId),
+    queryFn: async (): Promise<TournamentCheckout | null> => {
+      const result = await api.GET(
+        '/v1/tournaments/{tournament_id}/checkouts/current',
+        { params: { path: { tournament_id: tournamentId } } },
+      )
+      if (result.response.status === 404) return null
+      return apiToCheckout(unwrap('load your held places', result))
+    },
+    enabled:
+      sessionLoaded &&
+      (discoveryEnabled || cachedCheckout?.status === 'active'),
+    refetchInterval: (query) =>
+      checkoutRefreshInterval(query.state.data, discoveryEnabled),
+    throwOnError: (_error, query) => query.state.data === undefined,
+    retry: false,
+  })
+}
+
+/** Reconcile both the server-owned deadline and the capacity projection when a
+ * locally displayed checkout timer reaches zero. */
+export function useRefreshTournamentCheckout(tournamentId: string) {
+  const qc = useQueryClient()
+  return () => {
+    void Promise.all([
+      qc.invalidateQueries({ queryKey: checkoutKey(tournamentId) }),
+      reconcileTournament(qc, tournamentId),
+    ])
+  }
+}
+
+export function useStartCheckout(tournamentId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: checkoutKey(tournamentId) })
+    },
+    mutationFn: async (eventIds: string[]): Promise<TournamentCheckout> =>
+      apiToCheckout(
+        unwrap(
+          'start checkout',
+          await api.POST('/v1/tournaments/{tournament_id}/checkouts', {
+            params: { path: { tournament_id: tournamentId } },
+            body: { request_id: crypto.randomUUID(), event_ids: eventIds },
+          }),
+        ),
+      ),
+    onSuccess: (checkout) => qc.setQueryData(checkoutKey(tournamentId), checkout),
+    // Re-read durable state before reporting a transport error: the POST may have
+    // committed before its response was lost. Only report failure when the
+    // authoritative read confirms there is still no active checkout.
+    onSettled: async (_data, error) => {
+      await reconcileTournamentCheckout(qc, tournamentId)
+      if (
+        error &&
+        qc.getQueryData<TournamentCheckout | null>(checkoutKey(tournamentId))
+          ?.status !== 'active'
+      ) {
+        notifyError('start checkout')(error)
+      }
+    },
+  })
+}
+
+export function useCancelCheckout(tournamentId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: checkoutKey(tournamentId) })
+    },
+    mutationFn: async (checkoutId: string): Promise<TournamentCheckout> =>
+      apiToCheckout(
+        unwrap(
+          'release your checkout hold',
+          await api.DELETE(
+            '/v1/tournaments/{tournament_id}/checkouts/{checkout_id}',
+            {
+              params: {
+                path: { tournament_id: tournamentId, checkout_id: checkoutId },
+              },
+            },
+          ),
+        ),
+      ),
+    onSuccess: () => qc.setQueryData(checkoutKey(tournamentId), null),
+    // A lost DELETE response is equally ambiguous. Reconcile first, and only
+    // report failure if the exact hold we tried to release is still active.
+    onSettled: async (_data, error, checkoutId) => {
+      await reconcileTournamentCheckout(qc, tournamentId)
+      if (!error) return
+      const current = qc.getQueryData<TournamentCheckout | null>(
+        checkoutKey(tournamentId),
+      )
+      if (
+        current === undefined ||
+        (current?.status === 'active' && current.id === checkoutId)
+      ) {
+        notifyError('release your checkout hold')(error)
+      }
+    },
+  })
+}
+
 // ----- mutations -----------------------------------------------------------
 //
 // INVALIDATION MAP — every mutation in this module invalidates exactly this set:
@@ -823,11 +1010,12 @@ export function useTables(id: string): TournamentTable[] {
 // | ----------------------- | ---------------------------------------- | --------- |
 // | useCreateTournament     | ['tournaments']                          | onSuccess |
 // | useUpdateTournament     | ['tournaments'], ['tournaments', id]     | onSuccess |
-// | useTransitionTournament | ['tournaments'], ['tournaments', id]     | onSettled |
+// | useTransitionTournament | list, detail, ['tournament-checkout', id] | onSettled |
+// | useSetTournamentRegistration | list, detail, checkout              | onSettled |
 // | useDeleteTournament     | ['tournaments'], ['tournaments', id]     | onSuccess |
 // | useCreateEvent          | ['tournaments'], ['tournaments', id]     | onSuccess |
 // | useUpdateEvent          | ['tournaments'], ['tournaments', id]     | onSettled |
-// | useDeleteEvent          | ['tournaments'], ['tournaments', id]     | onSuccess |
+// | useDeleteEvent          | list, detail, ['tournament-checkout', id] | onSuccess |
 // | useEnterEvent           | ['tournaments'], ['tournaments', id]     | onSettled |
 // | useWithdrawEntry        | ['tournaments'], ['tournaments', id]     | onSettled |
 // | useCutDraw              | ['tournaments'], ['tournaments', id]     | onSettled |
@@ -835,12 +1023,13 @@ export function useTables(id: string): TournamentTable[] {
 // | usePlaceFixture         | ['tournaments'], ['tournaments', id]     | onSettled |
 // | useRequestScheduleSolve | ['tournaments'], ['tournaments', id]     | onSettled |
 //
-// There are only two keys, because there are only two queries: the list and one
-// tournament's detail (events, entrants, the table catalogue AND every event's draw all
+// Most mutations touch only the list and detail. Lifecycle/registration changes and
+// event deletion also refresh the current checkout because those writes can invalidate
+// its server-side hold. Events, entrants, the table catalogue AND every event's draw all
 // arrive nested in the detail — see the queries above; there is deliberately no
 // `GET …/draw`, because a per-event draw fetch would be an N+1 on the server and a
-// suspense waterfall on the client, ADR-0786). Create is the one mutation that touches
-// only the list: it has no detail entry to stale yet. The five `onSettled` rows
+// suspense waterfall on the client (ADR-0786). Create is the one mutation that touches
+// only the list: it has no detail entry to stale yet. The `onSettled` rows
 // reconcile on FAILURE as well as success, which is deliberate — see the notes on
 // each.
 
@@ -1006,7 +1195,7 @@ export function useTransitionTournament(tournamentId: string) {
     // Reconcile on BOTH paths — the 409 IS the stale-view signal — and **await it**, so
     // the header's inline refusal is written against the state the server judged rather
     // than racing the refetch that proves it (`reconcileTournament`).
-    onSettled: () => reconcileTournament(qc, tournamentId),
+    onSettled: () => reconcileTournamentCheckout(qc, tournamentId),
   })
 }
 
@@ -1023,7 +1212,7 @@ export function useSetTournamentRegistration(tournamentId: string) {
           { params: { path: { tournament_id: tournamentId } } },
         ),
       ),
-    onSettled: () => reconcileTournament(qc, tournamentId),
+    onSettled: () => reconcileTournamentCheckout(qc, tournamentId),
   })
 }
 
@@ -1084,7 +1273,7 @@ export function useUpdateEvent(tournamentId: string) {
           body: input.body,
         }),
       ),
-    onSettled: () => reconcileTournament(qc, tournamentId),
+    onSettled: () => reconcileTournamentCheckout(qc, tournamentId),
   })
 }
 
@@ -1100,7 +1289,7 @@ export function useDeleteEvent(tournamentId: string) {
         { allowEmpty: true },
       )
     },
-    onSuccess: () => invalidateTournament(qc, tournamentId),
+    onSuccess: () => void reconcileTournamentCheckout(qc, tournamentId),
     onError: notifyError('delete the event'),
   })
 }

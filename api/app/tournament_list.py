@@ -31,7 +31,7 @@ from app.player_accounts import primary_player_reference
 from app.schedule_solves import latest_solve
 from app.schemas.tournament import TournamentDetailRead
 from app.tournament_queries import (
-    active_entrants_by_event,
+    active_entrants_and_hold_counts_by_event,
     completed_match_ids,
     draw_type_catalogue,
     entrant_is_retired,
@@ -234,7 +234,9 @@ async def list_tournament_details(
         for event in events:
             events_by_tournament[event.tournament_id].append(event)
     event_ids = [e.id for e in events]
-    entrants_by_event = await active_entrants_by_event(db, event_ids)
+    entrants_by_event, holds_by_event = await active_entrants_and_hold_counts_by_event(
+        db, event_ids
+    )
     # And ONE batch for every one of those events' fixtures — its draw (ADR-0786).
     # Batched for the same reason the entrants are: the list returns every event of
     # every tournament, so reading ``event.fixtures`` in the loop would be a SELECT
@@ -264,6 +266,7 @@ async def list_tournament_details(
             events=events_by_tournament[tournament.id],
             entrants_by_event=entrants_by_event,
             fixtures_by_event=event_fixtures,
+            holds_by_event=holds_by_event,
             game_counts=None,
             rating=ratings[tournament.league_id],
             retired=retired,
@@ -336,7 +339,9 @@ async def tournament_detail(
         .all()
     )
     event_ids = [e.id for e in events]
-    entrants_by_event = await active_entrants_by_event(db, event_ids)
+    entrants_by_event, holds_by_event = await active_entrants_and_hold_counts_by_event(
+        db, event_ids
+    )
     event_fixtures = await fixtures_by_event(db, event_ids)
     game_counts = await game_counts_by_match(db, completed_match_ids(event_fixtures))
     rating = await entrant_rating(
@@ -352,6 +357,7 @@ async def tournament_detail(
         events=events,
         entrants_by_event=entrants_by_event,
         fixtures_by_event=event_fixtures,
+        holds_by_event=holds_by_event,
         game_counts=game_counts,
         rating=rating,
         retired=retired,

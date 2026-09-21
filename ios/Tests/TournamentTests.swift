@@ -40,7 +40,7 @@ private final class TestLocationManager: CLLocationManager {
         let client = APIClient(session: URLSession(configuration: configuration), tokens: SessionTokenStore(keychain: TestKeychain()))
         let service = TournamentService(client: client)
         TournamentTransport.body = #"""
-        [{"id":"00000000-0000-0000-0000-000000000001","name":"Open","description":null,"status":"published","can_edit":false,"created_by_username":"director","address":null,"date_range":null,"table_catalogue":[],"draw_type_catalogue":null,"events":[{"id":"00000000-0000-0000-0000-000000000002","name":"Singles","format":"singles","draw_type":"swiss","timezone":"America/Chicago","max_players":null,"entry_fee":0,"slot":{"date":"2026-09-05","start":"09:00","end":"17:00"},"entrants":[{"id":"00000000-0000-0000-0000-000000000003","user_id":"00000000-0000-0000-0000-000000000004","username":"alex","seed":null,"rating":null}],"entry_state":{"state":"open"},"stages":[{"id":"00000000-0000-0000-0000-000000000005","position":0,"draw_type":"swiss"}],"groups":[{"id":"00000000-0000-0000-0000-000000000006","stage_id":"00000000-0000-0000-0000-000000000005","position":0}],"fixtures":[{"id":"00000000-0000-0000-0000-000000000007","stage_id":"00000000-0000-0000-0000-000000000005","group_id":"00000000-0000-0000-0000-000000000006","round":1,"position":0,"entry_a_id":"00000000-0000-0000-0000-000000000003","entry_b_id":null,"winner_entry_id":null,"match_id":null,"match_status":null,"table_id":null,"scheduled_start":{"instant":"2026-09-05T14:00:00Z","local_label":"9:00 AM","tz_abbrev":"CDT"},"pinned_at":null}],"results":{"kind":"swiss_standings","rows":[{"entry_id":"00000000-0000-0000-0000-000000000003","rank":1,"played":0,"wins":0,"losses":0,"games_won":0,"games_lost":0}],"complete":false,"champion":null}}]}]
+        [{"id":"00000000-0000-0000-0000-000000000001","name":"Open","description":null,"status":"published","registration_open":true,"registration_generation":0,"checkout_available":true,"can_edit":false,"created_by_username":"director","address":null,"date_range":null,"table_catalogue":[],"draw_type_catalogue":null,"events":[{"id":"00000000-0000-0000-0000-000000000002","name":"Singles","format":"singles","draw_type":"swiss","timezone":"America/Chicago","max_players":null,"entry_fee":0,"slot":{"date":"2026-09-05","start":"09:00","end":"17:00"},"entrants":[{"id":"00000000-0000-0000-0000-000000000003","user_id":"00000000-0000-0000-0000-000000000004","username":"alex","seed":null,"rating":null}],"entry_state":{"state":"open"},"stages":[{"id":"00000000-0000-0000-0000-000000000005","position":0,"draw_type":"swiss"}],"groups":[{"id":"00000000-0000-0000-0000-000000000006","stage_id":"00000000-0000-0000-0000-000000000005","position":0}],"fixtures":[{"id":"00000000-0000-0000-0000-000000000007","stage_id":"00000000-0000-0000-0000-000000000005","group_id":"00000000-0000-0000-0000-000000000006","round":1,"position":0,"entry_a_id":"00000000-0000-0000-0000-000000000003","entry_b_id":null,"winner_entry_id":null,"match_id":null,"match_status":null,"table_id":null,"scheduled_start":{"instant":"2026-09-05T14:00:00Z","local_label":"9:00 AM","tz_abbrev":"CDT"},"pinned_at":null}],"results":{"kind":"swiss_standings","rows":[{"entry_id":"00000000-0000-0000-0000-000000000003","rank":1,"played":0,"wins":0,"losses":0,"games_won":0,"games_lost":0}],"complete":false,"champion":null}}]}]
         """#
         var payload = try JSONSerialization.jsonObject(with: Data(TournamentTransport.body.utf8)) as! [[String: Any]]
         var eventPayload = (payload[0]["events"] as! [[String: Any]])[0]
@@ -68,6 +68,56 @@ private final class TestLocationManager: CLLocationManager {
         precondition(tournaments[0].schedulePollSeconds == nil)
         print("PASS: near-me query, distances, eligibility rules, reservations, match settings and Swiss tiebreaks")
         let event = tournaments[0].events[0]
+        precondition(!event.requiresCheckout && !event.isCancelled)
+        let availableBody = TournamentTransport.body
+        var unavailablePayload = payload
+        var unavailableEvent = eventPayload
+        unavailableEvent["entry_fee"] = 12.0
+        unavailableEvent["lifecycle_state"] = "cancelled"
+        unavailablePayload[0]["events"] = [unavailableEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: unavailablePayload), encoding: .utf8)!
+        let unavailable = try await service.list()[0].events[0]
+        precondition(unavailable.requiresCheckout && unavailable.isCancelled, "Paid and cancelled entry states must survive decoding")
+        precondition(!unavailable.canStartCheckout(checkoutAvailable: true), "Cancelled paid events must not advertise checkout")
+        unavailableEvent["lifecycle_state"] = NSNull()
+        unavailableEvent["entry_state"] = ["state": "event_full"]
+        unavailablePayload[0]["events"] = [unavailableEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: unavailablePayload), encoding: .utf8)!
+        let full = try await service.list()[0]
+        precondition(full.checkoutAvailable, "Tournament checkout eligibility must survive decoding")
+        precondition(!full.events[0].canStartCheckout(checkoutAvailable: full.checkoutAvailable), "Full paid events must not advertise checkout")
+        precondition(event.canStartCheckout(checkoutAvailable: true) == false, "Free events must not advertise checkout")
+        var openPaidPayload = unavailablePayload
+        var openPaidEvent = unavailableEvent
+        openPaidEvent["entry_state"] = ["state": "open"]
+        openPaidPayload[0]["events"] = [openPaidEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: openPaidPayload), encoding: .utf8)!
+        let openPaid = try await service.list()[0]
+        precondition(openPaid.events[0].canStartCheckout(checkoutAvailable: openPaid.checkoutAvailable), "Eligible open paid events must advertise checkout")
+        precondition(openPaid.holdPollSeconds == 30, "Eligible paid events must poll to discover new checkout holds")
+        precondition(!openPaid.events[0].canStartCheckout(checkoutAvailable: false), "Ineligible merchants must not advertise checkout")
+        var paidDoublesPayload = openPaidPayload
+        var paidDoublesEvent = openPaidEvent
+        paidDoublesEvent["format"] = "doubles"
+        paidDoublesPayload[0]["events"] = [paidDoublesEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: paidDoublesPayload), encoding: .utf8)!
+        let paidDoubles = try await service.list()[0]
+        precondition(!paidDoubles.events[0].canStartCheckout(checkoutAvailable: true), "Paid doubles must not advertise unsupported checkout")
+        precondition(paidDoubles.holdPollSeconds == nil, "Paid doubles must not poll for checkout discovery")
+        var merchantUnavailablePayload = openPaidPayload
+        merchantUnavailablePayload[0]["checkout_available"] = false
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: merchantUnavailablePayload), encoding: .utf8)!
+        let merchantUnavailable = try await service.list()[0]
+        precondition(merchantUnavailable.holdPollSeconds == nil, "Merchant-unavailable tournaments must not poll for checkout discovery")
+        var legacyFeePayload = openPaidPayload
+        var legacyFeeEvent = openPaidEvent
+        legacyFeeEvent["entry_fee"] = 0.25
+        legacyFeePayload[0]["events"] = [legacyFeeEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: legacyFeePayload), encoding: .utf8)!
+        let legacyFee = try await service.list()[0]
+        precondition(!legacyFee.events[0].canStartCheckout(checkoutAvailable: true), "Preserved subminimum fees must not advertise checkout")
+        TournamentTransport.body = availableBody
+        print("PASS: paid checkout guidance requires an eligible tournament and an open event")
         var retainedPayload = payload
         var retainedEvent = eventPayload
         retainedEvent["retained_entrants"] = retainedEvent["entrants"]
@@ -84,6 +134,42 @@ private final class TestLocationManager: CLLocationManager {
         precondition(retained.player(retained.results?.rows?.first?.entryId) == "alex", "Results must retain historical player names")
         precondition(retainedTournament.entryCount == 1, "Tournament counts must include retained registrations")
         precondition(retained.capacityLabel == "1/2 players", "Capacity must use the server entered count")
+        var heldCapacityPayload = retainedPayload
+        var heldCapacityEvent = retainedEvent
+        heldCapacityEvent["held_places"] = 1
+        heldCapacityEvent["available_places"] = 0
+        heldCapacityPayload[0]["events"] = [heldCapacityEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: heldCapacityPayload), encoding: .utf8)!
+        let heldTournament = try await service.list()[0]
+        let heldCapacity = heldTournament.events[0]
+        precondition(heldCapacity.capacityLabel == "2/2 players", "Capacity must include checkout holds")
+        precondition(heldCapacity.hasHeldPlaces, "Events with active holds must request capacity refreshes")
+        precondition(heldTournament.hasHeldPlaces, "Tournament detail must poll while any checkout hold is active")
+        precondition(heldTournament.holdPollSeconds == 5, "Active holds must use the fast refresh cadence")
+        precondition(retainedTournament.holdPollSeconds == nil, "Free-only tournaments must not poll for checkout holds")
+        precondition(full.holdPollSeconds == nil, "Full tournaments without a hold must not poll for checkout discovery")
+        var uncappedHeldPayload = retainedPayload
+        var uncappedHeldEvent = retainedEvent
+        uncappedHeldEvent["max_players"] = NSNull()
+        uncappedHeldEvent["entered"] = 0
+        uncappedHeldEvent["entrants"] = []
+        uncappedHeldEvent["retained_entrants"] = []
+        uncappedHeldEvent["held_places"] = 1
+        uncappedHeldEvent["available_places"] = NSNull()
+        uncappedHeldPayload[0]["events"] = [uncappedHeldEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: uncappedHeldPayload), encoding: .utf8)!
+        let uncappedHeldCapacity = try await service.list()[0].events[0]
+        precondition(uncappedHeldCapacity.capacityLabel == "1 player", "Uncapped capacity must include checkout holds")
+        var overCapacityPayload = retainedPayload
+        var overCapacityEvent = retainedEvent
+        overCapacityEvent["entered"] = 6
+        overCapacityEvent["max_players"] = 4
+        overCapacityEvent["held_places"] = 0
+        overCapacityEvent["available_places"] = 0
+        overCapacityPayload[0]["events"] = [overCapacityEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: overCapacityPayload), encoding: .utf8)!
+        let overCapacity = try await service.list()[0].events[0]
+        precondition(overCapacity.capacityLabel == "6/4 players", "Capacity must preserve over-cap occupancy")
         let heldEntry = retained.entry(for: event.entrants[0].userId)
         precondition(heldEntry != nil, "A hidden held registration must offer withdrawal instead of entry")
         TournamentTransport.status = 204
@@ -159,6 +245,9 @@ private final class TestLocationManager: CLLocationManager {
         if event.fixtureHeading(event.fixtures[0]) != "Round 1" { roundTwoFailures.append("Swiss fixtures show a structural group") }
         if TournamentCopy.entryFee("45.005", locale: Locale(identifier: "en_US")) != nil { roundTwoFailures.append("sub-cent fee admitted") }
         if TournamentCopy.entryFee("1000000", locale: Locale(identifier: "en_US")) != nil { roundTwoFailures.append("over-limit fee admitted") }
+        if TournamentCopy.validEntryFee("0.49", locale: Locale(identifier: "en_US")) { roundTwoFailures.append("sub-minimum paid fee admitted") }
+        if !TournamentCopy.validEntryFee("0", locale: Locale(identifier: "en_US")) { roundTwoFailures.append("free entry fee refused") }
+        if !TournamentCopy.validEntryFee("0.50", locale: Locale(identifier: "en_US")) { roundTwoFailures.append("minimum paid fee refused") }
         if TournamentEventLimits.players.upperBound != 512 { roundTwoFailures.append("player limit stops below 512") }
         let manager = TestLocationManager()
         let location = TournamentLocation(manager: manager, locationTimeout: .milliseconds(20))

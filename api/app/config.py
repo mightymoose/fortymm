@@ -7,6 +7,7 @@ ad hoc ``os.environ.get(...)`` call site scattered through the codebase (see
 are left as-is.
 """
 
+import uuid
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated
@@ -167,6 +168,16 @@ class Settings(BaseSettings):
     #: wifi network can legitimately share an IP, so the 429 tells the player to
     #: retry shortly. The director entry arm carries no rate limit.
     tournament_entry_ip_per_hour: int = 30
+
+    #: Per-IP ceiling on creating paid checkout holds. Checkout is open to every
+    #: signed-in guest, so this bounds one host minting sessions to churn scarce
+    #: capacity while payment collection is unavailable.
+    tournament_checkout_ip_per_hour: Annotated[int, Field(gt=0)] = 30
+
+    #: The one Account whose owned tournaments may use Ryan's launch merchant.
+    #: An absent value fails paid checkout closed; it never turns a fee into free
+    #: entry. Independent organizer collection is intentionally out of scope.
+    tournament_payment_merchant_account_id: uuid.UUID | None = None
 
     #: The five authentication rate-limit ceilings (issue #1590), each an
     #: independent requests-per-hour count. Production keeps the tight abuse

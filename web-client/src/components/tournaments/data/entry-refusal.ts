@@ -41,6 +41,7 @@ export const ENTRY_REFUSAL_CODES = [
   // below rather than carrying words of its own. See `entryControlState`.
   'event_full',
   'rating_ineligible',
+  'payment_required',
 ] as const
 
 export type EntryRefusalCode = (typeof ENTRY_REFUSAL_CODES)[number]
@@ -114,6 +115,14 @@ export const ENTRY_REFUSAL_NOTICE: Record<EntryRefusalCode, EntryRefusalNotice> 
       tone: 'error',
       title: 'Not eligible',
       description: "Your rating doesn't meet this event's eligibility rules.",
+    },
+    // A stale tab can still offer the free-entry verb after an organizer adds a
+    // fee. Reconciliation redraws the card as paid; this copy tells the player
+    // how to continue without exposing the server's prose.
+    payment_required: {
+      tone: 'error',
+      title: 'This event now requires checkout',
+      description: 'Select the event again to add it to your checkout.',
     },
   }
 

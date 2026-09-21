@@ -21,6 +21,7 @@ from typing import Any, assert_never, cast
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.competition_rules import effective_draw_settings, format_rule_version
+from app.config import get_settings
 from app.draws import (
     EntryId,
     GroupId,
@@ -93,7 +94,7 @@ from app.tournament_eligibility import (
     event_is_full,
 )
 from app.tournament_queries import (
-    active_entrants_by_event,
+    active_entrants_and_hold_counts_by_event,
     completed_match_ids,
     entrant_is_retired,
     entrant_rating,
@@ -160,6 +161,10 @@ def _tournament_fields(
         "created_by_user_id": t.created_by_user_id,
         "created_by_username": created_by_username,
         "can_edit": t.owner_account_id == current_user_id,
+        "checkout_available": (
+            get_settings().tournament_payment_merchant_account_id == t.owner_account_id
+            and t.owner_account_is_active
+        ),
         "created_at": t.created_at,
         "updated_at": t.updated_at,
     }
@@ -747,6 +752,7 @@ def serialize_event(
     fixtures: list[TournamentFixtureRead],
     rating: float | None,
     game_counts: dict[uuid.UUID, tuple[int, int]] | None,
+    held_places: int = 0,
     retired: bool = False,
 ) -> TournamentEventRead:
     # ``entrants`` is not on the ORM row in the shape the read model wants (it
@@ -781,6 +787,7 @@ def serialize_event(
         {
             "id": e.id,
             "tournament_id": e.tournament_id,
+            "lifecycle_state": e.lifecycle_state,
             "name": e.name,
             "format": e.format,
             # The owned value is loaded with the event; no settings query is needed.
@@ -838,8 +845,12 @@ def serialize_event(
             "created_at": e.created_at,
             "updated_at": e.updated_at,
             "entrants": entrants,
+            "held_places": held_places,
             "entry_state": _entry_state(
-                e, entered=len(entrants), rating=rating, retired=retired
+                e,
+                entered=len(entrants) + held_places,
+                rating=rating,
+                retired=retired,
             ),
             "fixtures": fixtures,
             # The results, projected here from the fixtures' completed matches plus
@@ -928,6 +939,7 @@ def serialize_detail(
     events: list[TournamentEvent],
     entrants_by_event: dict[uuid.UUID, list[TournamentEntrantRead]],
     fixtures_by_event: dict[uuid.UUID, list[TournamentFixtureRead]],
+    holds_by_event: dict[uuid.UUID, int],
     game_counts: dict[uuid.UUID, tuple[int, int]] | None,
     rating: float | None,
     latest_schedule_solve: ScheduleSolve | None,
@@ -976,6 +988,7 @@ def serialize_detail(
                     entrants=entrants_by_event[e.id],
                     fixtures=fixtures_by_event[e.id],
                     rating=rating,
+                    held_places=holds_by_event[e.id],
                     retired=retired,
                     game_counts=game_counts,
                 )
@@ -1011,7 +1024,13 @@ async def shape_created_event_read(
     rating = await entrant_rating(db, league_id, primary_player_reference(viewer_id))
     retired = await entrant_is_retired(db, viewer_id)
     return serialize_event(
-        event, entrants=[], fixtures=[], rating=rating, game_counts={}, retired=retired
+        event,
+        entrants=[],
+        fixtures=[],
+        rating=rating,
+        held_places=0,
+        game_counts={},
+        retired=retired,
     )
 
 
@@ -1034,12 +1053,16 @@ async def shape_event_read(
     event as it now stands, judged on the caller's one ladder ``rating`` on
     ``league_id`` — the tournament's league, passed in by the verb rather than
     re-queried here."""
-    entrants = (await active_entrants_by_event(db, [event.id]))[event.id]
+    entrants_by_event, holds_by_event = await active_entrants_and_hold_counts_by_event(
+        db, [event.id]
+    )
+    entrants = entrants_by_event[event.id]
     event_fixtures = await fixtures_by_event(db, [event.id])
     fixtures = event_fixtures[event.id]
     game_counts = await game_counts_by_match(db, completed_match_ids(event_fixtures))
     rating = await entrant_rating(db, league_id, primary_player_reference(viewer_id))
     retired = await entrant_is_retired(db, viewer_id)
+    held_places = holds_by_event[event.id]
     # Its stages ride along for free, same as ``shape_created_event_read`` above:
     # ``update_event``'s own ``db.refresh(event)`` repopulates the ``lazy="selectin"``
     # collection, so ``serialize_event`` reads real rows off ``event.stages`` — and
@@ -1050,6 +1073,7 @@ async def shape_event_read(
         entrants=entrants,
         fixtures=fixtures,
         rating=rating,
+        held_places=held_places,
         game_counts=game_counts,
         retired=retired,
     )

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct TournamentEventView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var tournamentStore: TournamentStore<TournamentDTO>
     let eventId: UUID
     let service: TournamentService
@@ -88,6 +89,14 @@ struct TournamentEventView: View {
         }
         .background(FMColor.bgApp.ignoresSafeArea()).foregroundStyle(FMColor.fg1)
         .navigationTitle("Event").navigationBarTitleDisplayMode(.inline)
+        .task(id: "holds-\(scenePhase == .active)-\(tournamentStore.value?.holdPollSeconds ?? 0)") {
+            guard scenePhase == .active else { return }
+            while !Task.isCancelled, let seconds = tournamentStore.value?.holdPollSeconds {
+                do { try await Task.sleep(for: .seconds(seconds)) } catch { return }
+                guard !Task.isCancelled else { return }
+                await tournamentStore.load(force: true)
+            }
+        }
         .refreshable {
             await tournamentStore.load(force: true)
             if tournamentStore.refreshError == nil { error = nil }
@@ -110,17 +119,36 @@ struct TournamentEventView: View {
                     Spacer()
                     Button("Withdraw", role: .destructive) { confirmingWithdrawal = true }.disabled(busy)
                 }.font(FMFont.ui(14))
+            } else if event.isCancelled {
+                TournamentNotice(message: "This event is cancelled and cannot accept new entries.")
+            } else if event.requiresCheckout {
+                if event.canStartCheckout(checkoutAvailable: tournament.checkoutAvailable) {
+                    TournamentNotice(message: "Paid entry is currently available on fortymm.com.")
+                } else if event.entryFee < 0.50 {
+                    TournamentNotice(message: "This legacy entry fee cannot be checked out. Ask the organizer to update it.")
+                } else if event.entryState.state == .open {
+                    TournamentNotice(message: "Checkout is not available for this tournament.")
+                } else {
+                    entryRefusal(event)
+                }
             } else {
-                switch event.entryState.state {
-                case .open:
+                if event.entryState.state == .open {
                     Button("Enter event") { mutate { try await service.enter(tournament.id, event: event.id) } }
                         .buttonStyle(.borderedProminent).disabled(busy)
-                case .full: TournamentNotice(message: "This event is full. A place may open if another player withdraws.")
-                case .ineligible: TournamentNotice(message: event.ineligibilityMessage)
-                case .retired: TournamentNotice(message: "This player is retired.")
-                case .unknown: TournamentNotice(message: "Entry is currently unavailable. Refresh to check again.")
+                } else {
+                    entryRefusal(event)
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func entryRefusal(_ event: TournamentEventDTO) -> some View {
+        switch event.entryState.state {
+        case .full: TournamentNotice(message: "This event is full. A place may open if another player withdraws.")
+        case .ineligible: TournamentNotice(message: event.ineligibilityMessage)
+        case .retired: TournamentNotice(message: "This player is retired.")
+        case .open, .unknown: TournamentNotice(message: "Entry is currently unavailable. Refresh to check again.")
         }
     }
 

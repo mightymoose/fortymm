@@ -64,6 +64,9 @@ class EntryRefusal(StrEnum):
     rule"; it is "there is no fact to judge", and the beginners' event is exactly the
     one a brand-new player needs to get into."""
 
+    payment_required = "payment_required"
+    """The event has a positive fee and must be entered through paid checkout."""
+
 
 class EntryRefusedError(Exception):
     """Raised by the ``enter_event`` verb for one of the four machine-readable entry

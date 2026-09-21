@@ -3,8 +3,11 @@ import {
   capacityLabel,
   enteredSummary,
   eventCapacity,
+  HOLD_DISCOVERY_INTERVAL_MS,
+  HOLD_REFRESH_INTERVAL_MS,
+  holdRefreshInterval,
 } from './capacity'
-import { buildEntrants, buildEvent } from './seed.factory'
+import { buildEntrants, buildEvent, buildTournament } from './seed.factory'
 
 /** The capacity of an event holding `entered` of `maxPlayers` — stated in the two
  * numbers the reading is about, but built through the real factory, so `entered`
@@ -24,6 +27,15 @@ describe('eventCapacity', () => {
 
   it('reads an empty event as entirely open', () => {
     expect(capacityOf(0, 48)).toEqual({ state: 'places-left', remaining: 48 })
+  })
+
+  it('counts valid checkout holds as occupied without calling them entrants', () => {
+    const held = { entered: 6, heldPlaces: 2, maxPlayers: 10 }
+    expect(eventCapacity(held)).toEqual({ state: 'places-left', remaining: 2 })
+    expect(enteredSummary(held)).toBe(
+      '6 entered and 2 held, 8 of 10 places occupied',
+    )
+    expect(capacityFillPercent(held)).toBe(80)
   })
 
   // THE BOUNDARY. `entered === maxPlayers` is where "places left" stops being a
@@ -59,6 +71,37 @@ describe('eventCapacity', () => {
     it('stays uncapped however many have entered', () => {
       expect(capacityOf(250, null)).toEqual({ state: 'uncapped' })
     })
+  })
+})
+
+describe('holdRefreshInterval', () => {
+  it('polls while any checkout hold can affect capacity', () => {
+    const held = buildTournament({
+      status: 'archived',
+      checkoutAvailable: false,
+      events: [buildEvent({ heldPlaces: 2 })],
+    })
+    expect(holdRefreshInterval(held)).toBe(HOLD_REFRESH_INTERVAL_MS)
+  })
+
+  it('keeps a slower discovery poll for an eligible paid event with no holds', () => {
+    expect(holdRefreshInterval(buildTournament())).toBe(HOLD_DISCOVERY_INTERVAL_MS)
+    expect(holdRefreshInterval(undefined)).toBe(false)
+  })
+
+  it.each([
+    ['draft', buildTournament({ status: 'draft' })],
+    ['live', buildTournament({ status: 'live' })],
+    ['archived', buildTournament({ status: 'archived' })],
+    ['closed', buildTournament({ registrationOpen: false })],
+    ['checkout-disabled', buildTournament({ checkoutAvailable: false })],
+    ['no events', buildTournament({ events: [] })],
+    ['free-only', buildTournament({ events: [buildEvent({ entryFee: 0 })] })],
+    ['subminimum fee', buildTournament({ events: [buildEvent({ entryFee: 0.25 })] })],
+    ['doubles-only', buildTournament({ events: [buildEvent({ format: 'doubles' })] })],
+    ['cancelled-only', buildTournament({ events: [buildEvent({ lifecycleState: 'cancelled' })] })],
+  ])('stops zero-hold discovery for %s tournaments', (_label, tournament) => {
+    expect(holdRefreshInterval(tournament)).toBe(false)
   })
 })
 

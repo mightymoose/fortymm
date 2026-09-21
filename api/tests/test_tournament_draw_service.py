@@ -616,6 +616,8 @@ async def test_reregistering_same_entry_does_not_restore_draw_currency(
     tournament.status = TournamentStatus.published
     await db_session.commit()
     event = await _make_event(db_session, tournament)
+    event.entry_fee = Decimal("0")
+    await db_session.commit()
     tournament_id, event_id = tournament.id, event.id
     await _enter_field(db_session, event, 4, prefix="currency-period")
     await db_session.refresh(owner)
@@ -742,6 +744,7 @@ async def test_swiss_bye_reregistration_still_requires_a_recut(
     event = await _make_event(
         db_session, tournament, draw_type=DrawType.swiss, groups=[]
     )
+    event.entry_fee = Decimal("0")
     event.draw_settings = TournamentEventDrawSettings.for_draw_type(
         DrawType.swiss, settings={"rounds": 3}
     )

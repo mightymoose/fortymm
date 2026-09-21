@@ -511,6 +511,14 @@ export function entryControlState({
   const entry = myEntrant(event, username)
   if (entry) return { kind: 'withdraw', entryId: entry.id }
 
+  if (event.lifecycleState === 'cancelled') {
+    return {
+      kind: 'closed',
+      lead: 'Event cancelled',
+      reason: 'This event is cancelled and cannot accept new entries.',
+    }
+  }
+
   // 4. What the EVENT says about this caller entering it — the server's judgement,
   //    rendered, never recomputed (ADR-0783). The copy is the refusal table's
   //    (`./entry-refusal`), which is the same table the 409 on `POST …/entries`

@@ -74,6 +74,7 @@ struct NewTournamentEventView: View {
                     Toggle("Limit players", isOn: $capped)
                     if capped { Stepper("Maximum players: \(maxPlayers)", value: $maxPlayers, in: TournamentEventLimits.players) }
                     TextField("Entry fee", text: $entryFee).keyboardType(.decimalPad)
+                    Text("Free, or at least $0.50.").font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Schedule") {
                     DatePicker("Date", selection: $date, displayedComponents: .date)
@@ -101,7 +102,7 @@ struct NewTournamentEventView: View {
     }
     private var valid: Bool {
         TournamentCopy.validName(name) && !drawType.isEmpty &&
-        (TournamentCopy.entryFee(entryFee).map { $0.isFinite && $0 >= 0 } ?? false) && formatted(start, "HH:mm") < formatted(end, "HH:mm")
+        TournamentCopy.validEntryFee(entryFee) && formatted(start, "HH:mm") < formatted(end, "HH:mm")
     }
     private func formatted(_ date: Date, _ format: String) -> String {
         let formatter = DateFormatter()

@@ -146,6 +146,9 @@ async def cancel_event(
         .where(TournamentEvent.id == event_id)
         .values(lifecycle_state=EventLifecycleState.cancelled)
     )
+    from app.tournament_checkouts import invalidate_checkouts_for_event
+
+    await invalidate_checkouts_for_event(db, event_id)
     await db.refresh(event)
     await _record_reconciliation(db, event)
 

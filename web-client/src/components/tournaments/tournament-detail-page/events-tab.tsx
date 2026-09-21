@@ -1,14 +1,33 @@
 import { Plus, Trophy } from 'lucide-react'
+import {
+  type Dispatch,
+  type SetStateAction,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
 
 import { useSession } from '@/api/session'
 import { Button } from '@/components/ui/button'
 
 import type { Tournament, TournamentEvent } from '../data/types'
+import {
+  useCancelCheckout,
+  useCurrentCheckout,
+  useRefreshTournamentCheckout,
+  useStartCheckout,
+} from '../data/api'
 import { EmptyState } from '../empty-state'
 import { SectionHeader } from './section-header'
 import { DrawPanel } from './events-tab/draw-panel'
 import { EventCard } from './events-tab/event-card'
 import { EnterEventControl } from './events-tab/enter-event-control'
+import { CheckoutSummary } from './events-tab/checkout-summary'
+import {
+  isCheckoutEventEligible,
+  MAX_CHECKOUT_EVENTS,
+  toggleCheckoutEvent,
+} from './events-tab/checkout-policy'
 
 export interface EventsTabProps {
   tournament: Tournament
@@ -17,8 +36,9 @@ export interface EventsTabProps {
   canEdit: boolean
   onOpenEvent: (event: TournamentEvent) => void
   onNewEvent: () => void
+  checkoutDraftIds?: Set<string>
+  onCheckoutDraftChange?: Dispatch<SetStateAction<Set<string>>>
 }
-
 /** The Events tab: a list of event row-cards with a "New event" action and an
  * empty state. */
 export const EventsTab = ({
@@ -26,6 +46,8 @@ export const EventsTab = ({
   canEdit,
   onOpenEvent,
   onNewEvent,
+  checkoutDraftIds,
+  onCheckoutDraftChange,
 }: EventsTabProps) => {
   // The draw formats the server offers (ADR 20260726), handed to each card so it can
   // name the event's draw type in the server's words. Read off the tournament rather
@@ -39,7 +61,60 @@ export const EventsTab = ({
   // and "which entrant is me" is a join on the USERNAME — the session carries no
   // user id (see `myEntrant`). `EnterEventControl` reads the same session for the
   // same join, so the chip and the Enter/Withdraw control can never disagree.
-  const username = useSession().data?.data.user.username
+  const session = useSession()
+  const username = session.data?.data.user.username
+  const [localSelectedIds, setLocalSelectedIds] = useState<Set<string>>(() => new Set())
+  const selectedIds = checkoutDraftIds ?? localSelectedIds
+  const setSelectedIds = onCheckoutDraftChange ?? setLocalSelectedIds
+  const checkoutDiscoveryEnabled =
+    tournament.checkoutAvailable &&
+    tournament.status === 'published' &&
+    tournament.registrationOpen !== false
+  const currentCheckout = useCurrentCheckout(
+    tournament.id,
+    session.isSuccess,
+    checkoutDiscoveryEnabled,
+  )
+  const startCheckout = useStartCheckout(tournament.id)
+  const cancelCheckout = useCancelCheckout(tournament.id)
+  const refreshCheckout = useRefreshTournamentCheckout(tournament.id)
+  const checkout = currentCheckout.data?.status === 'active' ? currentCheckout.data : null
+  const activeCheckoutId = checkout?.id
+  // The POST response can be lost after the server commits. The mutation's
+  // reconciliation then discovers the durable checkout; adopt that server state
+  // and discard the draft after commit so a controlled draft does not update its
+  // parent while this child is rendering.
+  useEffect(() => {
+    if (activeCheckoutId && selectedIds.size > 0) {
+      setSelectedIds(new Set())
+    }
+  }, [activeCheckoutId, selectedIds, setSelectedIds])
+  const hidePaidSelection = checkout !== null || startCheckout.isPending
+  const disablePaidSelection = currentCheckout.isFetching
+  const selectedEvents = useMemo(
+    () =>
+      tournament.events.filter(
+        (event) =>
+          selectedIds.has(event.id) &&
+          isCheckoutEventEligible(tournament, event, username),
+      ),
+    [selectedIds, tournament, username],
+  )
+  const effectiveSelectedIds = useMemo(
+    () => new Set(selectedEvents.map((event) => event.id)),
+    [selectedEvents],
+  )
+  useEffect(() => {
+    if (!activeCheckoutId && effectiveSelectedIds.size !== selectedIds.size) {
+      // Editing or externally updating an event can make a draft impossible to
+      // submit. Prune it after commit; controlled state belongs to the parent.
+      setSelectedIds(effectiveSelectedIds)
+    }
+  }, [activeCheckoutId, effectiveSelectedIds, selectedIds, setSelectedIds])
+  const togglePaid = (eventId: string) => {
+    if (hidePaidSelection || disablePaidSelection) return
+    setSelectedIds((current) => toggleCheckoutEvent(current, eventId))
+  }
 
   return (
     <div>
@@ -61,6 +136,39 @@ export const EventsTab = ({
             </Button>
           )
         }
+      />
+      <CheckoutSummary
+        selection={selectedEvents}
+        checkout={checkout}
+        pending={
+          currentCheckout.isFetching ||
+          startCheckout.isPending ||
+          cancelCheckout.isPending
+        }
+        onHold={() => {
+          startCheckout.mutate(selectedEvents.map((event) => event.id), {
+            onSuccess: () => setSelectedIds(new Set()),
+          })
+        }}
+        onCancel={() => {
+          if (checkout) cancelCheckout.mutate(checkout.id)
+        }}
+        onChange={() => {
+          if (!checkout) return
+          const previous = new Set(checkout.lines.map((line) => line.eventId))
+          void cancelCheckout
+            .mutateAsync(checkout.id)
+            .catch(() => undefined)
+            .then(async () => {
+              // A DELETE response can be lost after the server commits. Restore
+              // the editable selection from durable reconciled state, not only
+              // from the mutation's success callback.
+              const reconciled = await currentCheckout.refetch()
+              if (reconciled.data === null) setSelectedIds(previous)
+            })
+        }}
+        onExpired={refreshCheckout}
+        onRemoveSelection={(eventId) => togglePaid(eventId)}
       />
       {tournament.events.length === 0 ? (
         <EmptyState
@@ -93,7 +201,20 @@ export const EventsTab = ({
               // and renders nothing when it doesn't — and it takes the whole
               // tournament, not just its id, because whether registration is open
               // at all is a property of the tournament's STATUS (ADR-0017).
-              action={<EnterEventControl tournament={tournament} event={ev} />}
+              action={
+                <EnterEventControl
+                  tournament={tournament}
+                  event={ev}
+                  selected={effectiveSelectedIds.has(ev.id)}
+                  onTogglePaid={() => togglePaid(ev.id)}
+                  paidSelectionLocked={
+                    hidePaidSelection ||
+                    (effectiveSelectedIds.size >= MAX_CHECKOUT_EVENTS &&
+                      !effectiveSelectedIds.has(ev.id))
+                  }
+                  paidSelectionDisabled={disablePaidSelection}
+                />
+              }
               // The event's draw (ADR-0786): its groups and fixtures for everyone, its
               // three verbs for the director alone. It hangs off the EVENT, not off a
               // tab of its own — a draw belongs to one event, and a "Draw" tab would

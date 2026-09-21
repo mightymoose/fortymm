@@ -295,6 +295,7 @@ async def test_tournament_entry_is_for_managed_player_not_account(db_session):
     db_session.add_all([director, manager])
     await db_session.commit()
     event = await _make_event(db_session, director)
+    event.entry_fee = 0
     tournament = await db_session.get(Tournament, event.tournament_id)
     tournament.status = TournamentStatus.published
     await db_session.commit()
@@ -559,6 +560,7 @@ async def test_account_without_player_can_manage_owned_tournament_entries(db_ses
     db_session.add_all([director, player])
     await db_session.commit()
     event = await _make_event(db_session, director)
+    event.entry_fee = 0
     tournament = await db_session.get(Tournament, event.tournament_id)
     tournament.status = TournamentStatus.published
     await db_session.commit()

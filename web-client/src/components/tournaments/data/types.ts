@@ -686,6 +686,7 @@ export type EventEntryState =
 export interface TournamentEvent {
   id: string
   name: string
+  lifecycleState: 'unstarted' | 'in_progress' | 'finished' | 'cancelled'
   format: EventFormat
   drawType: DrawType
   /** **K** — how many of each group's finishers advance into the knockout stage of an
@@ -741,6 +742,10 @@ export interface TournamentEvent {
   timezone: string
   /** Server-derived held registration count, including retained entrants. */
   entered: number
+  /** Valid checkout holds consuming capacity without appearing on the roster. */
+  heldPlaces: number
+  /** Places free after entrants and holds, or null when the event is uncapped. */
+  availablePlaces: number | null
   entrants: Entrant[]
   /** Still-entered players hidden from the active roster; retained for historical joins. */
   retainedEntrants: Entrant[]
@@ -842,6 +847,8 @@ export interface Tournament {
    * `can_edit`. Gates every mutation affordance — a non-creator sees the
    * read-only view. */
   canEdit: boolean
+  /** Whether this tournament's owner is the configured launch merchant. */
+  checkoutAvailable: boolean
   /** This tournament's real date span — the min/max of its events' own
    * `slot.date` — **derived by the server on every read** (#1511, "A tournament's
    * dates run backwards, and an event can sit outside them"), never a stored,

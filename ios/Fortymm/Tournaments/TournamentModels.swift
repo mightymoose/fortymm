@@ -45,6 +45,7 @@ struct TournamentDTO: Decodable, Identifiable {
     let status: TournamentStatus
     let registrationOpen: Bool
     let registrationGeneration: Int
+    let checkoutAvailable: Bool
     let canEdit: Bool
     let distanceMiles: Double?
     let createdByUsername: String
@@ -66,6 +67,14 @@ struct TournamentDTO: Decodable, Identifiable {
     var schedulePollSeconds: Int? {
         if let solve = latestScheduleSolve, ["queued", "running"].contains(solve.status) { return 3 }
         return status == .live ? 15 : nil
+    }
+    var hasHeldPlaces: Bool { events.contains { $0.hasHeldPlaces } }
+    var holdPollSeconds: Int? {
+        if hasHeldPlaces { return 5 }
+        guard status == .published, registrationOpen, checkoutAvailable,
+              events.contains(where: { $0.canStartCheckout(checkoutAvailable: true) })
+        else { return nil }
+        return 30
     }
     func drawName(_ event: TournamentEventDTO) -> String {
         drawTypeCatalogue?.first { $0.key == event.drawType }?.name ?? event.formatLabel
@@ -100,6 +109,7 @@ struct TournamentDTO: Decodable, Identifiable {
 struct TournamentEventDTO: Decodable, Identifiable {
     let id: UUID
     let name, format, drawType, timezone: String
+    private let lifecycleState: String?
     let maxPlayers: Int?
     let matchSettings: MatchSettings?
     let predicates: [Predicate]?
@@ -136,9 +146,16 @@ struct TournamentEventDTO: Decodable, Identifiable {
         }
     }
     let entryFee: Double
+    var isCancelled: Bool { lifecycleState == "cancelled" }
+    var requiresCheckout: Bool { entryFee > 0 }
+    var hasHeldPlaces: Bool { (heldPlaces ?? 0) > 0 }
+    func canStartCheckout(checkoutAvailable: Bool) -> Bool {
+        format == "singles" && entryFee >= 0.50 && checkoutAvailable && entryState.state == .open && !isCancelled
+    }
     let slot: Slot
     let entrants: [Entrant]
     private let entered: Int?
+    private let heldPlaces: Int?
     var entryCount: Int { entered ?? historicalEntrants.count }
     private let retainedEntrants: [Entrant]?
     var historicalEntrants: [Entrant] {
@@ -231,7 +248,12 @@ struct TournamentEventDTO: Decodable, Identifiable {
         canEdit && !fixtures.contains { $0.winnerEntryId != nil || $0.matchId != nil }
     }
     var formatLabel: String { drawType.replacingOccurrences(of: "-", with: " ").capitalized }
-    var capacityLabel: String { maxPlayers.map { "\(entryCount)/\($0) players" } ?? TournamentCopy.count(entryCount, "player") }
+    var capacityLabel: String {
+        let occupied = entryCount + (heldPlaces ?? 0)
+        return maxPlayers.map { maximum in
+            return "\(occupied)/\(maximum) players"
+        } ?? TournamentCopy.count(occupied, "player")
+    }
     var rosterEmptyMessage: String? {
         guard entrants.isEmpty else { return nil }
         return entryCount == 0 ? "No players entered yet." : "No active players to display."
@@ -279,6 +301,10 @@ enum TournamentCopy {
         NSDecimalRound(&cents, &decimal, 2, .down)
         guard decimal == cents else { return nil }
         return value
+    }
+    static func validEntryFee(_ text: String, locale: Locale = .current) -> Bool {
+        guard let value = entryFee(text, locale: locale) else { return false }
+        return value == 0 || value >= 0.50
     }
     static func count(_ count: Int, _ noun: String, plural: String? = nil) -> String {
         "\(count) \(count == 1 ? noun : (plural ?? noun + "s"))"

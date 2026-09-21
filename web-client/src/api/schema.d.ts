@@ -1734,6 +1734,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tournaments/{tournament_id}/checkouts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Start Tournament Checkout
+         * @description Start or resume one immutable combined paid-event checkout hold.
+         */
+        post: operations["start_tournament_checkout_v1_tournaments__tournament_id__checkouts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tournaments/{tournament_id}/checkouts/current": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Current Tournament Checkout
+         * @description Resume this Player's active checkout on this or another device.
+         */
+        get: operations["get_current_tournament_checkout_v1_tournaments__tournament_id__checkouts_current_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tournaments/{tournament_id}/checkouts/{checkout_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tournament Checkout
+         * @description Read an authorized checkout's server-owned quote and deadline.
+         */
+        get: operations["get_tournament_checkout_v1_tournaments__tournament_id__checkouts__checkout_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Cancel Tournament Checkout
+         * @description Explicitly cancel checkout and release every selected place together.
+         */
+        delete: operations["cancel_tournament_checkout_v1_tournaments__tournament_id__checkouts__checkout_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/schedule-solves": {
         parameters: {
             query?: never;
@@ -2765,6 +2829,11 @@ export interface components {
          * @enum {string}
          */
         EventFormat: "singles" | "doubles" | "teams";
+        /**
+         * EventLifecycleState
+         * @enum {string}
+         */
+        EventLifecycleState: "unstarted" | "in_progress" | "finished" | "cancelled";
         /**
          * EventStageRead
          * @description One stage of an event's draw — a row the event owns (ADR 20260815 decision 1,
@@ -5322,6 +5391,94 @@ export interface components {
             /** Pruned */
             pruned: number;
         };
+        /** TournamentCheckoutCreate */
+        TournamentCheckoutCreate: {
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /** Event Ids */
+            event_ids: string[];
+        };
+        /** TournamentCheckoutLineRead */
+        TournamentCheckoutLineRead: {
+            /**
+             * Event Id
+             * Format: uuid
+             */
+            event_id: string;
+            /** Event Name */
+            event_name: string;
+            /** Price Cents */
+            price_cents: number;
+        };
+        /**
+         * TournamentCheckoutPaymentState
+         * @enum {string}
+         */
+        TournamentCheckoutPaymentState: "unavailable";
+        /** TournamentCheckoutRead */
+        TournamentCheckoutRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /**
+             * Tournament Id
+             * Format: uuid
+             */
+            tournament_id: string;
+            /** Registration Generation */
+            registration_generation: number;
+            status: components["schemas"]["TournamentCheckoutState"];
+            payment_state: components["schemas"]["TournamentCheckoutPaymentState"];
+            /** Currency */
+            currency: string;
+            /** Total Cents */
+            total_cents: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Remaining Seconds */
+            remaining_seconds: number;
+            /** Lines */
+            lines: components["schemas"]["TournamentCheckoutLineRead"][];
+        };
+        /** TournamentCheckoutRefusal */
+        TournamentCheckoutRefusal: {
+            /** Code */
+            code: string;
+            /** Message */
+            message: string;
+            /** Event Id */
+            event_id?: string | null;
+        };
+        /**
+         * TournamentCheckoutRefusalResponse
+         * @description The FastAPI ``HTTPException`` envelope for a checkout conflict.
+         */
+        TournamentCheckoutRefusalResponse: {
+            detail: components["schemas"]["TournamentCheckoutRefusal"];
+        };
+        /**
+         * TournamentCheckoutState
+         * @enum {string}
+         */
+        TournamentCheckoutState: "active" | "cancelled" | "expired" | "invalidated";
         /**
          * TournamentCreate
          * @description A new tournament. It carries **no** ``status``: a tournament is born
@@ -5383,6 +5540,8 @@ export interface components {
             created_by_username: string;
             /** Can Edit */
             can_edit: boolean;
+            /** Checkout Available */
+            checkout_available: boolean;
             /**
              * Created At
              * Format: date-time
@@ -5514,6 +5673,7 @@ export interface components {
              * Format: uuid
              */
             tournament_id: string;
+            lifecycle_state: components["schemas"]["EventLifecycleState"];
             /** Name */
             name: string;
             format: components["schemas"]["EventFormat"];
@@ -5559,6 +5719,8 @@ export interface components {
             retained_entrants?: components["schemas"]["TournamentEntrantRead"][];
             /** Entry State */
             entry_state: components["schemas"]["EventEntryOpen"] | components["schemas"]["EventEntryFull"] | components["schemas"]["EventEntryRatingIneligible"] | components["schemas"]["EventEntryRetired"];
+            /** Held Places */
+            held_places: number;
             /** Fixtures */
             fixtures: components["schemas"]["TournamentFixtureRead"][];
             /** Results */
@@ -5568,6 +5730,11 @@ export interface components {
              * @description Held registrations, including identities hidden from the active roster.
              */
             readonly entered: number;
+            /**
+             * Available Places
+             * @description Capacity not occupied by entrants or valid checkout holds.
+             */
+            readonly available_places: number | null;
         };
         /**
          * TournamentEventUpdate
@@ -5863,6 +6030,8 @@ export interface components {
             created_by_username: string;
             /** Can Edit */
             can_edit: boolean;
+            /** Checkout Available */
+            checkout_available: boolean;
             /**
              * Created At
              * Format: date-time
@@ -8786,6 +8955,167 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_tournament_checkout_v1_tournaments__tournament_id__checkouts_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TournamentCheckoutCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentCheckoutRead"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentCheckoutRefusalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Checkout admission limit exceeded. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Checkout admission budget unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    get_current_tournament_checkout_v1_tournaments__tournament_id__checkouts_current_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentCheckoutRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tournament_checkout_v1_tournaments__tournament_id__checkouts__checkout_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+                checkout_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentCheckoutRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_tournament_checkout_v1_tournaments__tournament_id__checkouts__checkout_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+                checkout_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentCheckoutRead"];
+                };
             };
             /** @description Validation Error */
             422: {

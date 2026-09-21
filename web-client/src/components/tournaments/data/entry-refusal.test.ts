@@ -128,6 +128,14 @@ describe('entryRefusalNotice', () => {
     })
   })
 
+  it('guides a stale free-entry tab into checkout when payment is now required', () => {
+    expect(entryRefusalNotice(refusal(coded('payment_required')))).toEqual({
+      tone: 'error',
+      title: 'This event now requires checkout',
+      description: 'Select the event again to add it to your checkout.',
+    })
+  })
+
   it('is null for anything it cannot name — the caller falls back to the server', () => {
     expect(entryRefusalNotice(refusal(coded('invitation_only')))).toBeNull()
   })

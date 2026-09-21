@@ -98,6 +98,7 @@ type ReservationUpsert = components['schemas']['ReservationUpsert']
 // stub) derive it from `StoredEvent.reservations` at read time, so the 1:1 this slice
 // keeps can never drift out of step by itself.
 type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
+type TournamentCheckoutRead = components['schemas']['TournamentCheckoutRead']
 
 /** What the store actually holds for an event: everything the wire shape has
  * *except* the three fields the server DERIVES at read time — the `entered` count,
@@ -137,7 +138,9 @@ type ScheduleSolveRead = components['schemas']['ScheduleSolveRead']
  * every draw type but `swiss`, and `null` is not "unset" there either — a round-robin's
  * rounds come off the circle method and a bracket's depth follows from the field, so
  * neither is a number anybody chooses. */
-type StoredEvent = Omit<TournamentEventRead, 'entered' | 'entry_state' | 'groups'> & {
+type StoredEvent = Omit<TournamentEventRead, 'entered' | 'held_places' | 'available_places' | 'entry_state' | 'groups' | 'lifecycle_state'> & {
+  /** Older mock seeds predate lifecycle reads; they represent unstarted events. */
+  lifecycle_state?: TournamentEventRead['lifecycle_state']
   /** Seeded: the dev user is refused by this rule, at this rating. */
   ineligible?: { predicate_id: string; rating: number }
 }
@@ -162,11 +165,17 @@ type StoredEvent = Omit<TournamentEventRead, 'entered' | 'entry_state' | 'groups
  * let the two disagree the moment an event's slot moved and nobody re-derived the copy. */
 type StoredTournament = Omit<
   TournamentDetailRead,
-  'events' | 'draw_type_catalogue' | 'date_range' | 'registration_open' | 'registration_generation'
+  | 'events'
+  | 'draw_type_catalogue'
+  | 'date_range'
+  | 'registration_open'
+  | 'registration_generation'
+  | 'checkout_available'
 > & {
   events: StoredEvent[]
   registration_open?: boolean
   registration_generation?: number
+  checkout_available?: boolean
 }
 
 // The dev current user — must line up with the mocked session in handlers.ts so
@@ -593,6 +602,7 @@ function seed(): StoredTournament[] {
       name: 'Bay Area Open 2026',
       description: 'Two-day open. USATT-sanctioned, ratings-eligible.',
       status: 'published',
+      checkout_available: true,
       league_id: DEFAULT_LEAGUE_ID,
       address: {
         venue: 'Berkeley TT Club',
@@ -1355,6 +1365,51 @@ function seed(): StoredTournament[] {
 }
 
 let tournaments: StoredTournament[] = seed()
+const checkoutByTournament = new Map<string, TournamentCheckoutRead>()
+
+export function currentMockCheckout(
+  checkout: TournamentCheckoutRead,
+  now = Date.now(),
+): TournamentCheckoutRead | null {
+  const remainingSeconds = Math.max(
+    0,
+    Math.ceil((Date.parse(checkout.expires_at) - now) / 1_000),
+  )
+  return remainingSeconds === 0
+    ? null
+    : { ...checkout, remaining_seconds: remainingSeconds }
+}
+
+export function storeMockCheckout(checkout: TournamentCheckoutRead): void {
+  checkoutByTournament.set(checkout.tournament_id, checkout)
+}
+
+export function readCurrentMockCheckout(
+  tournamentId: string,
+  now = Date.now(),
+): TournamentCheckoutRead | null {
+  const stored = checkoutByTournament.get(tournamentId)
+  const checkout = stored ? currentMockCheckout(stored, now) : null
+  if (checkout) checkoutByTournament.set(tournamentId, checkout)
+  else checkoutByTournament.delete(tournamentId)
+  return checkout
+}
+
+export function cancelMockCheckout(
+  tournamentId: string,
+  checkoutId: string,
+): TournamentCheckoutRead | null {
+  const checkout = readCurrentMockCheckout(tournamentId)
+  if (!checkout || checkout.id !== checkoutId) return null
+  checkoutByTournament.delete(tournamentId)
+  return { ...checkout, status: 'cancelled' }
+}
+
+function heldPlacesFor(tournamentId: string, eventId: string): number {
+  return readCurrentMockCheckout(tournamentId)?.lines.filter(
+    (line) => line.event_id === eventId,
+  ).length ?? 0
+}
 
 /** What this event has to say about the DEV USER entering it (ADR-0783), in the
  * server's own precedence: **eligibility before capacity**. A player whose rating
@@ -1365,7 +1420,10 @@ let tournaments: StoredTournament[] = seed()
  * The capacity arm is derived from the entrants (`entryStateFor`), so entering the
  * last free place flips the event to `event_full` on the very next read — a stored
  * tag could not, and the dev demo would keep offering Enter on a full event. */
-function entryState(event: StoredEvent): TournamentEventRead['entry_state'] {
+function entryState(
+  event: StoredEvent,
+  heldPlaces = 0,
+): TournamentEventRead['entry_state'] {
   if (event.ineligible) {
     return {
       state: 'rating_ineligible',
@@ -1373,7 +1431,16 @@ function entryState(event: StoredEvent): TournamentEventRead['entry_state'] {
       rating: event.ineligible.rating,
     }
   }
-  return entryStateFor(event)
+  const state = entryStateFor(event)
+  const entered = event.entrants.length + (event.retained_entrants?.length ?? 0)
+  if (
+    state.state === 'open' &&
+    event.max_players !== null &&
+    entered + heldPlaces >= event.max_players
+  ) {
+    return { state: 'event_full' }
+  }
+  return state
 }
 
 /** Project a stored event onto the wire shape, deriving the `entered` count from
@@ -1382,14 +1449,21 @@ function entryState(event: StoredEvent): TournamentEventRead['entry_state'] {
  * stages and reservations (`groupsForEvent`, ADR 20260823 — every stage holds its own
  * groups, decoupled from the reservation count except for an `rr-then-ko` event's
  * group stage, which keeps deriving from `reservations.length` as it always has). */
-function readEvent(event: StoredEvent): TournamentEventRead {
+function readEvent(event: StoredEvent, heldPlaces = 0): TournamentEventRead {
   const { ineligible, ...wire } = event
   void ineligible
+  const entered = event.entrants.length + (event.retained_entrants?.length ?? 0)
   return {
     ...wire,
+    lifecycle_state: event.lifecycle_state ?? 'unstarted',
     groups: groupsForEvent(event),
-    entered: event.entrants.length + (event.retained_entrants?.length ?? 0),
-    entry_state: entryState(event),
+    entered,
+    held_places: heldPlaces,
+    available_places:
+      event.max_players === null
+        ? null
+        : Math.max(0, event.max_players - entered - heldPlaces),
+    entry_state: entryState(event, heldPlaces),
   }
 }
 
@@ -1422,7 +1496,10 @@ function readDetail(t: StoredTournament): TournamentDetailRead {
     ...t,
     registration_open: t.registration_open ?? t.status === 'published',
     registration_generation: t.registration_generation ?? (t.status === 'draft' ? 0 : 1),
-    events: t.events.map(readEvent),
+    checkout_available: t.checkout_available ?? false,
+    events: t.events.map((event) =>
+      readEvent(event, heldPlacesFor(t.id, event.id)),
+    ),
     distance_miles: null,
     // The served draw-type catalogue — every draw type the server can actually run, with
     // the copy to render it by (ADR "a draw type is a seeded row"). Non-null on DETAIL,
@@ -1487,6 +1564,7 @@ function haversineMiles(
  * by tests that drive the store through the default handlers. */
 export function resetTournamentsStore() {
   tournaments = seed()
+  checkoutByTournament.clear()
 }
 
 // The statuses in which a tournament has been ANNOUNCED to the world — the mock's
@@ -1955,6 +2033,7 @@ function readOf({ events, ...read }: StoredTournament): TournamentRead {
     ...read,
     registration_open: read.registration_open ?? read.status === 'published',
     registration_generation: read.registration_generation ?? (read.status === 'draft' ? 0 : 1),
+    checkout_available: read.checkout_available ?? false,
   }
 }
 

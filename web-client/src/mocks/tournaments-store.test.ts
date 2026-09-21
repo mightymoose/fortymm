@@ -209,6 +209,10 @@ function eventIn(tournamentId: string, eventId: string) {
 beforeEach(() => resetTournamentsStore())
 
 describe('the seeded read shape', () => {
+  it('includes a checkout-enabled tournament for the paid-entry dev journey', () => {
+    expect(findTournament(BAY_AREA_OPEN_ID)?.checkout_available).toBe(true)
+  })
+
   it('derives entered from the entrants it lists, never a stored number', () => {
     expect(event(FULLISH_SINGLES).entrants).toHaveLength(52)
     expect(event(FULLISH_SINGLES).entered).toBe(52)

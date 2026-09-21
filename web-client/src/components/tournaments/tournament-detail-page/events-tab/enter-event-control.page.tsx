@@ -15,10 +15,10 @@ const scoped = (container: Container) => ({
   /** The Enter control for `eventName` — absent when the player is entered, is
    * unpermitted, or the event isn't singles. */
   queryEnterButton(eventName: string) {
-    return container.queryByRole('button', { name: `Enter ${eventName}` })
+    return container.queryByRole('button', { name: `Enter free ${eventName}` })
   },
   findEnterButton(eventName: string) {
-    return container.findByRole('button', { name: `Enter ${eventName}` })
+    return container.findByRole('button', { name: `Enter free ${eventName}` })
   },
   /** The Withdraw control for `eventName` — shown only when the signed-in player
    * holds an active entry in it. */

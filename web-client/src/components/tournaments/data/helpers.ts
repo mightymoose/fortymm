@@ -437,6 +437,7 @@ export function emptyTournament(): Omit<Tournament, 'id'> {
     status: 'draft',
     // A brand-new tournament is created by, hence owned by, the current user.
     canEdit: true,
+    checkoutAvailable: false,
     // No events yet, so no date span — the server derives `dateRange` from the
     // events an org has not created, and this draft has never been fetched
     // besides (ADR 20260726's "not yet fetched" rule, applied here too).
@@ -471,6 +472,7 @@ export function emptyEvent(t: Tournament): TournamentEvent {
   return {
     id: genId('new'),
     name: '',
+    lifecycleState: 'unstarted',
     format: 'singles',
     drawType: 'single-elim',
     // A bracket has no groups to qualify out of, so it carries NO qualifier count — and
@@ -491,6 +493,8 @@ export function emptyEvent(t: Tournament): TournamentEvent {
     timezone: browserTimezone(),
     // A draft event nobody has entered: no entrants, so the derived count is 0.
     entered: 0,
+    heldPlaces: 0,
+    availablePlaces: 32,
     entrants: [],
     retainedEntrants: [],
     // Nothing about an unsaved event refuses anybody: it has room (nobody is in

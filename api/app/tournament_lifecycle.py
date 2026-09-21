@@ -67,6 +67,7 @@ from app.tournament_errors import (
 from app.tournament_geocoding import geocode_address
 from app.tournament_materialization import materialize_live_draw
 from app.tournament_realtime import stage_tournament_entrant_hints
+from app.tournament_registration import registration_open
 from app.tournament_retention import require_no_recorded_play
 from app.tournament_tables import stored_tables
 
@@ -586,7 +587,7 @@ async def transition_tournament(
     # the window before the draw-currency check is committed; a refusal rolls this
     # assignment back with the transaction, so it cannot accidentally reopen or
     # leave a failed attempt half-closed.
-    if to is TournamentStatus.live and tournament.registration_open:
+    if to is TournamentStatus.live and registration_open(tournament):
         tournament.registration_open = False
         tournament.registration_generation += 1
         db.add(

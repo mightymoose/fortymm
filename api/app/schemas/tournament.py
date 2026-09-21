@@ -26,7 +26,12 @@ from app.models.schedule_solve import (
     ScheduleSolveTrigger,
     SolverVerdict,
 )
-from app.models.tournament import DrawType, EventFormat, TournamentStatus
+from app.models.tournament import (
+    DrawType,
+    EventFormat,
+    EventLifecycleState,
+    TournamentStatus,
+)
 from app.schemas.schedule_solve import (
     ResolvedConflict,
     ResolvedReason,
@@ -105,6 +110,8 @@ def _fits_the_fee_column(value: float) -> float:
     binary tail of 10.1.
     """
     fee = Decimal(str(value))
+    if Decimal(0) < fee < Decimal("0.50"):
+        raise ValueError("A paid entry fee must be at least $0.50 USD.")
     if fee != fee.quantize(_CENTS, rounding=ROUND_DOWN):
         raise ValueError(
             f"An entry fee is in whole cents: at most 2 decimal places (got {value})."
@@ -1961,6 +1968,7 @@ class TournamentEventRead(BaseModel):
 
     id: uuid.UUID
     tournament_id: uuid.UUID
+    lifecycle_state: EventLifecycleState
     name: str
     format: EventFormat
     draw_type: DrawType
@@ -2072,6 +2080,7 @@ class TournamentEventRead(BaseModel):
     # a pair that can disagree (api/CLAUDE.md). So ``open`` means "the event admits
     # you", not "the button is live": the client composes the three.
     entry_state: EventEntryState
+    held_places: int = Field(ge=0)
     # The event's DRAW: its fixtures, in group → round → position order (ADR-0786).
     #
     # It rides on this payload rather than on a ``GET …/draw`` of its own, because the
@@ -2102,6 +2111,14 @@ class TournamentEventRead(BaseModel):
     def entered(self) -> int:
         """Held registrations, including identities hidden from the active roster."""
         return len(self.entrants) + len(self.retained_entrants)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def available_places(self) -> int | None:
+        """Capacity not occupied by entrants or valid checkout holds."""
+        if self.max_players is None:
+            return None
+        return max(0, self.max_players - self.entered - self.held_places)
 
 
 class DrawTypeRead(BaseModel):
@@ -2173,6 +2190,7 @@ class TournamentRead(BaseModel):
     created_by_user_id: uuid.UUID
     created_by_username: str
     can_edit: bool
+    checkout_available: bool
     created_at: datetime
     updated_at: datetime
 

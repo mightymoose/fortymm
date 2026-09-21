@@ -40,6 +40,27 @@ import {
 import { tournamentDetailPagePage } from './tournament-detail-page.page'
 
 describe('TournamentDetailPage', () => {
+  it('preserves a paid checkout draft across tournament tab switches', async () => {
+    tournamentDetailPagePage.render({
+      tournament: buildTournament({
+        events: [buildEvent({ name: 'Open Singles', entryFee: 45 })],
+      }),
+    })
+
+    await userEvent.click(
+      await tournamentDetailPagePage.findSelectButton('Open Singles'),
+    )
+    expect(screen.getByText('Entry summary')).toBeInTheDocument()
+
+    await userEvent.click(tournamentDetailPagePage.getTab(/^Tables/))
+    await userEvent.click(tournamentDetailPagePage.getTab(/^Events/))
+
+    expect(screen.getByText('Entry summary')).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', { name: 'Hold 1 place' }),
+    ).toBeEnabled()
+  })
+
   // Same doctrine as the card's: the separators are joins between the address
   // parts that are present, so a partial address strands no punctuation and an
   // empty one renders no meta item at all (#994, #972).
@@ -799,10 +820,16 @@ describe('TournamentDetailPage', () => {
       // "New event", no Generate/Re-cut/Delete draw verbs, and no Withdraw (the
       // spectator is not among the entrants).
       expect(controls.length).toBeGreaterThan(0)
+      expect(controls.map((el) => el.getAttribute('aria-label') ?? el.textContent)).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(/^View /),
+          expect.stringMatching(/^(Enter free|Select) /),
+        ]),
+      )
       expect(
         controls.every((el) => {
           const label = el.getAttribute('aria-label') ?? ''
-          return /^View /.test(label) || /^Enter /.test(label)
+          return /^View /.test(label) || /^(Enter free|Select) /.test(label)
         }),
       ).toBe(true)
       expect(tournamentDetailPagePage.queryNewEventButtons()).toHaveLength(0)
