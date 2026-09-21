@@ -5,11 +5,6 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import com.fortymm.android.network.FortyMMApiClient
-import com.fortymm.android.session.CredentialClearResult
-import com.fortymm.android.session.CredentialLoadResult
-import com.fortymm.android.session.CredentialSaveResult
-import com.fortymm.android.session.SessionCredentialStore
-import com.fortymm.android.session.SessionEndReason
 import com.fortymm.android.session.SessionOwner
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -40,7 +35,7 @@ class SessionBootstrapUiTest {
             )
             val owner = SessionOwner(
                 apiClient = FortyMMApiClient(server.url("/")),
-                credentialStore = MemoryCredentialStore(),
+                credentialStore = InMemorySessionCredentialStore(),
             )
             composeRule.setContent { FortyMMApp(owner) }
 
@@ -53,27 +48,4 @@ class SessionBootstrapUiTest {
         }
     }
 
-    private class MemoryCredentialStore : SessionCredentialStore {
-        private var credential: String? = null
-        private var expiresAtEpochMillis: Long? = null
-
-        override fun load(): CredentialLoadResult = credential
-            ?.let { CredentialLoadResult.Credential(it, expiresAtEpochMillis) }
-            ?: CredentialLoadResult.Absent
-
-        override fun save(credential: String, expiresAtEpochMillis: Long): CredentialSaveResult {
-            this.credential = credential
-            this.expiresAtEpochMillis = expiresAtEpochMillis
-            return CredentialSaveResult.Saved
-        }
-
-        override fun markSessionEnded(reason: SessionEndReason): CredentialSaveResult =
-            CredentialSaveResult.Saved
-
-        override fun clear(): CredentialClearResult {
-            credential = null
-            expiresAtEpochMillis = null
-            return CredentialClearResult.Cleared
-        }
-    }
 }

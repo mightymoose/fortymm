@@ -1,23 +1,27 @@
 package com.fortymm.android.session
 
 import com.fortymm.android.network.FortyMMApiClient
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
 class SessionOwnerTest {
     private lateinit var server: MockWebServer
+    private val responseGates = mutableListOf<HeldResponse>()
 
     @Before
     fun startServer() {
@@ -27,6 +31,7 @@ class SessionOwnerTest {
 
     @After
     fun stopServer() {
+        responseGates.forEach(HeldResponse::release)
         server.shutdown()
     }
 
@@ -106,37 +111,88 @@ class SessionOwnerTest {
     }
 
     @Test
-    fun cancelledUiCallerDoesNotRestartGuestCreation() = runBlocking {
-        val firstUserId = UUID.fromString("0b47aab8-7453-49ae-a359-b78cd77151c2")
-        val replacementUserId = UUID.fromString("693f6573-cae1-49cc-9d4d-f1dbc7c652a6")
-        val credentialStore = MemoryCredentialStore()
-        server.enqueue(
-            sessionResponse(firstUserId, "first-guest")
-                .addHeader("Set-Cookie", "session=first-session; Path=/; HttpOnly")
-                .addHeader("Set-Cookie", "csrf_token=first-csrf; Path=/")
-                .setBodyDelay(300, TimeUnit.MILLISECONDS),
+    fun overlappingBootstrapCallersObserveOneGuestIdentity() = runBlocking {
+        val userId = UUID.fromString("196ea2c9-cd38-437c-85b1-2c050824bb85")
+        val heldResponse = holdResponse(
+            sessionResponse(userId, "shared-guest")
+                .addHeader("Set-Cookie", "session=shared-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=shared-csrf; Path=/"),
         )
-        server.enqueue(
-            sessionResponse(replacementUserId, "replacement-guest")
-                .addHeader("Set-Cookie", "session=replacement-session; Path=/; HttpOnly")
-                .addHeader("Set-Cookie", "csrf_token=replacement-csrf; Path=/"),
+        val owner = SessionOwner(
+            apiClient = FortyMMApiClient(server.url("/")),
+            credentialStore = MemoryCredentialStore(),
+        )
+
+        val firstCaller = async(start = CoroutineStart.UNDISPATCHED) {
+            owner.bootstrap()
+            owner.state.value
+        }
+        heldResponse.awaitRequest()
+        val secondCaller = async(start = CoroutineStart.UNDISPATCHED) {
+            owner.bootstrap()
+            owner.state.value
+        }
+        heldResponse.release()
+
+        val expected = SessionState.Ready(SessionUser(userId, "shared-guest"))
+        assertEquals(expected, firstCaller.await())
+        assertEquals(expected, secondCaller.await())
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun cancellingOneBootstrapCallerLetsAnotherFinishAndLaterProcessRestoreTheGuest() = runBlocking {
+        val userId = UUID.fromString("0b47aab8-7453-49ae-a359-b78cd77151c2")
+        val credentialStore = MemoryCredentialStore()
+        val firstResponse = holdResponse(
+            sessionResponse(userId, "first-guest")
+                .addHeader("Set-Cookie", "session=first-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=first-csrf; Path=/"),
         )
         val owner = SessionOwner(
             apiClient = FortyMMApiClient(server.url("/")),
             credentialStore = credentialStore,
         )
 
-        val firstUiCaller = launch { owner.bootstrap() }
-        withContext(Dispatchers.IO) { server.takeRequest() }
+        val firstUiCaller = launch(start = CoroutineStart.UNDISPATCHED) { owner.bootstrap() }
+        firstResponse.awaitRequest()
+        val remainingCaller = async(start = CoroutineStart.UNDISPATCHED) {
+            owner.bootstrap()
+            owner.state.value
+        }
         firstUiCaller.cancelAndJoin()
-        owner.bootstrap()
+        assertTrue(firstUiCaller.isCancelled)
+        firstResponse.release()
 
         assertEquals(
-            SessionState.Ready(SessionUser(firstUserId, "first-guest")),
-            owner.state.value,
+            SessionState.Ready(SessionUser(userId, "first-guest")),
+            remainingCaller.await(),
         )
         assertEquals("first-session", credentialStore.credential)
         assertEquals(1, server.requestCount)
+
+        val restoredResponse = holdResponse(
+            sessionResponse(userId, "restored-guest")
+                .addHeader("Set-Cookie", "csrf_token=restored-csrf; Path=/"),
+        )
+        val laterProcess = SessionOwner(
+            apiClient = FortyMMApiClient(server.url("/")),
+            credentialStore = credentialStore,
+        )
+        val restoredState = async(start = CoroutineStart.UNDISPATCHED) {
+            laterProcess.bootstrap()
+            laterProcess.state.value
+        }
+        restoredResponse.awaitRequest()
+        restoredResponse.release()
+
+        assertEquals(
+            SessionState.Ready(SessionUser(userId, "restored-guest")),
+            restoredState.await(),
+        )
+        assertEquals(null, server.takeRequest().getHeader("Cookie"))
+        assertEquals("session=first-session", server.takeRequest().getHeader("Cookie"))
+        assertEquals(2, server.requestCount)
     }
 
     @Test
@@ -260,6 +316,58 @@ class SessionOwnerTest {
     }
 
     @Test
+    fun overlappingCallersShareOneFailedAttemptAndOneLaterRetry() = runBlocking {
+        val userId = UUID.fromString("bc6fbf63-240c-470a-a05f-57335e2d3bd2")
+        val (failedResponse, successfulResponse) = holdResponses(
+            MockResponse()
+                .setResponseCode(503)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""{"detail":"temporarily unavailable"}"""),
+            sessionResponse(userId, "retried-guest")
+                .addHeader("Set-Cookie", "session=retried-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=retried-csrf; Path=/"),
+        )
+        val owner = SessionOwner(
+            apiClient = FortyMMApiClient(server.url("/")),
+            credentialStore = MemoryCredentialStore(),
+        )
+
+        val firstAttempt = async(start = CoroutineStart.UNDISPATCHED) {
+            owner.bootstrap()
+            owner.state.value
+        }
+        failedResponse.awaitRequest()
+        val overlappingAttempt = async(start = CoroutineStart.UNDISPATCHED) {
+            owner.bootstrap()
+            owner.state.value
+        }
+        failedResponse.release()
+
+        val retryableState = SessionState.RetryableStartup(
+            "We couldn't start FortyMM. Check your connection and try again.",
+        )
+        assertEquals(retryableState, firstAttempt.await())
+        assertEquals(retryableState, overlappingAttempt.await())
+        assertEquals(1, server.requestCount)
+
+        val firstRetry = async(start = CoroutineStart.UNDISPATCHED) {
+            owner.bootstrap()
+            owner.state.value
+        }
+        successfulResponse.awaitRequest()
+        val overlappingRetry = async(start = CoroutineStart.UNDISPATCHED) {
+            owner.bootstrap()
+            owner.state.value
+        }
+        successfulResponse.release()
+
+        val readyState = SessionState.Ready(SessionUser(userId, "retried-guest"))
+        assertEquals(readyState, firstRetry.await())
+        assertEquals(readyState, overlappingRetry.await())
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
     fun truncatedFreshGuestResponsePreservesItsCredentialForAuthenticatedRetry() = runBlocking {
         val userId = UUID.fromString("32a3e549-8868-459a-b309-d1905e5cb895")
         val credentialStore = MemoryCredentialStore()
@@ -380,6 +488,41 @@ class SessionOwnerTest {
             }
             """.trimIndent(),
         )
+
+    private fun holdResponse(response: MockResponse): HeldResponse = holdResponses(response).single()
+
+    private fun holdResponses(vararg responses: MockResponse): List<HeldResponse> {
+        val heldResponses = responses.map(::HeldResponse)
+        responseGates += heldResponses
+        val pendingResponses = LinkedBlockingQueue(heldResponses)
+        server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+            override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): MockResponse {
+                val held = pendingResponses.poll()
+                    ?: return MockResponse()
+                        .setResponseCode(500)
+                        .setBody("Unexpected extra session bootstrap request")
+                held.requestReceived.countDown()
+                held.responseReleased.await()
+                return held.response
+            }
+        }
+        return heldResponses
+    }
+
+    private class HeldResponse(val response: MockResponse) {
+        val requestReceived = CountDownLatch(1)
+        val responseReleased = CountDownLatch(1)
+
+        fun awaitRequest() {
+            check(requestReceived.await(5, TimeUnit.SECONDS)) {
+                "Expected the session bootstrap request"
+            }
+        }
+
+        fun release() {
+            responseReleased.countDown()
+        }
+    }
 
     private class MemoryCredentialStore(
         var failedSavesRemaining: Int = 0,

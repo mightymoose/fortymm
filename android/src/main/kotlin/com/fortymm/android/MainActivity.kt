@@ -16,7 +16,7 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val sessionOwner = (application as FortyMMApplication).sessionOwner
+        val sessionOwner = (application as SessionOwnerProvider).sessionOwner
         setContent { FortyMMApp(sessionOwner) }
     }
 }

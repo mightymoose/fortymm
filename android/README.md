@@ -28,20 +28,49 @@ isolated backend, then install the app against the emulator's host gateway:
 QA_PORT=8085 QA_MAILPIT_PORT=8087 scripts/qa-up.sh android-session
 ./gradlew :android:installDevDebug \
   -PdevApiBaseUrl=http://10.0.2.2:8085
+
+wait_for_username() {
+  remote_output="$1"
+  local_output="$2"
+  for _ in $(seq 1 30); do
+    if adb shell uiautomator dump "$remote_output" >/dev/null &&
+       adb pull "$remote_output" "$local_output" >/dev/null; then
+      ready_nodes="$(xmllint --xpath \
+        'count(//node[@package="com.fortymm.android.dev" and string-length(@text) > 0 and not(@text="FortyMM") and not(@text="Home")])' \
+        "$local_output" 2>/dev/null || true)"
+      if [ "$ready_nodes" = "1" ]; then
+        username="$(xmllint --xpath \
+          'string(//node[@package="com.fortymm.android.dev" and string-length(@text) > 0 and not(@text="FortyMM") and not(@text="Home")]/@text)' \
+          "$local_output")"
+        if [ -n "$username" ] && [ "$username" != 'Starting FortyMM…' ]; then
+          printf '%s\n' "$username"
+          return 0
+        fi
+      fi
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 adb shell pm clear com.fortymm.android.dev
 adb shell am start -W \
   -n com.fortymm.android.dev/com.fortymm.android.MainActivity
-adb shell uiautomator dump /sdcard/fortymm-first.xml
+first_username="$(wait_for_username \
+  /sdcard/fortymm-first.xml /tmp/fortymm-first.xml)" || exit 1
 adb shell am force-stop com.fortymm.android.dev
 adb shell am start -W \
   -n com.fortymm.android.dev/com.fortymm.android.MainActivity
-adb shell uiautomator dump /sdcard/fortymm-relaunch.xml
+relaunch_username="$(wait_for_username \
+  /sdcard/fortymm-relaunch.xml /tmp/fortymm-relaunch.xml)" || exit 1
+test "$first_username" = "$relaunch_username"
 ```
 
-Both dumps must show the same API-generated username. Resolve that username in
-the isolated backend's `players` table before and after relaunch to confirm the
-same stable player ID and a single `account_session_tokens` row. Tear the stack
-down with `scripts/qa-down.sh android-session`.
+The final `test` must confirm the same API-generated username. The focused MockWebServer
+tests verify the stable user ID, authenticated restoration request, and exact
+bootstrap request counts at the HTTP boundary; do not inspect the backend
+database or log raw credentials as proof. Tear the stack down with
+`scripts/qa-down.sh android-session`.
 
 ## Pinned baseline
 
