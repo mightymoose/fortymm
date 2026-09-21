@@ -5,6 +5,7 @@ from enum import StrEnum
 
 
 class CheckoutRefusal(StrEnum):
+    collection_disabled = "collection_disabled"
     merchant_unavailable = "merchant_unavailable"
     registration_closed = "registration_closed"
     event_not_found = "event_not_found"

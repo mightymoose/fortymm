@@ -3,6 +3,7 @@ import { useDashboard } from '@/api/dashboard'
 import { deriveEmailStatus, useSession } from '@/api/session'
 import { AttentionPanel } from '@/components/dashboard/attention-panel'
 import { AttentionPanelSkeleton } from '@/components/dashboard/attention-panel-skeleton'
+import { CheckoutAttentionPanel } from '@/components/dashboard/checkout-attention-panel'
 import { projectAttentionPanelView } from '@/components/dashboard/attention-panel-view'
 import { FirstMatchDashboard } from '@/components/dashboard/first-match/first-match-dashboard'
 import { GuestPersistBanner } from '@/components/dashboard/guest-persist-banner'
@@ -103,6 +104,12 @@ export function DashboardPage() {
       {tournamentViews.map((tournamentView) => (
         <TournamentPanel key={tournamentView.tournamentId} view={tournamentView} />
       ))}
+      {!isLoading && (
+        <CheckoutAttentionPanel
+          items={data?.checkout_attention ?? []}
+          totalCount={data?.checkout_attention_total_count ?? 0}
+        />
+      )}
       {isFirstMatch ? (
         <FirstMatchDashboard />
       ) : (

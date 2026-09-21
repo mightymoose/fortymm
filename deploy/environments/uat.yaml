@@ -17,6 +17,10 @@
 #   - image digests. CI bakes those into the packaged chart at publish time.
 
 config:
+  # Card collection and positive-fee authoring remain paused until the complete
+  # release passes its launch acceptance checks.
+  TOURNAMENT_PAYMENT_COLLECTION_ENABLED: "false"
+  STRIPE_LIVEMODE: "false"
   # --- Auth0 / MCP OAuth Resource Server (non-secret identifiers only) ---
   # The Auth0 tenant that issues the JWTs.
   AUTH0_DOMAIN: "dev-ohl5xjusly2vsah6.us.auth0.com"

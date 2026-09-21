@@ -847,6 +847,8 @@ export interface Tournament {
    * `can_edit`. Gates every mutation affordance — a non-creator sees the
    * read-only view. */
   canEdit: boolean
+  /** Whether organizers may author positive entry fees in this deployment. */
+  feeAuthoringEnabled: boolean
   /** Whether this tournament's owner is the configured launch merchant. */
   checkoutAvailable: boolean
   /** This tournament's real date span — the min/max of its events' own

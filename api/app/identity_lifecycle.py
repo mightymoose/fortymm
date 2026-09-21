@@ -78,6 +78,13 @@ async def reactivate_account(db: AsyncSession, account_id: uuid.UUID) -> None:
 async def erase_account(db: AsyncSession, account_id: uuid.UUID) -> None:
     account = await _account(db, account_id)
     await deactivate_account(db, account_id)
+    # Checkout receipt destinations are independent PII and must disappear in
+    # the same erasure transaction; durable provider ids and amounts remain.
+    from app.tournament_payment_receipts import (
+        erase_tournament_receipt_pii_for_account,
+    )
+
+    await erase_tournament_receipt_pii_for_account(db, account_id)
     account.erased_at = datetime.now(UTC)
     account.email = None
     account.display_name = "Erased account"

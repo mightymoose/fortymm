@@ -22,6 +22,13 @@ describe('generated route tree', () => {
     expect(routeIds.length).toBeGreaterThan(10)
   })
 
+  it('registers the dedicated payer checkout and actionable-checkouts routes', () => {
+    expect(routeIds).toContain(
+      '/_app/tournaments/$tournamentId/checkouts/$checkoutId',
+    )
+    expect(routeIds).toContain('/_app/checkouts')
+  })
+
   it('no longer contains the deleted /simulator prototype route', () => {
     expect(routeIds).not.toContain('/simulator')
     expect(routeIds.filter((id) => id.includes('simulator'))).toEqual([])

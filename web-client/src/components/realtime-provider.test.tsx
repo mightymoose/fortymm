@@ -31,6 +31,8 @@ type DashboardResponse = components['schemas']['DashboardResponse']
 
 function dashboardWith(attentionTotal: number): DashboardResponse {
   return {
+    checkout_attention: [],
+    checkout_attention_total_count: 0,
     attention: [],
     attention_total_count: attentionTotal,
     waiting_count: 0,

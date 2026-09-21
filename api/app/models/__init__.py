@@ -73,6 +73,17 @@ from app.models.tournament_event_reservation_table import (
 from app.models.tournament_event_stage import TournamentEventStage
 from app.models.tournament_event_stage_group import TournamentEventStageGroup
 from app.models.tournament_fixture import TournamentFixture
+from app.models.tournament_payment import (
+    TournamentPayment,
+    TournamentPaymentAllocation,
+    TournamentPaymentLineOutcome,
+    TournamentPaymentReceipt,
+    TournamentPaymentState,
+    TournamentProviderEvent,
+    TournamentReceiptState,
+    TournamentRefundObligation,
+    TournamentRefundState,
+)
 from app.models.tournament_registration_window import TournamentRegistrationWindowChange
 from app.models.tournament_table import VenueTable
 from app.models.tournament_table_call_history import VenueTableCallHistory
@@ -135,6 +146,15 @@ __all__ = [
     "TournamentCheckout",
     "TournamentCheckoutLine",
     "TournamentCheckoutStatus",
+    "TournamentPayment",
+    "TournamentPaymentAllocation",
+    "TournamentPaymentLineOutcome",
+    "TournamentPaymentState",
+    "TournamentPaymentReceipt",
+    "TournamentProviderEvent",
+    "TournamentReceiptState",
+    "TournamentRefundObligation",
+    "TournamentRefundState",
     "TournamentEntry",
     "TournamentEntryWithdrawal",
     "TournamentRegistrationWindowChange",

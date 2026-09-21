@@ -44,6 +44,8 @@ const TAXONOMY = notificationTaxonomy()
 // `satisfies` (not `:`) so tsc fails if the OpenAPI schema drifts away from this
 // stub — the e2e suite is MSW-off, so nothing else would catch it.
 const DASHBOARD = {
+  checkout_attention: [],
+  checkout_attention_total_count: 0,
   attention: [],
   attention_total_count: 0,
   waiting_count: 0,

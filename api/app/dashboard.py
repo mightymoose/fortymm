@@ -53,6 +53,7 @@ from app.schemas.dashboard import (
 )
 from app.schemas.rating import RatingChange
 from app.sessions import get_current_user
+from app.tournament_checkout_attention import list_checkout_attention
 
 router = APIRouter(prefix="/v1")
 
@@ -79,9 +80,16 @@ async def get_dashboard(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_session),
 ) -> DashboardResponse:
+    checkout_attention_all = await list_checkout_attention(
+        db, payer_account_id=current_user.id
+    )
+    checkout_attention = checkout_attention_all[:3]
+    checkout_attention_total_count = len(checkout_attention_all)
     player = current_user.primary_player
     if player is None:
         return DashboardResponse(
+            checkout_attention=checkout_attention,
+            checkout_attention_total_count=checkout_attention_total_count,
             attention=[],
             attention_total_count=0,
             waiting_count=0,
@@ -186,6 +194,8 @@ async def get_dashboard(
     tournaments = await build_tournament_panels(db, player_id)
 
     return DashboardResponse(
+        checkout_attention=checkout_attention,
+        checkout_attention_total_count=checkout_attention_total_count,
         attention=attention,
         attention_total_count=attention_total_count,
         waiting_count=waiting_count,

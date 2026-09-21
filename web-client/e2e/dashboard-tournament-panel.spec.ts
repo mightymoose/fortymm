@@ -26,6 +26,8 @@ type DashboardResponse = components['schemas']['DashboardResponse']
 
 /** A player mid-tournament: a live best-of-five on Table 4, 2–1 up, game 4 next. */
 const IN_A_TOURNAMENT = {
+  checkout_attention: [],
+  checkout_attention_total_count: 0,
   attention: [],
   attention_total_count: 0,
   waiting_count: 0,

@@ -610,6 +610,57 @@ describe('BasicsSection', () => {
     )
   })
 
+  describe('while payment collection is disabled', () => {
+    const disabledFeeAuthoring = { feeAuthoringEnabled: false } as Record<
+      string,
+      unknown
+    >
+
+    it('hides fee authoring for a new event that defaults free', () => {
+      basicsSectionPage.render({
+        event: buildEvent({ id: 'new-event', entryFee: 0 }),
+        ...disabledFeeAuthoring,
+      })
+
+      expect(basicsSectionPage.queryEntryFeeInput()).toBeNull()
+      expect(
+        screen.queryByRole('button', { name: /make this event free/i }),
+      ).toBeNull()
+    })
+
+    it.each([45, 0.25])(
+      'shows the existing $%s fee read-only and confirms before making it free',
+      async (entryFee) => {
+        const onChange = vi.fn()
+        basicsSectionPage.render({
+          event: buildEvent({ entryFee }),
+          onChange,
+          ...disabledFeeAuthoring,
+        })
+
+        expect(basicsSectionPage.queryEntryFeeInput()).toBeNull()
+        expect(basicsSectionPage.getFieldValue('Entry fee')).toHaveTextContent(
+          String(entryFee),
+        )
+
+        await userEvent.click(
+          screen.getByRole('button', { name: /make this event free/i }),
+        )
+        expect(onChange).not.toHaveBeenCalled()
+        expect(screen.getByRole('alertdialog')).toHaveTextContent(
+          /cannot be undone/i,
+        )
+
+        await userEvent.click(
+          screen.getByRole('button', { name: /^make event free$/i }),
+        )
+        expect(onChange).toHaveBeenCalledWith(
+          expect.objectContaining({ entryFee: 0 }),
+        )
+      },
+    )
+  })
+
   // The section renders the editor's form errors below the offending field.
   it('renders inline field errors passed from the form', () => {
     basicsSectionPage.render({

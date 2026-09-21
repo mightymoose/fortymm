@@ -1,5 +1,17 @@
 import { useId } from 'react'
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
+import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 
 import type { EditFreeze } from '../../data/draw'
@@ -83,6 +95,9 @@ export interface BasicsSectionProps {
    * value falls to an em-dash: a director offered no choice is stuck loudly, which is
    * the honest failure. It never falls back to the stored slug. */
   drawTypes: DrawTypeOption[]
+  /** The deployment gate controlling positive-fee authoring. Existing fees remain
+   * visible when it is closed, but may only be changed to zero. */
+  feeAuthoringEnabled?: boolean
   onChange: (next: TournamentEvent) => void
 }
 
@@ -195,6 +210,7 @@ export const BasicsSection = ({
   errors = {},
   drawTypeFreeze,
   drawTypes,
+  feeAuthoringEnabled = true,
   onChange,
 }: BasicsSectionProps) => {
   const set = (patch: Partial<TournamentEvent>) => onChange({ ...event, ...patch })
@@ -402,33 +418,63 @@ export const BasicsSection = ({
             />
           )}
         </Field>
-        <Field
-          label="Entry fee"
-          required
-          error={!!errors.entryFee}
-          hint={errors.entryFee}
-          readOnly={readOnly}
-          value={numericValue(event.entryFee)}
-        >
-          {(id, hintId) => (
-            <Input
-              id={id}
-              type="number"
-              min={0}
-              max={ENTRY_FEE_MAX}
-              aria-invalid={!!errors.entryFee}
-              aria-describedby={hintId}
-              // Blank is `NaN` — *missing* — while a typed `0` is a legitimate free
-              // event and saves.
-              value={Number.isNaN(event.entryFee) ? '' : event.entryFee}
-              onChange={(e) =>
-                set({
-                  entryFee: e.target.value === '' ? NaN : Number(e.target.value),
-                })
-              }
-            />
-          )}
-        </Field>
+        {feeAuthoringEnabled ? (
+          <Field
+            label="Entry fee"
+            required
+            error={!!errors.entryFee}
+            hint={errors.entryFee}
+            readOnly={readOnly}
+            value={numericValue(event.entryFee)}
+          >
+            {(id, hintId) => (
+              <Input
+                id={id}
+                type="number"
+                min={0}
+                max={ENTRY_FEE_MAX}
+                aria-invalid={!!errors.entryFee}
+                aria-describedby={hintId}
+                value={Number.isNaN(event.entryFee) ? '' : event.entryFee}
+                onChange={(e) =>
+                  set({
+                    entryFee: e.target.value === '' ? NaN : Number(e.target.value),
+                  })
+                }
+              />
+            )}
+          </Field>
+        ) : event.entryFee > 0 ? (
+          <div className="flex flex-col gap-2">
+            <Field label="Entry fee" readOnly value={numericValue(event.entryFee)}>
+              {() => null}
+            </Field>
+            {canEdit && (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button type="button" variant="outline" className="self-start">
+                    Make this event free
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Make this event free?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This removes the event fee for new registrations and cannot be
+                      undone while payment collection is disabled.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={() => set({ entryFee: 0 })}>
+                      Make event free
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
+          </div>
+        ) : null}
       </div>
 
       <div className="my-1 flex items-center gap-3">

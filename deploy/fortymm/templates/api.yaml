@@ -16,6 +16,8 @@ spec:
       {{- include "fortymm.selector" (dict "component" "api") | nindent 6 }}
   template:
     metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
       labels:
         {{- include "fortymm.selector" (dict "component" "api") | nindent 8 }}
     spec:
@@ -56,6 +58,10 @@ spec:
           envFrom:
             {{- include "fortymm.appEnvFrom" . | nindent 12 }}
           env:
+            # Keep the launch gate sourced from chart config even if an
+            # operator's bulk .env Secret happens to contain a stale copy.
+            - name: TOURNAMENT_PAYMENT_COLLECTION_ENABLED
+              value: {{ index .Values.config "TOURNAMENT_PAYMENT_COLLECTION_ENABLED" | quote }}
             # Server-side geocoding key for venue addresses — see
             # docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md.
             # Sourced from the .env-backed Secret (secrets.env), the same place

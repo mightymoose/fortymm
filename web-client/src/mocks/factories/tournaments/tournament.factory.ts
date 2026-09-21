@@ -1578,6 +1578,7 @@ export function buildTournamentDetailRead(
     created_by_user_id: 'u-me',
     details_version: 1,    created_by_username: 'rita.kovac',
     can_edit: true,
+    fee_authoring_enabled: false,
     checkout_available: true,
     created_at: '2026-06-01T09:00:00Z',
     updated_at: '2026-06-10T12:00:00Z',

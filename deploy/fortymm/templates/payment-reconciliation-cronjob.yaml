@@ -1,0 +1,38 @@
+{{- if .Values.paymentReconciliation.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: payment-reconciliation
+  labels:
+    {{- include "fortymm.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.paymentReconciliation.schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 60
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            {{- include "fortymm.selector" (dict "component" "payment-reconciliation") | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: payment-reconciliation
+              image: {{ include "fortymm.apiImage" . }}
+              imagePullPolicy: {{ .Values.pullPolicy }}
+              command: ["python", "-m", "app.payment_reconciliation_sweep"]
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              envFrom:
+                {{- include "fortymm.appEnvFrom" . | nindent 16 }}
+{{- end }}

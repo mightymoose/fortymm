@@ -651,6 +651,7 @@ const draft: Omit<Tournament, 'id'> = {
   name: 'Autumn Cup',
   status: 'draft',
   canEdit: true,
+  feeAuthoringEnabled: false,
   checkoutAvailable: false,
   dateRange: { start: '2026-09-01', end: '2026-09-02' },
   description: 'A new draft.',

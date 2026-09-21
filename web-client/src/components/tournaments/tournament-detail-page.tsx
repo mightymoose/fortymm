@@ -462,6 +462,7 @@ export const TournamentDetailPage = ({
         tables={tournamentTables}
         drawTypes={drawTypes}
         canEdit={canEdit}
+        feeAuthoringEnabled={tournament.feeAuthoringEnabled}
         saving={savingEvent}
         onSave={saveEvent}
         onDelete={(id) => {

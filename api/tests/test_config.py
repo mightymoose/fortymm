@@ -12,6 +12,14 @@ from pydantic import ValidationError
 from app.config import McpConnectorConfig, get_settings
 
 
+def test_payment_collection_defaults_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", raising=False)
+
+    assert get_settings().tournament_payment_collection_enabled is False
+
+
 def test_solver_time_cap_defaults_to_ten_seconds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -21,6 +21,9 @@ const scoped = (container: Container) => ({
   getEntryFeeInput() {
     return container.getByLabelText(/Entry fee/)
   },
+  queryEntryFeeInput() {
+    return container.queryByLabelText(/Entry fee/)
+  },
   /** The three time-slot boxes (#1501) — used to assert the cross-field slot error's
    * `aria-invalid` / `aria-describedby` wiring, the same treatment `ReservationCard`'s
    * window boxes get. */

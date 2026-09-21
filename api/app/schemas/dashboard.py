@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from app.models.tournament import DrawType
 from app.schemas.rating import RatingChange
+from app.schemas.tournament_checkout import CheckoutAttentionItem
 
 # The actionable bucket a match falls in for the current user, in priority
 # order: a rated result the opponent proposed that is awaiting our review
@@ -314,6 +315,8 @@ class DashboardTournament(BaseModel):
 
 
 class DashboardResponse(BaseModel):
+    checkout_attention: list[CheckoutAttentionItem] = []
+    checkout_attention_total_count: int = 0
     # The current user's most-urgent actionable matches, pre-ranked by attention
     # priority (§5 of the PRD), capped server-side (``ATTENTION_BANNERS_LIMIT``)
     # since the panel only renders the top few as rows. Not the full set — use

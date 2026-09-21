@@ -78,6 +78,15 @@ config:
   # process for nearly every trigger) reads it to size the RQ job_timeout, so
   # both consume it via this shared ConfigMap.
   SOLVER_TIME_CAP_S: "10"
+  # Launch gate for new paid checkout holds and positive-fee authoring. False is
+  # deliberately safe for every new environment. A Helm value change alters the
+  # pod-template config checksum and therefore rolls the API/worker deployments.
+  TOURNAMENT_PAYMENT_COLLECTION_ENABLED: "false"
+  # Pinned independently from Stripe account defaults. STRIPE_SECRET_KEY stays
+  # in the environment's .env-backed Secret and never enters chart values.
+  STRIPE_API_VERSION: "2024-12-18.acacia"
+  # Evidence is rejected when its Stripe environment differs from this one.
+  STRIPE_LIVEMODE: "false"
   # --- Auth0 / MCP OAuth Resource Server (non-secret identifiers only) ---
   # See docs/adr/20260722-the-mcp-server-is-an-oauth-resource-server-trusting-auth0.md.
   #
@@ -179,6 +188,19 @@ worker:
 retirement:
   enabled: true
   schedule: "0 * * * *"
+
+# Replays verified Stripe events and retrieves payment intents left in an
+# uncertain preparing/checking state. A minute cadence stays well inside the
+# checkout hold window; concurrency is forbidden by the CronJob template.
+paymentReconciliation:
+  enabled: true
+  schedule: "* * * * *"
+
+# Daily recheck of tournament lifecycle and every related financial obligation
+# before checkout-only receipt addresses are erased.
+paymentReceiptPiiSweep:
+  enabled: true
+  schedule: "17 3 * * *"
 
 # Periodic email-confirmation token sweep CronJob (#1616). Runs
 # `python -m app.email_token_sweep` on this schedule to delete replaced

@@ -110,12 +110,16 @@ def _fits_the_fee_column(value: float) -> float:
     binary tail of 10.1.
     """
     fee = Decimal(str(value))
-    if Decimal(0) < fee < Decimal("0.50"):
-        raise ValueError("A paid entry fee must be at least $0.50 USD.")
     if fee != fee.quantize(_CENTS, rounding=ROUND_DOWN):
         raise ValueError(
             f"An entry fee is in whole cents: at most 2 decimal places (got {value})."
         )
+    return value
+
+
+def _meets_minimum_paid_fee(value: float) -> float:
+    if Decimal(0) < Decimal(str(value)) < Decimal("0.50"):
+        raise ValueError("A paid entry fee must be at least $0.50 USD.")
     return value
 
 
@@ -127,9 +131,18 @@ EventEntryFee = Annotated[
     # a number the column can hold, so it is refused here rather than in the driver.
     Field(ge=0, le=MAX_ENTRY_FEE, allow_inf_nan=False),
     AfterValidator(_fits_the_fee_column),
+    AfterValidator(_meets_minimum_paid_fee),
 ]
 """An event's entry fee: a non-negative amount in whole cents that the
 ``Numeric(8, 2)`` column can hold. ``0`` is a real answer — a free event."""
+
+StoredEventEntryFee = Annotated[
+    float,
+    Field(ge=0, le=MAX_ENTRY_FEE, allow_inf_nan=False),
+    AfterValidator(_fits_the_fee_column),
+]
+"""A storage-compatible fee accepted by PATCH so an unchanged legacy subminimum
+value can round-trip. The locked write verb decides whether it is unchanged."""
 
 # ----- the draw configuration, as a union tagged by the draw type -----------
 
@@ -2190,6 +2203,7 @@ class TournamentRead(BaseModel):
     created_by_user_id: uuid.UUID
     created_by_username: str
     can_edit: bool
+    fee_authoring_enabled: bool
     checkout_available: bool
     created_at: datetime
     updated_at: datetime
@@ -2862,7 +2876,7 @@ class TournamentEventUpdate(BaseModel):
     # no round count"), which is what patching a swiss event back to a round-robin says.
     rounds: SwissRounds | None = None
     max_players: EventMaxPlayers | None = None
-    entry_fee: EventEntryFee | None = None
+    entry_fee: StoredEventEntryFee | None = None
     # The same validated IANA zone create requires — correcting the venue timezone is a
     # supported edit (ADR: "picked Chicago, the venue is Denver"). Its column is NOT
     # NULL, so an explicit ``null`` is rejected below; an unknown zone is still a 422.

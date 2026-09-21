@@ -1,0 +1,38 @@
+{{- if .Values.paymentReceiptPiiSweep.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: payment-receipt-pii-sweep
+  labels:
+    {{- include "fortymm.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.paymentReceiptPiiSweep.schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            {{- include "fortymm.selector" (dict "component" "payment-receipt-pii-sweep") | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: payment-receipt-pii-sweep
+              image: {{ include "fortymm.apiImage" . }}
+              imagePullPolicy: {{ .Values.pullPolicy }}
+              command: ["python", "-m", "app.tournament_receipt_pii_sweep"]
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              envFrom:
+                {{- include "fortymm.appEnvFrom" . | nindent 16 }}
+{{- end }}

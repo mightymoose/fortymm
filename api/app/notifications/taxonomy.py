@@ -27,6 +27,7 @@ class NotificationCategory(StrEnum):
     # prefs category shared by the called / moved / cancelled message kinds
     # built in ``app.notifications.match_calls``.
     MATCH_CALLS = "match_calls"
+    PAYMENTS = "payments"
 
 
 class NotificationChannel(StrEnum):

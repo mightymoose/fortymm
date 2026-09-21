@@ -179,6 +179,21 @@ class Settings(BaseSettings):
     #: entry. Independent organizer collection is intentionally out of scope.
     tournament_payment_merchant_account_id: uuid.UUID | None = None
 
+    #: Deployment gate for both new paid checkout holds and positive-fee authoring.
+    #: False is deliberately the default: publishing payment code must not make card
+    #: collection public until the complete release has passed its launch checks.
+    #: Changing this value requires the process/pod rollout that changes its
+    #: environment; webhook and recovery work must never be conditional on it.
+    tournament_payment_collection_enabled: bool = False
+
+    #: Stripe credentials are intentionally independent from the collection
+    #: gate. Recovery and webhook processing must remain configured while new
+    #: collection is paused. Empty fails provider calls closed.
+    stripe_secret_key: str = ""
+    stripe_api_version: str = "2024-12-18.acacia"
+    stripe_webhook_secret: str = ""
+    stripe_livemode: bool = False
+
     #: The five authentication rate-limit ceilings (issue #1590), each an
     #: independent requests-per-hour count. Production keeps the tight abuse
     #: tiers below; docker-compose.dev.yml and docker-compose.qa.yml raise

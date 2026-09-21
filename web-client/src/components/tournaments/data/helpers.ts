@@ -437,6 +437,7 @@ export function emptyTournament(): Omit<Tournament, 'id'> {
     status: 'draft',
     // A brand-new tournament is created by, hence owned by, the current user.
     canEdit: true,
+    feeAuthoringEnabled: false,
     checkoutAvailable: false,
     // No events yet, so no date span — the server derives `dateRange` from the
     // events an org has not created, and this draft has never been fetched
@@ -486,7 +487,7 @@ export function emptyEvent(t: Tournament): TournamentEvent {
     // the API 422s the moment the director never touched the draw type.
     rounds: null,
     maxPlayers: 32,
-    entryFee: 30,
+    entryFee: 0,
     // Anchor the wall-clock windows in the director's own timezone (ADR 20260719):
     // a new event pre-fills from the browser's resolved zone, which for the common
     // single-venue case is exactly the venue's. They can correct it in the editor.

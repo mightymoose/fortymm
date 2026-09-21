@@ -62,6 +62,16 @@ function renderDashboard() {
     path: '/settings',
     component: () => <div>Settings route</div>,
   })
+  const checkoutsRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/checkouts',
+    component: () => <div>All actionable checkouts</div>,
+  })
+  const checkoutRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/tournaments/$tournamentId/checkouts/$checkoutId',
+    component: () => <div>Checkout route</div>,
+  })
   const router = createRouter({
     routeTree: rootRoute.addChildren([
       dashboardRoute,
@@ -69,6 +79,8 @@ function renderDashboard() {
       matchesRoute,
       scoringRoute,
       settingsRoute,
+      checkoutsRoute,
+      checkoutRoute,
     ]),
     history: createMemoryHistory({ initialEntries: ['/dashboard'] }),
   })
@@ -80,6 +92,75 @@ function renderDashboard() {
 }
 
 describe('DashboardPage', () => {
+  it('shows payer checkout recovery in priority order with a dedicated overflow path', async () => {
+    server.use(
+      http.get('*/v1/dashboard', () =>
+        HttpResponse.json({
+          ...dashboardResponse({ completed_match_count: 1 }),
+          checkout_attention_total_count: 4,
+          checkout_attention: [
+            {
+              checkout_id: 'checkout-review',
+              tournament_id: 'tournament-review',
+              tournament_name: 'Autumn Open',
+              kind: 'needs_review',
+              payment_state: 'failed',
+              expires_at: '2030-04-20T14:10:00Z',
+              remaining_seconds: 600,
+              support_reference: 'PAY-1770',
+              href: '/tournaments/tournament-review/checkouts/checkout-review',
+            },
+            {
+              checkout_id: 'checkout-checking',
+              tournament_id: 'tournament-checking',
+              tournament_name: 'City Championship',
+              kind: 'checking',
+              payment_state: 'checking',
+              expires_at: '2030-04-20T14:10:00Z',
+              remaining_seconds: 600,
+              support_reference: null,
+              href: '/tournaments/tournament-checking/checkouts/checkout-checking',
+            },
+            {
+              checkout_id: 'checkout-active',
+              tournament_id: 'tournament-active',
+              tournament_name: 'Sunday Singles',
+              kind: 'active',
+              payment_state: 'ready',
+              expires_at: '2030-04-20T14:02:00Z',
+              remaining_seconds: 120,
+              support_reference: null,
+              href: '/tournaments/tournament-active/checkouts/checkout-active',
+            },
+          ],
+        }),
+      ),
+    )
+
+    renderDashboard()
+
+    const panel = await screen.findByRole('region', {
+      name: /payment attention/i,
+    })
+    const rows = within(panel).getAllByRole('listitem')
+    expect(rows).toHaveLength(3)
+    expect(rows[0]).toHaveTextContent('Payment needs review')
+    expect(rows[0]).toHaveTextContent('PAY-1770')
+    expect(rows[1]).toHaveTextContent('Payment is still being confirmed')
+    expect(rows[2]).toHaveTextContent('Finish checkout')
+    expect(
+      within(rows[2]).getByRole('link', { name: /finish checkout/i }),
+    ).toHaveAttribute(
+      'href',
+      '/tournaments/tournament-active/checkouts/checkout-active',
+    )
+    expect(within(panel).getByRole('link', { name: /view all checkouts/i }))
+      .toHaveAttribute('href', '/checkouts')
+    expect(
+      screen.queryByRole('link', { name: /payment history/i }),
+    ).not.toBeInTheDocument()
+  })
+
   it('renders the wired widgets against the dashboard response', async () => {
     server.use(
       http.get('*/v1/dashboard', () =>

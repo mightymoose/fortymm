@@ -14,6 +14,7 @@ import { Route as AppRouteRouteImport } from './routes/_app/route'
 import { Route as ConfirmEmailRouteImport } from './routes/confirm-email'
 import { Route as DesignSystemRouteImport } from './routes/design-system'
 import { Route as AppAdminRouteImport } from './routes/_app/admin'
+import { Route as AppCheckoutsRouteImport } from './routes/_app/checkouts'
 import { Route as AppDashboardRouteImport } from './routes/_app/dashboard'
 import { Route as AppNotificationsRouteImport } from './routes/_app/notifications'
 import { Route as AppSettingsRouteImport } from './routes/_app/settings'
@@ -40,6 +41,7 @@ import { Route as AppTournamentsTournamentIdRouteImport } from './routes/_app/to
 import { Route as AppMatchesMatchIdIndexRouteImport } from './routes/_app/matches.$matchId.index'
 import { Route as AppPlayersUserIdMatchesRouteImport } from './routes/_app/players/$userId_.matches'
 import { Route as AppMatchesMatchIdResultsNewRouteImport } from './routes/_app/matches.$matchId.results.new'
+import { Route as AppTournamentsTournamentIdCheckoutsCheckoutIdRouteImport } from './routes/_app/tournaments.$tournamentId.checkouts.$checkoutId'
 import { Route as AppMatchesMatchIdGamesGameNumberScoresEditRouteImport } from './routes/_app/matches.$matchId.games.$gameNumber.scores.edit'
 import { Route as AppMatchesMatchIdGamesGameNumberScoresNewRouteImport } from './routes/_app/matches.$matchId.games.$gameNumber.scores.new'
 
@@ -65,6 +67,11 @@ const DesignSystemRoute = DesignSystemRouteImport.update({
 const AppAdminRoute = AppAdminRouteImport.update({
   id: '/admin',
   path: '/admin',
+  getParentRoute: () => AppRouteRoute,
+} as any)
+const AppCheckoutsRoute = AppCheckoutsRouteImport.update({
+  id: '/checkouts',
+  path: '/checkouts',
   getParentRoute: () => AppRouteRoute,
 } as any)
 const AppDashboardRoute = AppDashboardRouteImport.update({
@@ -200,6 +207,12 @@ const AppMatchesMatchIdResultsNewRoute =
     path: '/matches/$matchId/results/new',
     getParentRoute: () => AppRouteRoute,
   } as any)
+const AppTournamentsTournamentIdCheckoutsCheckoutIdRoute =
+  AppTournamentsTournamentIdCheckoutsCheckoutIdRouteImport.update({
+    id: '/checkouts/$checkoutId',
+    path: '/checkouts/$checkoutId',
+    getParentRoute: () => AppTournamentsTournamentIdRoute,
+  } as any)
 const AppMatchesMatchIdGamesGameNumberScoresEditRoute =
   AppMatchesMatchIdGamesGameNumberScoresEditRouteImport.update({
     id: '/matches/$matchId/games/$gameNumber/scores/edit',
@@ -218,6 +231,7 @@ export interface FileRoutesByFullPath {
   '/confirm-email': typeof ConfirmEmailRoute
   '/design-system': typeof DesignSystemRoute
   '/admin': typeof AppAdminRouteWithChildren
+  '/checkouts': typeof AppCheckoutsRoute
   '/dashboard': typeof AppDashboardRoute
   '/notifications': typeof AppNotificationsRouteWithChildren
   '/settings': typeof AppSettingsRoute
@@ -235,7 +249,7 @@ export interface FileRoutesByFullPath {
   '/notifications/settings': typeof AppNotificationsSettingsRoute
   '/players/$userId': typeof AppPlayersUserIdRoute
   '/settings/claude': typeof AppSettingsClaudeRoute
-  '/tournaments/$tournamentId': typeof AppTournamentsTournamentIdRoute
+  '/tournaments/$tournamentId': typeof AppTournamentsTournamentIdRouteWithChildren
   '/admin/': typeof AppAdminIndexRoute
   '/matches/': typeof AppMatchesIndexRoute
   '/notifications/': typeof AppNotificationsIndexRoute
@@ -244,6 +258,7 @@ export interface FileRoutesByFullPath {
   '/players/$userId/matches': typeof AppPlayersUserIdMatchesRoute
   '/matches/$matchId/': typeof AppMatchesMatchIdIndexRoute
   '/matches/$matchId/results/new': typeof AppMatchesMatchIdResultsNewRoute
+  '/tournaments/$tournamentId/checkouts/$checkoutId': typeof AppTournamentsTournamentIdCheckoutsCheckoutIdRoute
   '/matches/$matchId/games/$gameNumber/scores/edit': typeof AppMatchesMatchIdGamesGameNumberScoresEditRoute
   '/matches/$matchId/games/$gameNumber/scores/new': typeof AppMatchesMatchIdGamesGameNumberScoresNewRoute
 }
@@ -251,6 +266,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/confirm-email': typeof ConfirmEmailRoute
   '/design-system': typeof DesignSystemRoute
+  '/checkouts': typeof AppCheckoutsRoute
   '/dashboard': typeof AppDashboardRoute
   '/settings': typeof AppSettingsRoute
   '/login/sent': typeof LoginSentRoute
@@ -266,7 +282,7 @@ export interface FileRoutesByTo {
   '/notifications/settings': typeof AppNotificationsSettingsRoute
   '/players/$userId': typeof AppPlayersUserIdRoute
   '/settings/claude': typeof AppSettingsClaudeRoute
-  '/tournaments/$tournamentId': typeof AppTournamentsTournamentIdRoute
+  '/tournaments/$tournamentId': typeof AppTournamentsTournamentIdRouteWithChildren
   '/admin': typeof AppAdminIndexRoute
   '/matches': typeof AppMatchesIndexRoute
   '/notifications': typeof AppNotificationsIndexRoute
@@ -275,6 +291,7 @@ export interface FileRoutesByTo {
   '/players/$userId/matches': typeof AppPlayersUserIdMatchesRoute
   '/matches/$matchId': typeof AppMatchesMatchIdIndexRoute
   '/matches/$matchId/results/new': typeof AppMatchesMatchIdResultsNewRoute
+  '/tournaments/$tournamentId/checkouts/$checkoutId': typeof AppTournamentsTournamentIdCheckoutsCheckoutIdRoute
   '/matches/$matchId/games/$gameNumber/scores/edit': typeof AppMatchesMatchIdGamesGameNumberScoresEditRoute
   '/matches/$matchId/games/$gameNumber/scores/new': typeof AppMatchesMatchIdGamesGameNumberScoresNewRoute
 }
@@ -285,6 +302,7 @@ export interface FileRoutesById {
   '/confirm-email': typeof ConfirmEmailRoute
   '/design-system': typeof DesignSystemRoute
   '/_app/admin': typeof AppAdminRouteWithChildren
+  '/_app/checkouts': typeof AppCheckoutsRoute
   '/_app/dashboard': typeof AppDashboardRoute
   '/_app/notifications': typeof AppNotificationsRouteWithChildren
   '/_app/settings': typeof AppSettingsRoute
@@ -302,7 +320,7 @@ export interface FileRoutesById {
   '/_app/notifications/settings': typeof AppNotificationsSettingsRoute
   '/_app/players/$userId': typeof AppPlayersUserIdRoute
   '/_app/settings_/claude': typeof AppSettingsClaudeRoute
-  '/_app/tournaments/$tournamentId': typeof AppTournamentsTournamentIdRoute
+  '/_app/tournaments/$tournamentId': typeof AppTournamentsTournamentIdRouteWithChildren
   '/_app/admin/': typeof AppAdminIndexRoute
   '/_app/matches/': typeof AppMatchesIndexRoute
   '/_app/notifications/': typeof AppNotificationsIndexRoute
@@ -311,6 +329,7 @@ export interface FileRoutesById {
   '/_app/players/$userId_/matches': typeof AppPlayersUserIdMatchesRoute
   '/_app/matches/$matchId/': typeof AppMatchesMatchIdIndexRoute
   '/_app/matches/$matchId/results/new': typeof AppMatchesMatchIdResultsNewRoute
+  '/_app/tournaments/$tournamentId/checkouts/$checkoutId': typeof AppTournamentsTournamentIdCheckoutsCheckoutIdRoute
   '/_app/matches/$matchId/games/$gameNumber/scores/edit': typeof AppMatchesMatchIdGamesGameNumberScoresEditRoute
   '/_app/matches/$matchId/games/$gameNumber/scores/new': typeof AppMatchesMatchIdGamesGameNumberScoresNewRoute
 }
@@ -321,6 +340,7 @@ export interface FileRouteTypes {
     | '/confirm-email'
     | '/design-system'
     | '/admin'
+    | '/checkouts'
     | '/dashboard'
     | '/notifications'
     | '/settings'
@@ -347,6 +367,7 @@ export interface FileRouteTypes {
     | '/players/$userId/matches'
     | '/matches/$matchId/'
     | '/matches/$matchId/results/new'
+    | '/tournaments/$tournamentId/checkouts/$checkoutId'
     | '/matches/$matchId/games/$gameNumber/scores/edit'
     | '/matches/$matchId/games/$gameNumber/scores/new'
   fileRoutesByTo: FileRoutesByTo
@@ -354,6 +375,7 @@ export interface FileRouteTypes {
     | '/'
     | '/confirm-email'
     | '/design-system'
+    | '/checkouts'
     | '/dashboard'
     | '/settings'
     | '/login/sent'
@@ -378,6 +400,7 @@ export interface FileRouteTypes {
     | '/players/$userId/matches'
     | '/matches/$matchId'
     | '/matches/$matchId/results/new'
+    | '/tournaments/$tournamentId/checkouts/$checkoutId'
     | '/matches/$matchId/games/$gameNumber/scores/edit'
     | '/matches/$matchId/games/$gameNumber/scores/new'
   id:
@@ -387,6 +410,7 @@ export interface FileRouteTypes {
     | '/confirm-email'
     | '/design-system'
     | '/_app/admin'
+    | '/_app/checkouts'
     | '/_app/dashboard'
     | '/_app/notifications'
     | '/_app/settings'
@@ -413,6 +437,7 @@ export interface FileRouteTypes {
     | '/_app/players/$userId_/matches'
     | '/_app/matches/$matchId/'
     | '/_app/matches/$matchId/results/new'
+    | '/_app/tournaments/$tournamentId/checkouts/$checkoutId'
     | '/_app/matches/$matchId/games/$gameNumber/scores/edit'
     | '/_app/matches/$matchId/games/$gameNumber/scores/new'
   fileRoutesById: FileRoutesById
@@ -463,6 +488,13 @@ declare module '@tanstack/react-router' {
       path: '/admin'
       fullPath: '/admin'
       preLoaderRoute: typeof AppAdminRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
+    '/_app/checkouts': {
+      id: '/_app/checkouts'
+      path: '/checkouts'
+      fullPath: '/checkouts'
+      preLoaderRoute: typeof AppCheckoutsRouteImport
       parentRoute: typeof AppRouteRoute
     }
     '/_app/dashboard': {
@@ -647,6 +679,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppMatchesMatchIdResultsNewRouteImport
       parentRoute: typeof AppRouteRoute
     }
+    '/_app/tournaments/$tournamentId/checkouts/$checkoutId': {
+      id: '/_app/tournaments/$tournamentId/checkouts/$checkoutId'
+      path: '/checkouts/$checkoutId'
+      fullPath: '/tournaments/$tournamentId/checkouts/$checkoutId'
+      preLoaderRoute: typeof AppTournamentsTournamentIdCheckoutsCheckoutIdRouteImport
+      parentRoute: typeof AppTournamentsTournamentIdRoute
+    }
     '/_app/matches/$matchId/games/$gameNumber/scores/edit': {
       id: '/_app/matches/$matchId/games/$gameNumber/scores/edit'
       path: '/matches/$matchId/games/$gameNumber/scores/edit'
@@ -699,13 +738,28 @@ const AppNotificationsRouteChildren: AppNotificationsRouteChildren = {
 const AppNotificationsRouteWithChildren =
   AppNotificationsRoute._addFileChildren(AppNotificationsRouteChildren)
 
+interface AppTournamentsTournamentIdRouteChildren {
+  AppTournamentsTournamentIdCheckoutsCheckoutIdRoute: typeof AppTournamentsTournamentIdCheckoutsCheckoutIdRoute
+}
+
+const AppTournamentsTournamentIdRouteChildren: AppTournamentsTournamentIdRouteChildren =
+  {
+    AppTournamentsTournamentIdCheckoutsCheckoutIdRoute:
+      AppTournamentsTournamentIdCheckoutsCheckoutIdRoute,
+  }
+
+const AppTournamentsTournamentIdRouteWithChildren =
+  AppTournamentsTournamentIdRoute._addFileChildren(
+    AppTournamentsTournamentIdRouteChildren,
+  )
+
 interface AppTournamentsRouteChildren {
-  AppTournamentsTournamentIdRoute: typeof AppTournamentsTournamentIdRoute
+  AppTournamentsTournamentIdRoute: typeof AppTournamentsTournamentIdRouteWithChildren
   AppTournamentsIndexRoute: typeof AppTournamentsIndexRoute
 }
 
 const AppTournamentsRouteChildren: AppTournamentsRouteChildren = {
-  AppTournamentsTournamentIdRoute: AppTournamentsTournamentIdRoute,
+  AppTournamentsTournamentIdRoute: AppTournamentsTournamentIdRouteWithChildren,
   AppTournamentsIndexRoute: AppTournamentsIndexRoute,
 }
 
@@ -715,6 +769,7 @@ const AppTournamentsRouteWithChildren = AppTournamentsRoute._addFileChildren(
 
 interface AppRouteRouteChildren {
   AppAdminRoute: typeof AppAdminRouteWithChildren
+  AppCheckoutsRoute: typeof AppCheckoutsRoute
   AppDashboardRoute: typeof AppDashboardRoute
   AppNotificationsRoute: typeof AppNotificationsRouteWithChildren
   AppSettingsRoute: typeof AppSettingsRoute
@@ -733,6 +788,7 @@ interface AppRouteRouteChildren {
 
 const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppAdminRoute: AppAdminRouteWithChildren,
+  AppCheckoutsRoute: AppCheckoutsRoute,
   AppDashboardRoute: AppDashboardRoute,
   AppNotificationsRoute: AppNotificationsRouteWithChildren,
   AppSettingsRoute: AppSettingsRoute,

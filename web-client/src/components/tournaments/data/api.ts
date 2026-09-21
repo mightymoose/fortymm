@@ -293,6 +293,7 @@ export function apiToTournament(t: TournamentDetailRead): Tournament {
     registrationOpen: t.registration_open,
     registrationGeneration: t.registration_generation,
     canEdit: t.can_edit,
+    feeAuthoringEnabled: t.fee_authoring_enabled,
     checkoutAvailable: t.checkout_available,
     description: t.description ?? '',
     // Carried across UNCHANGED, `null` included: the server derives this from the

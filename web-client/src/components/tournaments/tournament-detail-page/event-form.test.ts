@@ -622,12 +622,12 @@ describe('eventToFormValues', () => {
     )
   })
 
-  /** A brand-new event (no `event` at all) starts **uncapped**, not at an invented
-   * number, and with no fee rather than a free one. */
-  it('starts a brand-new event uncapped, with the fee unanswered', () => {
+  /** Fee authoring stays hidden while collection is disabled, so a brand-new event
+   * starts free without requiring an answer from the organizer. */
+  it('starts a brand-new event uncapped and free', () => {
     const values = eventToFormValues(null)
     expect(values.maxPlayers).toBeNull()
-    expect(values.entryFee).toBeNaN()
+    expect(values.entryFee).toBe(0)
   })
 })
 

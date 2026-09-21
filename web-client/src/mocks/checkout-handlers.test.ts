@@ -19,6 +19,7 @@ const checkout: Checkout = {
   id: '00000000-0000-4000-8000-000000000001',
   request_id: '00000000-0000-4000-8000-000000000002',
   tournament_id: '00000000-0000-4000-8000-000000000003',
+  tournament_name: 'Test tournament',
   registration_generation: 0,
   status: 'active',
   payment_state: 'unavailable',

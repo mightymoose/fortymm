@@ -41,7 +41,12 @@ from app.tournament_checkout_errors import (
     CheckoutRefusal,
     CheckoutRefusedError,
 )
-from app.tournament_checkouts import cancel_checkout, start_checkout
+from app.tournament_checkouts import (
+    cancel_checkout,
+    read_checkout,
+    read_current_checkout,
+    start_checkout,
+)
 from app.tournament_entries import admit_to_event
 from app.tournament_errors import EntryRefusal, EntryRefusedError
 from app.tournament_event_stages import mint_stages
@@ -558,6 +563,43 @@ async def test_checkout_is_limited_to_the_configured_merchant_owner(
     assert available.json()["checkout_available"] is True
 
 
+async def test_disabled_collection_reports_unavailable_and_creates_no_paid_hold(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    player = await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"owner-{uuid.uuid4().hex[:8]}")
+    tournament, events = await _paid_tournament(
+        db_session,
+        owner=owner,
+        fees=(Decimal("10.00"), Decimal("0.00")),
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    monkeypatch.delenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", raising=False)
+
+    detail = await api_client.get(f"/v1/tournaments/{tournament.id}")
+    assert detail.status_code == 200
+    assert detail.json()["checkout_available"] is False
+
+    paid = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={
+            "request_id": str(uuid.uuid4()),
+            "event_ids": [str(events[0].id)],
+        },
+    )
+    assert paid.status_code == 409, paid.text
+    assert paid.json()["detail"]["code"] == "collection_disabled"
+    assert await db_session.scalar(select(TournamentCheckout)) is None
+
+    free = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/events/{events[1].id}/entries"
+    )
+    assert free.status_code == 201, free.text
+    assert free.json()["user_id"] == str(player.player_id)
+
+
 @pytest.mark.parametrize("erase", [False, True])
 async def test_inactive_merchant_disables_checkout_and_releases_holds(
     api_client: AsyncClient,
@@ -849,6 +891,61 @@ async def test_explicit_cancellation_releases_hold_for_another_player(
             json={"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]},
         )
         assert available.status_code == 201
+
+
+async def test_shared_entrant_account_cannot_read_or_cancel_payers_checkout(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    payer = await start_session(api_client, db_session)
+    manager = User(email=f"manager-{uuid.uuid4().hex[:8]}@example.com")
+    manager.player_grants.append(
+        AccountPlayer(player_id=payer.player_id, is_primary=True)
+    )
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("12.00"),), capacities=(1,)
+    )
+    db_session.add(manager)
+    await db_session.commit()
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    created = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]},
+    )
+    assert created.status_code == 201
+    checkout_id = uuid.UUID(created.json()["id"])
+
+    for operation in (
+        read_checkout(
+            db_session,
+            tournament_id=tournament.id,
+            checkout_id=checkout_id,
+            actor=manager,
+        ),
+        read_current_checkout(
+            db_session,
+            tournament_id=tournament.id,
+            actor=manager,
+        ),
+        cancel_checkout(
+            db_session,
+            tournament_id=tournament.id,
+            checkout_id=checkout_id,
+            actor=manager,
+        ),
+    ):
+        with pytest.raises(CheckoutNotFoundError):
+            await operation
+
+    payer_read = await read_checkout(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+    )
+    assert payer_read.id == checkout_id
 
 
 @pytest.mark.parametrize("lifecycle_state", ["deactivated", "merged"])

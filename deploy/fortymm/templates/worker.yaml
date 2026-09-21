@@ -11,6 +11,8 @@ spec:
       {{- include "fortymm.selector" (dict "component" "worker") | nindent 6 }}
   template:
     metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/config.yaml") . | sha256sum }}
       labels:
         {{- include "fortymm.selector" (dict "component" "worker") | nindent 8 }}
     spec:
@@ -27,6 +29,10 @@ spec:
               cpu: {{ .Values.worker.cpu }}
               memory: {{ .Values.worker.memory }}
           env:
+            # Keep runtime processes on the same chart-controlled launch gate;
+            # explicit env entries take precedence over the bulk envFrom data.
+            - name: TOURNAMENT_PAYMENT_COLLECTION_ENABLED
+              value: {{ index .Values.config "TOURNAMENT_PAYMENT_COLLECTION_ENABLED" | quote }}
             # CP-SAT's search-worker count — kept equal to the CPU limit above
             # (single source of truth: .Values.worker.cpu) so the solver never
             # oversubscribes the container's cgroup quota. See #1115 and the

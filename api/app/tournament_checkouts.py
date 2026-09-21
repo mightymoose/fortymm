@@ -36,6 +36,8 @@ from app.rate_limiting import (
     renew_idempotent_budget_marker,
     wait_for_idempotent_budget_marker_change,
 )
+from app.rbac import user_has_permission
+from app.realtime import EventKind, stage_event
 from app.schemas.tournament_checkout import (
     TournamentCheckoutCreate,
     TournamentCheckoutLineRead,
@@ -62,6 +64,8 @@ from app.tournament_queries import (
     visible_to,
 )
 from app.tournament_registration import registration_open
+
+PAYMENTS_VIEW_PERMISSION = "payments.view"
 
 
 @dataclass(frozen=True)
@@ -155,9 +159,14 @@ def _read(
         id=checkout.id,
         request_id=checkout.request_id,
         tournament_id=checkout.tournament_id,
+        tournament_name=tournament.name,
         registration_generation=checkout.registration_generation,
         status=_effective_state(checkout, tournament, now),
-        payment_state=TournamentCheckoutPaymentState.unavailable,
+        payment_state=(
+            TournamentCheckoutPaymentState(checkout.payment.state.value)
+            if checkout.payment is not None
+            else TournamentCheckoutPaymentState.unavailable
+        ),
         currency=checkout.currency,
         total_cents=checkout.total_cents,
         created_at=checkout.created_at,
@@ -425,6 +434,12 @@ async def _start_checkout_after_admission(
             await db.commit()
         return _read(prior_request, tournament, now)
 
+    if not get_settings().tournament_payment_collection_enabled:
+        raise CheckoutRefusedError(
+            CheckoutRefusal.collection_disabled,
+            "Payment collection is disabled for new checkouts.",
+        )
+
     # Account → Tournament → Player is the shared registration lock order. Taking
     # Player before Tournament can deadlock against free entry by another account
     # that manages the same Player (entry already holds Tournament when it resolves
@@ -597,11 +612,11 @@ async def read_checkout(
             TournamentCheckout.tournament_id == tournament_id,
         )
         .options(selectinload(TournamentCheckout.lines))
+        .execution_options(populate_existing=True)
     )
-    player = actor.primary_player
     if checkout is None or (
         checkout.payer_account_id != actor.id
-        and (player is None or checkout.entrant_player_id != player.id)
+        and not await user_has_permission(db, actor.id, PAYMENTS_VIEW_PERMISSION)
     ):
         raise CheckoutNotFoundError()
     tournament = await db.get(Tournament, tournament_id)
@@ -616,14 +631,11 @@ async def read_current_checkout(
     tournament_id: uuid.UUID,
     actor: User,
 ) -> TournamentCheckoutRead:
-    player = actor.primary_player
-    if player is None:
-        raise CheckoutNotFoundError()
     checkout = await db.scalar(
         select(TournamentCheckout)
         .where(
             TournamentCheckout.tournament_id == tournament_id,
-            TournamentCheckout.entrant_player_id == player.id,
+            TournamentCheckout.payer_account_id == actor.id,
             TournamentCheckout.status == TournamentCheckoutStatus.active,
         )
         .options(selectinload(TournamentCheckout.lines))
@@ -664,22 +676,21 @@ async def cancel_checkout(
         )
         .options(selectinload(TournamentCheckout.lines))
     )
-    player = locked_actor.primary_player
-    if checkout is None or (
-        checkout.payer_account_id != locked_actor.id
-        and (player is None or checkout.entrant_player_id != player.id)
-    ):
+    if checkout is None or checkout.payer_account_id != locked_actor.id:
         raise CheckoutNotFoundError()
     now = await _database_now(db)
     effective = _effective_state(checkout, tournament, now)
     if effective is TournamentCheckoutState.active:
         checkout.status = TournamentCheckoutStatus.cancelled
         checkout.cancelled_at = now
+        stage_event(db, checkout.payer_account_id, EventKind.dashboard_changed)
         await db.commit()
     elif effective is TournamentCheckoutState.expired:
         checkout.status = TournamentCheckoutStatus.expired
+        stage_event(db, checkout.payer_account_id, EventKind.dashboard_changed)
         await db.commit()
     elif effective is TournamentCheckoutState.invalidated:
         checkout.status = TournamentCheckoutStatus.invalidated
+        stage_event(db, checkout.payer_account_id, EventKind.dashboard_changed)
         await db.commit()
     return _read(checkout, tournament, now)

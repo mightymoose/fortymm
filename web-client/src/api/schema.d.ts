@@ -1734,6 +1734,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tournaments/{tournament_id}/payment-problems": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Tournament Payment Problems
+         * @description Owner-only safe projection; provider evidence and secrets stay internal.
+         */
+        get: operations["list_tournament_payment_problems_v1_tournaments__tournament_id__payment_problems_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/checkouts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Actionable Checkouts
+         * @description List this payer's actionable checkouts; terminal history is omitted.
+         */
+        get: operations["get_actionable_checkouts_v1_checkouts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/tournaments/{tournament_id}/checkouts": {
         parameters: {
             query?: never;
@@ -1793,6 +1833,47 @@ export interface paths {
          * @description Explicitly cancel checkout and release every selected place together.
          */
         delete: operations["cancel_tournament_checkout_v1_tournaments__tournament_id__checkouts__checkout_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tournament Checkout Payment
+         * @description Retrieve provider truth and reconcile; redirect query strings are ignored.
+         */
+        get: operations["get_tournament_checkout_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_get"];
+        put?: never;
+        /**
+         * Prepare Tournament Checkout Payment
+         * @description Prepare or resume the checkout's one card-only provider intent.
+         */
+        post: operations["prepare_tournament_checkout_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/webhooks/stripe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Receive Stripe Webhook */
+        post: operations["receive_stripe_webhook_v1_webhooks_stripe_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1994,6 +2075,11 @@ export interface components {
             from_username: string;
             /** To Username */
             to_username: string;
+        };
+        /** ActionableCheckoutsRead */
+        ActionableCheckoutsRead: {
+            /** Items */
+            items: components["schemas"]["CheckoutAttentionItem"][];
         };
         /**
          * Address
@@ -2303,6 +2389,39 @@ export interface components {
              */
             queued: boolean;
         };
+        /** CheckoutAttentionItem */
+        CheckoutAttentionItem: {
+            /**
+             * Checkout Id
+             * Format: uuid
+             */
+            checkout_id: string;
+            /**
+             * Tournament Id
+             * Format: uuid
+             */
+            tournament_id: string;
+            /** Tournament Name */
+            tournament_name: string;
+            kind: components["schemas"]["CheckoutAttentionKind"];
+            payment_state: components["schemas"]["TournamentCheckoutPaymentState"];
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Remaining Seconds */
+            remaining_seconds: number;
+            /** Support Reference */
+            support_reference: string | null;
+            /** Href */
+            href: string;
+        };
+        /**
+         * CheckoutAttentionKind
+         * @enum {string}
+         */
+        CheckoutAttentionKind: "needs_review" | "checking" | "active";
         /** ComponentHealth */
         ComponentHealth: {
             /** Healthy */
@@ -2507,6 +2626,16 @@ export interface components {
         };
         /** DashboardResponse */
         DashboardResponse: {
+            /**
+             * Checkout Attention
+             * @default []
+             */
+            checkout_attention: components["schemas"]["CheckoutAttentionItem"][];
+            /**
+             * Checkout Attention Total Count
+             * @default 0
+             */
+            checkout_attention_total_count: number;
             /** Attention */
             attention: components["schemas"]["DashboardAttentionItem"][];
             /** Attention Total Count */
@@ -3681,7 +3810,7 @@ export interface components {
          *     a user can mute each category independently per channel.
          * @enum {string}
          */
-        NotificationCategory: "match_reminder" | "rating_change" | "tournament" | "opponent" | "result_confirm" | "match_calls";
+        NotificationCategory: "match_reminder" | "rating_change" | "tournament" | "opponent" | "result_confirm" | "match_calls" | "payments";
         /**
          * NotificationCategoryCell
          * @description One cell of the matrix: this category's setting for one channel.
@@ -5417,7 +5546,7 @@ export interface components {
          * TournamentCheckoutPaymentState
          * @enum {string}
          */
-        TournamentCheckoutPaymentState: "unavailable";
+        TournamentCheckoutPaymentState: "unavailable" | "preparing" | "ready" | "checking" | "action_required" | "succeeded" | "failed" | "expired" | "canceled";
         /** TournamentCheckoutRead */
         TournamentCheckoutRead: {
             /**
@@ -5435,6 +5564,8 @@ export interface components {
              * Format: uuid
              */
             tournament_id: string;
+            /** Tournament Name */
+            tournament_name: string;
             /** Registration Generation */
             registration_generation: number;
             status: components["schemas"]["TournamentCheckoutState"];
@@ -5540,6 +5671,8 @@ export interface components {
             created_by_username: string;
             /** Can Edit */
             can_edit: boolean;
+            /** Fee Authoring Enabled */
+            fee_authoring_enabled: boolean;
             /** Checkout Available */
             checkout_available: boolean;
             /**
@@ -5995,6 +6128,66 @@ export interface components {
             call_notified_count: number;
             completed_at: components["schemas"]["FixtureTimeRead"] | null;
         };
+        /**
+         * TournamentPaymentLineOutcomeState
+         * @enum {string}
+         */
+        TournamentPaymentLineOutcomeState: "confirmed" | "refund_pending";
+        /** TournamentPaymentLineRead */
+        TournamentPaymentLineRead: {
+            /**
+             * Event Id
+             * Format: uuid
+             */
+            event_id: string;
+            /** Amount Cents */
+            amount_cents: number;
+            outcome: components["schemas"]["TournamentPaymentLineOutcomeState"] | null;
+            /** Refund Amount Cents */
+            refund_amount_cents: number;
+        };
+        /** TournamentPaymentPrepare */
+        TournamentPaymentPrepare: {
+            /** Receipt Email */
+            receipt_email?: string | null;
+        };
+        /** TournamentPaymentProblemList */
+        TournamentPaymentProblemList: {
+            /** Items */
+            items: components["schemas"]["TournamentPaymentProblemRead"][];
+        };
+        /** TournamentPaymentProblemRead */
+        TournamentPaymentProblemRead: {
+            /** Support Reference */
+            support_reference: string;
+            /** State */
+            state: string;
+            /**
+             * Checkout Id
+             * Format: uuid
+             */
+            checkout_id: string;
+        };
+        /** TournamentPaymentRead */
+        TournamentPaymentRead: {
+            /**
+             * Checkout Id
+             * Format: uuid
+             */
+            checkout_id: string;
+            payment_state: components["schemas"]["TournamentCheckoutPaymentState"];
+            /** Client Secret */
+            client_secret: string | null;
+            /** Receipt Email */
+            receipt_email: string | null;
+            /** Support Reference */
+            support_reference?: string | null;
+            /**
+             * Lines
+             * @default []
+             */
+            lines: components["schemas"]["TournamentPaymentLineRead"][];
+        };
         /** TournamentRead */
         TournamentRead: {
             /** Details Version */
@@ -6030,6 +6223,8 @@ export interface components {
             created_by_username: string;
             /** Can Edit */
             can_edit: boolean;
+            /** Fee Authoring Enabled */
+            fee_authoring_enabled: boolean;
             /** Checkout Available */
             checkout_available: boolean;
             /**
@@ -8967,6 +9162,70 @@ export interface operations {
             };
         };
     };
+    list_tournament_payment_problems_v1_tournaments__tournament_id__payment_problems_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentPaymentProblemList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_actionable_checkouts_v1_checkouts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ActionableCheckoutsRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     start_tournament_checkout_v1_tournaments__tournament_id__checkouts_post: {
         parameters: {
             query?: never;
@@ -9124,6 +9383,107 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tournament_checkout_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+                checkout_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentPaymentRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prepare_tournament_checkout_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+                checkout_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TournamentPaymentPrepare"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentPaymentRead"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentCheckoutRefusalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    receive_stripe_webhook_v1_webhooks_stripe_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

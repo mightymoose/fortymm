@@ -34,6 +34,8 @@ const SEEDED_PRIOR = '1500'
 /** One rated match, and it ESTABLISHED the rating: `delta` is null, and the spark
  * carries the single rated result (never the seed row). */
 const ESTABLISHED_DASHBOARD = {
+  checkout_attention: [],
+  checkout_attention_total_count: 0,
   attention: [],
   attention_total_count: 0,
   waiting_count: 0,

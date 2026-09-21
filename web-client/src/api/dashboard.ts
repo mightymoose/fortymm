@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api, unwrap } from './client'
 import type { components } from './schema'
 
+export type CheckoutAttentionItem = components['schemas']['CheckoutAttentionItem']
 export type DashboardResponse = components['schemas']['DashboardResponse']
 export type DashboardAttentionItem =
   components['schemas']['DashboardAttentionItem']

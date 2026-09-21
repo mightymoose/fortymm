@@ -24,6 +24,7 @@ from app.db import Base
 
 if TYPE_CHECKING:
     from app.models.tournament import Tournament
+    from app.models.tournament_payment import TournamentPayment
 
 
 class TournamentCheckoutStatus(enum.Enum):
@@ -121,6 +122,9 @@ class TournamentCheckout(Base):
         lazy="selectin",
         order_by="TournamentCheckoutLine.event_id",
     )
+    payment: Mapped["TournamentPayment | None"] = relationship(
+        back_populates="checkout", uselist=False, lazy="joined"
+    )
 
 
 class TournamentCheckoutLine(Base):
@@ -133,6 +137,9 @@ class TournamentCheckoutLine(Base):
         ),
         UniqueConstraint(
             "checkout_id", "event_id", name="uq_tournament_checkout_lines_event"
+        ),
+        UniqueConstraint(
+            "id", "checkout_id", name="uq_tournament_checkout_lines_id_checkout"
         ),
         Index("ix_tournament_checkout_lines_event_id", "event_id"),
     )

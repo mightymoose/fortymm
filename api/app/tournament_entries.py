@@ -59,7 +59,7 @@ from decimal import Decimal
 from typing import assert_never
 
 from pyrate_limiter import Duration, Rate
-from sqlalchemy import exists, or_, select, text
+from sqlalchemy import exists, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -70,11 +70,15 @@ from app.models import (
     Player,
     ScheduleSolveTrigger,
     Tournament,
+    TournamentCheckout,
+    TournamentCheckoutLine,
+    TournamentCheckoutStatus,
     TournamentEntry,
     TournamentEntryRegistration,
     TournamentEntryStatus,
     TournamentEvent,
     TournamentFixture,
+    TournamentPayment,
     User,
 )
 from app.player_accounts import PlayerAccessDenied, require_player
@@ -281,6 +285,7 @@ async def admit_to_event(
     actor: User,
     user_id: uuid.UUID | None,
     client_ip: str | None = None,
+    paid_checkout_id: uuid.UUID | None = None,
 ) -> TournamentEntrantRead:
     """Enter a player in a singles event — ``actor`` themselves, or (as the tournament's
     owner) the player ``user_id`` names — and return the created
@@ -407,7 +412,7 @@ async def admit_to_event(
     # manual arm for phone, offline and complimentary registrations. Checkout can
     # only reserve the signed-in player's own place, so applying this guard to the
     # director arm would make those entrants impossible to record.
-    if self_registration and Decimal(event.entry_fee) > 0:
+    if self_registration and Decimal(event.entry_fee) > 0 and paid_checkout_id is None:
         raise EntryRefusedError(
             EntryRefusal.payment_required,
             "This event requires paid checkout.",
@@ -419,6 +424,49 @@ async def admit_to_event(
         # but a later refusal must not leak that invalidation into a caller-owned
         # transaction which catches the refusal and commits other work.
         async with db.begin_nested():
+            if paid_checkout_id is not None:
+                checkout = await db.get(TournamentCheckout, paid_checkout_id)
+                checkout_now = await db.scalar(select(func.clock_timestamp()))
+                quoted_event = await db.scalar(
+                    select(
+                        exists().where(
+                            TournamentCheckoutLine.checkout_id == paid_checkout_id,
+                            TournamentCheckoutLine.event_id == event.id,
+                        )
+                    )
+                )
+                verified_success = await db.scalar(
+                    select(
+                        exists().where(
+                            TournamentPayment.checkout_id == paid_checkout_id,
+                            TournamentPayment.provider_status == "succeeded",
+                        )
+                    )
+                )
+                if (
+                    checkout is None
+                    or checkout.tournament_id != tournament.id
+                    or checkout.entrant_player_id != entrant.id
+                    or checkout.payer_account_id != actor.id
+                    or checkout.registration_generation
+                    != tournament.registration_generation
+                    or checkout_now is None
+                    or checkout.expires_at <= checkout_now
+                    or checkout.status
+                    not in {
+                        TournamentCheckoutStatus.active,
+                        TournamentCheckoutStatus.invalidated,
+                    }
+                    or not quoted_event
+                    or not verified_success
+                ):
+                    raise EntryRefusedError(
+                        EntryRefusal.payment_required,
+                        "A matching paid checkout is required.",
+                    )
+                # Consuming the combined hold releases it before capacity is
+                # counted. The tournament lock keeps competing admission behind us.
+                checkout.status = TournamentCheckoutStatus.invalidated
             if not self_registration:
                 # A director entry supersedes this player's hold for the same event. The
                 # quote is all-or-nothing, so invalidate the combined checkout before

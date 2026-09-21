@@ -170,11 +170,13 @@ type StoredTournament = Omit<
   | 'date_range'
   | 'registration_open'
   | 'registration_generation'
+  | 'fee_authoring_enabled'
   | 'checkout_available'
 > & {
   events: StoredEvent[]
   registration_open?: boolean
   registration_generation?: number
+  fee_authoring_enabled?: boolean
   checkout_available?: boolean
 }
 
@@ -1496,6 +1498,7 @@ function readDetail(t: StoredTournament): TournamentDetailRead {
     ...t,
     registration_open: t.registration_open ?? t.status === 'published',
     registration_generation: t.registration_generation ?? (t.status === 'draft' ? 0 : 1),
+    fee_authoring_enabled: t.fee_authoring_enabled ?? false,
     checkout_available: t.checkout_available ?? false,
     events: t.events.map((event) =>
       readEvent(event, heldPlacesFor(t.id, event.id)),
@@ -2033,6 +2036,7 @@ function readOf({ events, ...read }: StoredTournament): TournamentRead {
     ...read,
     registration_open: read.registration_open ?? read.status === 'published',
     registration_generation: read.registration_generation ?? (read.status === 'draft' ? 0 : 1),
+    fee_authoring_enabled: read.fee_authoring_enabled ?? false,
     checkout_available: read.checkout_available ?? false,
   }
 }

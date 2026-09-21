@@ -64,6 +64,7 @@ from app.tournament_errors import (
     EVENT_VERSION_CONFLICT_CODE,
     DrawTypeFrozenError,
     DrawUnderWayError,
+    EntryFeeTooLowError,
     EntryNotFoundError,
     EntryRateLimitedError,
     EntryRefusedError,
@@ -85,6 +86,7 @@ from app.tournament_errors import (
     NonSinglesEntryError,
     NotAllowedToWithdrawError,
     NotTournamentOwnerError,
+    PaymentCollectionDisabledError,
     PlacementClashError,
     PlacementTableNotFoundError,
     PlayerNotFoundError,
@@ -802,6 +804,11 @@ async def create_event(
         event, league_id = await create_event_core(
             db, tournament_id=tournament_id, actor=current_user, payload=payload
         )
+    except PaymentCollectionDisabledError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "collection_disabled", "message": str(exc)},
+        ) from exc
     except _TOURNAMENT_WRITE_ERRORS as exc:
         raise _map_tournament_write_error(exc) from exc
     # The verb returns the tournament's ``league_id`` — the ladder the caller's
@@ -1016,6 +1023,22 @@ async def update_event(
             actor=current_user,
             updates=payload,
         )
+    except EntryFeeTooLowError as exc:
+        raise RequestValidationError(
+            [
+                {
+                    "type": "value_error",
+                    "loc": ("body", "entry_fee"),
+                    "msg": str(exc),
+                    "input": payload.entry_fee,
+                }
+            ]
+        ) from exc
+    except PaymentCollectionDisabledError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "collection_disabled", "message": str(exc)},
+        ) from exc
     except EventVersionConflictError as exc:
         # A **structured** 409, unlike the two plain-string freezes below, and caught
         # before them so the two cannot be confused: the body carries a stable

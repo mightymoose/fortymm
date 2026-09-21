@@ -2,6 +2,7 @@ import {
   Bell,
   CheckCircle2,
   Clock,
+  CreditCard,
   Flag,
   Mail,
   Megaphone,
@@ -58,6 +59,11 @@ export const CATEGORY_VISUAL: Record<NotificationCategory, CategoryVisual> = {
     Icon: Megaphone,
     color: 'var(--ball-500)',
     tint: 'rgba(255, 122, 26, 0.12)',
+  },
+  payments: {
+    Icon: CreditCard,
+    color: 'var(--warn)',
+    tint: 'rgba(255, 196, 61, 0.14)',
   },
 }
 

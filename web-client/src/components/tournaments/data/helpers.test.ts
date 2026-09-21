@@ -351,6 +351,10 @@ describe('emptyEvent', () => {
     expect(event.fixtures).toEqual([])
   })
 
+  it('defaults a new event to free while fee authoring is hidden', () => {
+    expect(emptyEvent(buildTournament()).entryFee).toBe(0)
+  })
+
   // #1511: the server-derived `dateRange`, not a client re-derivation over the
   // events array.
   it("defaults a new event's date to the tournament's dateRange.start", () => {

@@ -1269,6 +1269,7 @@ export const handlers = [
       id: crypto.randomUUID(),
       request_id: body.request_id,
       tournament_id: tournamentId,
+      tournament_name: tournament?.name ?? 'Tournament',
       registration_generation: 0,
       status: 'active',
       payment_state: 'unavailable',

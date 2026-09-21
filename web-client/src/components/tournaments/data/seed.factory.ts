@@ -1708,6 +1708,7 @@ export function buildTournament(
     // Existing component factories/tests build the creator's own tournaments,
     // so default to editable; override `canEdit: false` for the read-only case.
     canEdit: true,
+    feeAuthoringEnabled: true,
     checkoutAvailable: true,
     // The min/max of the default `events` below's own `slot.date` (#1511) — the
     // server derives this from the tournament's events on every read; a fixture

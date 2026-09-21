@@ -48,7 +48,7 @@ from mcp import MCPError
 from mcp.types import INTERNAL_ERROR
 from pyrate_limiter import Duration, Rate
 from rq import Queue
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
@@ -4236,6 +4236,40 @@ async def test_create_event_owner_adds_it_and_it_persists(
     ).scalar_one()
     assert persisted.tournament_id == tournament_id
     assert persisted.match_settings == {"rated": True, "length_games": 5}
+
+
+async def test_create_event_cannot_bypass_the_disabled_fee_gate(
+    db_session: AsyncSession,
+    default_league: League,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = await make_user(db_session, "mcp-create-event-fee-gate")
+    raw = await _mint(db_session, owner)
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Free Events Only", TournamentStatus.draft
+    )
+    monkeypatch.delenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", raising=False)
+
+    async with _mcp_client(raw) as client, client:
+        result = await client.call_tool_mcp(
+            "create_event",
+            {
+                "tournament_id": str(tournament.id),
+                "payload": _event_payload(),
+            },
+        )
+
+    assert result.is_error is True
+    assert "Payment collection is disabled" in str(result.content)
+
+    assert (
+        await db_session.scalar(
+            select(func.count())
+            .select_from(TournamentEvent)
+            .where(TournamentEvent.tournament_id == tournament.id)
+        )
+        == 0
+    )
 
 
 async def test_create_event_non_owner_raises_tool_error_and_writes_nothing(

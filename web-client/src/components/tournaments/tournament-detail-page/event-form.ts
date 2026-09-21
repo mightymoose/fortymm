@@ -547,9 +547,8 @@ const EMPTY_FORM_VALUES: EventFormValues = {
   // saveable answer (ADR-0935), so an organizer who never touches the box gets an
   // event with no cap — rather than a form that silently refuses to submit.
   maxPlayers: null,
-  // …and with NO fee, which is not the same as a free one. `NaN` is the blank box,
-  // and blank stays a required error until they say which they meant.
-  entryFee: NaN,
+  // Fee authoring is hidden while collection is paused, so a new event starts free.
+  entryFee: 0,
   // The browser's resolved zone (ADR 20260719): the venue's, in the single-venue
   // common case, and a starting point the director can correct otherwise. This
   // const only backs the `event === null` projection below — the real new-event

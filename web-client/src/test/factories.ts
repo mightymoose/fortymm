@@ -322,21 +322,26 @@ export function dashboardResponse(
   const recent_results = overrides.recent_results ?? []
   const attention = overrides.attention ?? []
   return {
+    checkout_attention: overrides.checkout_attention ?? [],
+    checkout_attention_total_count:
+      overrides.checkout_attention_total_count ??
+      overrides.checkout_attention?.length ??
+      0,
     attention,
     // Mirrors the returned rows by default (no server-side cap in play).
     // Override to model a capped panel with extra "+N more" overflow.
-    attention_total_count: attention.length,
-    waiting_count: 0,
+    attention_total_count: overrides.attention_total_count ?? attention.length,
+    waiting_count: overrides.waiting_count ?? 0,
     recent_results,
-    rating: dashboardRating(),
+    rating: overrides.rating ?? dashboardRating(),
     // Default mirrors the visible list. Override directly to model the
     // "history exceeds the recent window" case the guest banner cares about.
-    completed_match_count: recent_results.length,
+    completed_match_count:
+      overrides.completed_match_count ?? recent_results.length,
     // Nobody is mid-tournament by default — the real shape of almost every
     // dashboard load, and the one that renders no panel. Override with
     // `buildDashboardTournament()` to model a player who is.
-    tournaments: [],
-    ...overrides,
+    tournaments: overrides.tournaments ?? [],
   }
 }
 

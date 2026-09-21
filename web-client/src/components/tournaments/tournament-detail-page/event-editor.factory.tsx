@@ -14,6 +14,7 @@ export function buildEventEditorProps(
     tables: buildTables(12),
     drawTypes: buildDrawTypes(),
     canEdit: true,
+    feeAuthoringEnabled: true,
     // No write in flight — the editor as an organizer first meets it.
     saving: false,
     onSave: () => {},

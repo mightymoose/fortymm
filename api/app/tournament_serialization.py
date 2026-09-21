@@ -161,8 +161,11 @@ def _tournament_fields(
         "created_by_user_id": t.created_by_user_id,
         "created_by_username": created_by_username,
         "can_edit": t.owner_account_id == current_user_id,
+        "fee_authoring_enabled": get_settings().tournament_payment_collection_enabled,
         "checkout_available": (
-            get_settings().tournament_payment_merchant_account_id == t.owner_account_id
+            get_settings().tournament_payment_collection_enabled
+            and get_settings().tournament_payment_merchant_account_id
+            == t.owner_account_id
             and t.owner_account_is_active
         ),
         "created_at": t.created_at,

@@ -15,6 +15,20 @@ leaf both the services and their adapters can import.
 from enum import StrEnum
 
 
+class PaymentCollectionDisabledError(Exception):
+    """A positive fee cannot be authored while public collection is paused."""
+
+    def __init__(self) -> None:
+        super().__init__("Payment collection is disabled; event fees must remain free.")
+
+
+class EntryFeeTooLowError(Exception):
+    """A PATCH attempted to introduce a positive fee below provider minimum."""
+
+    def __init__(self) -> None:
+        super().__init__("A paid entry fee must be at least $0.50 USD.")
+
+
 class EntryRefusal(StrEnum):
     """Why an entry into a tournament event was refused (ADR-0968).
 

@@ -78,6 +78,8 @@ export interface EventEditorProps {
   /** When false (a non-creator), the Save and Delete actions are hidden and the
    * editor becomes a read-only view of the event. */
   canEdit: boolean
+  /** Whether the deployment currently permits positive event-fee authoring. */
+  feeAuthoringEnabled?: boolean
   /** Persist the edited event — an `EditedEvent`, whose reservations are the organizer's
    * **diff** (`ReservationEntry`) rather than rows read back: each one either cites the id
    * the server minted or carries none at all, and a stored reservation no entry cites is a
@@ -163,6 +165,7 @@ export const EventEditor = ({
   tables,
   drawTypes,
   canEdit,
+  feeAuthoringEnabled = true,
   onSave,
   onDelete,
   saving = false,
@@ -570,6 +573,7 @@ export const EventEditor = ({
                   errors={basicsErrors}
                   drawTypeFreeze={drawTypeLock}
                   drawTypes={drawTypes}
+                  feeAuthoringEnabled={feeAuthoringEnabled}
                   onChange={applyChange}
                 />
               </TabsContent>

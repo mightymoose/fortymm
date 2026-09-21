@@ -21,12 +21,14 @@ absent id existed), exactly as the slice-1 lifecycle verbs do.
 
 import uuid
 from datetime import date, datetime, time
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.config import get_settings
 from app.draws import group_label
 from app.models import (
     DrawType,
@@ -77,12 +79,14 @@ from app.tournament_draws import (
 from app.tournament_edit import _load_owned_tournament_for_update
 from app.tournament_errors import (
     DrawTypeFrozenError,
+    EntryFeeTooLowError,
     EventCancelledError,
     EventFormatMembershipError,
     EventNotFoundError,
     EventVersionConflictError,
     GroupSetFrozenError,
     MatchRulesFrozenError,
+    PaymentCollectionDisabledError,
     TournamentArchivedError,
 )
 from app.tournament_event_stages import mint_stages, remint_stages_in_place
@@ -165,6 +169,11 @@ async def create_event(
     tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
     if tournament.status is TournamentStatus.archived:
         raise TournamentArchivedError()
+    if (
+        not get_settings().tournament_payment_collection_enabled
+        and Decimal(str(payload.entry_fee)) > 0
+    ):
+        raise PaymentCollectionDisabledError()
     # The event's stages, also ROWS (ADR 20260815) and also created with the event in
     # this same transaction — every event holds its minted stages from the moment it
     # exists, never as a follow-up write. ``mint_stages`` reads the template straight
@@ -1090,6 +1099,17 @@ async def update_event(
         raise EventVersionConflictError(current_version=event.lock_version)
     if event.lifecycle_state is EventLifecycleState.cancelled:
         raise EventCancelledError()
+    if updates.entry_fee is not None:
+        next_fee = Decimal(str(updates.entry_fee))
+        fee_changed = next_fee != Decimal(event.entry_fee)
+        if fee_changed and Decimal(0) < next_fee < Decimal("0.50"):
+            raise EntryFeeTooLowError()
+        if (
+            fee_changed
+            and next_fee > 0
+            and not get_settings().tournament_payment_collection_enabled
+        ):
+            raise PaymentCollectionDisabledError()
     # 404 → 403 → 409: the freezes are asked before the setattr loop below, so a
     # refusal writes nothing at all.
     await _enforce_group_set_frozen(db, event, updates)

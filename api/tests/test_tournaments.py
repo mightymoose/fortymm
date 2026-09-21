@@ -1162,6 +1162,129 @@ async def test_create_event_round_trips_jsonb(
     assert uuid.UUID(body["reservations"][0]["id"])
 
 
+async def test_disabled_collection_rejects_a_new_positive_event_fee(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _ = authed_client
+    monkeypatch.delenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", raising=False)
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(entry_fee=45),
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "collection_disabled"
+    assert (
+        await db_session.scalar(select(func.count()).select_from(TournamentEvent)) == 0
+    )
+
+
+async def test_disabled_collection_still_allows_a_new_free_event(
+    authed_client: tuple[AsyncClient, User],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _ = authed_client
+    monkeypatch.delenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", raising=False)
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(entry_fee=0),
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["entry_fee"] == 0
+
+
+async def test_disabled_collection_rejects_changing_an_existing_positive_fee(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _ = authed_client
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", "true")
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events",
+            json=_event_payload(entry_fee=45),
+        )
+    ).json()
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", "false")
+
+    response = await patch_event(
+        client, created["id"], event["id"], {"entry_fee": 50}
+    )
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "collection_disabled"
+    db_session.expire_all()
+    stored = await db_session.get(TournamentEvent, uuid.UUID(event["id"]))
+    assert stored is not None
+    assert stored.entry_fee == Decimal("45.00")
+
+
+async def test_disabled_collection_preserves_an_unchanged_legacy_subminimum_fee(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _ = authed_client
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", "true")
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events",
+            json=_event_payload(entry_fee=45),
+        )
+    ).json()
+    # The write boundary already refuses a new subminimum paid fee. Seed the legacy
+    # value at rest to exercise the compatibility promise for rows that predate it.
+    stored = await db_session.get(TournamentEvent, uuid.UUID(event["id"]))
+    assert stored is not None
+    stored.entry_fee = Decimal("0.25")
+    await db_session.commit()
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", "false")
+
+    unrelated = await patch_event(
+        client,
+        created["id"],
+        event["id"],
+        {"name": "Legacy fee preserved", "entry_fee": 0.25},
+    )
+    assert unrelated.status_code == 200, unrelated.text
+    assert unrelated.json()["entry_fee"] == 0.25
+
+
+async def test_disabled_collection_allows_an_existing_paid_event_to_be_made_free(
+    authed_client: tuple[AsyncClient, User],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _ = authed_client
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", "true")
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events",
+            json=_event_payload(entry_fee=45),
+        )
+    ).json()
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", "false")
+
+    made_free = await patch_event(
+        client,
+        created["id"],
+        event["id"],
+        {"entry_fee": 0},
+    )
+    assert made_free.status_code == 200, made_free.text
+    assert made_free.json()["entry_fee"] == 0
+
+
 async def test_create_event_with_an_unknown_timezone_is_422_and_writes_nothing(
     authed_client: tuple[AsyncClient, User],
 ):

@@ -73,6 +73,7 @@ def _tournament_read_payload(**overrides: Any) -> dict[str, Any]:
         "created_by_username": "director",
         "details_version": 1,
         "can_edit": True,
+        "fee_authoring_enabled": False,
         "checkout_available": False,
         "created_at": now,
         "updated_at": now,

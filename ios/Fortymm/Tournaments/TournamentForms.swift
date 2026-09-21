@@ -73,8 +73,10 @@ struct NewTournamentEventView: View {
                     if drawType == "swiss" { Stepper("Rounds: \(rounds)", value: $rounds, in: TournamentEventLimits.rounds) }
                     Toggle("Limit players", isOn: $capped)
                     if capped { Stepper("Maximum players: \(maxPlayers)", value: $maxPlayers, in: TournamentEventLimits.players) }
-                    TextField("Entry fee", text: $entryFee).keyboardType(.decimalPad)
-                    Text("Free, or at least $0.50.").font(.footnote).foregroundStyle(.secondary)
+                    if tournament.feeAuthoringEnabled {
+                        TextField("Entry fee", text: $entryFee).keyboardType(.decimalPad)
+                        Text("Free, or at least $0.50.").font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
                 Section("Schedule") {
                     DatePicker("Date", selection: $date, displayedComponents: .date)
@@ -102,7 +104,8 @@ struct NewTournamentEventView: View {
     }
     private var valid: Bool {
         TournamentCopy.validName(name) && !drawType.isEmpty &&
-        TournamentCopy.validEntryFee(entryFee) && formatted(start, "HH:mm") < formatted(end, "HH:mm")
+        (!tournament.feeAuthoringEnabled || TournamentCopy.validEntryFee(entryFee)) &&
+        formatted(start, "HH:mm") < formatted(end, "HH:mm")
     }
     private func formatted(_ date: Date, _ format: String) -> String {
         let formatter = DateFormatter()
@@ -113,7 +116,9 @@ struct NewTournamentEventView: View {
         return formatter.string(from: date)
     }
     private func save() {
-        guard valid, !saving, let fee = TournamentCopy.entryFee(entryFee) else { return }
+        guard valid, !saving else { return }
+        let fee = tournament.feeAuthoringEnabled ? TournamentCopy.entryFee(entryFee) : 0
+        guard let fee else { return }
         saving = true
         let body = NewTournamentEventBody(
             name: name.trimmingCharacters(in: .whitespacesAndNewlines), drawType: drawType,

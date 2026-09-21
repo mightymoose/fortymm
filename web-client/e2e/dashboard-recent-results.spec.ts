@@ -33,6 +33,8 @@ const LONG_OPPONENT = 'bartholomew.vandersteen.mcallister.iii'
 // web-client/CLAUDE.md on page.route stubs going green in vitest and breaking
 // here.
 const DASHBOARD = {
+  checkout_attention: [],
+  checkout_attention_total_count: 0,
   attention: [],
   attention_total_count: 0,
   waiting_count: 0,

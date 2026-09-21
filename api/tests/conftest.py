@@ -46,6 +46,15 @@ from tests._migration_database import migrated_database
 
 
 @pytest.fixture(autouse=True)
+def _enable_payment_collection_for_existing_tests(monkeypatch):
+    """Keep pre-gate behavioral tests explicit about exercising the open state.
+
+    Tests for the fail-closed default delete or override this variable themselves.
+    """
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", "true")
+
+
+@pytest.fixture(autouse=True)
 def fake_solver_queue(monkeypatch):
     connection = fakeredis.FakeStrictRedis()
     q = Queue(queue_module.SOLVER_QUEUE, connection=connection, is_async=False)
@@ -423,6 +432,7 @@ NOTIFICATION_TYPE_LABELS: dict[NotificationCategory, tuple[str, str]] = {
     NotificationCategory.OPPONENT: ("Challenges & friends", "Social"),
     NotificationCategory.RESULT_CONFIRM: ("Score acceptances", "Scores"),
     NotificationCategory.MATCH_CALLS: ("Match calls", "Calls"),
+    NotificationCategory.PAYMENTS: ("Payments", "Payments"),
 }
 NOTIFICATION_CHANNEL_LABELS: dict[ChannelEnum, str] = {
     ChannelEnum.IN_APP: "In-app",

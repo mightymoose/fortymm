@@ -20,6 +20,7 @@ dependencies = [
     "fastapi-limiter>=0.1.6,<0.3",
     "pyjwt[crypto]>=2.9",
     "fastmcp>=4.0.3,<5",
+    "stripe==11.6.0",
 ]
 
 [project.optional-dependencies]
