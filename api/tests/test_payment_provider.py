@@ -32,6 +32,66 @@ def _stripe_intent(*, status: str, metadata: object) -> object:
     )
 
 
+def _stripe_object_intent() -> stripe.StripeObject:
+    return stripe.StripeObject.construct_from(
+        {
+            "id": "pi_real_stripe_object",
+            "client_secret": "pi_real_stripe_object_secret",
+            "status": "requires_action",
+            "amount": 2345,
+            "currency": "usd",
+            "livemode": False,
+            "metadata": {
+                "fortymm_identity": "fortymm:checkout:test:payment:v1",
+                "fortymm_merchant_account_id": ("00000000-0000-0000-0000-000000000001"),
+            },
+        },
+        "sk_test_boundary",
+    )
+
+
+async def test_create_parses_real_dynamic_stripe_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_boundary")
+    monkeypatch.setattr(
+        stripe.PaymentIntent, "create", lambda **_kwargs: _stripe_object_intent()
+    )
+
+    intent = await StripePaymentProvider().create_payment_intent(_request())
+
+    assert intent.id == "pi_real_stripe_object"
+    assert intent.client_secret == "pi_real_stripe_object_secret"
+    assert intent.status == "requires_action"
+    assert intent.currency == "USD"
+
+
+async def test_webhook_parses_real_dynamic_stripe_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_boundary")
+    event = stripe.StripeObject.construct_from(
+        {
+            "id": "evt_real_stripe_object",
+            "type": "payment_intent.requires_action",
+            "created": 1_800_000_000,
+            "data": {"object": _stripe_object_intent()},
+        },
+        "sk_test_boundary",
+    )
+    monkeypatch.setattr(
+        stripe.Webhook,
+        "construct_event",
+        lambda *_args, **_kwargs: event,
+    )
+
+    verified = await StripePaymentProvider().verify_webhook(b"{}", "signature")
+
+    assert verified.id == "evt_real_stripe_object"
+    assert verified.payment.id == "pi_real_stripe_object"
+    assert verified.payment.status == "requires_action"
+
+
 async def test_create_rejects_unknown_provider_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -43,9 +103,7 @@ async def test_create_rejects_unknown_provider_status(
             status="future_status_not_understood_by_fortymm",
             metadata={
                 "fortymm_identity": "fortymm:checkout:test:payment:v1",
-                "fortymm_merchant_account_id": (
-                    "00000000-0000-0000-0000-000000000001"
-                ),
+                "fortymm_merchant_account_id": ("00000000-0000-0000-0000-000000000001"),
             },
         ),
     )
@@ -64,9 +122,7 @@ async def test_create_rejects_provider_metadata_missing_required_identity(
         lambda **_kwargs: _stripe_intent(
             status="requires_payment_method",
             metadata={
-                "fortymm_merchant_account_id": (
-                    "00000000-0000-0000-0000-000000000001"
-                )
+                "fortymm_merchant_account_id": ("00000000-0000-0000-0000-000000000001")
             },
         ),
     )

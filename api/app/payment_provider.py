@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Protocol, runtime_checkable
+from typing import Protocol, cast
 
 from app.config import get_settings
 
@@ -81,28 +81,25 @@ class PaymentProviderSignatureError(Exception):
     """Webhook bytes did not authenticate as provider evidence."""
 
 
-@runtime_checkable
-class _StripeIntentLike(Protocol):
-    id: object
-    client_secret: object
-    status: object
-    amount: object
-    currency: object
-    livemode: object
-    metadata: object
+def _stripe_field(resource: object, name: str) -> object:
+    """Read one runtime-validated field from Stripe's mapping-like resources.
 
-
-@runtime_checkable
-class _StripeEventDataLike(Protocol):
-    object: object
-
-
-@runtime_checkable
-class _StripeEventLike(Protocol):
-    id: object
-    type: object
-    created: object
-    data: object
+    ``stripe.StripeObject`` provides fields dynamically and therefore does not
+    satisfy a runtime-checkable data protocol on Python 3.13. It is a Mapping,
+    while small adapter tests and compatible SDK resources may use attributes.
+    Normalize both shapes here and validate each value at the actual boundary.
+    """
+    if isinstance(resource, Mapping):
+        mapping = cast(Mapping[str, object], resource)
+        try:
+            return mapping[name]
+        except KeyError as error:
+            raise ValueError(f"Stripe resource is missing {name}.") from error
+    try:
+        value: object = getattr(resource, name)
+    except AttributeError as error:
+        raise ValueError(f"Stripe resource is missing {name}.") from error
+    return value
 
 
 class StripePaymentProvider:
@@ -120,26 +117,29 @@ class StripePaymentProvider:
 
     @staticmethod
     def _intent(value: object) -> ProviderPaymentIntent:
-        if not isinstance(value, _StripeIntentLike):
-            raise ValueError("Malformed Stripe PaymentIntent response.")
         try:
-            if not isinstance(value.id, str) or not value.id:
+            intent_id = _stripe_field(value, "id")
+            client_secret = _stripe_field(value, "client_secret")
+            status = _stripe_field(value, "status")
+            amount = _stripe_field(value, "amount")
+            currency = _stripe_field(value, "currency")
+            livemode = _stripe_field(value, "livemode")
+            metadata_value = _stripe_field(value, "metadata")
+            if not isinstance(intent_id, str) or not intent_id:
                 raise ValueError("Stripe PaymentIntent id must be a string.")
-            if value.client_secret is not None and not isinstance(
-                value.client_secret, str
-            ):
+            if client_secret is not None and not isinstance(client_secret, str):
                 raise ValueError("Stripe client secret must be a string.")
-            if not isinstance(value.status, str):
+            if not isinstance(status, str):
                 raise ValueError("Stripe PaymentIntent status must be a string.")
-            if not isinstance(value.amount, int) or isinstance(value.amount, bool):
+            if not isinstance(amount, int) or isinstance(amount, bool):
                 raise ValueError("Stripe PaymentIntent amount must be an integer.")
-            if not isinstance(value.currency, str):
+            if not isinstance(currency, str):
                 raise ValueError("Stripe PaymentIntent currency must be a string.")
-            if not isinstance(value.livemode, bool):
+            if not isinstance(livemode, bool):
                 raise ValueError("Stripe PaymentIntent livemode must be boolean.")
-            metadata = value.metadata
-            if not isinstance(metadata, Mapping):
+            if not isinstance(metadata_value, Mapping):
                 raise ValueError("Stripe PaymentIntent metadata must be a mapping.")
+            metadata = cast(Mapping[str, object], metadata_value)
             durable_identity = metadata.get("fortymm_identity")
             if not isinstance(durable_identity, str) or not durable_identity:
                 raise ValueError("Stripe PaymentIntent is missing fortymm_identity.")
@@ -147,13 +147,13 @@ class StripePaymentProvider:
             if not isinstance(merchant, str):
                 raise ValueError("Stripe merchant metadata must be a string.")
             return ProviderPaymentIntent(
-                id=value.id,
-                client_secret=value.client_secret or "",
-                status=ProviderPaymentStatus(value.status),
-                amount_cents=value.amount,
-                currency=value.currency.upper(),
+                id=intent_id,
+                client_secret=client_secret or "",
+                status=ProviderPaymentStatus(status),
+                amount_cents=amount,
+                currency=currency.upper(),
                 merchant_account_id=merchant,
-                livemode=bool(value.livemode),
+                livemode=livemode,
                 durable_identity=durable_identity,
             )
         except (AttributeError, TypeError) as error:
@@ -263,19 +263,16 @@ class StripePaymentProvider:
 
         try:
             event = await asyncio.to_thread(verify)
-            if not isinstance(event, _StripeEventLike):
-                raise ValueError("Malformed Stripe event response.")
-            if not isinstance(event.id, str) or not isinstance(event.type, str):
+            event_id = _stripe_field(event, "id")
+            event_type = _stripe_field(event, "type")
+            created_value = _stripe_field(event, "created")
+            if not isinstance(event_id, str) or not isinstance(event_type, str):
                 raise ValueError("Stripe event identity must be strings.")
-            if not isinstance(event.created, int) or isinstance(event.created, bool):
+            if not isinstance(created_value, int) or isinstance(created_value, bool):
                 raise ValueError("Stripe event created time must be an integer.")
-            event_id = event.id
-            event_type = event.type
-            created = datetime.fromtimestamp(event.created, UTC)
-            data = event.data
-            if not isinstance(data, _StripeEventDataLike):
-                raise ValueError("Malformed Stripe event data response.")
-            intent = data.object
+            created = datetime.fromtimestamp(created_value, UTC)
+            data = _stripe_field(event, "data")
+            intent = _stripe_field(data, "object")
             return ProviderPaymentEvent(
                 id=event_id,
                 type=event_type,

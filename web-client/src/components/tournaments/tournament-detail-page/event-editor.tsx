@@ -41,7 +41,7 @@ import { MatchSection } from './event-editor/match-section'
 import { ReservationsSection } from './event-editor/reservations-section'
 import { StrandConfirmDialog } from './event-editor/strand-confirm-dialog'
 import {
-  eventSchema,
+  eventEditorSchema,
   eventToFormValues,
   firstInvalidSection,
   reservationWindowIssues,
@@ -211,7 +211,10 @@ export const EventEditor = ({
   } | null>(null)
 
   const form = useForm<EventFormValues>({
-    resolver: zodResolver(eventSchema),
+    resolver: zodResolver(eventEditorSchema({
+      feeAuthoringEnabled,
+      storedEntryFee: event?.entryFee ?? 0,
+    })),
     defaultValues: eventToFormValues(event),
   })
 

@@ -280,9 +280,7 @@ test.describe('Tournament — rr-then-ko draw', () => {
     // The field the server derives the group count from (#1387) — set on the Basics tab,
     // BEFORE `addReservations` switches the sheet to the Reservations tab.
     await editor.setPlayerLimit(MAX_PLAYERS)
-    // This flow exercises direct entry, not paid checkout. The product default for a
-    // newly-authored event is paid, so make this test event explicitly free.
-    await editor.setEntryFee(0)
+    // This flow exercises direct entry; the hidden fee input defaults new events free.
     await editor.addReservations(RESERVATION_COUNT)
 
     // THE 422 GATE. The create body is the client's own, and its status is asserted

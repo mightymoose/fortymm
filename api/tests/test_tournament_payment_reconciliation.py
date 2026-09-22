@@ -28,6 +28,7 @@ from app.models import (
     TournamentEntryRegistration,
     TournamentEvent,
     TournamentEventDrawSettings,
+    TournamentPayment,
     TournamentStatus,
     User,
 )
@@ -460,3 +461,34 @@ async def test_browser_claim_cannot_admit_without_matching_provider_evidence(
         [uuid.UUID(checkout["lines"][0]["event_id"])],
         1,
     )
+
+
+async def test_webhook_binding_recovers_client_secret_for_resumable_payment(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    provider = FakePaymentProvider()
+    _, tournament, _, checkout = await _prepared_checkout(
+        api_client, db_session, monkeypatch, provider
+    )
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None
+    payment.client_secret = None
+    await db_session.commit()
+
+    webhook = await _webhook(
+        api_client,
+        provider.event("evt_requires_action", status="requires_action"),
+        "test-valid-signature",
+    )
+    resumed = await api_client.post(_payment_url(tournament, checkout), json={})
+
+    assert webhook.status_code == 200, webhook.text
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["payment_state"] == "action_required"
+    assert resumed.json()["client_secret"] == "pi_reconcile_1770_secret"

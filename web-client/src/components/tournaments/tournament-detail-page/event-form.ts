@@ -532,6 +532,25 @@ export const eventSchema = z.object({
 // check that the mirror holds.
 export type EventFormValues = z.infer<typeof eventSchema>
 
+/**
+ * The editor's write schema. While paid-fee authoring is disabled, the fee is not an
+ * editable numeric field: an existing value may round-trip unchanged, or be cleared
+ * to zero through the explicit "Make event free" action. No other fee value can be
+ * authored through the hidden control seam.
+ */
+export function eventEditorSchema({
+  feeAuthoringEnabled,
+  storedEntryFee,
+}: {
+  feeAuthoringEnabled: boolean
+  storedEntryFee: number
+}) {
+  if (feeAuthoringEnabled) return eventSchema
+  return eventSchema.safeExtend({
+    entryFee: z.union([z.literal(storedEntryFee), z.literal(0)]),
+  })
+}
+
 const EMPTY_FORM_VALUES: EventFormValues = {
   name: '',
   format: 'singles',

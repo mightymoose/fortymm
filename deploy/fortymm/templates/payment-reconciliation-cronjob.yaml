@@ -35,4 +35,9 @@ spec:
                   memory: 256Mi
               envFrom:
                 {{- include "fortymm.appEnvFrom" . | nindent 16 }}
+              env:
+                # Explicitly override a stale bulk Secret value with the chart's
+                # launch gate, matching the API and worker deployments.
+                - name: TOURNAMENT_PAYMENT_COLLECTION_ENABLED
+                  value: {{ index .Values.config "TOURNAMENT_PAYMENT_COLLECTION_ENABLED" | quote }}
 {{- end }}

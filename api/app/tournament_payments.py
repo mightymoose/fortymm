@@ -10,6 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
 from app.models import (
+    Tournament,
     TournamentCheckout,
     TournamentCheckoutStatus,
     TournamentPayment,
@@ -122,6 +123,7 @@ async def _load(
         )
         .options(
             selectinload(TournamentCheckout.lines),
+            selectinload(TournamentCheckout.tournament),
             selectinload(TournamentCheckout.payment),
             selectinload(TournamentCheckout.payment).selectinload(
                 TournamentPayment.allocations
@@ -130,6 +132,121 @@ async def _load(
         .execution_options(populate_existing=True)
     )
     return checkout
+
+
+async def _load_for_first_obligation_locked(
+    db: AsyncSession,
+    *,
+    tournament_id: uuid.UUID,
+    checkout_id: uuid.UUID,
+    payer_account_id: uuid.UUID,
+) -> TournamentCheckout:
+    """Reload a first-payment candidate under the registration lock order."""
+    payer = await db.scalar(
+        select(User)
+        .where(User.id == payer_account_id)
+        .with_for_update(read=True)
+        .execution_options(populate_existing=True)
+    )
+    if payer is None or not payer.is_active or payer.merged_into_user_id is not None:
+        raise PaymentNotFoundError()
+    tournament = await db.scalar(
+        select(Tournament)
+        .where(Tournament.id == tournament_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if tournament is None:
+        raise PaymentNotFoundError()
+    checkout = await db.scalar(
+        select(TournamentCheckout)
+        .where(
+            TournamentCheckout.id == checkout_id,
+            TournamentCheckout.tournament_id == tournament_id,
+            TournamentCheckout.payer_account_id == payer_account_id,
+        )
+        .options(
+            selectinload(TournamentCheckout.lines),
+            selectinload(TournamentCheckout.tournament),
+            selectinload(TournamentCheckout.payment),
+            selectinload(TournamentCheckout.payment).selectinload(
+                TournamentPayment.allocations
+            ),
+        )
+        .with_for_update(of=TournamentCheckout)
+        .execution_options(populate_existing=True)
+    )
+    if checkout is None:
+        raise PaymentNotFoundError()
+    return checkout
+
+
+async def _terminalize_stale_checkout(
+    db: AsyncSession,
+    checkout: TournamentCheckout,
+    payment: TournamentPayment | None = None,
+) -> bool:
+    """Release stale authority and its unbound payment obligation, if any."""
+    now = await _database_now(db)
+    changed = False
+    if checkout.status is TournamentCheckoutStatus.active:
+        if checkout.expires_at <= now:
+            checkout.status = TournamentCheckoutStatus.expired
+            changed = True
+        elif (
+            checkout.registration_generation
+            != checkout.tournament.registration_generation
+            or checkout.merchant_account_id != checkout.tournament.owner_account_id
+            or not checkout.tournament.registration_open
+        ):
+            checkout.status = TournamentCheckoutStatus.invalidated
+            changed = True
+    if checkout.status is not TournamentCheckoutStatus.active:
+        if payment is not None:
+            terminal_payment_state = (
+                TournamentPaymentState.expired
+                if checkout.status is TournamentCheckoutStatus.expired
+                else TournamentPaymentState.canceled
+            )
+            if payment.state is not terminal_payment_state:
+                payment.state = terminal_payment_state
+                payment.updated_at = now
+                changed = True
+        if changed:
+            stage_event(db, checkout.payer_account_id, EventKind.dashboard_changed)
+        await db.commit()
+        return True
+    return False
+
+
+async def provider_create_request_if_authorized(
+    db: AsyncSession,
+    *,
+    tournament_id: uuid.UUID,
+    checkout_id: uuid.UUID,
+    payer_account_id: uuid.UUID,
+    payment_id: uuid.UUID,
+) -> PaymentIntentCreate | None:
+    """Revalidate an unbound obligation under locks, releasing them before I/O."""
+    checkout = await _load_for_first_obligation_locked(
+        db,
+        tournament_id=tournament_id,
+        checkout_id=checkout_id,
+        payer_account_id=payer_account_id,
+    )
+    payment = checkout.payment
+    if payment is None or payment.id != payment_id:
+        await db.rollback()
+        raise PaymentNotFoundError()
+    if payment.provider_payment_id is not None:
+        await db.commit()
+        return None
+    if await _terminalize_stale_checkout(db, checkout, payment):
+        return None
+    request = payment_intent_create_request(payment, checkout)
+    # Provider I/O must not retain Account, Tournament, or Checkout locks.
+    await db.commit()
+    return request
 
 
 async def _store_provider_result(
@@ -172,14 +289,26 @@ async def prepare_payment(
     payment = checkout.payment
     created_obligation = False
     if payment is None:
+        checkout = await _load_for_first_obligation_locked(
+            db,
+            tournament_id=tournament_id,
+            checkout_id=checkout_id,
+            payer_account_id=actor.id,
+        )
+        payment = checkout.payment
+        if payment is not None:
+            # A concurrent first request won while this request waited. Resume
+            # its durable aggregate without carrying registration locks into
+            # any provider call below.
+            await db.commit()
+    if payment is None:
+        if await _terminalize_stale_checkout(db, checkout):
+            raise PaymentNotFoundError()
         if not get_settings().tournament_payment_collection_enabled:
             checkout.status = TournamentCheckoutStatus.cancelled
             checkout.cancelled_at = await _database_now(db)
             await db.commit()
             raise PaymentCollectionDisabledError()
-        if checkout.status is not TournamentCheckoutStatus.active:
-            raise PaymentNotFoundError()
-
         payer = await db.get(User, checkout.payer_account_id)
         if payer is None:
             raise PaymentNotFoundError()
@@ -248,10 +377,11 @@ async def prepare_payment(
             await db.commit()
         return _read(payment)
 
-    if receipt_email_supplied and payment.receipt_email != receipt_email:
-        payment.receipt_email = receipt_email
-        payment.updated_at = await _database_now(db)
-        await db.commit()
+    if receipt_email_supplied:
+        if payment.receipt_email != receipt_email:
+            payment.receipt_email = receipt_email
+            payment.updated_at = await _database_now(db)
+            await db.commit()
         if payment.provider_payment_id is not None:
             intent = await provider.update_payment_intent_receipt(
                 payment.provider_payment_id, receipt_email
@@ -271,11 +401,43 @@ async def prepare_payment(
             return _read(payment)
 
     if payment.provider_payment_id is not None:
+        if not payment.client_secret:
+            try:
+                intent = await provider.retrieve_payment_intent(
+                    payment.durable_identity
+                )
+            except (TimeoutError, PaymentProviderUncertainError):
+                return _read(payment)
+            except PaymentProviderNotFoundError:
+                payment.state = TournamentPaymentState.checking
+                payment.updated_at = await _database_now(db)
+                stage_event(db, checkout.payer_account_id, EventKind.dashboard_changed)
+                await db.commit()
+                return _read(payment)
+            payment = await _store_provider_result(
+                db, payment_id=payment.id, intent=intent
+            )
         return _read(payment)
 
-    create_request = payment_intent_create_request(payment, checkout)
     try:
         if created_obligation:
+            create_request = await provider_create_request_if_authorized(
+                db,
+                tournament_id=tournament_id,
+                checkout_id=checkout_id,
+                payer_account_id=checkout.payer_account_id,
+                payment_id=payment.id,
+            )
+            if create_request is None:
+                checkout = await _load(db, tournament_id, checkout_id)
+                if checkout is None or checkout.payment is None:
+                    raise PaymentNotFoundError()
+                if checkout.payment.state in {
+                    TournamentPaymentState.expired,
+                    TournamentPaymentState.canceled,
+                }:
+                    raise PaymentNotFoundError()
+                return _read(checkout.payment)
             intent = await provider.create_payment_intent(create_request)
         else:
             try:
@@ -286,6 +448,23 @@ async def prepare_payment(
                 # A process may die after committing the durable obligation but
                 # before provider I/O. Retrying create with the same provider
                 # idempotency key is the safe recovery for that exact window.
+                create_request = await provider_create_request_if_authorized(
+                    db,
+                    tournament_id=tournament_id,
+                    checkout_id=checkout_id,
+                    payer_account_id=checkout.payer_account_id,
+                    payment_id=payment.id,
+                )
+                if create_request is None:
+                    checkout = await _load(db, tournament_id, checkout_id)
+                    if checkout is None or checkout.payment is None:
+                        raise PaymentNotFoundError() from None
+                    if checkout.payment.state in {
+                        TournamentPaymentState.expired,
+                        TournamentPaymentState.canceled,
+                    }:
+                        raise PaymentNotFoundError() from None
+                    return _read(checkout.payment)
                 intent = await provider.create_payment_intent(create_request)
     except (TimeoutError, PaymentProviderUncertainError):
         return _read(payment)
@@ -336,6 +515,14 @@ async def read_payment_status(
             intent = await provider.retrieve_payment_intent(payment.durable_identity)
         except (TimeoutError, PaymentProviderUncertainError):
             pass
+        except PaymentProviderNotFoundError:
+            # Search-by-metadata can lag even though a verified provider id is
+            # already bound. Preserve that identity and surface a safe checking
+            # state; a later sweep/read retries retrieval and never creates.
+            payment.state = TournamentPaymentState.checking
+            payment.updated_at = await _database_now(db)
+            stage_event(db, checkout.payer_account_id, EventKind.dashboard_changed)
+            await db.commit()
         else:
             from app.tournament_payment_reconciliation import reconcile_provider_intent
 

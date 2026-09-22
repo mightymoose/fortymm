@@ -106,6 +106,25 @@ describe('tournament checkout page', () => {
   })
 
   it.each([
+    ['checkout', '*/v1/tournaments/:tournamentId/checkouts/:checkoutId'],
+    ['payment', '*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment'],
+  ])('replaces loading with an actionable error when the initial %s request fails', async (_request, url) => {
+    serve()
+    server.use(
+      http.get(url, () => HttpResponse.json({ detail: 'Unavailable.' }, { status: 503 })),
+      http.post(url, () => HttpResponse.json({ detail: 'Unavailable.' }, { status: 503 })),
+    )
+
+    page.render(adapter())
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'We could not load this checkout. Try again.',
+    )
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled()
+    expect(screen.queryByText('Loading checkout…')).not.toBeInTheDocument()
+  })
+
+  it.each([
     ['preparing', 'Preparing your payment'],
     ['checking', 'Payment is still being confirmed'],
     ['action_required', 'Finish card authentication'],

@@ -30,6 +30,7 @@ from app.models import (
     TournamentEntry,
     TournamentPayment,
     TournamentPaymentReceipt,
+    TournamentPaymentState,
     TournamentReceiptState,
     TournamentRefundObligation,
     TournamentRefundState,
@@ -551,6 +552,54 @@ async def test_cleanup_accepts_all_events_terminal_without_archiving(
     assert tournament.archive_observed_at is None
     assert erased == 1
     assert receipt.recipient_email is None
+
+
+async def test_cleanup_erases_payment_address_without_a_receipt_row(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakePaymentProvider()
+    _, tournament, events, checkout = await _prepared_checkout(
+        api_client, db_session, monkeypatch, provider
+    )
+    payment_url = f"/v1/tournaments/{tournament.id}/checkouts/{checkout['id']}/payment"
+    updated = await api_client.post(
+        payment_url, json={"receipt_email": "payment-only@example.net"}
+    )
+    assert updated.status_code == 200, updated.text
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None
+    payment.state = TournamentPaymentState.canceled
+    for event in events:
+        event.lifecycle_state = EventLifecycleState.cancelled
+    await db_session.commit()
+    completion_observed_at = await db_session.scalar(
+        select(func.max(EventLifecycleHistory.observed_at)).where(
+            EventLifecycleHistory.event_id.in_([event.id for event in events]),
+            EventLifecycleHistory.to_state == EventLifecycleState.cancelled,
+        )
+    )
+    assert completion_observed_at is not None
+    assert (
+        await db_session.scalar(
+            select(TournamentPaymentReceipt).where(
+                TournamentPaymentReceipt.payment_id == payment.id
+            )
+        )
+        is None
+    )
+
+    erased = await _receipt_service().sweep_tournament_receipt_pii(
+        db_session, now=completion_observed_at + timedelta(days=31)
+    )
+
+    assert erased == 1
+    assert payment.receipt_email is None
 
 
 async def test_cleanup_uses_completion_when_it_qualifies_before_archive(

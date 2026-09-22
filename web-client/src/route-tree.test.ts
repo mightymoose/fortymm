@@ -24,7 +24,7 @@ describe('generated route tree', () => {
 
   it('registers the dedicated payer checkout and actionable-checkouts routes', () => {
     expect(routeIds).toContain(
-      '/_app/tournaments/$tournamentId/checkouts/$checkoutId',
+      '/_app/tournaments/$tournamentId_/checkouts/$checkoutId',
     )
     expect(routeIds).toContain('/_app/checkouts')
   })

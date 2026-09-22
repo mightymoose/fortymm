@@ -681,6 +681,9 @@ test.describe('Tournaments · the rule builder on a phone (375×667)', () => {
 
     // The top of the form, where the editor lands.
     await expectOnScreen(page, pom.eventNameInput, 'the Event name input')
+    // Payment collection is off in this environment. A free event keeps its zero
+    // default without exposing a fee-authoring control that cannot be submitted.
+    await expect(pom.entryFeeInput).toHaveCount(0)
 
     // The rest of the form is below the fold, so reaching it takes a scroll — a
     // **vertical** one, which is the design (a form taller than a phone is a form). The
@@ -689,7 +692,6 @@ test.describe('Tournaments · the rule builder on a phone (375×667)', () => {
     // then pass against the very layout that shipped the bug.
     for (const [field, what] of [
       [pom.playerLimitInput, 'the Player limit input'],
-      [pom.entryFeeInput, 'the Entry fee input'],
       [pom.slotDateInput, 'the slot Date input'],
       [pom.slotStartInput, 'the slot Start input'],
       // ⚠️ THE one QA measured at x=339..467 — a hundred pixels past the right edge.

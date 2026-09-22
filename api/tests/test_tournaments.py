@@ -1216,9 +1216,7 @@ async def test_disabled_collection_rejects_changing_an_existing_positive_fee(
     ).json()
     monkeypatch.setenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", "false")
 
-    response = await patch_event(
-        client, created["id"], event["id"], {"entry_fee": 50}
-    )
+    response = await patch_event(client, created["id"], event["id"], {"entry_fee": 50})
 
     assert response.status_code == 409, response.text
     assert response.json()["detail"]["code"] == "collection_disabled"

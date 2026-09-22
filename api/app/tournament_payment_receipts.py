@@ -23,6 +23,7 @@ from app.models import (
     TournamentEvent,
     TournamentPayment,
     TournamentPaymentReceipt,
+    TournamentPaymentState,
     TournamentReceiptState,
     TournamentRefundObligation,
     TournamentRefundState,
@@ -270,16 +271,22 @@ async def sweep_tournament_receipt_pii(
 ) -> int:
     """Erase checkout-only addresses after lifecycle and money are both quiet."""
     now = now or datetime.now(UTC)
-    receipts = list(
+    payments = list(
         await db.scalars(
-            select(TournamentPaymentReceipt)
-            .where(TournamentPaymentReceipt.recipient_email.is_not(None))
-            .options(selectinload(TournamentPaymentReceipt.payment))
+            select(TournamentPayment)
+            .outerjoin(TournamentPayment.receipt)
+            .where(
+                or_(
+                    TournamentPayment.receipt_email.is_not(None),
+                    TournamentPaymentReceipt.recipient_email.is_not(None),
+                )
+            )
+            .options(selectinload(TournamentPayment.receipt))
         )
     )
     erased = 0
-    for receipt in receipts:
-        payment = receipt.payment
+    for payment in payments:
+        receipt = payment.receipt
         checkout = await db.get(TournamentCheckout, payment.checkout_id)
         if checkout is None:
             continue
@@ -327,6 +334,13 @@ async def sweep_tournament_receipt_pii(
         if not milestones:
             continue
         lifecycle_at = min(milestones)
+        if payment.state not in {
+            TournamentPaymentState.succeeded,
+            TournamentPaymentState.failed,
+            TournamentPaymentState.expired,
+            TournamentPaymentState.canceled,
+        }:
+            continue
         refunds = list(
             await db.scalars(
                 select(TournamentRefundObligation).where(
@@ -349,14 +363,15 @@ async def sweep_tournament_receipt_pii(
         eligible_at = max(lifecycle_at, financial_at) + PII_RETENTION
         if now < eligible_at:
             continue
-        receipt.recipient_email = None
-        receipt.pii_erased_at = now
-        receipt.next_attempt_at = None
-        if receipt.state in {
-            TournamentReceiptState.pending,
-            TournamentReceiptState.retry_scheduled,
-        }:
-            receipt.state = TournamentReceiptState.canceled
+        if receipt is not None and receipt.recipient_email is not None:
+            receipt.recipient_email = None
+            receipt.pii_erased_at = now
+            receipt.next_attempt_at = None
+            if receipt.state in {
+                TournamentReceiptState.pending,
+                TournamentReceiptState.retry_scheduled,
+            }:
+                receipt.state = TournamentReceiptState.canceled
         payment.receipt_email = None
         erased += 1
     if erased:

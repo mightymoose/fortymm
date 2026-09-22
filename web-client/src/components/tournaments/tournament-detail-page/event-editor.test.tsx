@@ -1818,6 +1818,24 @@ describe('EventEditor', () => {
       )
     })
 
+    it('saves unrelated edits with an unchanged hidden legacy subminimum fee', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({
+        event: buildEvent({ entryFee: 0.25 }),
+        feeAuthoringEnabled: false,
+        onSave,
+      })
+
+      await userEvent.clear(eventEditorPage.getNameInput())
+      await userEvent.type(eventEditorPage.getNameInput(), 'Legacy fee event')
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+      expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Legacy fee event', entryFee: 0.25 }),
+      )
+    })
+
     // The two silent-discard fixes met here, and the banner won: a 422's `detail` is a
     // string we do not control (Pydantic's, when it is not one of ours), and
     // DEFINITION_OF_COMPLETE forbids it reaching the UI. So the panel stays open — the

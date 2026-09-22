@@ -5,16 +5,21 @@ the external processor boundary; the tests deliberately do not mock Fortymm's ow
 payment or persistence modules.
 """
 
+import asyncio
 import uuid
-from dataclasses import asdict, dataclass, is_dataclass
-from datetime import UTC, datetime
+from dataclasses import asdict, dataclass, is_dataclass, replace
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+)
 
 from app.leagues import get_default_league
 from app.main import app as fastapi_app
@@ -22,6 +27,8 @@ from app.models import (
     DrawType,
     EventFormat,
     Tournament,
+    TournamentCheckout,
+    TournamentCheckoutStatus,
     TournamentEvent,
     TournamentEventDrawSettings,
     TournamentPayment,
@@ -63,6 +70,7 @@ class FakePaymentProvider:
         self.create_error: Exception | None = None
         self.retrieved_intent: FakeProviderIntent | None = None
         self.retrieve_error: Exception | None = None
+        self.receipt_update_error: Exception | None = None
 
     async def create_payment_intent(self, request: object) -> FakeProviderIntent:
         if isinstance(request, dict):
@@ -98,6 +106,8 @@ class FakePaymentProvider:
         self, provider_payment_id: str, receipt_email: str | None
     ) -> FakeProviderIntent:
         self.receipt_updates.append((provider_payment_id, receipt_email))
+        if self.receipt_update_error is not None:
+            raise self.receipt_update_error
         return self.intent
 
 
@@ -258,6 +268,31 @@ async def test_receipt_destination_defaults_edits_clears_and_does_not_change_acc
     ]
 
 
+async def test_explicit_receipt_edit_retries_provider_sync_after_failure(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    _, tournament, checkout = await _paid_checkout(api_client, db_session, monkeypatch)
+    provider = FakePaymentProvider()
+    _install_provider(provider)
+    url = _payment_url(tournament, checkout)
+    assert (await api_client.post(url, json={})).status_code == 200
+
+    provider.receipt_update_error = RuntimeError("provider unavailable")
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        await api_client.post(url, json={"receipt_email": "retry@example.net"})
+
+    provider.receipt_update_error = None
+    retried = await api_client.post(url, json={"receipt_email": "retry@example.net"})
+
+    assert retried.status_code == 200, retried.text
+    assert provider.receipt_updates == [
+        (provider.intent.id, "retry@example.net"),
+        (provider.intent.id, "retry@example.net"),
+    ]
+
+
 async def test_checkout_without_email_can_prepare_payment(
     api_client: AsyncClient,
     db_session: AsyncSession,
@@ -272,6 +307,65 @@ async def test_checkout_without_email_can_prepare_payment(
     assert prepared.status_code == 200, prepared.text
     assert prepared.json()["receipt_email"] is None
     assert prepared.json()["client_secret"] == provider.intent.client_secret
+
+
+async def test_resume_retrieves_provider_when_bound_payment_lacks_client_secret(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    _, tournament, checkout = await _paid_checkout(api_client, db_session, monkeypatch)
+    provider = FakePaymentProvider()
+    _install_provider(provider)
+    url = _payment_url(tournament, checkout)
+    assert (await api_client.post(url, json={})).status_code == 200
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None
+    payment.client_secret = None
+    provider.retrievals.clear()
+    await db_session.commit()
+
+    resumed = await api_client.post(url, json={})
+
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["client_secret"] == provider.intent.client_secret
+    assert provider.retrievals == [payment.durable_identity]
+
+
+async def test_bound_payment_missing_secret_survives_provider_lookup_not_found(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    _, tournament, checkout = await _paid_checkout(api_client, db_session, monkeypatch)
+    provider = FakePaymentProvider()
+    _install_provider(provider)
+    url = _payment_url(tournament, checkout)
+    assert (await api_client.post(url, json={})).status_code == 200
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None
+    assert payment.provider_payment_id == provider.intent.id
+    payment.client_secret = None
+    provider.retrieve_error = PaymentProviderNotFoundError()
+    creates_before_resume = len(provider.creates)
+    await db_session.commit()
+
+    resumed = await api_client.post(url, json={})
+
+    assert resumed.status_code == 200, resumed.text
+    assert resumed.json()["payment_state"] == "checking"
+    assert resumed.json()["client_secret"] is None
+    assert len(provider.creates) == creates_before_resume
+    await db_session.refresh(payment)
+    assert payment.provider_payment_id == provider.intent.id
 
 
 async def test_closed_gate_cancels_unprepared_checkout_but_preserves_created_intent(
@@ -494,3 +588,268 @@ async def test_reconciliation_sweep_cancels_absent_intent_when_collection_is_dis
             },
         )
     assert replacement.status_code == 201, replacement.text
+
+
+@pytest.mark.parametrize(
+    "starting_state",
+    [TournamentPaymentState.ready, TournamentPaymentState.action_required],
+)
+async def test_reconciliation_sweep_refreshes_remotely_mutable_payment_states(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+    starting_state: TournamentPaymentState,
+) -> None:
+    _, _, checkout = await _paid_checkout(api_client, db_session, monkeypatch)
+    provider = FakePaymentProvider()
+    _install_provider(provider)
+    prepared = await api_client.post(
+        f"/v1/tournaments/{checkout['tournament_id']}/checkouts/{checkout['id']}/payment",
+        json={},
+    )
+    assert prepared.status_code == 200, prepared.text
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None
+    payment.state = starting_state
+    provider.intent = replace(provider.intent, status="processing")
+    await db_session.commit()
+
+    reconciled = await reconcile_stuck_payments(db_session, provider)
+    await db_session.refresh(payment)
+
+    assert reconciled == 1
+    assert payment.state is TournamentPaymentState.checking
+    assert provider.retrievals == [payment.durable_identity]
+
+
+@pytest.mark.parametrize(
+    ("stale_reason", "expected_status"),
+    [
+        ("expired", "expired"),
+        ("generation", "invalidated"),
+        ("merchant", "invalidated"),
+        ("registration_closed", "invalidated"),
+    ],
+)
+async def test_prepare_closes_stale_checkout_before_provider_obligation(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+    stale_reason: str,
+    expected_status: str,
+) -> None:
+    _, tournament, checkout = await _paid_checkout(api_client, db_session, monkeypatch)
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout["id"]))
+    assert stored is not None
+    if stale_reason == "expired":
+        stored.created_at = datetime.now(UTC) - timedelta(minutes=20)
+        stored.expires_at = datetime.now(UTC) - timedelta(minutes=10)
+    elif stale_reason == "generation":
+        tournament.registration_generation += 1
+    elif stale_reason == "merchant":
+        replacement = await make_user(
+            db_session, f"replacement-merchant-{uuid.uuid4().hex[:8]}"
+        )
+        stored.merchant_account_id = replacement.id
+    else:
+        tournament.registration_open = False
+    await db_session.commit()
+    provider = FakePaymentProvider()
+    _install_provider(provider)
+
+    refused = await api_client.post(_payment_url(tournament, checkout), json={})
+    checkout_read = await api_client.get(
+        f"/v1/tournaments/{tournament.id}/checkouts/{checkout['id']}"
+    )
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+
+    assert refused.status_code == 404
+    assert checkout_read.status_code == 200
+    assert checkout_read.json()["status"] == expected_status
+    assert payment is None
+    assert provider.creates == []
+
+
+@pytest.mark.parametrize(
+    ("stale_reason", "expected_checkout_status", "expected_payment_state"),
+    [
+        ("expired", "expired", TournamentPaymentState.expired),
+        ("generation", "invalidated", TournamentPaymentState.canceled),
+    ],
+)
+async def test_prepare_never_creates_for_stale_checkout_with_unbound_obligation(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+    stale_reason: str,
+    expected_checkout_status: str,
+    expected_payment_state: TournamentPaymentState,
+) -> None:
+    _, tournament, checkout = await _paid_checkout(api_client, db_session, monkeypatch)
+    provider = FakePaymentProvider()
+    provider.create_error = RuntimeError("process stopped after obligation commit")
+    _install_provider(provider)
+    url = _payment_url(tournament, checkout)
+    with pytest.raises(RuntimeError, match="obligation commit"):
+        await api_client.post(url, json={})
+
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout["id"]))
+    assert payment is not None
+    assert payment.provider_payment_id is None
+    assert stored is not None
+    if stale_reason == "expired":
+        stored.created_at = datetime.now(UTC) - timedelta(minutes=20)
+        stored.expires_at = datetime.now(UTC) - timedelta(minutes=10)
+    else:
+        tournament.registration_generation += 1
+    await db_session.commit()
+    provider.create_error = None
+    provider.retrieve_error = PaymentProviderNotFoundError()
+    creates_before_retry = len(provider.creates)
+
+    refused = await api_client.post(url, json={})
+    checkout_read = await api_client.get(
+        f"/v1/tournaments/{tournament.id}/checkouts/{checkout['id']}"
+    )
+
+    assert refused.status_code == 404
+    assert checkout_read.status_code == 200
+    assert checkout_read.json()["status"] == expected_checkout_status
+    assert len(provider.creates) == creates_before_retry
+    await db_session.refresh(payment)
+    assert payment.state is expected_payment_state
+
+    replacement = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={
+            "request_id": str(uuid.uuid4()),
+            "event_ids": [checkout["lines"][0]["event_id"]],
+        },
+    )
+    assert replacement.status_code == 201, replacement.text
+
+
+@pytest.mark.parametrize(
+    ("stale_reason", "expected_checkout_status", "expected_payment_state"),
+    [
+        ("expired", TournamentCheckoutStatus.expired, TournamentPaymentState.expired),
+        (
+            "generation",
+            TournamentCheckoutStatus.invalidated,
+            TournamentPaymentState.canceled,
+        ),
+    ],
+)
+async def test_reconciliation_never_creates_for_stale_unbound_obligation(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+    stale_reason: str,
+    expected_checkout_status: TournamentCheckoutStatus,
+    expected_payment_state: TournamentPaymentState,
+) -> None:
+    _, tournament, checkout = await _paid_checkout(api_client, db_session, monkeypatch)
+    provider = FakePaymentProvider()
+    provider.create_error = RuntimeError("process stopped after obligation commit")
+    _install_provider(provider)
+    with pytest.raises(RuntimeError, match="obligation commit"):
+        await api_client.post(_payment_url(tournament, checkout), json={})
+
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout["id"]))
+    assert payment is not None
+    assert payment.provider_payment_id is None
+    assert stored is not None
+    if stale_reason == "expired":
+        stored.created_at = datetime.now(UTC) - timedelta(minutes=20)
+        stored.expires_at = datetime.now(UTC) - timedelta(minutes=10)
+    else:
+        tournament.registration_generation += 1
+    await db_session.commit()
+    provider.create_error = None
+    provider.retrieve_error = PaymentProviderNotFoundError()
+    creates_before_sweep = len(provider.creates)
+
+    reconciled = await reconcile_stuck_payments(db_session, provider)
+
+    assert reconciled == 1
+    assert len(provider.creates) == creates_before_sweep
+    await db_session.refresh(stored)
+    await db_session.refresh(payment)
+    assert stored.status is expected_checkout_status
+    assert payment.state is expected_payment_state
+
+
+async def test_first_prepare_cannot_commit_obligation_after_concurrent_cancellation(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch,
+) -> None:
+    _, tournament, checkout = await _paid_checkout(api_client, db_session, monkeypatch)
+    provider = FakePaymentProvider()
+    _install_provider(provider)
+    checkout_id = uuid.UUID(checkout["id"])
+    preparing_pid = await db_session.scalar(text("SELECT pg_backend_pid()"))
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with make_session() as gatekeeper, make_session() as observer:
+        terminal = await gatekeeper.scalar(
+            select(TournamentCheckout)
+            .where(TournamentCheckout.id == checkout_id)
+            .with_for_update(of=TournamentCheckout)
+        )
+        assert terminal is not None
+        terminal.status = TournamentCheckoutStatus.cancelled
+        terminal.cancelled_at = datetime.now(UTC)
+        await gatekeeper.flush()
+        gatekeeper_pid = await gatekeeper.scalar(text("SELECT pg_backend_pid()"))
+
+        preparing = asyncio.create_task(
+            api_client.post(_payment_url(tournament, checkout), json={})
+        )
+        try:
+            async with asyncio.timeout(5):
+                while gatekeeper_pid not in (
+                    await observer.scalar(
+                        text("SELECT pg_blocking_pids(:pid)"),
+                        {"pid": preparing_pid},
+                    )
+                ):
+                    if preparing.done():
+                        response = await preparing
+                        pytest.fail(
+                            "payment preparation did not serialize obligation "
+                            f"creation with checkout cancellation: {response.text}"
+                        )
+                    await asyncio.sleep(0.01)
+            await gatekeeper.commit()
+            response = await preparing
+        finally:
+            if not preparing.done():
+                preparing.cancel()
+                await asyncio.gather(preparing, return_exceptions=True)
+
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(TournamentPayment.checkout_id == checkout_id)
+    )
+    assert response.status_code == 404
+    assert payment is None
+    assert provider.creates == []

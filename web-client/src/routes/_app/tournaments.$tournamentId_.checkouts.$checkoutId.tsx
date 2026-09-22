@@ -7,13 +7,17 @@ import { pageTitle } from '@/lib/page-title'
 const id = z.string().uuid()
 
 export const Route = createFileRoute(
-  '/_app/tournaments/$tournamentId/checkouts/$checkoutId',
+  '/_app/tournaments/$tournamentId_/checkouts/$checkoutId',
 )({
   params: {
     parse: (raw) => {
+      const tournamentId = id.safeParse(raw.tournamentId)
       const checkoutId = id.safeParse(raw.checkoutId)
-      if (!checkoutId.success) throw notFound()
-      return { checkoutId: checkoutId.data }
+      if (!tournamentId.success || !checkoutId.success) throw notFound()
+      return {
+        tournamentId: tournamentId.data,
+        checkoutId: checkoutId.data,
+      }
     },
   },
   head: () => ({ meta: [{ title: pageTitle('Checkout') }] }),

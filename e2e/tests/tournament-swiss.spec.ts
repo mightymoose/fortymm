@@ -299,9 +299,7 @@ async function authorSwissEvent(
   // choice reached the form, before anything is submitted.
   await expect(editor.roundsInput).toBeVisible()
   await editor.setRounds(rounds)
-  // The swiss lifecycle seeds entrants through the free-entry action; opt out of the
-  // editor's paid-event default explicitly.
-  await editor.setEntryFee(0)
+  // The hidden fee input defaults new events free for this direct-entry lifecycle.
 
   const createPost = page.waitForResponse(
     (r) => r.url().endsWith('/events') && r.request().method() === 'POST',

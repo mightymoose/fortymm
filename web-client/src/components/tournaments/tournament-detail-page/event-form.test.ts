@@ -1,6 +1,7 @@
 import { buildEvent, buildReservation, buildPredicate } from '../data/seed.factory'
 import {
   eventSchema,
+  eventEditorSchema,
   eventToFormValues,
   firstInvalidSection,
   isEventSlotWellFormed,
@@ -524,6 +525,20 @@ describe('eventSchema', () => {
         )
       })
     })
+  })
+})
+
+describe('eventEditorSchema while fee authoring is disabled', () => {
+  it('permits only the stored legacy fee or zero', () => {
+    const schema = eventEditorSchema({
+      feeAuthoringEnabled: false,
+      storedEntryFee: 0.25,
+    })
+
+    expect(schema.safeParse(formFor({ entryFee: 0.25 })).success).toBe(true)
+    expect(schema.safeParse(formFor({ entryFee: 0 })).success).toBe(true)
+    expect(schema.safeParse(formFor({ entryFee: 0.3 })).success).toBe(false)
+    expect(schema.safeParse(formFor({ entryFee: 1 })).success).toBe(false)
   })
 })
 

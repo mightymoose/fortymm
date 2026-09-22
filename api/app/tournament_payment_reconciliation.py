@@ -45,7 +45,10 @@ from app.tournament_payment_receipts import (
     enqueue_due_tournament_receipts,
     enqueue_tournament_receipt,
 )
-from app.tournament_payments import payment_intent_create_request, public_payment_state
+from app.tournament_payments import (
+    provider_create_request_if_authorized,
+    public_payment_state,
+)
 
 
 class ProviderPaymentEvidence(BaseModel):
@@ -350,6 +353,12 @@ async def reconcile_provider_intent(
         await _notify_payment_attention(db, payment, "provider_mismatch")
         return payment
 
+    # Webhooks can be the first authoritative response after an uncertain
+    # create. Retain a usable secret when Stripe includes it; when replayed
+    # evidence omits it, ready/action-required sweep states force retrieval.
+    if intent.client_secret:
+        payment.client_secret = intent.client_secret
+
     if intent.status != "succeeded":
         if checkout.expires_at <= await _database_now(db):
             payment.state = TournamentPaymentState.expired
@@ -510,7 +519,12 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
             select(TournamentPayment)
             .where(
                 TournamentPayment.state.in_(
-                    [TournamentPaymentState.preparing, TournamentPaymentState.checking]
+                    [
+                        TournamentPaymentState.preparing,
+                        TournamentPaymentState.ready,
+                        TournamentPaymentState.action_required,
+                        TournamentPaymentState.checking,
+                    ]
                 )
             )
             .options(selectinload(TournamentPayment.checkout))
@@ -521,6 +535,17 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
         try:
             intent = await provider.retrieve_payment_intent(payment.durable_identity)
         except PaymentProviderNotFoundError:
+            if payment.provider_payment_id is not None:
+                payment.state = TournamentPaymentState.checking
+                payment.updated_at = await _database_now(db)
+                stage_event(
+                    db,
+                    payment.checkout.payer_account_id,
+                    EventKind.dashboard_changed,
+                )
+                await db.commit()
+                reconciled += 1
+                continue
             if not get_settings().tournament_payment_collection_enabled:
                 now = await _database_now(db)
                 payment.checkout.status = TournamentCheckoutStatus.cancelled
@@ -536,9 +561,17 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                 reconciled += 1
                 continue
             try:
-                intent = await provider.create_payment_intent(
-                    payment_intent_create_request(payment, payment.checkout)
+                create_request = await provider_create_request_if_authorized(
+                    db,
+                    tournament_id=payment.checkout.tournament_id,
+                    checkout_id=payment.checkout_id,
+                    payer_account_id=payment.checkout.payer_account_id,
+                    payment_id=payment.id,
                 )
+                if create_request is None:
+                    reconciled += 1
+                    continue
+                intent = await provider.create_payment_intent(create_request)
             except (TimeoutError, PaymentProviderUncertainError):
                 continue
         except (TimeoutError, PaymentProviderUncertainError):

@@ -157,9 +157,12 @@ export function CheckoutPage({
   const [submitting, setSubmitting] = useState(false)
   const [checkout, setCheckout] = useState<Checkout | null>(null)
   const [payment, setPayment] = useState<Payment | null>(null)
+  const [failedLoadKey, setFailedLoadKey] = useState<string | null>(null)
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [authoritativePayment, setAuthoritativePayment] = useState<Payment | null>(null)
   const [now, setNow] = useState(() => (injectedNow ?? Date.now)())
   const adapter = injectedAdapter ?? stripeAdapter
+  const loadKey = `${tournamentId}:${checkoutId}:${redirected}:${loadAttempt}`
 
   useEffect(() => {
     let current = true
@@ -202,14 +205,18 @@ export function CheckoutPage({
         params: { path: paymentPath(tournamentId, checkoutId) },
       }),
       loadPayment(),
-    ]).then(([checkoutResult, loadedPayment]) => {
-      if (!current) return
-      setCheckout(checkoutWireSchema.parse(unwrap('load checkout', checkoutResult)) as Checkout)
-      receiptForm.reset({ receiptEmail: loadedPayment.receipt_email ?? '' })
-      setPayment(loadedPayment)
-    })
+    ])
+      .then(([checkoutResult, loadedPayment]) => {
+        if (!current) return
+        setCheckout(checkoutWireSchema.parse(unwrap('load checkout', checkoutResult)) as Checkout)
+        receiptForm.reset({ receiptEmail: loadedPayment.receipt_email ?? '' })
+        setPayment(loadedPayment)
+      })
+      .catch(() => {
+        if (current) setFailedLoadKey(loadKey)
+      })
     return () => { current = false }
-  }, [checkoutId, receiptForm, redirected, tournamentId])
+  }, [checkoutId, loadAttempt, loadKey, receiptForm, redirected, tournamentId])
 
   useEffect(() => {
     if (injectedNow) return
@@ -309,6 +316,17 @@ export function CheckoutPage({
       setSubmitting(false)
     }
   })
+
+  if (failedLoadKey === loadKey) {
+    return (
+      <div className="mx-auto max-w-2xl space-y-3 p-6">
+        <p role="alert">We could not load this checkout. Try again.</p>
+        <Button type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)}>
+          Try again
+        </Button>
+      </div>
+    )
+  }
 
   if (!checkout || !payment) {
     return <div role="status" className="mx-auto max-w-2xl p-6">Loading checkout…</div>
