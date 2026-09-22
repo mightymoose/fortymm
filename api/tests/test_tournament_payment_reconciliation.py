@@ -508,6 +508,79 @@ async def test_newer_quarantine_evidence_orders_later_provider_events(
     assert await _refunds(db_session) == []
 
 
+@pytest.mark.parametrize("quarantine_kind", ["bound_foreign_id", "unbound_mismatch"])
+async def test_not_found_reconciliation_retries_quarantine_notification(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    quarantine_kind: str,
+) -> None:
+    provider = FakePaymentProvider()
+    _, _, _, checkout = await _prepared_checkout(
+        api_client, db_session, monkeypatch, provider
+    )
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None
+    assert provider.intent is not None
+    if quarantine_kind == "unbound_mismatch":
+        payment.provider_payment_id = None
+        payment.provider_status = "create_uncertain"
+        payment.client_secret = None
+        payment.state = TournamentPaymentState.preparing
+        await db_session.commit()
+
+    notification_attempts: list[object] = []
+
+    def enqueue_after_first_outage(job: object) -> bool:
+        notification_attempts.append(job)
+        return len(notification_attempts) > 1
+
+    monkeypatch.setattr(
+        payment_reconciliation,
+        "enqueue_notification_job",
+        enqueue_after_first_outage,
+    )
+    mismatch_changes: dict[str, object]
+    if quarantine_kind == "bound_foreign_id":
+        mismatch_changes = {"id": "pi_foreign_notification_retry"}
+    else:
+        mismatch_changes = {"amount_cents": provider.intent.amount_cents + 1}
+    quarantined = await _webhook(
+        api_client,
+        provider.event(
+            f"evt_notification_retry_{quarantine_kind}",
+            status="processing",
+            **mismatch_changes,
+        ),
+        "test-valid-signature",
+    )
+    await db_session.refresh(payment)
+
+    assert quarantined.status_code == 200, quarantined.text
+    assert len(notification_attempts) == 1
+    assert payment.attention_notified_state != "provider_mismatch"
+    quarantine_at = payment.provider_mismatch_at
+    assert quarantine_at is not None
+    original_provider_id = payment.provider_payment_id
+
+    async def not_found(_durable_identity: str) -> FakeProviderIntent:
+        raise PaymentProviderNotFoundError()
+
+    monkeypatch.setattr(provider, "retrieve_payment_intent", not_found)
+
+    assert await reconcile_stuck_payments(db_session, provider) == 1
+    await db_session.refresh(payment)
+
+    assert len(notification_attempts) == 2
+    assert payment.attention_notified_state == "provider_mismatch"
+    assert payment.provider_mismatch_at == quarantine_at
+    assert payment.provider_payment_id == original_provider_id
+
+
 @pytest.mark.parametrize(
     ("changed_field", "changed_value"),
     [
@@ -927,6 +1000,103 @@ async def test_sweep_cancels_bound_safe_intent_despite_invariant_mismatch(
 
 
 @pytest.mark.parametrize(
+    "retrieval_error",
+    [
+        pytest.param(TimeoutError("retrieve timed out"), id="timeout"),
+        pytest.param(
+            PaymentProviderUncertainError("retrieve outcome unknown"),
+            id="uncertain",
+        ),
+    ],
+)
+async def test_uncertain_retrieval_releases_locks_before_later_obligation(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+    retrieval_error: Exception,
+) -> None:
+    first_provider = FakePaymentProvider("pi_uncertain_retrieve")
+    _, _, _, first_checkout = await _prepared_checkout(
+        api_client, db_session, monkeypatch, first_provider
+    )
+    second_provider = FakePaymentProvider("pi_after_uncertain_retrieve")
+    _, _, _, second_checkout = await _prepared_checkout(
+        api_client, db_session, monkeypatch, second_provider
+    )
+    first_checkout_id = uuid.UUID(first_checkout["id"])
+    second_checkout_id = uuid.UUID(second_checkout["id"])
+    first_payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == first_checkout_id
+        )
+    )
+    second_payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == second_checkout_id
+        )
+    )
+    assert first_payment is not None
+    assert second_payment is not None
+    assert first_provider.intent is not None
+    assert second_provider.intent is not None
+    first_payment.created_at = datetime.now(UTC) - timedelta(minutes=2)
+    second_payment.created_at = datetime.now(UTC) - timedelta(minutes=1)
+    await db_session.commit()
+
+    later_retrieve_entered = asyncio.Event()
+    release_later_retrieve = asyncio.Event()
+
+    class UncertainThenBlockingProvider:
+        async def retrieve_payment_intent(
+            self, durable_identity: str
+        ) -> FakeProviderIntent:
+            if durable_identity == first_payment.durable_identity:
+                raise retrieval_error
+            assert durable_identity == second_payment.durable_identity
+            later_retrieve_entered.set()
+            await release_later_retrieve.wait()
+            return second_provider.intent
+
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    provider = UncertainThenBlockingProvider()
+
+    async def sweep() -> int:
+        async with sessions() as session:
+            return await reconcile_stuck_payments(  # type: ignore[arg-type]
+                session, provider
+            )
+
+    sweeping = asyncio.create_task(sweep())
+    first_lifecycle_lock_released = False
+    try:
+        await asyncio.wait_for(later_retrieve_entered.wait(), timeout=5)
+        async with sessions() as concurrent_lifecycle_change:
+            try:
+                await asyncio.wait_for(
+                    concurrent_lifecycle_change.execute(
+                        text(
+                            "UPDATE tournament_checkouts "
+                            "SET cancelled_at = clock_timestamp() WHERE id = :id"
+                        ),
+                        {"id": first_checkout_id},
+                    ),
+                    timeout=1,
+                )
+            except TimeoutError:
+                await concurrent_lifecycle_change.rollback()
+            else:
+                await concurrent_lifecycle_change.commit()
+                first_lifecycle_lock_released = True
+    finally:
+        release_later_retrieve.set()
+        await asyncio.gather(sweeping, return_exceptions=True)
+
+    assert first_lifecycle_lock_released
+    assert await sweeping == 1
+
+
+@pytest.mark.parametrize(
     "provider_status",
     ["requires_payment_method", "requires_action", "requires_capture"],
 )
@@ -991,6 +1161,39 @@ async def test_sweep_cancels_safe_intent_when_payer_loses_authority(
     assert payment.client_secret is None
     assert stored.status is TournamentCheckoutStatus.active
     assert await _entry_facts(db_session, payer) == ([], 0)
+
+
+async def test_sweep_preserves_intent_for_legacy_generation_zero_open_window(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    """Reconciliation shares the preparation path's legacy-open decision."""
+    provider = FakePaymentProvider()
+    _, tournament, _, checkout = await _prepared_checkout(
+        api_client, db_session, monkeypatch, provider
+    )
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout["id"]))
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert stored is not None
+    assert payment is not None
+    tournament.registration_open = False
+    tournament.registration_generation = 0
+    stored.registration_generation = 0
+    await db_session.commit()
+
+    reconciled = await reconcile_stuck_payments(db_session, provider)
+    await db_session.refresh(stored)
+    await db_session.refresh(payment)
+
+    assert reconciled == 1
+    assert provider.cancellations == []
+    assert stored.status is TournamentCheckoutStatus.active
+    assert payment.state is TournamentPaymentState.ready
 
 
 async def test_sweep_does_not_cancel_a_different_provider_intent_id(

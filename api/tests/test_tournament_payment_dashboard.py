@@ -23,7 +23,8 @@ from app.models import (
 from app.models.tournament_payment import TournamentPaymentState
 from app.payment_provider import get_payment_provider
 from app.realtime import EventKind, RealtimeBroker
-from tests._helpers import make_client, start_session
+from app.tournament_checkout_attention import list_checkout_attention
+from tests._helpers import counted_statements, make_client, start_session
 from tests._realtime import watch_hints
 from tests.test_tournament_payments import (
     FakePaymentProvider,
@@ -204,6 +205,53 @@ async def test_actionable_checkouts_are_payer_only_and_exclude_terminal_history(
         strangers = await other.get("/v1/checkouts")
     assert strangers.status_code == 200
     assert strangers.json()["items"] == []
+
+
+async def test_actionable_checkout_query_filters_terminal_history_in_sql(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    engine,
+    monkeypatch,
+) -> None:
+    payer = await start_session(api_client, db_session)
+    await _payment(
+        api_client,
+        db_session,
+        monkeypatch,
+        payer=payer,
+        state=TournamentPaymentState.ready,
+    )
+    for state, checkout_status in (
+        (TournamentPaymentState.succeeded, TournamentCheckoutStatus.active),
+        (TournamentPaymentState.canceled, TournamentCheckoutStatus.cancelled),
+        (TournamentPaymentState.expired, TournamentCheckoutStatus.expired),
+    ):
+        checkout, _ = await _payment(
+            api_client,
+            db_session,
+            monkeypatch,
+            payer=payer,
+            state=state,
+        )
+        row = await db_session.get(TournamentCheckout, checkout["id"])
+        assert row is not None
+        row.status = checkout_status
+    await db_session.commit()
+
+    async with counted_statements(engine) as (session, statements):
+        items = await list_checkout_attention(session, payer_account_id=payer.id)
+
+    assert len(items) == 1
+    candidate_query = next(
+        statement
+        for statement in statements
+        if "FROM tournament_checkouts" in statement
+        and "JOIN tournament_payments" in statement
+    )
+    normalized = " ".join(candidate_query.split())
+    assert "tournament_payments.state IN" in normalized, normalized
+    assert "tournament_checkouts.status =" in normalized, normalized
+    assert "tournament_checkouts.expires_at >" in normalized, normalized
 
 
 async def test_preparing_payment_invalidates_only_the_payers_dashboard(

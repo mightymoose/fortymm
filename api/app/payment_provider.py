@@ -204,7 +204,11 @@ class StripePaymentProvider:
             return self._intent(await asyncio.to_thread(create))
         except TimeoutError as error:
             raise PaymentProviderUncertainError from error
-        except stripe.APIConnectionError as error:
+        except (
+            stripe.APIConnectionError,
+            stripe.APIError,
+            stripe.RateLimitError,
+        ) as error:
             # The request may have reached Stripe even though its response did
             # not reach us. Preserve the create obligation for reconciliation.
             raise PaymentProviderUncertainError from error
@@ -233,7 +237,11 @@ class StripePaymentProvider:
             return self._intent(await asyncio.to_thread(retrieve))
         except TimeoutError as error:
             raise PaymentProviderUncertainError from error
-        except stripe.APIConnectionError as error:
+        except (
+            stripe.APIConnectionError,
+            stripe.APIError,
+            stripe.RateLimitError,
+        ) as error:
             raise PaymentProviderUncertainError from error
 
     async def update_payment_intent_receipt(
@@ -256,7 +264,11 @@ class StripePaymentProvider:
             return self._intent(await asyncio.to_thread(update))
         except TimeoutError as error:
             raise PaymentProviderUncertainError from error
-        except stripe.APIConnectionError as error:
+        except (
+            stripe.APIConnectionError,
+            stripe.APIError,
+            stripe.RateLimitError,
+        ) as error:
             # The update may have reached Stripe even when its response did
             # not. Keep the desired email durable and let a later prepare
             # converge provider state.
@@ -280,7 +292,11 @@ class StripePaymentProvider:
             return self._intent(await asyncio.to_thread(cancel))
         except TimeoutError as error:
             raise PaymentProviderUncertainError from error
-        except stripe.APIConnectionError as error:
+        except (
+            stripe.APIConnectionError,
+            stripe.APIError,
+            stripe.RateLimitError,
+        ) as error:
             # A cancellation may have reached Stripe even when its response
             # did not. Leave the local obligation sweepable for retrieval.
             raise PaymentProviderUncertainError from error

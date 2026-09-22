@@ -183,6 +183,48 @@ async def test_cancel_translates_uncertain_connection_failure(
 
 
 @pytest.mark.parametrize(
+    "provider_error_type",
+    [
+        pytest.param(stripe.RateLimitError, id="rate-limit"),
+        pytest.param(stripe.APIError, id="api-error"),
+    ],
+)
+@pytest.mark.parametrize("operation", ["create", "retrieve", "update", "cancel"])
+async def test_retryable_stripe_failures_have_one_uncertain_boundary_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    provider_error_type: type[Exception],
+) -> None:
+    """Every transient SDK failure must leave its payment obligation retryable."""
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_boundary")
+    provider_error = provider_error_type("temporary Stripe failure")
+
+    def transient_failure(*_args: object, **_kwargs: object) -> object:
+        raise provider_error
+
+    stripe_method = {
+        "create": "create",
+        "retrieve": "search",
+        "update": "modify",
+        "cancel": "cancel",
+    }[operation]
+    monkeypatch.setattr(stripe.PaymentIntent, stripe_method, transient_failure)
+    provider = StripePaymentProvider()
+
+    with pytest.raises(PaymentProviderUncertainError):
+        if operation == "create":
+            await provider.create_payment_intent(_request())
+        elif operation == "retrieve":
+            await provider.retrieve_payment_intent(_request().idempotency_key)
+        elif operation == "update":
+            await provider.update_payment_intent_receipt(
+                "pi_boundary_test", "payer@example.net"
+            )
+        else:
+            await provider.cancel_payment_intent("pi_boundary_test")
+
+
+@pytest.mark.parametrize(
     "provider_error",
     [
         TimeoutError("receipt update timed out after submission"),

@@ -28,6 +28,10 @@ def upgrade() -> None:
         "tournament_payments",
         sa.Column("attention_notified_state", sa.String(length=32), nullable=True),
     )
+    op.add_column(
+        "tournament_payments",
+        sa.Column("provider_mismatch_at", sa.DateTime(timezone=True), nullable=True),
+    )
     receipt_state = postgresql.ENUM(
         "pending",
         "retry_scheduled",
@@ -120,6 +124,7 @@ def downgrade() -> None:
     )
     op.drop_table("tournament_payment_receipts")
     postgresql.ENUM(name="tournament_receipt_state").drop(op.get_bind())
+    op.drop_column("tournament_payments", "provider_mismatch_at")
     op.drop_column("tournament_payments", "attention_notified_state")
     op.drop_column("tournament_payments", "settlement_notified_at")
     op.drop_column("tournament_refund_obligations", "resolved_at")

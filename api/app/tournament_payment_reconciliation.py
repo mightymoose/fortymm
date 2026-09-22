@@ -56,6 +56,7 @@ from app.tournament_payments import (
     public_payment_state,
     reload_payment_for_reconciliation_locked,
 )
+from app.tournament_registration import registration_open
 
 
 class ProviderPaymentEvidence(BaseModel):
@@ -198,6 +199,19 @@ async def _notify_payment_attention(
         payment.attention_notified_state = event
 
 
+async def _quarantine_provider_mismatch(
+    db: AsyncSession, payment: TournamentPayment
+) -> None:
+    """Persist provider-association quarantine independently of notification I/O."""
+    if payment.provider_mismatch_at is None:
+        payment.provider_mismatch_at = await _database_now(db)
+    payment.support_reference = (
+        payment.support_reference or f"PAY-{str(payment.id)[:8].upper()}"
+    )
+    stage_event(db, payment.checkout.payer_account_id, EventKind.dashboard_changed)
+    await _notify_payment_attention(db, payment, "provider_mismatch")
+
+
 async def _ensure_settlement_outputs(
     db: AsyncSession, payment: TournamentPayment, now: datetime
 ) -> None:
@@ -313,6 +327,7 @@ async def retry_terminal_payment_outputs(
         await _ensure_settlement_outputs(db, payment, await _database_now(db))
     elif (
         payment.state is TournamentPaymentState.failed
+        and payment.provider_mismatch_at is not None
         and payment.attention_notified_state != "provider_mismatch"
     ):
         # A terminal mismatch has no more provider transitions to wake the
@@ -407,11 +422,7 @@ async def reconcile_provider_intent(
         if evidence_at is not None:
             payment.provider_evidence_at = evidence_at
         payment.state = TournamentPaymentState.checking
-        payment.support_reference = (
-            payment.support_reference or f"PAY-{str(payment.id)[:8].upper()}"
-        )
-        stage_event(db, checkout.payer_account_id, EventKind.dashboard_changed)
-        await _notify_payment_attention(db, payment, "provider_mismatch")
+        await _quarantine_provider_mismatch(db, payment)
         return payment
 
     # An uncertain create has no provider id to authenticate a lookup result.
@@ -424,11 +435,7 @@ async def reconcile_provider_intent(
     ):
         if evidence_at is not None:
             payment.provider_evidence_at = evidence_at
-        payment.support_reference = (
-            payment.support_reference or f"PAY-{str(payment.id)[:8].upper()}"
-        )
-        stage_event(db, checkout.payer_account_id, EventKind.dashboard_changed)
-        await _notify_payment_attention(db, payment, "provider_mismatch")
+        await _quarantine_provider_mismatch(db, payment)
         return payment
 
     payment.provider_status = intent.status
@@ -448,9 +455,6 @@ async def reconcile_provider_intent(
             }
             else TournamentPaymentState.checking
         )
-        payment.support_reference = (
-            payment.support_reference or f"PAY-{str(payment.id)[:8].upper()}"
-        )
         if intent.status == "succeeded" and intent.amount_cents > 0:
             await _refund(
                 db,
@@ -459,9 +463,14 @@ async def reconcile_provider_intent(
                 amount_cents=intent.amount_cents,
                 reason="provider_invariant_mismatch",
             )
-        stage_event(db, checkout.payer_account_id, EventKind.dashboard_changed)
-        await _notify_payment_attention(db, payment, "provider_mismatch")
+        await _quarantine_provider_mismatch(db, payment)
         return payment
+
+    # Exact id and immutable association fields are authoritative evidence
+    # that the quarantined payment has converged back to its owned intent.
+    payment.provider_mismatch_at = None
+    if payment.attention_notified_state == "provider_mismatch":
+        payment.attention_notified_state = None
 
     # Webhooks can be the first authoritative response after an uncertain
     # create. Retain a usable secret when Stripe includes it; when replayed
@@ -494,7 +503,7 @@ async def reconcile_provider_intent(
         and checkout.expires_at > now
         and checkout.registration_generation == tournament.registration_generation
         and checkout.merchant_account_id == tournament.owner_account_id
-        and tournament.registration_open
+        and registration_open(tournament)
     )
     if payer is None or not payer.is_active or payer.merged_into_user_id is not None:
         checkout_valid = False
@@ -677,8 +686,11 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                         TournamentPayment.state == TournamentPaymentState.failed,
                         or_(
                             TournamentPayment.receipt_sync_pending.is_(True),
-                            TournamentPayment.attention_notified_state.is_distinct_from(
-                                "provider_mismatch"
+                            and_(
+                                TournamentPayment.provider_mismatch_at.is_not(None),
+                                TournamentPayment.attention_notified_state.is_distinct_from(
+                                    "provider_mismatch"
+                                ),
                             ),
                         ),
                     ),
@@ -729,6 +741,11 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                 # A concurrently removed aggregate cannot be recovered, but it
                 # must not prevent later independent obligations from running.
                 continue
+            if payment.provider_mismatch_at is not None:
+                # Quarantine and its delivery marker are separate durable
+                # facts. A metadata miss must not suppress retrying an alert
+                # that previously failed to enqueue.
+                await _notify_payment_attention(db, payment, "provider_mismatch")
             if payment.state in {
                 TournamentPaymentState.succeeded,
                 TournamentPaymentState.failed,
@@ -749,7 +766,7 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                 await db.commit()
                 reconciled += 1
                 continue
-            if payment.attention_notified_state == "provider_mismatch":
+            if payment.provider_mismatch_at is not None:
                 # Mismatched evidence against an unbound uncertain create is
                 # intentionally quarantined. NotFound may be metadata lag and
                 # cannot safely turn that obligation into local cancellation.
@@ -774,7 +791,7 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                 and checkout.registration_generation
                 == checkout.tournament.registration_generation
                 and checkout.merchant_account_id == checkout.tournament.owner_account_id
-                and checkout.tournament.registration_open
+                and registration_open(checkout.tournament)
             )
             if not payer_can_recreate:
                 # Metadata NotFound is not proof that an uncertain create did
@@ -813,6 +830,26 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
             except (TimeoutError, PaymentProviderUncertainError):
                 continue
         except (TimeoutError, PaymentProviderUncertainError):
+            try:
+                payment, _payer = await reload_payment_for_reconciliation_locked(
+                    db,
+                    tournament_id=tournament_id,
+                    checkout_id=checkout_id,
+                    payer_account_id=payer_account_id,
+                    payment_id=payment_id,
+                )
+            except PaymentNotFoundError:
+                await db.rollback()
+                continue
+            if payment.provider_mismatch_at is not None:
+                # Transport uncertainty changes no binding or payment state,
+                # but it also must not starve the independent alert outbox.
+                await _notify_payment_attention(db, payment, "provider_mismatch")
+                reconciled += 1
+            # The lifecycle reload above owns payer/tournament/checkout/payment
+            # locks even when there is no quarantine output to persist. Always
+            # close that transaction before touching the next provider object.
+            await db.commit()
             continue
         # Provider I/O runs without locks. Reacquire the lifecycle-aware lock
         # order before deciding whether a still-chargeable intent is safe. This
@@ -838,7 +875,7 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
             and checkout.registration_generation
             == checkout.tournament.registration_generation
             and checkout.merchant_account_id == checkout.tournament.owner_account_id
-            and checkout.tournament.registration_open
+            and registration_open(checkout.tournament)
         )
         if (
             authority_lost
@@ -904,7 +941,7 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                 and checkout.registration_generation
                 == checkout.tournament.registration_generation
                 and checkout.merchant_account_id == checkout.tournament.owner_account_id
-                and checkout.tournament.registration_open
+                and registration_open(checkout.tournament)
             )
             if payment.state in {
                 TournamentPaymentState.succeeded,

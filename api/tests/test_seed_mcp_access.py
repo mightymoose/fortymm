@@ -12,7 +12,9 @@ from app.models import Permission, Role, RolePermission
 from scripts import seed_rbac
 
 MCP_ACCESS = "mcp.access"
+PAYMENTS_VIEW = "payments.view"
 BETA_TESTER = "Beta tester"
+ADMINISTRATOR = "Administrator"
 
 
 async def _role_permission_names(db: AsyncSession, role_name: str) -> set[str]:
@@ -57,6 +59,26 @@ async def test_seed_grants_mcp_access_to_beta_tester_only(db_session: AsyncSessi
         if role_name == BETA_TESTER:
             continue
         assert MCP_ACCESS not in await _role_permission_names(db_session, role_name)
+
+
+async def test_seed_grants_payment_support_visibility_to_administrators_only(
+    db_session: AsyncSession,
+) -> None:
+    """Fresh deploys make the payment-support capability assignable and include it
+    in the existing Administrator operator bundle, without exposing it to players."""
+    await seed_rbac.upsert_rbac(db_session)
+    await db_session.commit()
+
+    permission = await db_session.scalar(
+        select(Permission).where(Permission.name == PAYMENTS_VIEW)
+    )
+    assert permission is not None
+    assert PAYMENTS_VIEW in await _role_permission_names(db_session, ADMINISTRATOR)
+
+    for role_name, _, _ in seed_rbac.ROLES:
+        if role_name == ADMINISTRATOR:
+            continue
+        assert PAYMENTS_VIEW not in await _role_permission_names(db_session, role_name)
 
 
 async def test_seed_mcp_access_is_idempotent(db_session: AsyncSession):

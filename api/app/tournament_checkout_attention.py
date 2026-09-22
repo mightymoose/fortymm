@@ -3,11 +3,16 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import TournamentCheckout
+from app.models import (
+    Tournament,
+    TournamentCheckout,
+    TournamentCheckoutStatus,
+    TournamentPayment,
+)
 from app.models.tournament_payment import TournamentPaymentState
 from app.schemas.tournament_checkout import (
     CheckoutAttentionItem,
@@ -44,9 +49,30 @@ async def list_checkout_attention(
     rows = (
         await db.scalars(
             select(TournamentCheckout)
+            .join(Tournament, Tournament.id == TournamentCheckout.tournament_id)
             .outerjoin(TournamentCheckout.payment)
             .where(
                 TournamentCheckout.payer_account_id == payer_account_id,
+                or_(
+                    TournamentPayment.state.in_(
+                        {
+                            TournamentPaymentState.failed,
+                            TournamentPaymentState.checking,
+                        }
+                    ),
+                    and_(
+                        or_(
+                            TournamentPayment.id.is_(None),
+                            TournamentPayment.state.in_(_ACTIVE_STATES),
+                        ),
+                        TournamentCheckout.status == TournamentCheckoutStatus.active,
+                        TournamentCheckout.registration_generation
+                        == Tournament.registration_generation,
+                        TournamentCheckout.merchant_account_id
+                        == Tournament.owner_account_id,
+                        TournamentCheckout.expires_at > now,
+                    ),
+                ),
             )
             .options(
                 selectinload(TournamentCheckout.tournament),

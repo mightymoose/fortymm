@@ -35,6 +35,7 @@ from app.schemas.tournament_checkout import (
     TournamentPaymentRead,
 )
 from app.tournament_checkouts import _database_now
+from app.tournament_registration import registration_open
 
 PAYMENTS_VIEW_PERMISSION = "payments.view"
 TERMINAL_PAYMENT_STATES = frozenset(
@@ -218,7 +219,7 @@ async def _terminalize_stale_checkout(
             checkout.registration_generation
             != checkout.tournament.registration_generation
             or checkout.merchant_account_id != checkout.tournament.owner_account_id
-            or not checkout.tournament.registration_open
+            or not registration_open(checkout.tournament)
         ):
             checkout.status = TournamentCheckoutStatus.invalidated
             changed = True
@@ -250,7 +251,7 @@ async def _checkout_has_payment_authority(
         and checkout.registration_generation
         == checkout.tournament.registration_generation
         and checkout.merchant_account_id == checkout.tournament.owner_account_id
-        and checkout.tournament.registration_open
+        and registration_open(checkout.tournament)
     )
 
 
@@ -274,6 +275,11 @@ async def provider_create_request_if_authorized(
         await db.rollback()
         raise PaymentNotFoundError()
     if payment.provider_payment_id is not None:
+        await db.commit()
+        return None
+    if payment.provider_mismatch_at is not None:
+        # Foreign or invariant-breaking evidence is not proof of absence and
+        # cannot authorize another create. Preserve the durable quarantine.
         await db.commit()
         return None
     # A timed-out create may already exist remotely. Close stale payer-facing
@@ -638,7 +644,10 @@ async def prepare_payment(
             # A bound provider intent remains nonterminal so the reconciliation
             # sweep can observe a later capture and create refund obligations.
             if payment.provider_payment_id is None:
-                if payment.provider_status == UNCERTAIN_CREATE_PROVIDER_STATUS:
+                if (
+                    payment.provider_status == UNCERTAIN_CREATE_PROVIDER_STATUS
+                    or payment.provider_mismatch_at is not None
+                ):
                     # A timed-out create may exist remotely. Expire the payer
                     # capability while preserving the recovery obligation so
                     # the sweep can discover late success and refund it.
@@ -679,7 +688,7 @@ async def prepare_payment(
             if payment.provider_payment_id is not None:
                 await db.commit()
                 raise PaymentNotFoundError() from None
-            if payment.attention_notified_state == "provider_mismatch":
+            if payment.provider_mismatch_at is not None:
                 # Signed or lookup evidence was seen but failed immutable
                 # association checks. A later metadata miss does not prove the
                 # payment never existed, so collection disablement must not

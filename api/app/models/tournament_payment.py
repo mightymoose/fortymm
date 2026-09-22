@@ -103,6 +103,9 @@ class TournamentPayment(Base):
         DateTime(timezone=True)
     )
     attention_notified_state: Mapped[str | None] = mapped_column(String(32))
+    provider_mismatch_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     # This value is intentionally never serialized by a generic checkout read.
     client_secret: Mapped[str | None] = mapped_column(String(512))
     receipt_email: Mapped[str | None] = mapped_column(String(320))

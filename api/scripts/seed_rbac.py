@@ -21,6 +21,7 @@ PERMISSIONS = [
     ("tournament.create", "Create a new tournament."),
     ("notifications.broadcast", "Send broadcast notifications to players."),
     ("scheduling.view", "See the schedule-solve ledger in the Administration area."),
+    ("payments.view", "See payment-support details in the Administration area."),
     ("mcp.access", "Connect an agent to the MCP server over Auth0 OAuth."),
 ]
 
@@ -30,11 +31,13 @@ PERMISSIONS = [
 ROLES = [
     (
         "Administrator",
-        "Sees the Administration area and manages roles, permissions, and user assignments.",
+        "Sees the Administration area and manages roles, permissions, and user "
+        "assignments.",
         [
             "administration.view",
             "authorization.manage",
             "notifications.broadcast",
+            "payments.view",
             "scheduling.view",
         ],
     ),

@@ -21,12 +21,15 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import app.tournament_payment_reconciliation as payment_reconciliation
 from app.identity_lifecycle import erase_account
 from app.main import app as fastapi_app
 from app.models import (
     EventLifecycleHistory,
     EventLifecycleState,
     NotificationPreference,
+    TournamentCheckout,
+    TournamentCheckoutStatus,
     TournamentEntry,
     TournamentPayment,
     TournamentPaymentReceipt,
@@ -38,8 +41,10 @@ from app.models import (
 )
 from app.notifications.service import NotificationService
 from app.notifications.taxonomy import NotificationCategory, NotificationChannel
+from app.payment_provider import PaymentProviderNotFoundError
 from app.schemas.notification import NotificationJob
 from app.sessions import get_current_user
+from app.tournament_payment_reconciliation import reconcile_stuck_payments
 from tests._helpers import (
     CSRF_EVENT_HOOKS,
     FakeSender,
@@ -78,6 +83,45 @@ class RecordingReceiptSender:
                 str(failure), retryable=bool(getattr(failure, "retryable", False))
             )
         self.sent.append({"to_email": to_email, "subject": subject, "body": body})
+
+
+async def _unbound_mismatch_with_notification_outage(
+    api_client: AsyncClient,
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[FakePaymentProvider, Any, Any, dict[str, Any], TournamentPayment]:
+    provider = FakePaymentProvider()
+    original_create = provider.create_payment_intent
+
+    async def uncertain_create(request: object) -> Any:
+        await original_create(request)
+        raise TimeoutError("provider response was lost")
+
+    monkeypatch.setattr(provider, "create_payment_intent", uncertain_create)
+    monkeypatch.setattr(
+        payment_reconciliation,
+        "enqueue_notification_job",
+        lambda _job: False,
+    )
+    payer, tournament, _, checkout = await _prepared_checkout(
+        api_client, db, monkeypatch, provider
+    )
+    payment = await db.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None and payment.provider_payment_id is None
+    mismatch = provider.event(
+        f"evt_unbound_quarantine_{uuid.uuid4().hex}",
+        status="processing",
+        amount_cents=9999,
+    )
+    assert (
+        await _webhook(api_client, mismatch, "test-valid-signature")
+    ).status_code == 200
+    await db.refresh(payment)
+    return provider, payer, tournament, checkout, payment
 
 
 def _receipt_service() -> Any:
@@ -691,6 +735,140 @@ async def test_only_tournament_owner_can_read_safe_payment_problems(
     assert "secret" not in rendered
     assert "evidence_json" not in rendered
     assert "durable_identity" not in rendered
+
+
+@pytest.mark.parametrize(
+    "payment_state",
+    [TournamentPaymentState.preparing, TournamentPaymentState.checking],
+)
+async def test_payment_problems_include_nonterminal_provider_mismatch_quarantine(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    payment_state: TournamentPaymentState,
+) -> None:
+    provider = FakePaymentProvider()
+    payer, tournament, _, checkout = await _prepared_checkout(
+        api_client, db_session, monkeypatch, provider
+    )
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None
+    payment.state = payment_state
+    payment.attention_notified_state = "provider_mismatch"
+    payment.provider_mismatch_at = datetime.now(UTC)
+    payment.support_reference = f"PAY-{str(payment.id)[:8].upper()}"
+    await db_session.commit()
+
+    owner = await db_session.get(type(payer), tournament.owner_account_id)
+    assert owner is not None
+    fastapi_app.dependency_overrides[get_current_user] = lambda: owner
+    try:
+        response = await api_client.get(
+            f"/v1/tournaments/{tournament.id}/payment-problems"
+        )
+    finally:
+        fastapi_app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["items"] == [
+        {
+            "checkout_id": checkout["id"],
+            "state": "provider_mismatch",
+            "support_reference": payment.support_reference,
+        }
+    ]
+
+
+async def test_provider_mismatch_quarantine_survives_notification_outage(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, _, _, _, payment = await _unbound_mismatch_with_notification_outage(
+        api_client, db_session, monkeypatch
+    )
+
+    assert payment.attention_notified_state is None
+    assert payment.support_reference
+    assert getattr(payment, "provider_mismatch_at", None) is not None
+
+
+async def test_notification_outage_does_not_hide_quarantine_from_operator(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (
+        _,
+        payer,
+        tournament,
+        checkout,
+        payment,
+    ) = await _unbound_mismatch_with_notification_outage(
+        api_client, db_session, monkeypatch
+    )
+    owner = await db_session.get(type(payer), tournament.owner_account_id)
+    assert owner is not None
+    fastapi_app.dependency_overrides[get_current_user] = lambda: owner
+    try:
+        response = await api_client.get(
+            f"/v1/tournaments/{tournament.id}/payment-problems"
+        )
+    finally:
+        fastapi_app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["items"] == [
+        {
+            "checkout_id": checkout["id"],
+            "state": "provider_mismatch",
+            "support_reference": payment.support_reference,
+        }
+    ]
+
+
+@pytest.mark.parametrize("collection_enabled", [True, False])
+async def test_quarantined_unbound_payment_is_neither_recreated_nor_canceled(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    collection_enabled: bool,
+) -> None:
+    (
+        provider,
+        _,
+        _,
+        checkout,
+        payment,
+    ) = await _unbound_mismatch_with_notification_outage(
+        api_client, db_session, monkeypatch
+    )
+    creates_before_recovery = len(provider.creates)
+
+    async def not_found(_durable_identity: str) -> Any:
+        raise PaymentProviderNotFoundError()
+
+    monkeypatch.setattr(provider, "retrieve_payment_intent", not_found)
+    monkeypatch.setenv(
+        "TOURNAMENT_PAYMENT_COLLECTION_ENABLED",
+        "true" if collection_enabled else "false",
+    )
+
+    await reconcile_stuck_payments(db_session, provider)
+    await db_session.refresh(payment)
+    stored_checkout = await db_session.get(
+        TournamentCheckout, uuid.UUID(checkout["id"])
+    )
+
+    assert len(provider.creates) == creates_before_recovery
+    assert payment.provider_payment_id is None
+    assert payment.state is TournamentPaymentState.preparing
+    assert stored_checkout is not None
+    assert stored_checkout.status is TournamentCheckoutStatus.active
 
 
 def test_payments_is_a_preference_controlled_notification_category() -> None:

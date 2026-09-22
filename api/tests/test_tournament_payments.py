@@ -305,6 +305,31 @@ async def test_prepare_uses_server_owned_card_only_contract_and_resumes_one_inte
     assert payer.email == "payer@example.com"
 
 
+async def test_prepare_accepts_legacy_generation_zero_registration_window(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    """A false raw flag at generation zero is the legacy published-open shape."""
+    _, tournament, checkout = await _paid_checkout(api_client, db_session, monkeypatch)
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout["id"]))
+    assert stored is not None
+    tournament.registration_open = False
+    tournament.registration_generation = 0
+    stored.registration_generation = 0
+    await db_session.commit()
+    provider = FakePaymentProvider()
+    _install_provider(provider)
+
+    prepared = await api_client.post(_payment_url(tournament, checkout), json={})
+    await db_session.refresh(stored)
+
+    assert prepared.status_code == 200, prepared.text
+    assert prepared.json()["payment_state"] == "ready"
+    assert stored.status is TournamentCheckoutStatus.active
+    assert len(provider.creates) == 1
+
+
 async def test_prepare_is_payer_only_and_never_discloses_the_client_secret(
     api_client: AsyncClient,
     db_session: AsyncSession,

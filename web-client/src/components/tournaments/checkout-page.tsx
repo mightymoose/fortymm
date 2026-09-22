@@ -140,7 +140,16 @@ function StripeAdapterBridge({
   return null
 }
 
-export function CheckoutPage({
+export function CheckoutPage(props: CheckoutPageProps) {
+  return (
+    <CheckoutPageContent
+      key={`${props.tournamentId}:${props.checkoutId}`}
+      {...props}
+    />
+  )
+}
+
+function CheckoutPageContent({
   tournamentId,
   checkoutId,
   paymentAdapter: injectedAdapter,
@@ -224,6 +233,14 @@ export function CheckoutPage({
     return () => window.clearInterval(timer)
   }, [injectedNow])
 
+  useEffect(() => {
+    if (injectedNow || !checkout) return
+    const expiresAt = new Date(checkout.expires_at).getTime()
+    const delay = Math.max(0, expiresAt - Date.now())
+    const timer = window.setTimeout(() => setNow(Date.now()), delay)
+    return () => window.clearTimeout(timer)
+  }, [checkout, injectedNow])
+
   const confirm = receiptForm.handleSubmit(async ({ receiptEmail }) => {
       if (!adapter || !payment?.client_secret) return
       setSubmitting(true)
@@ -272,16 +289,26 @@ export function CheckoutPage({
   })
 
   const remainingSeconds = checkout
-    ? Math.max(0, Math.floor((new Date(checkout.expires_at).getTime() - now) / 1000))
+    ? Math.max(0, Math.ceil((new Date(checkout.expires_at).getTime() - now) / 1000))
     : 0
   const deadline = `${String(Math.floor(remainingSeconds / 60)).padStart(2, '0')}:${String(remainingSeconds % 60).padStart(2, '0')} remaining`
   const displayedPayment = authoritativePayment ?? payment
   const state = displayedPayment?.payment_state ?? 'preparing'
+  const paymentIsTerminal =
+    state === 'succeeded' ||
+    state === 'failed' ||
+    state === 'expired' ||
+    state === 'canceled'
+  const locallyExpired =
+    !!checkout &&
+    new Date(checkout.expires_at).getTime() <= now &&
+    !paymentIsTerminal
   const lineOutcomes = useMemo(
     () => new Map(displayedPayment?.lines.map((line) => [line.event_id, line])),
     [displayedPayment?.lines],
   )
   const canPay =
+    !locallyExpired &&
     (state === 'ready' || state === 'action_required') &&
     !!payment?.client_secret &&
     !!adapter
@@ -373,7 +400,7 @@ export function CheckoutPage({
         </CardContent>
       </Card>
 
-      {state !== 'succeeded' && (
+      {state !== 'succeeded' && !locallyExpired && (
         <Card>
           <CardHeader><CardTitle>Receipt destination</CardTitle></CardHeader>
           <CardContent className="space-y-3">
@@ -407,6 +434,8 @@ export function CheckoutPage({
             <a href={`/tournaments/${checkout.tournament_id}`}>Return to tournament</a>
           </Button>
         </section>
+      ) : locallyExpired ? (
+        <StateMessage title="Checkout expired" body="Your reservation has ended. Start a new checkout from the tournament." />
       ) : state === 'checking' ? (
         <StateMessage title="Payment is still being confirmed" body="You can safely leave this page and check your dashboard later." />
       ) : state === 'action_required' && !displayedPayment?.client_secret ? (

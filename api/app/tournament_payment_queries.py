@@ -11,7 +11,6 @@ from app.models import (
     TournamentCheckout,
     TournamentPayment,
     TournamentPaymentReceipt,
-    TournamentPaymentState,
     TournamentReceiptState,
 )
 
@@ -40,7 +39,7 @@ async def list_tournament_payment_problems(
         )
         .where(
             TournamentCheckout.tournament_id == tournament_id,
-            TournamentPayment.state == TournamentPaymentState.failed,
+            TournamentPayment.provider_mismatch_at.is_not(None),
             TournamentPayment.support_reference.is_not(None),
         )
     )

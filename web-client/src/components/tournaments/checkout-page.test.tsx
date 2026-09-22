@@ -1,11 +1,16 @@
 import { http, HttpResponse } from 'msw'
-import { screen, within } from '@testing-library/react'
+import { act, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { server } from '@/mocks/server'
+import { renderWithRouterContext } from '@/test/router'
 import { cardPaymentElementOptions } from './checkout-payment-options'
-import type { CheckoutBrowserPaymentAdapter } from './checkout-page'
+import {
+  CheckoutPage,
+  type CheckoutBrowserPaymentAdapter,
+} from './checkout-page'
 import { checkoutPage as page } from './checkout-page.page'
 
 const checkout = {
@@ -51,6 +56,27 @@ function adapter(
     element: <label>Card details<input aria-label="Card details" /></label>,
     confirmPayment: vi.fn().mockResolvedValue(result),
   }
+}
+
+function CheckoutNavigationHarness({
+  paymentAdapter,
+}: {
+  paymentAdapter: CheckoutBrowserPaymentAdapter
+}) {
+  const [checkoutId, setCheckoutId] = useState('checkout-a')
+  return (
+    <>
+      <button type="button" onClick={() => setCheckoutId('checkout-b')}>
+        Open checkout B
+      </button>
+      <CheckoutPage
+        tournamentId="tournament-1770"
+        checkoutId={checkoutId}
+        paymentAdapter={paymentAdapter}
+        now={() => new Date('2030-04-20T14:00:05Z').getTime()}
+      />
+    </>
+  )
 }
 
 function serve({
@@ -219,6 +245,84 @@ describe('tournament checkout page', () => {
     expect(screen.queryByText(/entry confirmed/i)).not.toBeInTheDocument()
   })
 
+  it('does not carry checkout A settlement into checkout B during client-side navigation', async () => {
+    const checkoutFor = (checkoutId: string) => ({
+      ...checkout,
+      id: checkoutId,
+      request_id: `request-${checkoutId}`,
+      tournament_name: checkoutId === 'checkout-a' ? 'Autumn Open' : 'Spring Open',
+      lines: [
+        {
+          event_id: 'open',
+          event_name: checkoutId === 'checkout-a' ? 'Autumn Singles' : 'Spring Singles',
+          price_cents: 3750,
+        },
+      ],
+    })
+    const paymentFor = (checkoutId: string, overrides: Record<string, unknown> = {}) =>
+      payment({
+        checkout_id: checkoutId,
+        lines: [
+          {
+            event_id: 'open',
+            amount_cents: 3750,
+            outcome: null,
+            refund_amount_cents: 0,
+          },
+        ],
+        ...overrides,
+      })
+
+    server.use(
+      http.get(
+        '*/v1/tournaments/:tournamentId/checkouts/:checkoutId',
+        ({ params }) => HttpResponse.json(checkoutFor(String(params.checkoutId))),
+      ),
+      http.post(
+        '*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment',
+        ({ params }) => HttpResponse.json(paymentFor(String(params.checkoutId))),
+      ),
+      http.get(
+        '*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment',
+        ({ params }) => HttpResponse.json(paymentFor(String(params.checkoutId), {
+          payment_state: 'succeeded',
+          client_secret: null,
+          lines: [
+            {
+              event_id: 'open',
+              amount_cents: 3750,
+              outcome: 'confirmed',
+              refund_amount_cents: 0,
+            },
+          ],
+        })),
+      ),
+    )
+
+    renderWithRouterContext(
+      <CheckoutNavigationHarness paymentAdapter={adapter()} />,
+      {
+        initialEntries: [
+          '/tournaments/tournament-1770/checkouts/checkout-a',
+        ],
+      },
+    )
+    const user = userEvent.setup()
+    await user.click(await screen.findByRole('button', { name: /pay/i }))
+    expect(await screen.findByText('Payment confirmed')).toBeInTheDocument()
+    expect(screen.getByText('Autumn Singles').parentElement).toHaveTextContent(
+      'Entry confirmed',
+    )
+
+    await user.click(screen.getByRole('button', { name: 'Open checkout B' }))
+
+    const springEntry = await screen.findByText('Spring Singles')
+    expect(screen.getByRole('heading', { name: 'Spring Open' })).toBeInTheDocument()
+    expect(springEntry.parentElement).not.toHaveTextContent('Entry confirmed')
+    expect(screen.queryByText('Payment confirmed')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /pay/i })).toBeEnabled()
+  })
+
   it('ignores redirect claims and renders only the refetched server result', async () => {
     const reads = serve({ statuses: [payment({ payment_state: 'checking', client_secret: null })] })
     page.render(
@@ -265,6 +369,71 @@ describe('tournament checkout page', () => {
 
     expect(await screen.findByText('Payment confirmed')).toBeInTheDocument()
     expect(screen.getAllByText('Entry confirmed')).toHaveLength(2)
+  })
+
+  it('expires a ready checkout locally when its displayed countdown elapses', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2030-04-20T14:10:01Z'))
+    serve()
+    page.render(adapter())
+
+    expect(await screen.findByText('Checkout expired')).toBeInTheDocument()
+    expect(screen.getByLabelText('00:00 remaining')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /pay/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: /card details/i })).not.toBeInTheDocument()
+  })
+
+  it('counts the final partial second and removes Pay at the exact local deadline', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2030-04-20T14:09:59.500Z'))
+    serve()
+    renderWithRouterContext(
+      <CheckoutPage
+        tournamentId="tournament-1770"
+        checkoutId="checkout-1770"
+        paymentAdapter={adapter()}
+      />,
+      { initialEntries: ['/tournaments/tournament-1770/checkouts/checkout-1770'] },
+    )
+    await act(async () => {
+      for (let index = 0; index < 10; index += 1) await Promise.resolve()
+    })
+
+    expect(screen.getByLabelText('00:01 remaining')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /pay/i })).toBeEnabled()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(499)
+    })
+    expect(screen.getByRole('button', { name: /pay/i })).toBeEnabled()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(screen.getByText('Checkout expired')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /pay/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: /card details/i })).not.toBeInTheDocument()
+  })
+
+  it('preserves a terminal payment result after the local checkout deadline', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2030-04-20T14:10:01Z'))
+    serve({
+      prepared: payment({
+        payment_state: 'succeeded',
+        client_secret: null,
+        lines: [
+          { event_id: 'open', amount_cents: 2500, outcome: 'confirmed', refund_amount_cents: 0 },
+          { event_id: 'doubles', amount_cents: 1250, outcome: 'refund_pending', refund_amount_cents: 1250 },
+        ],
+      }),
+    })
+    page.render(adapter())
+
+    expect(await screen.findByText('Payment confirmed')).toBeInTheDocument()
+    expect(screen.getByText('Open Singles').parentElement).toHaveTextContent('Entry confirmed')
+    expect(screen.getByText('Open Doubles').parentElement).toHaveTextContent('Not admitted — refund pending')
+    expect(screen.queryByText('Checkout expired')).not.toBeInTheDocument()
   })
 
   it('reloads or another device into the same prepared payment', async () => {
