@@ -220,14 +220,14 @@ jobs:
           # passed unconditionally: where nginx has no `/faro/` block (the QA
           # shape) the beacons simply 404, which is harmless.
           #
-          # The Maps key is a *browser* key -- readable in the shipped bundle
-          # either way. If the repository secret is unset it expands to empty,
-          # which matches the Dockerfile's own default: the build still
-          # succeeds and the map degrades to its text fallback. Nothing here
-          # fails on a missing key.
+          # The Maps and Stripe keys are *browser* keys -- readable in the
+          # shipped bundle either way. If either repository secret is unset it
+          # expands to empty, matching the Dockerfile defaults. The build still
+          # succeeds and the corresponding browser feature degrades safely.
           build-args: |
             VITE_FARO_COLLECTOR_URL=/faro/collect
             VITE_GOOGLE_MAPS_API_KEY=${{ secrets.VITE_GOOGLE_MAPS_API_KEY }}
+            VITE_STRIPE_PUBLISHABLE_KEY=${{ secrets.VITE_STRIPE_PUBLISHABLE_KEY }}
           cache-from: type=gha,scope=web-client
           cache-to: type=gha,mode=max,scope=web-client
           provenance: false

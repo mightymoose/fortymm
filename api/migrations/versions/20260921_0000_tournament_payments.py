@@ -58,6 +58,12 @@ def upgrade() -> None:
         sa.Column("client_secret", sa.String(length=512), nullable=True),
         sa.Column("receipt_email", sa.String(length=320), nullable=True),
         sa.Column(
+            "receipt_sync_pending",
+            sa.Boolean(),
+            server_default=sa.text("false"),
+            nullable=False,
+        ),
+        sa.Column(
             "currency", sa.String(length=3), server_default="USD", nullable=False
         ),
         sa.Column("amount_cents", sa.BigInteger(), nullable=False),

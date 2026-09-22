@@ -1,5 +1,6 @@
 import { Clock3, ShieldCheck, ShoppingBasket } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { Link } from '@tanstack/react-router'
 
 import {
   AlertDialog,
@@ -117,7 +118,7 @@ export function CheckoutSummary({
             {checkout && (
               <p className="mt-3 flex gap-2 text-sm text-muted-foreground">
                 <ShieldCheck className="mt-0.5 shrink-0" size={15} />
-                Payment collection isn’t available yet. Your places stay held until the timer ends.
+                Your places are held while you complete payment.
               </p>
             )}
           </div>
@@ -129,6 +130,23 @@ export function CheckoutSummary({
                   expiresAt={checkout.expiresAt}
                   onExpired={onExpired}
                 />
+                {checkout.status === 'active' && checkout.totalCents > 0 && (
+                  pending ? (
+                    <Button disabled>Continue to payment</Button>
+                  ) : (
+                    <Button asChild>
+                      <Link
+                        to="/tournaments/$tournamentId/checkouts/$checkoutId"
+                        params={{
+                          tournamentId: checkout.tournamentId,
+                          checkoutId: checkout.id,
+                        }}
+                      >
+                        Continue to payment
+                      </Link>
+                    </Button>
+                  )
+                )}
                 <AlertDialog>
                   <AlertDialogTrigger asChild><Button variant="outline" disabled={pending}>Change selection</Button></AlertDialogTrigger>
                   <AlertDialogContent size="sm">

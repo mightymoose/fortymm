@@ -5,7 +5,12 @@ from types import SimpleNamespace
 import pytest
 import stripe
 
-from app.payment_provider import PaymentIntentCreate, StripePaymentProvider
+from app.payment_provider import (
+    PaymentIntentCreate,
+    PaymentProviderCancellationRejectedError,
+    PaymentProviderUncertainError,
+    StripePaymentProvider,
+)
 
 
 def _request() -> PaymentIntentCreate:
@@ -146,3 +151,70 @@ async def test_create_rejects_malformed_provider_metadata_with_boundary_error(
 
     with pytest.raises(ValueError):
         await StripePaymentProvider().create_payment_intent(_request())
+
+
+async def test_cancel_parses_real_dynamic_stripe_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_boundary")
+    monkeypatch.setattr(
+        stripe.PaymentIntent, "cancel", lambda _intent_id: _stripe_object_intent()
+    )
+
+    intent = await StripePaymentProvider().cancel_payment_intent("pi_boundary_test")
+
+    assert intent.id == "pi_real_stripe_object"
+    assert intent.status == "requires_action"
+    assert intent.durable_identity == "fortymm:checkout:test:payment:v1"
+
+
+async def test_cancel_translates_uncertain_connection_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_boundary")
+
+    def connection_failure(_intent_id: str) -> object:
+        raise stripe.APIConnectionError("connection lost after request")
+
+    monkeypatch.setattr(stripe.PaymentIntent, "cancel", connection_failure)
+
+    with pytest.raises(PaymentProviderUncertainError):
+        await StripePaymentProvider().cancel_payment_intent("pi_boundary_test")
+
+
+@pytest.mark.parametrize(
+    "provider_error",
+    [
+        TimeoutError("receipt update timed out after submission"),
+        stripe.APIConnectionError("connection lost after receipt update"),
+    ],
+)
+async def test_receipt_update_translates_uncertain_transport_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_error: Exception,
+) -> None:
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_boundary")
+
+    def uncertain_update(_intent_id: str, *, receipt_email: str) -> object:  # noqa: ARG001 -- provider boundary shape
+        raise provider_error
+
+    monkeypatch.setattr(stripe.PaymentIntent, "modify", uncertain_update)
+
+    with pytest.raises(PaymentProviderUncertainError):
+        await StripePaymentProvider().update_payment_intent_receipt(
+            "pi_boundary_test", "payer@example.net"
+        )
+
+
+async def test_cancel_translates_non_cancelable_provider_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_boundary")
+
+    def cancellation_rejected(_intent_id: str) -> object:
+        raise stripe.InvalidRequestError("intent cannot be canceled", "intent")
+
+    monkeypatch.setattr(stripe.PaymentIntent, "cancel", cancellation_rejected)
+
+    with pytest.raises(PaymentProviderCancellationRejectedError):
+        await StripePaymentProvider().cancel_payment_intent("pi_boundary_test")

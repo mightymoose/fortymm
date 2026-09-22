@@ -1,4 +1,5 @@
-import { render, screen, type Container } from '@/test/utilities'
+import { renderWithRouterContext } from '@/test/router'
+import { screen, type Container } from '@/test/utilities'
 
 import { EventsTab, type EventsTabProps } from './events-tab'
 import { buildEventsTabProps } from './events-tab.factory'
@@ -21,7 +22,7 @@ const scoped = (container: Container) => ({
 /** Test page-object for `EventsTab`. */
 export const eventsTabPage = {
   render(overrides: Partial<EventsTabProps> = {}) {
-    render(<EventsTab {...buildEventsTabProps(overrides)} />)
+    renderWithRouterContext(<EventsTab {...buildEventsTabProps(overrides)} />)
   },
 
   within(container: Container = screen) {

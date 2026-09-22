@@ -231,6 +231,9 @@ services:
         # default => a keyless QA build succeeds and the map degrades to a text
         # fallback. Export VITE_GOOGLE_MAPS_API_KEY in the shell to supply one.
         VITE_GOOGLE_MAPS_API_KEY: ${VITE_GOOGLE_MAPS_API_KEY:-}
+        # Optional browser publishable key. Export it to exercise Stripe in QA;
+        # leaving it empty retains the checkout page's unavailable state.
+        VITE_STRIPE_PUBLISHABLE_KEY: ${VITE_STRIPE_PUBLISHABLE_KEY:-}
     depends_on:
       - api
 

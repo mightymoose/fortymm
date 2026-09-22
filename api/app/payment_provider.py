@@ -64,6 +64,10 @@ class PaymentProvider(Protocol):
         self, provider_payment_id: str, receipt_email: str | None
     ) -> ProviderPaymentIntent: ...
 
+    async def cancel_payment_intent(
+        self, provider_payment_id: str
+    ) -> ProviderPaymentIntent: ...
+
     async def verify_webhook(
         self, payload: bytes, signature: str | None
     ) -> ProviderPaymentEvent: ...
@@ -75,6 +79,10 @@ class PaymentProviderUncertainError(Exception):
 
 class PaymentProviderNotFoundError(Exception):
     """No provider object exists for the supplied durable identity."""
+
+
+class PaymentProviderCancellationRejectedError(Exception):
+    """The provider rejected cancellation because the intent is no longer cancelable."""
 
 
 class PaymentProviderSignatureError(Exception):
@@ -242,7 +250,45 @@ class StripePaymentProvider:
                 provider_payment_id, receipt_email=receipt_email or ""
             )
 
-        return self._intent(await asyncio.to_thread(update))
+        import stripe
+
+        try:
+            return self._intent(await asyncio.to_thread(update))
+        except TimeoutError as error:
+            raise PaymentProviderUncertainError from error
+        except stripe.APIConnectionError as error:
+            # The update may have reached Stripe even when its response did
+            # not. Keep the desired email durable and let a later prepare
+            # converge provider state.
+            raise PaymentProviderUncertainError from error
+
+    async def cancel_payment_intent(
+        self, provider_payment_id: str
+    ) -> ProviderPaymentIntent:
+        self._require_key()
+
+        def cancel() -> object:
+            import stripe
+
+            stripe.api_key = self._secret_key
+            stripe.api_version = self._api_version
+            return stripe.PaymentIntent.cancel(provider_payment_id)
+
+        import stripe
+
+        try:
+            return self._intent(await asyncio.to_thread(cancel))
+        except TimeoutError as error:
+            raise PaymentProviderUncertainError from error
+        except stripe.APIConnectionError as error:
+            # A cancellation may have reached Stripe even when its response
+            # did not. Leave the local obligation sweepable for retrieval.
+            raise PaymentProviderUncertainError from error
+        except stripe.InvalidRequestError as error:
+            # Stripe rejects cancellation once an intent has raced into a
+            # non-cancelable state. Callers must retrieve current truth rather
+            # than treating the stale pre-cancel snapshot as authoritative.
+            raise PaymentProviderCancellationRejectedError from error
 
     async def verify_webhook(
         self, payload: bytes, signature: str | None

@@ -142,6 +142,7 @@ services:
       # empty default => the map degrades to a text fallback. Export
       # VITE_GOOGLE_MAPS_API_KEY in your shell to supply a real key locally.
       VITE_GOOGLE_MAPS_API_KEY: ${VITE_GOOGLE_MAPS_API_KEY:-}
+      VITE_STRIPE_PUBLISHABLE_KEY: ${VITE_STRIPE_PUBLISHABLE_KEY:-}
     volumes:
       - ./web-client:/app
       - web-client-node-modules:/app/node_modules

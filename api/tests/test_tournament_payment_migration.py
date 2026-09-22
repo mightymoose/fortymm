@@ -21,6 +21,12 @@ async def test_payment_migration_installs_aggregate_and_allocation_invariants(
                 for item in inspect(sync).get_unique_constraints("tournament_payments")
             }
         )
+        payment_columns = await connection.run_sync(
+            lambda sync: {
+                item["name"]
+                for item in inspect(sync).get_columns("tournament_payments")
+            }
+        )
         allocation_foreign_keys = await connection.run_sync(
             lambda sync: {
                 item["name"]
@@ -34,6 +40,7 @@ async def test_payment_migration_installs_aggregate_and_allocation_invariants(
     assert "tournament_payment_allocations" in tables
     assert "uq_tournament_payments_checkout" in payment_uniques
     assert "uq_tournament_payments_identity" in payment_uniques
+    assert "receipt_sync_pending" in payment_columns
     assert (
         "fk_tournament_payment_allocations_payment_checkout" in allocation_foreign_keys
     )

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -105,6 +106,9 @@ class TournamentPayment(Base):
     # This value is intentionally never serialized by a generic checkout read.
     client_secret: Mapped[str | None] = mapped_column(String(512))
     receipt_email: Mapped[str | None] = mapped_column(String(320))
+    receipt_sync_pending: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
     currency: Mapped[str] = mapped_column(
         String(3), nullable=False, server_default="USD"
     )
