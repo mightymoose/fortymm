@@ -4,6 +4,7 @@ import { z } from 'zod'
 
 import type { CheckoutAttentionItem } from '@/api/dashboard'
 import { api, unwrap } from '@/api/client'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { checkoutAttentionCopy } from '@/components/dashboard/checkout-attention'
@@ -43,7 +44,23 @@ function ActionableCheckoutsPage() {
         <p className="fortymm-overline">Payments</p>
         <h1 id="checkouts-title" className="font-heading text-3xl font-bold">Your open checkouts</h1>
       </div>
-      {query.isPending ? <p>Loading checkouts…</p> : query.data?.items.length ? (
+      {query.isPending ? <p>Loading checkouts…</p> : query.isError && query.data === undefined ? (
+        <Alert variant="destructive">
+          <AlertTitle>We couldn’t load your checkouts</AlertTitle>
+          <AlertDescription className="space-y-3">
+            <p>Your checkout list is temporarily unavailable.</p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={query.isFetching}
+              onClick={() => void query.refetch()}
+            >
+              {query.isFetching ? 'Retrying…' : 'Retry'}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : query.data?.items.length ? (
         <ul className="space-y-3">
           {query.data.items.map((item) => (
             <li key={item.checkout_id}>

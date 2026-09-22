@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime, timedelta
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
@@ -240,14 +240,24 @@ async def _ensure_settlement_outputs(
             channels = [NotificationChannel.IN_APP, NotificationChannel.PUSH]
         confirmed = sum(item.outcome == "confirmed" for item in outcomes)
         pending = sum(item.outcome == "refund_pending" for item in outcomes)
-        body = f"{confirmed} entr{'y' if confirmed == 1 else 'ies'} confirmed."
-        if pending:
+        if confirmed and pending:
+            title = "Tournament registration partially confirmed"
+            body = f"{confirmed} entr{'y' if confirmed == 1 else 'ies'} confirmed."
             body += f" {pending} refund pending."
+        elif pending:
+            title = "Tournament registration refund pending"
+            body = (
+                "Your tournament registration could not be confirmed. "
+                f"{pending} refund{'s' if pending != 1 else ''} pending."
+            )
+        else:
+            title = "Tournament registration confirmed"
+            body = f"{confirmed} entr{'y' if confirmed == 1 else 'ies'} confirmed."
         enqueue_notification_job(
             NotificationJob(
                 user_id=checkout_facts.payer_account_id,
                 category=NotificationCategory.TOURNAMENT,
-                title="Tournament registration confirmed",
+                title=title,
                 body=body,
                 link=(
                     f"/tournaments/{checkout_facts.tournament_id}/checkouts/"
@@ -337,7 +347,15 @@ async def reconcile_provider_intent(
         payment.provider_payment_id = intent.id
 
     if not _matches(payment, checkout, intent):
-        payment.state = TournamentPaymentState.failed
+        payment.state = (
+            TournamentPaymentState.failed
+            if intent.status
+            in {
+                ProviderPaymentStatus.succeeded,
+                ProviderPaymentStatus.canceled,
+            }
+            else TournamentPaymentState.checking
+        )
         payment.support_reference = (
             payment.support_reference or f"PAY-{str(payment.id)[:8].upper()}"
         )
@@ -360,10 +378,11 @@ async def reconcile_provider_intent(
         payment.client_secret = intent.client_secret
 
     if intent.status != "succeeded":
-        if checkout.expires_at <= await _database_now(db):
-            payment.state = TournamentPaymentState.expired
-        else:
-            payment.state = public_payment_state(intent.status)
+        provider_state = public_payment_state(intent.status)
+        # Once an intent exists, every remotely mutable provider state must
+        # remain in the sweep. Expiry removes admission authority, not the need
+        # to observe a late capture and refund it.
+        payment.state = provider_state
         stage_event(db, checkout.payer_account_id, EventKind.dashboard_changed)
         if payment.state is TournamentPaymentState.checking:
             await _notify_payment_attention(db, payment, "checking")
@@ -375,6 +394,7 @@ async def reconcile_provider_intent(
         checkout.status is TournamentCheckoutStatus.active
         and checkout.expires_at > now
         and checkout.registration_generation == tournament.registration_generation
+        and checkout.merchant_account_id == tournament.owner_account_id
         and tournament.registration_open
     )
     payer = await db.get(User, checkout.payer_account_id)
@@ -518,13 +538,19 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
         await db.scalars(
             select(TournamentPayment)
             .where(
-                TournamentPayment.state.in_(
-                    [
-                        TournamentPaymentState.preparing,
-                        TournamentPaymentState.ready,
-                        TournamentPaymentState.action_required,
-                        TournamentPaymentState.checking,
-                    ]
+                or_(
+                    TournamentPayment.state.in_(
+                        [
+                            TournamentPaymentState.preparing,
+                            TournamentPaymentState.ready,
+                            TournamentPaymentState.action_required,
+                            TournamentPaymentState.checking,
+                        ]
+                    ),
+                    and_(
+                        TournamentPayment.state == TournamentPaymentState.expired,
+                        TournamentPayment.provider_payment_id.is_not(None),
+                    ),
                 )
             )
             .options(selectinload(TournamentPayment.checkout))

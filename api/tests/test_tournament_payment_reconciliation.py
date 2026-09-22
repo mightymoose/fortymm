@@ -29,12 +29,19 @@ from app.models import (
     TournamentEvent,
     TournamentEventDrawSettings,
     TournamentPayment,
+    TournamentPaymentState,
     TournamentStatus,
     User,
 )
+from app.notifications.taxonomy import NotificationCategory
 from app.payment_provider import get_payment_provider
 from app.tournament_event_stages import mint_stages
-from tests._helpers import make_user, start_session
+from app.tournament_payment_reconciliation import reconcile_stuck_payments
+from tests._helpers import (
+    enqueued_notification_jobs,
+    make_user,
+    start_session,
+)
 
 try:
     from app.payment_provider import PaymentProviderSignatureError
@@ -426,6 +433,167 @@ async def test_combined_success_confirms_valid_hold_and_refunds_invalid_line(
     assert outcomes[str(events[1].id)]["amount_cents"] == 2000
     assert outcomes[str(events[1].id)]["refund_amount_cents"] == 2000
     assert [amount for _, amount in await _refunds(db_session)] == [2000]
+
+
+@pytest.mark.parametrize(
+    ("provider_status", "expected_state"),
+    [
+        ("processing", TournamentPaymentState.checking),
+        ("requires_confirmation", TournamentPaymentState.ready),
+        ("requires_action", TournamentPaymentState.action_required),
+    ],
+)
+async def test_bound_payment_past_deadline_stays_reconcilable_for_late_success(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+    provider_status: str,
+    expected_state: TournamentPaymentState,
+) -> None:
+    provider = FakePaymentProvider()
+    payer, _, _, checkout = await _prepared_checkout(
+        api_client, db_session, monkeypatch, provider
+    )
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout["id"]))
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert stored is not None
+    assert payment is not None
+    assert provider.intent is not None
+    stored.created_at = datetime.now(UTC) - timedelta(minutes=20)
+    stored.expires_at = datetime.now(UTC) - timedelta(minutes=10)
+    provider.intent = FakeProviderIntent(
+        **(asdict(provider.intent) | {"status": provider_status})
+    )
+    await db_session.commit()
+
+    first_sweep = await reconcile_stuck_payments(db_session, provider)
+    await db_session.refresh(payment)
+
+    assert first_sweep == 1
+    assert payment.state is expected_state
+
+    provider.intent = FakeProviderIntent(
+        **(asdict(provider.intent) | {"status": "succeeded"})
+    )
+    second_sweep = await reconcile_stuck_payments(db_session, provider)
+
+    assert second_sweep == 1
+    assert await _entry_facts(db_session, payer) == ([], 0)
+    assert [amount for _, amount in await _refunds(db_session)] == [1234]
+
+
+async def test_nonterminal_invariant_mismatch_remains_reconcilable_until_capture(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    provider = FakePaymentProvider()
+    payer, tournament, _, checkout = await _prepared_checkout(
+        api_client, db_session, monkeypatch, provider
+    )
+    processing_mismatch = provider.event(
+        "evt_processing_mismatch",
+        status="processing",
+        amount_cents=4321,
+    )
+    provider.intent = provider.events["evt_processing_mismatch"].payment
+
+    first = await _webhook(api_client, processing_mismatch, "test-valid-signature")
+    first_status = await api_client.get(_payment_url(tournament, checkout))
+
+    assert first.status_code == 200
+    assert first_status.status_code == 200
+    assert first_status.json()["payment_state"] == "checking"
+    assert first_status.json()["support_reference"]
+    assert await _refunds(db_session) == []
+
+    captured_mismatch = provider.event(
+        "evt_succeeded_mismatch",
+        status="succeeded",
+        amount_cents=4321,
+    )
+    second = await _webhook(api_client, captured_mismatch, "test-valid-signature")
+
+    assert second.status_code == 200
+    assert await _entry_facts(db_session, payer) == ([], 0)
+    assert [amount for _, amount in await _refunds(db_session)] == [4321]
+
+
+async def test_all_refunded_settlement_uses_refund_specific_notification_title(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+    fake_notifications_queue,
+) -> None:
+    provider = FakePaymentProvider()
+    _, _, _, checkout = await _prepared_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        provider,
+        fees=(Decimal("10.00"), Decimal("20.00")),
+    )
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout["id"]))
+    assert stored is not None
+    stored.created_at = datetime.now(UTC) - timedelta(minutes=20)
+    stored.expires_at = datetime.now(UTC) - timedelta(minutes=10)
+    await db_session.commit()
+
+    accepted = await _webhook(
+        api_client, provider.event("evt_all_refunded_notice"), "test-valid-signature"
+    )
+
+    assert accepted.status_code == 200
+    registration_jobs = [
+        job
+        for job in enqueued_notification_jobs(fake_notifications_queue)
+        if job.category is NotificationCategory.TOURNAMENT
+    ]
+    assert len(registration_jobs) == 1
+    notice = registration_jobs[0]
+    assert "refund" in notice.title.casefold()
+    assert "confirmed" not in notice.title.casefold()
+    assert not notice.body.startswith("0 entries confirmed")
+
+
+async def test_mixed_settlement_notification_says_registration_is_partial(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+    fake_notifications_queue,
+) -> None:
+    provider = FakePaymentProvider()
+    _, _, events, _ = await _prepared_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        provider,
+        fees=(Decimal("10.00"), Decimal("20.00")),
+        capacities=(1, 1),
+    )
+    other = await make_user(db_session, f"mixed-notice-{uuid.uuid4().hex[:8]}")
+    db_session.add(TournamentEntry(event_id=events[1].id, user_id=other.player_id))
+    await db_session.commit()
+
+    accepted = await _webhook(
+        api_client, provider.event("evt_mixed_notice"), "test-valid-signature"
+    )
+
+    assert accepted.status_code == 200
+    registration_jobs = [
+        job
+        for job in enqueued_notification_jobs(fake_notifications_queue)
+        if job.category is NotificationCategory.TOURNAMENT
+    ]
+    assert len(registration_jobs) == 1
+    notice = registration_jobs[0]
+    assert "partial" in notice.title.casefold()
+    assert "1 entry confirmed" in notice.body.casefold()
+    assert "1 refund pending" in notice.body.casefold()
 
 
 async def test_browser_claim_cannot_admit_without_matching_provider_evidence(

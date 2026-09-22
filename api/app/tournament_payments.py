@@ -37,6 +37,13 @@ from app.schemas.tournament_checkout import (
 from app.tournament_checkouts import _database_now
 
 PAYMENTS_VIEW_PERMISSION = "payments.view"
+TERMINAL_PAYMENT_STATES = frozenset(
+    {
+        TournamentPaymentState.failed,
+        TournamentPaymentState.canceled,
+        TournamentPaymentState.succeeded,
+    }
+)
 
 
 class PaymentNotFoundError(Exception):
@@ -45,6 +52,13 @@ class PaymentNotFoundError(Exception):
 
 class PaymentCollectionDisabledError(Exception):
     pass
+
+
+def _is_durable_payment_history(payment: TournamentPayment) -> bool:
+    return payment.state in TERMINAL_PAYMENT_STATES or (
+        payment.state is TournamentPaymentState.expired
+        and payment.provider_payment_id is None
+    )
 
 
 def public_payment_state(
@@ -219,6 +233,20 @@ async def _terminalize_stale_checkout(
     return False
 
 
+async def _checkout_has_payment_authority(
+    db: AsyncSession, checkout: TournamentCheckout
+) -> bool:
+    """Return whether payer-facing operations remain authorized right now."""
+    return (
+        checkout.status is TournamentCheckoutStatus.active
+        and checkout.expires_at > await _database_now(db)
+        and checkout.registration_generation
+        == checkout.tournament.registration_generation
+        and checkout.merchant_account_id == checkout.tournament.owner_account_id
+        and checkout.tournament.registration_open
+    )
+
+
 async def provider_create_request_if_authorized(
     db: AsyncSession,
     *,
@@ -345,9 +373,40 @@ async def prepare_payment(
                 raise
             payment = checkout.payment
 
-    if payment.state is TournamentPaymentState.succeeded:
-        return _read(payment)
+    # Terminal aggregates are durable history. A later prepare is a safe read,
+    # never permission to disclose a reusable secret or mutate provider/local
+    # receipt state.
+    if _is_durable_payment_history(payment):
+        return _read(payment, include_client_secret=False)
 
+    if not created_obligation:
+        # Revalidate every existing aggregate under the same lock order as
+        # registration. The commit releases those locks before provider I/O.
+        checkout = await _load_for_first_obligation_locked(
+            db,
+            tournament_id=tournament_id,
+            checkout_id=checkout_id,
+            payer_account_id=actor.id,
+        )
+        payment = checkout.payment
+        if payment is None:
+            await db.rollback()
+            raise PaymentNotFoundError()
+        if _is_durable_payment_history(payment):
+            await db.commit()
+            return _read(payment, include_client_secret=False)
+        has_payment_authority = await _checkout_has_payment_authority(db, checkout)
+        if not has_payment_authority:
+            # A bound provider intent remains nonterminal so the reconciliation
+            # sweep can observe a later capture and create refund obligations.
+            if payment.provider_payment_id is None:
+                await _terminalize_stale_checkout(db, checkout, payment)
+                if _is_durable_payment_history(payment):
+                    return _read(payment, include_client_secret=False)
+            else:
+                await db.commit()
+            raise PaymentNotFoundError()
+        await db.commit()
     if (
         not get_settings().tournament_payment_collection_enabled
         and payment.provider_payment_id is None
@@ -506,11 +565,7 @@ async def read_payment_status(
     ):
         raise PaymentNotFoundError()
     payment = checkout.payment
-    if payment.state not in {
-        TournamentPaymentState.succeeded,
-        TournamentPaymentState.failed,
-        TournamentPaymentState.canceled,
-    }:
+    if not _is_durable_payment_history(payment):
         try:
             intent = await provider.retrieve_payment_intent(payment.durable_identity)
         except (TimeoutError, PaymentProviderUncertainError):

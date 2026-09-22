@@ -37,6 +37,7 @@ from app.models import (
     User,
 )
 from app.payment_provider import PaymentProviderNotFoundError, get_payment_provider
+from app.tournament_authority import transfer_ownership
 from app.tournament_event_stages import mint_stages
 from app.tournament_payment_reconciliation import reconcile_stuck_payments
 from tests._helpers import make_client, make_user, start_session
@@ -407,6 +408,382 @@ async def test_closed_gate_cancels_unprepared_checkout_but_preserves_created_int
     assert len(provider.creates) == 1
 
 
+@pytest.mark.parametrize(
+    ("terminal_status", "payload"),
+    [
+        (TournamentCheckoutStatus.cancelled, {}),
+        (TournamentCheckoutStatus.cancelled, {"receipt_email": "new@example.net"}),
+        (TournamentCheckoutStatus.invalidated, {}),
+        (
+            TournamentCheckoutStatus.invalidated,
+            {"receipt_email": "new@example.net"},
+        ),
+    ],
+)
+async def test_prepare_never_exposes_secret_for_terminal_checkout_with_bound_intent(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+    terminal_status: TournamentCheckoutStatus,
+    payload: dict[str, str],
+) -> None:
+    _, tournament, checkout = await _paid_checkout(api_client, db_session, monkeypatch)
+    provider = FakePaymentProvider()
+    _install_provider(provider)
+    url = _payment_url(tournament, checkout)
+    prepared = await api_client.post(url, json={})
+    assert prepared.status_code == 200, prepared.text
+    secret = prepared.json()["client_secret"]
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout["id"]))
+    assert stored is not None
+    stored.status = terminal_status
+    if terminal_status is TournamentCheckoutStatus.cancelled:
+        stored.cancelled_at = datetime.now(UTC)
+    await db_session.commit()
+    creates_before_retry = len(provider.creates)
+    receipt_updates_before_retry = len(provider.receipt_updates)
+
+    refused = await api_client.post(url, json=payload)
+
+    assert refused.status_code == 404
+    assert secret not in refused.text
+    assert len(provider.creates) == creates_before_retry
+    assert len(provider.receipt_updates) == receipt_updates_before_retry
+
+
+@pytest.mark.parametrize("receipt_edit", [False, True])
+@pytest.mark.parametrize(
+    "authority_change",
+    [
+        "materialized_expiry",
+        "elapsed_deadline",
+        "registration_generation",
+        "merchant_owner",
+        "registration_closed",
+    ],
+)
+async def test_bound_prepare_revalidates_authority_without_stranding_late_success(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+    authority_change: str,
+    receipt_edit: bool,
+) -> None:
+    payer, tournament, checkout = await _paid_checkout(
+        api_client, db_session, monkeypatch
+    )
+    provider = FakePaymentProvider()
+    _install_provider(provider)
+    url = _payment_url(tournament, checkout)
+    prepared = await api_client.post(url, json={})
+    assert prepared.status_code == 200, prepared.text
+    secret = prepared.json()["client_secret"]
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout["id"]))
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert stored is not None
+    assert payment is not None
+    assert payment.provider_payment_id == provider.intent.id
+    if authority_change == "materialized_expiry":
+        stored.status = TournamentCheckoutStatus.expired
+    elif authority_change == "elapsed_deadline":
+        stored.created_at = datetime.now(UTC) - timedelta(minutes=20)
+        stored.expires_at = datetime.now(UTC) - timedelta(minutes=10)
+    elif authority_change == "registration_generation":
+        tournament.registration_generation += 1
+    elif authority_change == "merchant_owner":
+        replacement = await make_user(
+            db_session, f"new-payment-owner-{uuid.uuid4().hex[:8]}"
+        )
+        await transfer_ownership(
+            db_session,
+            tournament.id,
+            actor_id=tournament.owner_account_id,
+            account_id=replacement.id,
+        )
+        # Ownership transfer normally materializes invalidation too. Keep the
+        # quote active here so reconciliation must independently enforce the
+        # immutable checkout merchant against the tournament's current owner.
+        stored.status = TournamentCheckoutStatus.active
+    else:
+        tournament.registration_open = False
+    await db_session.commit()
+    if authority_change == "merchant_owner":
+        await db_session.refresh(stored)
+        await db_session.refresh(tournament)
+        assert stored.status is TournamentCheckoutStatus.active
+        assert stored.merchant_account_id != tournament.owner_account_id
+    provider_operations_before_denial = (
+        len(provider.creates),
+        len(provider.retrievals),
+        len(provider.receipt_updates),
+    )
+    original_receipt = payment.receipt_email
+    payload = {"receipt_email": "changed@example.net"} if receipt_edit else {}
+
+    refused = await api_client.post(url, json=payload)
+
+    assert refused.status_code == 404
+    assert secret not in refused.text
+    assert (
+        len(provider.creates),
+        len(provider.retrievals),
+        len(provider.receipt_updates),
+    ) == provider_operations_before_denial
+    await db_session.refresh(payment)
+    assert payment.provider_payment_id == provider.intent.id
+    assert payment.receipt_email == original_receipt
+    assert payment.state in {
+        TournamentPaymentState.ready,
+        TournamentPaymentState.action_required,
+        TournamentPaymentState.checking,
+    }
+
+    provider.intent = replace(provider.intent, status="succeeded")
+    reconciled = await reconcile_stuck_payments(db_session, provider)
+
+    assert reconciled == 1
+    entry_count = await db_session.scalar(
+        text(
+            "SELECT count(*) FROM tournament_entry_members "
+            "WHERE player_id = :player_id AND left_at IS NULL"
+        ),
+        {"player_id": payer.player_id},
+    )
+    refunded = await db_session.scalar(
+        text(
+            "SELECT coalesce(sum(amount_cents), 0) "
+            "FROM tournament_refund_obligations WHERE payment_id = :payment_id"
+        ),
+        {"payment_id": payment.id},
+    )
+    assert entry_count == 0
+    assert refunded == 2345
+
+
+@pytest.mark.parametrize(
+    "terminal_status",
+    [TournamentCheckoutStatus.expired, TournamentCheckoutStatus.invalidated],
+)
+async def test_succeeded_payment_remains_readable_after_checkout_becomes_terminal(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+    terminal_status: TournamentCheckoutStatus,
+) -> None:
+    _, tournament, checkout = await _paid_checkout(api_client, db_session, monkeypatch)
+    provider = FakePaymentProvider()
+    _install_provider(provider)
+    url = _payment_url(tournament, checkout)
+    prepared = await api_client.post(url, json={})
+    assert prepared.status_code == 200, prepared.text
+    secret = prepared.json()["client_secret"]
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout["id"]))
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert stored is not None
+    assert payment is not None
+    payment.state = TournamentPaymentState.succeeded
+    stored.status = terminal_status
+    await db_session.commit()
+    provider_operations_before_read = (
+        len(provider.creates),
+        len(provider.retrievals),
+        len(provider.receipt_updates),
+    )
+
+    recovered = await api_client.post(url, json={})
+
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["payment_state"] == "succeeded"
+    assert recovered.json()["client_secret"] is None
+    assert secret not in recovered.text
+    assert (
+        len(provider.creates),
+        len(provider.retrievals),
+        len(provider.receipt_updates),
+    ) == provider_operations_before_read
+
+
+@pytest.mark.parametrize("receipt_edit", [False, True])
+@pytest.mark.parametrize(
+    "terminal_payment_state",
+    [
+        TournamentPaymentState.failed,
+        TournamentPaymentState.canceled,
+        TournamentPaymentState.succeeded,
+    ],
+)
+async def test_terminal_payment_history_never_returns_secret_or_mutates_provider(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+    terminal_payment_state: TournamentPaymentState,
+    receipt_edit: bool,
+) -> None:
+    _, tournament, checkout = await _paid_checkout(api_client, db_session, monkeypatch)
+    provider = FakePaymentProvider()
+    _install_provider(provider)
+    url = _payment_url(tournament, checkout)
+    prepared = await api_client.post(url, json={})
+    assert prepared.status_code == 200, prepared.text
+    secret = prepared.json()["client_secret"]
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None
+    payment.state = terminal_payment_state
+    original_receipt = payment.receipt_email
+    await db_session.commit()
+    provider_operations_before_read = (
+        len(provider.creates),
+        len(provider.retrievals),
+        len(provider.receipt_updates),
+    )
+    payload = {"receipt_email": "too-late@example.net"} if receipt_edit else {}
+
+    recovered = await api_client.post(url, json=payload)
+
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["payment_state"] == terminal_payment_state.value
+    assert recovered.json()["client_secret"] is None
+    assert secret not in recovered.text
+    assert (
+        len(provider.creates),
+        len(provider.retrievals),
+        len(provider.receipt_updates),
+    ) == provider_operations_before_read
+    await db_session.refresh(payment)
+    assert payment.state is terminal_payment_state
+    assert payment.receipt_email == original_receipt
+
+
+async def test_unbound_expired_obligation_is_durable_history_on_prepare_retry(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    _, tournament, checkout = await _paid_checkout(api_client, db_session, monkeypatch)
+    provider = FakePaymentProvider()
+    provider.create_error = RuntimeError("process stopped after obligation commit")
+    _install_provider(provider)
+    url = _payment_url(tournament, checkout)
+    with pytest.raises(RuntimeError, match="obligation commit"):
+        await api_client.post(url, json={})
+
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout["id"]))
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert stored is not None
+    assert payment is not None
+    assert payment.provider_payment_id is None
+    stored.created_at = datetime.now(UTC) - timedelta(minutes=20)
+    stored.expires_at = datetime.now(UTC) - timedelta(minutes=10)
+    await db_session.commit()
+    provider.create_error = None
+    original_receipt = payment.receipt_email
+    provider_operations_before_discovery = (
+        len(provider.creates),
+        len(provider.retrievals),
+        len(provider.receipt_updates),
+    )
+
+    materialized = await api_client.post(url, json={})
+
+    assert materialized.status_code == 200, materialized.text
+    assert materialized.json()["payment_state"] == "expired"
+    assert materialized.json()["client_secret"] is None
+    assert (
+        len(provider.creates),
+        len(provider.retrievals),
+        len(provider.receipt_updates),
+    ) == provider_operations_before_discovery
+    await db_session.refresh(payment)
+    assert payment.state is TournamentPaymentState.expired
+    assert payment.receipt_email == original_receipt
+    provider_operations_before_retry = (
+        len(provider.creates),
+        len(provider.retrievals),
+        len(provider.receipt_updates),
+    )
+
+    recovered = await api_client.post(
+        url, json={"receipt_email": "too-late@example.net"}
+    )
+
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["payment_state"] == "expired"
+    assert recovered.json()["client_secret"] is None
+    assert (
+        len(provider.creates),
+        len(provider.retrievals),
+        len(provider.receipt_updates),
+    ) == provider_operations_before_retry
+    await db_session.refresh(payment)
+    assert payment.state is TournamentPaymentState.expired
+    assert payment.receipt_email == original_receipt
+
+
+async def test_legacy_bound_expired_payment_remains_sweepable_for_late_success(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    payer, tournament, checkout = await _paid_checkout(
+        api_client, db_session, monkeypatch
+    )
+    provider = FakePaymentProvider()
+    _install_provider(provider)
+    prepared = await api_client.post(_payment_url(tournament, checkout), json={})
+    assert prepared.status_code == 200, prepared.text
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout["id"]))
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert stored is not None
+    assert payment is not None
+    assert payment.provider_payment_id == provider.intent.id
+    stored.status = TournamentCheckoutStatus.expired
+    stored.created_at = datetime.now(UTC) - timedelta(minutes=20)
+    stored.expires_at = datetime.now(UTC) - timedelta(minutes=10)
+    payment.state = TournamentPaymentState.expired
+    provider.intent = replace(provider.intent, status="succeeded")
+    await db_session.commit()
+
+    reconciled = await reconcile_stuck_payments(db_session, provider)
+
+    assert reconciled == 1
+    entry_count = await db_session.scalar(
+        text(
+            "SELECT count(*) FROM tournament_entry_members "
+            "WHERE player_id = :player_id AND left_at IS NULL"
+        ),
+        {"player_id": payer.player_id},
+    )
+    refunded = await db_session.scalar(
+        text(
+            "SELECT coalesce(sum(amount_cents), 0) "
+            "FROM tournament_refund_obligations WHERE payment_id = :payment_id"
+        ),
+        {"payment_id": payment.id},
+    )
+    assert entry_count == 0
+    assert refunded == 2345
+
+
 async def test_closed_gate_reconciles_uncertain_create_before_deciding_cancellation(
     api_client: AsyncClient,
     db_session: AsyncSession,
@@ -683,6 +1060,8 @@ async def test_prepare_closes_stale_checkout_before_provider_obligation(
     [
         ("expired", "expired", TournamentPaymentState.expired),
         ("generation", "invalidated", TournamentPaymentState.canceled),
+        ("registration_closed", "invalidated", TournamentPaymentState.canceled),
+        ("merchant_owner", "invalidated", TournamentPaymentState.canceled),
     ],
 )
 async def test_prepare_never_creates_for_stale_checkout_with_unbound_obligation(
@@ -713,33 +1092,66 @@ async def test_prepare_never_creates_for_stale_checkout_with_unbound_obligation(
     if stale_reason == "expired":
         stored.created_at = datetime.now(UTC) - timedelta(minutes=20)
         stored.expires_at = datetime.now(UTC) - timedelta(minutes=10)
-    else:
+    elif stale_reason == "generation":
         tournament.registration_generation += 1
+    elif stale_reason == "registration_closed":
+        tournament.registration_open = False
+    else:
+        replacement = await make_user(
+            db_session, f"replacement-owner-{uuid.uuid4().hex[:8]}"
+        )
+        await transfer_ownership(
+            db_session,
+            tournament.id,
+            actor_id=tournament.owner_account_id,
+            account_id=replacement.id,
+        )
+        # Isolate merchant authority from the transfer's eager materialization.
+        stored.status = TournamentCheckoutStatus.active
     await db_session.commit()
     provider.create_error = None
     provider.retrieve_error = PaymentProviderNotFoundError()
-    creates_before_retry = len(provider.creates)
+    original_receipt = payment.receipt_email
+    provider_operations_before_discovery = (
+        len(provider.creates),
+        len(provider.retrievals),
+        len(provider.receipt_updates),
+    )
 
-    refused = await api_client.post(url, json={})
+    materialized = await api_client.post(url, json={})
     checkout_read = await api_client.get(
         f"/v1/tournaments/{tournament.id}/checkouts/{checkout['id']}"
     )
 
-    assert refused.status_code == 404
+    assert materialized.status_code == 200, materialized.text
+    assert materialized.json()["payment_state"] == expected_payment_state.value
+    assert materialized.json()["client_secret"] is None
     assert checkout_read.status_code == 200
     assert checkout_read.json()["status"] == expected_checkout_status
-    assert len(provider.creates) == creates_before_retry
+    assert (
+        len(provider.creates),
+        len(provider.retrievals),
+        len(provider.receipt_updates),
+    ) == provider_operations_before_discovery
     await db_session.refresh(payment)
     assert payment.state is expected_payment_state
+    assert payment.receipt_email == original_receipt
 
-    replacement = await api_client.post(
-        f"/v1/tournaments/{tournament.id}/checkouts",
-        json={
-            "request_id": str(uuid.uuid4()),
-            "event_ids": [checkout["lines"][0]["event_id"]],
-        },
+    recovered = await api_client.post(
+        url, json={"receipt_email": "too-late@example.net"}
     )
-    assert replacement.status_code == 201, replacement.text
+
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["payment_state"] == expected_payment_state.value
+    assert recovered.json()["client_secret"] is None
+    assert (
+        len(provider.creates),
+        len(provider.retrievals),
+        len(provider.receipt_updates),
+    ) == provider_operations_before_discovery
+    await db_session.refresh(payment)
+    assert payment.state is expected_payment_state
+    assert payment.receipt_email == original_receipt
 
 
 @pytest.mark.parametrize(

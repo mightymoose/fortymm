@@ -108,6 +108,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # The type is the parent of both persisted delivery preferences and notification
+    # history. Remove only this migration's category dependents before removing their
+    # type; unrelated notification categories and their rows must survive downgrade.
+    op.execute("DELETE FROM notification_preferences WHERE category = 'payments'")
+    op.execute("DELETE FROM notifications WHERE category = 'payments'")
     op.execute("DELETE FROM notification_types WHERE key = 'payments'")
     op.drop_index(
         "ix_tournament_payment_receipts_next_attempt",
