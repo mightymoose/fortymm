@@ -702,10 +702,7 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
             TournamentPaymentState.succeeded,
             TournamentPaymentState.failed,
         }:
-            if (
-                payment.receipt_sync_pending
-                and payment.provider_payment_id is not None
-            ):
+            if payment.receipt_sync_pending and payment.provider_payment_id is not None:
                 await _sync_provider_receipt(
                     db,
                     provider=provider,
@@ -864,9 +861,7 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
             cancellation_durable_identity = payment.durable_identity
             await db.commit()
             try:
-                intent = await provider.cancel_payment_intent(
-                    cancellation_provider_id
-                )
+                intent = await provider.cancel_payment_intent(cancellation_provider_id)
             except PaymentProviderCancellationRejectedError:
                 try:
                     intent = await provider.retrieve_payment_intent(
@@ -908,8 +903,7 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                 and checkout.expires_at > await _database_now(db)
                 and checkout.registration_generation
                 == checkout.tournament.registration_generation
-                and checkout.merchant_account_id
-                == checkout.tournament.owner_account_id
+                and checkout.merchant_account_id == checkout.tournament.owner_account_id
                 and checkout.tournament.registration_open
             )
             if payment.state in {
@@ -924,16 +918,12 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
             if payment.provider_payment_id != cancellation_provider_id:
                 await db.commit()
                 continue
-            if (
-                not authority_lost
-                and intent.status
-                in {
-                    ProviderPaymentStatus.requires_payment_method,
-                    ProviderPaymentStatus.requires_confirmation,
-                    ProviderPaymentStatus.requires_action,
-                    ProviderPaymentStatus.requires_capture,
-                }
-            ):
+            if not authority_lost and intent.status in {
+                ProviderPaymentStatus.requires_payment_method,
+                ProviderPaymentStatus.requires_confirmation,
+                ProviderPaymentStatus.requires_action,
+                ProviderPaymentStatus.requires_capture,
+            }:
                 # Authority was restored while the cancellation request was in
                 # flight and the provider did not terminalize the intent.  Do
                 # not apply a response obtained under the stale cancellation

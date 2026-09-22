@@ -280,9 +280,7 @@ async def provider_create_request_if_authorized(
     # authority, but retain the unbound recovery obligation until provider
     # evidence proves whether the idempotent create was accepted.
     stale_payment = (
-        None
-        if payment.provider_status == UNCERTAIN_CREATE_PROVIDER_STATUS
-        else payment
+        None if payment.provider_status == UNCERTAIN_CREATE_PROVIDER_STATUS else payment
     )
     if await _terminalize_stale_checkout(db, checkout, stale_payment):
         return None
@@ -535,9 +533,7 @@ async def _sync_provider_receipt(
     # provider update instead of pinning this request in an unbounded loop.
     if payment is None:
         raise PaymentNotFoundError()
-    await db.refresh(
-        payment, attribute_names=["receipt_email", "receipt_sync_pending"]
-    )
+    await db.refresh(payment, attribute_names=["receipt_email", "receipt_sync_pending"])
     return payment
 
 
