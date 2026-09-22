@@ -137,8 +137,9 @@ async def _settled_checkout(
     receipt_email: str | None,
     mixed: bool = False,
     previous_receipt_email: str | None = None,
+    provider: FakePaymentProvider | None = None,
 ) -> tuple[Any, Any, list[Any], dict[str, Any], TournamentPaymentReceipt | None]:
-    provider = FakePaymentProvider()
+    provider = provider or FakePaymentProvider()
     capacities = (1, 1) if mixed else None
     fees = ("10.00", "20.00") if mixed else ("12.34",)
     payer, tournament, events, checkout = await _prepared_checkout(
@@ -345,6 +346,56 @@ async def test_permanent_or_exhausted_receipt_failure_is_operator_visible(
     }
 
 
+async def test_receipt_failure_reference_survives_a_truncated_uuid_collision(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_id = uuid.UUID("abcdef12-0000-4000-8000-000000000001")
+    second_id = uuid.UUID("abcdef12-ffff-4000-8000-000000000002")
+    assert str(first_id)[:8] == str(second_id)[:8]
+
+    _, _, _, _, blocker = await _settled_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        receipt_email="blocker@example.net",
+        provider=FakePaymentProvider("pi_receipt_reference_blocker"),
+    )
+    _, _, _, _, target = await _settled_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        receipt_email="target@example.net",
+        provider=FakePaymentProvider("pi_receipt_reference_target"),
+    )
+    assert blocker is not None and target is not None
+    collided_reference = f"PAY-{str(target.id)[:8].upper()}"
+    blocker.support_reference = collided_reference
+    await db_session.commit()
+
+    failed = await _receipt_service().attempt_tournament_receipt_delivery(
+        db_session,
+        target.id,
+        sender=RecordingReceiptSender([PermanentEmailFailure("mailbox rejected")]),
+        now=target.created_at + timedelta(minutes=1),
+    )
+    await db_session.commit()
+    stable_reference = failed.support_reference
+
+    retried = await _receipt_service().attempt_tournament_receipt_delivery(
+        db_session,
+        target.id,
+        sender=RecordingReceiptSender(),
+        now=target.created_at + timedelta(minutes=2),
+    )
+
+    assert stable_reference
+    assert stable_reference != blocker.support_reference
+    assert stable_reference != collided_reference
+    assert retried.support_reference == stable_reference
+
+
 async def test_receipt_delivery_does_not_start_after_retry_window_closes(
     api_client: AsyncClient,
     db_session: AsyncSession,
@@ -504,17 +555,208 @@ async def test_receipt_jobs_carry_only_an_id_and_account_erasure_clears_pii(
     assert payment.amount_cents == 1234
 
 
+@pytest.mark.parametrize("provider_binding", ["bound", "uncertain"])
+async def test_account_erasure_durably_clears_nonterminal_provider_receipt_pii(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    provider_binding: str,
+) -> None:
+    provider = FakePaymentProvider(f"pi_erase_{provider_binding}")
+    if provider_binding == "uncertain":
+        original_create = provider.create_payment_intent
+
+        async def create_with_lost_response(request: object) -> Any:
+            await original_create(request)
+            raise TimeoutError("provider accepted create but response was lost")
+
+        monkeypatch.setattr(
+            provider, "create_payment_intent", create_with_lost_response
+        )
+
+    payer, _, _, checkout = await _prepared_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        provider,
+        payment_payload={"receipt_email": "erase-me@example.net"},
+    )
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None
+    assert provider.intent is not None
+    if provider_binding == "uncertain":
+        assert payment.provider_payment_id is None
+        monkeypatch.setattr(provider, "create_payment_intent", original_create)
+    else:
+        assert payment.provider_payment_id == provider.intent.id
+
+    # Processing is deliberately not cancelable. Reconciliation must therefore
+    # remove the provider-held address even though local authority is gone.
+    provider.intent = type(provider.intent)(
+        **({**provider.intent.__dict__, "status": "processing"})
+    )
+    await erase_account(db_session, payer.id)
+    await db_session.commit()
+    await db_session.refresh(payment)
+
+    assert payment.receipt_email is None
+    assert payment.receipt_sync_pending is True
+
+    reconciled = await reconcile_stuck_payments(db_session, provider)
+    await db_session.refresh(payment)
+
+    assert reconciled == 1
+    assert provider.receipt_updates[-1] == (provider.intent.id, None)
+    assert payment.receipt_sync_pending is False
+
+
+async def test_erasure_clears_provider_receipt_pii_before_canceling_bound_intent(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakePaymentProvider("pi_erase_cancel_order")
+    payer, _, _, checkout = await _prepared_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        provider,
+        payment_payload={"receipt_email": "cancel-order@example.net"},
+    )
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None
+    assert payment.state is TournamentPaymentState.ready
+    assert payment.provider_payment_id == provider.intent_id
+
+    provider_calls: list[tuple[str, str | None]] = []
+    original_cancel = provider.cancel_payment_intent
+    original_update = provider.update_payment_intent_receipt
+
+    async def record_cancel(provider_payment_id: str) -> Any:
+        provider_calls.append(("cancel", provider_payment_id))
+        return await original_cancel(provider_payment_id)
+
+    async def record_receipt_clear(
+        provider_payment_id: str, receipt_email: str | None
+    ) -> Any:
+        provider_calls.append(("receipt", receipt_email))
+        return await original_update(provider_payment_id, receipt_email)
+
+    monkeypatch.setattr(provider, "cancel_payment_intent", record_cancel)
+    monkeypatch.setattr(provider, "update_payment_intent_receipt", record_receipt_clear)
+
+    await erase_account(db_session, payer.id)
+    await db_session.commit()
+    await db_session.refresh(payment)
+
+    assert payment.receipt_email is None
+    assert payment.receipt_sync_pending is True
+
+    reconciled = await reconcile_stuck_payments(db_session, provider)
+    await db_session.refresh(payment)
+
+    assert reconciled == 1
+    assert provider_calls == [
+        ("receipt", None),
+        ("cancel", payment.provider_payment_id),
+    ]
+    assert payment.state is TournamentPaymentState.canceled
+    assert payment.receipt_sync_pending is False
+
+
+async def test_account_erasure_durably_clears_settled_provider_receipt_pii(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakePaymentProvider("pi_erase_settled")
+    payer, _, _, checkout, _ = await _settled_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        receipt_email="settled-pii@example.net",
+        provider=provider,
+    )
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None and payment.provider_payment_id is not None
+
+    await erase_account(db_session, payer.id)
+    await db_session.commit()
+    await db_session.refresh(payment)
+
+    assert payment.receipt_email is None
+    assert payment.receipt_sync_pending is True
+
+    reconciled = await reconcile_stuck_payments(db_session, provider)
+    await db_session.refresh(payment)
+
+    assert reconciled == 1
+    assert provider.receipt_updates[-1] == (payment.provider_payment_id, None)
+    assert payment.receipt_sync_pending is False
+
+
+async def test_account_erasure_receipt_clear_remains_sweepable_after_cancellation(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakePaymentProvider("pi_erase_canceled")
+    payer, _, _, checkout = await _prepared_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        provider,
+        payment_payload={"receipt_email": "canceled-pii@example.net"},
+    )
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None and payment.provider_payment_id is not None
+    payment.state = TournamentPaymentState.canceled
+    await db_session.commit()
+
+    await erase_account(db_session, payer.id)
+    await db_session.commit()
+    await db_session.refresh(payment)
+
+    assert payment.receipt_email is None
+    assert payment.receipt_sync_pending is True
+
+    reconciled = await reconcile_stuck_payments(db_session, provider)
+    await db_session.refresh(payment)
+
+    assert reconciled == 1
+    assert provider.receipt_updates[-1] == (payment.provider_payment_id, None)
+    assert payment.receipt_sync_pending is False
+
+
 async def test_cleanup_waits_thirty_days_after_archive_and_financial_resolution(
     api_client: AsyncClient,
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    provider = FakePaymentProvider("pi_retention_cleanup")
     _, tournament, _, _, receipt = await _settled_checkout(
         api_client,
         db_session,
         monkeypatch,
         receipt_email="cleanup@example.net",
         mixed=True,
+        provider=provider,
     )
     assert receipt is not None
     refund = await db_session.scalar(
@@ -523,11 +765,12 @@ async def test_cleanup_waits_thirty_days_after_archive_and_financial_resolution(
         )
     )
     assert refund is not None
-    now = datetime.now(UTC)
     tournament.status = TournamentStatus.archived
-    tournament.archive_observed_at = now - timedelta(days=60)
-    tournament.archived_at = now - timedelta(days=60)
     await db_session.commit()
+    await db_session.refresh(tournament)
+    archive_observed_at = tournament.archive_observed_at
+    assert archive_observed_at is not None
+    now = archive_observed_at + timedelta(days=60)
 
     assert (
         await _receipt_service().sweep_tournament_receipt_pii(db_session, now=now) == 0
@@ -556,6 +799,17 @@ async def test_cleanup_waits_thirty_days_after_archive_and_financial_resolution(
     await db_session.refresh(receipt)
     assert receipt.recipient_email is None
     assert receipt.pii_erased_at == now
+    payment = await db_session.get(TournamentPayment, receipt.payment_id)
+    assert payment is not None
+    assert payment.receipt_email is None
+    assert payment.receipt_sync_pending is True
+
+    reconciled = await reconcile_stuck_payments(db_session, provider)
+    await db_session.refresh(payment)
+
+    assert reconciled == 1
+    assert provider.receipt_updates[-1] == (payment.provider_payment_id, None)
+    assert payment.receipt_sync_pending is False
 
 
 async def test_cleanup_accepts_all_events_terminal_without_archiving(

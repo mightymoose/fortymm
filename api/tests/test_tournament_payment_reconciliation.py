@@ -47,6 +47,7 @@ from app.payment_provider import (
     ProviderPaymentStatus,
     get_payment_provider,
 )
+from app.tournament_entries import withdraw_from_event
 from app.tournament_event_stages import mint_stages
 from app.tournament_payment_reconciliation import reconcile_stuck_payments
 from tests._helpers import (
@@ -140,6 +141,10 @@ class FakePaymentProvider:
         if self.receipt_update_error is not None:
             raise self.receipt_update_error
         assert self.intent is not None
+        if self.intent.status == "canceled":
+            raise RuntimeError(
+                "Stripe does not allow updating a canceled PaymentIntent"
+            )
         return self.intent
 
     async def verify_webhook(
@@ -184,6 +189,7 @@ async def _prepared_checkout(
     *,
     fees: tuple[Decimal, ...] = (Decimal("12.34"),),
     capacities: tuple[int | None, ...] | None = None,
+    payment_payload: dict[str, Any] | None = None,
 ) -> tuple[User, Tournament, list[TournamentEvent], dict[str, Any]]:
     payer = await start_session(api_client, db)
     owner = await make_user(db, f"payment-owner-{uuid.uuid4().hex[:8]}")
@@ -235,7 +241,7 @@ async def _prepared_checkout(
     _install_provider(provider)
     prepared = await api_client.post(
         f"/v1/tournaments/{tournament.id}/checkouts/{checkout['id']}/payment",
-        json={},
+        json=payment_payload or {},
     )
     assert prepared.status_code == 200, prepared.text
     return payer, tournament, events, checkout
@@ -622,6 +628,54 @@ async def test_provider_invariant_mismatch_is_quarantined_with_full_refund(
     assert sum(amount for _, amount in await _refunds(db_session)) == captured
 
 
+async def test_provider_mismatch_reference_survives_a_truncated_uuid_collision(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 32-bit display prefix must not become a permanent recovery poison pill."""
+    first_id = uuid.UUID("12345678-0000-4000-8000-000000000001")
+    second_id = uuid.UUID("12345678-ffff-4000-8000-000000000002")
+    assert str(first_id)[:8] == str(second_id)[:8]
+
+    blocker_provider = FakePaymentProvider("pi_reference_blocker")
+    _, _, _, blocker_checkout = await _prepared_checkout(
+        api_client, db_session, monkeypatch, blocker_provider
+    )
+    blocker = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(blocker_checkout["id"])
+        )
+    )
+    assert blocker is not None
+
+    target_provider = FakePaymentProvider("pi_reference_target")
+    _, _, _, target_checkout = await _prepared_checkout(
+        api_client, db_session, monkeypatch, target_provider
+    )
+    target = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(target_checkout["id"])
+        )
+    )
+    assert target is not None
+    collided_reference = f"PAY-{str(target.id)[:8].upper()}"
+    blocker.support_reference = collided_reference
+    await db_session.commit()
+
+    mismatch = target_provider.event(
+        f"evt_reference_collision_{uuid.uuid4().hex}", amount_cents=9999
+    )
+    first = await _webhook(api_client, mismatch, "test-valid-signature")
+    duplicate = await _webhook(api_client, mismatch, "test-valid-signature")
+    await db_session.refresh(target)
+
+    assert first.status_code == duplicate.status_code == 200
+    assert target.support_reference
+    assert target.support_reference != blocker.support_reference
+    assert target.support_reference != collided_reference
+
+
 async def test_failed_mismatch_remains_sweepable_until_receipt_sync_succeeds(
     api_client: AsyncClient,
     db_session: AsyncSession,
@@ -849,6 +903,59 @@ async def test_combined_success_confirms_valid_hold_and_refunds_invalid_line(
     assert outcomes[str(events[1].id)]["amount_cents"] == 2000
     assert outcomes[str(events[1].id)]["refund_amount_cents"] == 2000
     assert [amount for _, amount in await _refunds(db_session)] == [2000]
+
+
+async def test_fully_refunded_settlement_releases_hold_and_allows_replacement(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    provider = FakePaymentProvider()
+    payer, tournament, (event,), checkout = await _prepared_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        provider,
+        fees=(Decimal("10.00"),),
+        capacities=(1,),
+    )
+    other = await make_user(db_session, f"capacity-race-{uuid.uuid4().hex[:8]}")
+    occupying_entry = TournamentEntry(event_id=event.id, user_id=other.player_id)
+    db_session.add(occupying_entry)
+    await db_session.commit()
+
+    response = await _webhook(
+        api_client, provider.event("evt_all_refused"), "test-valid-signature"
+    )
+
+    assert response.status_code == 200
+    assert await _entry_facts(db_session, payer) == ([], 0)
+    assert [amount for _, amount in await _refunds(db_session)] == [1000]
+    stored_checkout = await db_session.get(
+        TournamentCheckout, uuid.UUID(checkout["id"])
+    )
+    assert stored_checkout is not None
+    assert stored_checkout.status is TournamentCheckoutStatus.invalidated
+
+    # Capacity becoming available again must let the same payer replace the settled
+    # quote immediately; a terminal payment must not leave its checkout holding the
+    # partial unique index or counting toward event capacity until the deadline.
+    await withdraw_from_event(
+        db_session,
+        tournament_id=tournament.id,
+        event_id=event.id,
+        entry_id=occupying_entry.id,
+        actor=other,
+    )
+    replacement = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={
+            "request_id": str(uuid.uuid4()),
+            "event_ids": [str(event.id)],
+        },
+    )
+    assert replacement.status_code == 201, replacement.text
+    assert replacement.json()["id"] != checkout["id"]
 
 
 async def test_processing_payment_past_deadline_stays_reconcilable_for_late_success(

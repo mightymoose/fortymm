@@ -2112,7 +2112,10 @@ def _event_payload() -> dict[str, object]:
         "format": "singles",
         "draw_type": "single-elim",
         "max_players": 64,
-        "entry_fee": 45,
+        # The shared MCP event fixture exercises authoring/detail behavior, not paid
+        # registration. Fee-policy tests opt into a positive value explicitly so the
+        # production merchant gate remains fail-closed in every other case.
+        "entry_fee": 0,
         "timezone": "America/Chicago",
         "slot": {"date": "2026-08-01", "start": "09:00", "end": "18:00"},
         "match_settings": {"rated": True, "length_games": 5},
@@ -4255,7 +4258,7 @@ async def test_create_event_cannot_bypass_the_disabled_fee_gate(
             "create_event",
             {
                 "tournament_id": str(tournament.id),
-                "payload": _event_payload(),
+                "payload": {**_event_payload(), "entry_fee": 45},
             },
         )
 

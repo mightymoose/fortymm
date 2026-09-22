@@ -35,6 +35,7 @@ from app.payment_provider import (
     ProviderPaymentStatus,
     StripePaymentProvider,
 )
+from app.payment_support_reference import payment_support_reference
 from app.realtime.events import EventKind
 from app.realtime.outbox import stage_event
 from app.schemas.notification import NotificationJob
@@ -69,6 +70,16 @@ class ProviderPaymentEvidence(BaseModel):
     merchant_account_id: str
     livemode: bool
     durable_identity: str
+
+
+CANCELABLE_PROVIDER_STATUSES = frozenset(
+    {
+        ProviderPaymentStatus.requires_payment_method,
+        ProviderPaymentStatus.requires_confirmation,
+        ProviderPaymentStatus.requires_action,
+        ProviderPaymentStatus.requires_capture,
+    }
+)
 
 
 def _evidence(intent: ProviderPaymentIntent) -> ProviderPaymentEvidence:
@@ -205,8 +216,8 @@ async def _quarantine_provider_mismatch(
     """Persist provider-association quarantine independently of notification I/O."""
     if payment.provider_mismatch_at is None:
         payment.provider_mismatch_at = await _database_now(db)
-    payment.support_reference = (
-        payment.support_reference or f"PAY-{str(payment.id)[:8].upper()}"
+    payment.support_reference = payment.support_reference or payment_support_reference(
+        payment.id
     )
     stage_event(db, payment.checkout.payer_account_id, EventKind.dashboard_changed)
     await _notify_payment_attention(db, payment, "provider_mismatch")
@@ -485,11 +496,13 @@ async def reconcile_provider_intent(
         # to observe a late capture and refund it.
         payment.state = provider_state
         if provider_state is TournamentPaymentState.canceled:
-            # A provider-confirmed cancellation will never issue a receipt.
-            # Discharge any uncertain pre-cancellation receipt update locally
-            # instead of calling the provider again for a terminal intent, and
-            # erase the now-useless payer capability from durable storage.
-            payment.receipt_sync_pending = False
+            # A canceled intent cannot issue a receipt, so a pending request to
+            # set a non-null delivery address is moot. A desired clear is
+            # different: cancellation is not proof that provider-held PII was
+            # erased, so preserve that obligation until an explicit provider
+            # update confirms ``None``.
+            if payment.receipt_email is not None:
+                payment.receipt_sync_pending = False
             payment.client_secret = None
         stage_event(db, checkout.payer_account_id, EventKind.dashboard_changed)
         if payment.state is TournamentPaymentState.checking:
@@ -528,11 +541,14 @@ async def reconcile_provider_intent(
             .order_by(TournamentPaymentAllocation.checkout_line_id)
         )
     )
+    confirmed_allocations = 0
     for allocation_id, event_id in allocations:
         allocation = await db.get(TournamentPaymentAllocation, allocation_id)
         if allocation is None:
             raise LookupError("payment allocation not found")
         if allocation.outcome is not None:
+            if allocation.outcome is TournamentPaymentLineOutcome.confirmed:
+                confirmed_allocations += 1
             continue
         admitted = False
         if checkout_valid and payer is not None:
@@ -555,6 +571,7 @@ async def reconcile_provider_intent(
             raise LookupError("payment allocation not found")
         if admitted:
             allocation.outcome = TournamentPaymentLineOutcome.confirmed
+            confirmed_allocations += 1
         else:
             allocation.outcome = TournamentPaymentLineOutcome.refund_pending
             allocation.refund_amount_cents = allocation.amount_cents
@@ -565,6 +582,19 @@ async def reconcile_provider_intent(
                 amount_cents=allocation.amount_cents,
                 reason="admission_unavailable",
             )
+
+    # A successful provider charge is terminal even when every admission loses its
+    # capacity race. In that all-refunded case no call to ``admit_to_event`` consumed
+    # the active checkout, so release its partial-unique-index/capacity hold here.
+    # A refused admission rolls back its savepoint and expires ORM state. Refresh the
+    # checkout explicitly before inspecting it instead of allowing attribute access
+    # to attempt implicit async I/O.
+    await db.refresh(checkout, attribute_names=["status"])
+    if (
+        checkout.status is TournamentCheckoutStatus.active
+        and confirmed_allocations == 0
+    ):
+        checkout.status = TournamentCheckoutStatus.invalidated
 
     payment.state = TournamentPaymentState.succeeded
     await _ensure_settlement_outputs(db, payment, now)
@@ -694,6 +724,11 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                             ),
                         ),
                     ),
+                    and_(
+                        TournamentPayment.state == TournamentPaymentState.canceled,
+                        TournamentPayment.provider_payment_id.is_not(None),
+                        TournamentPayment.receipt_sync_pending.is_(True),
+                    ),
                 )
             )
             .options(
@@ -713,6 +748,7 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
         if payment.state in {
             TournamentPaymentState.succeeded,
             TournamentPaymentState.failed,
+            TournamentPaymentState.canceled,
         }:
             if payment.receipt_sync_pending and payment.provider_payment_id is not None:
                 await _sync_provider_receipt(
@@ -751,6 +787,17 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                 TournamentPaymentState.failed,
                 TournamentPaymentState.canceled,
             }:
+                if (
+                    payment.receipt_sync_pending
+                    and payment.provider_payment_id is not None
+                ):
+                    await _sync_provider_receipt(
+                        db,
+                        provider=provider,
+                        payment_id=payment.id,
+                        provider_payment_id=payment.provider_payment_id,
+                        attempted_email=payment.receipt_email,
+                    )
                 await retry_terminal_payment_outputs(db, payment_id=payment_id)
                 await db.commit()
                 reconciled += 1
@@ -880,14 +927,65 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
         if (
             authority_lost
             and intent.id == payment.provider_payment_id
-            and intent.status
-            in {
-                ProviderPaymentStatus.requires_payment_method,
-                ProviderPaymentStatus.requires_confirmation,
-                ProviderPaymentStatus.requires_action,
-                ProviderPaymentStatus.requires_capture,
-            }
+            and intent.status in CANCELABLE_PROVIDER_STATUSES
         ):
+            if payment.receipt_sync_pending and payment.receipt_email is None:
+                # Stripe rejects receipt updates after cancellation. Clear
+                # provider-held PII first, after releasing every lifecycle lock,
+                # then rebuild authority before deciding whether cancellation is
+                # still allowed. An uncertain update leaves its durable marker
+                # set and defers cancellation to a later sweep.
+                receipt_provider_id = payment.provider_payment_id
+                await db.commit()
+                payment = await _sync_provider_receipt(
+                    db,
+                    provider=provider,
+                    payment_id=payment_id,
+                    provider_payment_id=receipt_provider_id,
+                    attempted_email=None,
+                )
+                if payment.receipt_sync_pending:
+                    continue
+                try:
+                    payment, payer = await reload_payment_for_reconciliation_locked(
+                        db,
+                        tournament_id=tournament_id,
+                        checkout_id=checkout_id,
+                        payer_account_id=payer_account_id,
+                        payment_id=payment_id,
+                    )
+                except PaymentNotFoundError:
+                    continue
+                checkout = payment.checkout
+                authority_lost = not (
+                    payer is not None
+                    and payer.is_active
+                    and payer.merged_into_user_id is None
+                    and checkout.status is TournamentCheckoutStatus.active
+                    and checkout.expires_at > await _database_now(db)
+                    and checkout.registration_generation
+                    == checkout.tournament.registration_generation
+                    and checkout.merchant_account_id
+                    == checkout.tournament.owner_account_id
+                    and registration_open(checkout.tournament)
+                )
+                if payment.state in {
+                    TournamentPaymentState.succeeded,
+                    TournamentPaymentState.failed,
+                    TournamentPaymentState.canceled,
+                }:
+                    await retry_terminal_payment_outputs(db, payment_id=payment_id)
+                    await db.commit()
+                    reconciled += 1
+                    continue
+                if (
+                    payment.provider_payment_id != receipt_provider_id
+                    or not authority_lost
+                    or payment.provider_status not in CANCELABLE_PROVIDER_STATUSES
+                ):
+                    await db.commit()
+                    continue
+
             # The locked read above is the authorization point for attempting
             # cancellation.  No additional local mutation is required to make
             # that decision durable: the existing nonterminal payment remains
@@ -955,12 +1053,7 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
             if payment.provider_payment_id != cancellation_provider_id:
                 await db.commit()
                 continue
-            if not authority_lost and intent.status in {
-                ProviderPaymentStatus.requires_payment_method,
-                ProviderPaymentStatus.requires_confirmation,
-                ProviderPaymentStatus.requires_action,
-                ProviderPaymentStatus.requires_capture,
-            }:
+            if not authority_lost and intent.status in CANCELABLE_PROVIDER_STATUSES:
                 # Authority was restored while the cancellation request was in
                 # flight and the provider did not terminalize the intent.  Do
                 # not apply a response obtained under the stale cancellation

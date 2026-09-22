@@ -175,31 +175,9 @@ function CheckoutPageContent({
 
   useEffect(() => {
     let current = true
-    const loadPayment = async (): Promise<Payment> => {
-      if (!redirected) {
-        return parsePayment(unwrap(
-          'prepare payment',
-          await api.POST(
-            '/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment',
-            {
-              params: { path: paymentPath(tournamentId, checkoutId) },
-              body: {},
-            },
-          ),
-        ))
-      }
-      const status = parsePayment(unwrap(
-        'check payment',
-        await api.GET(
-          '/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment',
-          { params: { path: paymentPath(tournamentId, checkoutId) } },
-        ),
-      ))
-      if (status.payment_state !== 'ready' && status.payment_state !== 'action_required') {
-        return status
-      }
-      return parsePayment(unwrap(
-        'resume payment',
+    const preparePayment = async (): Promise<Payment> =>
+      parsePayment(unwrap(
+        'prepare payment',
         await api.POST(
           '/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment',
           {
@@ -208,16 +186,37 @@ function CheckoutPageContent({
           },
         ),
       ))
-    }
-    void Promise.all([
-      api.GET('/v1/tournaments/{tournament_id}/checkouts/{checkout_id}', {
-        params: { path: paymentPath(tournamentId, checkoutId) },
-      }),
-      loadPayment(),
-    ])
-      .then(([checkoutResult, loadedPayment]) => {
+
+    void api.GET('/v1/tournaments/{tournament_id}/checkouts/{checkout_id}', {
+      params: { path: paymentPath(tournamentId, checkoutId) },
+    })
+      .then(async (checkoutResult) => {
+        const loadedCheckout = checkoutWireSchema.parse(
+          unwrap('load checkout', checkoutResult),
+        ) as Checkout
         if (!current) return
-        setCheckout(checkoutWireSchema.parse(unwrap('load checkout', checkoutResult)) as Checkout)
+        const paymentResult = await api.GET(
+          '/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment',
+          { params: { path: paymentPath(tournamentId, checkoutId) } },
+        )
+        if (!current) return
+        let loadedPayment: Payment
+        if (paymentResult.response.status === 404) {
+          if (loadedCheckout.status !== 'active') {
+            unwrap('check payment', paymentResult)
+          }
+          loadedPayment = await preparePayment()
+        } else {
+          const status = parsePayment(unwrap('check payment', paymentResult))
+          loadedPayment =
+            loadedCheckout.status === 'active' &&
+            (status.payment_state === 'ready' ||
+              status.payment_state === 'action_required')
+              ? await preparePayment()
+              : status
+        }
+        if (!current) return
+        setCheckout(loadedCheckout)
         receiptForm.reset({ receiptEmail: loadedPayment.receipt_email ?? '' })
         setPayment(loadedPayment)
       })
@@ -256,6 +255,8 @@ function CheckoutPageContent({
             },
           ),
         ))
+        setAuthoritativePayment(null)
+        setPayment(prepared)
         if (!prepared.client_secret) return
         const result = await adapter.confirmPayment({
           clientSecret: prepared.client_secret,
@@ -303,6 +304,8 @@ function CheckoutPageContent({
     !!checkout &&
     new Date(checkout.expires_at).getTime() <= now &&
     !paymentIsTerminal
+  const receiptIsEditable =
+    checkout?.status === 'active' && !locallyExpired && !paymentIsTerminal
   const lineOutcomes = useMemo(
     () => new Map(displayedPayment?.lines.map((line) => [line.event_id, line])),
     [displayedPayment?.lines],
@@ -328,6 +331,7 @@ function CheckoutPageContent({
           },
         ),
       ))
+      setAuthoritativePayment(null)
       setPayment(prepared)
     } catch (error) {
       const message = receiptMutationErrorMessage(error)
@@ -400,7 +404,7 @@ function CheckoutPageContent({
         </CardContent>
       </Card>
 
-      {state !== 'succeeded' && !locallyExpired && (
+      {receiptIsEditable && (
         <Card>
           <CardHeader><CardTitle>Receipt destination</CardTitle></CardHeader>
           <CardContent className="space-y-3">

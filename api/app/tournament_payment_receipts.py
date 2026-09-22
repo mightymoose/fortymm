@@ -28,6 +28,7 @@ from app.models import (
     TournamentRefundObligation,
     TournamentRefundState,
 )
+from app.payment_support_reference import payment_support_reference
 from app.tournament_payment_receipt_outcomes import parse_receipt_outcomes
 
 log = logging.getLogger(__name__)
@@ -168,7 +169,7 @@ async def attempt_tournament_receipt_delivery(
         receipt.failed_at = now
         receipt.failure_kind = "retry_exhausted"
         receipt.support_reference = (
-            receipt.support_reference or f"PAY-{str(receipt.id)[:8].upper()}"
+            receipt.support_reference or payment_support_reference(receipt.id)
         )
         receipt.next_attempt_at = None
         receipt.updated_at = now
@@ -193,7 +194,7 @@ async def attempt_tournament_receipt_delivery(
                 "retry_exhausted" if retryable else "permanent_delivery_failure"
             )
             receipt.support_reference = (
-                receipt.support_reference or f"PAY-{str(receipt.id)[:8].upper()}"
+                receipt.support_reference or payment_support_reference(receipt.id)
             )
             receipt.next_attempt_at = None
         receipt.updated_at = now
@@ -247,6 +248,10 @@ async def erase_tournament_receipt_pii_for_account(
     for payment in payments:
         if payment.receipt_email is not None:
             payment.receipt_email = None
+            # Clearing local PII does not clear the value copied to the payment
+            # provider. Keep a durable convergence obligation even when create
+            # returned ambiguously and no provider id has been bound yet.
+            payment.receipt_sync_pending = True
             changed += 1
         receipt = await db.scalar(
             select(TournamentPaymentReceipt).where(
@@ -287,10 +292,22 @@ async def sweep_tournament_receipt_pii(
     erased = 0
     for payment in payments:
         receipt = payment.receipt
-        checkout = await db.get(TournamentCheckout, payment.checkout_id)
-        if checkout is None:
+        tournament_id = await db.scalar(
+            select(TournamentCheckout.tournament_id).where(
+                TournamentCheckout.id == payment.checkout_id
+            )
+        )
+        if tournament_id is None:
             continue
-        tournament = await db.get(Tournament, checkout.tournament_id)
+        # Admission savepoints can expire already-present ORM objects. An
+        # explicit query with ``populate_existing`` guarantees the retention
+        # sweep never triggers implicit async I/O through an expired checkout
+        # or tournament attribute.
+        tournament = await db.scalar(
+            select(Tournament)
+            .where(Tournament.id == tournament_id)
+            .execution_options(populate_existing=True)
+        )
         if tournament is None:
             continue
         milestones = [
@@ -372,7 +389,9 @@ async def sweep_tournament_receipt_pii(
                 TournamentReceiptState.retry_scheduled,
             }:
                 receipt.state = TournamentReceiptState.canceled
-        payment.receipt_email = None
+        if payment.receipt_email is not None:
+            payment.receipt_email = None
+            payment.receipt_sync_pending = True
         erased += 1
     if erased:
         await db.flush()

@@ -186,6 +186,7 @@ from app.tournament_errors import (
     NotAllowedToWithdrawError,
     NotTournamentOwnerError,
     PaymentCollectionDisabledError,
+    PaymentMerchantUnavailableError,
     PlacementClashError,
     PlacementTableNotFoundError,
     PlayerNotFoundError,
@@ -1548,7 +1549,11 @@ async def create_event(
             event, league_id = await create_event_core(
                 db, tournament_id=tournament_id, actor=actor, payload=payload
             )
-        except (EntryFeeTooLowError, PaymentCollectionDisabledError) as exc:
+        except (
+            EntryFeeTooLowError,
+            PaymentCollectionDisabledError,
+            PaymentMerchantUnavailableError,
+        ) as exc:
             raise ToolError(str(exc)) from exc
         except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
             raise _map_tournament_write_tool_error(
@@ -1629,7 +1634,11 @@ async def update_event(
                 actor=actor,
                 updates=updates,
             )
-        except (EntryFeeTooLowError, PaymentCollectionDisabledError) as exc:
+        except (
+            EntryFeeTooLowError,
+            PaymentCollectionDisabledError,
+            PaymentMerchantUnavailableError,
+        ) as exc:
             raise ToolError(str(exc)) from exc
         except _TOURNAMENT_WRITE_TOOL_ERRORS as exc:
             raise _map_tournament_write_tool_error(

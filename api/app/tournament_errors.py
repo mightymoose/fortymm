@@ -22,6 +22,13 @@ class PaymentCollectionDisabledError(Exception):
         super().__init__("Payment collection is disabled; event fees must remain free.")
 
 
+class PaymentMerchantUnavailableError(Exception):
+    """A positive fee cannot be introduced for a non-launch merchant."""
+
+    def __init__(self) -> None:
+        super().__init__("Paid event fees are unavailable for this tournament.")
+
+
 class EntryFeeTooLowError(Exception):
     """A PATCH attempted to introduce a positive fee below provider minimum."""
 

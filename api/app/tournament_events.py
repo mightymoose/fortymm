@@ -87,6 +87,7 @@ from app.tournament_errors import (
     GroupSetFrozenError,
     MatchRulesFrozenError,
     PaymentCollectionDisabledError,
+    PaymentMerchantUnavailableError,
     TournamentArchivedError,
 )
 from app.tournament_event_stages import mint_stages, remint_stages_in_place
@@ -174,6 +175,12 @@ async def create_event(
         and Decimal(str(payload.entry_fee)) > 0
     ):
         raise PaymentCollectionDisabledError()
+    merchant_account_id = get_settings().tournament_payment_merchant_account_id
+    if (
+        Decimal(str(payload.entry_fee)) > 0
+        and tournament.owner_account_id != merchant_account_id
+    ):
+        raise PaymentMerchantUnavailableError()
     # The event's stages, also ROWS (ADR 20260815) and also created with the event in
     # this same transaction — every event holds its minted stages from the moment it
     # exists, never as a follow-up write. ``mint_stages`` reads the template straight
@@ -1110,6 +1117,13 @@ async def update_event(
             and not get_settings().tournament_payment_collection_enabled
         ):
             raise PaymentCollectionDisabledError()
+        merchant_account_id = get_settings().tournament_payment_merchant_account_id
+        if (
+            fee_changed
+            and next_fee > 0
+            and tournament.owner_account_id != merchant_account_id
+        ):
+            raise PaymentMerchantUnavailableError()
     # 404 → 403 → 409: the freezes are asked before the setattr loop below, so a
     # refusal writes nothing at all.
     await _enforce_group_set_frozen(db, event, updates)

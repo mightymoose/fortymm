@@ -87,6 +87,7 @@ from app.tournament_errors import (
     NotAllowedToWithdrawError,
     NotTournamentOwnerError,
     PaymentCollectionDisabledError,
+    PaymentMerchantUnavailableError,
     PlacementClashError,
     PlacementTableNotFoundError,
     PlayerNotFoundError,
@@ -809,6 +810,11 @@ async def create_event(
             status_code=409,
             detail={"code": "collection_disabled", "message": str(exc)},
         ) from exc
+    except PaymentMerchantUnavailableError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "merchant_unavailable", "message": str(exc)},
+        ) from exc
     except _TOURNAMENT_WRITE_ERRORS as exc:
         raise _map_tournament_write_error(exc) from exc
     # The verb returns the tournament's ``league_id`` — the ladder the caller's
@@ -1038,6 +1044,11 @@ async def update_event(
         raise HTTPException(
             status_code=409,
             detail={"code": "collection_disabled", "message": str(exc)},
+        ) from exc
+    except PaymentMerchantUnavailableError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "merchant_unavailable", "message": str(exc)},
         ) from exc
     except EventVersionConflictError as exc:
         # A **structured** 409, unlike the two plain-string freezes below, and caught

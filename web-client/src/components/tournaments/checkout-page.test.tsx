@@ -166,6 +166,36 @@ describe('tournament checkout page', () => {
     }
   })
 
+  it.each([
+    ['failed', 'Payment needs review'],
+    ['canceled', 'Checkout canceled'],
+    ['expired', 'Checkout expired'],
+  ])('does not offer receipt edits after a %s payment is terminal', async (paymentState, copy) => {
+    serve({
+      prepared: payment({
+        payment_state: paymentState,
+        client_secret: null,
+        support_reference: paymentState === 'failed' ? 'PAY-1770' : null,
+      }),
+    })
+    page.render(adapter())
+
+    expect(await screen.findByText(copy)).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: /receipt email/i })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /save receipt email/i })).not.toBeInTheDocument()
+  })
+
+  it('offers receipt edits while a nonterminal checking payment still accepts updates', async () => {
+    serve({
+      prepared: payment({ payment_state: 'checking', client_secret: null }),
+    })
+    page.render(adapter())
+
+    expect(await screen.findByText('Payment is still being confirmed')).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: /receipt email/i })).toHaveValue('payer@example.com')
+    expect(screen.getByRole('button', { name: /save receipt email/i })).toBeEnabled()
+  })
+
   it('keeps a decline retryable against the same checkout and payment', async () => {
     serve()
     const stripe = adapter({ kind: 'declined', message: 'Your card was declined.' })
@@ -234,14 +264,141 @@ describe('tournament checkout page', () => {
     expect(stripe.confirmPayment).not.toHaveBeenCalled()
   })
 
+  it('renders an authoritative terminal response returned when Pay refreshes preparation', async () => {
+    let prepares = 0
+    serve()
+    server.use(
+      http.post(
+        '*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment',
+        () => {
+          prepares += 1
+          if (prepares === 1) return HttpResponse.json(payment())
+          return HttpResponse.json(payment({
+            payment_state: 'failed',
+            client_secret: null,
+            support_reference: 'PAY-TERMINAL',
+          }))
+        },
+      ),
+    )
+    const stripe = adapter()
+    page.render(stripe)
+
+    await userEvent.setup().click(await screen.findByRole('button', { name: /pay/i }))
+
+    expect(await screen.findByText('Payment needs review')).toBeInTheDocument()
+    expect(screen.getByText(/PAY-TERMINAL/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /pay/i })).not.toBeInTheDocument()
+    expect(stripe.confirmPayment).not.toHaveBeenCalled()
+  })
+
+  it.each(['ready', 'action_required'])(
+    'lets a terminal Pay refresh replace a prior authoritative %s result',
+    async (authoritativeState) => {
+      let prepares = 0
+      server.use(
+        http.get('*/v1/tournaments/:tournamentId/checkouts/:checkoutId', () =>
+          HttpResponse.json(checkout),
+        ),
+        http.post(
+          '*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment',
+          () => {
+            prepares += 1
+            if (prepares < 3) return HttpResponse.json(payment())
+            return HttpResponse.json(payment({
+              payment_state: 'failed',
+              client_secret: null,
+              support_reference: 'PAY-AUTHORITATIVE-TERMINAL',
+            }))
+          },
+        ),
+        http.get(
+          '*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment',
+          () => HttpResponse.json(payment({ payment_state: authoritativeState })),
+        ),
+      )
+      const stripe = adapter({ kind: 'submitted' })
+      page.render(stripe)
+      const user = userEvent.setup()
+
+      await user.click(await screen.findByRole('button', { name: /pay/i }))
+      expect(await screen.findByRole('button', { name: /pay|authentication/i })).toBeEnabled()
+      await user.click(screen.getByRole('button', { name: /pay|authentication/i }))
+
+      expect(await screen.findByText('Payment needs review')).toBeInTheDocument()
+      expect(screen.getByText(/PAY-AUTHORITATIVE-TERMINAL/)).toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /pay|authentication/i })).not.toBeInTheDocument()
+      expect(stripe.confirmPayment).toHaveBeenCalledOnce()
+    },
+  )
+
+  it.each([
+    ['failed', 'Payment needs review'],
+    ['canceled', 'Checkout canceled'],
+    ['succeeded', 'Payment confirmed'],
+  ])(
+    'lets a terminal %s receipt-save response replace prior authoritative checking',
+    async (terminalState, terminalCopy) => {
+      let statusReads = 0
+      let prepares = 0
+      server.use(
+        http.get('*/v1/tournaments/:tournamentId/checkouts/:checkoutId', () =>
+          HttpResponse.json(checkout),
+        ),
+        http.get(
+          '*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment',
+          () => {
+            statusReads += 1
+            return HttpResponse.json(
+              statusReads === 1
+                ? payment()
+                : payment({ payment_state: 'checking', client_secret: null }),
+            )
+          },
+        ),
+        http.post(
+          '*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment',
+          () => {
+            prepares += 1
+            if (prepares < 3) return HttpResponse.json(payment())
+            return HttpResponse.json(payment({
+              payment_state: terminalState,
+              client_secret: null,
+              support_reference: terminalState === 'failed' ? 'PAY-RECEIPT-TERMINAL' : null,
+            }))
+          },
+        ),
+      )
+      const stripe = adapter({ kind: 'submitted' })
+      page.render(stripe)
+      const user = userEvent.setup()
+
+      await user.click(await screen.findByRole('button', { name: /pay/i }))
+      expect(await screen.findByText('Payment is still being confirmed')).toBeInTheDocument()
+      expect(screen.getByRole('textbox', { name: /receipt email/i })).toBeInTheDocument()
+
+      await user.click(screen.getByRole('button', { name: /save receipt email/i }))
+
+      expect(await screen.findByText(terminalCopy)).toBeInTheDocument()
+      expect(screen.queryByRole('textbox', { name: /receipt email/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('button', { name: /save receipt email/i })).not.toBeInTheDocument()
+      expect(stripe.confirmPayment).toHaveBeenCalledOnce()
+    },
+  )
+
   it('treats browser success as a claim and refetches authoritative status', async () => {
-    const reads = serve({ statuses: [payment({ payment_state: 'checking', client_secret: null })] })
+    const reads = serve({
+      statuses: [
+        payment(),
+        payment({ payment_state: 'checking', client_secret: null }),
+      ],
+    })
     const stripe = adapter({ kind: 'submitted' })
     page.render(stripe)
     await userEvent.setup().click(await screen.findByRole('button', { name: /pay/i }))
 
     expect(await screen.findByText('Payment is still being confirmed')).toBeInTheDocument()
-    expect(reads.statusReads()).toBe(1)
+    expect(reads.statusReads()).toBe(2)
     expect(screen.queryByText(/entry confirmed/i)).not.toBeInTheDocument()
   })
 
@@ -272,6 +429,7 @@ describe('tournament checkout page', () => {
         ],
         ...overrides,
       })
+    const statusReads = new Map<string, number>()
 
     server.use(
       http.get(
@@ -284,18 +442,24 @@ describe('tournament checkout page', () => {
       ),
       http.get(
         '*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment',
-        ({ params }) => HttpResponse.json(paymentFor(String(params.checkoutId), {
-          payment_state: 'succeeded',
-          client_secret: null,
-          lines: [
-            {
-              event_id: 'open',
-              amount_cents: 3750,
-              outcome: 'confirmed',
-              refund_amount_cents: 0,
-            },
-          ],
-        })),
+        ({ params }) => {
+          const checkoutId = String(params.checkoutId)
+          const read = statusReads.get(checkoutId) ?? 0
+          statusReads.set(checkoutId, read + 1)
+          if (read === 0) return HttpResponse.json(paymentFor(checkoutId))
+          return HttpResponse.json(paymentFor(checkoutId, {
+            payment_state: 'succeeded',
+            client_secret: null,
+            lines: [
+              {
+                event_id: 'open',
+                amount_cents: 3750,
+                outcome: 'confirmed',
+                refund_amount_cents: 0,
+              },
+            ],
+          }))
+        },
       ),
     )
 
@@ -333,6 +497,141 @@ describe('tournament checkout page', () => {
     expect(await screen.findByText('Payment is still being confirmed')).toBeInTheDocument()
     expect(reads.statusReads()).toBe(1)
     expect(screen.queryByText(/entry confirmed/i)).not.toBeInTheDocument()
+  })
+
+  it('loads retained payment status before attempting preparation from a dashboard link', async () => {
+    let statusReads = 0
+    let prepares = 0
+    server.use(
+      http.get('*/v1/tournaments/:tournamentId/checkouts/:checkoutId', () =>
+        HttpResponse.json({ ...checkout, status: 'invalidated' }),
+      ),
+      http.get(
+        '*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment',
+        () => {
+          statusReads += 1
+          return HttpResponse.json(payment({
+            payment_state: 'checking',
+            client_secret: null,
+          }))
+        },
+      ),
+      http.post(
+        '*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment',
+        () => {
+          prepares += 1
+          return HttpResponse.json({ detail: 'Not found.' }, { status: 404 })
+        },
+      ),
+    )
+
+    page.render(adapter())
+
+    expect(await screen.findByText('Payment is still being confirmed')).toBeInTheDocument()
+    expect(statusReads).toBe(1)
+    expect(prepares).toBe(0)
+    expect(screen.queryByText('We could not load this checkout. Try again.')).not.toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: /receipt email/i })).not.toBeInTheDocument()
+  })
+
+  it('loads an active retained checking payment before attempting preparation', async () => {
+    let statusReads = 0
+    let prepares = 0
+    server.use(
+      http.get('*/v1/tournaments/:tournamentId/checkouts/:checkoutId', () =>
+        HttpResponse.json(checkout),
+      ),
+      http.get(
+        '*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment',
+        () => {
+          statusReads += 1
+          return HttpResponse.json(payment({
+            payment_state: 'checking',
+            client_secret: null,
+          }))
+        },
+      ),
+      http.post(
+        '*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment',
+        () => {
+          prepares += 1
+          return HttpResponse.json({ detail: 'Preparation is no longer authorized.' }, { status: 404 })
+        },
+      ),
+    )
+
+    page.render(adapter())
+
+    expect(await screen.findByText('Payment is still being confirmed')).toBeInTheDocument()
+    expect(statusReads).toBe(1)
+    expect(prepares).toBe(0)
+  })
+
+  it('does not prepare an abandoned checkout after its delayed route load resolves', async () => {
+    let releaseCheckoutA!: () => void
+    let markCheckoutAStarted!: () => void
+    let markCheckoutAResponded!: () => void
+    let markAbandonedPrepare!: () => void
+    const checkoutARelease = new Promise<void>((resolve) => { releaseCheckoutA = resolve })
+    const checkoutAStarted = new Promise<void>((resolve) => { markCheckoutAStarted = resolve })
+    const checkoutAResponded = new Promise<void>((resolve) => { markCheckoutAResponded = resolve })
+    const abandonedPrepare = new Promise<boolean>((resolve) => {
+      markAbandonedPrepare = () => resolve(true)
+    })
+    const checkoutFor = (checkoutId: string) => ({
+      ...checkout,
+      id: checkoutId,
+      request_id: `request-${checkoutId}`,
+      tournament_name: checkoutId === 'checkout-a' ? 'Autumn Open' : 'Spring Open',
+    })
+
+    server.use(
+      http.get(
+        '*/v1/tournaments/:tournamentId/checkouts/:checkoutId',
+        async ({ params }) => {
+          const checkoutId = String(params.checkoutId)
+          if (checkoutId === 'checkout-a') {
+            markCheckoutAStarted()
+            await checkoutARelease
+            markCheckoutAResponded()
+          }
+          return HttpResponse.json(checkoutFor(checkoutId))
+        },
+      ),
+      http.get(
+        '*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment',
+        ({ params }) => HttpResponse.json(payment({
+          checkout_id: String(params.checkoutId),
+          payment_state: 'checking',
+          client_secret: null,
+        })),
+      ),
+      http.post(
+        '*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment',
+        ({ params }) => {
+          const checkoutId = String(params.checkoutId)
+          if (checkoutId === 'checkout-a') markAbandonedPrepare()
+          return HttpResponse.json(payment({ checkout_id: checkoutId }))
+        },
+      ),
+    )
+
+    renderWithRouterContext(
+      <CheckoutNavigationHarness paymentAdapter={adapter()} />,
+      { initialEntries: ['/tournaments/tournament-1770/checkouts/checkout-a'] },
+    )
+    await checkoutAStarted
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Open checkout B' }))
+    expect(await screen.findByRole('heading', { name: 'Spring Open' })).toBeInTheDocument()
+
+    releaseCheckoutA()
+    await checkoutAResponded
+    const preparedAfterCleanup = await Promise.race([
+      abandonedPrepare,
+      new Promise<boolean>((resolve) => window.setTimeout(() => resolve(false), 50)),
+    ])
+
+    expect(preparedAfterCleanup).toBe(false)
   })
 
   it('shows successful and mixed event outcomes without flattening them', async () => {
