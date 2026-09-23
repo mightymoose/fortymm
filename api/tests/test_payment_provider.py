@@ -408,6 +408,9 @@ async def test_permanent_stripe_configuration_failures_have_typed_contract(
 ) -> None:
     """Permanent operator/config faults never escape raw or look retryable."""
     if provider_error is None:
+        # Exercise the provider's own missing-key boundary independently of the
+        # enabled-collection startup guard covered by test_config.py.
+        monkeypatch.setenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", "false")
         monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
     else:
         monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_boundary")
