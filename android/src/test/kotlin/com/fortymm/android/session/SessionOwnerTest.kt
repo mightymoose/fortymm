@@ -481,6 +481,33 @@ class SessionOwnerTest {
     }
 
     @Test
+    fun sessionEndDropsAnUnsavedCredentialSoARetryCannotResurrectIt() = runBlocking {
+        val userId = UUID.fromString("7c6b5a49-3827-4165-9a4b-3c2d1e0f9a8b")
+        val credentialStore = MemoryCredentialStore(failedSavesRemaining = 1, failedEndMarksRemaining = 1)
+        server.enqueue(
+            sessionResponse(userId, "unsaved-guest")
+                .addHeader("Set-Cookie", "session=unsaved-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=unsaved-csrf; Path=/")
+                .setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY),
+        )
+        server.enqueue(sessionEndedResponse("session_ended", "You've been signed out. Sign in to continue."))
+        val apiClient = FortyMMApiClient(server.url("/"))
+        val owner = SessionOwner(apiClient, credentialStore)
+        owner.bootstrap()
+        assertEquals(null, credentialStore.credential)
+
+        apiClient.get("/v1/me")
+        owner.bootstrap()
+
+        assertEquals(
+            SessionState.SessionEnded("You've been signed out. Sign in to continue.", email = null),
+            owner.state.value,
+        )
+        assertEquals(null, credentialStore.credential)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
     fun failedCredentialWriteRetrySavesReceivedGuestWithoutCreatingAnotherOne() = runBlocking {
         val userId = UUID.fromString("9a0b75b9-1b31-4e50-97dc-dd7c3017cbdc")
         val credentialStore = MemoryCredentialStore(failedSavesRemaining = 1)
@@ -736,6 +763,7 @@ class SessionOwnerTest {
     private class MemoryCredentialStore(
         var failedSavesRemaining: Int = 0,
         var unreadable: Boolean = false,
+        var failedEndMarksRemaining: Int = 0,
     ) : SessionCredentialStore {
         var credential: String? = null
         var expiresAtEpochMillis: Long? = Long.MAX_VALUE
@@ -762,6 +790,10 @@ class SessionOwnerTest {
         }
 
         override fun markSessionEnded(reason: SessionEndReason): CredentialSaveResult {
+            if (failedEndMarksRemaining > 0) {
+                failedEndMarksRemaining -= 1
+                return CredentialSaveResult.Failed
+            }
             credential = null
             expiresAtEpochMillis = null
             sessionEndReason = reason
