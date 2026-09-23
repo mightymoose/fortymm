@@ -429,6 +429,58 @@ class SessionOwnerTest {
     }
 
     @Test
+    fun lateResponsesFromThePreviousIdentityCannotOverwriteOrRevokeTheRecoveredGuest() = runBlocking {
+        val previousUserId = UUID.fromString("0f3d2c1b-9a8e-4d7c-8b6a-5e4f3d2c1b0a")
+        val recoveredUserId = UUID.fromString("1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d")
+        val credentialStore = MemoryCredentialStore()
+        val (
+            previousGuestBootstrap,
+            lateEnd,
+            lateSuccess,
+            currentEnd,
+            recoveredGuestBootstrap,
+        ) = holdResponses(
+            sessionResponse(previousUserId, "previous-guest")
+                .addHeader("Set-Cookie", "session=previous-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=previous-csrf; Path=/"),
+            sessionEndedResponse("session_ended", "You've been signed out. Sign in to continue."),
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""{"data":{"username":"previous-guest"}}"""),
+            sessionEndedResponse("session_ended", "You've been signed out. Sign in to continue."),
+            sessionResponse(recoveredUserId, "recovered-guest")
+                .addHeader("Set-Cookie", "session=recovered-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=recovered-csrf; Path=/"),
+        )
+        previousGuestBootstrap.release()
+        currentEnd.release()
+        recoveredGuestBootstrap.release()
+        val apiClient = FortyMMApiClient(server.url("/"))
+        val owner = SessionOwner(apiClient, credentialStore)
+        owner.bootstrap()
+
+        val lateEndResponse = async(start = CoroutineStart.UNDISPATCHED) { apiClient.get("/v1/me") }
+        lateEnd.awaitRequest()
+        val lateSuccessResponse = async(start = CoroutineStart.UNDISPATCHED) { apiClient.get("/v1/me") }
+        lateSuccess.awaitRequest()
+        apiClient.get("/v1/me")
+        owner.startNewGuest()
+        lateEnd.release()
+        lateSuccess.release()
+
+        assertEquals(AuthenticatedResponse.Obsolete, lateEndResponse.await())
+        assertEquals(AuthenticatedResponse.Obsolete, lateSuccessResponse.await())
+        assertEquals(
+            SessionState.Ready(SessionUser(recoveredUserId, "recovered-guest")),
+            owner.state.value,
+        )
+        assertEquals("recovered-session", credentialStore.credential)
+        assertEquals("recovered-session", apiClient.sessionCredential)
+        assertEquals(5, server.requestCount)
+    }
+
+    @Test
     fun failedCredentialWriteRetrySavesReceivedGuestWithoutCreatingAnotherOne() = runBlocking {
         val userId = UUID.fromString("9a0b75b9-1b31-4e50-97dc-dd7c3017cbdc")
         val credentialStore = MemoryCredentialStore(failedSavesRemaining = 1)
