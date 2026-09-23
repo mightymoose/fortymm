@@ -36,8 +36,12 @@ spec:
               envFrom:
                 {{- include "fortymm.appEnvFrom" . | nindent 16 }}
               env:
-                # Explicitly override a stale bulk Secret value with the chart's
-                # launch gate, matching the API and worker deployments.
+                # Explicitly override stale bulk Secret values with the chart's
+                # payment settings, matching the API and worker deployments.
                 - name: TOURNAMENT_PAYMENT_COLLECTION_ENABLED
                   value: {{ index .Values.config "TOURNAMENT_PAYMENT_COLLECTION_ENABLED" | quote }}
+                - name: STRIPE_LIVEMODE
+                  value: {{ index .Values.config "STRIPE_LIVEMODE" | quote }}
+                - name: STRIPE_API_VERSION
+                  value: {{ index .Values.config "STRIPE_API_VERSION" | quote }}
 {{- end }}

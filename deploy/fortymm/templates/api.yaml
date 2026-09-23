@@ -58,10 +58,14 @@ spec:
           envFrom:
             {{- include "fortymm.appEnvFrom" . | nindent 12 }}
           env:
-            # Keep the launch gate sourced from chart config even if an
-            # operator's bulk .env Secret happens to contain a stale copy.
+            # Keep payment runtime settings sourced from chart config even if
+            # an operator's bulk .env Secret contains stale copies.
             - name: TOURNAMENT_PAYMENT_COLLECTION_ENABLED
               value: {{ index .Values.config "TOURNAMENT_PAYMENT_COLLECTION_ENABLED" | quote }}
+            - name: STRIPE_LIVEMODE
+              value: {{ index .Values.config "STRIPE_LIVEMODE" | quote }}
+            - name: STRIPE_API_VERSION
+              value: {{ index .Values.config "STRIPE_API_VERSION" | quote }}
             # Server-side geocoding key for venue addresses — see
             # docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md.
             # Sourced from the .env-backed Secret (secrets.env), the same place

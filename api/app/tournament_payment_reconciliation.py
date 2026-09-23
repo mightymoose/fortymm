@@ -396,6 +396,7 @@ async def reconcile_provider_intent(
     payment_id: uuid.UUID,
     intent: ProviderPaymentIntent,
     evidence_at: datetime | None = None,
+    release_checkout_on_cancel: bool = True,
 ) -> TournamentPayment:
     """Apply authoritative evidence idempotently; provider I/O happens upstream."""
     initial = await db.scalar(
@@ -419,6 +420,15 @@ async def reconcile_provider_intent(
         .where(Tournament.id == checkout.tournament_id)
         .with_for_update()
     )
+    locked_checkout = await db.scalar(
+        select(TournamentCheckout)
+        .where(TournamentCheckout.id == checkout.id)
+        .with_for_update(of=TournamentCheckout)
+        .execution_options(populate_existing=True)
+    )
+    if locked_checkout is None:
+        raise LookupError("checkout not found")
+    checkout = locked_checkout
     payment = await db.scalar(
         select(TournamentPayment)
         .where(TournamentPayment.id == payment_id)
@@ -517,6 +527,14 @@ async def reconcile_provider_intent(
                 amount_cents=intent.amount_cents,
                 reason="provider_invariant_mismatch",
             )
+        if (
+            payment.state is TournamentPaymentState.failed
+            and checkout.status is TournamentCheckoutStatus.active
+        ):
+            # Terminal mismatch evidence can never admit against this immutable
+            # checkout. Preserve the payment/refund facts while releasing its
+            # capacity and one-active-checkout hold immediately.
+            checkout.status = TournamentCheckoutStatus.invalidated
         await _quarantine_provider_mismatch(db, payment)
         return payment
 
@@ -547,6 +565,14 @@ async def reconcile_provider_intent(
             if payment.receipt_email is not None:
                 payment.receipt_sync_pending = False
             payment.client_secret = None
+            if (
+                release_checkout_on_cancel
+                and checkout.status is TournamentCheckoutStatus.active
+            ):
+                # Provider cancellation is a terminal no-admission outcome.
+                # The payment evidence remains intact; only the checkout's
+                # reservation authority and capacity hold are released.
+                checkout.status = TournamentCheckoutStatus.invalidated
         recipient_id = await _payer_recipient_id(db, checkout.payer_account_id)
         if recipient_id is not None:
             stage_event(db, recipient_id, EventKind.dashboard_changed)
@@ -723,6 +749,20 @@ async def replay_unprocessed_provider_events(db: AsyncSession) -> int:
 
 async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) -> int:
     """Retrieve provider truth without holding database or capacity locks."""
+    active_checkout = TournamentPayment.checkout.has(
+        TournamentCheckout.status == TournamentCheckoutStatus.active
+    )
+    active_checkout_with_active_payer = TournamentPayment.checkout.has(
+        and_(
+            TournamentCheckout.status == TournamentCheckoutStatus.active,
+            select(User.id)
+            .where(
+                User.id == TournamentCheckout.payer_account_id,
+                User.is_active,
+            )
+            .exists(),
+        )
+    )
     obligations = list(
         await db.scalars(
             select(TournamentPayment)
@@ -776,8 +816,11 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                             ),
                             and_(
                                 TournamentPayment.provider_mismatch_at.is_not(None),
-                                TournamentPayment.attention_notified_state.is_distinct_from(
-                                    "provider_mismatch"
+                                or_(
+                                    TournamentPayment.attention_notified_state.is_distinct_from(
+                                        "provider_mismatch"
+                                    ),
+                                    active_checkout,
                                 ),
                             ),
                         ),
@@ -785,7 +828,14 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                     and_(
                         TournamentPayment.state == TournamentPaymentState.canceled,
                         TournamentPayment.provider_payment_id.is_not(None),
-                        TournamentPayment.receipt_sync_pending.is_(True),
+                        or_(
+                            TournamentPayment.receipt_sync_pending.is_(True),
+                            and_(
+                                TournamentPayment.provider_status
+                                == ProviderPaymentStatus.canceled,
+                                active_checkout_with_active_payer,
+                            ),
+                        ),
                     ),
                 )
             )
@@ -799,6 +849,7 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
     )
     reconciled = 0
     for payment in obligations:
+        release_checkout_on_cancel = True
         payment_id = payment.id
         checkout_id = payment.checkout_id
         tournament_id = payment.checkout.tournament_id
@@ -808,6 +859,56 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
             TournamentPaymentState.failed,
             TournamentPaymentState.canceled,
         }:
+            stale_terminal_checkout = (
+                payment.checkout.status is TournamentCheckoutStatus.active
+                and (
+                    (
+                        payment.state is TournamentPaymentState.failed
+                        and payment.provider_mismatch_at is not None
+                    )
+                    or (
+                        payment.state is TournamentPaymentState.canceled
+                        and payment.provider_payment_id is not None
+                        and payment.provider_status == ProviderPaymentStatus.canceled
+                    )
+                )
+            )
+            if stale_terminal_checkout:
+                try:
+                    payment, payer = await reload_payment_for_reconciliation_locked(
+                        db,
+                        tournament_id=tournament_id,
+                        checkout_id=checkout_id,
+                        payer_account_id=payer_account_id,
+                        payment_id=payment_id,
+                    )
+                except PaymentNotFoundError:
+                    await db.rollback()
+                    continue
+                repair_checkout = (
+                    payment.checkout.status is TournamentCheckoutStatus.active
+                    and (
+                        (
+                            payment.state is TournamentPaymentState.failed
+                            and payment.provider_mismatch_at is not None
+                        )
+                        or (
+                            payment.state is TournamentPaymentState.canceled
+                            and payment.provider_payment_id is not None
+                            and payment.provider_status
+                            == ProviderPaymentStatus.canceled
+                            and payer is not None
+                            and payer.is_active
+                        )
+                    )
+                )
+                if repair_checkout:
+                    payment.checkout.status = TournamentCheckoutStatus.invalidated
+                    recipient_id = await _payer_recipient_id(
+                        db, payment.checkout.payer_account_id
+                    )
+                    if recipient_id is not None:
+                        stage_event(db, recipient_id, EventKind.dashboard_changed)
             if (
                 payment.state is TournamentPaymentState.failed
                 and payment.provider_status == "create_rejected"
@@ -1223,6 +1324,11 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
             # payment lifecycle changes are never blocked on the network.
             cancellation_provider_id = intent.id
             cancellation_durable_identity = payment.durable_identity
+            # Account-lifecycle cancellation has its own checkout ownership
+            # semantics. Preserve that workflow's checkout state when the
+            # provider confirms the cancellation we requested here; a
+            # provider-originated cancellation still releases an active hold.
+            release_checkout_on_cancel = False
             await db.commit()
             try:
                 intent = await provider.cancel_payment_intent(cancellation_provider_id)
@@ -1333,7 +1439,10 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                 await db.commit()
                 continue
         payment = await reconcile_provider_intent(
-            db, payment_id=payment.id, intent=intent
+            db,
+            payment_id=payment.id,
+            intent=intent,
+            release_checkout_on_cancel=release_checkout_on_cancel,
         )
         if payment.receipt_sync_pending and payment.provider_payment_id is not None:
             await db.commit()

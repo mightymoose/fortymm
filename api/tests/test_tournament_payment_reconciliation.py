@@ -1063,6 +1063,127 @@ async def test_provider_invariant_mismatch_is_quarantined_with_full_refund(
     assert sum(amount for _, amount in await _refunds(db_session)) == captured
 
 
+async def test_terminal_provider_mismatch_releases_hold_for_replacement_checkout(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    provider = FakePaymentProvider()
+    payer, tournament, (event,), checkout = await _prepared_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        provider,
+        fees=(Decimal("12.34"),),
+    )
+
+    accepted = await _webhook(
+        api_client,
+        provider.event("evt_terminal_mismatch_releases_hold", amount_cents=4321),
+        "test-valid-signature",
+    )
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout["id"]))
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+
+    assert accepted.status_code == 200, accepted.text
+    assert stored is not None
+    assert payment is not None
+    assert payment.state is TournamentPaymentState.failed
+    assert await _entry_facts(db_session, payer) == ([], 0)
+    assert [amount for _, amount in await _refunds(db_session)] == [4321]
+
+    replacement = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={
+            "request_id": str(uuid.uuid4()),
+            "event_ids": [str(event.id)],
+        },
+    )
+
+    assert replacement.status_code == 201, replacement.text
+    assert replacement.json()["id"] != checkout["id"]
+    assert stored.status is TournamentCheckoutStatus.invalidated
+
+
+async def test_sweep_repairs_stale_terminal_provider_mismatch_checkout_once(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+    fake_notifications_queue,
+    realtime_broker: RealtimeBroker,
+) -> None:
+    provider = FakePaymentProvider()
+    payer, tournament, (event,), checkout = await _prepared_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        provider,
+        fees=(Decimal("12.34"),),
+    )
+    assert provider.intent is not None
+    provider.intent = FakeProviderIntent(
+        **(asdict(provider.intent) | {"status": "succeeded", "amount_cents": 4321})
+    )
+
+    accepted = await _webhook(
+        api_client,
+        provider.event("evt_stale_terminal_mismatch", amount_cents=4321),
+        "test-valid-signature",
+    )
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout["id"]))
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert stored is not None
+    assert payment is not None
+    assert payment.state is TournamentPaymentState.failed
+    assert payment.attention_notified_state == "provider_mismatch"
+
+    # Simulate a terminal aggregate persisted before checkout release was part of
+    # reconciliation. The payment has no unfinished notification/refund marker
+    # that would otherwise keep it in the periodic sweep.
+    stored.status = TournamentCheckoutStatus.active
+    await db_session.commit()
+    refunds_before = await _refunds(db_session)
+    jobs_before = len(enqueued_notification_jobs(fake_notifications_queue))
+
+    async with watch_hints(realtime_broker, payer.id) as watch:
+        first_sweep = await reconcile_stuck_payments(db_session, provider)
+        hints = await watch.collect()
+    await db_session.refresh(stored)
+
+    assert first_sweep == 1
+    assert stored.status is TournamentCheckoutStatus.invalidated
+    assert hints[payer.id] == [EventKind.dashboard_changed]
+    assert await _refunds(db_session) == refunds_before
+    assert len(enqueued_notification_jobs(fake_notifications_queue)) == jobs_before
+    retrievals_after_repair = list(provider.retrievals)
+
+    second_sweep = await reconcile_stuck_payments(db_session, provider)
+
+    assert second_sweep == 0
+    assert provider.retrievals == retrievals_after_repair
+    assert await _refunds(db_session) == refunds_before
+    assert len(enqueued_notification_jobs(fake_notifications_queue)) == jobs_before
+
+    replacement = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={
+            "request_id": str(uuid.uuid4()),
+            "event_ids": [str(event.id)],
+        },
+    )
+    assert replacement.status_code == 201, replacement.text
+    assert replacement.json()["id"] != checkout["id"]
+
+
 async def test_provider_mismatch_reference_survives_a_truncated_uuid_collision(
     api_client: AsyncClient,
     db_session: AsyncSession,
@@ -1212,6 +1333,120 @@ async def test_provider_confirmed_cancellation_clears_receipt_sync_obligation(
     assert payment.state is TournamentPaymentState.canceled
     assert payment.receipt_sync_pending is False
     assert len(provider.receipt_updates) == calls_after_edit
+
+
+async def test_provider_confirmed_cancellation_releases_hold_for_replacement_checkout(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    provider = FakePaymentProvider()
+    payer, tournament, (event,), checkout = await _prepared_checkout(
+        api_client, db_session, monkeypatch, provider
+    )
+
+    canceled = await _webhook(
+        api_client,
+        provider.event("evt_canceled_releases_hold", status="canceled"),
+        "test-valid-signature",
+    )
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout["id"]))
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+
+    assert canceled.status_code == 200, canceled.text
+    assert stored is not None
+    assert payment is not None
+    assert payment.state is TournamentPaymentState.canceled
+    assert await _entry_facts(db_session, payer) == ([], 0)
+    assert await _refunds(db_session) == []
+
+    replacement = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={
+            "request_id": str(uuid.uuid4()),
+            "event_ids": [str(event.id)],
+        },
+    )
+
+    assert replacement.status_code == 201, replacement.text
+    assert replacement.json()["id"] != checkout["id"]
+    assert stored.status in {
+        TournamentCheckoutStatus.cancelled,
+        TournamentCheckoutStatus.invalidated,
+    }
+
+
+async def test_sweep_repairs_stale_provider_canceled_checkout_once(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+    fake_notifications_queue,
+    realtime_broker: RealtimeBroker,
+) -> None:
+    provider = FakePaymentProvider()
+    payer, tournament, (event,), checkout = await _prepared_checkout(
+        api_client, db_session, monkeypatch, provider
+    )
+    assert provider.intent is not None
+    provider.intent = FakeProviderIntent(
+        **(asdict(provider.intent) | {"status": "canceled"})
+    )
+
+    canceled = await _webhook(
+        api_client,
+        provider.event("evt_stale_provider_canceled", status="canceled"),
+        "test-valid-signature",
+    )
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout["id"]))
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert canceled.status_code == 200, canceled.text
+    assert stored is not None
+    assert payment is not None
+    assert payment.state is TournamentPaymentState.canceled
+
+    # Seed the pre-fix stale shape: terminal provider evidence alongside a
+    # checkout that still owns capacity and blocks replacement registration.
+    stored.status = TournamentCheckoutStatus.active
+    await db_session.commit()
+    refunds_before = await _refunds(db_session)
+    jobs_before = len(enqueued_notification_jobs(fake_notifications_queue))
+
+    async with watch_hints(realtime_broker, payer.id) as watch:
+        first_sweep = await reconcile_stuck_payments(db_session, provider)
+        hints = await watch.collect()
+    await db_session.refresh(stored)
+
+    assert first_sweep == 1
+    assert stored.status is TournamentCheckoutStatus.invalidated
+    assert hints[payer.id] == [EventKind.dashboard_changed]
+    assert await _refunds(db_session) == refunds_before == []
+    assert len(enqueued_notification_jobs(fake_notifications_queue)) == jobs_before
+    retrievals_after_repair = list(provider.retrievals)
+
+    second_sweep = await reconcile_stuck_payments(db_session, provider)
+
+    assert second_sweep == 0
+    assert provider.retrievals == retrievals_after_repair
+    assert await _refunds(db_session) == []
+    assert len(enqueued_notification_jobs(fake_notifications_queue)) == jobs_before
+
+    replacement = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={
+            "request_id": str(uuid.uuid4()),
+            "event_ids": [str(event.id)],
+        },
+    )
+    assert replacement.status_code == 201, replacement.text
+    assert replacement.json()["id"] != checkout["id"]
 
 
 async def test_canceled_receipt_rejection_is_visible_and_does_not_starve_sweep(

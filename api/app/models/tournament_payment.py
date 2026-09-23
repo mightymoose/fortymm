@@ -207,6 +207,13 @@ class TournamentProviderEvent(Base):
     """One signature-verified provider event, durable before acknowledgement."""
 
     __tablename__ = "tournament_provider_events"
+    __table_args__ = (
+        Index(
+            "ix_tournament_provider_events_unprocessed_received_at",
+            "received_at",
+            postgresql_where=text("processed_at IS NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")

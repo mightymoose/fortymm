@@ -47,6 +47,27 @@ async def test_payment_migration_installs_aggregate_and_allocation_invariants(
     assert "fk_tournament_payment_allocations_line_checkout" in allocation_foreign_keys
 
 
+async def test_payment_migration_indexes_only_unprocessed_events_in_replay_order(
+    engine: AsyncEngine,
+) -> None:
+    """The minute replay sweep must not scan and sort all historical evidence."""
+    async with engine.connect() as connection:
+        index_definition = await connection.scalar(
+            text(
+                "SELECT indexdef FROM pg_indexes "
+                "WHERE schemaname = current_schema() "
+                "AND tablename = 'tournament_provider_events' "
+                "AND lower(indexdef) LIKE '%(received_at)%' "
+                "AND lower(indexdef) LIKE '%where (processed_at is null)%'"
+            )
+        )
+
+    assert index_definition is not None
+    normalized = " ".join(index_definition.lower().split())
+    assert "(received_at)" in normalized
+    assert "where (processed_at is null)" in normalized
+
+
 async def test_receipt_migration_downgrade_removes_payment_notification_dependents(
     postgres_server_url: str,
 ) -> None:
