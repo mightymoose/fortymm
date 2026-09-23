@@ -1,5 +1,6 @@
 package com.fortymm.android.session
 
+import com.fortymm.android.network.AuthenticatedResponse
 import com.fortymm.android.network.FortyMMApiClient
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
@@ -393,6 +394,41 @@ class SessionOwnerTest {
     }
 
     @Test
+    fun structuredEndFromALaterRequestLeadsToRecoveryThatSurvivesRelaunch() = runBlocking {
+        val userId = UUID.fromString("c2b8d1a7-6e0f-4f3b-9a51-2d7e4c8b0f16")
+        val credentialStore = MemoryCredentialStore()
+        server.enqueue(
+            sessionResponse(userId, "soon-merged-guest")
+                .addHeader("Set-Cookie", "session=merged-away-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=merged-away-csrf; Path=/"),
+        )
+        server.enqueue(
+            sessionEndedResponse(
+                code = "session_merged",
+                message = "This guest session was merged into your account. Sign in to continue.",
+                email = "owner@example.com",
+            ),
+        )
+        val apiClient = FortyMMApiClient(server.url("/"))
+        val owner = SessionOwner(apiClient, credentialStore)
+        owner.bootstrap()
+
+        val response = apiClient.get("/v1/me")
+
+        val merged = SessionState.SessionEnded(
+            "This guest session was merged into your account. Sign in to continue.",
+            email = "owner@example.com",
+        )
+        assertEquals(AuthenticatedResponse.Obsolete, response)
+        assertEquals(merged, owner.state.value)
+        assertEquals(null, credentialStore.credential)
+        val relaunchedProcess = SessionOwner(FortyMMApiClient(server.url("/")), credentialStore)
+        relaunchedProcess.bootstrap()
+        assertEquals(merged, relaunchedProcess.state.value)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
     fun failedCredentialWriteRetrySavesReceivedGuestWithoutCreatingAnotherOne() = runBlocking {
         val userId = UUID.fromString("9a0b75b9-1b31-4e50-97dc-dd7c3017cbdc")
         val credentialStore = MemoryCredentialStore(failedSavesRemaining = 1)
@@ -600,6 +636,15 @@ class SessionOwnerTest {
             }
             """.trimIndent(),
         )
+
+    private fun sessionEndedResponse(code: String, message: String, email: String? = null) =
+        MockResponse()
+            .setResponseCode(401)
+            .setHeader("Content-Type", "application/json")
+            .addHeader("Set-Cookie", "session=; Path=/; Max-Age=0; HttpOnly")
+            .setBody(
+                """{"detail":{"code":"$code","message":"$message"${email?.let { ""","email":"$it"""" } ?: ""}}}""",
+            )
 
     private fun holdResponse(response: MockResponse): HeldResponse = holdResponses(response).single()
 

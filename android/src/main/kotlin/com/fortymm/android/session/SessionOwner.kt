@@ -69,6 +69,10 @@ class SessionOwner(
 
     val state: StateFlow<SessionState> = mutableState.asStateFlow()
 
+    init {
+        apiClient.sessionEndListener = ::endSessionFromServer
+    }
+
     suspend fun bootstrap() {
         if (mutableState.value is SessionState.Ready || mutableState.value is SessionState.SessionEnded) return
         val job = synchronized(bootstrapLock) {
@@ -85,6 +89,21 @@ class SessionOwner(
             bootstrapJob?.takeIf { it.isActive }
                 ?: applicationScope.async { clearSessionAndBootstrap() }
                     .also { bootstrapJob = it }
+        }
+        job.await()
+    }
+
+    /** Persists a server-reported end of the current session and drops its unsaved work. */
+    private suspend fun endSessionFromServer(reason: SessionEndReason) {
+        val job = synchronized(bootstrapLock) {
+            val previousJob = bootstrapJob
+            applicationScope.async {
+                previousJob?.join()
+                pendingCredentialRecovery = null
+                pendingPersistence = null
+                pendingSessionEnd = reason
+                persistSessionEnd(reason)
+            }.also { bootstrapJob = it }
         }
         job.await()
     }

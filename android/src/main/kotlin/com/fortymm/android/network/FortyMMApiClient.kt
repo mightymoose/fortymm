@@ -27,11 +27,16 @@ class FortyMMApiClient(
         .build()
     private val sessionUrl = apiRoot.newBuilder().encodedPath(SESSION_PATH).build()
 
+    private val credentialLock = Any()
+
     internal var sessionCredential: String? = null
         private set
 
     internal var csrfToken: String? = null
         private set
+
+    /** Told when the current session ends. The request that saw the end waits for it. */
+    internal var sessionEndListener: (suspend (SessionEndReason) -> Unit)? = null
 
     init {
         require(!httpClient.followRedirects && !httpClient.followSslRedirects) {
@@ -84,23 +89,13 @@ class FortyMMApiClient(
                 throw IOException("Session bootstrap response ended before its error body was read", error)
             }
             if (!response.isSuccessful) {
-                if (response.code == 401 && credential != null) {
-                    val ended = try {
-                        json.decodeFromString<SessionEndedResponseDto>(body)
-                    } catch (_: Exception) {
-                        null
-                    }
-                    if (ended?.detail?.code in SESSION_ENDED_CODES) {
+                val endReason = credential?.let { sessionEndReason(response.code, body) }
+                if (endReason != null) {
+                    synchronized(credentialLock) {
                         this@FortyMMApiClient.sessionCredential = null
                         this@FortyMMApiClient.csrfToken = null
-                        return@withContext EndedSession(
-                            SessionEndReason(
-                                message = ended?.detail?.message
-                                    ?: "Your session has ended. Sign in to continue.",
-                                email = ended?.detail?.email,
-                            ),
-                        )
                     }
+                    return@withContext EndedSession(endReason)
                 }
                 throw IOException("Session bootstrap failed with HTTP ${response.code}")
             }
@@ -139,14 +134,70 @@ class FortyMMApiClient(
                     cause = error,
                 )
             }
-            this@FortyMMApiClient.sessionCredential = resolvedCredential
-            this@FortyMMApiClient.csrfToken = csrfToken
+            synchronized(credentialLock) {
+                this@FortyMMApiClient.sessionCredential = resolvedCredential
+                this@FortyMMApiClient.csrfToken = csrfToken
+            }
             SessionBootstrap(
                 user = SessionUser(id = userId, username = dto.data.user.username),
                 credential = resolvedCredential,
                 expiresAtEpochMillis = receivedSessionCookie?.expiresAt,
             )
         }
+    }
+
+    /**
+     * Sends an authenticated GET for the current session.
+     *
+     * The response belongs to the credential that sent it. If that credential is no
+     * longer current when the response arrives, the response is [AuthenticatedResponse.Obsolete]:
+     * a late success cannot overwrite the new identity, and a late end cannot revoke it.
+     */
+    suspend fun get(path: String): AuthenticatedResponse {
+        val sentCredential = synchronized(credentialLock) { sessionCredential }
+            ?: throw IOException("There is no current session")
+        val request = Request.Builder()
+            .url(apiRoot.newBuilder().encodedPath(path).build())
+            .header("Accept", "application/json")
+            .header("Cookie", "$SESSION_COOKIE_NAME=$sentCredential")
+            .build()
+        val (code, body) = withContext(Dispatchers.IO) {
+            httpClient.newCall(request).execute().use { response ->
+                response.code to response.body?.string().orEmpty()
+            }
+        }
+        val endReason = sessionEndReason(code, body)
+        if (endReason != null) {
+            if (endIfCurrent(sentCredential)) sessionEndListener?.invoke(endReason)
+            return AuthenticatedResponse.Obsolete
+        }
+        if (synchronized(credentialLock) { sessionCredential != sentCredential }) {
+            return AuthenticatedResponse.Obsolete
+        }
+        if (code !in 200..299) throw IOException("GET $path failed with HTTP $code")
+        return AuthenticatedResponse.Current(body)
+    }
+
+    /** The one decoder for the API's structured session-ended responses. */
+    private fun sessionEndReason(code: Int, body: String): SessionEndReason? {
+        if (code != 401) return null
+        val detail = try {
+            json.decodeFromString<SessionEndedResponseDto>(body).detail
+        } catch (_: Exception) {
+            return null
+        }
+        if (detail.code !in SESSION_ENDED_CODES) return null
+        return SessionEndReason(
+            message = detail.message ?: "Your session has ended. Sign in to continue.",
+            email = detail.email,
+        )
+    }
+
+    private fun endIfCurrent(sentCredential: String): Boolean = synchronized(credentialLock) {
+        if (sessionCredential != sentCredential) return false
+        sessionCredential = null
+        csrfToken = null
+        true
     }
 
     private fun incompleteSessionOrThrow(
@@ -158,8 +209,10 @@ class FortyMMApiClient(
         cause: Exception? = null,
     ): IncompleteSession {
         if (receivedCredential != null && receivedCredential != sentCredential) {
-            sessionCredential = receivedCredential
-            csrfToken = receivedCsrfToken
+            synchronized(credentialLock) {
+                sessionCredential = receivedCredential
+                csrfToken = receivedCsrfToken
+            }
             return IncompleteSession(
                 credential = receivedCredential,
                 expiresAtEpochMillis = requireNotNull(receivedCredentialExpiresAt),
@@ -180,6 +233,14 @@ class FortyMMApiClient(
             .followSslRedirects(false)
             .build()
     }
+}
+
+/** The outcome of an authenticated request, tied to the session that sent it. */
+sealed interface AuthenticatedResponse {
+    data class Current(val body: String) : AuthenticatedResponse
+
+    /** The session that sent the request has ended or been replaced. Discard the response. */
+    data object Obsolete : AuthenticatedResponse
 }
 
 sealed interface SessionBootstrapResult
