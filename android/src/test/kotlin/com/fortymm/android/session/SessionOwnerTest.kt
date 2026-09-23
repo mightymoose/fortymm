@@ -354,6 +354,45 @@ class SessionOwnerTest {
     }
 
     @Test
+    fun doubleTappingContinueAsANewGuestCreatesOneNewIdentity() = runBlocking {
+        val endedReason = SessionEndReason(message = "You've been signed out.", email = null)
+        val credentialStore = MemoryCredentialStore().apply { sessionEndReason = endedReason }
+        val userId = UUID.fromString("a4f7e0f2-58c4-4b0e-9d7e-3f8a2c1b6d55")
+        val newGuestResponse = holdResponse(
+            sessionResponse(userId, "only-new-guest")
+                .addHeader("Set-Cookie", "session=only-new-guest-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=only-new-guest-csrf; Path=/"),
+        )
+        val owner = SessionOwner(
+            apiClient = FortyMMApiClient(server.url("/")),
+            credentialStore = credentialStore,
+        )
+        owner.bootstrap()
+
+        val firstTap = async(start = CoroutineStart.UNDISPATCHED) { owner.startNewGuest() }
+        newGuestResponse.awaitRequest()
+        assertEquals(
+            SessionState.SessionEnded(
+                endedReason.message,
+                endedReason.email,
+                newGuest = NewGuestStatus.Starting,
+            ),
+            owner.state.value,
+        )
+        val secondTap = async(start = CoroutineStart.UNDISPATCHED) { owner.startNewGuest() }
+        newGuestResponse.release()
+        firstTap.await()
+        secondTap.await()
+
+        assertEquals(
+            SessionState.Ready(SessionUser(userId, "only-new-guest")),
+            owner.state.value,
+        )
+        assertEquals("only-new-guest-session", credentialStore.credential)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
     fun failedCredentialWriteRetrySavesReceivedGuestWithoutCreatingAnotherOne() = runBlocking {
         val userId = UUID.fromString("9a0b75b9-1b31-4e50-97dc-dd7c3017cbdc")
         val credentialStore = MemoryCredentialStore(failedSavesRemaining = 1)

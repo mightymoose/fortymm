@@ -242,6 +242,7 @@ class SessionOwner(
     private suspend fun clearSessionAndBootstrap() {
         val recoveryState = mutableState.value
         if (!canStartNewGuest()) return
+        mutableState.value = recoveryState.withNewGuest(NewGuestStatus.Starting)
         if (recoveryState is SessionState.UnreadableStorage) {
             val cleared = withContext(Dispatchers.IO) { credentialStore.clear() }
             if (cleared == CredentialClearResult.Failed) {
