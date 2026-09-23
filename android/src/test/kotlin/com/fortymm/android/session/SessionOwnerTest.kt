@@ -1,5 +1,6 @@
 package com.fortymm.android.session
 
+import com.fortymm.android.network.AuthenticatedResponse
 import com.fortymm.android.network.FortyMMApiClient
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
@@ -101,10 +102,7 @@ class SessionOwnerTest {
         laterProcess.bootstrap()
 
         assertEquals(
-            SessionState.SessionEnded(
-                "Your saved session has expired. Start a new guest to continue.",
-                email = null,
-            ),
+            SessionState.SessionEnded(SessionEndReason(SessionEndCode.Expired)),
             laterProcess.state.value,
         )
         assertEquals(1, server.requestCount)
@@ -251,7 +249,7 @@ class SessionOwnerTest {
         firstProcess.bootstrap()
 
         assertEquals(
-            SessionState.SessionEnded("You've been signed out. Sign in to continue.", email = null),
+            SessionState.SessionEnded(SessionEndReason(SessionEndCode.Ended)),
             firstProcess.state.value,
         )
         val laterProcess = SessionOwner(
@@ -260,7 +258,7 @@ class SessionOwnerTest {
         )
         laterProcess.bootstrap()
         assertEquals(
-            SessionState.SessionEnded("You've been signed out. Sign in to continue.", email = null),
+            SessionState.SessionEnded(SessionEndReason(SessionEndCode.Ended)),
             laterProcess.state.value,
         )
         assertEquals(1, server.requestCount)
@@ -277,6 +275,229 @@ class SessionOwnerTest {
             SessionState.Ready(SessionUser(replacementUserId, "replacement-guest")),
             laterProcess.state.value,
         )
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun endedMarkerSurvivesProcessDeathUntilTheNewGuestCredentialIsSaved() = runBlocking {
+        val endedReason = SessionEndReason(SessionEndCode.Ended)
+        val credentialStore = MemoryCredentialStore().apply { sessionEndReason = endedReason }
+        val userId = UUID.fromString("5d0b7a52-2a8b-4c55-9f0e-6c4a0f5e2b11")
+        val newGuestResponse = holdResponse(
+            sessionResponse(userId, "new-guest")
+                .addHeader("Set-Cookie", "session=new-guest-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=new-guest-csrf; Path=/"),
+        )
+        val dyingProcess = SessionOwner(
+            apiClient = FortyMMApiClient(server.url("/")),
+            credentialStore = credentialStore,
+        )
+        dyingProcess.bootstrap()
+
+        val recovery = async(start = CoroutineStart.UNDISPATCHED) { dyingProcess.startNewGuest() }
+        newGuestResponse.awaitRequest()
+        val relaunchedProcess = SessionOwner(
+            apiClient = FortyMMApiClient(server.url("/")),
+            credentialStore = credentialStore,
+        )
+        relaunchedProcess.bootstrap()
+
+        assertEquals(
+            SessionState.SessionEnded(endedReason),
+            relaunchedProcess.state.value,
+        )
+        assertEquals(1, server.requestCount)
+        newGuestResponse.release()
+        recovery.await()
+        assertEquals("new-guest-session", credentialStore.credential)
+        assertEquals(null, credentialStore.sessionEndReason)
+    }
+
+    @Test
+    fun failedNewGuestStartStaysOnTheRecoveryScreenAndCanBeRetried() = runBlocking {
+        val endedReason = SessionEndReason(SessionEndCode.Ended)
+        val credentialStore = MemoryCredentialStore().apply { sessionEndReason = endedReason }
+        val owner = SessionOwner(
+            apiClient = FortyMMApiClient(server.url("/")),
+            credentialStore = credentialStore,
+        )
+        owner.bootstrap()
+        server.enqueue(MockResponse().setResponseCode(503).setBody("""{"detail":"unavailable"}"""))
+
+        owner.startNewGuest()
+
+        assertEquals(
+            SessionState.SessionEnded(
+                endedReason,
+                newGuest = NewGuestStatus.Failed,
+            ),
+            owner.state.value,
+        )
+        assertEquals(endedReason, credentialStore.sessionEndReason)
+
+        val userId = UUID.fromString("e3c1c0f4-7a51-4c4e-8d51-0f7c2b9f6a10")
+        server.enqueue(
+            sessionResponse(userId, "retried-new-guest")
+                .addHeader("Set-Cookie", "session=retried-new-guest-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=retried-new-guest-csrf; Path=/"),
+        )
+        owner.startNewGuest()
+
+        assertEquals(
+            SessionState.Ready(SessionUser(userId, "retried-new-guest")),
+            owner.state.value,
+        )
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun doubleTappingContinueAsANewGuestCreatesOneNewIdentity() = runBlocking {
+        val endedReason = SessionEndReason(SessionEndCode.Ended)
+        val credentialStore = MemoryCredentialStore().apply { sessionEndReason = endedReason }
+        val userId = UUID.fromString("a4f7e0f2-58c4-4b0e-9d7e-3f8a2c1b6d55")
+        val newGuestResponse = holdResponse(
+            sessionResponse(userId, "only-new-guest")
+                .addHeader("Set-Cookie", "session=only-new-guest-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=only-new-guest-csrf; Path=/"),
+        )
+        val owner = SessionOwner(
+            apiClient = FortyMMApiClient(server.url("/")),
+            credentialStore = credentialStore,
+        )
+        owner.bootstrap()
+
+        val firstTap = async(start = CoroutineStart.UNDISPATCHED) { owner.startNewGuest() }
+        newGuestResponse.awaitRequest()
+        assertEquals(
+            SessionState.SessionEnded(
+                endedReason,
+                newGuest = NewGuestStatus.Starting,
+            ),
+            owner.state.value,
+        )
+        val secondTap = async(start = CoroutineStart.UNDISPATCHED) { owner.startNewGuest() }
+        newGuestResponse.release()
+        firstTap.await()
+        secondTap.await()
+
+        assertEquals(
+            SessionState.Ready(SessionUser(userId, "only-new-guest")),
+            owner.state.value,
+        )
+        assertEquals("only-new-guest-session", credentialStore.credential)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun structuredEndFromALaterRequestLeadsToRecoveryThatSurvivesRelaunch() = runBlocking {
+        val userId = UUID.fromString("c2b8d1a7-6e0f-4f3b-9a51-2d7e4c8b0f16")
+        val credentialStore = MemoryCredentialStore()
+        server.enqueue(
+            sessionResponse(userId, "soon-merged-guest")
+                .addHeader("Set-Cookie", "session=merged-away-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=merged-away-csrf; Path=/"),
+        )
+        server.enqueue(
+            sessionEndedResponse(
+                code = "session_merged",
+                message = "This guest session was merged into your account. Sign in to continue.",
+                email = "owner@example.com",
+            ),
+        )
+        val apiClient = FortyMMApiClient(server.url("/"))
+        val owner = SessionOwner(apiClient, credentialStore)
+        owner.bootstrap()
+
+        val response = apiClient.get("/v1/me")
+
+        val merged = SessionState.SessionEnded(
+            SessionEndReason(SessionEndCode.Merged, email = "owner@example.com"),
+        )
+        assertEquals(AuthenticatedResponse.Obsolete, response)
+        assertEquals(merged, owner.state.value)
+        assertEquals(null, credentialStore.credential)
+        val relaunchedProcess = SessionOwner(FortyMMApiClient(server.url("/")), credentialStore)
+        relaunchedProcess.bootstrap()
+        assertEquals(merged, relaunchedProcess.state.value)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun lateResponsesFromThePreviousIdentityCannotOverwriteOrRevokeTheRecoveredGuest() = runBlocking {
+        val previousUserId = UUID.fromString("0f3d2c1b-9a8e-4d7c-8b6a-5e4f3d2c1b0a")
+        val recoveredUserId = UUID.fromString("1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d")
+        val credentialStore = MemoryCredentialStore()
+        val (
+            previousGuestBootstrap,
+            lateEnd,
+            lateSuccess,
+            currentEnd,
+            recoveredGuestBootstrap,
+        ) = holdResponses(
+            sessionResponse(previousUserId, "previous-guest")
+                .addHeader("Set-Cookie", "session=previous-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=previous-csrf; Path=/"),
+            sessionEndedResponse("session_ended", "You've been signed out. Sign in to continue."),
+            MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""{"data":{"username":"previous-guest"}}"""),
+            sessionEndedResponse("session_ended", "You've been signed out. Sign in to continue."),
+            sessionResponse(recoveredUserId, "recovered-guest")
+                .addHeader("Set-Cookie", "session=recovered-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=recovered-csrf; Path=/"),
+        )
+        previousGuestBootstrap.release()
+        currentEnd.release()
+        recoveredGuestBootstrap.release()
+        val apiClient = FortyMMApiClient(server.url("/"))
+        val owner = SessionOwner(apiClient, credentialStore)
+        owner.bootstrap()
+
+        val lateEndResponse = async(start = CoroutineStart.UNDISPATCHED) { apiClient.get("/v1/me") }
+        lateEnd.awaitRequest()
+        val lateSuccessResponse = async(start = CoroutineStart.UNDISPATCHED) { apiClient.get("/v1/me") }
+        lateSuccess.awaitRequest()
+        apiClient.get("/v1/me")
+        owner.startNewGuest()
+        lateEnd.release()
+        lateSuccess.release()
+
+        assertEquals(AuthenticatedResponse.Obsolete, lateEndResponse.await())
+        assertEquals(AuthenticatedResponse.Obsolete, lateSuccessResponse.await())
+        assertEquals(
+            SessionState.Ready(SessionUser(recoveredUserId, "recovered-guest")),
+            owner.state.value,
+        )
+        assertEquals("recovered-session", credentialStore.credential)
+        assertEquals("recovered-session", apiClient.sessionCredential)
+        assertEquals(5, server.requestCount)
+    }
+
+    @Test
+    fun sessionEndDropsAnUnsavedCredentialSoARetryCannotResurrectIt() = runBlocking {
+        val userId = UUID.fromString("7c6b5a49-3827-4165-9a4b-3c2d1e0f9a8b")
+        val credentialStore = MemoryCredentialStore(failedSavesRemaining = 1, failedEndMarksRemaining = 1)
+        server.enqueue(
+            sessionResponse(userId, "unsaved-guest")
+                .addHeader("Set-Cookie", "session=unsaved-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=unsaved-csrf; Path=/")
+                .setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY),
+        )
+        server.enqueue(sessionEndedResponse("session_ended", "You've been signed out. Sign in to continue."))
+        val apiClient = FortyMMApiClient(server.url("/"))
+        val owner = SessionOwner(apiClient, credentialStore)
+        owner.bootstrap()
+        assertEquals(null, credentialStore.credential)
+
+        apiClient.get("/v1/me")
+        owner.bootstrap()
+
+        assertEquals(
+            SessionState.SessionEnded(SessionEndReason(SessionEndCode.Ended)),
+            owner.state.value,
+        )
+        assertEquals(null, credentialStore.credential)
         assertEquals(2, server.requestCount)
     }
 
@@ -410,9 +631,7 @@ class SessionOwnerTest {
         owner.bootstrap()
 
         assertEquals(
-            SessionState.UnreadableStorage(
-                "We couldn't read your saved session.",
-            ),
+            SessionState.UnreadableStorage(),
             owner.state.value,
         )
         assertEquals(0, server.requestCount)
@@ -489,6 +708,15 @@ class SessionOwnerTest {
             """.trimIndent(),
         )
 
+    private fun sessionEndedResponse(code: String, message: String, email: String? = null) =
+        MockResponse()
+            .setResponseCode(401)
+            .setHeader("Content-Type", "application/json")
+            .addHeader("Set-Cookie", "session=; Path=/; Max-Age=0; HttpOnly")
+            .setBody(
+                """{"detail":{"code":"$code","message":"$message"${email?.let { ""","email":"$it"""" } ?: ""}}}""",
+            )
+
     private fun holdResponse(response: MockResponse): HeldResponse = holdResponses(response).single()
 
     private fun holdResponses(vararg responses: MockResponse): List<HeldResponse> {
@@ -527,6 +755,7 @@ class SessionOwnerTest {
     private class MemoryCredentialStore(
         var failedSavesRemaining: Int = 0,
         var unreadable: Boolean = false,
+        var failedEndMarksRemaining: Int = 0,
     ) : SessionCredentialStore {
         var credential: String? = null
         var expiresAtEpochMillis: Long? = Long.MAX_VALUE
@@ -553,6 +782,10 @@ class SessionOwnerTest {
         }
 
         override fun markSessionEnded(reason: SessionEndReason): CredentialSaveResult {
+            if (failedEndMarksRemaining > 0) {
+                failedEndMarksRemaining -= 1
+                return CredentialSaveResult.Failed
+            }
             credential = null
             expiresAtEpochMillis = null
             sessionEndReason = reason

@@ -15,6 +15,8 @@ import java.security.KeyStore
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import javax.crypto.Cipher
+import javax.crypto.SecretKey
 
 @RunWith(AndroidJUnit4::class)
 class AndroidSessionCredentialStoreTest {
@@ -69,16 +71,26 @@ class AndroidSessionCredentialStoreTest {
     @Test
     fun sessionEndedReasonReplacesTheCredentialAndSurvivesANewStore() {
         val store = AndroidSessionCredentialStore(context)
-        val reason = SessionEndReason(
-            message = "This guest session was merged into your account. Sign in to continue.",
-            email = "player@example.com",
-        )
+        val reason = SessionEndReason(SessionEndCode.Merged, email = "player@example.com")
 
         assertEquals(CredentialSaveResult.Saved, store.save("merged-guest-credential"))
         assertEquals(CredentialSaveResult.Saved, store.markSessionEnded(reason))
 
         assertEquals(
             CredentialLoadResult.SessionEnded(reason),
+            AndroidSessionCredentialStore(context).load(),
+        )
+    }
+
+    @Test
+    fun endedMarkerWrittenBeforeReasonCodesReadsAsSignedOut() {
+        assertEquals(CredentialSaveResult.Saved, AndroidSessionCredentialStore(context).save("creates-the-key"))
+        writeProtectedPayload(
+            """{"kind":"session-ended","message":"You've been signed out. Sign in to continue.","email":null}""",
+        )
+
+        assertEquals(
+            CredentialLoadResult.SessionEnded(SessionEndReason(SessionEndCode.Ended)),
             AndroidSessionCredentialStore(context).load(),
         )
     }
@@ -128,10 +140,7 @@ class AndroidSessionCredentialStoreTest {
     @Test
     fun syncedTemporarySessionEndReplacesAStalePrimaryAfterProcessDeathBeforeRename() {
         val store = AndroidSessionCredentialStore(context)
-        val reason = SessionEndReason(
-            message = "This guest session expired. Start a new guest to continue.",
-            email = null,
-        )
+        val reason = SessionEndReason(SessionEndCode.Expired)
         assertEquals(CredentialSaveResult.Saved, store.save("stale-rejected-credential"))
         val credentialFile = File(credentialDirectory, "credential.bin")
         val stalePrimary = credentialFile.readBytes()
@@ -206,6 +215,20 @@ class AndroidSessionCredentialStoreTest {
             )
         } finally {
             executor.shutdownNow()
+        }
+    }
+
+    /** Writes [payload] in the store's on-disk format, as an older build would have. */
+    private fun writeProtectedPayload(payload: String) {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        val key = androidKeyStore().getKey("${context.packageName}.session-credential.v1", null) as SecretKey
+        cipher.init(Cipher.ENCRYPT_MODE, key)
+        val ciphertext = cipher.doFinal(payload.toByteArray(Charsets.UTF_8))
+        File(credentialDirectory, "credential.bin").outputStream().use { output ->
+            output.write(1)
+            output.write(cipher.iv.size)
+            output.write(cipher.iv)
+            output.write(ciphertext)
         }
     }
 

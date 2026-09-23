@@ -13,6 +13,16 @@ reports `Ready` after a new or rotated session credential is durably saved.
 The Home shell observes that state and renders loading, the API-returned
 username, or a retryable startup error.
 
+## Session recovery
+
+A structured `session_ended` or `session_merged` response from any request
+replaces Home with a persistent "Signed out" recovery screen. The owner stores
+the reason, not the credential, so a force-stop and relaunch shows the same
+screen without a network call. Only "Continue as a new guest" leaves it. That
+action runs one cookieless bootstrap under the shared session lock, and its
+new credential replaces the stored reason in one atomic write. A response sent
+with an earlier credential cannot end or overwrite the recovered guest.
+
 Run the focused JVM session tests and the API 26 device tests with:
 
 ```bash

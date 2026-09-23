@@ -4,6 +4,7 @@ import com.fortymm.android.network.FortyMMApiClient
 import com.fortymm.android.network.EndedSession
 import com.fortymm.android.network.IncompleteSession
 import com.fortymm.android.network.SessionBootstrap
+import com.fortymm.android.network.SessionBootstrapResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
@@ -21,9 +22,17 @@ data class SessionUser(
     val username: String,
 )
 
+/** Why a session ended. The recovery screen owns the copy for each code. */
+enum class SessionEndCode(val wireValue: String) {
+    Ended("session_ended"),
+    Merged("session_merged"),
+    Expired("session_expired"),
+}
+
 data class SessionEndReason(
-    val message: String,
-    val email: String?,
+    val code: SessionEndCode,
+    /** The merged account's email. Kept for sign-in (#1729), never shown here. */
+    val email: String? = null,
 )
 
 sealed interface SessionState {
@@ -31,11 +40,23 @@ sealed interface SessionState {
 
     data class Ready(val user: SessionUser) : SessionState
 
-    data class SessionEnded(val message: String, val email: String?) : SessionState
+    data class SessionEnded(
+        val reason: SessionEndReason,
+        val newGuest: NewGuestStatus = NewGuestStatus.Idle,
+    ) : SessionState
 
-    data class UnreadableStorage(val message: String) : SessionState
+    data class UnreadableStorage(
+        val newGuest: NewGuestStatus = NewGuestStatus.Idle,
+    ) : SessionState
 
     data class RetryableStartup(val message: String) : SessionState
+}
+
+/** Progress of an explicit "Continue as a new guest" request from a recovery state. */
+enum class NewGuestStatus {
+    Idle,
+    Starting,
+    Failed,
 }
 
 /** Process-level owner of credential restoration and session bootstrap state. */
@@ -54,6 +75,10 @@ class SessionOwner(
 
     val state: StateFlow<SessionState> = mutableState.asStateFlow()
 
+    init {
+        apiClient.sessionEndListener = ::endSessionFromServer
+    }
+
     suspend fun bootstrap() {
         if (mutableState.value is SessionState.Ready || mutableState.value is SessionState.SessionEnded) return
         val job = synchronized(bootstrapLock) {
@@ -68,8 +93,23 @@ class SessionOwner(
         if (!canStartNewGuest()) return
         val job = synchronized(bootstrapLock) {
             bootstrapJob?.takeIf { it.isActive }
-                ?: applicationScope.async { clearSessionAndBootstrap() }
+                ?: applicationScope.async { startNewGuestOnce() }
                     .also { bootstrapJob = it }
+        }
+        job.await()
+    }
+
+    /** Persists a server-reported end of the current session and drops its unsaved work. */
+    private suspend fun endSessionFromServer(reason: SessionEndReason) {
+        val job = synchronized(bootstrapLock) {
+            val previousJob = bootstrapJob
+            applicationScope.async {
+                previousJob?.join()
+                pendingCredentialRecovery = null
+                pendingPersistence = null
+                pendingSessionEnd = reason
+                persistSessionEnd(reason)
+            }.also { bootstrapJob = it }
         }
         job.await()
     }
@@ -94,10 +134,7 @@ class SessionOwner(
         val storedCredential = when (val loaded = withContext(Dispatchers.IO) { credentialStore.load() }) {
             is CredentialLoadResult.Credential -> {
                 if (loaded.expiresAtEpochMillis == null || loaded.expiresAtEpochMillis <= currentTimeMillis()) {
-                    val reason = SessionEndReason(
-                        message = "Your saved session has expired. Start a new guest to continue.",
-                        email = null,
-                    )
+                    val reason = SessionEndReason(SessionEndCode.Expired)
                     pendingSessionEnd = reason
                     persistSessionEnd(reason)
                     return
@@ -106,38 +143,46 @@ class SessionOwner(
             }
             CredentialLoadResult.Absent -> null
             is CredentialLoadResult.SessionEnded -> {
-                mutableState.value = SessionState.SessionEnded(
-                    loaded.reason.message,
-                    loaded.reason.email,
-                )
+                mutableState.value = SessionState.SessionEnded(loaded.reason)
                 return
             }
             CredentialLoadResult.UnreadableStorage -> {
-                mutableState.value = SessionState.UnreadableStorage(
-                    "We couldn't read your saved session.",
-                )
+                mutableState.value = SessionState.UnreadableStorage()
                 return
             }
         }
 
-        try {
-            when (val result = apiClient.bootstrap(storedCredential?.value)) {
-                is SessionBootstrap -> finishBootstrap(result, storedCredential)
-                is EndedSession -> {
-                    pendingSessionEnd = result.reason
-                    persistSessionEnd(result.reason)
-                }
-                is IncompleteSession -> {
-                    pendingCredentialRecovery = result
-                    persistRecoveredCredential(result)
-                }
-            }
+        requestSession(storedCredential)
+    }
+
+    private suspend fun requestSession(storedCredential: CredentialLoadResult.Credential?) {
+        val result = try {
+            apiClient.bootstrap(storedCredential?.value)
         } catch (error: CancellationException) {
             throw error
         } catch (_: Exception) {
             mutableState.value = SessionState.RetryableStartup(
                 "We couldn't start FortyMM. Check your connection and try again.",
             )
+            return
+        }
+        applyBootstrapResult(result, storedCredential)
+    }
+
+    private suspend fun applyBootstrapResult(
+        result: SessionBootstrapResult,
+        storedCredential: CredentialLoadResult.Credential?,
+    ) {
+        when (result) {
+            is SessionBootstrap -> finishBootstrap(result, storedCredential)
+            is EndedSession -> {
+                pendingSessionEnd = result.reason
+                persistSessionEnd(result.reason)
+            }
+            is IncompleteSession -> {
+                pendingCredentialRecovery = result
+                persistRecoveredCredential(result)
+            }
         }
     }
 
@@ -183,7 +228,7 @@ class SessionOwner(
         if (saved == CredentialSaveResult.Saved) {
             pendingSessionEnd = null
             pendingPersistence = null
-            mutableState.value = SessionState.SessionEnded(reason.message, reason.email)
+            mutableState.value = SessionState.SessionEnded(reason)
         } else {
             mutableState.value = SessionState.RetryableStartup(
                 "We couldn't protect your signed-out state on this device. Please try again.",
@@ -211,25 +256,36 @@ class SessionOwner(
         mutableState.value is SessionState.UnreadableStorage ||
             mutableState.value is SessionState.SessionEnded
 
-    private suspend fun clearSessionAndBootstrap() {
+    private suspend fun startNewGuestOnce() {
+        val recoveryState = mutableState.value
         if (!canStartNewGuest()) return
-        val previousState = mutableState.value
-        val cleared = withContext(Dispatchers.IO) { credentialStore.clear() }
-        if (cleared == CredentialClearResult.Failed) {
-            mutableState.value = when (previousState) {
-                is SessionState.SessionEnded -> previousState.copy(
-                    message = "We couldn't clear the ended session. Please try again.",
-                )
-                else -> SessionState.UnreadableStorage(
-                    "We couldn't clear the unreadable saved session. Please try again.",
-                )
+        mutableState.value = recoveryState.withNewGuest(NewGuestStatus.Starting)
+        if (recoveryState is SessionState.UnreadableStorage) {
+            val cleared = withContext(Dispatchers.IO) { credentialStore.clear() }
+            if (cleared == CredentialClearResult.Failed) {
+                mutableState.value = recoveryState.withNewGuest(NewGuestStatus.Failed)
+                return
             }
-            return
         }
         pendingCredentialRecovery = null
         pendingPersistence = null
         pendingSessionEnd = null
-        mutableState.value = SessionState.Loading
-        bootstrapOnce()
+        // The ended marker stays stored until the new credential replaces it, so a
+        // process death before that save relaunches into recovery, not a silent guest.
+        val result = try {
+            apiClient.bootstrap(credential = null)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            mutableState.value = recoveryState.withNewGuest(NewGuestStatus.Failed)
+            return
+        }
+        applyBootstrapResult(result, storedCredential = null)
+    }
+
+    private fun SessionState.withNewGuest(status: NewGuestStatus): SessionState = when (this) {
+        is SessionState.SessionEnded -> copy(newGuest = status)
+        is SessionState.UnreadableStorage -> copy(newGuest = status)
+        else -> this
     }
 }
