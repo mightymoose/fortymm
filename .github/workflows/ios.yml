@@ -59,6 +59,10 @@ jobs:
       # -- which the FastAPI lifespan hits at boot -- if it's `google` with no
       # GOOGLE_GEOCODING_API_KEY. This job never geocodes anything.
       GEOCODER: fake
+      # This native API is test infrastructure, not a deployed worker. Opt into
+      # the explicit development-only notification dedup fallback just like
+      # API CI and docker-compose.dev.
+      FORTYMM_DEV: "1"
       # uvicorn here serves plain HTTP (no TLS, no reverse proxy) and the
       # simulator app talks to it directly, so the session cookie must not
       # carry the Secure flag -- otherwise URLSession drops it and every
