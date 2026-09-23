@@ -8,6 +8,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.account_merge_resolution import (
+    is_terminal_merge_survivor,
+    terminal_active_account_id,
+)
 from app.config import get_settings
 from app.models import (
     Tournament,
@@ -18,16 +22,24 @@ from app.models import (
     TournamentPaymentState,
     User,
 )
+from app.notifications.service import enqueue_notification_job
+from app.notifications.taxonomy import NotificationCategory
 from app.payment_provider import (
+    STRIPE_USD_MAX_AMOUNT_CENTS,
     PaymentIntentCreate,
     PaymentProvider,
+    PaymentProviderAmountInvalidError,
+    PaymentProviderCreateRejectedError,
     PaymentProviderNotFoundError,
+    PaymentProviderReceiptUpdateRejectedError,
     PaymentProviderUncertainError,
     ProviderPaymentIntent,
     ProviderPaymentStatus,
 )
+from app.payment_support_reference import payment_support_reference
 from app.rbac import user_has_permission
 from app.realtime import EventKind, stage_event
+from app.schemas.notification import NotificationJob
 from app.schemas.tournament_checkout import (
     TournamentCheckoutPaymentState,
     TournamentPaymentLineOutcomeState,
@@ -55,6 +67,14 @@ class PaymentNotFoundError(Exception):
 
 
 class PaymentCollectionDisabledError(Exception):
+    pass
+
+
+class PaymentAmountInvalidError(Exception):
+    pass
+
+
+class PaymentCreateRejectedError(Exception):
     pass
 
 
@@ -104,8 +124,64 @@ def payment_intent_create_request(
     )
 
 
+def _new_payment_obligation(
+    checkout: TournamentCheckout,
+    *,
+    receipt_email: str | None,
+    state: TournamentPaymentState = TournamentPaymentState.preparing,
+    provider_status: str | None = None,
+) -> TournamentPayment:
+    """Build the one durable payment projection from an immutable checkout."""
+    return TournamentPayment(
+        checkout_id=checkout.id,
+        durable_identity=f"fortymm:checkout:{checkout.id}:payment:v1",
+        receipt_email=receipt_email,
+        currency=checkout.currency,
+        amount_cents=checkout.total_cents,
+        state=state,
+        provider_status=provider_status,
+        allocations=[
+            TournamentPaymentAllocation(
+                checkout_line_id=line.id,
+                checkout_id=checkout.id,
+                amount_cents=line.price_cents,
+            )
+            for line in checkout.lines
+        ],
+    )
+
+
+async def _persist_preprovider_cancellation(
+    db: AsyncSession,
+    checkout: TournamentCheckout,
+    *,
+    provider_status: str,
+) -> TournamentPayment:
+    """Keep a readable terminal projection when no provider create is possible."""
+    payment = checkout.payment
+    if payment is None:
+        payment = _new_payment_obligation(
+            checkout,
+            receipt_email=None,
+            state=TournamentPaymentState.canceled,
+            provider_status=provider_status,
+        )
+        db.add(payment)
+    now = await _database_now(db)
+    checkout.status = TournamentCheckoutStatus.cancelled
+    checkout.cancelled_at = checkout.cancelled_at or now
+    payment.state = TournamentPaymentState.canceled
+    payment.updated_at = now
+    stage_event(db, checkout.payer_account_id, EventKind.dashboard_changed)
+    await db.commit()
+    return payment
+
+
 def _read(
-    payment: TournamentPayment, *, include_client_secret: bool = True
+    payment: TournamentPayment,
+    *,
+    include_client_secret: bool = True,
+    receipt_editable: bool = True,
 ) -> TournamentPaymentRead:
     event_ids = {line.id: line.event_id for line in payment.checkout.lines}
     return TournamentPaymentRead(
@@ -117,6 +193,7 @@ def _read(
             else None
         ),
         receipt_email=payment.receipt_email,
+        receipt_editable=receipt_editable,
         support_reference=payment.support_reference,
         lines=[
             TournamentPaymentLineRead(
@@ -401,6 +478,74 @@ async def reload_payment_after_provider_io_locked(
     return payment
 
 
+async def _reload_payment_for_create_rejection_locked(
+    db: AsyncSession,
+    *,
+    tournament_id: uuid.UUID,
+    checkout_id: uuid.UUID,
+    payer_account_id: uuid.UUID,
+    payment_id: uuid.UUID,
+) -> TournamentPayment:
+    """Reload an unbound create obligation solely to terminalize rejection.
+
+    A same-person account merge may commit while provider create is in flight.
+    The ordinary reload correctly rejects that historical actor because it is
+    used by provider-mutating paths.  A permanent provider refusal is different:
+    it must close the already-created obligation and checkout even after the
+    payer becomes historical, while retaining their ids as audit ownership.
+    """
+    payer = await db.scalar(
+        select(User)
+        .where(User.id == payer_account_id)
+        .with_for_update(read=True)
+        .execution_options(populate_existing=True)
+    )
+    if payer is None:
+        raise PaymentNotFoundError()
+    tournament = await db.scalar(
+        select(Tournament)
+        .where(Tournament.id == tournament_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if tournament is None:
+        raise PaymentNotFoundError()
+    checkout = await db.scalar(
+        select(TournamentCheckout)
+        .where(
+            TournamentCheckout.id == checkout_id,
+            TournamentCheckout.tournament_id == tournament_id,
+            TournamentCheckout.payer_account_id == payer_account_id,
+        )
+        .with_for_update(of=TournamentCheckout)
+        .execution_options(populate_existing=True)
+    )
+    if checkout is None:
+        raise PaymentNotFoundError()
+    payment = await db.scalar(
+        select(TournamentPayment)
+        .where(
+            TournamentPayment.id == payment_id,
+            TournamentPayment.checkout_id == checkout_id,
+        )
+        .options(
+            selectinload(TournamentPayment.allocations),
+            selectinload(TournamentPayment.checkout).selectinload(
+                TournamentCheckout.lines
+            ),
+            selectinload(TournamentPayment.checkout).selectinload(
+                TournamentCheckout.tournament
+            ),
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if payment is None:
+        await db.rollback()
+        raise PaymentNotFoundError()
+    return payment
+
+
 async def reload_payment_for_reconciliation_locked(
     db: AsyncSession,
     *,
@@ -506,6 +651,35 @@ async def _sync_provider_receipt(
             if current_payment is None:
                 raise PaymentNotFoundError() from None
             return current_payment
+        except PaymentProviderReceiptUpdateRejectedError:
+            # Canceled intents cannot always be mutated to clear provider-held
+            # receipt PII. This is terminal provider work, not a retryable
+            # sweep obligation: preserve a manual-review fact and continue.
+            payment = await db.scalar(
+                select(TournamentPayment)
+                .where(TournamentPayment.id == payment_id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if payment is None:
+                raise PaymentNotFoundError() from None
+            if (
+                payment.receipt_email != attempted_email
+                or payment.provider_payment_id != provider_payment_id
+            ):
+                # This rejection belongs to an older desired value or provider
+                # binding.  A concurrent writer owns the current sync marker;
+                # never terminalize its still-unresolved obligation.
+                await db.commit()
+                return payment
+            payment.receipt_sync_pending = False
+            payment.receipt_sync_failed_at = await _database_now(db)
+            payment.support_reference = (
+                payment.support_reference or payment_support_reference(payment.id)
+            )
+            payment.updated_at = payment.receipt_sync_failed_at
+            await db.commit()
+            return payment
         payment = await _store_provider_result(db, payment_id=payment_id, intent=intent)
 
         # Only a successful provider response for the current desired value can
@@ -529,6 +703,7 @@ async def _sync_provider_receipt(
             return payment
         if payment.receipt_email == attempted_email:
             payment.receipt_sync_pending = False
+            payment.receipt_sync_failed_at = None
             payment.updated_at = await _database_now(db)
             await db.commit()
             return payment
@@ -557,6 +732,24 @@ async def prepare_payment(
     checkout = await _load(db, tournament_id, checkout_id)
     if checkout is None or checkout.payer_account_id != actor.id:
         raise PaymentNotFoundError()
+    if (
+        checkout.payment is None
+        and checkout.currency.upper() == "USD"
+        and checkout.total_cents > STRIPE_USD_MAX_AMOUNT_CENTS
+    ):
+        # Reject impossible aggregates before creating a durable provider
+        # obligation. The same decision must release the checkout's holds;
+        # otherwise every retry can only repeat this permanent refusal.
+        checkout = await _load_for_first_obligation_locked(
+            db,
+            tournament_id=tournament_id,
+            checkout_id=checkout_id,
+            payer_account_id=actor.id,
+        )
+        await _persist_preprovider_cancellation(
+            db, checkout, provider_status="amount_not_supported"
+        )
+        raise PaymentAmountInvalidError()
 
     payment = checkout.payment
     created_obligation = False
@@ -577,9 +770,9 @@ async def prepare_payment(
         if await _terminalize_stale_checkout(db, checkout):
             raise PaymentNotFoundError()
         if not get_settings().tournament_payment_collection_enabled:
-            checkout.status = TournamentCheckoutStatus.cancelled
-            checkout.cancelled_at = await _database_now(db)
-            await db.commit()
+            await _persist_preprovider_cancellation(
+                db, checkout, provider_status="collection_disabled"
+            )
             raise PaymentCollectionDisabledError()
         payer = await db.get(User, checkout.payer_account_id)
         if payer is None:
@@ -587,22 +780,7 @@ async def prepare_payment(
         selected_email = receipt_email if receipt_email_supplied else None
         if not receipt_email_supplied and payer.confirmed_at is not None:
             selected_email = payer.email
-        identity = f"fortymm:checkout:{checkout.id}:payment:v1"
-        payment = TournamentPayment(
-            checkout_id=checkout.id,
-            durable_identity=identity,
-            receipt_email=selected_email,
-            currency=checkout.currency,
-            amount_cents=checkout.total_cents,
-            allocations=[
-                TournamentPaymentAllocation(
-                    checkout_line_id=line.id,
-                    checkout_id=checkout.id,
-                    amount_cents=line.price_cents,
-                )
-                for line in checkout.lines
-            ],
-        )
+        payment = _new_payment_obligation(checkout, receipt_email=selected_email)
         db.add(payment)
         try:
             # This commit is the create obligation. No tournament/capacity lock is
@@ -724,15 +902,39 @@ async def prepare_payment(
         return _read(payment)
 
     if receipt_email_supplied:
-        if payment.receipt_email != receipt_email:
+        # Receipt destinations are account PII. Reacquire the lifecycle lock
+        # before persisting an edit: the authorization check above deliberately
+        # released its locks before provider I/O, so an erase/merge/deactivate
+        # may have won in the meantime.
+        payment = await reload_payment_after_provider_io_locked(
+            db,
+            tournament_id=tournament_id,
+            checkout_id=checkout_id,
+            payer_account_id=actor.id,
+            payment_id=payment.id,
+        )
+        if _is_durable_payment_history(payment):
+            await db.commit()
+            return _read(payment, include_client_secret=False)
+        if not await _checkout_has_payment_authority(db, payment.checkout):
+            await db.commit()
+            raise PaymentNotFoundError()
+        if (
+            payment.receipt_email != receipt_email
+            or payment.receipt_sync_failed_at is not None
+        ):
             payment.receipt_email = receipt_email
+            # A new desired value owns a fresh sync attempt. A manual-review
+            # marker for an older value must not remain operator-visible.
+            payment.receipt_sync_failed_at = None
             if payment.provider_payment_id is not None or payment.provider_status in {
                 IN_FLIGHT_CREATE_PROVIDER_STATUS,
                 UNCERTAIN_CREATE_PROVIDER_STATUS,
             }:
                 payment.receipt_sync_pending = True
             payment.updated_at = await _database_now(db)
-            await db.commit()
+        # Release lifecycle/checkout/payment locks before the provider call.
+        await db.commit()
         if payment.provider_payment_id is not None:
             payment = await _sync_provider_receipt(
                 db,
@@ -840,6 +1042,52 @@ async def prepare_payment(
                     return _read(checkout.payment)
                 provider_create_attempted = True
                 intent = await provider.create_payment_intent(create_request)
+    except (
+        PaymentProviderAmountInvalidError,
+        PaymentProviderCreateRejectedError,
+    ) as error:
+        payment = await _reload_payment_for_create_rejection_locked(
+            db,
+            tournament_id=tournament_id,
+            checkout_id=checkout_id,
+            payer_account_id=actor.id,
+            payment_id=payment.id,
+        )
+        if payment.provider_payment_id is None:
+            now = await _database_now(db)
+            payment.state = TournamentPaymentState.failed
+            payment.provider_status = "create_rejected"
+            payment.support_reference = (
+                payment.support_reference or payment_support_reference(payment.id)
+            )
+            payment.checkout.status = TournamentCheckoutStatus.cancelled
+            payment.checkout.cancelled_at = now
+            payment.updated_at = now
+            recipient_id = await terminal_active_account_id(
+                db, payment.checkout.payer_account_id
+            )
+            if recipient_id is not None:
+                stage_event(db, recipient_id, EventKind.dashboard_changed)
+            if recipient_id is not None and enqueue_notification_job(
+                NotificationJob(
+                    user_id=recipient_id,
+                    category=NotificationCategory.PAYMENTS,
+                    title="Payment could not be started",
+                    body=(
+                        "Your tournament payment needs review. Contact support with "
+                        f"reference {payment.support_reference}."
+                    ),
+                    link=(
+                        f"/tournaments/{payment.checkout.tournament_id}/checkouts/"
+                        f"{payment.checkout_id}"
+                    ),
+                )
+            ):
+                payment.attention_notified_state = "create_rejected"
+            await db.commit()
+        if isinstance(error, PaymentProviderAmountInvalidError):
+            raise PaymentAmountInvalidError() from None
+        raise PaymentCreateRejectedError() from None
     except (TimeoutError, PaymentProviderUncertainError):
         if provider_create_attempted:
             payment = await reload_payment_after_provider_io_locked(
@@ -906,11 +1154,25 @@ async def read_payment_status(
     checkout = await _load(db, tournament_id, checkout_id)
     if checkout is None or checkout.payment is None:
         raise PaymentNotFoundError()
-    if checkout.payer_account_id != actor.id and not await user_has_permission(
+    owns_historical_payment = await is_terminal_merge_survivor(
+        db,
+        historical_account_id=checkout.payer_account_id,
+        candidate_account_id=actor.id,
+    )
+    if not owns_historical_payment and not await user_has_permission(
         db, actor.id, PAYMENTS_VIEW_PERMISSION
     ):
         raise PaymentNotFoundError()
     payment = checkout.payment
+    if checkout.payer_account_id != actor.id and owns_historical_payment:
+        # The survivor inherits recovery visibility, not the old account's
+        # provider-mutating capability. Return the durable local projection
+        # that the notification/dashboard linked to, always secret-redacted.
+        return _read(
+            payment,
+            include_client_secret=False,
+            receipt_editable=False,
+        )
     if payment.state in {
         TournamentPaymentState.succeeded,
         TournamentPaymentState.failed,

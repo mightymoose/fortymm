@@ -12,6 +12,45 @@ from app.payment_provider import (
     StripePaymentProvider,
 )
 
+try:
+    from app.payment_provider import PaymentProviderReceiptUpdateRejectedError
+except ImportError:  # The red test defines the provider contract production must add.
+
+    class PaymentProviderReceiptUpdateRejectedError(Exception):
+        pass
+
+
+try:
+    from app.payment_provider import PaymentProviderAmountInvalidError
+except ImportError:  # The red test defines the provider contract production must add.
+
+    class PaymentProviderAmountInvalidError(Exception):
+        pass
+
+
+try:
+    from app.payment_provider import PaymentProviderCreateRejectedError
+except ImportError:  # The red test defines the provider contract production must add.
+
+    class PaymentProviderCreateRejectedError(Exception):
+        pass
+
+
+try:
+    from app.payment_provider import PaymentProviderConfigurationError
+except ImportError:  # The red test defines the provider contract production must add.
+
+    class PaymentProviderConfigurationError(Exception):
+        pass
+
+
+try:
+    from app.payment_provider import PaymentProviderResponseInvalidError
+except ImportError:  # The red test defines the provider contract production must add.
+
+    class PaymentProviderResponseInvalidError(Exception):
+        pass
+
 
 def _request() -> PaymentIntentCreate:
     return PaymentIntentCreate(
@@ -71,6 +110,26 @@ async def test_create_parses_real_dynamic_stripe_object(
     assert intent.currency == "USD"
 
 
+async def test_create_rejects_amount_above_stripe_usd_maximum_before_sdk_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_boundary")
+    sdk_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        stripe.PaymentIntent,
+        "create",
+        lambda **kwargs: sdk_calls.append(kwargs),
+    )
+    request = PaymentIntentCreate(
+        **(_request().__dict__ | {"amount_cents": 100_000_000})
+    )
+
+    with pytest.raises(PaymentProviderAmountInvalidError):
+        await StripePaymentProvider().create_payment_intent(request)
+
+    assert sdk_calls == []
+
+
 async def test_webhook_parses_real_dynamic_stripe_event(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -97,6 +156,69 @@ async def test_webhook_parses_real_dynamic_stripe_event(
     assert verified.payment.status == "requires_action"
 
 
+@pytest.mark.parametrize(
+    "event",
+    [
+        pytest.param(
+            {
+                "id": "evt_unsupported_type",
+                "type": "charge.succeeded",
+                "created": 1_800_000_000,
+                "data": {"object": {"id": "ch_other_integration"}},
+            },
+            id="unsupported-event-type",
+        ),
+        pytest.param(
+            {
+                "id": "evt_non_fortymm_intent",
+                "type": "payment_intent.succeeded",
+                "created": 1_800_000_000,
+                "data": {
+                    "object": _stripe_intent(
+                        status="succeeded",
+                        metadata={"another_integration": "true"},
+                    )
+                },
+            },
+            id="non-fortymm-payment-intent",
+        ),
+        pytest.param(
+            {
+                "id": "evt_unsupported_payment_intent_subtype",
+                "type": "payment_intent.created",
+                "created": 1_800_000_000,
+                "data": {
+                    "object": _stripe_intent(
+                        status="requires_payment_method",
+                        metadata={
+                            "fortymm_identity": "fortymm:checkout:test:payment:v1",
+                            "fortymm_merchant_account_id": (
+                                "00000000-0000-0000-0000-000000000001"
+                            ),
+                        },
+                    )
+                },
+            },
+            id="unsupported-payment-intent-subtype",
+        ),
+    ],
+)
+async def test_webhook_ignores_authenticated_irrelevant_stripe_event(
+    monkeypatch: pytest.MonkeyPatch,
+    event: dict[str, object],
+) -> None:
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_boundary")
+    monkeypatch.setattr(
+        stripe.Webhook,
+        "construct_event",
+        lambda *_args, **_kwargs: event,
+    )
+
+    verified = await StripePaymentProvider().verify_webhook(b"{}", "signature")
+
+    assert verified is None
+
+
 async def test_create_rejects_unknown_provider_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -113,7 +235,7 @@ async def test_create_rejects_unknown_provider_status(
         ),
     )
 
-    with pytest.raises(ValueError):
+    with pytest.raises(PaymentProviderResponseInvalidError):
         await StripePaymentProvider().create_payment_intent(_request())
 
 
@@ -132,7 +254,7 @@ async def test_create_rejects_provider_metadata_missing_required_identity(
         ),
     )
 
-    with pytest.raises(ValueError):
+    with pytest.raises(PaymentProviderResponseInvalidError):
         await StripePaymentProvider().create_payment_intent(_request())
 
 
@@ -149,7 +271,41 @@ async def test_create_rejects_malformed_provider_metadata_with_boundary_error(
         ),
     )
 
-    with pytest.raises(ValueError):
+    with pytest.raises(PaymentProviderResponseInvalidError):
+        await StripePaymentProvider().create_payment_intent(_request())
+
+
+@pytest.mark.parametrize(
+    ("message", "param", "expected_error"),
+    [
+        pytest.param(
+            "Amount must be no more than 99999999",
+            "amount",
+            PaymentProviderAmountInvalidError,
+            id="amount-specific",
+        ),
+        pytest.param(
+            "No such connected account",
+            "stripe_account",
+            PaymentProviderCreateRejectedError,
+            id="generic-permanent-rejection",
+        ),
+    ],
+)
+async def test_create_classifies_permanent_rejection_by_provider_field(
+    monkeypatch: pytest.MonkeyPatch,
+    message: str,
+    param: str,
+    expected_error: type[Exception],
+) -> None:
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_boundary")
+
+    def rejected_create(**_kwargs: object) -> object:
+        raise stripe.InvalidRequestError(message, param)
+
+    monkeypatch.setattr(stripe.PaymentIntent, "create", rejected_create)
+
+    with pytest.raises(expected_error):
         await StripePaymentProvider().create_payment_intent(_request())
 
 
@@ -225,6 +381,79 @@ async def test_retryable_stripe_failures_have_one_uncertain_boundary_contract(
 
 
 @pytest.mark.parametrize(
+    ("operation", "provider_error"),
+    [
+        pytest.param("create", None, id="create-missing-key"),
+        pytest.param(
+            "retrieve",
+            stripe.AuthenticationError("invalid Stripe API key"),
+            id="retrieve-authentication",
+        ),
+        pytest.param(
+            "update",
+            stripe.PermissionError("key cannot update PaymentIntents"),
+            id="update-permission",
+        ),
+        pytest.param(
+            "cancel",
+            stripe.IdempotencyError("idempotency contract rejected"),
+            id="cancel-idempotency",
+        ),
+    ],
+)
+async def test_permanent_stripe_configuration_failures_have_typed_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    provider_error: Exception | None,
+) -> None:
+    """Permanent operator/config faults never escape raw or look retryable."""
+    if provider_error is None:
+        monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
+    else:
+        monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_boundary")
+
+        def permanent_failure(*_args: object, **_kwargs: object) -> object:
+            raise provider_error
+
+        stripe_method = {
+            "retrieve": "search",
+            "update": "modify",
+            "cancel": "cancel",
+        }[operation]
+        monkeypatch.setattr(stripe.PaymentIntent, stripe_method, permanent_failure)
+
+    provider = StripePaymentProvider()
+    with pytest.raises(PaymentProviderConfigurationError):
+        if operation == "create":
+            await provider.create_payment_intent(_request())
+        elif operation == "retrieve":
+            await provider.retrieve_payment_intent(_request().idempotency_key)
+        elif operation == "update":
+            await provider.update_payment_intent_receipt(
+                "pi_boundary_test", "payer@example.net"
+            )
+        else:
+            await provider.cancel_payment_intent("pi_boundary_test")
+
+
+async def test_retrieve_translates_invalid_search_request_to_permanent_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rejected PaymentIntent search is configuration, not a raw SDK leak."""
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_boundary")
+
+    def rejected_search(**_kwargs: object) -> object:
+        raise stripe.InvalidRequestError("search unavailable", "query")
+
+    monkeypatch.setattr(stripe.PaymentIntent, "search", rejected_search)
+
+    with pytest.raises(PaymentProviderConfigurationError):
+        await StripePaymentProvider().retrieve_payment_intent(
+            _request().idempotency_key
+        )
+
+
+@pytest.mark.parametrize(
     "provider_error",
     [
         TimeoutError("receipt update timed out after submission"),
@@ -245,6 +474,24 @@ async def test_receipt_update_translates_uncertain_transport_failure(
     with pytest.raises(PaymentProviderUncertainError):
         await StripePaymentProvider().update_payment_intent_receipt(
             "pi_boundary_test", "payer@example.net"
+        )
+
+
+async def test_receipt_update_translates_permanent_provider_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_boundary")
+
+    def rejected_update(_intent_id: str, *, receipt_email: str) -> object:  # noqa: ARG001 -- provider boundary shape
+        raise stripe.InvalidRequestError(
+            "PaymentIntent cannot be updated after cancellation", "intent"
+        )
+
+    monkeypatch.setattr(stripe.PaymentIntent, "modify", rejected_update)
+
+    with pytest.raises(PaymentProviderReceiptUpdateRejectedError):
+        await StripePaymentProvider().update_payment_intent_receipt(
+            "pi_boundary_test", None
         )
 
 

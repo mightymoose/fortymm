@@ -12,6 +12,7 @@ from app.models import (
 )
 from app.payment_provider import (
     PaymentProvider,
+    PaymentProviderResponseInvalidError,
     PaymentProviderSignatureError,
     get_payment_provider,
 )
@@ -47,7 +48,9 @@ from app.tournament_payment_reconciliation import (
     process_verified_event,
 )
 from app.tournament_payments import (
+    PaymentAmountInvalidError,
     PaymentCollectionDisabledError,
+    PaymentCreateRejectedError,
     PaymentNotFoundError,
     prepare_payment,
     read_payment_status,
@@ -258,6 +261,25 @@ async def prepare_tournament_checkout_payment(
                 "message": "Payment collection is disabled for new checkouts.",
             },
         ) from error
+    except PaymentAmountInvalidError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "amount_not_supported",
+                "message": "The checkout total exceeds the supported card amount.",
+            },
+        ) from error
+    except PaymentCreateRejectedError as error:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "payment_rejected",
+                "message": (
+                    "Payment setup was rejected. "
+                    "Contact the tournament director or support."
+                ),
+            },
+        ) from error
 
 
 @router.get(
@@ -295,10 +317,15 @@ async def receive_stripe_webhook(
         event = await provider.verify_webhook(
             payload, request.headers.get("stripe-signature")
         )
-    except PaymentProviderSignatureError as error:
+    except (
+        PaymentProviderSignatureError,
+        PaymentProviderResponseInvalidError,
+    ) as error:
         raise HTTPException(
             status_code=400, detail="Invalid webhook signature."
         ) from error
+    if event is None:
+        return Response(status_code=200)
     # The verified envelope is durable before any domain processing, so a
     # worker crash or admission bug is replayable rather than acknowledged loss.
     await persist_verified_event(db, event)

@@ -93,8 +93,14 @@ def enqueued_notification_jobs(queue: Queue) -> list[NotificationJob]:
     delivery itself is covered by the ``NotificationService.notify`` tests."""
     jobs: list[NotificationJob] = []
     for job in queue.get_jobs():
-        assert job.func_name == DELIVER_NOTIFICATION_JOB
-        jobs.append(NotificationJob.model_validate_json(job.args[0]))
+        if job.func_name == DELIVER_NOTIFICATION_JOB:
+            jobs.append(NotificationJob.model_validate_json(job.args[0]))
+        else:
+            from app.notifications.jobs import DELIVER_NOTIFICATION_V2_JOB
+            from app.schemas.notification import NotificationJobV2
+
+            assert job.func_name == DELIVER_NOTIFICATION_V2_JOB
+            jobs.append(NotificationJobV2.model_validate_json(job.args[0]).notification)
     return jobs
 
 

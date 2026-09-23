@@ -103,6 +103,7 @@ from tests._helpers import (
     accept_standing_result,
     assert_tournament_address_is_sql_null,
     counted_statements,
+    enqueued_notification_jobs,
     grant_permissions,
     joined_to_reservation,
     make_client,
@@ -1115,6 +1116,40 @@ async def test_create_rejects_unknown_field(
 
 
 # ----- event happy path ----------------------------------------------------
+
+
+async def test_fee_authoring_capability_requires_collection_and_configured_owner(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, owner = authed_client
+    other_merchant = await make_user(
+        db_session, f"other-merchant-{uuid.uuid4().hex[:8]}"
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", "true")
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+
+    created = await client.post("/v1/tournaments", json=_create_payload())
+
+    assert created.status_code == 201, created.text
+    assert created.json()["fee_authoring_enabled"] is True
+
+    monkeypatch.delenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID")
+    without_merchant = await client.get(f"/v1/tournaments/{created.json()['id']}")
+    assert without_merchant.status_code == 200, without_merchant.text
+    assert without_merchant.json()["fee_authoring_enabled"] is False
+
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(other_merchant.id))
+    wrong_merchant = await client.get(f"/v1/tournaments/{created.json()['id']}")
+    assert wrong_merchant.status_code == 200, wrong_merchant.text
+    assert wrong_merchant.json()["fee_authoring_enabled"] is False
+
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", "false")
+    collection_disabled = await client.get(f"/v1/tournaments/{created.json()['id']}")
+    assert collection_disabled.status_code == 200, collection_disabled.text
+    assert collection_disabled.json()["fee_authoring_enabled"] is False
 
 
 async def test_create_event_round_trips_jsonb(
@@ -12872,7 +12907,7 @@ async def _catalogue_table_ids(client: AsyncClient, tournament_id: str) -> list[
 
 
 def _match_call_jobs(queue: Queue) -> list[NotificationJob]:
-    jobs = [NotificationJob.model_validate_json(job.args[0]) for job in queue.jobs]
+    jobs = enqueued_notification_jobs(queue)
     return [job for job in jobs if job.category == "match_calls"]
 
 

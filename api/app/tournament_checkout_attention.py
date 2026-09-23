@@ -12,6 +12,7 @@ from app.models import (
     TournamentCheckout,
     TournamentCheckoutStatus,
     TournamentPayment,
+    User,
 )
 from app.models.tournament_payment import TournamentPaymentState
 from app.schemas.tournament_checkout import (
@@ -46,14 +47,47 @@ async def list_checkout_attention(
 ) -> list[CheckoutAttentionItem]:
     """Return every actionable checkout in its stable user-facing priority."""
     now = await _database_now(db)
+    # A payment remains owned by the account that created it for audit
+    # purposes.  Resolve the caller's entire reverse merge chain solely as a
+    # read projection so a second merge does not strand the original payer's
+    # recovery UI.  UNION (rather than UNION ALL) also makes corrupt cycles
+    # terminate without exposing unrelated accounts.
+    payer_identities = (
+        select(User.id)
+        .where(User.id == payer_account_id)
+        .cte("checkout_payer_identities", recursive=True)
+    )
+    payer_identities = payer_identities.union(
+        select(User.id).join(
+            payer_identities,
+            User.merged_into_user_id == payer_identities.c.id,
+        )
+    )
     rows = (
         await db.scalars(
             select(TournamentCheckout)
             .join(Tournament, Tournament.id == TournamentCheckout.tournament_id)
+            .join(
+                payer_identities,
+                payer_identities.c.id == TournamentCheckout.payer_account_id,
+            )
             .outerjoin(TournamentCheckout.payment)
             .where(
-                TournamentCheckout.payer_account_id == payer_account_id,
+                # Reverse-merge identities retain only recovery visibility.
+                # A survivor must not inherit an old account's unsubmitted,
+                # ready, or action-required payment capabilities.
                 or_(
+                    TournamentCheckout.payer_account_id == payer_account_id,
+                    TournamentPayment.state.in_(
+                        {
+                            TournamentPaymentState.failed,
+                            TournamentPaymentState.checking,
+                        }
+                    ),
+                    TournamentPayment.provider_mismatch_at.is_not(None),
+                ),
+                or_(
+                    TournamentPayment.provider_mismatch_at.is_not(None),
                     TournamentPayment.state.in_(
                         {
                             TournamentPaymentState.failed,
@@ -85,18 +119,28 @@ async def list_checkout_attention(
     ranked: list[tuple[int, datetime, CheckoutAttentionItem]] = []
     for checkout in rows:
         payment = checkout.payment
-        if payment is not None and payment.state not in _ACTIONABLE_STATES:
-            continue
-        if (payment is None or payment.state in _ACTIVE_STATES) and (
-            _effective_state(checkout, checkout.tournament, now)
-            is not TournamentCheckoutState.active
+        if (
+            payment is not None
+            and payment.state not in _ACTIONABLE_STATES
+            and payment.provider_mismatch_at is None
         ):
             continue
-        kind = (
-            _kind(payment.state)
-            if payment is not None
-            else CheckoutAttentionKind.active
-        )
+        if (
+            (payment is None or payment.state in _ACTIVE_STATES)
+            and (payment is None or payment.provider_mismatch_at is None)
+            and (
+                _effective_state(checkout, checkout.tournament, now)
+                is not TournamentCheckoutState.active
+            )
+        ):
+            continue
+        kind = CheckoutAttentionKind.active
+        if payment is not None:
+            kind = (
+                CheckoutAttentionKind.needs_review
+                if payment.provider_mismatch_at is not None
+                else _kind(payment.state)
+            )
         item = CheckoutAttentionItem(
             checkout_id=checkout.id,
             tournament_id=checkout.tournament_id,

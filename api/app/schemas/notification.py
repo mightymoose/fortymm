@@ -2,8 +2,9 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.notifications.email_dedup import email_delivery_key
 from app.notifications.taxonomy import NotificationCategory, NotificationChannel
 
 
@@ -287,6 +288,32 @@ class NotificationJob(BaseModel):
     collapse_id: str | None = None
     channels: list[NotificationChannel] | None = None
     result_id: uuid.UUID | None = None
+    email_already_delivered_key: str | None = None
+    # Input-only compatibility for in-process callers. The address is reduced
+    # to comparison evidence before this model is serialized onto Redis.
+    email_already_delivered_to: str | None = Field(default=None, exclude=True)
+
+    @model_validator(mode="after")
+    def derive_email_delivery_key(self) -> "NotificationJob":
+        if self.email_already_delivered_key is None:
+            self.email_already_delivered_key = email_delivery_key(
+                self.email_already_delivered_to
+            )
+        return self
+
+
+class NotificationJobV2(BaseModel):
+    """Versioned, PII-free outer queue envelope.
+
+    The legacy queue stores a bare :class:`NotificationJob`.  Keeping the new
+    shape behind a distinct entry point and queue lets already-deployed workers
+    drain that contract without ever reserving a payload they cannot decode.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal[2] = 2
+    notification: NotificationJob
 
 
 class BroadcastRecipient(BaseModel):

@@ -11,8 +11,10 @@ SOLVER_QUEUE = "solver"
 #: in flight; its job persists nothing and its result lives only in Redis.
 PREVIEW_QUEUE = "preview"
 EMAIL_QUEUE = "email"
+NOTIFICATION_EMAIL_V2_QUEUE = "notification-email-v2"
 RATINGS_QUEUE = "ratings"
 NOTIFICATIONS_QUEUE = "notifications"
+NOTIFICATIONS_V2_QUEUE = "notifications-v2"
 # Reserved for a future enqueue-based retirement trigger. The current periodic
 # trigger (task #9 / ADR 0007 O8) runs the sweep *inline* via
 # ``python -m app.retirement_sweep`` on a schedule (Helm CronJob in UAT, a small
@@ -38,12 +40,20 @@ def get_email_queue() -> Queue:
     return Queue(EMAIL_QUEUE, connection=_connection())
 
 
+def get_notification_email_v2_queue() -> Queue:
+    return Queue(NOTIFICATION_EMAIL_V2_QUEUE, connection=_connection())
+
+
 def get_ratings_queue() -> Queue:
     return Queue(RATINGS_QUEUE, connection=_connection())
 
 
 def get_notifications_queue() -> Queue:
     return Queue(NOTIFICATIONS_QUEUE, connection=_connection())
+
+
+def get_notifications_v2_queue() -> Queue:
+    return Queue(NOTIFICATIONS_V2_QUEUE, connection=_connection())
 
 
 def get_retirement_queue() -> Queue:

@@ -112,6 +112,7 @@ from app.tournament_materialization import materialize_event
 from app.tournament_queries import stage_ids_for_events
 from tests._entry_seeds import seed_fixture_match_sides
 from tests._helpers import (
+    enqueued_notification_jobs,
     event_draw_settings,
     event_groups,
     hijack_solve,
@@ -563,10 +564,7 @@ async def _match_call_notifications(db: AsyncSession) -> list[Notification]:
 
 
 def _fanout_jobs(notifications_queue: Queue) -> list[NotificationJob]:
-    return [
-        NotificationJob.model_validate_json(job.args[0])
-        for job in notifications_queue.jobs
-    ]
+    return enqueued_notification_jobs(notifications_queue)
 
 
 def _slide_pin_later(

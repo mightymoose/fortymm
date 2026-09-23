@@ -7,6 +7,7 @@ ad hoc ``os.environ.get(...)`` call site scattered through the codebase (see
 are left as-is.
 """
 
+import os
 import uuid
 from dataclasses import dataclass
 from enum import StrEnum
@@ -157,6 +158,12 @@ class Settings(BaseSettings):
     #: copy can never drift from what actually sends the mail.
     email_from: str = "noreply@fortymm.local"
 
+    #: Deployment secret used to turn a normalized receipt address into
+    #: non-reversible duplicate-delivery evidence carried by queued jobs.
+    #: Production must set this; development deliberately falls back to a
+    #: process-local test key at the call site so local email remains usable.
+    notification_email_dedup_secret: str = ""
+
     #: Per-IP ceiling on tournament **self-entry** (``POST
     #: /v1/tournaments/{id}/events/{event_id}/entries`` with no body), per hour
     #: (#1092). Self-entry carries no permission any more, so this per-IP cap is
@@ -235,6 +242,15 @@ class Settings(BaseSettings):
                 "GEOCODER is 'google' but GOOGLE_GEOCODING_API_KEY is unset. "
                 "Set the key, or ask for the test double by name with "
                 "GEOCODER=fake."
+            )
+        if (
+            self.tournament_payment_collection_enabled
+            and not self.notification_email_dedup_secret.strip()
+            and os.environ.get("FORTYMM_DEV", "").lower() not in {"1", "true", "yes"}
+        ):
+            raise ValueError(
+                "NOTIFICATION_EMAIL_DEDUP_SECRET is required when "
+                "TOURNAMENT_PAYMENT_COLLECTION_ENABLED is true outside development."
             )
         return self
 

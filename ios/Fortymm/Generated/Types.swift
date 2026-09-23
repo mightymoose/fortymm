@@ -13333,6 +13333,8 @@ internal enum Components {
             internal var clientSecret: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/receipt_email`.
             internal var receiptEmail: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/receipt_editable`.
+            internal var receiptEditable: Swift.Bool
             /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/support_reference`.
             internal var supportReference: Swift.String?
             /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/lines`.
@@ -13344,6 +13346,7 @@ internal enum Components {
             ///   - paymentState:
             ///   - clientSecret:
             ///   - receiptEmail:
+            ///   - receiptEditable:
             ///   - supportReference:
             ///   - lines:
             internal init(
@@ -13351,6 +13354,7 @@ internal enum Components {
                 paymentState: Components.Schemas.TournamentCheckoutPaymentState,
                 clientSecret: Swift.String? = nil,
                 receiptEmail: Swift.String? = nil,
+                receiptEditable: Swift.Bool,
                 supportReference: Swift.String? = nil,
                 lines: [Components.Schemas.TournamentPaymentLineRead]? = nil
             ) {
@@ -13358,6 +13362,7 @@ internal enum Components {
                 self.paymentState = paymentState
                 self.clientSecret = clientSecret
                 self.receiptEmail = receiptEmail
+                self.receiptEditable = receiptEditable
                 self.supportReference = supportReference
                 self.lines = lines
             }
@@ -13366,6 +13371,7 @@ internal enum Components {
                 case paymentState = "payment_state"
                 case clientSecret = "client_secret"
                 case receiptEmail = "receipt_email"
+                case receiptEditable = "receipt_editable"
                 case supportReference = "support_reference"
                 case lines
             }

@@ -103,6 +103,7 @@ class TournamentPaymentRead(BaseModel):
     payment_state: TournamentCheckoutPaymentState
     client_secret: str | None
     receipt_email: str | None
+    receipt_editable: bool
     support_reference: str | None = None
     lines: list["TournamentPaymentLineRead"] = []
 

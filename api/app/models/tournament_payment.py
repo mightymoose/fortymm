@@ -112,6 +112,9 @@ class TournamentPayment(Base):
     receipt_sync_pending: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")
     )
+    receipt_sync_failed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     currency: Mapped[str] = mapped_column(
         String(3), nullable=False, server_default="USD"
     )

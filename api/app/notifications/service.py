@@ -36,6 +36,7 @@ from app.models import (
 )
 from app.models import NotificationChannel as NotificationChannelModel
 from app.notifications.apns import Environment, PushSender, SendOutcome
+from app.notifications.email_dedup import email_delivery_key
 from app.notifications.taxonomy import (
     LOCKED_CELLS,
     LOCKED_CHANNELS,
@@ -59,6 +60,7 @@ from app.schemas.notification import (
     NotificationFeed,
     NotificationItem,
     NotificationJob,
+    NotificationJobV2,
     NotificationPreferences,
     NotificationPreferencesUpdate,
     NotificationTaxonomy,
@@ -302,12 +304,12 @@ def enqueue_notification_job(job: NotificationJob) -> bool:
     # Imported lazily (not at module level) because app.notifications.jobs
     # imports this service — a top-level import would be a cycle. The
     # function-level import keeps the job name a single source of truth.
-    from app.notifications.jobs import DELIVER_NOTIFICATION_JOB
+    from app.notifications.jobs import DELIVER_NOTIFICATION_V2_JOB
 
     try:
-        queue_module.get_notifications_queue().enqueue(
-            DELIVER_NOTIFICATION_JOB,
-            job.model_dump_json(),
+        queue_module.get_notifications_v2_queue().enqueue(
+            DELIVER_NOTIFICATION_V2_JOB,
+            NotificationJobV2(notification=job).model_dump_json(),
             result_ttl=60,
             failure_ttl=300,
         )
@@ -458,6 +460,8 @@ class NotificationService:
         collapse_id: str | None = None,
         channels: Collection[NotificationChannel] | None = None,
         result_id: uuid.UUID | None = None,
+        email_already_delivered_to: str | None = None,
+        email_already_delivered_key: str | None = None,
     ) -> NotifyResult:
         """Deliver one notification to one user across every channel the user's
         preferences allow for the notification's category.
@@ -479,18 +483,22 @@ class NotificationService:
         ``Notification.result_id`` / ``_visible_notifications_clause``. Leave
         it ``None`` for every notification that isn't one of the two hideable
         result-acceptance prompts."""
-        user = await self._active_recipient(user_id)
+        # Jobs can sit in Redis while their originally addressed account is
+        # merged. Resolve that same-person chain at delivery time so an enqueue
+        # marker never strands the notice on a tombstoned identity.
+        user = await self._canonical_active_recipient(user_id)
         if user is None:
             return NotifyResult()
+        recipient_id = user.id
 
         candidates = set(NotificationChannel) if channels is None else set(channels)
-        effective = await self._effective_channels(user_id, category, candidates)
+        effective = await self._effective_channels(recipient_id, category, candidates)
         result = NotifyResult()
 
         if NotificationChannel.IN_APP in effective:
             self._db.add(
                 Notification(
-                    user_id=user_id,
+                    user_id=recipient_id,
                     category=category.value,
                     title=title,
                     body=body,
@@ -516,7 +524,7 @@ class NotificationService:
             # doesn't taint the session for the email enqueue below.
             try:
                 result.pushed = await self.send_to_user(
-                    user_id,
+                    recipient_id,
                     title=title,
                     body=body,
                     category=push_category,
@@ -527,35 +535,48 @@ class NotificationService:
                 await self._db.rollback()
                 log.exception(
                     "Push delivery failed; continuing with remaining channels",
-                    extra={"user_id": str(user_id), "category": category.value},
+                    extra={"user_id": str(recipient_id), "category": category.value},
                 )
 
         if NotificationChannel.EMAIL in effective:
             # In-app persistence and token pruning may have committed the old
             # lock. Recheck before enqueueing, and again in the email worker.
-            recipient = await self._active_recipient(user_id)
+            recipient = await self._canonical_active_recipient(recipient_id)
             if recipient and recipient.email and recipient.confirmed_at is not None:
                 if self._enqueue_notification_email(
-                    user_id, recipient.email, title, body, link
+                    recipient.id,
+                    title,
+                    body,
+                    link,
+                    category,
+                    email_already_delivered_key
+                    or email_delivery_key(email_already_delivered_to),
                 ):
                     result.emailed = True
 
         return result
 
     def _enqueue_notification_email(
-        self, user_id: uuid.UUID, to_email: str, title: str, body: str, link: str | None
+        self,
+        user_id: uuid.UUID,
+        title: str,
+        body: str,
+        link: str | None,
+        category: NotificationCategory,
+        email_already_delivered_key: str | None,
     ) -> bool:
         """Fire-and-forget the notification email. A Redis hiccup must not fail
         the originating flow, so enqueue failures are logged and swallowed
         (mirrors ``app.sessions._enqueue_rating_recompute_after_merge``)."""
         try:
-            queue_module.get_email_queue().enqueue(
-                "app.notifications.jobs.deliver_notification_email",
+            queue_module.get_notification_email_v2_queue().enqueue(
+                "app.notifications.jobs.deliver_notification_email_v2",
                 str(user_id),
-                to_email,
                 title,
                 body,
                 link,
+                category.value,
+                email_already_delivered_key,
                 result_ttl=60,
                 failure_ttl=300,
             )
@@ -1083,6 +1104,25 @@ class NotificationService:
             .execution_options(populate_existing=True)
         )
         return recipient
+
+    async def _canonical_active_recipient(self, user_id: uuid.UUID) -> User | None:
+        """Follow a same-person merge chain to its active terminal account."""
+        account_id = user_id
+        visited: set[uuid.UUID] = set()
+        while account_id not in visited:
+            visited.add(account_id)
+            recipient: User | None = await self._db.scalar(
+                select(User)
+                .where(User.id == account_id)
+                .with_for_update(read=True)
+                .execution_options(populate_existing=True)
+            )
+            if recipient is None:
+                return None
+            if recipient.merged_into_user_id is None:
+                return recipient if recipient.is_active else None
+            account_id = recipient.merged_into_user_id
+        return None
 
     async def _tokens_for_user(self, user_id: uuid.UUID) -> Sequence[DeviceToken]:
         if await self._active_recipient(user_id) is None:

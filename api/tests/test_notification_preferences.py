@@ -1,27 +1,48 @@
 """Notification preferences: the channel masters + per-cell matrix, and how
 the resolved preferences gate what ``notify`` actually delivers."""
 
+import inspect
+import json
+import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
+import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import queue as queue_module
 from app.models import (
     DeviceToken,
     Notification,
     NotificationChannelSetting,
     NotificationPreference,
 )
+from app.notifications import jobs as notification_jobs
 from app.notifications.service import NotificationService
 from app.notifications.taxonomy import NotificationCategory, NotificationChannel
 from app.schemas.notification import (
     NotificationCellUpdate,
     NotificationChannelUpdate,
+    NotificationJob,
     NotificationPreferencesUpdate,
 )
 from tests._helpers import FakeSender, make_user, start_session
+
+NOTIFICATION_EMAIL_V2_QUEUE = "notification-email-v2"
+DELIVER_NOTIFICATION_EMAIL_V2_JOB = (
+    "app.notifications.jobs.deliver_notification_email_v2"
+)
+
+
+@pytest.fixture
+def versioned_email_queues(fake_email_queue, monkeypatch: pytest.MonkeyPatch):
+    """Model old and new workers sharing Redis but listening to distinct queues."""
+    fake_email_queue._is_async = True
+    new_queue = queue_module.get_notification_email_v2_queue()
+    return fake_email_queue, new_queue
 
 
 def _channels(data: dict) -> dict[str, dict]:
@@ -465,9 +486,10 @@ async def test_notify_missing_user_is_noop(db_session: AsyncSession):
     assert result.emailed is False
 
 
-async def test_notify_skips_tombstoned_user(db_session: AsyncSession):
-    """A merged-away guest must not receive notifications — nothing is
-    delivered and no in-app record is persisted to the ghost."""
+async def test_notify_reroutes_tombstoned_user_to_active_survivor(
+    db_session: AsyncSession,
+):
+    """Delayed work addressed to a merged account follows its survivor."""
     survivor = await make_user(db_session, "survivor")
     ghost = await make_user(db_session, "ghost")
     ghost.merged_into_user_id = survivor.id
@@ -483,9 +505,9 @@ async def test_notify_skips_tombstoned_user(db_session: AsyncSession):
         body="b",
     )
 
-    assert result.in_app_created is False
+    assert result.in_app_created is True
     assert sender.sent == []
-    rows = (
+    ghost_rows = (
         (
             await db_session.execute(
                 select(Notification).where(Notification.user_id == ghost.id)
@@ -494,7 +516,285 @@ async def test_notify_skips_tombstoned_user(db_session: AsyncSession):
         .scalars()
         .all()
     )
-    assert rows == []
+    survivor_rows = (
+        (
+            await db_session.execute(
+                select(Notification).where(Notification.user_id == survivor.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert ghost_rows == []
+    assert [(row.title, row.body) for row in survivor_rows] == [("t", "b")]
+
+
+async def test_queued_email_re_resolves_merged_survivor_and_current_address(
+    db_session: AsyncSession,
+    versioned_email_queues,
+    monkeypatch,
+) -> None:
+    old_queue, new_queue = versioned_email_queues
+    payer = await make_user(db_session, "queued-email-payer")
+    payer.email = "old@example.com"
+    payer.confirmed_at = datetime.now(UTC)
+    survivor = await make_user(db_session, "queued-email-survivor")
+    survivor.email = "current@example.com"
+    survivor.confirmed_at = datetime.now(UTC)
+    await db_session.commit()
+
+    queued = await NotificationService(db_session, FakeSender()).notify(
+        user_id=payer.id,
+        category=NotificationCategory.TOURNAMENT,
+        title="Registration confirmed",
+        body="Your entry is confirmed.",
+        channels=[NotificationChannel.EMAIL],
+    )
+    assert queued.emailed is True
+    assert old_queue.get_jobs() == []
+    [job] = new_queue.get_jobs()
+    assert job.origin == NOTIFICATION_EMAIL_V2_QUEUE
+    assert job.func_name == DELIVER_NOTIFICATION_EMAIL_V2_JOB
+    assert "@" not in json.dumps(job.args)
+
+    payer.merged_into_user_id = survivor.id
+    payer.merged_at = datetime.now(UTC)
+    await db_session.commit()
+    sent: list[str] = []
+    monkeypatch.setattr(
+        "app.email.send_notification_email",
+        lambda to_email, *_args, **_kwargs: sent.append(to_email),
+    )
+
+    await notification_jobs._deliver_notification_email_v2(
+        uuid.UUID(job.args[0]), *job.args[1:]
+    )
+
+    assert sent == ["current@example.com"]
+
+
+async def test_queued_email_rechecks_preferences_and_receipt_duplicate_at_delivery(
+    db_session: AsyncSession,
+    versioned_email_queues,
+    monkeypatch,
+) -> None:
+    old_queue, new_queue = versioned_email_queues
+    user = await make_user(db_session, "queued-email-dedup")
+    user.email = "receipt@example.com"
+    user.confirmed_at = datetime.now(UTC)
+    await db_session.commit()
+
+    queued = await NotificationService(db_session, FakeSender()).notify(
+        user_id=user.id,
+        category=NotificationCategory.TOURNAMENT,
+        title="Registration confirmed",
+        body="Your entry is confirmed.",
+        channels=[NotificationChannel.EMAIL],
+        email_already_delivered_to="RECEIPT@example.com",
+    )
+    assert queued.emailed is True
+    assert old_queue.get_jobs() == []
+    [job] = new_queue.get_jobs()
+    assert job.func_name == DELIVER_NOTIFICATION_EMAIL_V2_JOB
+    assert "@" not in json.dumps(job.args)
+    sent: list[str] = []
+    monkeypatch.setattr(
+        "app.email.send_notification_email",
+        lambda to_email, *_args, **_kwargs: sent.append(to_email),
+    )
+
+    await notification_jobs._deliver_notification_email_v2(
+        uuid.UUID(job.args[0]), *job.args[1:]
+    )
+
+    assert sent == []
+
+
+async def test_queued_email_honors_preference_changed_before_final_delivery(
+    db_session: AsyncSession,
+    versioned_email_queues,
+    monkeypatch,
+) -> None:
+    old_queue, new_queue = versioned_email_queues
+    user = await make_user(db_session, "queued-email-muted")
+    user.email = "muted-later@example.com"
+    user.confirmed_at = datetime.now(UTC)
+    await db_session.commit()
+    result = await NotificationService(db_session, FakeSender()).notify(
+        user_id=user.id,
+        category=NotificationCategory.TOURNAMENT,
+        title="Registration confirmed",
+        body="Your entry is confirmed.",
+        channels=[NotificationChannel.EMAIL],
+    )
+    assert result.emailed is True
+    assert old_queue.get_jobs() == []
+    [job] = new_queue.get_jobs()
+    assert job.func_name == DELIVER_NOTIFICATION_EMAIL_V2_JOB
+
+    db_session.add(
+        NotificationPreference(
+            user_id=user.id,
+            category=NotificationCategory.TOURNAMENT.value,
+            channel=NotificationChannel.EMAIL.value,
+            enabled=False,
+        )
+    )
+    await db_session.commit()
+    sent: list[str] = []
+    monkeypatch.setattr(
+        "app.email.send_notification_email",
+        lambda to_email, *_args, **_kwargs: sent.append(to_email),
+    )
+
+    await notification_jobs._deliver_notification_email_v2(
+        uuid.UUID(job.args[0]), *job.args[1:]
+    )
+
+    assert sent == []
+
+
+@pytest.mark.parametrize("category", list(NotificationCategory))
+async def test_legacy_notification_email_jobs_remain_consumable_for_every_category(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    category: NotificationCategory,
+) -> None:
+    """A new worker must drain every old producer's exact five-argument job.
+
+    The legacy payload has no category, so compatibility cannot classify or
+    preference-gate it.  Its safe rolling-deploy contract is the old one:
+    require the same live confirmed account/address, then deliver.  Generic
+    queued jobs must not be discarded merely because their title is unknown.
+    """
+    user = await make_user(
+        db_session, f"legacy-{category.value}-{uuid.uuid4().hex[:6]}"
+    )
+    user.email = "current@example.com"
+    user.confirmed_at = datetime.now(UTC)
+    await db_session.commit()
+    sent: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        "app.email.send_notification_email",
+        lambda to_email, subject, *_args, **_kwargs: sent.append((to_email, subject)),
+    )
+
+    title = f"Legacy {category.value} notification"
+    await notification_jobs._deliver_email(
+        user.id,
+        "current@example.com",
+        title,
+        "This generic pre-deploy notification must drain.",
+        f"/notifications/{category.value}",
+    )
+
+    assert sent == [("current@example.com", title)]
+
+
+async def test_legacy_notification_email_handler_keeps_exact_old_contract(
+    db_session: AsyncSession,
+    fake_email_queue,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Old producers and already-pickled jobs retain their import path and arity."""
+    signature = inspect.signature(notification_jobs.deliver_notification_email)
+    assert list(signature.parameters) == [
+        "account_id",
+        "to_email",
+        "title",
+        "body",
+        "link",
+    ]
+    assert all(
+        parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+    assert signature.parameters["link"].default is None
+
+    user = await make_user(db_session, "legacy-address-snapshot")
+    user.email = "current@example.com"
+    user.confirmed_at = datetime.now(UTC)
+    await db_session.commit()
+    fake_email_queue._is_async = True
+    legacy_args = (
+        str(user.id),
+        "stale-queued@example.com",
+        "Generic old notification",
+        "Body",
+        None,
+    )
+    fake_email_queue.enqueue(
+        "app.notifications.jobs.deliver_notification_email", *legacy_args
+    )
+    [legacy_job] = fake_email_queue.get_jobs()
+    assert legacy_job.func_name == "app.notifications.jobs.deliver_notification_email"
+    assert legacy_job.args == legacy_args
+
+    sent: list[str] = []
+    monkeypatch.setattr(
+        "app.email.send_notification_email",
+        lambda to_email, *_args, **_kwargs: sent.append(to_email),
+    )
+
+    # Old semantics validate the address snapshot. They do not silently upgrade
+    # an old job to the new merge/preference/dedup contract.
+    await notification_jobs._deliver_email(
+        user.id,
+        "stale-queued@example.com",
+        "Generic old notification",
+        "Body",
+        None,
+    )
+
+    assert sent == []
+
+
+def test_new_workers_are_configured_to_drain_new_and_legacy_email_queues() -> None:
+    """New deployments drain old jobs, while old workers cannot reserve v2 jobs."""
+    repo_root = Path(__file__).parents[2]
+    configurations = {
+        "dev compose": repo_root / "docker-compose.dev.yml",
+        "qa compose": repo_root / "docker-compose.qa.yml",
+        "helm": repo_root / "deploy/fortymm/values.yaml",
+    }
+
+    for label, path in configurations.items():
+        contents = path.read_text()
+        worker_lines = [
+            line
+            for line in contents.splitlines()
+            if "rq worker" in line or "queues:" in line
+        ]
+        assert worker_lines, label
+        queue_tokens = worker_lines[0].split()
+        assert NOTIFICATION_EMAIL_V2_QUEUE in queue_tokens, label
+        assert "email" in queue_tokens, label
+        assert queue_tokens.index(NOTIFICATION_EMAIL_V2_QUEUE) < queue_tokens.index(
+            "email"
+        ), label
+
+
+def test_notification_email_duplicate_token_is_versioned_keyed_evidence(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("NOTIFICATION_EMAIL_DEDUP_SECRET", "deployment-secret")
+
+    job = NotificationJob(
+        user_id=uuid.UUID("00000000-0000-0000-0000-000000000177"),
+        category=NotificationCategory.TOURNAMENT,
+        title="Registration confirmed",
+        body="Your entry is confirmed.",
+        email_already_delivered_to=" Person@Example.com ",
+    )
+    serialized = job.model_dump_json()
+
+    # Independent known HMAC-SHA256 vector over the normalized address. The
+    # version prefix permits key/algorithm rotation without ambiguous Redis
+    # payloads; the address itself must never be dictionary-recoverable SHA256.
+    assert job.email_already_delivered_key == (
+        "v1:2d2eee6cb76b35d5d691af9556577fecf0b2fe5e23b91423b5957dac6695081d"
+    )
+    assert "person@example.com" not in serialized.casefold()
 
 
 async def test_notify_skips_muted_email(db_session: AsyncSession):

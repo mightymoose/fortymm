@@ -20,6 +20,34 @@ def test_payment_collection_defaults_closed(
     assert get_settings().tournament_payment_collection_enabled is False
 
 
+def test_deployed_payment_collection_requires_notification_email_dedup_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """API and worker both construct Settings, so one startup guard protects both."""
+    monkeypatch.delenv("FORTYMM_DEV", raising=False)
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", "true")
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_live_configured")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_configured")
+    monkeypatch.setenv(
+        "TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID",
+        "00000000-0000-0000-0000-000000000177",
+    )
+    monkeypatch.delenv("NOTIFICATION_EMAIL_DEDUP_SECRET", raising=False)
+
+    with pytest.raises(ValidationError, match="NOTIFICATION_EMAIL_DEDUP_SECRET"):
+        get_settings()
+
+
+def test_payment_disabled_deployment_may_omit_notification_email_dedup_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FORTYMM_DEV", raising=False)
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", "false")
+    monkeypatch.delenv("NOTIFICATION_EMAIL_DEDUP_SECRET", raising=False)
+
+    assert get_settings().notification_email_dedup_secret == ""
+
+
 def test_solver_time_cap_defaults_to_ten_seconds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

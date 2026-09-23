@@ -107,7 +107,7 @@ async def _make_event(
         format=format,
         draw_settings=TournamentEventDrawSettings.for_draw_type(draw_type),
         max_players=64,
-        entry_fee=Decimal("45"),
+        entry_fee=Decimal("0"),
         timezone="America/Chicago",
         slot={"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         match_settings={"rated": True, "length_games": 5},

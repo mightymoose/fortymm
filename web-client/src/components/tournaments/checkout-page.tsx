@@ -1,6 +1,7 @@
 import { Elements, PaymentElement, useElements, useStripe } from '@stripe/react-stripe-js'
 import { loadStripe } from '@stripe/stripe-js'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { flushSync } from 'react-dom'
 import { useLocation } from '@tanstack/react-router'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
@@ -45,6 +46,7 @@ const paymentWireSchema = z.object({
   payment_state: z.enum(['unavailable', 'preparing', 'ready', 'checking', 'action_required', 'succeeded', 'failed', 'expired', 'canceled']),
   client_secret: z.string().nullable(),
   receipt_email: z.string().nullable(),
+  receipt_editable: z.boolean().default(true),
   support_reference: z.string().nullable().optional(),
   lines: z.array(z.object({
     event_id: z.string(),
@@ -169,6 +171,7 @@ function CheckoutPageContent({
   const [failedLoadKey, setFailedLoadKey] = useState<string | null>(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [authoritativePayment, setAuthoritativePayment] = useState<Payment | null>(null)
+  const [statusUncertain, setStatusUncertain] = useState(false)
   const [now, setNow] = useState(() => (injectedNow ?? Date.now)())
   const adapter = injectedAdapter ?? stripeAdapter
   const loadKey = `${tournamentId}:${checkoutId}:${redirected}:${loadAttempt}`
@@ -203,9 +206,27 @@ function CheckoutPageContent({
         let loadedPayment: Payment
         if (paymentResult.response.status === 404) {
           if (loadedCheckout.status !== 'active') {
-            unwrap('check payment', paymentResult)
+            // Older terminal checkouts may predate a durable payment row. The
+            // checkout projection is still authoritative history: render it
+            // without retrying preparation or turning a terminal state into a
+            // generic load failure.
+            loadedPayment = parsePayment({
+              checkout_id: loadedCheckout.id,
+              payment_state: loadedCheckout.payment_state,
+              client_secret: null,
+              receipt_email: null,
+              receipt_editable: false,
+              support_reference: null,
+              lines: loadedCheckout.lines.map((line) => ({
+                event_id: line.event_id,
+                amount_cents: line.price_cents,
+                outcome: null,
+                refund_amount_cents: 0,
+              })),
+            })
+          } else {
+            loadedPayment = await preparePayment()
           }
-          loadedPayment = await preparePayment()
         } else {
           const status = parsePayment(unwrap('check payment', paymentResult))
           loadedPayment =
@@ -242,8 +263,10 @@ function CheckoutPageContent({
 
   const confirm = receiptForm.handleSubmit(async ({ receiptEmail }) => {
       if (!adapter || !payment?.client_secret) return
+      let paymentSubmitted = false
       setSubmitting(true)
       setLocalError(null)
+      setStatusUncertain(false)
       try {
         const prepared = parsePayment(unwrap(
           'update receipt destination',
@@ -266,6 +289,14 @@ function CheckoutPageContent({
           setLocalError(result.message)
           return
         }
+        paymentSubmitted = true
+        flushSync(() => {
+          setAuthoritativePayment({
+            ...prepared,
+            payment_state: 'checking',
+            client_secret: null,
+          })
+        })
         const status = parsePayment(unwrap(
           'check payment',
           await api.GET(
@@ -275,6 +306,10 @@ function CheckoutPageContent({
         ))
         setAuthoritativePayment(status)
       } catch (error) {
+        if (paymentSubmitted) {
+          setStatusUncertain(true)
+          return
+        }
         const message = receiptMutationErrorMessage(error)
         if (message) {
           receiptForm.setError('receiptEmail', {
@@ -305,6 +340,7 @@ function CheckoutPageContent({
     new Date(checkout.expires_at).getTime() <= now &&
     !paymentIsTerminal
   const receiptIsEditable =
+    displayedPayment?.receipt_editable !== false &&
     checkout?.status === 'active' && !locallyExpired && !paymentIsTerminal
   const lineOutcomes = useMemo(
     () => new Map(displayedPayment?.lines.map((line) => [line.event_id, line])),
@@ -441,7 +477,12 @@ function CheckoutPageContent({
       ) : locallyExpired ? (
         <StateMessage title="Checkout expired" body="Your reservation has ended. Start a new checkout from the tournament." />
       ) : state === 'checking' ? (
-        <StateMessage title="Payment is still being confirmed" body="You can safely leave this page and check your dashboard later." />
+        <StateMessage
+          title="Payment is still being confirmed"
+          body={statusUncertain
+            ? 'Payment confirmation status is uncertain. You can safely leave this page and check your dashboard later.'
+            : 'You can safely leave this page and check your dashboard later.'}
+        />
       ) : state === 'action_required' && !displayedPayment?.client_secret ? (
         <StateMessage title="Finish card authentication" body="Complete the verification requested by your card issuer." />
       ) : state === 'expired' || checkout.status === 'expired' ? (

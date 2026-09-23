@@ -14,6 +14,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.account_merge_resolution import is_terminal_merge_survivor
 from app.config import get_settings
 from app.models import (
     EventFormat,
@@ -614,9 +615,15 @@ async def read_checkout(
         .options(selectinload(TournamentCheckout.lines))
         .execution_options(populate_existing=True)
     )
-    if checkout is None or (
-        checkout.payer_account_id != actor.id
-        and not await user_has_permission(db, actor.id, PAYMENTS_VIEW_PERMISSION)
+    if checkout is None:
+        raise CheckoutNotFoundError()
+    owns_historical_checkout = await is_terminal_merge_survivor(
+        db,
+        historical_account_id=checkout.payer_account_id,
+        candidate_account_id=actor.id,
+    )
+    if not owns_historical_checkout and not await user_has_permission(
+        db, actor.id, PAYMENTS_VIEW_PERMISSION
     ):
         raise CheckoutNotFoundError()
     tournament = await db.get(Tournament, tournament_id)

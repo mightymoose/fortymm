@@ -63,7 +63,7 @@ def _event_payload(**overrides: Any) -> dict[str, Any]:
         "format": "singles",
         "draw_type": "round-robin",
         "max_players": 64,
-        "entry_fee": 45,
+        "entry_fee": 0,
         "timezone": "America/Chicago",
         "slot": {"date": "2026-06-13", "start": "09:00", "end": "18:00"},
         "match_settings": {"rated": True, "length_games": 5},

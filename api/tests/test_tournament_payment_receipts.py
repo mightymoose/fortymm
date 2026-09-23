@@ -39,6 +39,7 @@ from app.models import (
     TournamentRefundState,
     TournamentStatus,
 )
+from app.notifications import jobs as notification_jobs
 from app.notifications.service import NotificationService
 from app.notifications.taxonomy import NotificationCategory, NotificationChannel
 from app.payment_provider import PaymentProviderNotFoundError
@@ -346,6 +347,54 @@ async def test_permanent_or_exhausted_receipt_failure_is_operator_visible(
     }
 
 
+async def test_missing_smtp_configuration_is_a_permanent_operator_visible_failure(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payer, tournament, _, checkout, receipt = await _settled_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        receipt_email="production-receipt@example.net",
+    )
+    assert receipt is not None
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+    monkeypatch.delenv("FORTYMM_DEV", raising=False)
+
+    failed = await _receipt_service().attempt_tournament_receipt_delivery(
+        db_session,
+        receipt.id,
+        sender=_receipt_service()._EmailSender(),
+        now=receipt.created_at + timedelta(minutes=1),
+    )
+    await db_session.commit()
+
+    assert failed.state is TournamentReceiptState.failed
+    assert failed.failure_kind == "permanent_delivery_failure"
+    assert failed.support_reference
+    assert failed.next_attempt_at is None
+
+    owner = await db_session.get(type(payer), tournament.owner_account_id)
+    assert owner is not None
+    fastapi_app.dependency_overrides[get_current_user] = lambda: owner
+    try:
+        response = await api_client.get(
+            f"/v1/tournaments/{tournament.id}/payment-problems"
+        )
+    finally:
+        fastapi_app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["items"] == [
+        {
+            "checkout_id": checkout["id"],
+            "state": "receipt_delivery_failed",
+            "support_reference": failed.support_reference,
+        }
+    ]
+
+
 async def test_receipt_failure_reference_survives_a_truncated_uuid_collision(
     api_client: AsyncClient,
     db_session: AsyncSession,
@@ -424,11 +473,7 @@ async def test_receipt_delivery_does_not_start_after_retry_window_closes(
 @pytest.mark.parametrize(
     ("receipt_email", "expected_channels", "expected_emailed"),
     [
-        (
-            "PAYER@example.COM",
-            {NotificationChannel.IN_APP, NotificationChannel.PUSH},
-            False,
-        ),
+        ("PAYER@example.COM", None, True),
         ("receipts@example.net", None, True),
     ],
 )
@@ -471,6 +516,78 @@ async def test_registration_confirmation_uses_preferences_and_deduplicates_email
     assert delivered.in_app_created is True
     assert delivered.pushed == 0
     assert delivered.emailed is expected_emailed
+
+
+@pytest.mark.parametrize(
+    ("merge_before_delivery", "expected_recipients"),
+    [
+        pytest.param(False, [], id="same-final-address-is-deduplicated"),
+        pytest.param(
+            True,
+            ["survivor@example.net"],
+            id="merged-final-address-receives-generic-confirmation",
+        ),
+    ],
+)
+async def test_settlement_email_candidate_deduplicates_against_final_address_only(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_notifications_queue,
+    fake_email_queue,
+    fake_notification_email_v2_queue,
+    merge_before_delivery: bool,
+    expected_recipients: list[str],
+) -> None:
+    fake_email_queue._is_async = True
+    payer, _, _, _, receipt = await _settled_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        receipt_email="PAYER@example.COM",
+    )
+    assert receipt is not None
+    [registration] = [
+        job
+        for job in enqueued_notification_jobs(fake_notifications_queue)
+        if job.category is NotificationCategory.TOURNAMENT
+    ]
+
+    # Receipt deduplication is a final-delivery decision. Email must remain a
+    # candidate, and the outer notification payload must carry no address PII.
+    assert registration.channels is None
+    assert "@" not in registration.model_dump_json()
+    delivered = await NotificationService(db_session, FakeSender()).notify(
+        **registration.model_dump()
+    )
+    assert delivered.emailed is True
+    [email_job] = [
+        job
+        for job in fake_notification_email_v2_queue.get_jobs()
+        if job.func_name == "app.notifications.jobs.deliver_notification_email_v2"
+    ]
+    assert "@" not in json.dumps(email_job.args)
+
+    if merge_before_delivery:
+        survivor = await make_user(
+            db_session, f"receipt-survivor-{uuid.uuid4().hex[:8]}"
+        )
+        survivor.email = "survivor@example.net"
+        survivor.confirmed_at = datetime.now(UTC)
+        payer.merged_into_user_id = survivor.id
+        payer.merged_at = datetime.now(UTC)
+        await db_session.commit()
+
+    sent: list[str] = []
+    monkeypatch.setattr(
+        "app.email.send_notification_email",
+        lambda to_email, *_args, **_kwargs: sent.append(to_email),
+    )
+    await notification_jobs._deliver_notification_email_v2(
+        uuid.UUID(email_job.args[0]), *email_job.args[1:]
+    )
+
+    assert sent == expected_recipients
 
 
 @pytest.mark.parametrize(
@@ -588,6 +705,8 @@ async def test_account_erasure_durably_clears_nonterminal_provider_receipt_pii(
     )
     assert payment is not None
     assert provider.intent is not None
+    payment.receipt_sync_failed_at = datetime.now(UTC) - timedelta(minutes=5)
+    await db_session.commit()
     if provider_binding == "uncertain":
         assert payment.provider_payment_id is None
         monkeypatch.setattr(provider, "create_payment_intent", original_create)
@@ -605,6 +724,7 @@ async def test_account_erasure_durably_clears_nonterminal_provider_receipt_pii(
 
     assert payment.receipt_email is None
     assert payment.receipt_sync_pending is True
+    assert payment.receipt_sync_failed_at is None
 
     reconciled = await reconcile_stuck_payments(db_session, provider)
     await db_session.refresh(payment)
@@ -759,6 +879,9 @@ async def test_cleanup_waits_thirty_days_after_archive_and_financial_resolution(
         provider=provider,
     )
     assert receipt is not None
+    payment = await db_session.get(TournamentPayment, receipt.payment_id)
+    assert payment is not None
+    payment.receipt_sync_failed_at = datetime.now(UTC) - timedelta(days=1)
     refund = await db_session.scalar(
         select(TournamentRefundObligation).where(
             TournamentRefundObligation.payment_id == receipt.payment_id
@@ -799,9 +922,52 @@ async def test_cleanup_waits_thirty_days_after_archive_and_financial_resolution(
     await db_session.refresh(receipt)
     assert receipt.recipient_email is None
     assert receipt.pii_erased_at == now
-    payment = await db_session.get(TournamentPayment, receipt.payment_id)
-    assert payment is not None
     assert payment.receipt_email is None
+    assert payment.receipt_sync_pending is True
+    assert payment.receipt_sync_failed_at is None
+
+    reconciled = await reconcile_stuck_payments(db_session, provider)
+    await db_session.refresh(payment)
+
+    assert reconciled == 1
+    assert provider.receipt_updates[-1] == (payment.provider_payment_id, None)
+    assert payment.receipt_sync_pending is False
+
+
+async def test_cleanup_retries_stale_provider_pii_failure_after_local_pii_is_gone(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakePaymentProvider("pi_retention_stale_failure")
+    _, tournament, _, _, receipt = await _settled_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        receipt_email="already-cleared@example.net",
+        provider=provider,
+    )
+    assert receipt is not None
+    payment = await db_session.get(TournamentPayment, receipt.payment_id)
+    assert payment is not None and payment.provider_payment_id is not None
+
+    tournament.status = TournamentStatus.archived
+    await db_session.commit()
+    await db_session.refresh(tournament)
+    assert tournament.archive_observed_at is not None
+
+    receipt.recipient_email = None
+    payment.receipt_email = None
+    payment.receipt_sync_pending = False
+    payment.receipt_sync_failed_at = datetime.now(UTC) - timedelta(days=1)
+    await db_session.commit()
+    now = tournament.archive_observed_at + timedelta(days=31)
+
+    assert (
+        await _receipt_service().sweep_tournament_receipt_pii(db_session, now=now) == 1
+    )
+    await db_session.refresh(payment)
+    assert payment.receipt_sync_failed_at is None
     assert payment.receipt_sync_pending is True
 
     reconciled = await reconcile_stuck_payments(db_session, provider)

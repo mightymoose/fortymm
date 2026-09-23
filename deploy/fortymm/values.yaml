@@ -165,7 +165,7 @@ apnsKeyPath: /run/secrets/apns_auth_key.p8
 apnsKeyFile: apns_auth_key.p8
 
 worker:
-  queues: preview solver email ratings notifications
+  queues: preview solver notifications-v2 notifications notification-email-v2 email ratings
   # CPU/memory for the CP-SAT solve worker. `cpu` is a bare core count (not
   # "m" millicores) because it doubles as SOLVE_NUM_WORKERS — CP-SAT's
   # search-worker portfolio must equal the container's CPU limit or it

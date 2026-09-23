@@ -72,6 +72,7 @@ from app.tournament_event_stages import mint_stages
 from app.tournament_queries import stage_ids_for_events, stage_ids_for_tournament
 from tests._entry_seeds import seed_fixture_match_sides, withdraw_entry_with_history
 from tests._helpers import (
+    enqueued_notification_jobs,
     event_groups,
     hijack_solve,
     make_user,
@@ -316,10 +317,7 @@ async def _place_fixture(
 
 
 def _fanout_jobs(notifications_queue: Queue) -> list[NotificationJob]:
-    return [
-        NotificationJob.model_validate_json(job.args[0])
-        for job in notifications_queue.jobs
-    ]
+    return enqueued_notification_jobs(notifications_queue)
 
 
 def _freeze_clocks(monkeypatch: pytest.MonkeyPatch, now: datetime) -> None:

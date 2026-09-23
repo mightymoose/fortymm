@@ -24,11 +24,15 @@ from app.models import (
     User,
 )
 from app.notifications.service import enqueue_notification_job
-from app.notifications.taxonomy import NotificationCategory, NotificationChannel
+from app.notifications.taxonomy import NotificationCategory
 from app.payment_provider import (
     PaymentProvider,
+    PaymentProviderAmountInvalidError,
     PaymentProviderCancellationRejectedError,
+    PaymentProviderConfigurationError,
+    PaymentProviderCreateRejectedError,
     PaymentProviderNotFoundError,
+    PaymentProviderResponseInvalidError,
     PaymentProviderUncertainError,
     ProviderPaymentEvent,
     ProviderPaymentIntent,
@@ -185,6 +189,11 @@ async def _notify_payment_attention(
             "At least one tournament entry could not be confirmed; "
             "its refund is pending.",
         ),
+        "create_rejected": (
+            "Payment could not be started",
+            f"Your tournament payment needs review. Contact support with reference "
+            f"{payment.support_reference}.",
+        ),
     }[event]
     checkout_facts = (
         await db.execute(
@@ -194,9 +203,16 @@ async def _notify_payment_attention(
             ).where(TournamentCheckout.id == payment.checkout_id)
         )
     ).one()
+    recipient_id = await _payer_recipient_id(db, checkout_facts.payer_account_id)
+    if recipient_id is None:
+        # There is no safe delivery target for an inactive/erased account or
+        # a corrupt merge chain. Treat this output as discharged so a terminal
+        # payment does not remain an immortal sweep obligation.
+        payment.attention_notified_state = event
+        return
     enqueued = enqueue_notification_job(
         NotificationJob(
-            user_id=checkout_facts.payer_account_id,
+            user_id=recipient_id,
             category=NotificationCategory.PAYMENTS,
             title=copy[0],
             body=copy[1],
@@ -210,6 +226,29 @@ async def _notify_payment_attention(
         payment.attention_notified_state = event
 
 
+async def _payer_recipient_id(
+    db: AsyncSession, payer_account_id: uuid.UUID
+) -> uuid.UUID | None:
+    """Resolve payer-facing recovery output without rewriting audit ownership."""
+    account_id = payer_account_id
+    visited: set[uuid.UUID] = set()
+    while account_id not in visited:
+        visited.add(account_id)
+        account = await db.scalar(
+            select(User)
+            .where(User.id == account_id)
+            .execution_options(populate_existing=True)
+        )
+        if account is None:
+            return None
+        if account.merged_into_user_id is None:
+            return account.id if account.is_active else None
+        account_id = account.merged_into_user_id
+    # Account merges reject tombstoned targets, but treat a corrupt legacy
+    # cycle as having no safe recipient instead of looping or misrouting PII.
+    return None
+
+
 async def _quarantine_provider_mismatch(
     db: AsyncSession, payment: TournamentPayment
 ) -> None:
@@ -219,7 +258,9 @@ async def _quarantine_provider_mismatch(
     payment.support_reference = payment.support_reference or payment_support_reference(
         payment.id
     )
-    stage_event(db, payment.checkout.payer_account_id, EventKind.dashboard_changed)
+    recipient_id = await _payer_recipient_id(db, payment.checkout.payer_account_id)
+    if recipient_id is not None:
+        stage_event(db, recipient_id, EventKind.dashboard_changed)
     await _notify_payment_attention(db, payment, "provider_mismatch")
 
 
@@ -235,6 +276,7 @@ async def _ensure_settlement_outputs(
             ).where(TournamentCheckout.id == payment.checkout_id)
         )
     ).one()
+    recipient_id = await _payer_recipient_id(db, checkout_facts.payer_account_id)
     line_rows = list(
         await db.execute(
             select(
@@ -278,15 +320,6 @@ async def _ensure_settlement_outputs(
         enqueue_tournament_receipt(receipt.id)
 
     if payment.settlement_notified_at is None:
-        payer = await db.get(User, checkout_facts.payer_account_id)
-        channels = None
-        if (
-            payer is not None
-            and payer.email
-            and payment.receipt_email
-            and payer.email.casefold() == payment.receipt_email.casefold()
-        ):
-            channels = [NotificationChannel.IN_APP, NotificationChannel.PUSH]
         confirmed = sum(item.outcome == "confirmed" for item in outcomes)
         pending = sum(item.outcome == "refund_pending" for item in outcomes)
         if confirmed and pending:
@@ -302,9 +335,9 @@ async def _ensure_settlement_outputs(
         else:
             title = "Tournament registration confirmed"
             body = f"{confirmed} entr{'y' if confirmed == 1 else 'ies'} confirmed."
-        enqueued = enqueue_notification_job(
+        enqueued = recipient_id is not None and enqueue_notification_job(
             NotificationJob(
-                user_id=checkout_facts.payer_account_id,
+                user_id=recipient_id,
                 category=NotificationCategory.TOURNAMENT,
                 title=title,
                 body=body,
@@ -312,10 +345,12 @@ async def _ensure_settlement_outputs(
                     f"/tournaments/{checkout_facts.tournament_id}/checkouts/"
                     f"{payment.checkout_id}"
                 ),
-                channels=channels,
+                email_already_delivered_to=payment.receipt_email,
             )
         )
-        if enqueued:
+        if enqueued or recipient_id is None:
+            # No active canonical recipient is a terminal delivery outcome,
+            # not a queue outage to retry forever.
             payment.settlement_notified_at = now
     if any(item.outcome == "refund_pending" for item in outcomes):
         await _notify_payment_attention(db, payment, "refund_pending")
@@ -344,6 +379,12 @@ async def retry_terminal_payment_outputs(
         # A terminal mismatch has no more provider transitions to wake the
         # notifier. Read and sweep seams therefore retry its durable alert.
         await _notify_payment_attention(db, payment, "provider_mismatch")
+    elif (
+        payment.state is TournamentPaymentState.failed
+        and payment.provider_status == "create_rejected"
+        and payment.attention_notified_state != "create_rejected"
+    ):
+        await _notify_payment_attention(db, payment, "create_rejected")
     return payment
 
 
@@ -504,7 +545,9 @@ async def reconcile_provider_intent(
             if payment.receipt_email is not None:
                 payment.receipt_sync_pending = False
             payment.client_secret = None
-        stage_event(db, checkout.payer_account_id, EventKind.dashboard_changed)
+        recipient_id = await _payer_recipient_id(db, checkout.payer_account_id)
+        if recipient_id is not None:
+            stage_event(db, recipient_id, EventKind.dashboard_changed)
         if payment.state is TournamentPaymentState.checking:
             await _notify_payment_attention(db, payment, "checking")
         return payment
@@ -598,7 +641,9 @@ async def reconcile_provider_intent(
 
     payment.state = TournamentPaymentState.succeeded
     await _ensure_settlement_outputs(db, payment, now)
-    stage_event(db, payer_account_id, EventKind.dashboard_changed)
+    recipient_id = await _payer_recipient_id(db, payer_account_id)
+    if recipient_id is not None:
+        stage_event(db, recipient_id, EventKind.dashboard_changed)
     return payment
 
 
@@ -717,6 +762,12 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                         or_(
                             TournamentPayment.receipt_sync_pending.is_(True),
                             and_(
+                                TournamentPayment.provider_status == "create_rejected",
+                                TournamentPayment.attention_notified_state.is_distinct_from(
+                                    "create_rejected"
+                                ),
+                            ),
+                            and_(
                                 TournamentPayment.provider_mismatch_at.is_not(None),
                                 TournamentPayment.attention_notified_state.is_distinct_from(
                                     "provider_mismatch"
@@ -751,19 +802,58 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
             TournamentPaymentState.canceled,
         }:
             if payment.receipt_sync_pending and payment.provider_payment_id is not None:
-                await _sync_provider_receipt(
-                    db,
-                    provider=provider,
-                    payment_id=payment_id,
-                    provider_payment_id=payment.provider_payment_id,
-                    attempted_email=payment.receipt_email,
-                )
+                try:
+                    await _sync_provider_receipt(
+                        db,
+                        provider=provider,
+                        payment_id=payment_id,
+                        provider_payment_id=payment.provider_payment_id,
+                        attempted_email=payment.receipt_email,
+                    )
+                except (
+                    PaymentProviderConfigurationError,
+                    PaymentProviderResponseInvalidError,
+                ):
+                    payment, _payer = await reload_payment_for_reconciliation_locked(
+                        db,
+                        tournament_id=tournament_id,
+                        checkout_id=checkout_id,
+                        payer_account_id=payer_account_id,
+                        payment_id=payment_id,
+                    )
+                    payment.receipt_sync_pending = False
+                    await _quarantine_provider_mismatch(db, payment)
             await retry_terminal_payment_outputs(db, payment_id=payment_id)
             await db.commit()
             reconciled += 1
             continue
         try:
             intent = await provider.retrieve_payment_intent(payment.durable_identity)
+        except (
+            PaymentProviderConfigurationError,
+            PaymentProviderResponseInvalidError,
+        ):
+            try:
+                payment, _payer = await reload_payment_for_reconciliation_locked(
+                    db,
+                    tournament_id=tournament_id,
+                    checkout_id=checkout_id,
+                    payer_account_id=payer_account_id,
+                    payment_id=payment_id,
+                )
+            except PaymentNotFoundError:
+                await db.rollback()
+                continue
+            if payment.state not in {
+                TournamentPaymentState.succeeded,
+                TournamentPaymentState.failed,
+                TournamentPaymentState.canceled,
+            }:
+                payment.state = TournamentPaymentState.checking
+                await _quarantine_provider_mismatch(db, payment)
+            await db.commit()
+            reconciled += 1
+            continue
         except PaymentProviderNotFoundError:
             try:
                 payment, payer = await reload_payment_for_reconciliation_locked(
@@ -791,13 +881,30 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                     payment.receipt_sync_pending
                     and payment.provider_payment_id is not None
                 ):
-                    await _sync_provider_receipt(
-                        db,
-                        provider=provider,
-                        payment_id=payment.id,
-                        provider_payment_id=payment.provider_payment_id,
-                        attempted_email=payment.receipt_email,
-                    )
+                    try:
+                        await _sync_provider_receipt(
+                            db,
+                            provider=provider,
+                            payment_id=payment.id,
+                            provider_payment_id=payment.provider_payment_id,
+                            attempted_email=payment.receipt_email,
+                        )
+                    except (
+                        PaymentProviderConfigurationError,
+                        PaymentProviderResponseInvalidError,
+                    ):
+                        (
+                            payment,
+                            _payer,
+                        ) = await reload_payment_for_reconciliation_locked(
+                            db,
+                            tournament_id=tournament_id,
+                            checkout_id=checkout_id,
+                            payer_account_id=payer_account_id,
+                            payment_id=payment_id,
+                        )
+                        payment.receipt_sync_pending = False
+                        await _quarantine_provider_mismatch(db, payment)
                 await retry_terminal_payment_outputs(db, payment_id=payment_id)
                 await db.commit()
                 reconciled += 1
@@ -805,11 +912,11 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
             if payment.provider_payment_id is not None:
                 payment.state = TournamentPaymentState.checking
                 payment.updated_at = await _database_now(db)
-                stage_event(
-                    db,
-                    payment.checkout.payer_account_id,
-                    EventKind.dashboard_changed,
+                recipient_id = await _payer_recipient_id(
+                    db, payment.checkout.payer_account_id
                 )
+                if recipient_id is not None:
+                    stage_event(db, recipient_id, EventKind.dashboard_changed)
                 await db.commit()
                 reconciled += 1
                 continue
@@ -854,11 +961,11 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                 if payment.provider_status != UNCERTAIN_CREATE_PROVIDER_STATUS:
                     payment.state = TournamentPaymentState.canceled
                 payment.updated_at = now
-                stage_event(
-                    db,
-                    payment.checkout.payer_account_id,
-                    EventKind.dashboard_changed,
+                recipient_id = await _payer_recipient_id(
+                    db, payment.checkout.payer_account_id
                 )
+                if recipient_id is not None:
+                    stage_event(db, recipient_id, EventKind.dashboard_changed)
                 await db.commit()
                 reconciled += 1
                 continue
@@ -874,6 +981,61 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                     reconciled += 1
                     continue
                 intent = await provider.create_payment_intent(create_request)
+            except (
+                PaymentProviderConfigurationError,
+                PaymentProviderResponseInvalidError,
+            ):
+                try:
+                    payment, _payer = await reload_payment_for_reconciliation_locked(
+                        db,
+                        tournament_id=tournament_id,
+                        checkout_id=checkout_id,
+                        payer_account_id=payer_account_id,
+                        payment_id=payment_id,
+                    )
+                except PaymentNotFoundError:
+                    await db.rollback()
+                    continue
+                payment.state = TournamentPaymentState.checking
+                await _quarantine_provider_mismatch(db, payment)
+                await db.commit()
+                reconciled += 1
+                continue
+            except (
+                PaymentProviderAmountInvalidError,
+                PaymentProviderCreateRejectedError,
+            ):
+                try:
+                    payment, _payer = await reload_payment_for_reconciliation_locked(
+                        db,
+                        tournament_id=tournament_id,
+                        checkout_id=checkout_id,
+                        payer_account_id=payer_account_id,
+                        payment_id=payment_id,
+                    )
+                except PaymentNotFoundError:
+                    await db.rollback()
+                    continue
+                if payment.provider_payment_id is None:
+                    now = await _database_now(db)
+                    payment.state = TournamentPaymentState.failed
+                    payment.provider_status = "create_rejected"
+                    payment.support_reference = (
+                        payment.support_reference
+                        or payment_support_reference(payment.id)
+                    )
+                    payment.checkout.status = TournamentCheckoutStatus.cancelled
+                    payment.checkout.cancelled_at = now
+                    payment.updated_at = now
+                    recipient_id = await _payer_recipient_id(
+                        db, payment.checkout.payer_account_id
+                    )
+                    if recipient_id is not None:
+                        stage_event(db, recipient_id, EventKind.dashboard_changed)
+                    await _notify_payment_attention(db, payment, "create_rejected")
+                await db.commit()
+                reconciled += 1
+                continue
             except (TimeoutError, PaymentProviderUncertainError):
                 continue
         except (TimeoutError, PaymentProviderUncertainError):
@@ -929,6 +1091,24 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
             and intent.id == payment.provider_payment_id
             and intent.status in CANCELABLE_PROVIDER_STATUSES
         ):
+            if payment.receipt_email is not None:
+                # Authority loss revokes permission to retain or reuse the
+                # payer's provider receipt address. Make the clear a fresh
+                # desired value before cancellation, even when a lifecycle
+                # scrub has not yet reached this payment.
+                payment.receipt_email = None
+                payment.receipt_sync_pending = True
+                payment.receipt_sync_failed_at = None
+            if (
+                payment.receipt_email is None
+                and payment.receipt_sync_failed_at is not None
+            ):
+                # A permanent refusal to clear provider-held PII is an
+                # operator-visible hold, not permission to erase the only
+                # remaining chance to clear it by canceling the intent.
+                await db.commit()
+                reconciled += 1
+                continue
             if payment.receipt_sync_pending and payment.receipt_email is None:
                 # Stripe rejects receipt updates after cancellation. Clear
                 # provider-held PII first, after releasing every lifecycle lock,
@@ -937,14 +1117,34 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                 # set and defers cancellation to a later sweep.
                 receipt_provider_id = payment.provider_payment_id
                 await db.commit()
-                payment = await _sync_provider_receipt(
-                    db,
-                    provider=provider,
-                    payment_id=payment_id,
-                    provider_payment_id=receipt_provider_id,
-                    attempted_email=None,
-                )
+                try:
+                    payment = await _sync_provider_receipt(
+                        db,
+                        provider=provider,
+                        payment_id=payment_id,
+                        provider_payment_id=receipt_provider_id,
+                        attempted_email=None,
+                    )
+                except (
+                    PaymentProviderConfigurationError,
+                    PaymentProviderResponseInvalidError,
+                ):
+                    payment, _payer = await reload_payment_for_reconciliation_locked(
+                        db,
+                        tournament_id=tournament_id,
+                        checkout_id=checkout_id,
+                        payer_account_id=payer_account_id,
+                        payment_id=payment_id,
+                    )
+                    payment.receipt_sync_pending = False
+                    await _quarantine_provider_mismatch(db, payment)
+                    await db.commit()
+                    reconciled += 1
+                    continue
                 if payment.receipt_sync_pending:
+                    continue
+                if payment.receipt_sync_failed_at is not None:
+                    reconciled += 1
                     continue
                 try:
                     payment, payer = await reload_payment_for_reconciliation_locked(
@@ -997,11 +1197,54 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
             await db.commit()
             try:
                 intent = await provider.cancel_payment_intent(cancellation_provider_id)
+            except (
+                PaymentProviderConfigurationError,
+                PaymentProviderResponseInvalidError,
+            ):
+                try:
+                    payment, _payer = await reload_payment_for_reconciliation_locked(
+                        db,
+                        tournament_id=tournament_id,
+                        checkout_id=checkout_id,
+                        payer_account_id=payer_account_id,
+                        payment_id=payment_id,
+                    )
+                except PaymentNotFoundError:
+                    await db.rollback()
+                    continue
+                payment.state = TournamentPaymentState.checking
+                await _quarantine_provider_mismatch(db, payment)
+                await db.commit()
+                reconciled += 1
+                continue
             except PaymentProviderCancellationRejectedError:
                 try:
                     intent = await provider.retrieve_payment_intent(
                         cancellation_durable_identity
                     )
+                except (
+                    PaymentProviderConfigurationError,
+                    PaymentProviderResponseInvalidError,
+                ):
+                    try:
+                        (
+                            payment,
+                            _payer,
+                        ) = await reload_payment_for_reconciliation_locked(
+                            db,
+                            tournament_id=tournament_id,
+                            checkout_id=checkout_id,
+                            payer_account_id=payer_account_id,
+                            payment_id=payment_id,
+                        )
+                    except PaymentNotFoundError:
+                        await db.rollback()
+                        continue
+                    payment.state = TournamentPaymentState.checking
+                    await _quarantine_provider_mismatch(db, payment)
+                    await db.commit()
+                    reconciled += 1
+                    continue
                 except (
                     PaymentProviderNotFoundError,
                     TimeoutError,
@@ -1065,13 +1308,27 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
         )
         if payment.receipt_sync_pending and payment.provider_payment_id is not None:
             await db.commit()
-            payment = await _sync_provider_receipt(
-                db,
-                provider=provider,
-                payment_id=payment.id,
-                provider_payment_id=payment.provider_payment_id,
-                attempted_email=payment.receipt_email,
-            )
+            try:
+                payment = await _sync_provider_receipt(
+                    db,
+                    provider=provider,
+                    payment_id=payment.id,
+                    provider_payment_id=payment.provider_payment_id,
+                    attempted_email=payment.receipt_email,
+                )
+            except (
+                PaymentProviderConfigurationError,
+                PaymentProviderResponseInvalidError,
+            ):
+                payment, _payer = await reload_payment_for_reconciliation_locked(
+                    db,
+                    tournament_id=tournament_id,
+                    checkout_id=checkout_id,
+                    payer_account_id=payer_account_id,
+                    payment_id=payment_id,
+                )
+                payment.receipt_sync_pending = False
+                await _quarantine_provider_mismatch(db, payment)
         await db.commit()
         reconciled += 1
     return reconciled

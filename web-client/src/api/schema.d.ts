@@ -6180,6 +6180,8 @@ export interface components {
             client_secret: string | null;
             /** Receipt Email */
             receipt_email: string | null;
+            /** Receipt Editable */
+            receipt_editable: boolean;
             /** Support Reference */
             support_reference?: string | null;
             /**

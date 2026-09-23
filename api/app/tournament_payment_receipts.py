@@ -61,6 +61,12 @@ class _EmailSender:
             raise ReceiptDeliveryError(str(exc), retryable=True) from exc
         except smtplib.SMTPException as exc:
             raise ReceiptDeliveryError(str(exc), retryable=False) from exc
+        except RuntimeError as exc:
+            # Notification delivery raises RuntimeError for deployment
+            # configuration defects such as a missing SMTP_HOST. Requeueing
+            # cannot heal those defects, so surface them immediately as a
+            # durable operator-visible failure.
+            raise ReceiptDeliveryError(str(exc), retryable=False) from exc
 
 
 def _copy(receipt: TournamentPaymentReceipt) -> tuple[str, str]:
@@ -246,12 +252,18 @@ async def erase_tournament_receipt_pii_for_account(
     )
     changed = 0
     for payment in payments:
+        if payment.receipt_sync_failed_at is not None:
+            # Erasure is a new authoritative request to clear provider PII,
+            # even when a prior attempt already made the local value null.
+            payment.receipt_sync_pending = True
+        payment.receipt_sync_failed_at = None
         if payment.receipt_email is not None:
             payment.receipt_email = None
             # Clearing local PII does not clear the value copied to the payment
             # provider. Keep a durable convergence obligation even when create
             # returned ambiguously and no provider id has been bound yet.
             payment.receipt_sync_pending = True
+            payment.receipt_sync_failed_at = None
             changed += 1
         receipt = await db.scalar(
             select(TournamentPaymentReceipt).where(
@@ -284,6 +296,7 @@ async def sweep_tournament_receipt_pii(
                 or_(
                     TournamentPayment.receipt_email.is_not(None),
                     TournamentPaymentReceipt.recipient_email.is_not(None),
+                    TournamentPayment.receipt_sync_failed_at.is_not(None),
                 )
             )
             .options(selectinload(TournamentPayment.receipt))
@@ -392,6 +405,11 @@ async def sweep_tournament_receipt_pii(
         if payment.receipt_email is not None:
             payment.receipt_email = None
             payment.receipt_sync_pending = True
+        elif payment.receipt_sync_failed_at is not None:
+            # Retention expiry starts a fresh clear attempt after an older
+            # permanent refusal rather than hiding the operator marker.
+            payment.receipt_sync_pending = True
+        payment.receipt_sync_failed_at = None
         erased += 1
     if erased:
         await db.flush()

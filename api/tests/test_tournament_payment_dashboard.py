@@ -23,8 +23,9 @@ from app.models import (
 from app.models.tournament_payment import TournamentPaymentState
 from app.payment_provider import get_payment_provider
 from app.realtime import EventKind, RealtimeBroker
+from app.sessions import get_current_user
 from app.tournament_checkout_attention import list_checkout_attention
-from tests._helpers import counted_statements, make_client, start_session
+from tests._helpers import counted_statements, make_client, make_user, start_session
 from tests._realtime import watch_hints
 from tests.test_tournament_payments import (
     FakePaymentProvider,
@@ -157,6 +158,89 @@ async def test_fresh_checkout_is_actionable_before_payment_preparation(
             ),
         }
     ]
+
+
+async def test_survivor_reverse_merge_recovery_excludes_old_prepayment_capabilities(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    payer = await start_session(api_client, db_session)
+    _, _, fresh = await _paid_checkout(api_client, db_session, monkeypatch, payer=payer)
+    ready, _ = await _payment(
+        api_client,
+        db_session,
+        monkeypatch,
+        payer=payer,
+        state=TournamentPaymentState.ready,
+    )
+    action_required, _ = await _payment(
+        api_client,
+        db_session,
+        monkeypatch,
+        payer=payer,
+        state=TournamentPaymentState.action_required,
+    )
+    checking, _ = await _payment(
+        api_client,
+        db_session,
+        monkeypatch,
+        payer=payer,
+        state=TournamentPaymentState.checking,
+    )
+    survivor = await make_user(db_session, "reverse-merge-survivor")
+    payer.merged_into_user_id = survivor.id
+    payer.merged_at = datetime.now(UTC)
+    await db_session.commit()
+
+    fastapi_app.dependency_overrides[get_current_user] = lambda: survivor
+    try:
+        response = await api_client.get("/v1/checkouts")
+    finally:
+        fastapi_app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 200, response.text
+    assert [item["checkout_id"] for item in response.json()["items"]] == [
+        checking["id"]
+    ]
+    assert not {fresh["id"], ready["id"], action_required["id"]} & {
+        item["checkout_id"] for item in response.json()["items"]
+    }
+
+
+async def test_unbound_provider_mismatch_remains_actionable_after_payer_merge(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    payer = await start_session(api_client, db_session)
+    checkout, payment = await _payment(
+        api_client,
+        db_session,
+        monkeypatch,
+        payer=payer,
+        state=TournamentPaymentState.preparing,
+    )
+    payment.provider_payment_id = None
+    payment.client_secret = None
+    payment.provider_mismatch_at = datetime.now(UTC)
+    payment.support_reference = "PAY-UNBOUND-MERGE"
+    survivor = await make_user(db_session, "unbound-mismatch-survivor")
+    payer.merged_into_user_id = survivor.id
+    payer.merged_at = datetime.now(UTC)
+    await db_session.commit()
+
+    fastapi_app.dependency_overrides[get_current_user] = lambda: survivor
+    try:
+        response = await api_client.get("/v1/checkouts")
+    finally:
+        fastapi_app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.status_code == 200, response.text
+    [item] = response.json()["items"]
+    assert item["checkout_id"] == checkout["id"]
+    assert item["kind"] == "needs_review"
+    assert item["support_reference"] == "PAY-UNBOUND-MERGE"
 
 
 async def test_actionable_checkouts_are_payer_only_and_exclude_terminal_history(

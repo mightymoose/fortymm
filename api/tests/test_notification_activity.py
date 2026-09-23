@@ -1,5 +1,7 @@
 """Delayed notification work respects current Account activity."""
 
+import json
+
 import pytest
 from sqlalchemy import select, text
 
@@ -102,7 +104,7 @@ async def test_push_holds_recipient_activity_through_external_delivery(
 
 @pytest.mark.parametrize("suspended", [False, True])
 async def test_queued_notification_email_rechecks_activity_before_delivery(
-    db_session, engine, fake_email_queue, monkeypatch, suspended
+    db_session, engine, fake_notification_email_v2_queue, monkeypatch, suspended
 ):
     import asyncio
     from datetime import UTC, datetime
@@ -114,7 +116,6 @@ async def test_queued_notification_email_rechecks_activity_before_delivery(
     from app.notifications import jobs
     from app.notifications.taxonomy import NotificationChannel
 
-    fake_email_queue._is_async = True
     user = await make_user(db_session, "delayed-email")
     user.email = "delayed@example.com"
     user.confirmed_at = datetime.now(UTC)
@@ -128,7 +129,11 @@ async def test_queued_notification_email_rechecks_activity_before_delivery(
     )
     assert result.emailed
     await db_session.commit()
-    queued = fake_email_queue.jobs[-1]
+    queued = fake_notification_email_v2_queue.jobs[-1]
+    assert queued.origin == "notification-email-v2"
+    assert queued.func_name == "app.notifications.jobs.deliver_notification_email_v2"
+    assert len(queued.args) == 6
+    assert "@" not in json.dumps(queued.args)
     if suspended:
         await db_session.execute(
             text("UPDATE accounts SET deactivated_at=clock_timestamp() WHERE id=:id"),

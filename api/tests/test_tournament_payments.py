@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import (
 
 import app.tournament_payment_reconciliation as payment_reconciliation
 from app.db import get_session
+from app.identity_lifecycle import erase_account
 from app.leagues import get_default_league
 from app.main import app as fastapi_app
 from app.models import (
@@ -39,18 +40,35 @@ from app.models import (
     TournamentStatus,
     User,
 )
+from app.notifications.taxonomy import NotificationCategory
 from app.payment_provider import (
     PaymentProviderNotFoundError,
+    PaymentProviderReceiptUpdateRejectedError,
     PaymentProviderUncertainError,
     ProviderPaymentEvent,
     ProviderPaymentIntent,
     ProviderPaymentStatus,
     get_payment_provider,
 )
+from app.realtime import EventKind, RealtimeBroker
+from app.sessions import get_current_user
 from app.tournament_authority import transfer_ownership
 from app.tournament_event_stages import mint_stages
 from app.tournament_payment_reconciliation import reconcile_stuck_payments
-from tests._helpers import make_client, make_user, start_session
+from tests._helpers import (
+    enqueued_notification_jobs,
+    make_client,
+    make_user,
+    start_session,
+)
+from tests._realtime import watch_hints
+
+try:
+    from app.payment_provider import PaymentProviderCreateRejectedError
+except ImportError:  # The red test defines the provider contract production must add.
+
+    class PaymentProviderCreateRejectedError(Exception):
+        pass
 
 
 @dataclass(frozen=True)
@@ -429,6 +447,40 @@ async def test_receipt_destination_defaults_edits_clears_and_does_not_change_acc
     ]
 
 
+async def test_merged_survivor_payment_recovery_is_explicitly_read_only(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    payer, tournament, checkout = await _paid_checkout(
+        api_client, db_session, monkeypatch
+    )
+    provider = FakePaymentProvider()
+    _install_provider(provider)
+    url = _payment_url(tournament, checkout)
+    assert (await api_client.post(url, json={})).status_code == 200
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None
+    payment.state = TournamentPaymentState.checking
+    survivor = await make_user(db_session, f"receipt-survivor-{uuid.uuid4().hex[:8]}")
+    payer.merged_into_user_id = survivor.id
+    payer.merged_at = datetime.now(UTC)
+    await db_session.commit()
+
+    fastapi_app.dependency_overrides[get_current_user] = lambda: survivor
+    try:
+        recovered = await api_client.get(url)
+    finally:
+        fastapi_app.dependency_overrides.pop(get_current_user, None)
+
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["receipt_editable"] is False
+
+
 @pytest.mark.parametrize(
     "provider_error",
     [
@@ -557,6 +609,39 @@ async def test_explicit_receipt_edit_retries_provider_sync_after_failure(
     ]
 
 
+async def test_new_receipt_choice_clears_stale_manual_review_marker(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    _, tournament, checkout = await _paid_checkout(api_client, db_session, monkeypatch)
+    provider = FakePaymentProvider()
+    _install_provider(provider)
+    url = _payment_url(tournament, checkout)
+    assert (await api_client.post(url, json={})).status_code == 200
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None
+    payment.receipt_sync_failed_at = datetime.now(UTC) - timedelta(minutes=5)
+    await db_session.commit()
+
+    # The new desired value owns a fresh sync attempt. If its provider result is
+    # uncertain, it stays pending without retaining the obsolete operator alert.
+    provider.receipt_update_error = TimeoutError("new receipt result unknown")
+    changed = await api_client.post(
+        url, json={"receipt_email": "new-choice@example.net"}
+    )
+
+    assert changed.status_code == 200, changed.text
+    await db_session.refresh(payment)
+    assert payment.receipt_email == "new-choice@example.net"
+    assert payment.receipt_sync_pending is True
+    assert payment.receipt_sync_failed_at is None
+
+
 async def test_concurrent_receipt_edits_leave_provider_at_current_desired_email(
     api_client: AsyncClient,
     db_session: AsyncSession,
@@ -619,6 +704,69 @@ async def test_concurrent_receipt_edits_leave_provider_at_current_desired_email(
         )
     assert desired_email == "current@example.net"
     assert provider_receipt_email == desired_email
+
+
+async def test_stale_receipt_rejection_cannot_terminalize_newer_edit(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch,
+) -> None:
+    _, tournament, checkout = await _paid_checkout(api_client, db_session, monkeypatch)
+    url = _payment_url(tournament, checkout)
+    provider = FakePaymentProvider()
+    _install_provider(provider)
+    assert (await api_client.post(url, json={})).status_code == 200
+
+    stale_update_entered = asyncio.Event()
+    release_stale_update = asyncio.Event()
+
+    async def reject_stale_update(
+        provider_payment_id: str, receipt_email: str | None
+    ) -> FakeProviderIntent:
+        provider.receipt_updates.append((provider_payment_id, receipt_email))
+        if receipt_email == "stale@example.net":
+            stale_update_entered.set()
+            await release_stale_update.wait()
+            raise PaymentProviderReceiptUpdateRejectedError()
+        if receipt_email == "current@example.net":
+            raise TimeoutError("newer receipt result remains uncertain")
+        return provider.intent
+
+    monkeypatch.setattr(provider, "update_payment_intent_receipt", reject_stale_update)
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+
+    async def independent_session() -> AsyncIterator[AsyncSession]:
+        async with make_session() as session:
+            yield session
+
+    fastapi_app.dependency_overrides[get_session] = independent_session
+    async with make_client() as other_device:
+        other_device.cookies.update(api_client.cookies)
+        stale = asyncio.create_task(
+            api_client.post(url, json={"receipt_email": "stale@example.net"})
+        )
+        try:
+            await asyncio.wait_for(stale_update_entered.wait(), timeout=5)
+            current = await other_device.post(
+                url, json={"receipt_email": "current@example.net"}
+            )
+            assert current.status_code == 200, current.text
+        finally:
+            release_stale_update.set()
+        stale_response = await stale
+
+    assert stale_response.status_code == 200, stale_response.text
+    async with make_session() as observer:
+        payment = await observer.scalar(
+            select(TournamentPayment).where(
+                TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+            )
+        )
+    assert payment is not None
+    assert payment.receipt_email == "current@example.net"
+    assert payment.receipt_sync_pending is True
+    assert payment.receipt_sync_failed_at is None
 
 
 async def test_receipt_sync_bounds_continuous_concurrent_edits_and_remains_retryable(
@@ -1213,6 +1361,97 @@ async def test_receipt_update_revalidates_authority_after_provider_io(
         }
 
 
+async def test_receipt_edit_cannot_restore_pii_after_account_erasure_wins(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch,
+) -> None:
+    payer, tournament, checkout = await _paid_checkout(
+        api_client, db_session, monkeypatch
+    )
+
+    class ReceiptTrackingProvider(FakePaymentProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.provider_receipt_email: str | None = None
+            self.cancellations: list[str] = []
+
+        async def update_payment_intent_receipt(
+            self, provider_payment_id: str, receipt_email: str | None
+        ) -> FakeProviderIntent:
+            intent = await super().update_payment_intent_receipt(
+                provider_payment_id, receipt_email
+            )
+            self.provider_receipt_email = receipt_email
+            return intent
+
+        async def cancel_payment_intent(
+            self, provider_payment_id: str
+        ) -> FakeProviderIntent:
+            self.cancellations.append(provider_payment_id)
+            self.intent = replace(self.intent, status="canceled")
+            return self.intent
+
+    provider = ReceiptTrackingProvider()
+    _install_provider(provider)
+    url = _payment_url(tournament, checkout)
+    initial_email = "before-erasure@example.net"
+    desired_email = "stale-edit@example.net"
+    initial = await api_client.post(url, json={"receipt_email": initial_email})
+    assert initial.status_code == 200, initial.text
+    assert provider.provider_receipt_email == initial_email
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None
+    await db_session.commit()
+
+    # Existing-payment preparation deliberately releases its initial lifecycle
+    # locks before doing any provider I/O. Pause immediately after that release
+    # so account erasure can commit in the exact stale-edit window.
+    validation_released = asyncio.Event()
+    release_edit = asyncio.Event()
+    original_commit = db_session.commit
+    intercept_next_commit = True
+
+    async def pause_after_validation_commit() -> None:
+        nonlocal intercept_next_commit
+        await original_commit()
+        if intercept_next_commit:
+            intercept_next_commit = False
+            validation_released.set()
+            await release_edit.wait()
+
+    monkeypatch.setattr(db_session, "commit", pause_after_validation_commit)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as eraser:
+        editing = asyncio.create_task(
+            api_client.post(url, json={"receipt_email": desired_email})
+        )
+        try:
+            await asyncio.wait_for(validation_released.wait(), timeout=5)
+            await erase_account(eraser, payer.id)
+            await eraser.commit()
+            release_edit.set()
+            response = await editing
+        finally:
+            release_edit.set()
+            if not editing.done():
+                editing.cancel()
+                await asyncio.gather(editing, return_exceptions=True)
+
+    assert response.status_code == 404
+    await reconcile_stuck_payments(db_session, provider)
+    await db_session.refresh(payment)
+
+    assert payment.receipt_email is None
+    assert provider.provider_receipt_email is None
+    assert all(email != desired_email for _, email in provider.receipt_updates)
+
+
 @pytest.mark.parametrize(
     ("terminal_state", "webhook_status", "amount_cents"),
     [
@@ -1335,6 +1574,10 @@ async def test_closed_gate_cancels_unprepared_checkout_but_preserves_created_int
         f"/v1/tournaments/{tournament.id}/checkouts/{checkout['id']}"
     )
     assert cancelled.json()["status"] == "cancelled"
+    terminal = await api_client.get(_payment_url(tournament, checkout))
+    assert terminal.status_code == 200, terminal.text
+    assert terminal.json()["payment_state"] == "canceled"
+    assert terminal.json()["client_secret"] is None
     assert provider.creates == []
 
     # Closing the gate later must not strand or erase an intent already created.
@@ -1353,6 +1596,121 @@ async def test_closed_gate_cancels_unprepared_checkout_but_preserves_created_int
     assert resumed.status_code == 200, resumed.text
     assert resumed.json()["client_secret"] == created.json()["client_secret"]
     assert len(provider.creates) == 1
+
+
+async def test_generic_permanent_create_rejection_is_not_reported_as_bad_amount(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    _, tournament, checkout = await _paid_checkout(api_client, db_session, monkeypatch)
+    provider = FakePaymentProvider()
+
+    async def reject_create(_request: object) -> ProviderPaymentIntent:
+        raise PaymentProviderCreateRejectedError("connected account is unavailable")
+
+    monkeypatch.setattr(provider, "create_payment_intent", reject_create)
+    _install_provider(provider)
+
+    response = await api_client.post(_payment_url(tournament, checkout), json={})
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "payment_rejected"
+    assert "amount" not in detail["message"].casefold()
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    owner = await db_session.get(User, tournament.owner_account_id)
+    assert payment is not None
+    assert owner is not None
+    assert payment.support_reference is not None
+
+    fastapi_app.dependency_overrides[get_current_user] = lambda: owner
+    try:
+        problems = await api_client.get(
+            f"/v1/tournaments/{tournament.id}/payment-problems"
+        )
+    finally:
+        fastapi_app.dependency_overrides.pop(get_current_user, None)
+
+    assert problems.status_code == 200, problems.text
+    assert problems.json()["items"] == [
+        {
+            "checkout_id": checkout["id"],
+            "state": "create_rejected",
+            "support_reference": payment.support_reference,
+        }
+    ]
+
+
+async def test_foreground_create_rejection_after_merge_notifies_and_hints_survivor(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch,
+    fake_notifications_queue,
+    realtime_broker: RealtimeBroker,
+) -> None:
+    payer, tournament, checkout = await _paid_checkout(
+        api_client, db_session, monkeypatch
+    )
+    payer_id = payer.id
+    survivor = await make_user(
+        db_session, f"foreground-reject-survivor-{uuid.uuid4().hex[:8]}"
+    )
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    class MergeDuringRejectedCreate(FakePaymentProvider):
+        def __init__(self) -> None:
+            super().__init__()
+            self.merged = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def create_payment_intent(self, request: object) -> FakeProviderIntent:
+            async with sessions() as concurrent:
+                stale_payer = await concurrent.get(User, payer.id, with_for_update=True)
+                assert stale_payer is not None
+                stale_payer.merged_into_user_id = survivor.id
+                stale_payer.merged_at = datetime.now(UTC)
+                await concurrent.commit()
+            self.merged.set()
+            await self.release.wait()
+            raise PaymentProviderCreateRejectedError(
+                "merchant rejected the foreground create"
+            )
+
+    provider = MergeDuringRejectedCreate()
+    _install_provider(provider)
+    preparing = asyncio.create_task(
+        api_client.post(_payment_url(tournament, checkout), json={})
+    )
+    await asyncio.wait_for(provider.merged.wait(), timeout=5)
+    try:
+        async with watch_hints(realtime_broker, payer.id, survivor.id) as watch:
+            provider.release.set()
+            response = await preparing
+            hints = await watch.collect()
+    finally:
+        provider.release.set()
+        if not preparing.done():
+            await preparing
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "payment_rejected"
+    jobs = enqueued_notification_jobs(fake_notifications_queue)
+    assert [(job.user_id, job.category) for job in jobs] == [
+        (survivor.id, NotificationCategory.PAYMENTS)
+    ]
+    assert hints[payer.id] == []
+    assert hints[survivor.id] == [EventKind.dashboard_changed]
+
+    db_session.expire_all()
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout["id"]))
+    assert stored is not None
+    assert stored.payer_account_id == payer_id
 
 
 @pytest.mark.parametrize(

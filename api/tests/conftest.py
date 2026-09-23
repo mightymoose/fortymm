@@ -112,8 +112,8 @@ def fake_notifications_queue(monkeypatch):
     ``NotificationService.notify`` tests; this fixture only lets callers assert
     which jobs were enqueued."""
     connection = fakeredis.FakeStrictRedis()
-    q = Queue(queue_module.NOTIFICATIONS_QUEUE, connection=connection, is_async=True)
-    monkeypatch.setattr(queue_module, "get_notifications_queue", lambda: q)
+    q = Queue(queue_module.NOTIFICATIONS_V2_QUEUE, connection=connection, is_async=True)
+    monkeypatch.setattr(queue_module, "get_notifications_v2_queue", lambda: q)
     return q
 
 
@@ -133,6 +133,29 @@ def fake_email_queue(monkeypatch):
     q = Queue(queue_module.EMAIL_QUEUE, connection=connection, is_async=False)
     monkeypatch.setattr(queue_module, "get_email_queue", lambda: q)
     monkeypatch.setenv("FORTYMM_DEV", "1")
+    return q
+
+
+@pytest.fixture(autouse=True)
+def fake_notification_email_v2_queue(monkeypatch, fake_email_queue):
+    """Record versioned notification email jobs on their rollout-safe queue.
+
+    The legacy ``email`` queue stays available for pre-deploy jobs and all
+    unrelated email callables.  New notification-email payloads must be
+    isolated so an old worker can never reserve a callable/payload it cannot
+    execute.
+    """
+    q = Queue(
+        "notification-email-v2",
+        connection=fake_email_queue.connection,
+        is_async=True,
+    )
+    monkeypatch.setattr(
+        queue_module,
+        "get_notification_email_v2_queue",
+        lambda: q,
+        raising=False,
+    )
     return q
 
 
