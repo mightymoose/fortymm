@@ -281,6 +281,41 @@ class SessionOwnerTest {
     }
 
     @Test
+    fun endedMarkerSurvivesProcessDeathUntilTheNewGuestCredentialIsSaved() = runBlocking {
+        val endedReason = SessionEndReason(message = "You've been signed out.", email = null)
+        val credentialStore = MemoryCredentialStore().apply { sessionEndReason = endedReason }
+        val userId = UUID.fromString("5d0b7a52-2a8b-4c55-9f0e-6c4a0f5e2b11")
+        val newGuestResponse = holdResponse(
+            sessionResponse(userId, "new-guest")
+                .addHeader("Set-Cookie", "session=new-guest-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=new-guest-csrf; Path=/"),
+        )
+        val dyingProcess = SessionOwner(
+            apiClient = FortyMMApiClient(server.url("/")),
+            credentialStore = credentialStore,
+        )
+        dyingProcess.bootstrap()
+
+        val recovery = async(start = CoroutineStart.UNDISPATCHED) { dyingProcess.startNewGuest() }
+        newGuestResponse.awaitRequest()
+        val relaunchedProcess = SessionOwner(
+            apiClient = FortyMMApiClient(server.url("/")),
+            credentialStore = credentialStore,
+        )
+        relaunchedProcess.bootstrap()
+
+        assertEquals(
+            SessionState.SessionEnded(endedReason.message, endedReason.email),
+            relaunchedProcess.state.value,
+        )
+        assertEquals(1, server.requestCount)
+        newGuestResponse.release()
+        recovery.await()
+        assertEquals("new-guest-session", credentialStore.credential)
+        assertEquals(null, credentialStore.sessionEndReason)
+    }
+
+    @Test
     fun failedCredentialWriteRetrySavesReceivedGuestWithoutCreatingAnotherOne() = runBlocking {
         val userId = UUID.fromString("9a0b75b9-1b31-4e50-97dc-dd7c3017cbdc")
         val credentialStore = MemoryCredentialStore(failedSavesRemaining = 1)

@@ -120,6 +120,10 @@ class SessionOwner(
             }
         }
 
+        requestSession(storedCredential)
+    }
+
+    private suspend fun requestSession(storedCredential: CredentialLoadResult.Credential?) {
         try {
             when (val result = apiClient.bootstrap(storedCredential?.value)) {
                 is SessionBootstrap -> finishBootstrap(result, storedCredential)
@@ -213,23 +217,21 @@ class SessionOwner(
 
     private suspend fun clearSessionAndBootstrap() {
         if (!canStartNewGuest()) return
-        val previousState = mutableState.value
-        val cleared = withContext(Dispatchers.IO) { credentialStore.clear() }
-        if (cleared == CredentialClearResult.Failed) {
-            mutableState.value = when (previousState) {
-                is SessionState.SessionEnded -> previousState.copy(
-                    message = "We couldn't clear the ended session. Please try again.",
-                )
-                else -> SessionState.UnreadableStorage(
+        if (mutableState.value is SessionState.UnreadableStorage) {
+            val cleared = withContext(Dispatchers.IO) { credentialStore.clear() }
+            if (cleared == CredentialClearResult.Failed) {
+                mutableState.value = SessionState.UnreadableStorage(
                     "We couldn't clear the unreadable saved session. Please try again.",
                 )
+                return
             }
-            return
         }
         pendingCredentialRecovery = null
         pendingPersistence = null
         pendingSessionEnd = null
         mutableState.value = SessionState.Loading
-        bootstrapOnce()
+        // The ended marker stays stored until the new credential replaces it, so a
+        // process death before that save relaunches into recovery, not a silent guest.
+        requestSession(storedCredential = null)
     }
 }
