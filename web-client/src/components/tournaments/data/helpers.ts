@@ -486,7 +486,9 @@ export function emptyEvent(t: Tournament): TournamentEvent {
     // the API 422s the moment the director never touched the draw type.
     rounds: null,
     maxPlayers: 32,
-    entryFee: 30,
+    // Free until the director sets a price (#1807). A pre-filled price could charge
+    // players real money for a number nobody chose.
+    entryFee: 0,
     // Anchor the wall-clock windows in the director's own timezone (ADR 20260719):
     // a new event pre-fills from the browser's resolved zone, which for the common
     // single-venue case is exactly the venue's. They can correct it in the editor.

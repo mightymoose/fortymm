@@ -351,7 +351,7 @@ export function asEditedEvent(
   event: TournamentEvent,
   reservations: ReservationEntry[] = keepReservations(event.reservations),
 ): EditedEvent {
-  return { ...event, reservations }
+  return { ...event, reservations, storedEntryFee: event.entryFee }
 }
 
 /** An event with **no entrant cap** (`max_players: null`, ADR-0935): open to

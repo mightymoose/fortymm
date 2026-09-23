@@ -620,8 +620,12 @@ export function eventToCreateBody(ev: EditedEvent): TournamentEventCreate {
  * version belonging to this complete draft. Load latest replaces both the values
  * and their version; it never upgrades the version of an old draft. */
 export function eventToUpdateBody(ev: EditedEvent): TournamentEventUpdate {
+  // An unchanged fee stays off the wire (#1807): the server judges the fee rules only
+  // on a fee that changes, and a legacy fee they refuse must not block this edit.
+  const { entry_fee, ...fields } = eventToApiFields(ev)
   return {
-    ...eventToApiFields(ev),
+    ...fields,
+    ...(ev.entryFee === ev.storedEntryFee ? {} : { entry_fee }),
     reservations: reservationEntriesToApi(ev.reservations),
     lock_version: ev.lockVersion,
   }

@@ -394,6 +394,7 @@ export const EventEditor = ({
       ...event,
       ...formValues,
       lockVersion: event.lockVersion,
+      storedEntryFee: event.entryFee,
     }
 
     // #1537: would THIS save newly strand an already-placed match against its

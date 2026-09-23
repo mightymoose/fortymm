@@ -21,6 +21,7 @@ absent id existed), exactly as the slice-1 lifecycle verbs do.
 
 import uuid
 from datetime import date, datetime, time
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, select
@@ -56,6 +57,7 @@ from app.schemas.tournament import (
     SwissDrawSettingsWrite,
     TournamentEventCreate,
     TournamentEventUpdate,
+    enforce_entry_fee_rules,
     enforce_event_reservation_cap,
     enforce_reservation_containment,
     named_list,
@@ -737,6 +739,22 @@ def _enforce_reservation_cap(
     enforce_event_reservation_cap(draw_type, reservation_count)
 
 
+def _enforce_entry_fee_rules(
+    event: TournamentEvent, updates: TournamentEventUpdate
+) -> None:
+    """Raise :class:`EntryFeeOutOfBoundsError` when this PATCH changes the fee to one
+    the paid-collection rules refuse (#1807).
+
+    **A no-op when the fee is absent or unchanged.** A stored fee that breaks the
+    rules still accepts every other edit, including a re-send of the same fee. Checkout
+    refuses that fee until the organizer changes it."""
+    if updates.entry_fee is None:
+        return
+    if Decimal(str(updates.entry_fee)) == Decimal(str(event.entry_fee)):
+        return
+    enforce_entry_fee_rules(updates.entry_fee)
+
+
 def _stored_event_window(event: TournamentEvent) -> tuple[date, time, time] | None:
     """This event's **stored** ``slot`` as a parsed ``(date, start, end)`` triple, or
     ``None`` when the stored value does not spell one (#1501 review).
@@ -1116,6 +1134,7 @@ async def update_event(
     # so a cut event over the cap still answers the cap's 422 first, and a cut event
     # at all still answers a freeze's 409 first.
     _enforce_reservation_containment(event, updates)
+    _enforce_entry_fee_rules(event, updates)
     facts_before = _event_scheduling_facts(event)
     old_entry_fee = event.entry_fee
     old_format = event.format

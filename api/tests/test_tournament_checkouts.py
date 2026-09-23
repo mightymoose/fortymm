@@ -786,14 +786,17 @@ async def test_checkout_creation_queues_behind_player_retirement(
     assert await db_session.scalar(select(TournamentCheckout)) is None
 
 
-async def test_combined_total_exceeding_int32_is_stored_exactly(
+async def test_combined_total_of_many_capped_events_is_stored_exactly(
     api_client: AsyncClient,
     db_session: AsyncSession,
     monkeypatch,
 ) -> None:
+    # This test used 22 fees of $999,999.99 to push the total past int32. The $500 cap
+    # (#1807) refuses those fees at checkout, and a capped total passes int32 only past
+    # about 43,000 events. So the test now sums many events at the cap instead.
     await start_session(api_client, db_session)
     owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
-    fees = tuple(Decimal("999999.99") for _ in range(22))
+    fees = tuple(Decimal("499.99") for _ in range(22))
     tournament, events = await _paid_tournament(db_session, owner=owner, fees=fees)
     monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
 
@@ -806,7 +809,7 @@ async def test_combined_total_exceeding_int32_is_stored_exactly(
     )
 
     assert response.status_code == 201
-    assert response.json()["total_cents"] == 2_199_999_978
+    assert response.json()["total_cents"] == 1_099_978
 
 
 async def test_explicit_cancellation_releases_hold_for_another_player(
@@ -1117,6 +1120,51 @@ async def test_checkout_refuses_a_positive_fee_below_fifty_cents(
         "message": "Paid event fees must be at least $0.50 USD.",
         "event_id": str(event.id),
     }
+
+
+async def test_checkout_refuses_a_stored_fee_above_the_cap(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("500.01"),)
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+
+    response = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "price_too_high",
+        "message": "The maximum entry fee is $500.",
+        "event_id": str(event.id),
+    }
+
+
+async def test_checkout_starts_for_a_fee_at_the_cap(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("500.00"),)
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+
+    response = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]},
+    )
+
+    assert response.status_code == 201, response.text
 
 
 async def test_tournament_availability_counts_holds_without_listing_them_as_entrants(

@@ -277,6 +277,17 @@ class ReservationNotInEventError(Exception):
         self.reservation_id = reservation_id
 
 
+class EntryFeeOutOfBoundsError(ValueError):
+    """Raised when a new or changed entry fee is positive but below $0.50, or above
+    $500 (#1807). Judged by ``app.schemas.tournament.enforce_entry_fee_rules``.
+
+    A ``ValueError`` for the same reason :class:`EventReservationCapExceededError` is
+    one: the create schema raises it inside a validator, so Pydantic folds it into the
+    create's own 422. The update verb raises it from plain code, so the HTTP route and
+    the MCP tool catch it explicitly.
+    """
+
+
 class EventReservationCapExceededError(ValueError):
     """Raised when a non-``rr-then-ko`` event would hold more than one reservation
     (#1482) — the ceiling half of the reservation cap, judged by
