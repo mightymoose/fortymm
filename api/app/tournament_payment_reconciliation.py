@@ -821,7 +821,6 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                         payer_account_id=payer_account_id,
                         payment_id=payment_id,
                     )
-                    payment.receipt_sync_pending = False
                     await _quarantine_provider_mismatch(db, payment)
             await retry_terminal_payment_outputs(db, payment_id=payment_id)
             await db.commit()
@@ -903,7 +902,6 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                             payer_account_id=payer_account_id,
                             payment_id=payment_id,
                         )
-                        payment.receipt_sync_pending = False
                         await _quarantine_provider_mismatch(db, payment)
                 await retry_terminal_payment_outputs(db, payment_id=payment_id)
                 await db.commit()
@@ -1136,7 +1134,6 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                         payer_account_id=payer_account_id,
                         payment_id=payment_id,
                     )
-                    payment.receipt_sync_pending = False
                     await _quarantine_provider_mismatch(db, payment)
                     await db.commit()
                     reconciled += 1
@@ -1327,7 +1324,6 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                     payer_account_id=payer_account_id,
                     payment_id=payment_id,
                 )
-                payment.receipt_sync_pending = False
                 await _quarantine_provider_mismatch(db, payment)
         await db.commit()
         reconciled += 1

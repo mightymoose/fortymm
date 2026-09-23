@@ -7,7 +7,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
 
-import { api, unwrap } from '@/api/client'
+import { ApiError, api, unwrap } from '@/api/client'
 import type { components } from '@/api/schema'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -101,6 +101,23 @@ function paymentPath(tournamentId: string, checkoutId: string) {
     tournament_id: tournamentId,
     checkout_id: checkoutId,
   }
+}
+
+function paymentProjection(checkout: Checkout): Payment {
+  return parsePayment({
+    checkout_id: checkout.id,
+    payment_state: checkout.payment_state,
+    client_secret: null,
+    receipt_email: null,
+    receipt_editable: false,
+    support_reference: null,
+    lines: checkout.lines.map((line) => ({
+      event_id: line.event_id,
+      amount_cents: line.price_cents,
+      outcome: null,
+      refund_amount_cents: 0,
+    })),
+  })
 }
 
 function StripeAdapterBridge({
@@ -210,20 +227,7 @@ function CheckoutPageContent({
             // checkout projection is still authoritative history: render it
             // without retrying preparation or turning a terminal state into a
             // generic load failure.
-            loadedPayment = parsePayment({
-              checkout_id: loadedCheckout.id,
-              payment_state: loadedCheckout.payment_state,
-              client_secret: null,
-              receipt_email: null,
-              receipt_editable: false,
-              support_reference: null,
-              lines: loadedCheckout.lines.map((line) => ({
-                event_id: line.event_id,
-                amount_cents: line.price_cents,
-                outcome: null,
-                refund_amount_cents: 0,
-              })),
-            })
+            loadedPayment = paymentProjection(loadedCheckout)
           } else {
             loadedPayment = await preparePayment()
           }
@@ -308,6 +312,55 @@ function CheckoutPageContent({
       } catch (error) {
         if (paymentSubmitted) {
           setStatusUncertain(true)
+          return
+        }
+        if (error instanceof ApiError && error.status === 404) {
+          // Preparation is an authority check immediately before handing the
+          // secret to Stripe. Once that authority is gone, discard every local
+          // card affordance before doing any more I/O; even a failed refresh
+          // must never make the stale secret retryable.
+          setAuthoritativePayment({
+            ...payment,
+            payment_state: 'preparing',
+            client_secret: null,
+            receipt_editable: false,
+          })
+          try {
+            const refreshedCheckout = checkoutWireSchema.parse(
+              unwrap(
+                'refresh checkout authority',
+                await api.GET(
+                  '/v1/tournaments/{tournament_id}/checkouts/{checkout_id}',
+                  { params: { path: paymentPath(tournamentId, checkoutId) } },
+                ),
+              ),
+            ) as Checkout
+            const refreshedPaymentResult = await api.GET(
+              '/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment',
+              { params: { path: paymentPath(tournamentId, checkoutId) } },
+            )
+            const refreshedPayment =
+              refreshedPaymentResult.response.status === 404
+                ? paymentProjection(refreshedCheckout)
+                : parsePayment(
+                    unwrap('refresh payment authority', refreshedPaymentResult),
+                  )
+            const nonPayablePayment = {
+              ...refreshedPayment,
+              client_secret: null,
+              receipt_editable: false,
+            }
+            setCheckout(refreshedCheckout)
+            setPayment(nonPayablePayment)
+            setAuthoritativePayment(nonPayablePayment)
+            receiptForm.reset({
+              receiptEmail: refreshedPayment.receipt_email ?? '',
+            })
+          } catch {
+            // Keep the non-payable projection installed above. The initial 404
+            // is authoritative about losing preparation rights even when the
+            // follow-up projection cannot be loaded.
+          }
           return
         }
         const message = receiptMutationErrorMessage(error)
@@ -474,8 +527,6 @@ function CheckoutPageContent({
             <a href={`/tournaments/${checkout.tournament_id}`}>Return to tournament</a>
           </Button>
         </section>
-      ) : locallyExpired ? (
-        <StateMessage title="Checkout expired" body="Your reservation has ended. Start a new checkout from the tournament." />
       ) : state === 'checking' ? (
         <StateMessage
           title="Payment is still being confirmed"
@@ -483,6 +534,10 @@ function CheckoutPageContent({
             ? 'Payment confirmation status is uncertain. You can safely leave this page and check your dashboard later.'
             : 'You can safely leave this page and check your dashboard later.'}
         />
+      ) : locallyExpired ? (
+        <StateMessage title="Checkout expired" body="Your reservation has ended. Start a new checkout from the tournament." />
+      ) : state === 'ready' && !displayedPayment?.client_secret ? (
+        <StateMessage title="Payment is no longer available" body="No payment action is available for this checkout." />
       ) : state === 'action_required' && !displayedPayment?.client_secret ? (
         <StateMessage title="Finish card authentication" body="Complete the verification requested by your card issuer." />
       ) : state === 'expired' || checkout.status === 'expired' ? (

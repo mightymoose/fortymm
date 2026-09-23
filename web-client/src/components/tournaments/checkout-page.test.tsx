@@ -277,6 +277,27 @@ describe("tournament checkout page", () => {
     ).toBeEnabled();
   });
 
+  it("keeps an in-flight payment in confirmation when the local checkout deadline has passed", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2030-04-20T14:10:01Z"));
+    serve({
+      prepared: payment({ payment_state: "checking", client_secret: null }),
+    });
+
+    page.render(adapter());
+
+    expect(
+      await screen.findByText("Payment is still being confirmed"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Checkout expired")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /pay|try card again/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: /card details/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it("does not offer receipt edits on a merged-account recovery projection", async () => {
     serve({
       prepared: payment({
@@ -415,6 +436,65 @@ describe("tournament checkout page", () => {
       screen.queryByRole("button", { name: /pay/i }),
     ).not.toBeInTheDocument();
     expect(stripe.confirmPayment).not.toHaveBeenCalled();
+  });
+
+  it("refreshes authority after Pay preparation disappears instead of reusing stale card state", async () => {
+    let checkoutReads = 0;
+    let paymentReads = 0;
+    let prepares = 0;
+    server.use(
+      http.get("*/v1/tournaments/:tournamentId/checkouts/:checkoutId", () => {
+        checkoutReads += 1;
+        return HttpResponse.json(
+          checkoutReads === 1
+            ? checkout
+            : {
+                ...checkout,
+                status: "invalidated",
+                payment_state: "canceled",
+              },
+        );
+      }),
+      http.get(
+        "*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment",
+        () => {
+          paymentReads += 1;
+          return HttpResponse.json(
+            paymentReads === 1
+              ? payment()
+              : payment({ payment_state: "canceled", client_secret: null }),
+          );
+        },
+      ),
+      http.post(
+        "*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment",
+        () => {
+          prepares += 1;
+          if (prepares === 1) return HttpResponse.json(payment());
+          return HttpResponse.json(
+            { detail: "Preparation is no longer authorized." },
+            { status: 404 },
+          );
+        },
+      ),
+    );
+    const stripe = adapter();
+    page.render(stripe);
+
+    await userEvent
+      .setup()
+      .click(await screen.findByRole("button", { name: /pay/i }));
+
+    expect(await screen.findByText("Checkout canceled")).toBeInTheDocument();
+    expect(checkoutReads).toBeGreaterThanOrEqual(2);
+    expect(paymentReads).toBeGreaterThanOrEqual(2);
+    expect(stripe.confirmPayment).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("button", { name: /pay|try card again/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: /card details/i }),
+    ).not.toBeInTheDocument();
   });
 
   it.each(["ready", "action_required"])(

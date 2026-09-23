@@ -189,10 +189,12 @@ services:
   # Periodic sweeps. The retirement sweep (task #9 / ADR 0007 O8) auto-accepts
   # lapsed standing results and sends due deadline-nearing reminders; the
   # email-token sweep (#1616) deletes replaced confirmation-token rows once
-  # they age out of EMAIL_CONFIRM_TOKEN_LIFETIME — an independent cleanup that
-  # does not wait on the user's next request or confirm. Both run inline
-  # (python -m app.retirement_sweep / app.email_token_sweep), not through the
-  # rq worker/queue, so this is a plain loop rather than a queue consumer.
+  # they age out of EMAIL_CONFIRM_TOKEN_LIFETIME. Payment reconciliation and
+  # receipt-PII cleanup recover provider state and erase expired tournament
+  # receipt details independently of request traffic. Every sweep runs inline
+  # (python -m app.*), not through the rq worker/queue, so this is a plain loop
+  # rather than a queue consumer. Each command owns its failure so one broken
+  # sweep cannot starve the remaining work in that cycle.
   # Hourly by default; must stay at least daily for the reminder's 24h-before
   # guarantee. Override the interval (seconds) with RETIREMENT_SWEEP_INTERVAL.
   retirement-sweep:
@@ -211,6 +213,8 @@ services:
     command: >
       sh -c "while true; do python -m app.retirement_sweep || true;
              python -m app.email_token_sweep || true;
+             python -m app.payment_reconciliation_sweep || true;
+             python -m app.tournament_receipt_pii_sweep || true;
              sleep ${RETIREMENT_SWEEP_INTERVAL:-3600}; done"
 
   # Catches every email the worker sends in this preview stack instead of

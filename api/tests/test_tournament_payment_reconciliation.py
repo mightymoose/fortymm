@@ -1370,7 +1370,7 @@ async def test_malformed_provider_operation_is_quarantined_without_starving_swee
     assert first_payment.provider_mismatch_at is not None
     assert first_payment.support_reference is not None
     if malformed_operation == "receipt_update":
-        assert first_payment.receipt_sync_pending is False
+        assert first_payment.receipt_sync_pending is True
     assert later_payment.attention_notified_state == "provider_mismatch"
 
 
@@ -1696,6 +1696,67 @@ async def test_authority_loss_does_not_cancel_until_receipt_pii_clear_is_verifie
     assert payment.receipt_sync_pending is False
     assert payment.receipt_sync_failed_at is not None
     assert payment.support_reference is not None
+
+
+@pytest.mark.parametrize(
+    "provider_error",
+    [
+        PaymentProviderConfigurationError("provider credentials unavailable"),
+        PaymentProviderResponseInvalidError("malformed receipt update response"),
+    ],
+    ids=["configuration", "malformed-response"],
+)
+async def test_receipt_pii_clear_provider_failure_remains_retryable_before_cancel(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    provider_error: Exception,
+) -> None:
+    provider = FakePaymentProvider("pi_receipt_clear_retry")
+    _, _, _, checkout = await _prepared_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        provider,
+        payment_payload={"receipt_email": "private@example.net"},
+    )
+    stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout["id"]))
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert stored is not None
+    assert payment is not None
+    stored.status = TournamentCheckoutStatus.expired
+    stored.created_at = datetime.now(UTC) - timedelta(minutes=20)
+    stored.expires_at = datetime.now(UTC) - timedelta(minutes=10)
+    provider.receipt_update_error = provider_error
+    provider.receipt_updates.clear()
+    await db_session.commit()
+
+    first_sweep = await reconcile_stuck_payments(db_session, provider)
+    await db_session.refresh(payment)
+
+    assert first_sweep == 1
+    assert provider.receipt_updates == [(provider.intent_id, None)]
+    assert provider.cancellations == []
+    assert payment.state is TournamentPaymentState.ready
+    assert payment.receipt_email is None
+    assert payment.receipt_sync_pending is True
+
+    provider.receipt_update_error = None
+    second_sweep = await reconcile_stuck_payments(db_session, provider)
+    await db_session.refresh(payment)
+
+    assert second_sweep == 1
+    assert provider.receipt_updates == [
+        (provider.intent_id, None),
+        (provider.intent_id, None),
+    ]
+    assert provider.cancellations == [provider.intent_id]
+    assert payment.state is TournamentPaymentState.canceled
+    assert payment.receipt_sync_pending is False
 
 
 @pytest.mark.parametrize(

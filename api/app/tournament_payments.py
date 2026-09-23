@@ -1164,10 +1164,11 @@ async def read_payment_status(
     ):
         raise PaymentNotFoundError()
     payment = checkout.payment
-    if checkout.payer_account_id != actor.id and owns_historical_payment:
-        # The survivor inherits recovery visibility, not the old account's
-        # provider-mutating capability. Return the durable local projection
-        # that the notification/dashboard linked to, always secret-redacted.
+    if checkout.payer_account_id != actor.id:
+        # Merge survivors and payments.view operators inherit recovery
+        # visibility, not the payer's provider-mutating capability. Return the
+        # durable local projection that the notification/dashboard linked to,
+        # always secret-redacted and without contacting the provider.
         return _read(
             payment,
             include_client_secret=False,

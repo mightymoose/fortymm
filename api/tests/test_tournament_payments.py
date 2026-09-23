@@ -57,6 +57,7 @@ from app.tournament_event_stages import mint_stages
 from app.tournament_payment_reconciliation import reconcile_stuck_payments
 from tests._helpers import (
     enqueued_notification_jobs,
+    grant_permissions,
     make_client,
     make_user,
     start_session,
@@ -367,6 +368,35 @@ async def test_prepare_is_payer_only_and_never_discloses_the_client_secret(
     assert refused.status_code == 404
     assert len(provider.creates) == 1
     assert provider.intent.client_secret not in refused.text
+
+
+async def test_payments_view_grant_is_read_only_for_another_payers_payment(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    _, tournament, checkout = await _paid_checkout(api_client, db_session, monkeypatch)
+    provider = FakePaymentProvider()
+    _install_provider(provider)
+    url = _payment_url(tournament, checkout)
+    prepared = await api_client.post(url, json={})
+    assert prepared.status_code == 200, prepared.text
+    operator = await make_user(db_session, f"payment-operator-{uuid.uuid4().hex[:8]}")
+    await grant_permissions(db_session, operator, ["payments.view"])
+
+    fastapi_app.dependency_overrides[get_current_user] = lambda: operator
+    try:
+        read = await api_client.get(url)
+        edit = await api_client.post(
+            url, json={"receipt_email": "operator@example.net"}
+        )
+    finally:
+        fastapi_app.dependency_overrides.pop(get_current_user, None)
+
+    assert read.status_code == 200, read.text
+    assert read.json()["receipt_editable"] is False
+    assert edit.status_code == 404
+    assert provider.receipt_updates == []
 
 
 async def test_concrete_checking_response_emits_one_attention_transition(

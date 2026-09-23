@@ -542,6 +542,24 @@ describe('eventEditorSchema while fee authoring is disabled', () => {
   })
 })
 
+describe('eventEditorSchema while fee authoring is enabled', () => {
+  it('round-trips an unchanged legacy subminimum fee but rejects authoring a different one', () => {
+    const legacySchema = eventEditorSchema({
+      feeAuthoringEnabled: true,
+      storedEntryFee: 0.25,
+    })
+    const newEventSchema = eventEditorSchema({
+      feeAuthoringEnabled: true,
+      storedEntryFee: 0,
+    })
+
+    expect(legacySchema.safeParse(formFor({ entryFee: 0.25 })).success).toBe(true)
+    expect(legacySchema.safeParse(formFor({ entryFee: 0.3 })).success).toBe(false)
+    expect(newEventSchema.safeParse(formFor({ entryFee: 0.25 })).success).toBe(false)
+    expect(newEventSchema.safeParse(formFor({ entryFee: 0.5 })).success).toBe(true)
+  })
+})
+
 describe('isEventSlotWellFormed', () => {
   it('accepts a real date and two real times', () => {
     expect(

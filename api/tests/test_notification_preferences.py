@@ -610,6 +610,39 @@ async def test_queued_email_rechecks_preferences_and_receipt_duplicate_at_delive
     assert sent == []
 
 
+async def test_queued_email_without_keyed_duplicate_evidence_is_delivered(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A missing key is no evidence that an unrelated email was delivered."""
+    monkeypatch.delenv("FORTYMM_DEV", raising=False)
+    monkeypatch.delenv("NOTIFICATION_EMAIL_DEDUP_SECRET", raising=False)
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", "false")
+    user = await make_user(db_session, "queued-email-no-dedup-key")
+    user.email = "notification@example.com"
+    user.confirmed_at = datetime.now(UTC)
+    await db_session.commit()
+    sent: list[str] = []
+    monkeypatch.setattr(
+        "app.email.send_notification_email",
+        lambda to_email, *_args, **_kwargs: sent.append(to_email),
+    )
+
+    # Deployed payment-disabled configurations may intentionally omit the
+    # dedup secret.  ``None`` in the queued envelope means "no evidence", not
+    # "the current address already received this notification".
+    await notification_jobs._deliver_notification_email_v2(
+        user.id,
+        "Tournament update",
+        "Registration opens tomorrow.",
+        None,
+        NotificationCategory.TOURNAMENT.value,
+        None,
+    )
+
+    assert sent == ["notification@example.com"]
+
+
 async def test_queued_email_honors_preference_changed_before_final_delivery(
     db_session: AsyncSession,
     versioned_email_queues,

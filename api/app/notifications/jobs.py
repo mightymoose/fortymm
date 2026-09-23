@@ -164,7 +164,10 @@ async def _deliver_notification_email_v2(
         if NotificationChannel.EMAIL not in enabled:
             return
         current_email = account.email
-        if already_delivered_key == email_delivery_key(current_email):
+        if (
+            already_delivered_key is not None
+            and already_delivered_key == email_delivery_key(current_email)
+        ):
             return
         # The read locks keep activity and the address stable through the send.
         email.send_notification_email(current_email, title, body, link)

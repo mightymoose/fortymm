@@ -545,7 +545,15 @@ export function eventEditorSchema({
   feeAuthoringEnabled: boolean
   storedEntryFee: number
 }) {
-  if (feeAuthoringEnabled) return eventSchema
+  if (feeAuthoringEnabled) {
+    return eventSchema.safeExtend({
+      // The provider's minimum constrains a newly authored fee, but an older
+      // event may legitimately store a positive amount below that minimum.
+      // Preserve that exact value so unrelated edits can round-trip it without
+      // allowing the organizer to author a different subminimum amount.
+      entryFee: z.union([entryFeeSchema, z.literal(storedEntryFee)]),
+    })
+  }
   return eventSchema.safeExtend({
     entryFee: z.union([z.literal(storedEntryFee), z.literal(0)]),
   })
