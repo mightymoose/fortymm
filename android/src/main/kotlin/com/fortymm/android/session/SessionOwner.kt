@@ -22,9 +22,17 @@ data class SessionUser(
     val username: String,
 )
 
+/** Why a session ended. The recovery screen owns the copy for each code. */
+enum class SessionEndCode(val wireValue: String) {
+    Ended("session_ended"),
+    Merged("session_merged"),
+    Expired("session_expired"),
+}
+
 data class SessionEndReason(
-    val message: String,
-    val email: String?,
+    val code: SessionEndCode,
+    /** The merged account's email. Kept for sign-in (#1729), never shown here. */
+    val email: String? = null,
 )
 
 sealed interface SessionState {
@@ -33,13 +41,11 @@ sealed interface SessionState {
     data class Ready(val user: SessionUser) : SessionState
 
     data class SessionEnded(
-        val message: String,
-        val email: String?,
+        val reason: SessionEndReason,
         val newGuest: NewGuestStatus = NewGuestStatus.Idle,
     ) : SessionState
 
     data class UnreadableStorage(
-        val message: String,
         val newGuest: NewGuestStatus = NewGuestStatus.Idle,
     ) : SessionState
 
@@ -128,10 +134,7 @@ class SessionOwner(
         val storedCredential = when (val loaded = withContext(Dispatchers.IO) { credentialStore.load() }) {
             is CredentialLoadResult.Credential -> {
                 if (loaded.expiresAtEpochMillis == null || loaded.expiresAtEpochMillis <= currentTimeMillis()) {
-                    val reason = SessionEndReason(
-                        message = "Your saved session has expired. Start a new guest to continue.",
-                        email = null,
-                    )
+                    val reason = SessionEndReason(SessionEndCode.Expired)
                     pendingSessionEnd = reason
                     persistSessionEnd(reason)
                     return
@@ -140,16 +143,11 @@ class SessionOwner(
             }
             CredentialLoadResult.Absent -> null
             is CredentialLoadResult.SessionEnded -> {
-                mutableState.value = SessionState.SessionEnded(
-                    loaded.reason.message,
-                    loaded.reason.email,
-                )
+                mutableState.value = SessionState.SessionEnded(loaded.reason)
                 return
             }
             CredentialLoadResult.UnreadableStorage -> {
-                mutableState.value = SessionState.UnreadableStorage(
-                    "We couldn't read your saved session.",
-                )
+                mutableState.value = SessionState.UnreadableStorage()
                 return
             }
         }
@@ -230,7 +228,7 @@ class SessionOwner(
         if (saved == CredentialSaveResult.Saved) {
             pendingSessionEnd = null
             pendingPersistence = null
-            mutableState.value = SessionState.SessionEnded(reason.message, reason.email)
+            mutableState.value = SessionState.SessionEnded(reason)
         } else {
             mutableState.value = SessionState.RetryableStartup(
                 "We couldn't protect your signed-out state on this device. Please try again.",

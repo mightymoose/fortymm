@@ -102,10 +102,7 @@ class SessionOwnerTest {
         laterProcess.bootstrap()
 
         assertEquals(
-            SessionState.SessionEnded(
-                "Your saved session has expired. Start a new guest to continue.",
-                email = null,
-            ),
+            SessionState.SessionEnded(SessionEndReason(SessionEndCode.Expired)),
             laterProcess.state.value,
         )
         assertEquals(1, server.requestCount)
@@ -252,7 +249,7 @@ class SessionOwnerTest {
         firstProcess.bootstrap()
 
         assertEquals(
-            SessionState.SessionEnded("You've been signed out. Sign in to continue.", email = null),
+            SessionState.SessionEnded(SessionEndReason(SessionEndCode.Ended)),
             firstProcess.state.value,
         )
         val laterProcess = SessionOwner(
@@ -261,7 +258,7 @@ class SessionOwnerTest {
         )
         laterProcess.bootstrap()
         assertEquals(
-            SessionState.SessionEnded("You've been signed out. Sign in to continue.", email = null),
+            SessionState.SessionEnded(SessionEndReason(SessionEndCode.Ended)),
             laterProcess.state.value,
         )
         assertEquals(1, server.requestCount)
@@ -283,7 +280,7 @@ class SessionOwnerTest {
 
     @Test
     fun endedMarkerSurvivesProcessDeathUntilTheNewGuestCredentialIsSaved() = runBlocking {
-        val endedReason = SessionEndReason(message = "You've been signed out.", email = null)
+        val endedReason = SessionEndReason(SessionEndCode.Ended)
         val credentialStore = MemoryCredentialStore().apply { sessionEndReason = endedReason }
         val userId = UUID.fromString("5d0b7a52-2a8b-4c55-9f0e-6c4a0f5e2b11")
         val newGuestResponse = holdResponse(
@@ -306,7 +303,7 @@ class SessionOwnerTest {
         relaunchedProcess.bootstrap()
 
         assertEquals(
-            SessionState.SessionEnded(endedReason.message, endedReason.email),
+            SessionState.SessionEnded(endedReason),
             relaunchedProcess.state.value,
         )
         assertEquals(1, server.requestCount)
@@ -318,7 +315,7 @@ class SessionOwnerTest {
 
     @Test
     fun failedNewGuestStartStaysOnTheRecoveryScreenAndCanBeRetried() = runBlocking {
-        val endedReason = SessionEndReason(message = "You've been signed out.", email = null)
+        val endedReason = SessionEndReason(SessionEndCode.Ended)
         val credentialStore = MemoryCredentialStore().apply { sessionEndReason = endedReason }
         val owner = SessionOwner(
             apiClient = FortyMMApiClient(server.url("/")),
@@ -331,8 +328,7 @@ class SessionOwnerTest {
 
         assertEquals(
             SessionState.SessionEnded(
-                endedReason.message,
-                endedReason.email,
+                endedReason,
                 newGuest = NewGuestStatus.Failed,
             ),
             owner.state.value,
@@ -356,7 +352,7 @@ class SessionOwnerTest {
 
     @Test
     fun doubleTappingContinueAsANewGuestCreatesOneNewIdentity() = runBlocking {
-        val endedReason = SessionEndReason(message = "You've been signed out.", email = null)
+        val endedReason = SessionEndReason(SessionEndCode.Ended)
         val credentialStore = MemoryCredentialStore().apply { sessionEndReason = endedReason }
         val userId = UUID.fromString("a4f7e0f2-58c4-4b0e-9d7e-3f8a2c1b6d55")
         val newGuestResponse = holdResponse(
@@ -374,8 +370,7 @@ class SessionOwnerTest {
         newGuestResponse.awaitRequest()
         assertEquals(
             SessionState.SessionEnded(
-                endedReason.message,
-                endedReason.email,
+                endedReason,
                 newGuest = NewGuestStatus.Starting,
             ),
             owner.state.value,
@@ -416,8 +411,7 @@ class SessionOwnerTest {
         val response = apiClient.get("/v1/me")
 
         val merged = SessionState.SessionEnded(
-            "This guest session was merged into your account. Sign in to continue.",
-            email = "owner@example.com",
+            SessionEndReason(SessionEndCode.Merged, email = "owner@example.com"),
         )
         assertEquals(AuthenticatedResponse.Obsolete, response)
         assertEquals(merged, owner.state.value)
@@ -500,7 +494,7 @@ class SessionOwnerTest {
         owner.bootstrap()
 
         assertEquals(
-            SessionState.SessionEnded("You've been signed out. Sign in to continue.", email = null),
+            SessionState.SessionEnded(SessionEndReason(SessionEndCode.Ended)),
             owner.state.value,
         )
         assertEquals(null, credentialStore.credential)
@@ -637,9 +631,7 @@ class SessionOwnerTest {
         owner.bootstrap()
 
         assertEquals(
-            SessionState.UnreadableStorage(
-                "We couldn't read your saved session.",
-            ),
+            SessionState.UnreadableStorage(),
             owner.state.value,
         )
         assertEquals(0, server.requestCount)

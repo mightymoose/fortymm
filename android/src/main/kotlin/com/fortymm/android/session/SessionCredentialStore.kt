@@ -113,7 +113,7 @@ class AndroidSessionCredentialStore internal constructor(
                 json.encodeToString(
                     StoredSessionDto(
                         kind = SESSION_ENDED_KIND,
-                        message = reason.message,
+                        code = reason.code.wireValue,
                         email = reason.email,
                     ),
                 ),
@@ -140,9 +140,11 @@ class AndroidSessionCredentialStore internal constructor(
             CREDENTIAL_KIND -> stored.credential
                 ?.let { CredentialLoadResult.Credential(it, stored.expiresAtEpochMillis) }
                 ?: CredentialLoadResult.UnreadableStorage
+            // A marker written before codes existed holds only a message; it reads as ended.
             SESSION_ENDED_KIND -> CredentialLoadResult.SessionEnded(
                 SessionEndReason(
-                    message = stored.message ?: "Your session has ended. Sign in to continue.",
+                    code = SessionEndCode.entries.firstOrNull { it.wireValue == stored.code }
+                        ?: SessionEndCode.Ended,
                     email = stored.email,
                 ),
             )
@@ -281,6 +283,6 @@ private data class StoredSessionDto(
     val kind: String,
     val credential: String? = null,
     val expiresAtEpochMillis: Long? = null,
-    val message: String? = null,
+    val code: String? = null,
     val email: String? = null,
 )

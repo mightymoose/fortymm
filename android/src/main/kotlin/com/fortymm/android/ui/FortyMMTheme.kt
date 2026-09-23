@@ -15,6 +15,7 @@ object FortyMMColor {
 }
 
 object FortyMMSpace {
+    const val S2 = 8
     const val S4 = 16
     const val S6 = 24
     const val S8 = 32

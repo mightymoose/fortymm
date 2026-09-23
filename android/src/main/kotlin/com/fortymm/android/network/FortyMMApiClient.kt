@@ -1,5 +1,6 @@
 package com.fortymm.android.network
 
+import com.fortymm.android.session.SessionEndCode
 import com.fortymm.android.session.SessionEndReason
 import com.fortymm.android.session.SessionUser
 import kotlinx.coroutines.Dispatchers
@@ -186,11 +187,12 @@ class FortyMMApiClient(
         } catch (_: Exception) {
             return null
         }
-        if (detail.code !in SESSION_ENDED_CODES) return null
-        return SessionEndReason(
-            message = detail.message ?: "Your session has ended. Sign in to continue.",
-            email = detail.email,
-        )
+        val endCode = when (detail.code) {
+            SessionEndCode.Ended.wireValue -> SessionEndCode.Ended
+            SessionEndCode.Merged.wireValue -> SessionEndCode.Merged
+            else -> return null
+        }
+        return SessionEndReason(endCode, detail.email)
     }
 
     private fun endIfCurrent(sentCredential: String): Boolean = synchronized(credentialLock) {
@@ -225,7 +227,6 @@ class FortyMMApiClient(
         private const val SESSION_PATH = "/v1/session"
         private const val SESSION_COOKIE_NAME = "session"
         private const val CSRF_COOKIE_NAME = "csrf_token"
-        private val SESSION_ENDED_CODES = setOf("session_ended", "session_merged")
 
         internal fun newHttpClient(): OkHttpClient = OkHttpClient.Builder()
             .cookieJar(CookieJar.NO_COOKIES)
@@ -284,6 +285,5 @@ private data class SessionEndedResponseDto(
 @Serializable
 private data class SessionEndedDetailDto(
     val code: String,
-    val message: String? = null,
     val email: String? = null,
 )
