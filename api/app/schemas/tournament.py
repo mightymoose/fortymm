@@ -39,6 +39,7 @@ from app.schemas.schedule_solve import (
     parse_placement_conflicts,
 )
 from app.tournament_errors import (
+    EntryFeeOutOfBoundsError,
     EventReservationCapExceededError,
     ReservationOutsideEventWindowError,
 )
@@ -110,8 +111,6 @@ def _fits_the_fee_column(value: float) -> float:
     binary tail of 10.1.
     """
     fee = Decimal(str(value))
-    if Decimal(0) < fee < Decimal("0.50"):
-        raise ValueError("A paid entry fee must be at least $0.50 USD.")
     if fee != fee.quantize(_CENTS, rounding=ROUND_DOWN):
         raise ValueError(
             f"An entry fee is in whole cents: at most 2 decimal places (got {value})."
@@ -130,6 +129,38 @@ EventEntryFee = Annotated[
 ]
 """An event's entry fee: a non-negative amount in whole cents that the
 ``Numeric(8, 2)`` column can hold. ``0`` is a real answer — a free event."""
+
+MAX_PAID_ENTRY_FEE = Decimal("500.00")
+"""The largest fee an organizer may set (#1807). It is a typo guard, not a column
+limit: it catches ``3000`` typed for $30.00 before a player pays it."""
+
+
+MIN_PAID_ENTRY_FEE = Decimal("0.50")
+"""The smallest positive fee checkout can charge. A fee between $0 and this is
+refused rather than rounded or treated as free."""
+
+
+def enforce_entry_fee_rules(fee: float) -> None:
+    """Refuse a positive fee below :data:`MIN_PAID_ENTRY_FEE`, or one above
+    :data:`MAX_PAID_ENTRY_FEE`.
+
+    Only a new or changed fee is judged. The create schema calls this for every fee,
+    and the update verb calls it only when the fee changes, so a stored fee that
+    breaks the rule never blocks an unrelated edit."""
+    amount = Decimal(str(fee))
+    if Decimal(0) < amount < MIN_PAID_ENTRY_FEE:
+        raise EntryFeeOutOfBoundsError("A paid entry fee must be at least $0.50 USD.")
+    if amount > MAX_PAID_ENTRY_FEE:
+        raise EntryFeeOutOfBoundsError("The maximum entry fee is $500.")
+
+
+def _within_entry_fee_rules(value: float) -> float:
+    enforce_entry_fee_rules(value)
+    return value
+
+
+NewEventEntryFee = Annotated[EventEntryFee, AfterValidator(_within_entry_fee_rules)]
+"""A new event's entry fee: storable, and within the paid-collection rules."""
 
 # ----- the draw configuration, as a union tagged by the draw type -----------
 
@@ -2697,7 +2728,7 @@ class TournamentEventCreate(BaseModel):
     # ``CHECK (max_players > 0)`` backs the positive half of it whatever route writes
     # the row.
     max_players: EventMaxPlayers | None = None
-    entry_fee: EventEntryFee
+    entry_fee: NewEventEntryFee
     # Required and validated: the event's wall-clock windows are meaningless without a
     # zone to anchor them (ADR "tournament times are timezone-aware instants"), so a
     # create must name one and it must be a real IANA zone (an unknown zone is a 422).

@@ -248,6 +248,11 @@ private final class TestLocationManager: CLLocationManager {
         if TournamentCopy.validEntryFee("0.49", locale: Locale(identifier: "en_US")) { roundTwoFailures.append("sub-minimum paid fee admitted") }
         if !TournamentCopy.validEntryFee("0", locale: Locale(identifier: "en_US")) { roundTwoFailures.append("free entry fee refused") }
         if !TournamentCopy.validEntryFee("0.50", locale: Locale(identifier: "en_US")) { roundTwoFailures.append("minimum paid fee refused") }
+        if !TournamentCopy.validEntryFee("500", locale: Locale(identifier: "en_US")) { roundTwoFailures.append("fee at the $500 cap refused") }
+        if TournamentCopy.validEntryFee("500.01", locale: Locale(identifier: "en_US")) { roundTwoFailures.append("fee above the $500 cap admitted") }
+        if TournamentCopy.entryFeeIssue("500.01", locale: Locale(identifier: "en_US")) != "The maximum entry fee is $500." { roundTwoFailures.append("fee cap message differs from the API") }
+        if TournamentCopy.entryFeeIssue("0.49", locale: Locale(identifier: "en_US")) != "A paid entry fee must be at least $0.50 USD." { roundTwoFailures.append("fee minimum message differs from the API") }
+        if TournamentCopy.entryFeeIssue("45", locale: Locale(identifier: "en_US")) != nil { roundTwoFailures.append("valid fee reported an issue") }
         if TournamentEventLimits.players.upperBound != 512 { roundTwoFailures.append("player limit stops below 512") }
         let manager = TestLocationManager()
         let location = TournamentLocation(manager: manager, locationTimeout: .milliseconds(20))

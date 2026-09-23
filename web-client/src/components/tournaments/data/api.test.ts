@@ -1153,11 +1153,12 @@ describe('eventToCreateBody', () => {
 
 describe('eventToUpdateBody', () => {
   it('maps the same snake_case fields as create', () => {
-    const body = eventToUpdateBody(edited)
+    // A changed fee, because an unchanged one stays off the wire (#1807).
+    const body = eventToUpdateBody({ ...edited, entryFee: 35 })
 
     expect(body.draw_type).toBe('round-robin')
     expect(body.max_players).toBe(48)
-    expect(body.entry_fee).toBe(30)
+    expect(body.entry_fee).toBe(35)
     expect(body.timezone).toBe('America/Chicago')
     expect(body.match_settings).toEqual({ rated: true, length_games: 3 })
     // A PATCH is the id-keyed diff (ADR 20260801), so a reservation the event already

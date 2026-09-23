@@ -64,6 +64,7 @@ from app.tournament_errors import (
     EVENT_VERSION_CONFLICT_CODE,
     DrawTypeFrozenError,
     DrawUnderWayError,
+    EntryFeeOutOfBoundsError,
     EntryNotFoundError,
     EntryRateLimitedError,
     EntryRefusedError,
@@ -876,6 +877,22 @@ def _event_reservation_cap_exceeded(
     )
 
 
+def _entry_fee_out_of_bounds(exc: EntryFeeOutOfBoundsError) -> RequestValidationError:
+    """The 422 for a PATCH that changes the fee to one the paid-collection rules refuse
+    (#1807), on the ``entry_fee`` field. The create path never reaches this adapter,
+    because Pydantic folds the same ``ValueError`` into the create's own 422."""
+    return RequestValidationError(
+        [
+            {
+                "type": "value_error",
+                "loc": ("body", "entry_fee"),
+                "msg": str(exc),
+                "input": None,
+            }
+        ]
+    )
+
+
 def _event_version_conflict(exc: EventVersionConflictError) -> HTTPException:
     """The **409** for a PATCH built on a superseded read of the event (#1499).
 
@@ -1038,6 +1055,9 @@ async def update_event(
         # (#1482): a 422, shaped like every other validation error on this route (see
         # ``_event_reservation_cap_exceeded``).
         raise _event_reservation_cap_exceeded(exc) from exc
+    except EntryFeeOutOfBoundsError as exc:
+        # A changed fee outside the paid-collection rules (#1807): a 422 on the fee.
+        raise _entry_fee_out_of_bounds(exc) from exc
     except ReservationOutsideEventWindowError as exc:
         # A reservation's window would fall outside its event's own slot (#1501): a
         # 422, shaped like every other validation error on this route (see

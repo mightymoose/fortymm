@@ -486,6 +486,7 @@ describe('an added reservation, through the mock’s id-keyed diff', () => {
       eventId: EVENT,
       body: eventToUpdateBody({
         ...stored,
+        storedEntryFee: stored.entryFee,
         // rr-then-ko (#1482): this PATCH leaves the event holding TWO reservations —
         // one kept, one added — which every other draw type now caps at one.
         drawType: 'rr-then-ko',
@@ -531,6 +532,7 @@ describe('an added reservation, through the mock’s id-keyed diff', () => {
       eventId: EVENT,
       body: eventToUpdateBody({
         ...stored,
+        storedEntryFee: stored.entryFee,
         reservations: keepReservations([
           { ...stored.reservations[0], id: 'res-invented' },
         ]),
