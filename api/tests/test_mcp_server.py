@@ -26,6 +26,7 @@ engine (``DATABASE_URL`` is pointed at the test Postgres by the autouse
 first — the verifier's own connection only sees committed rows.
 """
 
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -2104,26 +2105,29 @@ def _tournament_payload() -> dict[str, object]:
     }
 
 
-def _event_payload() -> dict[str, object]:
+def _event_payload(**overrides: object) -> dict[str, object]:
     """A minimal valid create-event body for a tournament (same shape as
     test_tournaments), so the detail read exercises the events list too."""
     return {
-        "name": "Open Singles",
-        "format": "singles",
-        "draw_type": "single-elim",
-        "max_players": 64,
-        "entry_fee": 45,
-        "timezone": "America/Chicago",
-        "slot": {"date": "2026-08-01", "start": "09:00", "end": "18:00"},
-        "match_settings": {"rated": True, "length_games": 5},
-        "predicates": [{"id": "pr-1", "field": "rating", "op": "<", "value": 1500}],
-        "reservations": [
-            {
-                "name": "Reservation A",
-                "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
-                "table_ids": ["t1"],
-            }
-        ],
+        **{
+            "name": "Open Singles",
+            "format": "singles",
+            "draw_type": "single-elim",
+            "max_players": 64,
+            "entry_fee": 45,
+            "timezone": "America/Chicago",
+            "slot": {"date": "2026-08-01", "start": "09:00", "end": "18:00"},
+            "match_settings": {"rated": True, "length_games": 5},
+            "predicates": [{"id": "pr-1", "field": "rating", "op": "<", "value": 1500}],
+            "reservations": [
+                {
+                    "name": "Reservation A",
+                    "slot": {"date": "2026-08-01", "start": "09:00", "end": "12:30"},
+                    "table_ids": ["t1"],
+                }
+            ],
+        },
+        **overrides,
     }
 
 
@@ -4271,6 +4275,40 @@ async def test_create_event_non_owner_raises_tool_error_and_writes_nothing(
     ).scalar_one_or_none() is None
 
 
+async def test_create_event_fee_above_the_cap_raises_tool_error_and_writes_nothing(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The $500 fee cap (#1807) refuses a new event on the MCP surface too."""
+    owner = await make_user(db_session, "mcp-create-event-fee-cap-owner")
+    raw = await _mint(db_session, owner)
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Fee Cap Cup", TournamentStatus.draft
+    )
+    tournament_id = tournament.id
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(
+            ToolError, match=re.escape("The maximum entry fee is $500.")
+        ):
+            await client.call_tool(
+                "create_event",
+                {
+                    "tournament_id": str(tournament_id),
+                    "payload": _event_payload(entry_fee=500.01),
+                },
+            )
+
+    db_session.expire_all()
+    assert (
+        await db_session.execute(
+            select(TournamentEvent).where(
+                TournamentEvent.tournament_id == tournament_id
+            )
+        )
+    ).scalar_one_or_none() is None
+
+
 async def test_create_event_unknown_tournament_raises_tool_error(
     db_session: AsyncSession,
 ) -> None:
@@ -4484,6 +4522,45 @@ async def test_update_event_owner_edits_it_and_it_persists(
         )
     ).scalar_one()
     assert persisted.name == "Renamed Open"
+
+
+async def test_update_event_fee_above_the_cap_raises_tool_error_and_writes_nothing(
+    db_session: AsyncSession,
+    default_league: League,
+) -> None:
+    """The shared verb's $500 fee cap (#1807) reaches an agent as a ``ToolError``
+    carrying the domain sentence."""
+    owner = await make_user(db_session, "mcp-update-event-fee-cap-owner")
+    raw = await _mint(db_session, owner)
+    tournament = await _seed_owned_tournament(
+        db_session, owner, default_league, "Fee Cap Cup", TournamentStatus.draft
+    )
+    event = await _seed_event(db_session, tournament)
+    tournament_id, event_id = tournament.id, event.id
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(
+            ToolError, match=re.escape("The maximum entry fee is $500.")
+        ):
+            await client.call_tool(
+                "update_event",
+                {
+                    "tournament_id": str(tournament_id),
+                    "event_id": str(event_id),
+                    "updates": {
+                        "entry_fee": 500.01,
+                        "lock_version": event.lock_version,
+                    },
+                },
+            )
+
+    db_session.expire_all()
+    persisted = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == event_id)
+        )
+    ).scalar_one()
+    assert Decimal(str(persisted.entry_fee)) == Decimal("0.00")
 
 
 async def test_update_event_frozen_change_raises_tool_error(

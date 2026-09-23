@@ -3,7 +3,8 @@ import type { FieldErrors } from 'react-hook-form'
 
 import { drawTypeSchema } from '../data/draw-types'
 import {
-  entryFeeSchema,
+  entryFeeRuleIssue,
+  entryFeeShapeSchema,
   maxPlayersSchema,
   nameSchema,
   reservationNameSchema,
@@ -366,7 +367,11 @@ export const eventSchema = z.object({
   // one whose director does.
   rounds: z.number().nullable(),
   maxPlayers: maxPlayersSchema,
-  entryFee: entryFeeSchema,
+  entryFee: entryFeeShapeSchema,
+  // The fee this form was opened with (#1807), never shown. The paid-collection rules
+  // below judge only a fee that differs from it. `NaN` for a blank form, so every fee
+  // typed there is judged.
+  storedEntryFee: z.union([z.nan(), z.number()]),
   // The IANA timezone anchoring the wall-clock windows (ADR 20260719). `NOT NULL`
   // on the server and required here to mirror it — a non-empty string is the whole
   // client-side rule: whether it names a *known* zone is the server's to judge (an
@@ -425,6 +430,16 @@ export const eventSchema = z.object({
       // `reservationNameIssues` follows for the reservation names.
       message: result.error.issues[0].message,
     })
+  })
+  // **The paid-collection fee rules (#1807)**: $0, or $0.50 to $500, judged only on a
+  // fee the director changed — the server's `update_event` does the same. A stored fee
+  // the rules now refuse must not block a rename, so it is left alone until the
+  // director edits the fee box. Raised at the field's own path, like K above.
+  .superRefine((values, ctx) => {
+    if (Number.isNaN(values.entryFee)) return
+    if (values.entryFee === values.storedEntryFee) return
+    const issue = entryFeeRuleIssue(values.entryFee)
+    if (issue) ctx.addIssue({ code: 'custom', path: ['entryFee'], message: issue })
   })
   // **R** is judged as half of the same pair, for the same reason and by the same shape
   // (ADR "swiss pre-cuts every round and pairs each one on advance"): the server parses
@@ -550,6 +565,7 @@ const EMPTY_FORM_VALUES: EventFormValues = {
   // …and with NO fee, which is not the same as a free one. `NaN` is the blank box,
   // and blank stays a required error until they say which they meant.
   entryFee: NaN,
+  storedEntryFee: NaN,
   // The browser's resolved zone (ADR 20260719): the venue's, in the single-venue
   // common case, and a starting point the director can correct otherwise. This
   // const only backs the `event === null` projection below — the real new-event
@@ -578,6 +594,7 @@ export function eventToFormValues(event: TournamentEvent | null): EventFormValue
     rounds: event.rounds,
     maxPlayers: event.maxPlayers,
     entryFee: event.entryFee,
+    storedEntryFee: event.entryFee,
     timezone: event.timezone,
     slot: event.slot,
     match: event.match,

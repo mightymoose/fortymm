@@ -13,6 +13,7 @@ class CheckoutRefusal(StrEnum):
     event_full = "event_full"
     event_free = "event_free"
     price_too_low = "price_too_low"
+    price_too_high = "price_too_high"
     already_entered = "already_entered"
     active_checkout_conflict = "active_checkout_conflict"
     request_payload_conflict = "request_payload_conflict"

@@ -1653,6 +1653,71 @@ describe('EventEditor', () => {
     })
   })
 
+  // The paid-collection fee rules (#1807): $0, or $0.50 to $500. The $500 cap catches a
+  // typo such as `3000` for $30.00. The rules judge only a fee the director changes, so
+  // a stored fee that breaks them never blocks an unrelated edit.
+  describe('the entry fee rules', () => {
+    it('starts a new event free', () => {
+      eventEditorPage.render({ event: emptyEvent(buildTournament()) })
+
+      expect(eventEditorPage.getEntryFeeInput()).toHaveValue(0)
+    })
+
+    it('refuses a fee above $500 and does not save', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({ event: buildEvent({ entryFee: 45 }), onSave })
+
+      fireEvent.change(eventEditorPage.getEntryFeeInput(), {
+        target: { value: '500.01' },
+      })
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() =>
+        expect(
+          eventEditorPage.queryError(/The maximum entry fee is \$500\./),
+        ).toBeInTheDocument(),
+      )
+      expect(onSave).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      { stored: 0.3, label: 'below the minimum' },
+      { stored: 900, label: 'above the cap' },
+    ])(
+      'saves a rename of an event whose stored fee is $stored ($label), and leaves the fee off the wire',
+      async ({ stored }) => {
+        const onSave = vi.fn().mockResolvedValue(undefined)
+        eventEditorPage.render({
+          event: buildEvent({ id: 'ev-1', entryFee: stored }),
+          onSave,
+        })
+
+        fireEvent.change(eventEditorPage.getNameInput(), {
+          target: { value: 'Renamed Singles' },
+        })
+        await userEvent.click(eventEditorPage.getSaveButton())
+
+        await waitFor(() => expect(onSave).toHaveBeenCalled())
+        const body = eventToUpdateBody(onSave.mock.calls[0][0])
+        expect(body.name).toBe('Renamed Singles')
+        expect('entry_fee' in body).toBe(false)
+      },
+    )
+
+    it('sends a fee the director changed', async () => {
+      const onSave = vi.fn().mockResolvedValue(undefined)
+      eventEditorPage.render({ event: buildEvent({ id: 'ev-1', entryFee: 45 }), onSave })
+
+      fireEvent.change(eventEditorPage.getEntryFeeInput(), {
+        target: { value: '0' },
+      })
+      await userEvent.click(eventEditorPage.getSaveButton())
+
+      await waitFor(() => expect(onSave).toHaveBeenCalled())
+      expect(eventToUpdateBody(onSave.mock.calls[0][0]).entry_fee).toBe(0)
+    })
+  })
+
   // The two freezes, wired end to end through the real sheet — the sections own the
   // controls, the editor owns the derivation, and this is the seam between them. Both
   // are read off the event's `fixtures`, which is not a form field: nothing on this

@@ -225,6 +225,10 @@ export type ReservationEntry =
  * directly, and it is not part of the diff a save sends. */
 export type EditedEvent = Omit<TournamentEvent, 'reservations'> & {
   reservations: ReservationEntry[]
+  /** The fee this draft was opened with (#1807). An update sends `entry_fee` only when
+   * `entryFee` differs from it, so a stored fee the rules now refuse survives an
+   * unrelated edit. */
+  storedEntryFee: number
 }
 
 /**
