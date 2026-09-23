@@ -57,6 +57,10 @@ class PaymentProvider(Protocol):
     ) -> ProviderPaymentIntent: ...
 
     async def retrieve_payment_intent(
+        self, provider_payment_id: str
+    ) -> ProviderPaymentIntent: ...
+
+    async def find_payment_intent_by_durable_identity(
         self, durable_identity: str
     ) -> ProviderPaymentIntent: ...
 
@@ -78,7 +82,7 @@ class PaymentProviderUncertainError(Exception):
 
 
 class PaymentProviderNotFoundError(Exception):
-    """No provider object exists for the supplied durable identity."""
+    """No provider object exists for the supplied id or durable identity."""
 
 
 class PaymentProviderCancellationRejectedError(Exception):
@@ -274,11 +278,50 @@ class StripePaymentProvider:
             raise PaymentProviderUncertainError from error
 
     async def retrieve_payment_intent(
-        self, durable_identity: str
+        self, provider_payment_id: str
     ) -> ProviderPaymentIntent:
         self._require_key()
 
         def retrieve() -> object:
+            import stripe
+
+            stripe.api_key = self._secret_key
+            stripe.api_version = self._api_version
+            return stripe.PaymentIntent.retrieve(provider_payment_id)
+
+        import stripe
+
+        try:
+            return self._intent(await asyncio.to_thread(retrieve))
+        except (
+            stripe.AuthenticationError,
+            stripe.PermissionError,
+            stripe.IdempotencyError,
+        ) as error:
+            raise PaymentProviderConfigurationError from error
+        except stripe.InvalidRequestError as error:
+            if error.code == "resource_missing":
+                raise PaymentProviderNotFoundError from error
+            # Invalid account/context/API parameters are permanent operator
+            # configuration failures, not evidence that this bound intent is
+            # absent. Treating them as NotFound could authorize unsafe create
+            # recovery at callers that still own an unbound obligation.
+            raise PaymentProviderConfigurationError from error
+        except TimeoutError as error:
+            raise PaymentProviderUncertainError from error
+        except (
+            stripe.APIConnectionError,
+            stripe.APIError,
+            stripe.RateLimitError,
+        ) as error:
+            raise PaymentProviderUncertainError from error
+
+    async def find_payment_intent_by_durable_identity(
+        self, durable_identity: str
+    ) -> ProviderPaymentIntent:
+        self._require_key()
+
+        def find() -> object:
             import stripe
 
             stripe.api_key = self._secret_key
@@ -294,7 +337,7 @@ class StripePaymentProvider:
         import stripe
 
         try:
-            return self._intent(await asyncio.to_thread(retrieve))
+            return self._intent(await asyncio.to_thread(find))
         except (
             stripe.AuthenticationError,
             stripe.PermissionError,

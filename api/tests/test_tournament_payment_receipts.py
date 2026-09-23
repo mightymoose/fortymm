@@ -1428,6 +1428,52 @@ async def test_cleanup_erases_payment_address_without_a_receipt_row(
     assert payment.receipt_email is None
 
 
+async def test_cleanup_selects_terminal_payment_with_only_create_snapshot_pii(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakePaymentProvider()
+    _, _, events, checkout = await _prepared_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        provider,
+        payment_payload={"receipt_email": "create-snapshot@example.net"},
+    )
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None
+    assert payment.create_receipt_email == "create-snapshot@example.net"
+
+    # This is the safe post-cancellation shape: provider PII has already been
+    # cleared, while the immutable create snapshot is the only local PII left.
+    payment.state = TournamentPaymentState.canceled
+    payment.provider_status = "canceled"
+    payment.receipt_email = None
+    payment.receipt_sync_pending = False
+    for event in events:
+        event.lifecycle_state = EventLifecycleState.cancelled
+    await db_session.commit()
+    completion_observed_at = await db_session.scalar(
+        select(func.max(EventLifecycleHistory.observed_at)).where(
+            EventLifecycleHistory.event_id.in_([event.id for event in events]),
+            EventLifecycleHistory.to_state == EventLifecycleState.cancelled,
+        )
+    )
+    assert completion_observed_at is not None
+
+    erased = await _receipt_service().sweep_tournament_receipt_pii(
+        db_session, now=completion_observed_at + timedelta(days=31)
+    )
+
+    assert erased == 1
+    assert payment.create_receipt_email is None
+
+
 async def test_cleanup_uses_completion_when_it_qualifies_before_archive(
     api_client: AsyncClient,
     db_session: AsyncSession,
@@ -1634,7 +1680,7 @@ async def test_quarantined_unbound_payment_is_neither_recreated_nor_canceled(
     async def not_found(_durable_identity: str) -> Any:
         raise PaymentProviderNotFoundError()
 
-    monkeypatch.setattr(provider, "retrieve_payment_intent", not_found)
+    monkeypatch.setattr(provider, "find_payment_intent_by_durable_identity", not_found)
     monkeypatch.setenv(
         "TOURNAMENT_PAYMENT_COLLECTION_ENABLED",
         "true" if collection_enabled else "false",

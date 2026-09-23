@@ -94,7 +94,8 @@ class TournamentPayment(Base):
                 "state IN ('preparing', 'ready', 'action_required', 'checking') "
                 "OR (state = 'expired' AND provider_payment_id IS NOT NULL) "
                 "OR (provider_payment_id IS NULL "
-                "AND provider_status = 'create_in_flight') "
+                "AND provider_status IN ('create_in_flight', "
+                "'create_uncertain', 'create_parameters_unknown')) "
                 "OR (state = 'succeeded' "
                 "AND (receipt_sync_pending IS TRUE "
                 "OR settlement_notified_at IS NULL)) "
@@ -139,6 +140,10 @@ class TournamentPayment(Base):
     )
     # This value is intentionally never serialized by a generic checkout read.
     client_secret: Mapped[str | None] = mapped_column(String(512))
+    # Snapshot of the receipt destination used by the first provider create.
+    # Later edits converge through the provider update operation; replaying an
+    # idempotent create must retain its byte-for-byte semantic parameters.
+    create_receipt_email: Mapped[str | None] = mapped_column(String(320))
     receipt_email: Mapped[str | None] = mapped_column(String(320))
     receipt_sync_pending: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=text("false")

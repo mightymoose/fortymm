@@ -141,6 +141,7 @@ class FakePaymentProvider:
         self.events: dict[str, FakeProviderEvent] = {}
         self.intent: FakeProviderIntent | None = None
         self.retrievals: list[str] = []
+        self.identity_searches: list[str] = []
         self.cancellations: list[str] = []
         self.receipt_updates: list[tuple[str, str | None]] = []
         self.receipt_update_error: Exception | None = None
@@ -166,9 +167,16 @@ class FakePaymentProvider:
         return self.intent
 
     async def retrieve_payment_intent(
+        self, provider_payment_id: str
+    ) -> FakeProviderIntent:
+        self.retrievals.append(provider_payment_id)
+        assert self.intent is not None
+        return self.intent
+
+    async def find_payment_intent_by_durable_identity(
         self, durable_identity: str
     ) -> FakeProviderIntent:
-        self.retrievals.append(durable_identity)
+        self.identity_searches.append(durable_identity)
         assert self.intent is not None
         return self.intent
 
@@ -441,13 +449,19 @@ async def test_impossible_oversized_create_does_not_starve_later_sweep_obligatio
     await db_session.commit()
 
     class OversizedThenLaterProvider(FakePaymentProvider):
-        async def retrieve_payment_intent(
+        async def find_payment_intent_by_durable_identity(
             self, durable_identity: str
         ) -> FakeProviderIntent:
-            self.retrievals.append(durable_identity)
+            self.identity_searches.append(durable_identity)
             if durable_identity == oversized.durable_identity:
                 raise PaymentProviderNotFoundError
-            assert durable_identity == later.durable_identity
+            raise AssertionError("only the unbound payment may use metadata search")
+
+        async def retrieve_payment_intent(
+            self, provider_payment_id: str
+        ) -> FakeProviderIntent:
+            self.retrievals.append(provider_payment_id)
+            assert provider_payment_id == later.provider_payment_id
             return FakeProviderIntent(
                 **(asdict(later_provider.intent) | {"status": "succeeded"})
             )
@@ -504,13 +518,13 @@ async def test_malformed_provider_response_is_quarantined_without_starving_later
 
     class MalformedThenValidProvider(FakePaymentProvider):
         async def retrieve_payment_intent(
-            self, durable_identity: str
+            self, provider_payment_id: str
         ) -> FakeProviderIntent:
-            if durable_identity == malformed.durable_identity:
+            if provider_payment_id == malformed.provider_payment_id:
                 raise PaymentProviderResponseInvalidError(
                     "Stripe PaymentIntent response is missing status"
                 )
-            assert durable_identity == later.durable_identity
+            assert provider_payment_id == later.provider_payment_id
             return FakeProviderIntent(
                 **(asdict(later_provider.intent) | {"status": "succeeded"})
             )
@@ -556,11 +570,11 @@ async def test_provider_configuration_failure_is_visible_without_starving_sweep(
 
     class BrokenThenValidProvider(FakePaymentProvider):
         async def retrieve_payment_intent(
-            self, durable_identity: str
+            self, provider_payment_id: str
         ) -> FakeProviderIntent:
-            if durable_identity == broken.durable_identity:
+            if provider_payment_id == broken.provider_payment_id:
                 raise PaymentProviderConfigurationError("Stripe key was revoked")
-            assert durable_identity == later.durable_identity
+            assert provider_payment_id == later.provider_payment_id
             return FakeProviderIntent(
                 **(asdict(later_provider.intent) | {"status": "succeeded"})
             )
@@ -578,7 +592,7 @@ async def test_provider_configuration_failure_is_visible_without_starving_sweep(
     assert later.state is TournamentPaymentState.succeeded
 
 
-async def test_invalid_stripe_search_is_quarantined_without_starving_later_work(
+async def test_invalid_stripe_search_remains_retryable_without_starving_later_work(
     api_client: AsyncClient,
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
@@ -604,6 +618,11 @@ async def test_invalid_stripe_search_is_quarantined_without_starving_later_work(
     assert broken is not None
     assert later is not None
     assert later_provider.intent is not None
+    broken.provider_payment_id = None
+    broken.client_secret = None
+    broken.provider_status = "create_uncertain"
+    broken.state = TournamentPaymentState.preparing
+    await db_session.commit()
 
     def rejected_search(**_kwargs: object) -> object:
         raise stripe.InvalidRequestError("search unavailable", "query")
@@ -613,12 +632,19 @@ async def test_invalid_stripe_search_is_quarantined_without_starving_later_work(
     stripe_provider = StripePaymentProvider()
 
     class InvalidSearchThenValidProvider(FakePaymentProvider):
-        async def retrieve_payment_intent(
+        async def find_payment_intent_by_durable_identity(
             self, durable_identity: str
         ) -> ProviderPaymentIntent:
             if durable_identity == broken.durable_identity:
-                return await stripe_provider.retrieve_payment_intent(durable_identity)
-            assert durable_identity == later.durable_identity
+                return await stripe_provider.find_payment_intent_by_durable_identity(
+                    durable_identity
+                )
+            raise AssertionError("only the unbound payment may use metadata search")
+
+        async def retrieve_payment_intent(
+            self, provider_payment_id: str
+        ) -> ProviderPaymentIntent:
+            assert provider_payment_id == later.provider_payment_id
             return ProviderPaymentIntent(
                 **(asdict(later_provider.intent) | {"status": "succeeded"})
             )
@@ -630,9 +656,136 @@ async def test_invalid_stripe_search_is_quarantined_without_starving_later_work(
     await db_session.refresh(later)
 
     assert reconciled == 2
-    assert broken.provider_mismatch_at is not None
-    assert broken.support_reference is not None
+    assert broken.provider_mismatch_at is None
+    assert broken.support_reference is None
+    assert broken.state is TournamentPaymentState.checking
+    assert broken.provider_status == "create_uncertain"
     assert later.state is TournamentPaymentState.succeeded
+
+
+async def test_unknown_legacy_create_matching_lookup_does_not_emit_stale_review_alert(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakePaymentProvider("pi_legacy_unknown_matching")
+    _, _, _, checkout = await _prepared_checkout(
+        api_client, db_session, monkeypatch, provider
+    )
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None
+    assert provider.intent is not None
+    payment.provider_payment_id = None
+    payment.client_secret = None
+    payment.provider_status = "create_parameters_unknown"
+    payment.state = TournamentPaymentState.preparing
+    await db_session.commit()
+    notification_attempts: list[object] = []
+    monkeypatch.setattr(
+        payment_reconciliation,
+        "enqueue_notification_job",
+        lambda job: notification_attempts.append(job) or True,
+    )
+
+    async def matching_lookup(durable_identity: str) -> FakeProviderIntent:
+        # Provider evidence must be consulted before creating operator-visible
+        # quarantine state for an identity whose immutable create snapshot was
+        # unknowable during migration.
+        assert notification_attempts == []
+        assert durable_identity == payment.durable_identity
+        assert provider.intent is not None
+        return provider.intent
+
+    monkeypatch.setattr(
+        provider,
+        "find_payment_intent_by_durable_identity",
+        matching_lookup,
+    )
+
+    assert await reconcile_stuck_payments(db_session, provider) == 1
+    await db_session.refresh(payment)
+
+    assert payment.provider_payment_id == provider.intent.id
+    assert payment.state is TournamentPaymentState.ready
+    assert payment.provider_mismatch_at is None
+    assert payment.support_reference is None
+    assert payment.attention_notified_state != "provider_mismatch"
+    assert notification_attempts == []
+
+
+@pytest.mark.parametrize("evidence", ["not_found", "mismatch"])
+async def test_unknown_legacy_create_quarantines_only_after_authoritative_lookup(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    evidence: str,
+) -> None:
+    provider = FakePaymentProvider(f"pi_legacy_unknown_{evidence}")
+    _, _, _, checkout = await _prepared_checkout(
+        api_client, db_session, monkeypatch, provider
+    )
+    stored_checkout = await db_session.get(
+        TournamentCheckout, uuid.UUID(checkout["id"])
+    )
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert stored_checkout is not None
+    assert payment is not None
+    assert provider.intent is not None
+    payment.provider_payment_id = None
+    payment.client_secret = None
+    payment.provider_status = "create_parameters_unknown"
+    payment.state = TournamentPaymentState.preparing
+    if evidence == "not_found":
+        # A definitive metadata miss must be quarantined even after checkout
+        # authority is gone; an early authority/gate exit cannot hide it.
+        now = datetime.now(UTC)
+        stored_checkout.status = TournamentCheckoutStatus.expired
+        stored_checkout.created_at = now - timedelta(minutes=20)
+        stored_checkout.expires_at = now - timedelta(minutes=10)
+    await db_session.commit()
+    notification_attempts: list[object] = []
+    monkeypatch.setattr(
+        payment_reconciliation,
+        "enqueue_notification_job",
+        lambda job: notification_attempts.append(job) or True,
+    )
+
+    async def authoritative_lookup(durable_identity: str) -> FakeProviderIntent:
+        assert notification_attempts == []
+        assert durable_identity == payment.durable_identity
+        if evidence == "not_found":
+            raise PaymentProviderNotFoundError()
+        assert provider.intent is not None
+        return FakeProviderIntent(
+            **(
+                asdict(provider.intent)
+                | {"amount_cents": provider.intent.amount_cents + 1}
+            )
+        )
+
+    monkeypatch.setattr(
+        provider,
+        "find_payment_intent_by_durable_identity",
+        authoritative_lookup,
+    )
+
+    assert await reconcile_stuck_payments(db_session, provider) == 1
+    await db_session.refresh(payment)
+
+    assert payment.provider_payment_id is None
+    assert payment.state is TournamentPaymentState.checking
+    assert payment.provider_mismatch_at is not None
+    assert payment.support_reference is not None
+    assert payment.attention_notified_state == "provider_mismatch"
+    assert len(notification_attempts) == 1
 
 
 async def test_webhook_rejects_invalid_signature_without_persisting_event(
@@ -1011,7 +1164,12 @@ async def test_not_found_reconciliation_retries_quarantine_notification(
     async def not_found(_durable_identity: str) -> FakeProviderIntent:
         raise PaymentProviderNotFoundError()
 
-    monkeypatch.setattr(provider, "retrieve_payment_intent", not_found)
+    provider_method = (
+        "find_payment_intent_by_durable_identity"
+        if quarantine_kind == "unbound_mismatch"
+        else "retrieve_payment_intent"
+    )
+    monkeypatch.setattr(provider, provider_method, not_found)
 
     assert await reconcile_stuck_payments(db_session, provider) == 1
     await db_session.refresh(payment)
@@ -1574,13 +1732,19 @@ async def test_malformed_provider_operation_is_quarantined_without_starving_swee
             self.intent = first_provider.intent
 
         async def retrieve_payment_intent(
-            self, durable_identity: str
+            self, provider_payment_id: str
         ) -> FakeProviderIntent:
-            if malformed_operation == "create":
-                raise PaymentProviderNotFoundError
-            assert durable_identity == first_payment.durable_identity
+            assert malformed_operation != "create"
+            assert provider_payment_id == first_payment.provider_payment_id
             assert self.intent is not None
             return self.intent
+
+        async def find_payment_intent_by_durable_identity(
+            self, durable_identity: str
+        ) -> FakeProviderIntent:
+            assert malformed_operation == "create"
+            assert durable_identity == first_payment.durable_identity
+            raise PaymentProviderNotFoundError
 
         async def create_payment_intent(self, request: object) -> FakeProviderIntent:
             raise PaymentProviderResponseInvalidError("malformed create response")
@@ -1851,7 +2015,11 @@ async def test_sweep_cancels_safe_provider_intent_after_checkout_loses_authority
 ) -> None:
     provider = FakePaymentProvider()
     _, _, _, checkout = await _prepared_checkout(
-        api_client, db_session, monkeypatch, provider
+        api_client,
+        db_session,
+        monkeypatch,
+        provider,
+        payment_payload={"receipt_email": "authority-lost@example.net"},
     )
     stored = await db_session.get(TournamentCheckout, uuid.UUID(checkout["id"]))
     payment = await db_session.scalar(
@@ -1862,6 +2030,7 @@ async def test_sweep_cancels_safe_provider_intent_after_checkout_loses_authority
     assert stored is not None
     assert payment is not None
     assert provider.intent is not None
+    assert payment.create_receipt_email == "authority-lost@example.net"
     stored.status = authority_loss
     if authority_loss is TournamentCheckoutStatus.expired:
         stored.created_at = datetime.now(UTC) - timedelta(minutes=20)
@@ -1880,8 +2049,10 @@ async def test_sweep_cancels_safe_provider_intent_after_checkout_loses_authority
     assert first_sweep == 1
     assert provider.cancellations == ["pi_reconcile_1770"]
     assert payment.state is TournamentPaymentState.canceled
+    assert payment.receipt_email is None
+    assert payment.create_receipt_email is None
     assert second_sweep == 0
-    assert provider.retrievals == [payment.durable_identity]
+    assert provider.retrievals == [payment.provider_payment_id]
 
 
 async def test_authority_loss_does_not_cancel_until_receipt_pii_clear_is_verified(
@@ -2096,11 +2267,11 @@ async def test_uncertain_retrieval_releases_locks_before_later_obligation(
 
     class UncertainThenBlockingProvider:
         async def retrieve_payment_intent(
-            self, durable_identity: str
+            self, provider_payment_id: str
         ) -> FakeProviderIntent:
-            if durable_identity == first_payment.durable_identity:
+            if provider_payment_id == first_payment.provider_payment_id:
                 raise retrieval_error
-            assert durable_identity == second_payment.durable_identity
+            assert provider_payment_id == second_payment.provider_payment_id
             later_retrieve_entered.set()
             await release_later_retrieve.wait()
             return second_provider.intent
@@ -2322,7 +2493,10 @@ async def test_sweep_keeps_polling_processing_intent_after_checkout_loses_author
 
     assert first_sweep == second_sweep == 1
     assert provider.cancellations == []
-    assert provider.retrievals == [payment.durable_identity, payment.durable_identity]
+    assert provider.retrievals == [
+        payment.provider_payment_id,
+        payment.provider_payment_id,
+    ]
     assert payment.state is TournamentPaymentState.checking
 
 
@@ -2369,45 +2543,40 @@ async def test_cancel_rejection_reloads_terminal_truth_and_continues_sweep(
     class RacingCancellationProvider:
         def __init__(self) -> None:
             self.intents = {
-                first_payment.durable_identity: FakeProviderIntent(
+                first_provider.intent.id: FakeProviderIntent(
                     **(
                         asdict(first_provider.intent)
                         | {"status": "requires_payment_method"}
                     )
                 ),
-                second_payment.durable_identity: FakeProviderIntent(
+                second_provider.intent.id: FakeProviderIntent(
                     **(
                         asdict(second_provider.intent)
                         | {"status": "requires_payment_method"}
                     )
                 ),
             }
-            self.durable_by_id = {
-                intent.id: durable_identity
-                for durable_identity, intent in self.intents.items()
-            }
             self.retrievals: list[str] = []
             self.cancellations: list[str] = []
 
         async def retrieve_payment_intent(
-            self, durable_identity: str
+            self, provider_payment_id: str
         ) -> FakeProviderIntent:
-            self.retrievals.append(durable_identity)
-            return self.intents[durable_identity]
+            self.retrievals.append(provider_payment_id)
+            return self.intents[provider_payment_id]
 
         async def cancel_payment_intent(
             self, provider_payment_id: str
         ) -> FakeProviderIntent:
             self.cancellations.append(provider_payment_id)
-            durable_identity = self.durable_by_id[provider_payment_id]
-            intent = self.intents[durable_identity]
+            intent = self.intents[provider_payment_id]
             if provider_payment_id == "pi_cancel_race":
-                self.intents[durable_identity] = FakeProviderIntent(
+                self.intents[provider_payment_id] = FakeProviderIntent(
                     **(asdict(intent) | {"status": "succeeded"})
                 )
                 raise PaymentProviderCancellationRejectedError
             canceled = FakeProviderIntent(**(asdict(intent) | {"status": "canceled"}))
-            self.intents[durable_identity] = canceled
+            self.intents[provider_payment_id] = canceled
             return canceled
 
     provider = RacingCancellationProvider()
@@ -2419,8 +2588,8 @@ async def test_cancel_rejection_reloads_terminal_truth_and_continues_sweep(
 
     assert reconciled == 2
     assert set(provider.cancellations) == {"pi_cancel_race", "pi_later_obligation"}
-    assert provider.retrievals.count(first_payment.durable_identity) == 2
-    assert provider.retrievals.count(second_payment.durable_identity) == 1
+    assert provider.retrievals.count(first_payment.provider_payment_id) == 2
+    assert provider.retrievals.count(second_payment.provider_payment_id) == 1
     assert first_payment.state is TournamentPaymentState.succeeded
     assert second_payment.state is TournamentPaymentState.canceled
     assert await _entry_facts(db_session, first_payer) == ([], 0)
@@ -2460,9 +2629,9 @@ async def test_sweep_does_not_hold_lifecycle_locks_during_safe_cancellation_io(
             self.retrieval_count = 0
 
         async def retrieve_payment_intent(
-            self, durable_identity: str
+            self, provider_payment_id: str
         ) -> FakeProviderIntent:
-            assert durable_identity == payment.durable_identity
+            assert provider_payment_id == payment.provider_payment_id
             self.retrieval_count += 1
             if blocked_call == "rejection_fallback" and self.retrieval_count == 2:
                 provider_call_entered.set()
@@ -2576,17 +2745,17 @@ async def test_uncertain_cancellation_releases_locks_before_later_obligation(
     class UncertainThenBlockingProvider:
         def __init__(self) -> None:
             self.intents = {
-                first_payment.durable_identity: first_provider.intent,
-                second_payment.durable_identity: second_provider.intent,
+                first_provider.intent.id: first_provider.intent,
+                second_provider.intent.id: second_provider.intent,
             }
 
         async def retrieve_payment_intent(
-            self, durable_identity: str
+            self, provider_payment_id: str
         ) -> FakeProviderIntent:
-            if durable_identity == second_payment.durable_identity:
+            if provider_payment_id == second_payment.provider_payment_id:
                 later_retrieve_entered.set()
                 await release_later_retrieve.wait()
-            return self.intents[durable_identity]
+            return self.intents[provider_payment_id]
 
         async def cancel_payment_intent(
             self, provider_payment_id: str
@@ -2695,18 +2864,29 @@ async def test_inactive_payer_not_found_stays_recoverable_and_does_not_stop_swee
             self.missing = True
 
         async def retrieve_payment_intent(
-            self, durable_identity: str
+            self, provider_payment_id: str
         ) -> FakeProviderIntent:
-            self.retrievals.append(durable_identity)
-            if durable_identity == missing_payment.durable_identity:
+            self.retrievals.append(provider_payment_id)
+            if provider_payment_id == missing_provider.intent.id:
                 if self.missing:
                     raise PaymentProviderNotFoundError
                 return FakeProviderIntent(
                     **(asdict(missing_provider.intent) | {"status": "succeeded"})
                 )
-            assert durable_identity == later_payment.durable_identity
+            assert provider_payment_id == later_provider.intent.id
             return FakeProviderIntent(
                 **(asdict(later_provider.intent) | {"status": "succeeded"})
+            )
+
+        async def find_payment_intent_by_durable_identity(
+            self, durable_identity: str
+        ) -> FakeProviderIntent:
+            self.identity_searches.append(durable_identity)
+            assert durable_identity == missing_payment.durable_identity
+            if self.missing:
+                raise PaymentProviderNotFoundError
+            return FakeProviderIntent(
+                **(asdict(missing_provider.intent) | {"status": "succeeded"})
             )
 
         async def create_payment_intent(self, request: object) -> FakeProviderIntent:
@@ -2719,10 +2899,14 @@ async def test_inactive_payer_not_found_stays_recoverable_and_does_not_stop_swee
     await db_session.refresh(later_payment)
 
     assert first_sweep == 2
-    assert provider.retrievals == [
-        missing_payment.durable_identity,
-        later_payment.durable_identity,
-    ]
+    assert provider.retrievals == (
+        [missing_provider.intent.id, later_provider.intent.id]
+        if bound
+        else [later_provider.intent.id]
+    )
+    assert provider.identity_searches == (
+        [] if bound else [missing_payment.durable_identity]
+    )
     assert missing_payment.state is (
         TournamentPaymentState.checking if bound else TournamentPaymentState.preparing
     )
@@ -2880,7 +3064,7 @@ async def test_background_create_rejection_after_merge_notifies_and_hints_surviv
     sessions = async_sessionmaker(engine, expire_on_commit=False)
 
     class MergeDuringRejectedCreate(FakePaymentProvider):
-        async def retrieve_payment_intent(
+        async def find_payment_intent_by_durable_identity(
             self, durable_identity: str
         ) -> FakeProviderIntent:
             assert durable_identity == payment.durable_identity
@@ -3135,9 +3319,9 @@ async def test_reconciliation_hint_for_merged_payer_routes_to_survivor(
 
     class MissingProvider(FakePaymentProvider):
         async def retrieve_payment_intent(
-            self, durable_identity: str
+            self, provider_payment_id: str
         ) -> FakeProviderIntent:
-            assert durable_identity == payment.durable_identity
+            assert provider_payment_id == payment.provider_payment_id
             raise PaymentProviderNotFoundError
 
     async with watch_hints(realtime_broker, payer.id, survivor.id) as watch:

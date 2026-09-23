@@ -189,9 +189,155 @@ async def test_bounded_reconciliation_indexes_are_added_by_a_forward_migration(
         assert PENDING_REFUND_INDEX not in allocation_indexes_after_downgrade
 
 
+@pytest.mark.parametrize("contract", ["upgrade", "downgrade"])
+async def test_create_receipt_snapshot_migration_quarantines_unknown_legacy_params(
+    postgres_server_url: str,
+    contract: str,
+) -> None:
+    """Never guess create-time Stripe parameters from a later mutable address."""
+    async with empty_database(postgres_server_url) as migrated:
+        run_alembic(migrated.url, "upgrade", "20260921_0003")
+        account_id = uuid.uuid4()
+        player_id = uuid.uuid4()
+        tournament_id = uuid.uuid4()
+        safe_checkout_id = uuid.uuid4()
+        in_flight_checkout_id = uuid.uuid4()
+        uncertain_checkout_id = uuid.uuid4()
+        expired_checkout_id = uuid.uuid4()
+        canceled_checkout_id = uuid.uuid4()
+        async with migrated.begin() as connection:
+            await connection.execute(
+                text("INSERT INTO accounts (id) VALUES (:account_id)"),
+                {"account_id": account_id},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO players (id, username) VALUES (:player_id, :username)"
+                ),
+                {"player_id": player_id, "username": f"migration-{player_id}"},
+            )
+            league_id = await connection.scalar(
+                text(
+                    "INSERT INTO leagues (name, rating_strategy_id) "
+                    "SELECT :name, id FROM rating_strategies ORDER BY id LIMIT 1 "
+                    "RETURNING id"
+                ),
+                {"name": f"Migration league {tournament_id}"},
+            )
+            await connection.execute(
+                text(
+                    "INSERT INTO tournaments "
+                    "(id, name, league_id, owner_account_id, created_by_user_id) "
+                    "VALUES (:id, :name, :league_id, :account_id, :account_id)"
+                ),
+                {
+                    "id": tournament_id,
+                    "name": f"Migration tournament {tournament_id}",
+                    "league_id": league_id,
+                    "account_id": account_id,
+                },
+            )
+            for checkout_id in (
+                safe_checkout_id,
+                in_flight_checkout_id,
+                uncertain_checkout_id,
+                expired_checkout_id,
+                canceled_checkout_id,
+            ):
+                await connection.execute(
+                    text(
+                        "INSERT INTO tournament_checkouts "
+                        "(id, request_id, payer_account_id, entrant_player_id, "
+                        "tournament_id, merchant_account_id, registration_generation, "
+                        "currency, total_cents, status) VALUES "
+                        "(:id, :request_id, :account_id, :player_id, :tournament_id, "
+                        ":account_id, 0, 'USD', 2345, 'expired')"
+                    ),
+                    {
+                        "id": checkout_id,
+                        "request_id": uuid.uuid4(),
+                        "account_id": account_id,
+                        "player_id": player_id,
+                        "tournament_id": tournament_id,
+                    },
+                )
+            await connection.execute(
+                text(
+                    "INSERT INTO tournament_payments "
+                    "(checkout_id, durable_identity, provider_status, receipt_email, "
+                    "currency, amount_cents, state) VALUES "
+                    "(:safe, 'migration:safe', NULL, 'safe@example.net', "
+                    "'USD', 2345, 'preparing'), "
+                    "(:in_flight, 'migration:in-flight', 'create_in_flight', "
+                    "'mutable-in-flight@example.net', 'USD', 2345, 'preparing'), "
+                    "(:uncertain, 'migration:uncertain', 'create_uncertain', "
+                    "'mutable-uncertain@example.net', 'USD', 2345, 'preparing'), "
+                    "(:expired, 'migration:expired', 'create_in_flight', "
+                    "'mutable-expired@example.net', 'USD', 2345, 'expired'), "
+                    "(:canceled, 'migration:canceled', 'create_uncertain', "
+                    "'mutable-canceled@example.net', 'USD', 2345, 'canceled')"
+                ),
+                {
+                    "safe": safe_checkout_id,
+                    "in_flight": in_flight_checkout_id,
+                    "uncertain": uncertain_checkout_id,
+                    "expired": expired_checkout_id,
+                    "canceled": canceled_checkout_id,
+                },
+            )
+
+        run_alembic(migrated.url, "upgrade", "20260921_0004")
+
+        if contract == "downgrade":
+            run_alembic(migrated.url, "downgrade", "20260921_0003")
+            async with migrated.connect() as connection:
+                legacy_statuses = set(
+                    await connection.scalars(
+                        text(
+                            "SELECT provider_status FROM tournament_payments "
+                            "WHERE durable_identity LIKE 'migration:%' "
+                            "AND provider_status IS NOT NULL"
+                        )
+                    )
+                )
+            assert legacy_statuses == {"create_uncertain"}
+            return
+
+        async with migrated.connect() as connection:
+            rows = {
+                row.durable_identity: row
+                for row in (
+                    await connection.execute(
+                        text(
+                            "SELECT durable_identity, provider_status, state, "
+                            "create_receipt_email FROM tournament_payments"
+                        )
+                    )
+                ).mappings()
+            }
+
+        assert rows["migration:safe"]["create_receipt_email"] == "safe@example.net"
+        for identity in (
+            "migration:in-flight",
+            "migration:uncertain",
+            "migration:expired",
+            "migration:canceled",
+        ):
+            assert rows[identity]["create_receipt_email"] is None
+            assert rows[identity]["provider_status"] == "create_parameters_unknown"
+            assert rows[identity]["state"] == "checking"
+
+
 async def _explain(engine: AsyncEngine, query: str) -> str:
     async with engine.connect() as connection:
-        await connection.execute(text("SET enable_seqscan = off"))
+        # These assertions prove that each production predicate can use its
+        # bounded index in the required order.  On the session-scoped test DB,
+        # stale/reused statistics can otherwise prefer a competing index plus
+        # an explicit sort even with sequential scans disabled.  Removing sort
+        # as an alternative makes this an index-availability check rather than
+        # a fragile assertion about the planner's current cost estimates.
+        await connection.execute(text("SET LOCAL enable_seqscan = off"))
+        await connection.execute(text("SET LOCAL enable_sort = off"))
         rows = await connection.execute(text(f"EXPLAIN (COSTS OFF) {query}"))
     return "\n".join(str(row[0]) for row in rows).lower()
 

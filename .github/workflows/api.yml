@@ -36,6 +36,9 @@ defaults:
 env:
   MIGRATION_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
   GEOCODER: fake
+  # CI is a development runtime; deployed API/worker processes must provide
+  # NOTIFICATION_EMAIL_DEDUP_SECRET instead of using the local fallback.
+  FORTYMM_DEV: "1"
 
 jobs:
   pytest:

@@ -171,7 +171,17 @@ const checkoutSchema = z.object({
   ),
 })
 
-export type TournamentCheckout = ReturnType<typeof apiToCheckout>
+type MappedTournamentCheckout = ReturnType<typeof apiToCheckout>
+
+export type TournamentCheckout = Omit<
+  MappedTournamentCheckout,
+  'remainingSecondsObservedAt'
+> & {
+  // API-mapped values always carry this observation instant. Keep it optional
+  // so locally constructed projections and older persisted test fixtures can
+  // still degrade to observation at first render.
+  remainingSecondsObservedAt?: number
+}
 
 function apiToCheckout(payload: TournamentCheckoutRead) {
   const checkout = checkoutSchema.parse(payload)
@@ -187,6 +197,10 @@ function apiToCheckout(payload: TournamentCheckoutRead) {
     createdAt: checkout.created_at,
     expiresAt: checkout.expires_at,
     remainingSeconds: checkout.remaining_seconds,
+    // Keep the server-owned duration tied to the instant this response reached
+    // the client. React Query may serve this object long after it entered the
+    // cache, so consumers must not restart the duration when they mount.
+    remainingSecondsObservedAt: performance.now(),
     lines: checkout.lines.map((line) => ({
       eventId: line.event_id,
       eventName: line.event_name,
@@ -895,9 +909,32 @@ export function checkoutRefreshInterval(
 ): number | false {
   if (checkout === undefined) return false
   // Keep a displayed hold current even if registration closes underneath it.
-  // Empty and terminal snapshots only need discovery polling while this
-  // tournament can actually create a replacement checkout.
-  return checkout?.status === 'active' || discoveryEnabled ? 5_000 : false
+  // Closed checkouts with provider work still in flight also need to be
+  // refreshed until that obligation reaches a terminal state. Empty and
+  // terminal snapshots only need discovery polling while explicitly enabled.
+  return checkout?.status === 'active' ||
+    isClosedCheckoutProviderWorkUnresolved(checkout) ||
+    discoveryEnabled
+    ? 5_000
+    : false
+}
+
+const CLOSED_UNRESOLVED_PAYMENT_STATES = new Set([
+  'preparing',
+  'ready',
+  'checking',
+  'action_required',
+  'expired',
+])
+
+export function isClosedCheckoutProviderWorkUnresolved(
+  checkout: TournamentCheckout | null | undefined,
+) {
+  return (
+    checkout != null &&
+    checkout.status !== 'active' &&
+    CLOSED_UNRESOLVED_PAYMENT_STATES.has(checkout.paymentState)
+  )
 }
 
 export function useCurrentCheckout(
@@ -905,10 +942,6 @@ export function useCurrentCheckout(
   sessionLoaded = true,
   discoveryEnabled = true,
 ) {
-  const qc = useQueryClient()
-  const cachedCheckout = qc.getQueryData<TournamentCheckout | null>(
-    checkoutKey(tournamentId),
-  )
   return useQuery({
     queryKey: checkoutKey(tournamentId),
     queryFn: async (): Promise<TournamentCheckout | null> => {
@@ -919,9 +952,10 @@ export function useCurrentCheckout(
       if (result.response.status === 404) return null
       return apiToCheckout(unwrap('load your held places', result))
     },
-    enabled:
-      sessionLoaded &&
-      (discoveryEnabled || cachedCheckout?.status === 'active'),
+    // An authenticated viewer always gets one authoritative discovery read.
+    // Whether checkout can be started now does not tell us whether provider
+    // work from an earlier checkout is still unresolved.
+    enabled: sessionLoaded,
     refetchInterval: (query) =>
       checkoutRefreshInterval(query.state.data, discoveryEnabled),
     throwOnError: (_error, query) => query.state.data === undefined,

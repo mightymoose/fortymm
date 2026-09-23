@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 
 import type { Tournament, TournamentEvent } from '../data/types'
 import {
+  isClosedCheckoutProviderWorkUnresolved,
   useCancelCheckout,
   useCurrentCheckout,
   useRefreshTournamentCheckout,
@@ -78,7 +79,11 @@ export const EventsTab = ({
   const startCheckout = useStartCheckout(tournament.id)
   const cancelCheckout = useCancelCheckout(tournament.id)
   const refreshCheckout = useRefreshTournamentCheckout(tournament.id)
-  const checkout = currentCheckout.data?.status === 'active' ? currentCheckout.data : null
+  const unresolvedCheckoutBlocker = isClosedCheckoutProviderWorkUnresolved(currentCheckout.data)
+  const checkout =
+    currentCheckout.data?.status === 'active' || unresolvedCheckoutBlocker
+      ? (currentCheckout.data ?? null)
+      : null
   const activeCheckoutId = checkout?.id
   // The POST response can be lost after the server commits. The mutation's
   // reconciliation then discovers the durable checkout; adopt that server state

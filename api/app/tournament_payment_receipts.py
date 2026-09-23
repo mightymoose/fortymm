@@ -380,6 +380,7 @@ async def erase_tournament_receipt_pii_for_account(
     }
     changed = 0
     for payment in payments:
+        payment.create_receipt_email = None
         if payment.receipt_sync_failed_at is not None:
             # Erasure is a new authoritative request to clear provider PII,
             # even when a prior attempt already made the local value null.
@@ -418,6 +419,7 @@ async def sweep_tournament_receipt_pii(
             .outerjoin(TournamentPayment.receipt)
             .where(
                 or_(
+                    TournamentPayment.create_receipt_email.is_not(None),
                     TournamentPayment.receipt_email.is_not(None),
                     TournamentPaymentReceipt.recipient_email.is_not(None),
                     TournamentPayment.receipt_sync_failed_at.is_not(None),
@@ -534,6 +536,7 @@ async def sweep_tournament_receipt_pii(
             # permanent refusal rather than hiding the operator marker.
             payment.receipt_sync_pending = True
         payment.receipt_sync_failed_at = None
+        payment.create_receipt_email = None
         erased += 1
     if erased:
         await db.flush()

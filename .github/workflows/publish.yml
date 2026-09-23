@@ -183,12 +183,19 @@ jobs:
     needs: tag
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    env:
+      VITE_STRIPE_PUBLISHABLE_KEY: ${{ secrets.VITE_STRIPE_PUBLISHABLE_KEY }}
     # Same as the api job: the pushed manifest digest, straight from the push
     # step, for a downstream job to bake into the chart.
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v7
+
+      - name: Require the Stripe browser key
+        run: |
+          set -euo pipefail
+          : "${VITE_STRIPE_PUBLISHABLE_KEY:?VITE_STRIPE_PUBLISHABLE_KEY must be configured before publishing a launchable web image}"
 
       - uses: docker/setup-qemu-action@v4
         with:
@@ -221,9 +228,10 @@ jobs:
           # shape) the beacons simply 404, which is harmless.
           #
           # The Maps and Stripe keys are *browser* keys -- readable in the
-          # shipped bundle either way. If either repository secret is unset it
-          # expands to empty, matching the Dockerfile defaults. The build still
-          # succeeds and the corresponding browser feature degrades safely.
+          # shipped bundle either way. Maps degrades safely when its repository
+          # secret is absent. Stripe does not: this artifact can become
+          # collection-enabled after deployment, so the guard above refuses to
+          # publish an image that can never render card entry.
           build-args: |
             VITE_FARO_COLLECTOR_URL=/faro/collect
             VITE_GOOGLE_MAPS_API_KEY=${{ secrets.VITE_GOOGLE_MAPS_API_KEY }}

@@ -16,6 +16,25 @@ describe('Stripe browser configuration', () => {
     )
   })
 
+  it('refuses to publish a web artifact without its Stripe browser key', () => {
+    const workflow = repositoryFile('.github/workflows/publish.yml')
+    const webJobStart = workflow.indexOf('\n  web-client:')
+    const chartJobStart = workflow.indexOf('\n  chart:', webJobStart)
+    const webJob = workflow.slice(webJobStart, chartJobStart)
+    const requiredKeyGuard = webJob.indexOf(
+      '${VITE_STRIPE_PUBLISHABLE_KEY:?',
+    )
+    const imageBuild = webJob.indexOf('uses: docker/build-push-action@v7')
+
+    expect(webJobStart).toBeGreaterThan(-1)
+    expect(chartJobStart).toBeGreaterThan(webJobStart)
+    expect(webJob).toMatch(
+      /^\s+VITE_STRIPE_PUBLISHABLE_KEY: \$\{\{ secrets\.VITE_STRIPE_PUBLISHABLE_KEY }}$/m,
+    )
+    expect(requiredKeyGuard).toBeGreaterThan(-1)
+    expect(requiredKeyGuard).toBeLessThan(imageBuild)
+  })
+
   it('passes VITE_STRIPE_PUBLISHABLE_KEY into the QA web image build', () => {
     expect(repositoryFile('docker-compose.qa.yml')).toMatch(
       /^\s+VITE_STRIPE_PUBLISHABLE_KEY: \$\{VITE_STRIPE_PUBLISHABLE_KEY:-}$/m,

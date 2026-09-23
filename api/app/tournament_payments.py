@@ -60,6 +60,14 @@ TERMINAL_PAYMENT_STATES = frozenset(
 MAX_RECEIPT_SYNC_ATTEMPTS = 5
 IN_FLIGHT_CREATE_PROVIDER_STATUS = "create_in_flight"
 UNCERTAIN_CREATE_PROVIDER_STATUS = "create_uncertain"
+UNKNOWN_CREATE_PARAMETERS_PROVIDER_STATUS = "create_parameters_unknown"
+UNRESOLVED_UNBOUND_CREATE_PROVIDER_STATUSES = frozenset(
+    {
+        IN_FLIGHT_CREATE_PROVIDER_STATUS,
+        UNCERTAIN_CREATE_PROVIDER_STATUS,
+        UNKNOWN_CREATE_PARAMETERS_PROVIDER_STATUS,
+    }
+)
 
 
 class PaymentNotFoundError(Exception):
@@ -76,6 +84,17 @@ class PaymentAmountInvalidError(Exception):
 
 class PaymentCreateRejectedError(Exception):
     pass
+
+
+async def retrieve_provider_intent(
+    provider: PaymentProvider, payment: TournamentPayment
+) -> ProviderPaymentIntent:
+    """Use the bound provider identity, or metadata only while still unbound."""
+    if payment.provider_payment_id is not None:
+        return await provider.retrieve_payment_intent(payment.provider_payment_id)
+    return await provider.find_payment_intent_by_durable_identity(
+        payment.durable_identity
+    )
 
 
 def _is_durable_payment_history(payment: TournamentPayment) -> bool:
@@ -120,7 +139,7 @@ def payment_intent_create_request(
         payment_method_types=["card"],
         save_payment_method=False,
         idempotency_key=payment.durable_identity,
-        receipt_email=payment.receipt_email,
+        receipt_email=payment.create_receipt_email,
     )
 
 
@@ -135,6 +154,7 @@ def _new_payment_obligation(
     return TournamentPayment(
         checkout_id=checkout.id,
         durable_identity=f"fortymm:checkout:{checkout.id}:payment:v1",
+        create_receipt_email=receipt_email,
         receipt_email=receipt_email,
         currency=checkout.currency,
         amount_cents=checkout.total_cents,
@@ -375,6 +395,19 @@ async def provider_create_request_if_authorized(
     if payment.provider_payment_id is not None:
         await db.commit()
         return None
+    if payment.provider_status == UNKNOWN_CREATE_PARAMETERS_PROVIDER_STATUS:
+        # A legacy migration could not reconstruct the byte-for-byte provider
+        # create request. This path is reached only after metadata discovery
+        # authoritatively found no matching intent, so quarantine that absence
+        # and never authorize replay with guessed parameters.
+        from app.tournament_payment_reconciliation import (
+            _quarantine_provider_mismatch,
+        )
+
+        payment.state = TournamentPaymentState.checking
+        await _quarantine_provider_mismatch(db, payment)
+        await db.commit()
+        return None
     if payment.provider_mismatch_at is not None:
         # Foreign or invariant-breaking evidence is not proof of absence and
         # cannot authorize another create. Preserve the durable quarantine.
@@ -384,7 +417,9 @@ async def provider_create_request_if_authorized(
     # authority, but retain the unbound recovery obligation until provider
     # evidence proves whether the idempotent create was accepted.
     stale_payment = (
-        None if payment.provider_status == UNCERTAIN_CREATE_PROVIDER_STATUS else payment
+        None
+        if payment.provider_status in UNRESOLVED_UNBOUND_CREATE_PROVIDER_STATUSES
+        else payment
     )
     if await _terminalize_stale_checkout(db, checkout, stale_payment):
         return None
@@ -798,9 +833,7 @@ async def prepare_payment(
         payer = await db.get(User, checkout.payer_account_id)
         if payer is None:
             raise PaymentNotFoundError()
-        selected_email = receipt_email if receipt_email_supplied else None
-        if not receipt_email_supplied and payer.confirmed_at is not None:
-            selected_email = payer.email
+        selected_email = receipt_email if receipt_email_supplied else payer.email
         payment = _new_payment_obligation(checkout, receipt_email=selected_email)
         db.add(payment)
         try:
@@ -844,7 +877,8 @@ async def prepare_payment(
             # sweep can observe a later capture and create refund obligations.
             if payment.provider_payment_id is None:
                 if (
-                    payment.provider_status == UNCERTAIN_CREATE_PROVIDER_STATUS
+                    payment.provider_status
+                    in UNRESOLVED_UNBOUND_CREATE_PROVIDER_STATUSES
                     or payment.provider_mismatch_at is not None
                 ):
                     # A timed-out create may exist remotely. Expire the payer
@@ -864,7 +898,7 @@ async def prepare_payment(
         and payment.provider_payment_id is None
     ):
         try:
-            intent = await provider.retrieve_payment_intent(payment.durable_identity)
+            intent = await retrieve_provider_intent(provider, payment)
         except (TimeoutError, PaymentProviderUncertainError):
             # A transport failure still cannot distinguish no provider object
             # from an accepted create. Preserve the obligation for recovery.
@@ -887,7 +921,16 @@ async def prepare_payment(
             if payment.provider_payment_id is not None:
                 await db.commit()
                 raise PaymentNotFoundError() from None
-            if payment.provider_mismatch_at is not None:
+            unknown_create_parameters = (
+                payment.provider_status == UNKNOWN_CREATE_PARAMETERS_PROVIDER_STATUS
+            )
+            if unknown_create_parameters:
+                from app.tournament_payment_reconciliation import (
+                    _quarantine_provider_mismatch,
+                )
+
+                await _quarantine_provider_mismatch(db, payment)
+            elif payment.provider_mismatch_at is not None:
                 # Signed or lookup evidence was seen but failed immutable
                 # association checks. A later metadata miss does not prove the
                 # payment never existed, so collection disablement must not
@@ -897,14 +940,18 @@ async def prepare_payment(
             now = await _database_now(db)
             payment.checkout.status = TournamentCheckoutStatus.cancelled
             payment.checkout.cancelled_at = now
-            if payment.provider_status != UNCERTAIN_CREATE_PROVIDER_STATUS:
+            if (
+                payment.provider_status
+                not in UNRESOLVED_UNBOUND_CREATE_PROVIDER_STATUSES
+            ):
                 payment.state = TournamentPaymentState.canceled
             payment.updated_at = now
-            stage_event(
-                db,
-                payment.checkout.payer_account_id,
-                EventKind.dashboard_changed,
-            )
+            if not unknown_create_parameters:
+                stage_event(
+                    db,
+                    payment.checkout.payer_account_id,
+                    EventKind.dashboard_changed,
+                )
             await db.commit()
             raise PaymentCollectionDisabledError() from None
         payment = await _store_provider_result(db, payment_id=payment.id, intent=intent)
@@ -948,10 +995,11 @@ async def prepare_payment(
             # A new desired value owns a fresh sync attempt. A manual-review
             # marker for an older value must not remain operator-visible.
             payment.receipt_sync_failed_at = None
-            if payment.provider_payment_id is not None or payment.provider_status in {
-                IN_FLIGHT_CREATE_PROVIDER_STATUS,
-                UNCERTAIN_CREATE_PROVIDER_STATUS,
-            }:
+            if (
+                payment.provider_payment_id is not None
+                or payment.provider_status
+                in UNRESOLVED_UNBOUND_CREATE_PROVIDER_STATUSES
+            ):
                 payment.receipt_sync_pending = True
             payment.updated_at = await _database_now(db)
         # Release lifecycle/checkout/payment locks before the provider call.
@@ -976,9 +1024,7 @@ async def prepare_payment(
     if payment.provider_payment_id is not None:
         if not payment.client_secret:
             try:
-                intent = await provider.retrieve_payment_intent(
-                    payment.durable_identity
-                )
+                intent = await retrieve_provider_intent(provider, payment)
             except (TimeoutError, PaymentProviderUncertainError):
                 return _read(payment)
             except PaymentProviderNotFoundError:
@@ -1037,9 +1083,7 @@ async def prepare_payment(
             intent = await provider.create_payment_intent(create_request)
         else:
             try:
-                intent = await provider.retrieve_payment_intent(
-                    payment.durable_identity
-                )
+                intent = await retrieve_provider_intent(provider, payment)
             except PaymentProviderNotFoundError:
                 # A process may die after committing the durable obligation but
                 # before provider I/O. Retrying create with the same provider
@@ -1213,13 +1257,13 @@ async def read_payment_status(
         await db.commit()
     if not _is_durable_payment_history(payment):
         try:
-            intent = await provider.retrieve_payment_intent(payment.durable_identity)
+            intent = await retrieve_provider_intent(provider, payment)
         except (TimeoutError, PaymentProviderUncertainError):
             pass
         except PaymentProviderNotFoundError:
-            # Search-by-metadata can lag even though a verified provider id is
-            # already bound. Preserve that identity and surface a safe checking
-            # state; a later sweep/read retries retrieval and never creates.
+            # A missing bound provider id is anomalous. Preserve the local
+            # identity and surface a safe checking state; a later sweep/read
+            # retries direct retrieval and never creates another intent.
             payment = await reload_payment_after_provider_io_locked(
                 db,
                 tournament_id=tournament_id,
@@ -1230,13 +1274,25 @@ async def read_payment_status(
             if _is_durable_payment_history(payment):
                 await db.commit()
                 return _read(payment, include_client_secret=False)
+            unknown_create_parameters = (
+                payment.provider_payment_id is None
+                and payment.provider_status == UNKNOWN_CREATE_PARAMETERS_PROVIDER_STATUS
+            )
+            if unknown_create_parameters:
+                from app.tournament_payment_reconciliation import (
+                    _quarantine_provider_mismatch,
+                )
+
+                payment.state = TournamentPaymentState.checking
+                await _quarantine_provider_mismatch(db, payment)
             payment.state = TournamentPaymentState.checking
             payment.updated_at = await _database_now(db)
-            stage_event(
-                db,
-                payment.checkout.payer_account_id,
-                EventKind.dashboard_changed,
-            )
+            if not unknown_create_parameters:
+                stage_event(
+                    db,
+                    payment.checkout.payer_account_id,
+                    EventKind.dashboard_changed,
+                )
             await db.commit()
         else:
             from app.tournament_payment_reconciliation import reconcile_provider_intent

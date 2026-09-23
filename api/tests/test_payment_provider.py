@@ -8,6 +8,7 @@ import stripe
 from app.payment_provider import (
     PaymentIntentCreate,
     PaymentProviderCancellationRejectedError,
+    PaymentProviderNotFoundError,
     PaymentProviderUncertainError,
     StripePaymentProvider,
 )
@@ -345,7 +346,9 @@ async def test_cancel_translates_uncertain_connection_failure(
         pytest.param(stripe.APIError, id="api-error"),
     ],
 )
-@pytest.mark.parametrize("operation", ["create", "retrieve", "update", "cancel"])
+@pytest.mark.parametrize(
+    "operation", ["create", "retrieve", "find", "update", "cancel"]
+)
 async def test_retryable_stripe_failures_have_one_uncertain_boundary_contract(
     monkeypatch: pytest.MonkeyPatch,
     operation: str,
@@ -360,7 +363,8 @@ async def test_retryable_stripe_failures_have_one_uncertain_boundary_contract(
 
     stripe_method = {
         "create": "create",
-        "retrieve": "search",
+        "retrieve": "retrieve",
+        "find": "search",
         "update": "modify",
         "cancel": "cancel",
     }[operation]
@@ -371,7 +375,11 @@ async def test_retryable_stripe_failures_have_one_uncertain_boundary_contract(
         if operation == "create":
             await provider.create_payment_intent(_request())
         elif operation == "retrieve":
-            await provider.retrieve_payment_intent(_request().idempotency_key)
+            await provider.retrieve_payment_intent("pi_boundary_test")
+        elif operation == "find":
+            await provider.find_payment_intent_by_durable_identity(
+                _request().idempotency_key
+            )
         elif operation == "update":
             await provider.update_payment_intent_receipt(
                 "pi_boundary_test", "payer@example.net"
@@ -419,7 +427,7 @@ async def test_permanent_stripe_configuration_failures_have_typed_contract(
             raise provider_error
 
         stripe_method = {
-            "retrieve": "search",
+            "retrieve": "retrieve",
             "update": "modify",
             "cancel": "cancel",
         }[operation]
@@ -430,7 +438,7 @@ async def test_permanent_stripe_configuration_failures_have_typed_contract(
         if operation == "create":
             await provider.create_payment_intent(_request())
         elif operation == "retrieve":
-            await provider.retrieve_payment_intent(_request().idempotency_key)
+            await provider.retrieve_payment_intent("pi_boundary_test")
         elif operation == "update":
             await provider.update_payment_intent_receipt(
                 "pi_boundary_test", "payer@example.net"
@@ -451,9 +459,47 @@ async def test_retrieve_translates_invalid_search_request_to_permanent_error(
     monkeypatch.setattr(stripe.PaymentIntent, "search", rejected_search)
 
     with pytest.raises(PaymentProviderConfigurationError):
-        await StripePaymentProvider().retrieve_payment_intent(
+        await StripePaymentProvider().find_payment_intent_by_durable_identity(
             _request().idempotency_key
         )
+
+
+async def test_direct_retrieve_translates_resource_missing_to_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_boundary")
+
+    def missing_intent(_provider_payment_id: str) -> object:
+        raise stripe.InvalidRequestError(
+            "No such payment_intent: 'pi_missing'",
+            "intent",
+            code="resource_missing",
+        )
+
+    monkeypatch.setattr(stripe.PaymentIntent, "retrieve", missing_intent)
+
+    with pytest.raises(PaymentProviderNotFoundError):
+        await StripePaymentProvider().retrieve_payment_intent("pi_missing")
+
+
+async def test_direct_retrieve_does_not_treat_other_invalid_requests_as_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_boundary")
+
+    def rejected_retrieve(_provider_payment_id: str) -> object:
+        raise stripe.InvalidRequestError(
+            "The request is invalid for this account",
+            "stripe_account",
+            code="account_invalid",
+        )
+
+    monkeypatch.setattr(stripe.PaymentIntent, "retrieve", rejected_retrieve)
+
+    with pytest.raises(
+        (PaymentProviderConfigurationError, PaymentProviderResponseInvalidError)
+    ):
+        await StripePaymentProvider().retrieve_payment_intent("pi_boundary_test")
 
 
 @pytest.mark.parametrize(

@@ -251,14 +251,11 @@ class Settings(BaseSettings):
                 "STRIPE_SECRET_KEY is required when "
                 "TOURNAMENT_PAYMENT_COLLECTION_ENABLED is true."
             )
-        if (
-            self.tournament_payment_collection_enabled
-            and not self.notification_email_dedup_secret.strip()
-            and os.environ.get("FORTYMM_DEV", "").lower() not in {"1", "true", "yes"}
-        ):
+        if not self.notification_email_dedup_secret.strip() and os.environ.get(
+            "FORTYMM_DEV", ""
+        ).lower() not in {"1", "true", "yes"}:
             raise ValueError(
-                "NOTIFICATION_EMAIL_DEDUP_SECRET is required when "
-                "TOURNAMENT_PAYMENT_COLLECTION_ENABLED is true outside development."
+                "NOTIFICATION_EMAIL_DEDUP_SECRET is required outside development."
             )
         return self
 

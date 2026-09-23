@@ -10,9 +10,10 @@ from decimal import Decimal
 from math import ceil
 from typing import cast
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.account_merge_resolution import is_terminal_merge_survivor
 from app.config import get_settings
@@ -27,6 +28,8 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentPayment,
+    TournamentPaymentState,
     User,
 )
 from app.rate_limiting import (
@@ -67,6 +70,16 @@ from app.tournament_queries import (
 from app.tournament_registration import registration_open
 
 PAYMENTS_VIEW_PERMISSION = "payments.view"
+_UNBOUND_CREATE_PROVIDER_STATUSES = (
+    "create_in_flight",
+    "create_uncertain",
+    "create_parameters_unknown",
+)
+_TERMINAL_PAYMENT_STATES = (
+    TournamentPaymentState.failed,
+    TournamentPaymentState.canceled,
+    TournamentPaymentState.succeeded,
+)
 
 
 @dataclass(frozen=True)
@@ -74,6 +87,21 @@ class _CheckoutAdmission:
     marker_key: str
     marker_token: str
     owns_marker: bool
+
+
+def _provider_work_is_unresolved() -> ColumnElement[bool]:
+    """Provider work that must stay visible after checkout authority closes."""
+    return or_(
+        TournamentPayment.state == TournamentPaymentState.checking,
+        and_(
+            TournamentPayment.provider_payment_id.is_not(None),
+            TournamentPayment.state.not_in(_TERMINAL_PAYMENT_STATES),
+        ),
+        and_(
+            TournamentPayment.provider_payment_id.is_(None),
+            TournamentPayment.provider_status.in_(_UNBOUND_CREATE_PROVIDER_STATUSES),
+        ),
+    )
 
 
 async def _renew_checkout_admission_lease(key: str, token: str) -> None:
@@ -472,16 +500,22 @@ async def _start_checkout_after_admission(
         )
 
     await _expire_stale_checkouts(db, tournament, player.id)
-    active = await db.scalar(
+    blocking_checkout = await db.scalar(
         select(TournamentCheckout)
         .where(
             TournamentCheckout.tournament_id == tournament.id,
             TournamentCheckout.entrant_player_id == player.id,
-            TournamentCheckout.status == TournamentCheckoutStatus.active,
+            or_(
+                TournamentCheckout.status == TournamentCheckoutStatus.active,
+                and_(
+                    TournamentCheckout.status != TournamentCheckoutStatus.active,
+                    TournamentCheckout.payment.has(_provider_work_is_unresolved()),
+                ),
+            ),
         )
         .options(selectinload(TournamentCheckout.lines))
     )
-    if active is not None:
+    if blocking_checkout is not None:
         raise CheckoutRefusedError(
             CheckoutRefusal.active_checkout_conflict,
             "Cancel the active checkout before changing the event selection.",
@@ -643,7 +677,21 @@ async def read_current_checkout(
         .where(
             TournamentCheckout.tournament_id == tournament_id,
             TournamentCheckout.payer_account_id == actor.id,
-            TournamentCheckout.status == TournamentCheckoutStatus.active,
+            or_(
+                TournamentCheckout.status == TournamentCheckoutStatus.active,
+                and_(
+                    TournamentCheckout.status != TournamentCheckoutStatus.active,
+                    TournamentCheckout.payment.has(_provider_work_is_unresolved()),
+                ),
+            ),
+        )
+        .order_by(
+            case(
+                (TournamentCheckout.status == TournamentCheckoutStatus.active, 0),
+                else_=1,
+            ),
+            TournamentCheckout.created_at.desc(),
+            TournamentCheckout.id.desc(),
         )
         .options(selectinload(TournamentCheckout.lines))
     )

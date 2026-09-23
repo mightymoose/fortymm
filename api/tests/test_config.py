@@ -61,14 +61,16 @@ def test_enabled_payment_collection_requires_nonblank_stripe_secret_key(
         get_settings()
 
 
-def test_payment_disabled_deployment_may_omit_notification_email_dedup_secret(
+def test_deployed_workers_require_dedup_secret_when_payments_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Queued delivery still compares final addresses after collection closes."""
     monkeypatch.delenv("FORTYMM_DEV", raising=False)
     monkeypatch.setenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", "false")
     monkeypatch.delenv("NOTIFICATION_EMAIL_DEDUP_SECRET", raising=False)
 
-    assert get_settings().notification_email_dedup_secret == ""
+    with pytest.raises(ValidationError, match="NOTIFICATION_EMAIL_DEDUP_SECRET"):
+        get_settings()
 
 
 def test_solver_time_cap_defaults_to_ten_seconds(

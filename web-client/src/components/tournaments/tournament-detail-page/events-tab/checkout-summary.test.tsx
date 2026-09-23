@@ -124,27 +124,83 @@ it('explains the checkout selection limit at 100 events', async () => {
   expect(screen.getByRole('button', { name: 'Hold 100 places' })).toBeEnabled()
 })
 
-it('keeps the countdown tied to the authoritative expiry across delayed refreshes', async () => {
+it('uses server remaining time on a monotonic clock and removes payment at zero', async () => {
   vi.useFakeTimers()
-  vi.setSystemTime(new Date('2030-04-20T14:00:05Z'))
-  const view = await renderCheckoutSummary({
+  vi.setSystemTime(new Date('2040-04-20T14:00:00Z'))
+  await renderCheckoutSummary({
     selection: [],
-    checkout,
+    checkout: {
+      ...checkout,
+      // The device clock is ten years ahead of this server-owned absolute
+      // timestamp. The response duration is authoritative for local display.
+      remainingSeconds: 2,
+    },
     pending: false,
     ...callbacks,
   })
-  expect(screen.getByLabelText('09:55 remaining')).toBeInTheDocument()
+  expect(screen.getByLabelText('00:02 remaining')).toBeInTheDocument()
+  expect(
+    screen.getByRole('link', { name: 'Continue to payment' }),
+  ).toBeInTheDocument()
 
-  view.rerenderSummary({
-    selection: [],
-    checkout: { ...checkout, remainingSeconds: 1 },
-    pending: false,
-    ...callbacks,
+  // A wall-clock correction after receipt must not move the monotonic hold.
+  vi.setSystemTime(new Date('2060-04-20T14:00:00Z'))
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000)
   })
-  expect(screen.getByLabelText('09:55 remaining')).toBeInTheDocument()
+  expect(screen.getByLabelText('00:01 remaining')).toBeInTheDocument()
+  expect(
+    screen.getByRole('link', { name: 'Continue to payment' }),
+  ).toBeInTheDocument()
 
-  await act(() => vi.advanceTimersByTimeAsync(595_000))
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000)
+  })
+  expect(screen.getByLabelText('00:00 remaining')).toBeInTheDocument()
   expect(callbacks.onExpired).toHaveBeenCalledTimes(1)
+  expect(
+    screen.queryByRole('link', { name: 'Continue to payment' }),
+  ).not.toBeInTheDocument()
+})
+
+it('does not restart cached remaining time when the summary mounts or remounts late', async () => {
+  vi.useFakeTimers()
+  const cachedCheckout: TournamentCheckout & {
+    remainingSecondsObservedAt: number
+  } = {
+    ...checkout,
+    remainingSeconds: 2,
+    // Query data must carry the monotonic instant at which this server-owned
+    // duration was received. Components may mount long after the cache fills.
+    remainingSecondsObservedAt: performance.now(),
+  }
+
+  await vi.advanceTimersByTimeAsync(1_000)
+  const firstMount = await renderCheckoutSummary({
+    selection: [],
+    checkout: cachedCheckout,
+    pending: false,
+    ...callbacks,
+  })
+
+  expect(screen.getByLabelText('00:01 remaining')).toBeInTheDocument()
+  expect(
+    screen.getByRole('link', { name: 'Continue to payment' }),
+  ).toBeInTheDocument()
+
+  firstMount.unmount()
+  await vi.advanceTimersByTimeAsync(1_000)
+  await renderCheckoutSummary({
+    selection: [],
+    checkout: cachedCheckout,
+    pending: false,
+    ...callbacks,
+  })
+
+  expect(screen.getByLabelText('00:00 remaining')).toBeInTheDocument()
+  expect(
+    screen.queryByRole('link', { name: 'Continue to payment' }),
+  ).not.toBeInTheDocument()
 })
 
 it('describes paid held places as ready to continue instead of unavailable', async () => {

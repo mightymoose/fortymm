@@ -52,14 +52,15 @@ from app.tournament_payment_receipts import (
     enqueue_tournament_receipt,
 )
 from app.tournament_payments import (
-    IN_FLIGHT_CREATE_PROVIDER_STATUS,
-    UNCERTAIN_CREATE_PROVIDER_STATUS,
+    UNKNOWN_CREATE_PARAMETERS_PROVIDER_STATUS,
+    UNRESOLVED_UNBOUND_CREATE_PROVIDER_STATUSES,
     PaymentNotFoundError,
     _sync_provider_receipt,
     _terminalize_stale_checkout,
     provider_create_request_if_authorized,
     public_payment_state,
     reload_payment_for_reconciliation_locked,
+    retrieve_provider_intent,
 )
 from app.tournament_registration import registration_open
 
@@ -458,6 +459,13 @@ async def reconcile_provider_intent(
         and payment.provider_payment_id is not None
     )
     if provider_confirmed_terminal:
+        if payment.state is TournamentPaymentState.canceled:
+            # Once a provider id is bound and cancellation is authoritative,
+            # the create request can never be replayed.  Its immutable receipt
+            # snapshot is now only retained PII; provider-clear obligations
+            # continue to be represented independently by receipt_email and
+            # receipt_sync_pending.
+            payment.create_receipt_email = None
         if payment.state is TournamentPaymentState.succeeded:
             await _ensure_settlement_outputs(db, payment, await _database_now(db))
         return payment
@@ -499,6 +507,8 @@ async def reconcile_provider_intent(
     ):
         if evidence_at is not None:
             payment.provider_evidence_at = evidence_at
+        if payment.provider_status == UNKNOWN_CREATE_PARAMETERS_PROVIDER_STATUS:
+            payment.state = TournamentPaymentState.checking
         await _quarantine_provider_mismatch(db, payment)
         return payment
 
@@ -557,6 +567,10 @@ async def reconcile_provider_intent(
         # to observe a late capture and refund it.
         payment.state = provider_state
         if provider_state is TournamentPaymentState.canceled:
+            # A bound, canceled intent has no remaining create-replay window.
+            # Discard the local create snapshot without discharging any
+            # separate obligation to clear provider-held receipt PII.
+            payment.create_receipt_email = None
             # A canceled intent cannot issue a receipt, so a pending request to
             # set a non-null delivery address is moot. A desired clear is
             # different: cancellation is not proof that provider-held PII was
@@ -773,7 +787,9 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
         # unbound aggregate discoverable.
         and_(
             TournamentPayment.provider_payment_id.is_(None),
-            TournamentPayment.provider_status == IN_FLIGHT_CREATE_PROVIDER_STATUS,
+            TournamentPayment.provider_status.in_(
+                UNRESOLVED_UNBOUND_CREATE_PROVIDER_STATUSES
+            ),
         ),
         and_(
             TournamentPayment.state == TournamentPaymentState.succeeded,
@@ -973,7 +989,7 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
             reconciled += 1
             continue
         try:
-            intent = await provider.retrieve_payment_intent(payment.durable_identity)
+            intent = await retrieve_provider_intent(provider, payment)
         except (
             PaymentProviderConfigurationError,
             PaymentProviderResponseInvalidError,
@@ -1021,7 +1037,18 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                 # A concurrently removed aggregate cannot be recovered, but it
                 # must not prevent later independent obligations from running.
                 continue
-            if payment.provider_mismatch_at is not None:
+            unknown_create_parameters = (
+                payment.provider_payment_id is None
+                and payment.provider_status == UNKNOWN_CREATE_PARAMETERS_PROVIDER_STATUS
+            )
+            if unknown_create_parameters:
+                # Unlike ordinary uncertain creates, these migrated rows cannot
+                # safely replay the original create command. An authoritative
+                # metadata miss is therefore an operator-visible quarantine,
+                # even after payer authority or collection availability ends.
+                payment.state = TournamentPaymentState.checking
+                await _quarantine_provider_mismatch(db, payment)
+            elif payment.provider_mismatch_at is not None:
                 # Quarantine and its delivery marker are separate durable
                 # facts. A metadata miss must not suppress retrying an alert
                 # that previously failed to enqueue.
@@ -1083,7 +1110,8 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
             checkout = payment.checkout
             stale_payment = (
                 None
-                if payment.provider_status == UNCERTAIN_CREATE_PROVIDER_STATUS
+                if payment.provider_status
+                in UNRESOLVED_UNBOUND_CREATE_PROVIDER_STATUSES
                 else payment
             )
             if await _terminalize_stale_checkout(db, checkout, stale_payment):
@@ -1111,7 +1139,10 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                 now = await _database_now(db)
                 payment.checkout.status = TournamentCheckoutStatus.cancelled
                 payment.checkout.cancelled_at = now
-                if payment.provider_status != UNCERTAIN_CREATE_PROVIDER_STATUS:
+                if (
+                    payment.provider_status
+                    not in UNRESOLVED_UNBOUND_CREATE_PROVIDER_STATUSES
+                ):
                     payment.state = TournamentPaymentState.canceled
                 payment.updated_at = now
                 recipient_id = await _payer_recipient_id(
@@ -1349,7 +1380,6 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
             # transaction before provider I/O so payer/tournament/checkout/
             # payment lifecycle changes are never blocked on the network.
             cancellation_provider_id = intent.id
-            cancellation_durable_identity = payment.durable_identity
             # Account-lifecycle cancellation has its own checkout ownership
             # semantics. Preserve that workflow's checkout state when the
             # provider confirms the cancellation we requested here; a
@@ -1381,7 +1411,7 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
             except PaymentProviderCancellationRejectedError:
                 try:
                     intent = await provider.retrieve_payment_intent(
-                        cancellation_durable_identity
+                        cancellation_provider_id
                     )
                 except (
                     PaymentProviderConfigurationError,

@@ -16,24 +16,34 @@ import {
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
-import type { TournamentCheckout } from '../../data/api'
+import { isClosedCheckoutProviderWorkUnresolved, type TournamentCheckout } from '../../data/api'
 import type { TournamentEvent } from '../../data/types'
 import { MAX_CHECKOUT_EVENTS } from './checkout-policy'
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
 
-function Countdown({ expiresAt, onExpired }: { expiresAt: string; onExpired: () => void }) {
-  const deadline = Date.parse(expiresAt)
-  const [now, setNow] = useState(() => Date.now())
+function monotonicNow() {
+  return performance.now()
+}
+
+function Countdown({
+  remainingSeconds,
+  remainingSecondsObservedAt,
+  onExpired,
+}: {
+  remainingSeconds: number
+  remainingSecondsObservedAt: number
+  onExpired: () => void
+}) {
+  const initialNow = monotonicNow()
+  const [deadline] = useState(() => remainingSecondsObservedAt + remainingSeconds * 1_000)
+  const [now, setNow] = useState(initialNow)
   const notified = useRef(false)
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000)
+    const timer = window.setInterval(() => setNow(monotonicNow()), 1_000)
     return () => window.clearInterval(timer)
   }, [])
   const seconds = Math.max(0, Math.ceil((deadline - now) / 1_000))
-  useEffect(() => {
-    notified.current = false
-  }, [expiresAt])
   useEffect(() => {
     if (seconds === 0 && !notified.current) {
       notified.current = true
@@ -71,6 +81,7 @@ export function CheckoutSummary({
   onExpired: () => void
   onRemoveSelection: (eventId: string) => void
 }) {
+  const [expiredCheckoutId, setExpiredCheckoutId] = useState<string | null>(null)
   if (!checkout && selection.length === 0) return null
   const lines = checkout?.lines ?? selection.map((event) => ({
     eventId: event.id,
@@ -78,13 +89,21 @@ export function CheckoutSummary({
     priceCents: Math.round(event.entryFee * 100),
   }))
   const total = checkout?.totalCents ?? lines.reduce((sum, line) => sum + line.priceCents, 0)
+  const checkoutTimeExpired =
+    checkout !== null && (checkout.remainingSeconds === 0 || expiredCheckoutId === checkout.id)
+  const unresolvedProviderWork = isClosedCheckoutProviderWorkUnresolved(checkout)
+  const title = checkout
+    ? unresolvedProviderWork
+      ? 'Payment in progress'
+      : 'Your held places'
+    : 'Entry summary'
 
   return (
     <Card asChild className="mb-5 border-l-4 border-l-primary">
       <section aria-labelledby="checkout-title">
         <CardHeader className="border-b">
           <div className="flex items-center gap-2 text-primary"><ShoppingBasket size={18} /></div>
-          <CardTitle id="checkout-title">{checkout ? 'Your held places' : 'Entry summary'}</CardTitle>
+          <CardTitle id="checkout-title">{title}</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4 pt-1 md:grid-cols-[1fr_190px]">
           <div>
@@ -118,20 +137,32 @@ export function CheckoutSummary({
             {checkout && (
               <p className="mt-3 flex gap-2 text-sm text-muted-foreground">
                 <ShieldCheck className="mt-0.5 shrink-0" size={15} />
-                Your places are held while you complete payment.
+                {unresolvedProviderWork
+                  ? 'Payment is still being confirmed'
+                  : 'Your places are held while you complete payment.'}
               </p>
             )}
           </div>
           <div className="flex flex-col gap-3">
             {checkout ? (
               <>
-                <Countdown
-                  key={checkout.id}
-                  expiresAt={checkout.expiresAt}
-                  onExpired={onExpired}
-                />
-                {checkout.status === 'active' && checkout.totalCents > 0 && (
-                  pending ? (
+                {checkout.status === 'active' && (
+                  <Countdown
+                    key={`${checkout.id}:${checkout.remainingSecondsObservedAt ?? 'first-render'}:${checkout.remainingSeconds}`}
+                    remainingSeconds={checkout.remainingSeconds}
+                    remainingSecondsObservedAt={
+                      checkout.remainingSecondsObservedAt ?? monotonicNow()
+                    }
+                    onExpired={() => {
+                      setExpiredCheckoutId(checkout.id)
+                      onExpired()
+                    }}
+                  />
+                )}
+                {checkout.status === 'active' &&
+                  checkout.totalCents > 0 &&
+                  !checkoutTimeExpired &&
+                  (pending ? (
                     <Button disabled>Continue to payment</Button>
                   ) : (
                     <Button asChild>
@@ -145,24 +176,27 @@ export function CheckoutSummary({
                         Continue to payment
                       </Link>
                     </Button>
-                  )
+                  ))}
+                {checkout.status === 'active' && (
+                  <>
+                    <AlertDialog>
+                      <AlertDialogTrigger asChild><Button variant="outline" disabled={pending}>Change selection</Button></AlertDialogTrigger>
+                      <AlertDialogContent size="sm">
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Release these places?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            Changing your selection releases this checkout hold. Your new choices will be checked again and receive a new hold.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel>Keep hold</AlertDialogCancel>
+                          <AlertDialogAction onClick={onChange}>Release and change</AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                    <Button variant="ghost" disabled={pending} onClick={onCancel}>Release hold</Button>
+                  </>
                 )}
-                <AlertDialog>
-                  <AlertDialogTrigger asChild><Button variant="outline" disabled={pending}>Change selection</Button></AlertDialogTrigger>
-                  <AlertDialogContent size="sm">
-                    <AlertDialogHeader>
-                      <AlertDialogTitle>Release these places?</AlertDialogTitle>
-                      <AlertDialogDescription>
-                        Changing your selection releases this checkout hold. Your new choices will be checked again and receive a new hold.
-                      </AlertDialogDescription>
-                    </AlertDialogHeader>
-                    <AlertDialogFooter>
-                      <AlertDialogCancel>Keep hold</AlertDialogCancel>
-                      <AlertDialogAction onClick={onChange}>Release and change</AlertDialogAction>
-                    </AlertDialogFooter>
-                  </AlertDialogContent>
-                </AlertDialog>
-                <Button variant="ghost" disabled={pending} onClick={onCancel}>Release hold</Button>
               </>
             ) : (
               <Button disabled={pending} onClick={onHold}>
