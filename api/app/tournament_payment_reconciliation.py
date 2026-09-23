@@ -33,6 +33,7 @@ from app.payment_provider import (
     PaymentProviderCreateRejectedError,
     PaymentProviderNotFoundError,
     PaymentProviderResponseInvalidError,
+    PaymentProviderSearchRejectedError,
     PaymentProviderUncertainError,
     ProviderPaymentEvent,
     ProviderPaymentIntent,
@@ -993,6 +994,7 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
         except (
             PaymentProviderConfigurationError,
             PaymentProviderResponseInvalidError,
+            PaymentProviderSearchRejectedError,
         ) as error:
             try:
                 payment, _payer = await reload_payment_for_reconciliation_locked(
@@ -1014,10 +1016,17 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                 # Missing/invalid credentials say nothing about the identity
                 # of an unbound create. Preserve its lookup/recreate path so a
                 # later authoritative NotFound can safely retry the same
-                # idempotent create. A malformed response, or a configuration
-                # failure against an already-bound intent, still needs review.
+                # idempotent create. A permanently rejected search, malformed
+                # response, or configuration failure against an already-bound
+                # intent still needs review.
                 if (
-                    isinstance(error, PaymentProviderResponseInvalidError)
+                    isinstance(
+                        error,
+                        (
+                            PaymentProviderResponseInvalidError,
+                            PaymentProviderSearchRejectedError,
+                        ),
+                    )
                     or payment.provider_payment_id is not None
                 ):
                     await _quarantine_provider_mismatch(db, payment)

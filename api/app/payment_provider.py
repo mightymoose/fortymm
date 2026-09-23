@@ -105,6 +105,10 @@ class PaymentProviderConfigurationError(Exception):
     """Provider credentials or account configuration permanently reject work."""
 
 
+class PaymentProviderSearchRejectedError(Exception):
+    """The provider permanently rejected durable-identity search."""
+
+
 class PaymentProviderResponseInvalidError(Exception):
     """The provider returned an intent that cannot be trusted or interpreted."""
 
@@ -349,7 +353,7 @@ class StripePaymentProvider:
             # version does not support the query. Normalize that SDK detail so
             # reconciliation can quarantine this obligation and continue with
             # later independent work.
-            raise PaymentProviderConfigurationError from error
+            raise PaymentProviderSearchRejectedError from error
         except TimeoutError as error:
             raise PaymentProviderUncertainError from error
         except (

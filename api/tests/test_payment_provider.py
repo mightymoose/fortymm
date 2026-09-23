@@ -46,6 +46,14 @@ except ImportError:  # The red test defines the provider contract production mus
 
 
 try:
+    from app.payment_provider import PaymentProviderSearchRejectedError
+except ImportError:  # The red test defines the provider contract production must add.
+
+    class PaymentProviderSearchRejectedError(Exception):
+        pass
+
+
+try:
     from app.payment_provider import PaymentProviderResponseInvalidError
 except ImportError:  # The red test defines the provider contract production must add.
 
@@ -447,10 +455,10 @@ async def test_permanent_stripe_configuration_failures_have_typed_contract(
             await provider.cancel_payment_intent("pi_boundary_test")
 
 
-async def test_retrieve_translates_invalid_search_request_to_permanent_error(
+async def test_find_translates_rejected_search_to_dedicated_permanent_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A rejected PaymentIntent search is configuration, not a raw SDK leak."""
+    """A permanently unsupported search is distinct from credential outages."""
     monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_boundary")
 
     def rejected_search(**_kwargs: object) -> object:
@@ -458,7 +466,7 @@ async def test_retrieve_translates_invalid_search_request_to_permanent_error(
 
     monkeypatch.setattr(stripe.PaymentIntent, "search", rejected_search)
 
-    with pytest.raises(PaymentProviderConfigurationError):
+    with pytest.raises(PaymentProviderSearchRejectedError):
         await StripePaymentProvider().find_payment_intent_by_durable_identity(
             _request().idempotency_key
         )

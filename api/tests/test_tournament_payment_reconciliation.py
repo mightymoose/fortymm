@@ -592,7 +592,7 @@ async def test_provider_configuration_failure_is_visible_without_starving_sweep(
     assert later.state is TournamentPaymentState.succeeded
 
 
-async def test_invalid_stripe_search_remains_retryable_without_starving_later_work(
+async def test_rejected_search_is_quarantined_without_duplicate_create(
     api_client: AsyncClient,
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
@@ -632,13 +632,16 @@ async def test_invalid_stripe_search_remains_retryable_without_starving_later_wo
     stripe_provider = StripePaymentProvider()
 
     class InvalidSearchThenValidProvider(FakePaymentProvider):
+        search_is_rejected = True
+
         async def find_payment_intent_by_durable_identity(
             self, durable_identity: str
         ) -> ProviderPaymentIntent:
             if durable_identity == broken.durable_identity:
-                return await stripe_provider.find_payment_intent_by_durable_identity(
-                    durable_identity
-                )
+                if self.search_is_rejected:
+                    find = stripe_provider.find_payment_intent_by_durable_identity
+                    return await find(durable_identity)
+                raise PaymentProviderNotFoundError
             raise AssertionError("only the unbound payment may use metadata search")
 
         async def retrieve_payment_intent(
@@ -649,18 +652,73 @@ async def test_invalid_stripe_search_remains_retryable_without_starving_later_wo
                 **(asdict(later_provider.intent) | {"status": "succeeded"})
             )
 
-    reconciled = await reconcile_stuck_payments(
-        db_session, InvalidSearchThenValidProvider("pi_unused")
-    )
+    recovery_provider = InvalidSearchThenValidProvider("pi_unused")
+    reconciled = await reconcile_stuck_payments(db_session, recovery_provider)
     await db_session.refresh(broken)
     await db_session.refresh(later)
 
     assert reconciled == 2
-    assert broken.provider_mismatch_at is None
-    assert broken.support_reference is None
+    assert broken.provider_mismatch_at is not None
+    assert broken.support_reference is not None
     assert broken.state is TournamentPaymentState.checking
     assert broken.provider_status == "create_uncertain"
+    assert broken.attention_notified_state == "provider_mismatch"
+    assert recovery_provider.creates == []
     assert later.state is TournamentPaymentState.succeeded
+
+    quarantine_at = broken.provider_mismatch_at
+    support_reference = broken.support_reference
+    recovery_provider.search_is_rejected = False
+
+    assert await reconcile_stuck_payments(db_session, recovery_provider) == 1
+    await db_session.refresh(broken)
+
+    assert broken.provider_mismatch_at == quarantine_at
+    assert broken.support_reference == support_reference
+    assert broken.state is TournamentPaymentState.checking
+    assert broken.attention_notified_state == "provider_mismatch"
+    assert recovery_provider.creates == []
+
+
+async def test_unbound_search_credential_outage_remains_retryable(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakePaymentProvider("pi_search_credentials")
+    _, _, _, checkout = await _prepared_checkout(
+        api_client, db_session, monkeypatch, provider
+    )
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None
+    payment.provider_payment_id = None
+    payment.client_secret = None
+    payment.provider_status = "create_uncertain"
+    payment.state = TournamentPaymentState.preparing
+    await db_session.commit()
+
+    class CredentialOutageProvider(FakePaymentProvider):
+        async def find_payment_intent_by_durable_identity(
+            self, durable_identity: str
+        ) -> FakeProviderIntent:
+            self.identity_searches.append(durable_identity)
+            raise PaymentProviderConfigurationError("Stripe key was revoked")
+
+    outage_provider = CredentialOutageProvider("pi_unused")
+    assert await reconcile_stuck_payments(db_session, outage_provider) == 1
+    await db_session.refresh(payment)
+
+    assert outage_provider.identity_searches == [payment.durable_identity]
+    assert outage_provider.creates == []
+    assert payment.state is TournamentPaymentState.checking
+    assert payment.provider_status == "create_uncertain"
+    assert payment.provider_mismatch_at is None
+    assert payment.support_reference is None
+    assert payment.attention_notified_state != "provider_mismatch"
 
 
 async def test_unknown_legacy_create_matching_lookup_does_not_emit_stale_review_alert(
