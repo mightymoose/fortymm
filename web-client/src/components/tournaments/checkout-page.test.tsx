@@ -151,7 +151,7 @@ describe("tournament checkout page", () => {
     expect(within(main).getByText("Total").parentElement).toHaveTextContent(
       "$37.50",
     );
-    expect(screen.getByLabelText("09:55 remaining")).toBeInTheDocument();
+    expect(screen.getByLabelText("10:00 remaining")).toBeInTheDocument();
     expect(page.getReceiptEmail()).toHaveValue("payer@example.com");
     expect(
       screen.getByRole("textbox", { name: /card details/i }),
@@ -318,6 +318,180 @@ describe("tournament checkout page", () => {
       screen.queryByRole("button", { name: /save receipt email/i }),
     ).not.toBeInTheDocument();
   });
+
+  it("renders an operator's redacted unprepared checkout without payer-only preparation", async () => {
+    let prepares = 0;
+    server.use(
+      http.get("*/v1/tournaments/:tournamentId/checkouts/:checkoutId", () =>
+        HttpResponse.json(checkout),
+      ),
+      http.get(
+        "*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment",
+        () =>
+          HttpResponse.json(
+            payment({
+              payment_state: "unavailable",
+              client_secret: null,
+              receipt_email: null,
+              receipt_editable: false,
+            }),
+          ),
+      ),
+      http.post(
+        "*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment",
+        () => {
+          prepares += 1;
+          return HttpResponse.json(
+            { detail: "Only the payer may prepare payment." },
+            { status: 404 },
+          );
+        },
+      ),
+    );
+
+    page.render(adapter());
+
+    expect(
+      await screen.findByRole("heading", { name: "Autumn Open" }),
+    ).toBeInTheDocument();
+    expect(prepares).toBe(0);
+    expect(
+      screen.queryByText("We could not load this checkout. Try again."),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("textbox", { name: /receipt email|card details/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /pay|authentication/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("still prepares a payer's active checkout when no payment row exists", async () => {
+    let prepares = 0;
+    server.use(
+      http.get("*/v1/tournaments/:tournamentId/checkouts/:checkoutId", () =>
+        HttpResponse.json(checkout),
+      ),
+      http.get(
+        "*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment",
+        () =>
+          HttpResponse.json({ detail: "Checkout not found." }, { status: 404 }),
+      ),
+      http.post(
+        "*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment",
+        () => {
+          prepares += 1;
+          return HttpResponse.json(payment());
+        },
+      ),
+    );
+
+    page.render(adapter());
+
+    expect(await screen.findByRole("button", { name: /pay/i })).toBeEnabled();
+    expect(prepares).toBe(1);
+  });
+
+  it.each([
+    ["ready", "Payment is no longer available"],
+    ["action_required", "Finish card authentication"],
+  ])(
+    "renders a redacted read-only %s status without payer-only preparation",
+    async (paymentState, copy) => {
+      let prepares = 0;
+      server.use(
+        http.get("*/v1/tournaments/:tournamentId/checkouts/:checkoutId", () =>
+          HttpResponse.json(checkout),
+        ),
+        http.get(
+          "*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment",
+          () =>
+            HttpResponse.json(
+              payment({
+                payment_state: paymentState,
+                client_secret: null,
+                receipt_editable: false,
+              }),
+            ),
+        ),
+        http.post(
+          "*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment",
+          () => {
+            prepares += 1;
+            return HttpResponse.json(
+              { detail: "Only the payer may prepare payment." },
+              { status: 404 },
+            );
+          },
+        ),
+      );
+
+      page.render(adapter());
+
+      expect(await screen.findByText(copy)).toBeInTheDocument();
+      expect(prepares).toBe(0);
+      expect(
+        screen.queryByText("We could not load this checkout. Try again."),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("textbox", { name: /receipt email|card details/i }),
+      ).not.toBeInTheDocument();
+    },
+  );
+
+  it.each([
+    {
+      skew: "ahead",
+      deviceNow: "2030-04-20T15:00:00Z",
+      remainingSeconds: 300,
+      expectedDeadline: "05:00 remaining",
+      expired: false,
+    },
+    {
+      skew: "behind",
+      deviceNow: "2030-04-20T13:00:00Z",
+      remainingSeconds: 0,
+      expectedDeadline: "00:00 remaining",
+      expired: true,
+    },
+  ])(
+    "derives checkout expiry from server remaining seconds when the device clock is $skew",
+    async ({ deviceNow, remainingSeconds, expectedDeadline, expired }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(deviceNow));
+      server.use(
+        http.get("*/v1/tournaments/:tournamentId/checkouts/:checkoutId", () =>
+          HttpResponse.json({
+            ...checkout,
+            remaining_seconds: remainingSeconds,
+          }),
+        ),
+        http.get(
+          "*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment",
+          () => HttpResponse.json(payment()),
+        ),
+        http.post(
+          "*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment",
+          () => HttpResponse.json(payment()),
+        ),
+      );
+
+      page.render(adapter());
+
+      expect(
+        await screen.findByLabelText(expectedDeadline),
+      ).toBeInTheDocument();
+      if (expired) {
+        expect(screen.getByText("Checkout expired")).toBeInTheDocument();
+        expect(
+          screen.queryByRole("button", { name: /pay/i }),
+        ).not.toBeInTheDocument();
+      } else {
+        expect(screen.queryByText("Checkout expired")).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /pay/i })).toBeEnabled();
+      }
+    },
+  );
 
   it("keeps a decline retryable against the same checkout and payment", async () => {
     serve();
@@ -1036,6 +1210,11 @@ describe("tournament checkout page", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2030-04-20T14:10:01Z"));
     serve();
+    server.use(
+      http.get("*/v1/tournaments/:tournamentId/checkouts/:checkoutId", () =>
+        HttpResponse.json({ ...checkout, remaining_seconds: 0 }),
+      ),
+    );
     page.render(adapter());
 
     expect(await screen.findByText("Checkout expired")).toBeInTheDocument();
@@ -1050,8 +1229,13 @@ describe("tournament checkout page", () => {
 
   it("counts the final partial second and removes Pay at the exact local deadline", async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2030-04-20T14:09:59.500Z"));
+    vi.setSystemTime(new Date("2030-04-20T14:00:00Z"));
     serve();
+    server.use(
+      http.get("*/v1/tournaments/:tournamentId/checkouts/:checkoutId", () =>
+        HttpResponse.json({ ...checkout, remaining_seconds: 1 }),
+      ),
+    );
     renderWithRouterContext(
       <CheckoutPage
         tournamentId="tournament-1770"
@@ -1072,7 +1256,7 @@ describe("tournament checkout page", () => {
     expect(screen.getByRole("button", { name: /pay/i })).toBeEnabled();
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(499);
+      await vi.advanceTimersByTimeAsync(999);
     });
     expect(screen.getByRole("button", { name: /pay/i })).toBeEnabled();
 

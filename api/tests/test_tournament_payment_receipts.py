@@ -9,6 +9,7 @@ The email sender is the external boundary.  Admission, persistence, notification
 preferences, and identity lifecycle all remain real.
 """
 
+import asyncio
 import importlib
 import json
 import uuid
@@ -19,7 +20,7 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 from rq.job import JobStatus
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 import app.tournament_payment_reconciliation as payment_reconciliation
@@ -143,6 +144,7 @@ async def _settled_checkout(
     mixed: bool = False,
     previous_receipt_email: str | None = None,
     provider: FakePaymentProvider | None = None,
+    payer_email: str = "Payer@Example.com",
 ) -> tuple[Any, Any, list[Any], dict[str, Any], TournamentPaymentReceipt | None]:
     provider = provider or FakePaymentProvider()
     capacities = (1, 1) if mixed else None
@@ -155,7 +157,7 @@ async def _settled_checkout(
         fees=tuple(Decimal(value) for value in fees),
         capacities=capacities,
     )
-    payer.email = "Payer@Example.com"
+    payer.email = payer_email
     payer.confirmed_at = datetime.now(UTC)
     if mixed:
         other = await make_user(db, f"receipt-capacity-{uuid.uuid4().hex[:8]}")
@@ -849,6 +851,142 @@ async def test_receipt_jobs_carry_only_an_id_and_account_erasure_clears_pii(
     assert payment.receipt_email is None
     assert payment.provider_payment_id is not None
     assert payment.amount_cents == 1234
+
+
+async def test_account_erasure_serializes_with_concurrent_receipt_delivery(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payer, _, _, _, receipt = await _settled_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        receipt_email="erase-delivery-race@example.net",
+    )
+    assert receipt is not None
+    receipt_id = receipt.id
+    payer_id = payer.id
+    sender = RecordingReceiptSender()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with sessions() as eraser, sessions() as worker:
+        eraser_pid = await eraser.scalar(text("SELECT pg_backend_pid()"))
+        worker_pid = await worker.scalar(text("SELECT pg_backend_pid()"))
+        await _receipt_service().erase_tournament_receipt_pii_for_account(
+            eraser, payer_id
+        )
+
+        async def deliver() -> TournamentPaymentReceipt:
+            result = await _receipt_service().attempt_tournament_receipt_delivery(
+                worker, receipt_id, sender=sender
+            )
+            await worker.commit()
+            return result
+
+        delivery = asyncio.create_task(deliver())
+        blocked = False
+        try:
+            async with asyncio.timeout(5):
+                while not delivery.done():
+                    blockers = await db_session.scalar(
+                        text("SELECT pg_blocking_pids(:pid)"), {"pid": worker_pid}
+                    )
+                    if eraser_pid in blockers:
+                        blocked = True
+                        break
+                    await asyncio.sleep(0.01)
+
+            assert blocked, (
+                "receipt delivery reached the sender before account erasure "
+                f"committed: {sender.sent}"
+            )
+            await eraser.commit()
+            delivered = await delivery
+        finally:
+            if not delivery.done():
+                delivery.cancel()
+            await asyncio.gather(delivery, return_exceptions=True)
+
+    assert sender.sent == []
+    assert delivered.state is TournamentReceiptState.canceled
+    assert delivered.recipient_email is None
+
+
+async def test_survivor_erasure_scrubs_receipt_pii_for_every_historical_payer(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Erasing the survivor owns receipt PII inherited through the full merge chain."""
+    settled = []
+    for index, address in enumerate(
+        [
+            "origin-receipt@example.net",
+            "middle-receipt@example.net",
+            "survivor-receipt@example.net",
+        ]
+    ):
+        api_client.cookies.clear()
+        settled.append(
+            await _settled_checkout(
+                api_client,
+                db_session,
+                monkeypatch,
+                receipt_email=address,
+                provider=FakePaymentProvider(f"pi_reverse_merge_erasure_{index}"),
+                payer_email=f"reverse-merge-payer-{index}@example.net",
+            )
+        )
+
+    origin, middle, survivor = [item[0] for item in settled]
+    receipts = [item[4] for item in settled]
+    assert all(receipt is not None for receipt in receipts)
+    payments = [
+        await db_session.scalar(
+            select(TournamentPayment).where(
+                TournamentPayment.checkout_id == uuid.UUID(item[3]["id"])
+            )
+        )
+        for item in settled
+    ]
+    assert all(payment is not None for payment in payments)
+
+    merged_at = datetime.now(UTC)
+    origin.merged_into_user_id = middle.id
+    origin.merged_at = merged_at
+    middle.merged_into_user_id = survivor.id
+    middle.merged_at = merged_at
+    await db_session.commit()
+
+    await erase_account(db_session, survivor.id)
+    await db_session.commit()
+    for payment in payments:
+        assert payment is not None
+        await db_session.refresh(payment)
+    for receipt in receipts:
+        assert receipt is not None
+        await db_session.refresh(receipt)
+
+    assert [payment.receipt_email for payment in payments if payment is not None] == [
+        None,
+        None,
+        None,
+    ]
+    assert [
+        payment.receipt_sync_pending for payment in payments if payment is not None
+    ] == [True, True, True]
+    assert [receipt.recipient_email for receipt in receipts if receipt is not None] == [
+        None,
+        None,
+        None,
+    ]
+    assert [receipt.state for receipt in receipts if receipt is not None] == [
+        TournamentReceiptState.canceled,
+        TournamentReceiptState.canceled,
+        TournamentReceiptState.canceled,
+    ]
 
 
 @pytest.mark.parametrize("provider_binding", ["bound", "uncertain"])

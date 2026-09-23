@@ -749,96 +749,122 @@ async def replay_unprocessed_provider_events(db: AsyncSession) -> int:
 
 async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) -> int:
     """Retrieve provider truth without holding database or capacity locks."""
-    active_checkout = TournamentPayment.checkout.has(
-        TournamentCheckout.status == TournamentCheckoutStatus.active
-    )
-    active_checkout_with_active_payer = TournamentPayment.checkout.has(
+    # Keep the minute sweep proportional to unresolved work. Payment-local
+    # markers, refund allocation outputs, and stale active-checkout repairs have
+    # different bounded indexes; combining them into one large OR would force
+    # PostgreSQL back through retained terminal history. Candidate discovery is
+    # read-only. Existing per-payment reloads below retain the authoritative lock
+    # order and revalidate every candidate before mutation.
+    local_marker = or_(
+        TournamentPayment.state.in_(
+            [
+                TournamentPaymentState.preparing,
+                TournamentPaymentState.ready,
+                TournamentPaymentState.action_required,
+                TournamentPaymentState.checking,
+            ]
+        ),
         and_(
-            TournamentCheckout.status == TournamentCheckoutStatus.active,
-            select(User.id)
-            .where(
-                User.id == TournamentCheckout.payer_account_id,
-                User.is_active,
-            )
-            .exists(),
+            TournamentPayment.state == TournamentPaymentState.expired,
+            TournamentPayment.provider_payment_id.is_not(None),
+        ),
+        # A create can be accepted remotely while a concurrent request
+        # materializes local expiry/cancellation. The pre-I/O marker keeps that
+        # unbound aggregate discoverable.
+        and_(
+            TournamentPayment.provider_payment_id.is_(None),
+            TournamentPayment.provider_status == IN_FLIGHT_CREATE_PROVIDER_STATUS,
+        ),
+        and_(
+            TournamentPayment.state == TournamentPaymentState.succeeded,
+            or_(
+                TournamentPayment.receipt_sync_pending.is_(True),
+                TournamentPayment.settlement_notified_at.is_(None),
+            ),
+        ),
+        and_(
+            TournamentPayment.state == TournamentPaymentState.failed,
+            or_(
+                TournamentPayment.receipt_sync_pending.is_(True),
+                and_(
+                    TournamentPayment.provider_status == "create_rejected",
+                    TournamentPayment.attention_notified_state.is_distinct_from(
+                        "create_rejected"
+                    ),
+                ),
+                and_(
+                    TournamentPayment.provider_mismatch_at.is_not(None),
+                    TournamentPayment.attention_notified_state.is_distinct_from(
+                        "provider_mismatch"
+                    ),
+                ),
+            ),
+        ),
+        and_(
+            TournamentPayment.state == TournamentPaymentState.canceled,
+            TournamentPayment.provider_payment_id.is_not(None),
+            TournamentPayment.receipt_sync_pending.is_(True),
+        ),
+    )
+    local_ids = set(
+        await db.scalars(
+            select(TournamentPayment.id)
+            .where(local_marker)
+            .order_by(TournamentPayment.created_at, TournamentPayment.id)
         )
     )
-    obligations = list(
+    refund_ids = set(
         await db.scalars(
-            select(TournamentPayment)
+            select(TournamentPaymentAllocation.payment_id)
+            .join(
+                TournamentPayment,
+                TournamentPayment.id == TournamentPaymentAllocation.payment_id,
+            )
             .where(
+                TournamentPaymentAllocation.outcome
+                == TournamentPaymentLineOutcome.refund_pending,
+                TournamentPayment.state == TournamentPaymentState.succeeded,
+                TournamentPayment.attention_notified_state.is_distinct_from(
+                    "refund_pending"
+                ),
+            )
+        )
+    )
+    active_repair_ids = set(
+        await db.scalars(
+            select(TournamentPayment.id)
+            .join(
+                TournamentCheckout,
+                TournamentCheckout.id == TournamentPayment.checkout_id,
+            )
+            .join(User, User.id == TournamentCheckout.payer_account_id)
+            .where(
+                TournamentCheckout.status == TournamentCheckoutStatus.active,
                 or_(
-                    TournamentPayment.state.in_(
-                        [
-                            TournamentPaymentState.preparing,
-                            TournamentPaymentState.ready,
-                            TournamentPaymentState.action_required,
-                            TournamentPaymentState.checking,
-                        ]
-                    ),
-                    and_(
-                        TournamentPayment.state == TournamentPaymentState.expired,
-                        TournamentPayment.provider_payment_id.is_not(None),
-                    ),
-                    # A create can be accepted remotely while a concurrent
-                    # request materializes local expiry/cancellation.  The
-                    # pre-I/O marker keeps that unbound aggregate discoverable.
-                    and_(
-                        TournamentPayment.provider_payment_id.is_(None),
-                        TournamentPayment.provider_status
-                        == IN_FLIGHT_CREATE_PROVIDER_STATUS,
-                    ),
-                    and_(
-                        TournamentPayment.state == TournamentPaymentState.succeeded,
-                        or_(
-                            TournamentPayment.receipt_sync_pending.is_(True),
-                            TournamentPayment.settlement_notified_at.is_(None),
-                            and_(
-                                TournamentPayment.attention_notified_state.is_distinct_from(
-                                    "refund_pending"
-                                ),
-                                TournamentPayment.allocations.any(
-                                    TournamentPaymentAllocation.outcome
-                                    == TournamentPaymentLineOutcome.refund_pending
-                                ),
-                            ),
-                        ),
-                    ),
                     and_(
                         TournamentPayment.state == TournamentPaymentState.failed,
-                        or_(
-                            TournamentPayment.receipt_sync_pending.is_(True),
-                            and_(
-                                TournamentPayment.provider_status == "create_rejected",
-                                TournamentPayment.attention_notified_state.is_distinct_from(
-                                    "create_rejected"
-                                ),
-                            ),
-                            and_(
-                                TournamentPayment.provider_mismatch_at.is_not(None),
-                                or_(
-                                    TournamentPayment.attention_notified_state.is_distinct_from(
-                                        "provider_mismatch"
-                                    ),
-                                    active_checkout,
-                                ),
-                            ),
-                        ),
+                        TournamentPayment.provider_mismatch_at.is_not(None),
                     ),
                     and_(
                         TournamentPayment.state == TournamentPaymentState.canceled,
                         TournamentPayment.provider_payment_id.is_not(None),
-                        or_(
-                            TournamentPayment.receipt_sync_pending.is_(True),
-                            and_(
-                                TournamentPayment.provider_status
-                                == ProviderPaymentStatus.canceled,
-                                active_checkout_with_active_payer,
-                            ),
-                        ),
+                        TournamentPayment.provider_status
+                        == ProviderPaymentStatus.canceled,
+                        User.is_active,
                     ),
-                )
+                ),
             )
+            .order_by(
+                TournamentCheckout.entrant_player_id,
+                TournamentCheckout.tournament_id,
+            )
+        )
+    )
+    candidate_ids = local_ids | refund_ids | active_repair_ids
+    obligations = list(
+        await db.scalars(
+            select(TournamentPayment)
+            .where(TournamentPayment.id.in_(candidate_ids))
             .options(
                 selectinload(TournamentPayment.checkout).selectinload(
                     TournamentCheckout.tournament

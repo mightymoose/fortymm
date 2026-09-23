@@ -38,6 +38,29 @@ def test_deployed_payment_collection_requires_notification_email_dedup_secret(
         get_settings()
 
 
+@pytest.mark.parametrize("stripe_secret_key", [None, "", " \t"])
+@pytest.mark.parametrize("fortymm_dev", [None, "true"])
+def test_enabled_payment_collection_requires_nonblank_stripe_secret_key(
+    monkeypatch: pytest.MonkeyPatch,
+    stripe_secret_key: str | None,
+    fortymm_dev: str | None,
+) -> None:
+    """Every enabled runtime must fail at startup before it can accept a card."""
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", "true")
+    monkeypatch.setenv("NOTIFICATION_EMAIL_DEDUP_SECRET", "dedup-configured")
+    if stripe_secret_key is None:
+        monkeypatch.delenv("STRIPE_SECRET_KEY", raising=False)
+    else:
+        monkeypatch.setenv("STRIPE_SECRET_KEY", stripe_secret_key)
+    if fortymm_dev is None:
+        monkeypatch.delenv("FORTYMM_DEV", raising=False)
+    else:
+        monkeypatch.setenv("FORTYMM_DEV", fortymm_dev)
+
+    with pytest.raises(ValidationError, match="STRIPE_SECRET_KEY"):
+        get_settings()
+
+
 def test_payment_disabled_deployment_may_omit_notification_email_dedup_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -52,6 +52,7 @@ def _enable_payment_collection_for_existing_tests(monkeypatch):
     Tests for the fail-closed default delete or override this variable themselves.
     """
     monkeypatch.setenv("TOURNAMENT_PAYMENT_COLLECTION_ENABLED", "true")
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_configured")
 
 
 @pytest.fixture(autouse=True)

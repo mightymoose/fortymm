@@ -211,6 +211,27 @@ def _read(
     )
 
 
+def _read_unavailable_checkout(checkout: TournamentCheckout) -> TournamentPaymentRead:
+    """Project an authorized checkout without creating a payment obligation."""
+    return TournamentPaymentRead(
+        checkout_id=checkout.id,
+        payment_state=TournamentCheckoutPaymentState.unavailable,
+        client_secret=None,
+        receipt_email=None,
+        receipt_editable=False,
+        support_reference=None,
+        lines=[
+            TournamentPaymentLineRead(
+                event_id=line.event_id,
+                amount_cents=line.price_cents,
+                outcome=None,
+                refund_amount_cents=0,
+            )
+            for line in checkout.lines
+        ],
+    )
+
+
 async def _load(
     db: AsyncSession, tournament_id: uuid.UUID, checkout_id: uuid.UUID
 ) -> TournamentCheckout | None:
@@ -1152,17 +1173,25 @@ async def read_payment_status(
 ) -> TournamentPaymentRead:
     """Authorize, retrieve provider truth without locks, and reconcile it."""
     checkout = await _load(db, tournament_id, checkout_id)
-    if checkout is None or checkout.payment is None:
+    if checkout is None:
         raise PaymentNotFoundError()
     owns_historical_payment = await is_terminal_merge_survivor(
         db,
         historical_account_id=checkout.payer_account_id,
         candidate_account_id=actor.id,
     )
-    if not owns_historical_payment and not await user_has_permission(
+    can_view_payments = await user_has_permission(
         db, actor.id, PAYMENTS_VIEW_PERMISSION
-    ):
+    )
+    if not owns_historical_payment and not can_view_payments:
         raise PaymentNotFoundError()
+    if checkout.payment is None:
+        # The payer's 404 is the preparation handshake used by the browser.
+        # A payments.view operator may inspect the quote, but a read must never
+        # create the payer's provider obligation or expose payer-only controls.
+        if checkout.payer_account_id == actor.id or not can_view_payments:
+            raise PaymentNotFoundError()
+        return _read_unavailable_checkout(checkout)
     payment = checkout.payment
     if checkout.payer_account_id != actor.id:
         # Merge survivors and payments.view operators inherit recovery

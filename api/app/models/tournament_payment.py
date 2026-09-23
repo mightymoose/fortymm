@@ -75,10 +75,41 @@ class TournamentPayment(Base):
             "id", "checkout_id", name="uq_tournament_payments_id_checkout"
         ),
         UniqueConstraint("durable_identity", name="uq_tournament_payments_identity"),
-        UniqueConstraint(
-            "provider_payment_id", name="uq_tournament_payments_provider_payment"
+        # PostgreSQL UNIQUE already permits multiple NULLs. Keep only bound
+        # provider identities in the uniqueness index so unbound-create
+        # recovery can use its small ordered obligation index instead of an
+        # ever-growing all-NULL branch of this one.
+        Index(
+            "uq_tournament_payments_provider_payment",
+            "provider_payment_id",
+            unique=True,
+            postgresql_where=text("provider_payment_id IS NOT NULL"),
         ),
         Index("ix_tournament_payments_checkout_id", "checkout_id"),
+        Index(
+            "ix_tournament_payments_reconciliation_pending_created_at_id",
+            "created_at",
+            "id",
+            postgresql_where=text(
+                "state IN ('preparing', 'ready', 'action_required', 'checking') "
+                "OR (state = 'expired' AND provider_payment_id IS NOT NULL) "
+                "OR (provider_payment_id IS NULL "
+                "AND provider_status = 'create_in_flight') "
+                "OR (state = 'succeeded' "
+                "AND (receipt_sync_pending IS TRUE "
+                "OR settlement_notified_at IS NULL)) "
+                "OR (state = 'failed' "
+                "AND (receipt_sync_pending IS TRUE "
+                "OR (provider_status = 'create_rejected' "
+                "AND attention_notified_state IS DISTINCT FROM 'create_rejected') "
+                "OR (provider_mismatch_at IS NOT NULL "
+                "AND attention_notified_state IS DISTINCT FROM "
+                "'provider_mismatch'))) "
+                "OR (state = 'canceled' "
+                "AND provider_payment_id IS NOT NULL "
+                "AND receipt_sync_pending IS TRUE)"
+            ),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -176,6 +207,11 @@ class TournamentPaymentAllocation(Base):
             ["tournament_checkout_lines.id", "tournament_checkout_lines.checkout_id"],
             ondelete="RESTRICT",
             name="fk_tournament_payment_allocations_line_checkout",
+        ),
+        Index(
+            "ix_tournament_payment_allocations_refund_pending_payment_id",
+            "payment_id",
+            postgresql_where=text("outcome = 'refund_pending'"),
         ),
     )
 

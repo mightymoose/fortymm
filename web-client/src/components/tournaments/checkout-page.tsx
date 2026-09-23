@@ -103,6 +103,10 @@ function paymentPath(tournamentId: string, checkoutId: string) {
   }
 }
 
+function monotonicNow() {
+  return performance.now()
+}
+
 function paymentProjection(checkout: Checkout): Payment {
   return parsePayment({
     checkout_id: checkout.id,
@@ -189,7 +193,9 @@ function CheckoutPageContent({
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [authoritativePayment, setAuthoritativePayment] = useState<Payment | null>(null)
   const [statusUncertain, setStatusUncertain] = useState(false)
-  const [now, setNow] = useState(() => (injectedNow ?? Date.now)())
+  const countdownNow = injectedNow ?? monotonicNow
+  const [now, setNow] = useState(() => countdownNow())
+  const [checkoutDeadline, setCheckoutDeadline] = useState<number | null>(null)
   const adapter = injectedAdapter ?? stripeAdapter
   const loadKey = `${tournamentId}:${checkoutId}:${redirected}:${loadAttempt}`
 
@@ -214,6 +220,10 @@ function CheckoutPageContent({
         const loadedCheckout = checkoutWireSchema.parse(
           unwrap('load checkout', checkoutResult),
         ) as Checkout
+        // The server supplies the trusted duration. Anchor it to receipt on a
+        // monotonic local clock so device wall-clock skew or later clock
+        // corrections cannot lengthen or shorten the displayed hold.
+        const checkoutReceivedAt = countdownNow()
         if (!current) return
         const paymentResult = await api.GET(
           '/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment',
@@ -235,12 +245,17 @@ function CheckoutPageContent({
           const status = parsePayment(unwrap('check payment', paymentResult))
           loadedPayment =
             loadedCheckout.status === 'active' &&
+            status.receipt_editable &&
             (status.payment_state === 'ready' ||
               status.payment_state === 'action_required')
               ? await preparePayment()
               : status
         }
         if (!current) return
+        setNow(countdownNow())
+        setCheckoutDeadline(
+          checkoutReceivedAt + loadedCheckout.remaining_seconds * 1000,
+        )
         setCheckout(loadedCheckout)
         receiptForm.reset({ receiptEmail: loadedPayment.receipt_email ?? '' })
         setPayment(loadedPayment)
@@ -249,21 +264,20 @@ function CheckoutPageContent({
         if (current) setFailedLoadKey(loadKey)
       })
     return () => { current = false }
-  }, [checkoutId, loadAttempt, loadKey, receiptForm, redirected, tournamentId])
+  }, [checkoutId, countdownNow, loadAttempt, loadKey, receiptForm, redirected, tournamentId])
 
   useEffect(() => {
     if (injectedNow) return
-    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    const timer = window.setInterval(() => setNow(countdownNow()), 1000)
     return () => window.clearInterval(timer)
-  }, [injectedNow])
+  }, [countdownNow, injectedNow])
 
   useEffect(() => {
-    if (injectedNow || !checkout) return
-    const expiresAt = new Date(checkout.expires_at).getTime()
-    const delay = Math.max(0, expiresAt - Date.now())
-    const timer = window.setTimeout(() => setNow(Date.now()), delay)
+    if (injectedNow || checkoutDeadline === null) return
+    const delay = Math.max(0, checkoutDeadline - countdownNow())
+    const timer = window.setTimeout(() => setNow(countdownNow()), delay)
     return () => window.clearTimeout(timer)
-  }, [checkout, injectedNow])
+  }, [checkoutDeadline, countdownNow, injectedNow])
 
   const confirm = receiptForm.handleSubmit(async ({ receiptEmail }) => {
       if (!adapter || !payment?.client_secret) return
@@ -335,6 +349,7 @@ function CheckoutPageContent({
                 ),
               ),
             ) as Checkout
+            const checkoutReceivedAt = countdownNow()
             const refreshedPaymentResult = await api.GET(
               '/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment',
               { params: { path: paymentPath(tournamentId, checkoutId) } },
@@ -351,6 +366,10 @@ function CheckoutPageContent({
               receipt_editable: false,
             }
             setCheckout(refreshedCheckout)
+            setNow(countdownNow())
+            setCheckoutDeadline(
+              checkoutReceivedAt + refreshedCheckout.remaining_seconds * 1000,
+            )
             setPayment(nonPayablePayment)
             setAuthoritativePayment(nonPayablePayment)
             receiptForm.reset({
@@ -377,8 +396,8 @@ function CheckoutPageContent({
       }
   })
 
-  const remainingSeconds = checkout
-    ? Math.max(0, Math.ceil((new Date(checkout.expires_at).getTime() - now) / 1000))
+  const remainingSeconds = checkoutDeadline !== null
+    ? Math.max(0, Math.ceil((checkoutDeadline - now) / 1000))
     : 0
   const deadline = `${String(Math.floor(remainingSeconds / 60)).padStart(2, '0')}:${String(remainingSeconds % 60).padStart(2, '0')} remaining`
   const displayedPayment = authoritativePayment ?? payment
@@ -390,9 +409,11 @@ function CheckoutPageContent({
     state === 'canceled'
   const locallyExpired =
     !!checkout &&
-    new Date(checkout.expires_at).getTime() <= now &&
+    checkoutDeadline !== null &&
+    checkoutDeadline <= now &&
     !paymentIsTerminal
   const receiptIsEditable =
+    state !== 'unavailable' &&
     displayedPayment?.receipt_editable !== false &&
     checkout?.status === 'active' && !locallyExpired && !paymentIsTerminal
   const lineOutcomes = useMemo(
@@ -534,6 +555,8 @@ function CheckoutPageContent({
             ? 'Payment confirmation status is uncertain. You can safely leave this page and check your dashboard later.'
             : 'You can safely leave this page and check your dashboard later.'}
         />
+      ) : state === 'unavailable' ? (
+        <StateMessage title="Payment unavailable" body="No payment action is available for this checkout." />
       ) : locallyExpired ? (
         <StateMessage title="Checkout expired" body="Your reservation has ended. Start a new checkout from the tournament." />
       ) : state === 'ready' && !displayedPayment?.client_secret ? (

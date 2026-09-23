@@ -325,6 +325,63 @@ describe('EventsTab', () => {
       expect(screen.queryByText('Your held places')).toBeNull()
     })
 
+    it.each([
+      'unavailable',
+      'preparing',
+      'ready',
+      'checking',
+      'action_required',
+      'succeeded',
+      'failed',
+      'expired',
+      'canceled',
+    ] as const)(
+      'preserves active checkout controls when its payment state is %s',
+      async (paymentState) => {
+        const eventId = '00000000-0000-4000-8000-000000000021'
+        server.use(
+          http.get('*/v1/tournaments/:tournamentId/checkouts/current', () =>
+            HttpResponse.json({
+              id: '00000000-0000-4000-8000-000000000022',
+              request_id: '00000000-0000-4000-8000-000000000023',
+              tournament_id: '00000000-0000-4000-8000-000000000020',
+              registration_generation: 0,
+              status: 'active',
+              payment_state: paymentState,
+              currency: 'USD',
+              total_cents: 4500,
+              created_at: new Date().toISOString(),
+              expires_at: new Date(Date.now() + 600_000).toISOString(),
+              remaining_seconds: 600,
+              lines: [
+                {
+                  event_id: eventId,
+                  event_name: 'Open Singles',
+                  price_cents: 4500,
+                },
+              ],
+            }),
+          ),
+        )
+        eventsTabPage.render({
+          tournament: buildTournament({
+            events: [
+              buildEvent({ id: eventId, name: 'Open Singles', entryFee: 45 }),
+            ],
+          }),
+        })
+
+        expect(await screen.findByText('Your held places')).toBeInTheDocument()
+        expect(
+          screen.getByRole('link', { name: 'Continue to payment' }),
+        ).toBeInTheDocument()
+        expect(
+          screen.getByRole('button', { name: 'Change selection' }),
+        ).toBeEnabled()
+        expect(screen.getByRole('button', { name: 'Release hold' })).toBeEnabled()
+      },
+    )
+
     it('refreshes checkout and tournament state when the hold expires', async () => {
       const eventId = '00000000-0000-4000-8000-000000000031'
       let reads = 0

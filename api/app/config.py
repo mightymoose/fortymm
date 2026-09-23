@@ -245,6 +245,14 @@ class Settings(BaseSettings):
             )
         if (
             self.tournament_payment_collection_enabled
+            and not self.stripe_secret_key.strip()
+        ):
+            raise ValueError(
+                "STRIPE_SECRET_KEY is required when "
+                "TOURNAMENT_PAYMENT_COLLECTION_ENABLED is true."
+            )
+        if (
+            self.tournament_payment_collection_enabled
             and not self.notification_email_dedup_secret.strip()
             and os.environ.get("FORTYMM_DEV", "").lower() not in {"1", "true", "yes"}
         ):

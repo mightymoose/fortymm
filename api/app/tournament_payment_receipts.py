@@ -19,6 +19,7 @@ from sqlalchemy.orm import selectinload
 from app import email
 from app import queue as queue_module
 from app.models import (
+    Account,
     EventLifecycleHistory,
     EventLifecycleState,
     Tournament,
@@ -326,6 +327,21 @@ async def erase_tournament_receipt_pii_for_account(
     db: AsyncSession, account_id: uuid.UUID, *, now: datetime | None = None
 ) -> int:
     now = now or datetime.now(UTC)
+    # Financial rows retain the account that originally created the checkout.
+    # Erasing the live survivor therefore owns receipt PII across its complete
+    # reverse merge chain. UNION (rather than UNION ALL) makes even a corrupt
+    # cycle terminate without expanding beyond connected historical identities.
+    payer_identities = (
+        select(Account.id)
+        .where(Account.id == account_id)
+        .cte("receipt_payer_identities", recursive=True)
+    )
+    payer_identities = payer_identities.union(
+        select(Account.id).join(
+            payer_identities,
+            Account.merged_into_user_id == payer_identities.c.id,
+        )
+    )
     payments = list(
         await db.scalars(
             select(TournamentPayment)
@@ -333,9 +349,35 @@ async def erase_tournament_receipt_pii_for_account(
                 TournamentCheckout,
                 TournamentCheckout.id == TournamentPayment.checkout_id,
             )
-            .where(TournamentCheckout.payer_account_id == account_id)
+            .join(
+                payer_identities,
+                payer_identities.c.id == TournamentCheckout.payer_account_id,
+            )
+            .order_by(TournamentPayment.id)
+            .with_for_update(of=TournamentPayment)
+            .execution_options(populate_existing=True)
         )
     )
+    # Settlement owns receipt creation through a locked payment. Take every
+    # payment lock before any receipt lock to preserve that global order, then
+    # keep delivery from reading an address until this erasure commits.
+    receipts_by_payment = {
+        receipt.payment_id: receipt
+        for receipt in await db.scalars(
+            select(TournamentPaymentReceipt)
+            .where(
+                TournamentPaymentReceipt.payment_id.in_(
+                    [payment.id for payment in payments]
+                )
+            )
+            .order_by(
+                TournamentPaymentReceipt.payment_id,
+                TournamentPaymentReceipt.id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    }
     changed = 0
     for payment in payments:
         if payment.receipt_sync_failed_at is not None:
@@ -351,11 +393,7 @@ async def erase_tournament_receipt_pii_for_account(
             payment.receipt_sync_pending = True
             payment.receipt_sync_failed_at = None
             changed += 1
-        receipt = await db.scalar(
-            select(TournamentPaymentReceipt).where(
-                TournamentPaymentReceipt.payment_id == payment.id
-            )
-        )
+        receipt = receipts_by_payment.get(payment.id)
         if receipt is not None and receipt.recipient_email is not None:
             receipt.recipient_email = None
             receipt.pii_erased_at = now

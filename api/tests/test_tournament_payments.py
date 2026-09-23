@@ -475,6 +475,68 @@ async def test_payments_view_grant_is_read_only_for_another_payers_payment(
     assert provider.receipt_updates == []
 
 
+async def test_payments_view_reads_unprepared_checkout_without_creating_payment(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    _, tournament, checkout = await _paid_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        payer_email="payer@example.com",
+    )
+    provider = FakePaymentProvider()
+    _install_provider(provider)
+    url = _payment_url(tournament, checkout)
+    operator = await make_user(
+        db_session, f"unprepared-payment-operator-{uuid.uuid4().hex[:8]}"
+    )
+    await grant_permissions(db_session, operator, ["payments.view"])
+
+    fastapi_app.dependency_overrides[get_current_user] = lambda: operator
+    try:
+        read = await api_client.get(url)
+        refused_prepare = await api_client.post(url, json={})
+    finally:
+        fastapi_app.dependency_overrides.pop(get_current_user, None)
+
+    assert read.status_code == 200, read.text
+    assert read.json() == {
+        "checkout_id": checkout["id"],
+        "payment_state": "unavailable",
+        "client_secret": None,
+        "receipt_email": None,
+        "receipt_editable": False,
+        "support_reference": None,
+        "lines": [
+            {
+                "event_id": checkout["lines"][0]["event_id"],
+                "amount_cents": 2345,
+                "outcome": None,
+                "refund_amount_cents": 0,
+            }
+        ],
+    }
+    assert refused_prepare.status_code == 404
+    assert provider.creates == []
+    assert (
+        await db_session.scalar(
+            select(TournamentPayment).where(
+                TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+            )
+        )
+        is None
+    )
+
+    payer_prepare = await api_client.post(url, json={})
+
+    assert payer_prepare.status_code == 200, payer_prepare.text
+    assert payer_prepare.json()["payment_state"] == "ready"
+    assert payer_prepare.json()["client_secret"] == provider.intent.client_secret
+    assert len(provider.creates) == 1
+
+
 async def test_concrete_checking_response_emits_one_attention_transition(
     api_client: AsyncClient,
     db_session: AsyncSession,
