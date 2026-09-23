@@ -93,7 +93,7 @@ class SessionOwner(
         if (!canStartNewGuest()) return
         val job = synchronized(bootstrapLock) {
             bootstrapJob?.takeIf { it.isActive }
-                ?: applicationScope.async { clearSessionAndBootstrap() }
+                ?: applicationScope.async { startNewGuestOnce() }
                     .also { bootstrapJob = it }
         }
         job.await()
@@ -256,7 +256,7 @@ class SessionOwner(
         mutableState.value is SessionState.UnreadableStorage ||
             mutableState.value is SessionState.SessionEnded
 
-    private suspend fun clearSessionAndBootstrap() {
+    private suspend fun startNewGuestOnce() {
         val recoveryState = mutableState.value
         if (!canStartNewGuest()) return
         mutableState.value = recoveryState.withNewGuest(NewGuestStatus.Starting)
