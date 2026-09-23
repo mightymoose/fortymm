@@ -316,6 +316,44 @@ class SessionOwnerTest {
     }
 
     @Test
+    fun failedNewGuestStartStaysOnTheRecoveryScreenAndCanBeRetried() = runBlocking {
+        val endedReason = SessionEndReason(message = "You've been signed out.", email = null)
+        val credentialStore = MemoryCredentialStore().apply { sessionEndReason = endedReason }
+        val owner = SessionOwner(
+            apiClient = FortyMMApiClient(server.url("/")),
+            credentialStore = credentialStore,
+        )
+        owner.bootstrap()
+        server.enqueue(MockResponse().setResponseCode(503).setBody("""{"detail":"unavailable"}"""))
+
+        owner.startNewGuest()
+
+        assertEquals(
+            SessionState.SessionEnded(
+                endedReason.message,
+                endedReason.email,
+                newGuest = NewGuestStatus.Failed,
+            ),
+            owner.state.value,
+        )
+        assertEquals(endedReason, credentialStore.sessionEndReason)
+
+        val userId = UUID.fromString("e3c1c0f4-7a51-4c4e-8d51-0f7c2b9f6a10")
+        server.enqueue(
+            sessionResponse(userId, "retried-new-guest")
+                .addHeader("Set-Cookie", "session=retried-new-guest-session; Path=/; HttpOnly")
+                .addHeader("Set-Cookie", "csrf_token=retried-new-guest-csrf; Path=/"),
+        )
+        owner.startNewGuest()
+
+        assertEquals(
+            SessionState.Ready(SessionUser(userId, "retried-new-guest")),
+            owner.state.value,
+        )
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
     fun failedCredentialWriteRetrySavesReceivedGuestWithoutCreatingAnotherOne() = runBlocking {
         val userId = UUID.fromString("9a0b75b9-1b31-4e50-97dc-dd7c3017cbdc")
         val credentialStore = MemoryCredentialStore(failedSavesRemaining = 1)
