@@ -18,8 +18,9 @@ from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from rq.job import JobStatus
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 import app.tournament_payment_reconciliation as payment_reconciliation
 from app.identity_lifecycle import erase_account
@@ -42,7 +43,10 @@ from app.models import (
 from app.notifications import jobs as notification_jobs
 from app.notifications.service import NotificationService
 from app.notifications.taxonomy import NotificationCategory, NotificationChannel
-from app.payment_provider import PaymentProviderNotFoundError
+from app.payment_provider import (
+    PaymentProviderCreateRejectedError,
+    PaymentProviderNotFoundError,
+)
 from app.schemas.notification import NotificationJob
 from app.sessions import get_current_user
 from app.tournament_payment_reconciliation import reconcile_stuck_payments
@@ -237,6 +241,181 @@ async def test_settlement_without_receipt_destination_creates_no_email_work(
     )
 
     assert receipt is None
+
+
+async def test_receipt_recovery_coalesces_backlog_and_recovers_deleted_queue_job(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_email_queue,
+) -> None:
+    _, _, _, _, receipt = await _settled_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        receipt_email="recover-queue-loss@example.net",
+    )
+    assert receipt is not None
+    fake_email_queue._is_async = True
+
+    assert await _receipt_service().enqueue_due_tournament_receipts(db_session) == 1
+    assert await _receipt_service().enqueue_due_tournament_receipts(db_session) == 1
+    queued = fake_email_queue.get_jobs()
+    assert len(queued) == 1
+    assert queued[0].args == (str(receipt.id),)
+
+    # A stable queued identity must coalesce an ordinary worker backlog, but a
+    # genuinely lost Redis job must not suppress the durable recovery scan.
+    fake_email_queue.remove(queued[0])
+    queued[0].delete()
+    assert fake_email_queue.get_jobs() == []
+
+    assert await _receipt_service().enqueue_due_tournament_receipts(db_session) == 1
+    recovered = fake_email_queue.get_jobs()
+    assert len(recovered) == 1
+    assert recovered[0].args == (str(receipt.id),)
+
+
+async def test_receipt_recovery_requeues_orphaned_queued_job_hash(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_email_queue,
+) -> None:
+    _, _, _, _, receipt = await _settled_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        receipt_email="recover-orphaned-job@example.net",
+    )
+    assert receipt is not None
+    fake_email_queue._is_async = True
+
+    assert await _receipt_service().enqueue_due_tournament_receipts(db_session) == 1
+    [orphaned] = fake_email_queue.get_jobs()
+    fake_email_queue.remove(orphaned)
+
+    assert fake_email_queue.get_jobs() == []
+    assert orphaned.get_status(refresh=True) is JobStatus.QUEUED
+
+    assert await _receipt_service().enqueue_due_tournament_receipts(db_session) == 1
+    recovered = fake_email_queue.get_jobs()
+    assert len(recovered) == 1
+    assert recovered[0].args == (str(receipt.id),)
+
+
+async def test_started_receipt_delivery_schedules_its_transient_failure_retry(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    engine: AsyncEngine,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_email_queue,
+) -> None:
+    _, _, _, _, receipt = await _settled_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        receipt_email="retry-from-worker@example.net",
+    )
+    assert receipt is not None
+    fake_email_queue._is_async = True
+    service = _receipt_service()
+
+    assert service.enqueue_tournament_receipt(receipt.id) is True
+    [started] = fake_email_queue.get_jobs()
+    fake_email_queue.remove(started)
+    started.set_status(JobStatus.STARTED)
+
+    async def transient_failure(_sender: object, **_kwargs: str) -> None:
+        raise service.ReceiptDeliveryError("smtp timeout", retryable=True)
+
+    monkeypatch.setattr(service._EmailSender, "send", transient_failure)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    await service._deliver(sessions, receipt.id)
+    await db_session.refresh(receipt)
+
+    assert receipt.state is TournamentReceiptState.retry_scheduled
+    assert receipt.next_attempt_at is not None
+    assert fake_email_queue.scheduled_job_registry.count == 1
+
+
+async def test_due_retry_recovers_scheduled_job_without_rq_scheduler(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_email_queue,
+) -> None:
+    _, _, _, _, receipt = await _settled_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        receipt_email="due-without-scheduler@example.net",
+    )
+    assert receipt is not None
+    due_at = datetime.now(UTC) - timedelta(minutes=1)
+    receipt.state = TournamentReceiptState.retry_scheduled
+    receipt.next_attempt_at = due_at
+    await db_session.commit()
+    fake_email_queue._is_async = True
+    service = _receipt_service()
+
+    assert (
+        service.enqueue_tournament_receipt(
+            receipt.id,
+            delay=timedelta(),
+            attempt_at=due_at,
+        )
+        is True
+    )
+    assert fake_email_queue.scheduled_job_registry.count == 1
+    assert fake_email_queue.get_jobs() == []
+
+    assert (
+        await service.enqueue_due_tournament_receipts(
+            db_session,
+            now=datetime.now(UTC),
+        )
+        == 1
+    )
+    assert fake_email_queue.scheduled_job_registry.count == 0
+    runnable = fake_email_queue.get_jobs()
+    assert len(runnable) == 1
+    assert runnable[0].args == (str(receipt.id),)
+
+
+async def test_receipt_recovery_requeues_when_job_hash_disappears_during_status_read(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_email_queue,
+) -> None:
+    _, _, _, _, receipt = await _settled_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        receipt_email="hash-race-recovery@example.net",
+    )
+    assert receipt is not None
+    fake_email_queue._is_async = True
+    service = _receipt_service()
+
+    assert await service.enqueue_due_tournament_receipts(db_session) == 1
+    [queued] = fake_email_queue.get_jobs()
+    original_fetch = fake_email_queue.fetch_job
+
+    def fetch_then_lose_hash(job_id: str):
+        job = original_fetch(job_id)
+        assert job is not None
+        job.delete()
+        return job
+
+    monkeypatch.setattr(fake_email_queue, "fetch_job", fetch_then_lose_hash)
+
+    assert await service.enqueue_due_tournament_receipts(db_session) == 1
+    recovered = fake_email_queue.get_jobs()
+    assert len(recovered) == 1
+    assert recovered[0].args == (str(receipt.id),)
 
 
 async def test_transient_receipt_failure_retries_without_changing_money_or_admission(
@@ -732,6 +911,51 @@ async def test_account_erasure_durably_clears_nonterminal_provider_receipt_pii(
     assert reconciled == 1
     assert provider.receipt_updates[-1] == (provider.intent.id, None)
     assert payment.receipt_sync_pending is False
+
+
+async def test_account_erasure_discharges_receipt_clear_for_rejected_provider_create(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RejectedCreateProvider(FakePaymentProvider):
+        async def create_payment_intent(self, request: object) -> Any:
+            raise PaymentProviderCreateRejectedError("provider rejected create")
+
+    provider = RejectedCreateProvider("pi_never_created")
+    payer, tournament, _, checkout = await _prepared_checkout(
+        api_client,
+        db_session,
+        monkeypatch,
+        provider,
+        prepare_payment=False,
+    )
+    rejected = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts/{checkout['id']}/payment",
+        json={"receipt_email": "erase-rejected@example.net"},
+    )
+    assert rejected.status_code == 409, rejected.text
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None
+    assert payment.state is TournamentPaymentState.failed
+    assert payment.provider_status == "create_rejected"
+    assert payment.provider_payment_id is None
+
+    await erase_account(db_session, payer.id)
+    await db_session.commit()
+    await db_session.refresh(payment)
+    assert payment.receipt_email is None
+    assert payment.receipt_sync_pending is True
+
+    assert await reconcile_stuck_payments(db_session, provider) == 1
+    await db_session.refresh(payment)
+
+    assert payment.receipt_sync_pending is False
+    assert await reconcile_stuck_payments(db_session, provider) == 0
 
 
 async def test_erasure_clears_provider_receipt_pii_before_canceling_bound_intent(

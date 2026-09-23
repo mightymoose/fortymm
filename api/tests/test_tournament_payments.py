@@ -37,11 +37,13 @@ from app.models import (
     TournamentEventDrawSettings,
     TournamentPayment,
     TournamentPaymentState,
+    TournamentProviderEvent,
     TournamentStatus,
     User,
 )
 from app.notifications.taxonomy import NotificationCategory
 from app.payment_provider import (
+    PaymentProviderConfigurationError,
     PaymentProviderNotFoundError,
     PaymentProviderReceiptUpdateRejectedError,
     PaymentProviderUncertainError,
@@ -276,6 +278,80 @@ def _payment_url(tournament: Tournament, checkout: dict[str, Any]) -> str:
 def _install_provider(provider: FakePaymentProvider) -> None:
     """Override the provider dependency without coupling to its module location."""
     fastapi_app.dependency_overrides[get_payment_provider] = lambda: provider
+
+
+async def test_verified_event_without_local_payment_is_retired_after_replay(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    provider = BlockingNotFoundProvider()
+    provider.webhook_intent = ProviderPaymentIntent(
+        id=f"pi_other_deployment_{uuid.uuid4().hex}",
+        client_secret="",
+        status=ProviderPaymentStatus.succeeded,
+        amount_cents=2345,
+        currency="USD",
+        merchant_account_id=str(uuid.uuid4()),
+        livemode=False,
+        durable_identity=f"fortymm_other_deployment_{uuid.uuid4().hex}",
+    )
+    _install_provider(provider)
+    event_id = f"evt_other_deployment_{uuid.uuid4().hex}"
+
+    accepted = await api_client.post(
+        "/v1/webhooks/stripe",
+        content=event_id,
+        headers={"stripe-signature": "test-valid-signature"},
+    )
+
+    assert accepted.status_code == 200, accepted.text
+    row = await db_session.scalar(
+        select(TournamentProviderEvent).where(
+            TournamentProviderEvent.provider_event_id == event_id
+        )
+    )
+    assert row is not None
+
+    await payment_reconciliation.replay_unprocessed_provider_events(db_session)
+    await db_session.refresh(row)
+
+    assert row.processed_at is not None
+
+
+async def test_unbound_create_recovers_after_temporary_provider_configuration_failure(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    _, tournament, checkout = await _paid_checkout(api_client, db_session, monkeypatch)
+    provider = FakePaymentProvider()
+    provider.create_error = TimeoutError("create response was lost")
+    _install_provider(provider)
+
+    uncertain = await api_client.post(_payment_url(tournament, checkout), json={})
+    assert uncertain.status_code == 200, uncertain.text
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == uuid.UUID(checkout["id"])
+        )
+    )
+    assert payment is not None
+    assert payment.provider_payment_id is None
+
+    provider.create_error = None
+    provider.retrieve_error = PaymentProviderConfigurationError(
+        "Stripe credentials are temporarily unavailable"
+    )
+    await reconcile_stuck_payments(db_session, provider)
+
+    provider.retrieve_error = PaymentProviderNotFoundError()
+    await reconcile_stuck_payments(db_session, provider)
+    await db_session.refresh(payment)
+
+    assert payment.provider_mismatch_at is None
+    assert payment.provider_payment_id == provider.intent.id
+    assert payment.state is TournamentPaymentState.ready
+    assert len(provider.creates) == 2
 
 
 async def test_prepare_uses_server_owned_card_only_contract_and_resumes_one_intent(

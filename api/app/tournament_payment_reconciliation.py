@@ -120,6 +120,8 @@ async def _refund(
     amount_cents: int,
     reason: str,
 ) -> None:
+    # This slice records the durable compensating obligation only. Provider
+    # refund execution and its recovery/operator lifecycle belong to #1772.
     line_id = allocation.checkout_line_id if allocation is not None else None
     existing = await db.scalar(
         select(TournamentRefundObligation).where(
@@ -708,8 +710,13 @@ async def replay_unprocessed_provider_events(db: AsyncSession) -> int:
                 ),
                 evidence_at=row.provider_created_at,
             )
-            row.processed_at = await _database_now(db)
-            processed += 1
+        # A verified event gets one deferred association attempt. If no local
+        # aggregate exists then it belongs to another deployment/account scope,
+        # or raced ahead of a local create whose durable marker can recover by
+        # provider lookup independently. Retire it so every sweep remains
+        # bounded instead of rescanning an immutable unmatched event forever.
+        row.processed_at = await _database_now(db)
+        processed += 1
     await db.commit()
     return processed
 
@@ -801,6 +808,18 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
             TournamentPaymentState.failed,
             TournamentPaymentState.canceled,
         }:
+            if (
+                payment.state is TournamentPaymentState.failed
+                and payment.provider_status == "create_rejected"
+                and payment.provider_payment_id is None
+                and payment.receipt_sync_pending
+            ):
+                # An authoritative create refusal proves no provider object
+                # exists. Account erasure can still leave a provider-clear
+                # marker on the local aggregate; discharge that impossible
+                # copy operation instead of sweeping it forever.
+                payment.receipt_sync_pending = False
+                payment.receipt_sync_failed_at = None
             if payment.receipt_sync_pending and payment.provider_payment_id is not None:
                 try:
                     await _sync_provider_receipt(
@@ -831,7 +850,7 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
         except (
             PaymentProviderConfigurationError,
             PaymentProviderResponseInvalidError,
-        ):
+        ) as error:
             try:
                 payment, _payer = await reload_payment_for_reconciliation_locked(
                     db,
@@ -849,7 +868,16 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                 TournamentPaymentState.canceled,
             }:
                 payment.state = TournamentPaymentState.checking
-                await _quarantine_provider_mismatch(db, payment)
+                # Missing/invalid credentials say nothing about the identity
+                # of an unbound create. Preserve its lookup/recreate path so a
+                # later authoritative NotFound can safely retry the same
+                # idempotent create. A malformed response, or a configuration
+                # failure against an already-bound intent, still needs review.
+                if (
+                    isinstance(error, PaymentProviderResponseInvalidError)
+                    or payment.provider_payment_id is not None
+                ):
+                    await _quarantine_provider_mismatch(db, payment)
             await db.commit()
             reconciled += 1
             continue
@@ -982,7 +1010,7 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
             except (
                 PaymentProviderConfigurationError,
                 PaymentProviderResponseInvalidError,
-            ):
+            ) as error:
                 try:
                     payment, _payer = await reload_payment_for_reconciliation_locked(
                         db,
@@ -995,7 +1023,11 @@ async def reconcile_stuck_payments(db: AsyncSession, provider: PaymentProvider) 
                     await db.rollback()
                     continue
                 payment.state = TournamentPaymentState.checking
-                await _quarantine_provider_mismatch(db, payment)
+                if (
+                    isinstance(error, PaymentProviderResponseInvalidError)
+                    or payment.provider_payment_id is not None
+                ):
+                    await _quarantine_provider_mismatch(db, payment)
                 await db.commit()
                 reconciled += 1
                 continue

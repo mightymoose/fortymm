@@ -9,6 +9,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 from redis.exceptions import RedisError
+from rq import Queue
+from rq.exceptions import InvalidJobOperation, NoSuchJobError
+from rq.job import JobStatus
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
@@ -35,6 +38,14 @@ log = logging.getLogger(__name__)
 RETRY_WINDOW = timedelta(hours=24)
 PII_RETENTION = timedelta(days=30)
 DELIVERY_JOB = "app.tournament_payment_receipts.deliver_tournament_receipt"
+_ACTIVE_DELIVERY_JOB_STATES = frozenset(
+    {
+        JobStatus.QUEUED,
+        JobStatus.STARTED,
+        JobStatus.DEFERRED,
+        JobStatus.SCHEDULED,
+    }
+)
 
 
 class TournamentReceiptSender(Protocol):
@@ -82,8 +93,35 @@ def _copy(receipt: TournamentPaymentReceipt) -> tuple[str, str]:
     return "FortyMM tournament registration", "\n".join(lines)
 
 
+def _delivery_job_id(
+    receipt_id: uuid.UUID, *, attempt_at: datetime | None = None
+) -> str:
+    base = f"tournament-receipt-{receipt_id}"
+    if attempt_at is None:
+        return base
+    generation = attempt_at.astimezone(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    return f"{base}-{generation}"
+
+
+def _job_has_active_membership(queue: Queue, *, job_id: str, status: JobStatus) -> bool:
+    """Treat a job as active only while its queue/registry still owns it."""
+    if status is JobStatus.QUEUED:
+        return job_id in queue.get_job_ids()
+    if status is JobStatus.STARTED:
+        return job_id in queue.started_job_registry.get_job_ids(cleanup=False)
+    if status is JobStatus.DEFERRED:
+        return job_id in queue.deferred_job_registry.get_job_ids(cleanup=False)
+    if status is JobStatus.SCHEDULED:
+        return job_id in queue.scheduled_job_registry.get_job_ids(cleanup=False)
+    return False
+
+
 def enqueue_tournament_receipt(
-    receipt_id: uuid.UUID, *, delay: timedelta | None = None
+    receipt_id: uuid.UUID,
+    *,
+    delay: timedelta | None = None,
+    attempt_at: datetime | None = None,
+    force_runnable: bool = False,
 ) -> bool:
     """Queue only the durable id; addresses and copy are loaded in the worker."""
     queue = queue_module.get_email_queue()
@@ -92,11 +130,45 @@ def enqueue_tournament_receipt(
     # the payment settlement request.
     if not getattr(queue, "is_async", getattr(queue, "_is_async", True)):
         return False
+    if delay is not None and attempt_at is None:
+        attempt_at = datetime.now(UTC) + delay
+    job_id = _delivery_job_id(receipt_id, attempt_at=attempt_at)
     try:
+        existing = queue.fetch_job(job_id)
+        if existing is not None:
+            try:
+                status = existing.get_status(refresh=True)
+            except InvalidJobOperation:
+                # The hash disappeared after fetch. Remove any stale runnable
+                # or scheduled membership so the same stable identity can be
+                # enqueued as real recovery work.
+                queue.remove(job_id)
+                queue.scheduled_job_registry.remove(job_id, delete_job=False)
+                queue.deferred_job_registry.remove(job_id, delete_job=False)
+                existing = None
+            if (
+                existing is not None
+                and status in _ACTIVE_DELIVERY_JOB_STATES
+                and _job_has_active_membership(queue, job_id=job_id, status=status)
+                and not (force_runnable and status is JobStatus.SCHEDULED)
+            ):
+                # The durable scan may run many times while a worker is backed
+                # up. One stable RQ identity represents that outstanding work.
+                return True
+            if existing is not None:
+                # A terminal job, an orphaned active-looking hash, or a due
+                # scheduled job when no scheduler is deployed does not own
+                # runnable work. Remove it so the deterministic identity can
+                # represent the immediate recovery attempt.
+                try:
+                    existing.delete()
+                except NoSuchJobError:
+                    pass
         if delay is None:
             queue.enqueue(
                 DELIVERY_JOB,
                 str(receipt_id),
+                job_id=job_id,
                 result_ttl=60,
                 failure_ttl=86400,
             )
@@ -105,10 +177,11 @@ def enqueue_tournament_receipt(
                 delay,
                 DELIVERY_JOB,
                 str(receipt_id),
+                job_id=job_id,
                 result_ttl=60,
                 failure_ttl=86400,
             )
-    except (RedisError, OSError, TimeoutError):
+    except (RedisError, NoSuchJobError, OSError, TimeoutError):
         log.exception(
             "Failed to enqueue tournament receipt",
             extra={"receipt_id": str(receipt_id)},
@@ -127,22 +200,35 @@ async def enqueue_due_tournament_receipts(
     failure or a worker that races the settlement commit cannot strand mail.
     """
     now = now or datetime.now(UTC)
-    ids = list(
-        await db.scalars(
-            select(TournamentPaymentReceipt.id).where(
-                TournamentPaymentReceipt.recipient_email.is_not(None),
-                or_(
-                    TournamentPaymentReceipt.state == TournamentReceiptState.pending,
-                    (
+    receipts = list(
+        (
+            await db.execute(
+                select(
+                    TournamentPaymentReceipt.id,
+                    TournamentPaymentReceipt.next_attempt_at,
+                ).where(
+                    TournamentPaymentReceipt.recipient_email.is_not(None),
+                    or_(
                         TournamentPaymentReceipt.state
-                        == TournamentReceiptState.retry_scheduled
-                    )
-                    & (TournamentPaymentReceipt.next_attempt_at <= now),
+                        == TournamentReceiptState.pending,
+                        (
+                            TournamentPaymentReceipt.state
+                            == TournamentReceiptState.retry_scheduled
+                        )
+                        & (TournamentPaymentReceipt.next_attempt_at <= now),
+                    ),
                 ),
             )
-        )
+        ).all()
     )
-    return sum(enqueue_tournament_receipt(receipt_id) for receipt_id in ids)
+    return sum(
+        enqueue_tournament_receipt(
+            receipt_id,
+            attempt_at=next_attempt_at,
+            force_runnable=True,
+        )
+        for receipt_id, next_attempt_at in receipts
+    )
 
 
 async def attempt_tournament_receipt_delivery(
@@ -224,7 +310,7 @@ async def _deliver(
         await db.commit()
         if receipt.state is TournamentReceiptState.retry_scheduled and next_attempt:
             delay = max(next_attempt - datetime.now(UTC), timedelta())
-            enqueue_tournament_receipt(receipt.id, delay=delay)
+            enqueue_tournament_receipt(receipt.id, delay=delay, attempt_at=next_attempt)
 
 
 def deliver_tournament_receipt(receipt_id: str) -> None:
