@@ -26,6 +26,8 @@ from app.match_calls import pin_tick_loop
 from app.matches import router as matches_router
 from app.mcp_server import mcp
 from app.notifications.router import router as notifications_router
+from app.payments.dependencies import get_payment_provider
+from app.payments.startup import verify_stripe_account
 from app.players import router as players_router
 from app.rate_limiting import init_rate_limit_redis, shutdown_rate_limit_redis
 from app.rbac import router as rbac_router
@@ -86,6 +88,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # connection from that client's pool, which is what pub/sub needs, so a
         # second client would buy nothing but another idle socket.
         settings = get_settings()
+        if settings.stripe_secret_key:
+            # A misconfigured deploy dies at boot, not at its first webhook
+            # (mirrors ``Settings._require_google_key``'s stance) — but this
+            # needs a network call, so it cannot live on the Settings model.
+            await verify_stripe_account(settings, get_payment_provider(settings))
         realtime_broker = RealtimeBroker(
             connection,
             coalesce_delay=settings.realtime_coalesce_ms / 1000,
