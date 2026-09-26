@@ -2963,13 +2963,11 @@ extension APIProtocol {
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/get(get_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_get)`.
     internal func getTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet(
         path: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input.Path,
-        headers: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input.Headers = .init(),
-        body: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input.Body? = nil
+        headers: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input.Headers = .init()
     ) async throws -> Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Output {
         try await getTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet(Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input(
             path: path,
-            headers: headers,
-            body: body
+            headers: headers
         ))
     }
     /// Prepare Tournament Payment
@@ -2982,13 +2980,11 @@ extension APIProtocol {
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/post(prepare_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_post)`.
     internal func prepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost(
         path: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input.Path,
-        headers: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input.Headers = .init(),
-        body: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input.Body? = nil
+        headers: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input.Headers = .init()
     ) async throws -> Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Output {
         try await prepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost(Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input(
             path: path,
-            headers: headers,
-            body: body
+            headers: headers
         ))
     }
     /// List Schedule Solves
@@ -5136,17 +5132,6 @@ internal enum Components {
                 case end
             }
         }
-        /// The explicit production gate (#1816).
-        ///
-        /// Deliberately explicit configuration, never inferred from a hostname or a
-        /// key prefix: a deploy that forgets to set this stays ``development``, which
-        /// is the fail-safe direction for :meth:`Settings._refuse_live_key_outside_production`.
-        ///
-        /// - Remark: Generated from `#/components/schemas/DeployEnvironment`.
-        internal enum DeployEnvironment: String, Codable, Hashable, Sendable, CaseIterable {
-            case development = "development"
-            case production = "production"
-        }
         /// Confirmation that the device token is registered to the current user.
         ///
         /// - Remark: Generated from `#/components/schemas/DeviceTokenResponse`.
@@ -5624,20 +5609,6 @@ internal enum Components {
                     "formatted"
                 ])
             }
-        }
-        /// Which geocoding implementation this process uses — a closed set.
-        ///
-        /// Selection is **explicit configuration**, never inferred from whether a key
-        /// happens to be present (ADR "a venue's coordinates are geocoded server-side
-        /// and not null", 2026-07-26 amendment). Inference failed silently open: an
-        /// environment meant to geocode for real, whose key was missing or rotated
-        /// out, quietly hashed addresses into pseudo-random coordinates and stored
-        /// them as though they were real.
-        ///
-        /// - Remark: Generated from `#/components/schemas/GeocoderChoice`.
-        internal enum GeocoderChoice: String, Codable, Hashable, Sendable, CaseIterable {
-            case google = "google"
-            case fake = "fake"
         }
         /// One competitive group of an event's draw, as it is **read**: server-minted
         /// identity and order, plus which stage it belongs to and which reservation it plays
@@ -10895,203 +10866,6 @@ internal enum Components {
                 case captchaToken = "captcha_token"
                 case fmmHpToken = "fmm_hp_token"
                 case email
-            }
-        }
-        /// - Remark: Generated from `#/components/schemas/Settings`.
-        internal struct Settings: Codable, Hashable, Sendable {
-            /// - Remark: Generated from `#/components/schemas/Settings/solver_time_cap_s`.
-            internal var solverTimeCapS: Swift.Double?
-            /// - Remark: Generated from `#/components/schemas/Settings/preview_solver_time_cap_s`.
-            internal var previewSolverTimeCapS: Swift.Double?
-            /// - Remark: Generated from `#/components/schemas/Settings/auth0_domain`.
-            internal var auth0Domain: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/Settings/auth0_audience`.
-            internal var auth0Audience: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/Settings/mcp_public_base_url`.
-            internal var mcpPublicBaseUrl: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/Settings/mcp_public_resource_url`.
-            internal var mcpPublicResourceUrl: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/Settings/mcp_oauth_client_id`.
-            internal var mcpOauthClientId: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/Settings/realtime_coalesce_ms`.
-            internal var realtimeCoalesceMs: Swift.Int?
-            /// - Remark: Generated from `#/components/schemas/Settings/realtime_max_stream_seconds`.
-            internal var realtimeMaxStreamSeconds: Swift.Int?
-            /// - Remark: Generated from `#/components/schemas/Settings/realtime_max_connections_per_user`.
-            internal var realtimeMaxConnectionsPerUser: Swift.Int?
-            /// - Remark: Generated from `#/components/schemas/Settings/geocoder`.
-            internal var geocoder: Components.Schemas.GeocoderChoice?
-            /// - Remark: Generated from `#/components/schemas/Settings/google_geocoding_api_key`.
-            internal var googleGeocodingApiKey: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/Settings/realtime_retry_base_ms`.
-            internal var realtimeRetryBaseMs: Swift.Int?
-            /// - Remark: Generated from `#/components/schemas/Settings/realtime_retry_spread_ms`.
-            internal var realtimeRetrySpreadMs: Swift.Int?
-            /// - Remark: Generated from `#/components/schemas/Settings/email_from`.
-            internal var emailFrom: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/Settings/tournament_entry_ip_per_hour`.
-            internal var tournamentEntryIpPerHour: Swift.Int?
-            /// - Remark: Generated from `#/components/schemas/Settings/tournament_checkout_ip_per_hour`.
-            internal var tournamentCheckoutIpPerHour: Swift.Int?
-            /// - Remark: Generated from `#/components/schemas/Settings/tournament_payment_merchant_account_id`.
-            internal var tournamentPaymentMerchantAccountId: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/Settings/email_send_session_limit_per_hour`.
-            internal var emailSendSessionLimitPerHour: Swift.Int?
-            /// - Remark: Generated from `#/components/schemas/Settings/email_send_ip_limit_per_hour`.
-            internal var emailSendIpLimitPerHour: Swift.Int?
-            /// - Remark: Generated from `#/components/schemas/Settings/email_resend_session_limit_per_hour`.
-            internal var emailResendSessionLimitPerHour: Swift.Int?
-            /// - Remark: Generated from `#/components/schemas/Settings/email_resend_ip_limit_per_hour`.
-            internal var emailResendIpLimitPerHour: Swift.Int?
-            /// - Remark: Generated from `#/components/schemas/Settings/login_consume_ip_limit_per_hour`.
-            internal var loginConsumeIpLimitPerHour: Swift.Int?
-            /// - Remark: Generated from `#/components/schemas/Settings/guest_creation_ip_limit_per_hour`.
-            internal var guestCreationIpLimitPerHour: Swift.Int?
-            /// - Remark: Generated from `#/components/schemas/Settings/guest_creation_ip_limit_per_day`.
-            internal var guestCreationIpLimitPerDay: Swift.Int?
-            /// - Remark: Generated from `#/components/schemas/Settings/match_creation_account_limit_per_hour`.
-            internal var matchCreationAccountLimitPerHour: Swift.Int?
-            /// - Remark: Generated from `#/components/schemas/Settings/match_creation_account_limit_per_day`.
-            internal var matchCreationAccountLimitPerDay: Swift.Int?
-            /// - Remark: Generated from `#/components/schemas/Settings/environment`.
-            internal var environment: Components.Schemas.DeployEnvironment?
-            /// - Remark: Generated from `#/components/schemas/Settings/stripe_secret_key`.
-            internal var stripeSecretKey: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/Settings/stripe_account_id`.
-            internal var stripeAccountId: Swift.String?
-            /// - Remark: Generated from `#/components/schemas/Settings/STRIPE_WEBHOOK_SIGNING_SECRETS`.
-            internal var stripeWebhookSigningSecrets: Swift.String?
-            /// Creates a new `Settings`.
-            ///
-            /// - Parameters:
-            ///   - solverTimeCapS:
-            ///   - previewSolverTimeCapS:
-            ///   - auth0Domain:
-            ///   - auth0Audience:
-            ///   - mcpPublicBaseUrl:
-            ///   - mcpPublicResourceUrl:
-            ///   - mcpOauthClientId:
-            ///   - realtimeCoalesceMs:
-            ///   - realtimeMaxStreamSeconds:
-            ///   - realtimeMaxConnectionsPerUser:
-            ///   - geocoder:
-            ///   - googleGeocodingApiKey:
-            ///   - realtimeRetryBaseMs:
-            ///   - realtimeRetrySpreadMs:
-            ///   - emailFrom:
-            ///   - tournamentEntryIpPerHour:
-            ///   - tournamentCheckoutIpPerHour:
-            ///   - tournamentPaymentMerchantAccountId:
-            ///   - emailSendSessionLimitPerHour:
-            ///   - emailSendIpLimitPerHour:
-            ///   - emailResendSessionLimitPerHour:
-            ///   - emailResendIpLimitPerHour:
-            ///   - loginConsumeIpLimitPerHour:
-            ///   - guestCreationIpLimitPerHour:
-            ///   - guestCreationIpLimitPerDay:
-            ///   - matchCreationAccountLimitPerHour:
-            ///   - matchCreationAccountLimitPerDay:
-            ///   - environment:
-            ///   - stripeSecretKey:
-            ///   - stripeAccountId:
-            ///   - stripeWebhookSigningSecrets:
-            internal init(
-                solverTimeCapS: Swift.Double? = nil,
-                previewSolverTimeCapS: Swift.Double? = nil,
-                auth0Domain: Swift.String? = nil,
-                auth0Audience: Swift.String? = nil,
-                mcpPublicBaseUrl: Swift.String? = nil,
-                mcpPublicResourceUrl: Swift.String? = nil,
-                mcpOauthClientId: Swift.String? = nil,
-                realtimeCoalesceMs: Swift.Int? = nil,
-                realtimeMaxStreamSeconds: Swift.Int? = nil,
-                realtimeMaxConnectionsPerUser: Swift.Int? = nil,
-                geocoder: Components.Schemas.GeocoderChoice? = nil,
-                googleGeocodingApiKey: Swift.String? = nil,
-                realtimeRetryBaseMs: Swift.Int? = nil,
-                realtimeRetrySpreadMs: Swift.Int? = nil,
-                emailFrom: Swift.String? = nil,
-                tournamentEntryIpPerHour: Swift.Int? = nil,
-                tournamentCheckoutIpPerHour: Swift.Int? = nil,
-                tournamentPaymentMerchantAccountId: Swift.String? = nil,
-                emailSendSessionLimitPerHour: Swift.Int? = nil,
-                emailSendIpLimitPerHour: Swift.Int? = nil,
-                emailResendSessionLimitPerHour: Swift.Int? = nil,
-                emailResendIpLimitPerHour: Swift.Int? = nil,
-                loginConsumeIpLimitPerHour: Swift.Int? = nil,
-                guestCreationIpLimitPerHour: Swift.Int? = nil,
-                guestCreationIpLimitPerDay: Swift.Int? = nil,
-                matchCreationAccountLimitPerHour: Swift.Int? = nil,
-                matchCreationAccountLimitPerDay: Swift.Int? = nil,
-                environment: Components.Schemas.DeployEnvironment? = nil,
-                stripeSecretKey: Swift.String? = nil,
-                stripeAccountId: Swift.String? = nil,
-                stripeWebhookSigningSecrets: Swift.String? = nil
-            ) {
-                self.solverTimeCapS = solverTimeCapS
-                self.previewSolverTimeCapS = previewSolverTimeCapS
-                self.auth0Domain = auth0Domain
-                self.auth0Audience = auth0Audience
-                self.mcpPublicBaseUrl = mcpPublicBaseUrl
-                self.mcpPublicResourceUrl = mcpPublicResourceUrl
-                self.mcpOauthClientId = mcpOauthClientId
-                self.realtimeCoalesceMs = realtimeCoalesceMs
-                self.realtimeMaxStreamSeconds = realtimeMaxStreamSeconds
-                self.realtimeMaxConnectionsPerUser = realtimeMaxConnectionsPerUser
-                self.geocoder = geocoder
-                self.googleGeocodingApiKey = googleGeocodingApiKey
-                self.realtimeRetryBaseMs = realtimeRetryBaseMs
-                self.realtimeRetrySpreadMs = realtimeRetrySpreadMs
-                self.emailFrom = emailFrom
-                self.tournamentEntryIpPerHour = tournamentEntryIpPerHour
-                self.tournamentCheckoutIpPerHour = tournamentCheckoutIpPerHour
-                self.tournamentPaymentMerchantAccountId = tournamentPaymentMerchantAccountId
-                self.emailSendSessionLimitPerHour = emailSendSessionLimitPerHour
-                self.emailSendIpLimitPerHour = emailSendIpLimitPerHour
-                self.emailResendSessionLimitPerHour = emailResendSessionLimitPerHour
-                self.emailResendIpLimitPerHour = emailResendIpLimitPerHour
-                self.loginConsumeIpLimitPerHour = loginConsumeIpLimitPerHour
-                self.guestCreationIpLimitPerHour = guestCreationIpLimitPerHour
-                self.guestCreationIpLimitPerDay = guestCreationIpLimitPerDay
-                self.matchCreationAccountLimitPerHour = matchCreationAccountLimitPerHour
-                self.matchCreationAccountLimitPerDay = matchCreationAccountLimitPerDay
-                self.environment = environment
-                self.stripeSecretKey = stripeSecretKey
-                self.stripeAccountId = stripeAccountId
-                self.stripeWebhookSigningSecrets = stripeWebhookSigningSecrets
-            }
-            internal enum CodingKeys: String, CodingKey {
-                case solverTimeCapS = "solver_time_cap_s"
-                case previewSolverTimeCapS = "preview_solver_time_cap_s"
-                case auth0Domain = "auth0_domain"
-                case auth0Audience = "auth0_audience"
-                case mcpPublicBaseUrl = "mcp_public_base_url"
-                case mcpPublicResourceUrl = "mcp_public_resource_url"
-                case mcpOauthClientId = "mcp_oauth_client_id"
-                case realtimeCoalesceMs = "realtime_coalesce_ms"
-                case realtimeMaxStreamSeconds = "realtime_max_stream_seconds"
-                case realtimeMaxConnectionsPerUser = "realtime_max_connections_per_user"
-                case geocoder
-                case googleGeocodingApiKey = "google_geocoding_api_key"
-                case realtimeRetryBaseMs = "realtime_retry_base_ms"
-                case realtimeRetrySpreadMs = "realtime_retry_spread_ms"
-                case emailFrom = "email_from"
-                case tournamentEntryIpPerHour = "tournament_entry_ip_per_hour"
-                case tournamentCheckoutIpPerHour = "tournament_checkout_ip_per_hour"
-                case tournamentPaymentMerchantAccountId = "tournament_payment_merchant_account_id"
-                case emailSendSessionLimitPerHour = "email_send_session_limit_per_hour"
-                case emailSendIpLimitPerHour = "email_send_ip_limit_per_hour"
-                case emailResendSessionLimitPerHour = "email_resend_session_limit_per_hour"
-                case emailResendIpLimitPerHour = "email_resend_ip_limit_per_hour"
-                case loginConsumeIpLimitPerHour = "login_consume_ip_limit_per_hour"
-                case guestCreationIpLimitPerHour = "guest_creation_ip_limit_per_hour"
-                case guestCreationIpLimitPerDay = "guest_creation_ip_limit_per_day"
-                case matchCreationAccountLimitPerHour = "match_creation_account_limit_per_hour"
-                case matchCreationAccountLimitPerDay = "match_creation_account_limit_per_day"
-                case environment
-                case stripeSecretKey = "stripe_secret_key"
-                case stripeAccountId = "stripe_account_id"
-                case stripeWebhookSigningSecrets = "STRIPE_WEBHOOK_SIGNING_SECRETS"
             }
         }
         /// A date-only (``YYYY-MM-DD``) window with ``HH:MM`` start/end. The strings
@@ -29595,44 +29369,17 @@ internal enum Operations {
                 }
             }
             internal var headers: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input.Headers
-            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/GET/requestBody`.
-            internal enum Body: Sendable, Hashable {
-                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/GET/requestBody/json`.
-                internal struct JsonPayload: Codable, Hashable, Sendable {
-                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/GET/requestBody/json/value1`.
-                    internal var value1: Components.Schemas.Settings
-                    /// Creates a new `JsonPayload`.
-                    ///
-                    /// - Parameters:
-                    ///   - value1:
-                    internal init(value1: Components.Schemas.Settings) {
-                        self.value1 = value1
-                    }
-                    internal init(from decoder: any Swift.Decoder) throws {
-                        self.value1 = try .init(from: decoder)
-                    }
-                    internal func encode(to encoder: any Swift.Encoder) throws {
-                        try self.value1.encode(to: encoder)
-                    }
-                }
-                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/GET/requestBody/content/application\/json`.
-                case json(Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input.Body.JsonPayload)
-            }
-            internal var body: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input.Body?
             /// Creates a new `Input`.
             ///
             /// - Parameters:
             ///   - path:
             ///   - headers:
-            ///   - body:
             internal init(
                 path: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input.Path,
-                headers: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input.Headers = .init(),
-                body: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input.Body? = nil
+                headers: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input.Headers = .init()
             ) {
                 self.path = path
                 self.headers = headers
-                self.body = body
             }
         }
         internal enum Output: Sendable, Hashable {
@@ -29812,44 +29559,17 @@ internal enum Operations {
                 }
             }
             internal var headers: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input.Headers
-            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/POST/requestBody`.
-            internal enum Body: Sendable, Hashable {
-                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/POST/requestBody/json`.
-                internal struct JsonPayload: Codable, Hashable, Sendable {
-                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/POST/requestBody/json/value1`.
-                    internal var value1: Components.Schemas.Settings
-                    /// Creates a new `JsonPayload`.
-                    ///
-                    /// - Parameters:
-                    ///   - value1:
-                    internal init(value1: Components.Schemas.Settings) {
-                        self.value1 = value1
-                    }
-                    internal init(from decoder: any Swift.Decoder) throws {
-                        self.value1 = try .init(from: decoder)
-                    }
-                    internal func encode(to encoder: any Swift.Encoder) throws {
-                        try self.value1.encode(to: encoder)
-                    }
-                }
-                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/POST/requestBody/content/application\/json`.
-                case json(Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input.Body.JsonPayload)
-            }
-            internal var body: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input.Body?
             /// Creates a new `Input`.
             ///
             /// - Parameters:
             ///   - path:
             ///   - headers:
-            ///   - body:
             internal init(
                 path: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input.Path,
-                headers: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input.Headers = .init(),
-                body: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input.Body? = nil
+                headers: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input.Headers = .init()
             ) {
                 self.path = path
                 self.headers = headers
-                self.body = body
             }
         }
         internal enum Output: Sendable, Hashable {

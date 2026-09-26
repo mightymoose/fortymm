@@ -26,6 +26,7 @@ from app.models import (
     TournamentPayment,
     TournamentPaymentLineOutcome,
     TournamentPaymentProviderCreateState,
+    TournamentPaymentProviderEvent,
     TournamentPaymentRefundObligation,
     TournamentPaymentRefundReason,
     TournamentPaymentStatus,
@@ -50,9 +51,11 @@ from app.tournament_payment_errors import (
     PaymentProviderUnavailableError,
 )
 from app.tournament_payments import (
+    IncomingProviderEvent,
     prepare_or_resume_payment,
     read_payment_status,
     reconcile_payment,
+    record_and_reconcile_provider_event,
 )
 from app.tournament_registration import set_registration_open
 from tests._helpers import make_raw_client, make_user
@@ -1193,3 +1196,84 @@ async def test_webhook_retries_when_stripe_is_unreachable(
         assert settled is not None
         assert settled.status is TournamentPaymentStatus.succeeded
         assert await _entered_player_ids(verify_session, event.id) == [player_id]
+
+
+@pytest.mark.parametrize(
+    ("fields", "event_account"),
+    [
+        ({"metadata": {"payment_id": str(uuid.UUID(int=0))}}, None),
+        ({"currency": "eur"}, None),
+        ({}, "acct_someone_else"),
+    ],
+    ids=["metadata-payment-id", "currency", "event-account"],
+)
+async def test_identity_mismatch_quarantines_and_admits_nobody(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    fields: dict[str, object],
+    event_account: str | None,
+) -> None:
+    provider = FakePaymentProvider()
+    *_, event, _, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    intent_id = payment.provider_payment_intent_id
+    assert intent_id is not None
+    provider.set_status(intent_id, status="succeeded", amount_received=2000)
+    provider._update(intent_id, **fields)
+    source_event = IncomingProviderEvent(
+        id=f"evt_{uuid.uuid4().hex}",
+        type="payment_intent.succeeded",
+        livemode=False,
+        account=event_account,
+        payment_intent_id=intent_id,
+    )
+
+    reconciled = await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, source_event=source_event
+    )
+    assert reconciled is not None
+    assert reconciled.status is TournamentPaymentStatus.quarantined
+    assert await _entered_player_ids(db_session, event.id) == []
+    (obligation,) = await _obligations(db_session, payment.id)
+    assert obligation.amount_cents == 2000
+
+
+async def test_stored_webhook_evidence_never_keeps_the_client_secret(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider = FakePaymentProvider()
+    *_, payment = await _prepared_payment(db_session, monkeypatch, provider=provider)
+    event_id = f"evt_{uuid.uuid4().hex}"
+    await record_and_reconcile_provider_event(
+        db_session,
+        raw={
+            "id": event_id,
+            "type": "payment_intent.processing",
+            "livemode": False,
+            "data": {
+                "object": {
+                    "id": payment.provider_payment_intent_id,
+                    "client_secret": "pi_secret_must_not_persist",
+                }
+            },
+        },
+        provider=provider,
+    )
+    stored = await db_session.scalar(
+        select(TournamentPaymentProviderEvent).where(
+            TournamentPaymentProviderEvent.provider_event_id == event_id
+        )
+    )
+    assert stored is not None
+    assert "client_secret" not in stored.payload["data"]["object"]
+    assert stored.payment_id == payment.id
+
+
+def test_payment_routes_take_no_request_body() -> None:
+    """A dependency parameter is request input. The provider dependency must
+    never let a caller post settings (and so a Stripe key) in the body."""
+    paths = fastapi_app.openapi()["paths"]
+    route = paths["/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment"]
+    assert "requestBody" not in route["get"]
+    assert "requestBody" not in route["post"]

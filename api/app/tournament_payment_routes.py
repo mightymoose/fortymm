@@ -5,13 +5,11 @@ import uuid
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
-from sqlalchemy import delete
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.db import get_session
-from app.models import TournamentPaymentProviderEvent, User
+from app.models import User
 from app.payments.dependencies import get_payment_provider
 from app.payments.provider import PaymentProvider
 from app.schemas.tournament_payment import (
@@ -25,12 +23,9 @@ from app.tournament_payment_errors import (
     PaymentProviderUnavailableError,
 )
 from app.tournament_payments import (
-    HANDLED_PROVIDER_EVENT_TYPES,
-    find_payment_id_for_provider_event,
-    parse_incoming_provider_event,
     prepare_or_resume_payment,
     read_payment_status,
-    reconcile_payment,
+    record_and_reconcile_provider_event,
 )
 
 router = APIRouter(prefix="/v1")
@@ -130,49 +125,13 @@ async def stripe_webhook(
     if event is None:
         raise HTTPException(status_code=400, detail="Invalid Stripe webhook signature.")
 
-    raw = event.to_dict()
-    incoming = parse_incoming_provider_event(raw)
-    payment_id = await find_payment_id_for_provider_event(db, incoming)
-
-    # Persist uniquely BEFORE acknowledging (#1816) — a duplicate insert is a
-    # no-op, not an error, so a replayed event changes nothing.
-    result = await db.execute(
-        pg_insert(TournamentPaymentProviderEvent)
-        .values(
-            provider_event_id=incoming.id,
-            event_type=incoming.type,
-            payment_id=payment_id,
-            payload=raw,
+    try:
+        await record_and_reconcile_provider_event(
+            db, raw=event.to_dict(), provider=provider
         )
-        .on_conflict_do_nothing(
-            index_elements=["provider_event_id"],
-        )
-        .returning(TournamentPaymentProviderEvent.id)
-    )
-    newly_inserted = result.first() is not None
-    await db.commit()
-
-    if (
-        newly_inserted
-        and payment_id is not None
-        and incoming.type in HANDLED_PROVIDER_EVENT_TYPES
-    ):
-        try:
-            await reconcile_payment(
-                db, payment_id=payment_id, provider=provider, source_event=incoming
-            )
-        except PaymentProviderUnavailableError as error:
-            # Not acknowledged: forget the event so Stripe's retry processes it
-            # instead of hitting the replay no-op. The payment is unchanged.
-            await db.rollback()
-            await db.execute(
-                delete(TournamentPaymentProviderEvent).where(
-                    TournamentPaymentProviderEvent.provider_event_id == incoming.id
-                )
-            )
-            await db.commit()
-            raise HTTPException(
-                status_code=503, detail="Payment provider unavailable."
-            ) from error
+    except PaymentProviderUnavailableError as error:
+        raise HTTPException(
+            status_code=503, detail="Payment provider unavailable."
+        ) from error
 
     return StripeWebhookAck(received=True)

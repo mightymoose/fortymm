@@ -2729,16 +2729,6 @@ export interface components {
             end: string;
         };
         /**
-         * DeployEnvironment
-         * @description The explicit production gate (#1816).
-         *
-         *     Deliberately explicit configuration, never inferred from a hostname or a
-         *     key prefix: a deploy that forgets to set this stays ``development``, which
-         *     is the fail-safe direction for :meth:`Settings._refuse_live_key_outside_production`.
-         * @enum {string}
-         */
-        DeployEnvironment: "development" | "production";
-        /**
          * DeviceTokenResponse
          * @description Confirmation that the device token is registered to the current user.
          */
@@ -3019,19 +3009,6 @@ export interface components {
             /** Formatted */
             formatted: string;
         };
-        /**
-         * GeocoderChoice
-         * @description Which geocoding implementation this process uses — a closed set.
-         *
-         *     Selection is **explicit configuration**, never inferred from whether a key
-         *     happens to be present (ADR "a venue's coordinates are geocoded server-side
-         *     and not null", 2026-07-26 amendment). Inference failed silently open: an
-         *     environment meant to geocode for real, whose key was missing or rotated
-         *     out, quietly hashed addresses into pseudo-random coordinates and stored
-         *     them as though they were real.
-         * @enum {string}
-         */
-        GeocoderChoice: "google" | "fake";
         /**
          * GroupRead
          * @description One competitive group of an event's draw, as it is **read**: server-minted
@@ -5186,152 +5163,6 @@ export interface components {
              * Format: email
              */
             email: string;
-        };
-        /** Settings */
-        Settings: {
-            /**
-             * Solver Time Cap S
-             * @default 10
-             */
-            solver_time_cap_s: number;
-            /**
-             * Preview Solver Time Cap S
-             * @default 5
-             */
-            preview_solver_time_cap_s: number;
-            /**
-             * Auth0 Domain
-             * @default
-             */
-            auth0_domain: string;
-            /**
-             * Auth0 Audience
-             * @default
-             */
-            auth0_audience: string;
-            /**
-             * Mcp Public Base Url
-             * @default
-             */
-            mcp_public_base_url: string;
-            /**
-             * Mcp Public Resource Url
-             * @default
-             */
-            mcp_public_resource_url: string;
-            /**
-             * Mcp Oauth Client Id
-             * @default
-             */
-            mcp_oauth_client_id: string;
-            /**
-             * Realtime Coalesce Ms
-             * @default 250
-             */
-            realtime_coalesce_ms: number;
-            /**
-             * Realtime Max Stream Seconds
-             * @default 900
-             */
-            realtime_max_stream_seconds: number;
-            /**
-             * Realtime Max Connections Per User
-             * @default 4
-             */
-            realtime_max_connections_per_user: number;
-            /** @default google */
-            geocoder: components["schemas"]["GeocoderChoice"];
-            /** Google Geocoding Api Key */
-            google_geocoding_api_key?: string | null;
-            /**
-             * Realtime Retry Base Ms
-             * @default 3000
-             */
-            realtime_retry_base_ms: number;
-            /**
-             * Realtime Retry Spread Ms
-             * @default 5000
-             */
-            realtime_retry_spread_ms: number;
-            /**
-             * Email From
-             * @default noreply@fortymm.local
-             */
-            email_from: string;
-            /**
-             * Tournament Entry Ip Per Hour
-             * @default 30
-             */
-            tournament_entry_ip_per_hour: number;
-            /**
-             * Tournament Checkout Ip Per Hour
-             * @default 30
-             */
-            tournament_checkout_ip_per_hour: number;
-            /** Tournament Payment Merchant Account Id */
-            tournament_payment_merchant_account_id?: string | null;
-            /**
-             * Email Send Session Limit Per Hour
-             * @default 5
-             */
-            email_send_session_limit_per_hour: number;
-            /**
-             * Email Send Ip Limit Per Hour
-             * @default 20
-             */
-            email_send_ip_limit_per_hour: number;
-            /**
-             * Email Resend Session Limit Per Hour
-             * @default 3
-             */
-            email_resend_session_limit_per_hour: number;
-            /**
-             * Email Resend Ip Limit Per Hour
-             * @default 10
-             */
-            email_resend_ip_limit_per_hour: number;
-            /**
-             * Login Consume Ip Limit Per Hour
-             * @default 60
-             */
-            login_consume_ip_limit_per_hour: number;
-            /**
-             * Guest Creation Ip Limit Per Hour
-             * @default 60
-             */
-            guest_creation_ip_limit_per_hour: number;
-            /**
-             * Guest Creation Ip Limit Per Day
-             * @default 300
-             */
-            guest_creation_ip_limit_per_day: number;
-            /**
-             * Match Creation Account Limit Per Hour
-             * @default 60
-             */
-            match_creation_account_limit_per_hour: number;
-            /**
-             * Match Creation Account Limit Per Day
-             * @default 300
-             */
-            match_creation_account_limit_per_day: number;
-            /** @default development */
-            environment: components["schemas"]["DeployEnvironment"];
-            /**
-             * Stripe Secret Key
-             * @default
-             */
-            stripe_secret_key: string;
-            /**
-             * Stripe Account Id
-             * @default
-             */
-            stripe_account_id: string;
-            /**
-             * Stripe Webhook Signing Secrets
-             * @default
-             */
-            STRIPE_WEBHOOK_SIGNING_SECRETS: string;
         };
         /**
          * Slot
@@ -9405,11 +9236,7 @@ export interface operations {
                 session?: string | null;
             };
         };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["Settings"] | null;
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {
@@ -9443,11 +9270,7 @@ export interface operations {
                 session?: string | null;
             };
         };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["Settings"] | null;
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             201: {

@@ -14,6 +14,7 @@ from app.schemas.tournament_checkout import TournamentCheckoutPaymentState
 TERMINAL_PAYMENT_STATUSES = frozenset(
     {
         TournamentPaymentStatus.succeeded,
+        TournamentPaymentStatus.failed,
         TournamentPaymentStatus.canceled,
         TournamentPaymentStatus.quarantined,
     }

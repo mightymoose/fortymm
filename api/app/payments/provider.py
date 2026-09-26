@@ -90,8 +90,16 @@ class ProviderRefused(ProviderRetrievalFailed):
 
 
 def _retrieval_failure(error: stripe.StripeError) -> ProviderRetrievalFailed:
+    # An authentication failure is about Fortymm's own key, not about the
+    # PaymentIntent, so it must not quarantine a payment either.
     if isinstance(
-        error, (stripe.APIConnectionError, stripe.APIError, stripe.RateLimitError)
+        error,
+        (
+            stripe.APIConnectionError,
+            stripe.APIError,
+            stripe.RateLimitError,
+            stripe.AuthenticationError,
+        ),
     ):
         return ProviderUnavailable(str(error))
     return ProviderRefused(str(error))

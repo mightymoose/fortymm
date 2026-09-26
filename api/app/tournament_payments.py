@@ -13,7 +13,8 @@ import uuid
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
@@ -27,6 +28,7 @@ from app.models import (
     TournamentPaymentLine,
     TournamentPaymentLineOutcome,
     TournamentPaymentProviderCreateState,
+    TournamentPaymentProviderEvent,
     TournamentPaymentRefundObligation,
     TournamentPaymentRefundReason,
     TournamentPaymentStatus,
@@ -140,6 +142,66 @@ def parse_incoming_provider_event(raw: dict[str, Any]) -> IncomingProviderEvent:
     )
 
 
+def _without_client_secret(raw: dict[str, Any]) -> dict[str, Any]:
+    """The stored evidence copy of an event. A PaymentIntent object carries
+    its client secret, which only the payer's prepare or resume may return,
+    so the evidence trail keeps everything except that field."""
+    data = raw.get("data")
+    if not isinstance(data, dict):
+        return raw
+    data_object = data.get("object")
+    if not isinstance(data_object, dict) or "client_secret" not in data_object:
+        return raw
+    object_copy = {k: v for k, v in data_object.items() if k != "client_secret"}
+    return {**raw, "data": {**data, "object": object_copy}}
+
+
+async def record_and_reconcile_provider_event(
+    db: AsyncSession, *, raw: dict[str, Any], provider: PaymentProvider
+) -> None:
+    """Persist a verified webhook event uniquely, then reconcile its payment.
+
+    A replayed event hits the unique key and changes nothing. If Stripe cannot
+    be reached, the event row is removed again and
+    :class:`PaymentProviderUnavailableError` propagates, so the caller does
+    not acknowledge it and Stripe's retry reprocesses it.
+    """
+    incoming = parse_incoming_provider_event(raw)
+    payment_id = await find_payment_id_for_provider_event(db, incoming)
+    result = await db.execute(
+        pg_insert(TournamentPaymentProviderEvent)
+        .values(
+            provider_event_id=incoming.id,
+            event_type=incoming.type,
+            payment_id=payment_id,
+            payload=_without_client_secret(raw),
+        )
+        .on_conflict_do_nothing(index_elements=["provider_event_id"])
+        .returning(TournamentPaymentProviderEvent.id)
+    )
+    newly_inserted = result.first() is not None
+    await db.commit()
+    if (
+        not newly_inserted
+        or payment_id is None
+        or incoming.type not in HANDLED_PROVIDER_EVENT_TYPES
+    ):
+        return
+    try:
+        await reconcile_payment(
+            db, payment_id=payment_id, provider=provider, source_event=incoming
+        )
+    except PaymentProviderUnavailableError:
+        await db.rollback()
+        await db.execute(
+            delete(TournamentPaymentProviderEvent).where(
+                TournamentPaymentProviderEvent.provider_event_id == incoming.id
+            )
+        )
+        await db.commit()
+        raise
+
+
 async def find_payment_id_for_provider_event(
     db: AsyncSession, event: IncomingProviderEvent
 ) -> uuid.UUID | None:
@@ -248,7 +310,8 @@ async def _drive_provider_create(
     No capacity lock is held here.
     """
     payment = await _lock_payment(db, payment_id)
-    assert payment is not None
+    if payment is None:
+        raise PaymentNotFoundError()
     if payment.provider_create_state is TournamentPaymentProviderCreateState.created:
         await db.commit()
         return payment, None
