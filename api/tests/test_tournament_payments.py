@@ -37,7 +37,7 @@ from app.schemas.tournament_checkout import (
     TournamentCheckoutCreate,
     TournamentCheckoutPaymentState,
 )
-from app.tournament_checkouts import start_checkout
+from app.tournament_checkouts import read_checkout, start_checkout
 from app.tournament_entries import admit_to_event
 from app.tournament_errors import RecordedPlayDeletionError
 from app.tournament_event_stages import mint_stages
@@ -161,6 +161,12 @@ async def test_happy_path_prepare_then_webhook_success_admits_exactly_once(
     assert reconciled is not None
     assert reconciled.status is TournamentPaymentStatus.succeeded
     assert await _entered_player_ids(db_session, event.id) == [payer.primary_player.id]
+
+    # The combined checkout read embeds the linked payment's mapped state.
+    checkout_read = await read_checkout(
+        db_session, tournament_id=tournament.id, checkout_id=checkout_id, actor=payer
+    )
+    assert checkout_read.payment_state is TournamentCheckoutPaymentState.succeeded
 
     # Replaying reconcile (a duplicate webhook, or a status read racing it)
     # must not admit a second time or touch the settled row.
