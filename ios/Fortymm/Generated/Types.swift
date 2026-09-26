@@ -1128,6 +1128,25 @@ internal protocol APIProtocol: Sendable {
     /// - Remark: HTTP `DELETE /v1/tournaments/{tournament_id}/checkouts/{checkout_id}`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/{checkout_id}/delete(cancel_tournament_checkout_v1_tournaments__tournament_id__checkouts__checkout_id__delete)`.
     func cancelTournamentCheckoutV1TournamentsTournamentIdCheckoutsCheckoutIdDelete(_ input: Operations.CancelTournamentCheckoutV1TournamentsTournamentIdCheckoutsCheckoutIdDelete.Input) async throws -> Operations.CancelTournamentCheckoutV1TournamentsTournamentIdCheckoutsCheckoutIdDelete.Output
+    /// Get Tournament Payment
+    ///
+    /// Read a payment's current status, refreshing it against Stripe first
+    /// when it is not yet in a terminal state. Only the payer and the configured
+    /// merchant account may read it (#1816) — everyone else gets a 404. Never
+    /// carries the client secret.
+    ///
+    /// - Remark: HTTP `GET /v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/get(get_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_get)`.
+    func getTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet(_ input: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input) async throws -> Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Output
+    /// Prepare Tournament Payment
+    ///
+    /// Create (or resume) this checkout's Stripe PaymentIntent. The ONLY
+    /// response that ever carries the Stripe client secret — call this again to
+    /// resume an in-progress payment.
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/post(prepare_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_post)`.
+    func prepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost(_ input: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input) async throws -> Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Output
     /// List Schedule Solves
     ///
     /// Paginated cross-tournament solve ledger backing the Administration area's
@@ -2929,6 +2948,41 @@ extension APIProtocol {
         headers: Operations.CancelTournamentCheckoutV1TournamentsTournamentIdCheckoutsCheckoutIdDelete.Input.Headers = .init()
     ) async throws -> Operations.CancelTournamentCheckoutV1TournamentsTournamentIdCheckoutsCheckoutIdDelete.Output {
         try await cancelTournamentCheckoutV1TournamentsTournamentIdCheckoutsCheckoutIdDelete(Operations.CancelTournamentCheckoutV1TournamentsTournamentIdCheckoutsCheckoutIdDelete.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// Get Tournament Payment
+    ///
+    /// Read a payment's current status, refreshing it against Stripe first
+    /// when it is not yet in a terminal state. Only the payer and the configured
+    /// merchant account may read it (#1816) — everyone else gets a 404. Never
+    /// carries the client secret.
+    ///
+    /// - Remark: HTTP `GET /v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/get(get_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_get)`.
+    internal func getTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet(
+        path: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input.Path,
+        headers: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input.Headers = .init()
+    ) async throws -> Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Output {
+        try await getTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet(Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// Prepare Tournament Payment
+    ///
+    /// Create (or resume) this checkout's Stripe PaymentIntent. The ONLY
+    /// response that ever carries the Stripe client secret — call this again to
+    /// resume an in-progress payment.
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/post(prepare_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_post)`.
+    internal func prepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost(
+        path: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input.Path,
+        headers: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input.Headers = .init()
+    ) async throws -> Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Output {
+        try await prepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost(Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input(
             path: path,
             headers: headers
         ))
@@ -11367,6 +11421,14 @@ internal enum Components {
         /// - Remark: Generated from `#/components/schemas/TournamentCheckoutPaymentState`.
         internal enum TournamentCheckoutPaymentState: String, Codable, Hashable, Sendable, CaseIterable {
             case unavailable = "unavailable"
+            case preparing = "preparing"
+            case ready = "ready"
+            case checking = "checking"
+            case actionRequired = "action_required"
+            case succeeded = "succeeded"
+            case failed = "failed"
+            case expired = "expired"
+            case canceled = "canceled"
         }
         /// - Remark: Generated from `#/components/schemas/TournamentCheckoutRead`.
         internal struct TournamentCheckoutRead: Codable, Hashable, Sendable {
@@ -11503,6 +11565,7 @@ internal enum Components {
             case cancelled = "cancelled"
             case expired = "expired"
             case invalidated = "invalidated"
+            case completed = "completed"
         }
         /// A new tournament. It carries **no** ``status``: a tournament is born
         /// ``draft`` (the column's default) and moves only across a guarded lifecycle
@@ -12979,6 +13042,139 @@ internal enum Components {
                 case pinnedAt = "pinned_at"
                 case callNotifiedCount = "call_notified_count"
                 case completedAt = "completed_at"
+            }
+        }
+        /// The prepare/resume response — the ONE place the Stripe client secret is
+        /// ever returned. ``None`` when the create outcome was uncertain (Fortymm
+        /// state ``preparing``): the client has nothing to confirm yet and must
+        /// resume (call this operation again) shortly.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared`.
+        internal struct TournamentPaymentPrepared: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/id`.
+            internal var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/checkout_id`.
+            internal var checkoutId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/reference`.
+            internal var reference: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/status`.
+            internal var status: Components.Schemas.TournamentCheckoutPaymentState
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/last_error`.
+            internal var lastError: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/amount_cents`.
+            internal var amountCents: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/currency`.
+            internal var currency: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/created_at`.
+            internal var createdAt: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/client_secret`.
+            internal var clientSecret: Swift.String?
+            /// Creates a new `TournamentPaymentPrepared`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - checkoutId:
+            ///   - reference:
+            ///   - status:
+            ///   - lastError:
+            ///   - amountCents:
+            ///   - currency:
+            ///   - createdAt:
+            ///   - clientSecret:
+            internal init(
+                id: Swift.String,
+                checkoutId: Swift.String,
+                reference: Swift.String,
+                status: Components.Schemas.TournamentCheckoutPaymentState,
+                lastError: Swift.String? = nil,
+                amountCents: Swift.Int,
+                currency: Swift.String,
+                createdAt: Foundation.Date,
+                clientSecret: Swift.String? = nil
+            ) {
+                self.id = id
+                self.checkoutId = checkoutId
+                self.reference = reference
+                self.status = status
+                self.lastError = lastError
+                self.amountCents = amountCents
+                self.currency = currency
+                self.createdAt = createdAt
+                self.clientSecret = clientSecret
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case id
+                case checkoutId = "checkout_id"
+                case reference
+                case status
+                case lastError = "last_error"
+                case amountCents = "amount_cents"
+                case currency
+                case createdAt = "created_at"
+                case clientSecret = "client_secret"
+            }
+        }
+        /// The payer's (or merchant's) view of a payment. Never carries the Stripe
+        /// client secret — only :class:`TournamentPaymentPrepared` does, and only the
+        /// prepare/resume operation returns that (#1816 constraint).
+        ///
+        /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead`.
+        internal struct TournamentPaymentRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/id`.
+            internal var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/checkout_id`.
+            internal var checkoutId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/reference`.
+            internal var reference: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/status`.
+            internal var status: Components.Schemas.TournamentCheckoutPaymentState
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/last_error`.
+            internal var lastError: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/amount_cents`.
+            internal var amountCents: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/currency`.
+            internal var currency: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/created_at`.
+            internal var createdAt: Foundation.Date
+            /// Creates a new `TournamentPaymentRead`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - checkoutId:
+            ///   - reference:
+            ///   - status:
+            ///   - lastError:
+            ///   - amountCents:
+            ///   - currency:
+            ///   - createdAt:
+            internal init(
+                id: Swift.String,
+                checkoutId: Swift.String,
+                reference: Swift.String,
+                status: Components.Schemas.TournamentCheckoutPaymentState,
+                lastError: Swift.String? = nil,
+                amountCents: Swift.Int,
+                currency: Swift.String,
+                createdAt: Foundation.Date
+            ) {
+                self.id = id
+                self.checkoutId = checkoutId
+                self.reference = reference
+                self.status = status
+                self.lastError = lastError
+                self.amountCents = amountCents
+                self.currency = currency
+                self.createdAt = createdAt
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case id
+                case checkoutId = "checkout_id"
+                case reference
+                case status
+                case lastError = "last_error"
+                case amountCents = "amount_cents"
+                case currency
+                case createdAt = "created_at"
             }
         }
         /// - Remark: Generated from `#/components/schemas/TournamentRead`.
@@ -29086,6 +29282,387 @@ internal enum Operations {
             /// - Throws: An error if `self` is not `.unprocessableContent`.
             /// - SeeAlso: `.unprocessableContent`.
             internal var unprocessableContent: Operations.CancelTournamentCheckoutV1TournamentsTournamentIdCheckoutsCheckoutIdDelete.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Get Tournament Payment
+    ///
+    /// Read a payment's current status, refreshing it against Stripe first
+    /// when it is not yet in a terminal state. Only the payer and the configured
+    /// merchant account may read it (#1816) — everyone else gets a 404. Never
+    /// carries the client secret.
+    ///
+    /// - Remark: HTTP `GET /v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/get(get_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_get)`.
+    internal enum GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet {
+        internal static let id: Swift.String = "get_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_get"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/GET/path`.
+            internal struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/GET/path/tournament_id`.
+                internal var tournamentId: Swift.String
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/GET/path/checkout_id`.
+                internal var checkoutId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - tournamentId:
+                ///   - checkoutId:
+                internal init(
+                    tournamentId: Swift.String,
+                    checkoutId: Swift.String
+                ) {
+                    self.tournamentId = tournamentId
+                    self.checkoutId = checkoutId
+                }
+            }
+            internal var path: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input.Path
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/GET/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            internal init(
+                path: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input.Path,
+                headers: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/GET/responses/200/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.TournamentPaymentRead)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.TournamentPaymentRead {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/get(get_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_get)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            internal var ok: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/GET/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/get(get_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_get)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.GetTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentGet.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Prepare Tournament Payment
+    ///
+    /// Create (or resume) this checkout's Stripe PaymentIntent. The ONLY
+    /// response that ever carries the Stripe client secret — call this again to
+    /// resume an in-progress payment.
+    ///
+    /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/post(prepare_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_post)`.
+    internal enum PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost {
+        internal static let id: Swift.String = "prepare_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_post"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/POST/path`.
+            internal struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/POST/path/tournament_id`.
+                internal var tournamentId: Swift.String
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/POST/path/checkout_id`.
+                internal var checkoutId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - tournamentId:
+                ///   - checkoutId:
+                internal init(
+                    tournamentId: Swift.String,
+                    checkoutId: Swift.String
+                ) {
+                    self.tournamentId = tournamentId
+                    self.checkoutId = checkoutId
+                }
+            }
+            internal var path: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input.Path
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/POST/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            internal init(
+                path: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input.Path,
+                headers: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Created: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/POST/responses/201/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/POST/responses/201/content/application\/json`.
+                    case json(Components.Schemas.TournamentPaymentPrepared)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.TournamentPaymentPrepared {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Output.Created.Body
+                /// Creates a new `Created`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Output.Created.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/post(prepare_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_post)/responses/201`.
+            ///
+            /// HTTP response code: `201 created`.
+            case created(Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Output.Created)
+            /// The associated value of the enum case if `self` is `.created`.
+            ///
+            /// - Throws: An error if `self` is not `.created`.
+            /// - SeeAlso: `.created`.
+            internal var created: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Output.Created {
+                get throws {
+                    switch self {
+                    case let .created(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "created",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/POST/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/POST/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/post(prepare_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_post)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Output.UnprocessableContent {
                 get throws {
                     switch self {
                     case let .unprocessableContent(response):

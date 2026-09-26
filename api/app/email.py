@@ -23,7 +23,7 @@ def _dev_mode() -> bool:
     return os.environ.get("FORTYMM_DEV", "").lower() in {"1", "true", "yes"}
 
 
-def _app_base_url() -> str | None:
+def app_base_url() -> str | None:
     base = os.environ.get("APP_BASE_URL")
     if base:
         return base.rstrip("/")
@@ -33,7 +33,7 @@ def _app_base_url() -> str | None:
 
 
 def _confirm_url(raw_token: str) -> str:
-    base = _app_base_url()
+    base = app_base_url()
     if base is None:
         # Refuse to render a localhost URL into a real outbound email — that
         # was the failure mode that motivated this guard. Caller is expected
@@ -47,7 +47,7 @@ def _confirm_url(raw_token: str) -> str:
 
 
 def _login_url(raw_token: str) -> str:
-    base = _app_base_url()
+    base = app_base_url()
     if base is None:
         raise RuntimeError(
             "APP_BASE_URL must be set outside FORTYMM_DEV — refusing to "
@@ -63,7 +63,7 @@ def _absolute_link(link: str | None) -> str | None:
     no configured base — the email still sends, just without the deep link."""
     if not link:
         return None
-    base = _app_base_url()
+    base = app_base_url()
     if base is None:
         return None
     if link.startswith(("http://", "https://")):

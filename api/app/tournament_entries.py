@@ -281,6 +281,7 @@ async def admit_to_event(
     actor: User,
     user_id: uuid.UUID | None,
     client_ip: str | None = None,
+    payment_authorized: bool = False,
 ) -> TournamentEntrantRead:
     """Enter a player in a singles event — ``actor`` themselves, or (as the tournament's
     owner) the player ``user_id`` names — and return the created
@@ -407,7 +408,14 @@ async def admit_to_event(
     # manual arm for phone, offline and complimentary registrations. Checkout can
     # only reserve the signed-in player's own place, so applying this guard to the
     # director arm would make those entrants impossible to record.
-    if self_registration and Decimal(event.entry_fee) > 0:
+    #
+    # ``payment_authorized`` (#1816) is set ONLY by verified payment admission
+    # (app.tournament_payments._admit), never by an HTTP or MCP caller — it
+    # answers "has this player already paid Stripe", nothing more. Every OTHER
+    # guard below (rating eligibility, capacity, already-entered) still applies
+    # exactly as it does for a free self-registration; this is not a second
+    # ``force`` (ADR-0784 already forbids one).
+    if self_registration and Decimal(event.entry_fee) > 0 and not payment_authorized:
         raise EntryRefusedError(
             EntryRefusal.payment_required,
             "This event requires paid checkout.",

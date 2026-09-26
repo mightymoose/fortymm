@@ -1798,6 +1798,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tournament Payment
+         * @description Read a payment's current status, refreshing it against Stripe first
+         *     when it is not yet in a terminal state. Only the payer and the configured
+         *     merchant account may read it (#1816) — everyone else gets a 404. Never
+         *     carries the client secret.
+         */
+        get: operations["get_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_get"];
+        put?: never;
+        /**
+         * Prepare Tournament Payment
+         * @description Create (or resume) this checkout's Stripe PaymentIntent. The ONLY
+         *     response that ever carries the Stripe client secret — call this again to
+         *     resume an in-progress payment.
+         */
+        post: operations["prepare_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/schedule-solves": {
         parameters: {
             query?: never;
@@ -5417,7 +5446,7 @@ export interface components {
          * TournamentCheckoutPaymentState
          * @enum {string}
          */
-        TournamentCheckoutPaymentState: "unavailable";
+        TournamentCheckoutPaymentState: "unavailable" | "preparing" | "ready" | "checking" | "action_required" | "succeeded" | "failed" | "expired" | "canceled";
         /** TournamentCheckoutRead */
         TournamentCheckoutRead: {
             /**
@@ -5478,7 +5507,7 @@ export interface components {
          * TournamentCheckoutState
          * @enum {string}
          */
-        TournamentCheckoutState: "active" | "cancelled" | "expired" | "invalidated";
+        TournamentCheckoutState: "active" | "cancelled" | "expired" | "invalidated" | "completed";
         /**
          * TournamentCreate
          * @description A new tournament. It carries **no** ``status``: a tournament is born
@@ -5994,6 +6023,73 @@ export interface components {
             /** Call Notified Count */
             call_notified_count: number;
             completed_at: components["schemas"]["FixtureTimeRead"] | null;
+        };
+        /**
+         * TournamentPaymentPrepared
+         * @description The prepare/resume response — the ONE place the Stripe client secret is
+         *     ever returned. ``None`` when the create outcome was uncertain (Fortymm
+         *     state ``preparing``): the client has nothing to confirm yet and must
+         *     resume (call this operation again) shortly.
+         */
+        TournamentPaymentPrepared: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Checkout Id
+             * Format: uuid
+             */
+            checkout_id: string;
+            /** Reference */
+            reference: string;
+            status: components["schemas"]["TournamentCheckoutPaymentState"];
+            /** Last Error */
+            last_error: string | null;
+            /** Amount Cents */
+            amount_cents: number;
+            /** Currency */
+            currency: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Client Secret */
+            client_secret: string | null;
+        };
+        /**
+         * TournamentPaymentRead
+         * @description The payer's (or merchant's) view of a payment. Never carries the Stripe
+         *     client secret — only :class:`TournamentPaymentPrepared` does, and only the
+         *     prepare/resume operation returns that (#1816 constraint).
+         */
+        TournamentPaymentRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Checkout Id
+             * Format: uuid
+             */
+            checkout_id: string;
+            /** Reference */
+            reference: string;
+            status: components["schemas"]["TournamentCheckoutPaymentState"];
+            /** Last Error */
+            last_error: string | null;
+            /** Amount Cents */
+            amount_cents: number;
+            /** Currency */
+            currency: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** TournamentRead */
         TournamentRead: {
@@ -9115,6 +9211,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TournamentCheckoutRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+                checkout_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentPaymentRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prepare_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+                checkout_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentPaymentPrepared"];
                 };
             };
             /** @description Validation Error */

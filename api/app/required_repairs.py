@@ -238,9 +238,18 @@ async def request_schedule(db: AsyncSession, tournament_id: uuid.UUID) -> uuid.U
     return repair_id
 
 
+async def request_payment_cancel(db: AsyncSession, payment_id: uuid.UUID) -> None:
+    """Stage a best-effort PaymentIntent cancellation (#1816), dispatched only
+    after the caller's transaction commits. No durable ``RequiredRepair`` row
+    backs this — unlike ``request_rating``/``request_schedule``, correctness
+    does not depend on the job ever running (see ``_enqueue``'s
+    ``payment_cancel`` branch): it is a plain outbox entry."""
+    _stage(db, "payment_cancel", payment_id)
+
+
 @dataclass(frozen=True)
 class Dispatch:
-    kind: Literal["rating", "schedule"]
+    kind: Literal["rating", "schedule", "payment_cancel"]
     target: uuid.UUID
 
 
@@ -248,7 +257,9 @@ _STAGED = "app.required_repairs.dispatch"
 
 
 def _stage(
-    db: AsyncSession, kind: Literal["rating", "schedule"], target: uuid.UUID
+    db: AsyncSession,
+    kind: Literal["rating", "schedule", "payment_cancel"],
+    target: uuid.UUID,
 ) -> None:
     transaction = (
         db.sync_session.get_nested_transaction() or db.sync_session.get_transaction()
@@ -260,20 +271,32 @@ def _stage(
 
 
 def _enqueue(dispatch: Dispatch) -> None:
-    if dispatch.kind == "schedule":
-        queue_module.get_queue().enqueue(
-            "app.schedule_solves.run_schedule_solve",
-            str(dispatch.target),
-            job_timeout=int(get_settings().solver_time_cap_s) + 60,
-        )
-    else:
-        queue_module.get_ratings_queue().enqueue(
-            "app.required_repairs.run_rating",
-            str(dispatch.target),
-            job_timeout=900,
-            result_ttl=60,
-            failure_ttl=86400,
-        )
+    match dispatch.kind:
+        case "schedule":
+            queue_module.get_queue().enqueue(
+                "app.schedule_solves.run_schedule_solve",
+                str(dispatch.target),
+                job_timeout=int(get_settings().solver_time_cap_s) + 60,
+            )
+        case "rating":
+            queue_module.get_ratings_queue().enqueue(
+                "app.required_repairs.run_rating",
+                str(dispatch.target),
+                job_timeout=900,
+                result_ttl=60,
+                failure_ttl=86400,
+            )
+        case "payment_cancel":
+            # #1816: best-effort. If this job never runs (Redis down, worker
+            # crash), correctness is unaffected — a late success is still
+            # caught by reconcile's own already-entered → refund-due path;
+            # this only saves a payer from completing a charge a director's
+            # entry already made moot.
+            queue_module.get_payments_queue().enqueue(
+                "app.tournament_payments.run_cancel_payment_intent",
+                str(dispatch.target),
+                job_timeout=60,
+            )
 
 
 @event.listens_for(Session, "after_commit")

@@ -14,6 +14,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app import required_repairs
 from app.config import get_settings
 from app.models import (
     EventFormat,
@@ -26,6 +27,8 @@ from app.models import (
     TournamentEntry,
     TournamentEntryStatus,
     TournamentEvent,
+    TournamentPayment,
+    TournamentPaymentStatus,
     User,
 )
 from app.rate_limiting import (
@@ -54,6 +57,10 @@ from app.tournament_eligibility import (
     Eligible,
     evaluate_rating_eligibility,
     event_is_full,
+)
+from app.tournament_payment_state import (
+    TERMINAL_PAYMENT_STATUSES,
+    payment_display_state,
 )
 from app.tournament_queries import (
     active_entry_counts_by_event,
@@ -122,13 +129,13 @@ def _price_cents(price: Decimal) -> int:
     return int(price * Decimal(100))
 
 
-async def _database_now(db: AsyncSession) -> datetime:
+async def database_now(db: AsyncSession) -> datetime:
     return cast(
         datetime, (await db.execute(select(func.clock_timestamp()))).scalar_one()
     )
 
 
-def _effective_state(
+def checkout_effective_state(
     checkout: TournamentCheckout, tournament: Tournament, now: datetime
 ) -> TournamentCheckoutState:
     match checkout.status:
@@ -138,6 +145,8 @@ def _effective_state(
             return TournamentCheckoutState.expired
         case TournamentCheckoutStatus.invalidated:
             return TournamentCheckoutState.invalidated
+        case TournamentCheckoutStatus.completed:
+            return TournamentCheckoutState.completed
         case TournamentCheckoutStatus.active:
             if checkout.registration_generation != tournament.registration_generation:
                 return TournamentCheckoutState.invalidated
@@ -148,16 +157,33 @@ def _effective_state(
             return TournamentCheckoutState.active
 
 
-def _read(
-    checkout: TournamentCheckout, tournament: Tournament, now: datetime
+async def _read(
+    db: AsyncSession,
+    checkout: TournamentCheckout,
+    tournament: Tournament,
+    now: datetime,
 ) -> TournamentCheckoutRead:
+    # A checkout is at most one-to-one with a payment (#1816); nothing here
+    # triggers Stripe — that only happens on the dedicated payment status
+    # read/webhook/prepare paths (app.tournament_payments). This is a cheap,
+    # already-known-state embed for the combined checkout view.
+    payment_status = await db.scalar(
+        select(TournamentPayment.status).where(
+            TournamentPayment.checkout_id == checkout.id
+        )
+    )
+    payment_state = (
+        payment_display_state(payment_status)
+        if payment_status is not None
+        else TournamentCheckoutPaymentState.unavailable
+    )
     return TournamentCheckoutRead(
         id=checkout.id,
         request_id=checkout.request_id,
         tournament_id=checkout.tournament_id,
         registration_generation=checkout.registration_generation,
-        status=_effective_state(checkout, tournament, now),
-        payment_state=TournamentCheckoutPaymentState.unavailable,
+        status=checkout_effective_state(checkout, tournament, now),
+        payment_state=payment_state,
         currency=checkout.currency,
         total_cents=checkout.total_cents,
         created_at=checkout.created_at,
@@ -188,7 +214,7 @@ async def _expire_stale_checkouts(
             .options(selectinload(TournamentCheckout.lines))
         )
     )
-    now = await _database_now(db)
+    now = await database_now(db)
     for checkout in checkouts:
         if (
             checkout.registration_generation != tournament.registration_generation
@@ -234,20 +260,53 @@ async def invalidate_checkout_for_entrant_event(
     The caller owns the tournament lock, which serializes this transition with
     checkout admission. Only a quote containing the manually entered event is
     invalidated; an unrelated paid selection in the same tournament survives.
+
+    #1816: a checkout with an OPEN payment (one not yet in a terminal state)
+    is marked ``cancel_requested`` in this SAME transaction — the director's
+    entry supersedes it — and an RQ job is staged (dispatched only after this
+    transaction commits, via ``app.required_repairs``'s outbox) to cancel the
+    PaymentIntent itself: that is a Stripe network call, which cannot run
+    inside this locked transaction. If Stripe later reports success anyway,
+    ``reconcile_payment`` finds the entry already made and records a refund
+    obligation instead of reversing the director's action.
     """
-    checkout_ids = select(TournamentCheckoutLine.checkout_id).where(
+    checkout_ids_select = select(TournamentCheckoutLine.checkout_id).where(
         TournamentCheckoutLine.event_id == event_id
     )
+    matching_checkout_ids = list(
+        await db.scalars(
+            select(TournamentCheckout.id).where(
+                TournamentCheckout.id.in_(checkout_ids_select),
+                TournamentCheckout.tournament_id == tournament_id,
+                TournamentCheckout.entrant_player_id == entrant_player_id,
+                TournamentCheckout.status == TournamentCheckoutStatus.active,
+            )
+        )
+    )
+    if not matching_checkout_ids:
+        return
     await db.execute(
         update(TournamentCheckout)
-        .where(
-            TournamentCheckout.id.in_(checkout_ids),
-            TournamentCheckout.tournament_id == tournament_id,
-            TournamentCheckout.entrant_player_id == entrant_player_id,
-            TournamentCheckout.status == TournamentCheckoutStatus.active,
-        )
+        .where(TournamentCheckout.id.in_(matching_checkout_ids))
         .values(status=TournamentCheckoutStatus.invalidated)
     )
+    now = await database_now(db)
+    cancel_requested_ids = (
+        await db.execute(
+            update(TournamentPayment)
+            .where(
+                TournamentPayment.checkout_id.in_(matching_checkout_ids),
+                TournamentPayment.status.not_in(TERMINAL_PAYMENT_STATUSES),
+            )
+            .values(
+                status=TournamentPaymentStatus.cancel_requested,
+                cancel_requested_at=now,
+            )
+            .returning(TournamentPayment.id)
+        )
+    ).scalars()
+    for payment_id in cancel_requested_ids:
+        await required_repairs.request_payment_cancel(db, payment_id)
 
 
 async def _load_tournament_locked(
@@ -404,7 +463,7 @@ async def _start_checkout_after_admission(
         )
         .options(selectinload(TournamentCheckout.lines))
     )
-    now = await _database_now(db)
+    now = await database_now(db)
     if prior_request is not None:
         if prior_request.tournament_id != tournament.id:
             raise CheckoutRefusedError(
@@ -419,11 +478,11 @@ async def _start_checkout_after_admission(
         # A durable result wins over mutable admission gates, including later
         # player retirement. A retry after a lost response must replay the terminal
         # result rather than masquerading as a new checkout.
-        effective = _effective_state(prior_request, tournament, now)
+        effective = checkout_effective_state(prior_request, tournament, now)
         if effective is not TournamentCheckoutState.active:
             prior_request.status = TournamentCheckoutStatus(effective.value)
             await db.commit()
-        return _read(prior_request, tournament, now)
+        return await _read(db, prior_request, tournament, now)
 
     # Account → Tournament → Player is the shared registration lock order. Taking
     # Player before Tournament can deadlock against free entry by another account
@@ -579,8 +638,8 @@ async def _start_checkout_after_admission(
     db.add(checkout)
     await db.commit()
     await db.refresh(checkout)
-    now = await _database_now(db)
-    return _read(checkout, tournament, now)
+    now = await database_now(db)
+    return await _read(db, checkout, tournament, now)
 
 
 async def read_checkout(
@@ -607,7 +666,7 @@ async def read_checkout(
     tournament = await db.get(Tournament, tournament_id)
     if tournament is None:
         raise CheckoutNotFoundError()
-    return _read(checkout, tournament, await _database_now(db))
+    return await _read(db, checkout, tournament, await database_now(db))
 
 
 async def read_current_checkout(
@@ -633,7 +692,7 @@ async def read_current_checkout(
     tournament = await db.get(Tournament, tournament_id)
     if tournament is None:
         raise CheckoutNotFoundError()
-    return _read(checkout, tournament, await _database_now(db))
+    return await _read(db, checkout, tournament, await database_now(db))
 
 
 async def cancel_checkout(
@@ -670,8 +729,8 @@ async def cancel_checkout(
         and (player is None or checkout.entrant_player_id != player.id)
     ):
         raise CheckoutNotFoundError()
-    now = await _database_now(db)
-    effective = _effective_state(checkout, tournament, now)
+    now = await database_now(db)
+    effective = checkout_effective_state(checkout, tournament, now)
     if effective is TournamentCheckoutState.active:
         checkout.status = TournamentCheckoutStatus.cancelled
         checkout.cancelled_at = now
@@ -682,4 +741,4 @@ async def cancel_checkout(
     elif effective is TournamentCheckoutState.invalidated:
         checkout.status = TournamentCheckoutStatus.invalidated
         await db.commit()
-    return _read(checkout, tournament, now)
+    return await _read(db, checkout, tournament, now)

@@ -36,6 +36,18 @@ class McpConnectorConfig:
     client_id: str
 
 
+class DeployEnvironment(StrEnum):
+    """The explicit production gate (#1816).
+
+    Deliberately explicit configuration, never inferred from a hostname or a
+    key prefix: a deploy that forgets to set this stays ``development``, which
+    is the fail-safe direction for :meth:`Settings._refuse_live_key_outside_production`.
+    """
+
+    DEVELOPMENT = "development"
+    PRODUCTION = "production"
+
+
 class GeocoderChoice(StrEnum):
     """Which geocoding implementation this process uses — a closed set.
 
@@ -203,6 +215,60 @@ class Settings(BaseSettings):
     guest_creation_ip_limit_per_day: Annotated[int, Field(gt=0)] = 300
     match_creation_account_limit_per_hour: Annotated[int, Field(gt=0)] = 60
     match_creation_account_limit_per_day: Annotated[int, Field(gt=0)] = 300
+
+    #: The explicit production gate (#1816). Never inferred from the Stripe key
+    #: prefix or anything else — see :class:`DeployEnvironment`.
+    environment: DeployEnvironment = DeployEnvironment.DEVELOPMENT
+
+    #: The Stripe secret API key this process authenticates with. Empty means
+    #: card payments are unconfigured; ``TournamentPaymentService`` fails
+    #: closed rather than calling Stripe with no key.
+    stripe_secret_key: str = ""
+
+    #: The Stripe ``acct_…`` id that owns :attr:`stripe_secret_key`, verified at
+    #: startup against the account Stripe reports for that key (see
+    #: ``app.payments.startup.verify_stripe_account``). An empty payee Stripe
+    #: account on a payment row means charges run directly on THIS account
+    #: (the launch posture); Stripe Connect (#1819) adds connected payees
+    #: without touching this field's meaning.
+    stripe_account_id: str = ""
+
+    #: Comma-separated Stripe webhook signing secrets (plural — more than one
+    #: must verify at once, e.g. rotating a secret, or a local ``stripe
+    #: listen`` secret alongside a deployed one). Read as a single
+    #: comma-separated string rather than pydantic-settings' JSON-list env
+    #: parsing, so an operator can set it with a plain shell-quoted value.
+    stripe_webhook_signing_secrets_raw: str = Field(
+        default="", alias="STRIPE_WEBHOOK_SIGNING_SECRETS"
+    )
+
+    @property
+    def stripe_webhook_signing_secrets(self) -> list[str]:
+        return [
+            secret.strip()
+            for secret in self.stripe_webhook_signing_secrets_raw.split(",")
+            if secret.strip()
+        ]
+
+    @model_validator(mode="after")
+    def _refuse_live_key_outside_production(self) -> "Settings":
+        """Refuse to boot with a live Stripe key anywhere but the explicit
+        production posture (#1816 constraint: "production uses no live key
+        until launch"). Mirrors :meth:`_require_google_key`'s stance: one
+        guard on the model covers every entrypoint that constructs
+        ``Settings`` (the API, the RQ worker, ad hoc scripts), not just the
+        FastAPI dependency path.
+        """
+        if (
+            self.stripe_secret_key.startswith("sk_live_")
+            and self.environment is not DeployEnvironment.PRODUCTION
+        ):
+            raise ValueError(
+                "STRIPE_SECRET_KEY is a live key ('sk_live_...') but "
+                "ENVIRONMENT is not 'production'. Refusing to start rather "
+                "than risk a live charge from a non-production deploy."
+            )
+        return self
 
     @model_validator(mode="after")
     def _require_google_key(self) -> "Settings":

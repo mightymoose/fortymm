@@ -277,6 +277,42 @@ async def test_populated_beta_history_survives_upgrade_to_head(
                         await connection.execute(text(statement))
 
 
+async def test_payments_migration_backfills_pre_payments_registration_stamp(
+    postgres_server_url,
+):
+    """#1816's forward migration adds ``pre_payments_registration`` NOT NULL
+    with a ``true`` server default, so every registration that exists at
+    migration time (the frozen fixture's populated rows) comes back stamped
+    ``true``. The default then drops to ``false`` for later rows."""
+    fixture = json.loads(FIXTURE.read_text())
+    async with empty_database(postgres_server_url) as engine:
+        run_alembic(engine.url, "upgrade", "0001")
+        await load_frozen_fixture(engine, fixture)
+        async with engine.connect() as connection:
+            registration_count = await connection.scalar(
+                text("SELECT count(*) FROM tournament_entry_registrations")
+            )
+        assert registration_count and registration_count > 0
+        run_alembic(engine.url, "upgrade", "head")
+        async with engine.connect() as connection:
+            unstamped = await connection.scalar(
+                text(
+                    "SELECT count(*) FROM tournament_entry_registrations "
+                    "WHERE pre_payments_registration IS NOT TRUE"
+                )
+            )
+            later_default = await connection.scalar(
+                text(
+                    "SELECT column_default FROM information_schema.columns "
+                    "WHERE table_name = 'tournament_entry_registrations' "
+                    "AND column_name = 'pre_payments_registration'"
+                )
+            )
+        assert unstamped == 0
+        # A registration created after the migration is not "before payments".
+        assert later_default == "false"
+
+
 @pytest.mark.parametrize(
     "statement",
     [

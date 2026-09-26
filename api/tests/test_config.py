@@ -249,3 +249,35 @@ def test_auth_rate_limit_rejects_invalid_values(
     monkeypatch.setenv(env_var, bad_value)
     with pytest.raises(ValidationError):
         get_settings()
+
+
+def test_live_stripe_key_outside_production_refuses_to_boot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1816: a live key anywhere but the explicit production posture must
+    fail construction, mirroring ``_require_google_key``'s stance."""
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_live_abc123")
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    with pytest.raises(ValidationError):
+        get_settings()
+
+
+def test_live_stripe_key_in_production_boots(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_live_abc123")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    assert get_settings().stripe_secret_key == "sk_live_abc123"
+
+
+def test_test_mode_stripe_key_boots_without_the_production_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_abc123")
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    assert get_settings().stripe_secret_key == "sk_test_abc123"
+
+
+def test_webhook_signing_secrets_split_on_commas_and_ignore_blanks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STRIPE_WEBHOOK_SIGNING_SECRETS", "whsec_a, whsec_b,, ")
+    assert get_settings().stripe_webhook_signing_secrets == ["whsec_a", "whsec_b"]

@@ -19,6 +19,11 @@ NOTIFICATIONS_QUEUE = "notifications"
 # looping compose service in dev/qa/uat), so nothing is currently enqueued here
 # and no rq worker processes this queue.
 RETIREMENT_QUEUE = "retirement"
+#: PaymentIntent cancellation jobs (#1816). A director entry that supersedes an
+#: open payment marks it ``cancel_requested`` inside its own locked transaction,
+#: then enqueues the actual Stripe cancel call here — the network call must run
+#: outside that lock, so it cannot happen inline.
+PAYMENTS_QUEUE = "payments"
 
 
 def _connection() -> Redis:
@@ -48,3 +53,7 @@ def get_notifications_queue() -> Queue:
 
 def get_retirement_queue() -> Queue:
     return Queue(RETIREMENT_QUEUE, connection=_connection())
+
+
+def get_payments_queue() -> Queue:
+    return Queue(PAYMENTS_QUEUE, connection=_connection())

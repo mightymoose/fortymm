@@ -31,6 +31,10 @@ class TournamentCheckoutStatus(enum.Enum):
     cancelled = "cancelled"
     expired = "expired"
     invalidated = "invalidated"
+    #: A verified payment converted this checkout's hold into registrations
+    #: (#1816). Like every non-active status, it no longer counts toward
+    #: capacity.
+    completed = "completed"
 
 
 class TournamentCheckout(Base):
