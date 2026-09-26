@@ -13044,6 +13044,20 @@ internal enum Components {
                 case completedAt = "completed_at"
             }
         }
+        /// The safe, player-facing decline codes (#1816). Never Stripe's raw
+        /// ``decline_code`` or message. A decline code outside the named set maps to
+        /// :attr:`card_error`.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TournamentPaymentErrorCode`.
+        internal enum TournamentPaymentErrorCode: String, Codable, Hashable, Sendable, CaseIterable {
+            case cardDeclined = "card_declined"
+            case expiredCard = "expired_card"
+            case incorrectCvc = "incorrect_cvc"
+            case incorrectNumber = "incorrect_number"
+            case insufficientFunds = "insufficient_funds"
+            case processingError = "processing_error"
+            case cardError = "card_error"
+        }
         /// The prepare/resume response — the ONE place the Stripe client secret is
         /// ever returned. ``None`` when the create outcome was uncertain (Fortymm
         /// state ``preparing``): the client has nothing to confirm yet and must
@@ -13057,14 +13071,36 @@ internal enum Components {
             internal var checkoutId: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/reference`.
             internal var reference: Swift.String
-            /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/status`.
-            internal var status: Components.Schemas.TournamentCheckoutPaymentState
-            /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/last_error`.
-            internal var lastError: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/payment_state`.
+            internal var paymentState: Components.Schemas.TournamentCheckoutPaymentState
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/last_error_code`.
+            internal struct LastErrorCodePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/last_error_code/value1`.
+                internal var value1: Components.Schemas.TournamentPaymentErrorCode
+                /// Creates a new `LastErrorCodePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.TournamentPaymentErrorCode) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/last_error_code`.
+            internal var lastErrorCode: Components.Schemas.TournamentPaymentPrepared.LastErrorCodePayload?
             /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/amount_cents`.
             internal var amountCents: Swift.Int
             /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/currency`.
-            internal var currency: Swift.String
+            internal enum CurrencyPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case usd = "USD"
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/currency`.
+            internal var currency: Components.Schemas.TournamentPaymentPrepared.CurrencyPayload
             /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/created_at`.
             internal var createdAt: Foundation.Date
             /// - Remark: Generated from `#/components/schemas/TournamentPaymentPrepared/client_secret`.
@@ -13075,8 +13111,8 @@ internal enum Components {
             ///   - id:
             ///   - checkoutId:
             ///   - reference:
-            ///   - status:
-            ///   - lastError:
+            ///   - paymentState:
+            ///   - lastErrorCode:
             ///   - amountCents:
             ///   - currency:
             ///   - createdAt:
@@ -13085,18 +13121,18 @@ internal enum Components {
                 id: Swift.String,
                 checkoutId: Swift.String,
                 reference: Swift.String,
-                status: Components.Schemas.TournamentCheckoutPaymentState,
-                lastError: Swift.String? = nil,
+                paymentState: Components.Schemas.TournamentCheckoutPaymentState,
+                lastErrorCode: Components.Schemas.TournamentPaymentPrepared.LastErrorCodePayload? = nil,
                 amountCents: Swift.Int,
-                currency: Swift.String,
+                currency: Components.Schemas.TournamentPaymentPrepared.CurrencyPayload,
                 createdAt: Foundation.Date,
                 clientSecret: Swift.String? = nil
             ) {
                 self.id = id
                 self.checkoutId = checkoutId
                 self.reference = reference
-                self.status = status
-                self.lastError = lastError
+                self.paymentState = paymentState
+                self.lastErrorCode = lastErrorCode
                 self.amountCents = amountCents
                 self.currency = currency
                 self.createdAt = createdAt
@@ -13106,8 +13142,8 @@ internal enum Components {
                 case id
                 case checkoutId = "checkout_id"
                 case reference
-                case status
-                case lastError = "last_error"
+                case paymentState = "payment_state"
+                case lastErrorCode = "last_error_code"
                 case amountCents = "amount_cents"
                 case currency
                 case createdAt = "created_at"
@@ -13118,6 +13154,9 @@ internal enum Components {
         /// client secret — only :class:`TournamentPaymentPrepared` does, and only the
         /// prepare/resume operation returns that (#1816 constraint).
         ///
+        /// ``payment_state`` is the same field, with the same values, as the checkout
+        /// read's ``payment_state``.
+        ///
         /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead`.
         internal struct TournamentPaymentRead: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/id`.
@@ -13126,14 +13165,36 @@ internal enum Components {
             internal var checkoutId: Swift.String
             /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/reference`.
             internal var reference: Swift.String
-            /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/status`.
-            internal var status: Components.Schemas.TournamentCheckoutPaymentState
-            /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/last_error`.
-            internal var lastError: Swift.String?
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/payment_state`.
+            internal var paymentState: Components.Schemas.TournamentCheckoutPaymentState
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/last_error_code`.
+            internal struct LastErrorCodePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/last_error_code/value1`.
+                internal var value1: Components.Schemas.TournamentPaymentErrorCode
+                /// Creates a new `LastErrorCodePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.TournamentPaymentErrorCode) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/last_error_code`.
+            internal var lastErrorCode: Components.Schemas.TournamentPaymentRead.LastErrorCodePayload?
             /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/amount_cents`.
             internal var amountCents: Swift.Int
             /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/currency`.
-            internal var currency: Swift.String
+            internal enum CurrencyPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case usd = "USD"
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/currency`.
+            internal var currency: Components.Schemas.TournamentPaymentRead.CurrencyPayload
             /// - Remark: Generated from `#/components/schemas/TournamentPaymentRead/created_at`.
             internal var createdAt: Foundation.Date
             /// Creates a new `TournamentPaymentRead`.
@@ -13142,8 +13203,8 @@ internal enum Components {
             ///   - id:
             ///   - checkoutId:
             ///   - reference:
-            ///   - status:
-            ///   - lastError:
+            ///   - paymentState:
+            ///   - lastErrorCode:
             ///   - amountCents:
             ///   - currency:
             ///   - createdAt:
@@ -13151,17 +13212,17 @@ internal enum Components {
                 id: Swift.String,
                 checkoutId: Swift.String,
                 reference: Swift.String,
-                status: Components.Schemas.TournamentCheckoutPaymentState,
-                lastError: Swift.String? = nil,
+                paymentState: Components.Schemas.TournamentCheckoutPaymentState,
+                lastErrorCode: Components.Schemas.TournamentPaymentRead.LastErrorCodePayload? = nil,
                 amountCents: Swift.Int,
-                currency: Swift.String,
+                currency: Components.Schemas.TournamentPaymentRead.CurrencyPayload,
                 createdAt: Foundation.Date
             ) {
                 self.id = id
                 self.checkoutId = checkoutId
                 self.reference = reference
-                self.status = status
-                self.lastError = lastError
+                self.paymentState = paymentState
+                self.lastErrorCode = lastErrorCode
                 self.amountCents = amountCents
                 self.currency = currency
                 self.createdAt = createdAt
@@ -13170,8 +13231,8 @@ internal enum Components {
                 case id
                 case checkoutId = "checkout_id"
                 case reference
-                case status
-                case lastError = "last_error"
+                case paymentState = "payment_state"
+                case lastErrorCode = "last_error_code"
                 case amountCents = "amount_cents"
                 case currency
                 case createdAt = "created_at"

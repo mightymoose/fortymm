@@ -6025,6 +6025,14 @@ export interface components {
             completed_at: components["schemas"]["FixtureTimeRead"] | null;
         };
         /**
+         * TournamentPaymentErrorCode
+         * @description The safe, player-facing decline codes (#1816). Never Stripe's raw
+         *     ``decline_code`` or message. A decline code outside the named set maps to
+         *     :attr:`card_error`.
+         * @enum {string}
+         */
+        TournamentPaymentErrorCode: "card_declined" | "expired_card" | "incorrect_cvc" | "incorrect_number" | "insufficient_funds" | "processing_error" | "card_error";
+        /**
          * TournamentPaymentPrepared
          * @description The prepare/resume response — the ONE place the Stripe client secret is
          *     ever returned. ``None`` when the create outcome was uncertain (Fortymm
@@ -6044,13 +6052,15 @@ export interface components {
             checkout_id: string;
             /** Reference */
             reference: string;
-            status: components["schemas"]["TournamentCheckoutPaymentState"];
-            /** Last Error */
-            last_error: string | null;
+            payment_state: components["schemas"]["TournamentCheckoutPaymentState"];
+            last_error_code: components["schemas"]["TournamentPaymentErrorCode"] | null;
             /** Amount Cents */
             amount_cents: number;
-            /** Currency */
-            currency: string;
+            /**
+             * Currency
+             * @constant
+             */
+            currency: "USD";
             /**
              * Created At
              * Format: date-time
@@ -6064,6 +6074,9 @@ export interface components {
          * @description The payer's (or merchant's) view of a payment. Never carries the Stripe
          *     client secret — only :class:`TournamentPaymentPrepared` does, and only the
          *     prepare/resume operation returns that (#1816 constraint).
+         *
+         *     ``payment_state`` is the same field, with the same values, as the checkout
+         *     read's ``payment_state``.
          */
         TournamentPaymentRead: {
             /**
@@ -6078,13 +6091,15 @@ export interface components {
             checkout_id: string;
             /** Reference */
             reference: string;
-            status: components["schemas"]["TournamentCheckoutPaymentState"];
-            /** Last Error */
-            last_error: string | null;
+            payment_state: components["schemas"]["TournamentCheckoutPaymentState"];
+            last_error_code: components["schemas"]["TournamentPaymentErrorCode"] | null;
             /** Amount Cents */
             amount_cents: number;
-            /** Currency */
-            currency: string;
+            /**
+             * Currency
+             * @constant
+             */
+            currency: "USD";
             /**
              * Created At
              * Format: date-time
