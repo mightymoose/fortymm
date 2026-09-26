@@ -10,3 +10,9 @@ class PaymentNotFoundError(Exception):
 class PaymentNotReadyError(Exception):
     """The checkout cannot be turned into a payment yet (it is not the
     payer's own active checkout)."""
+
+
+class PaymentProviderUnavailableError(Exception):
+    """Stripe could not be reached while reconciling a payment. Nothing
+    changed: the payment keeps its last known state, and a later status read,
+    resume or webhook retry reconciles it."""

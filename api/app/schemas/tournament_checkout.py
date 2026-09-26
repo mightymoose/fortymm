@@ -10,6 +10,7 @@ class TournamentCheckoutState(StrEnum):
     cancelled = "cancelled"
     expired = "expired"
     invalidated = "invalidated"
+    completed = "completed"
 
 
 class TournamentCheckoutPaymentState(StrEnum):

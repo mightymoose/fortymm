@@ -78,6 +78,7 @@ def upgrade() -> None:
         "quarantine",
         "line_could_not_admit",
         "superseded_by_director_entry",
+        "checkout_superseded",
         name="tournament_payment_refund_reason",
         create_type=False,
     )
@@ -85,6 +86,7 @@ def upgrade() -> None:
         "quarantine",
         "line_could_not_admit",
         "superseded_by_director_entry",
+        "checkout_superseded",
         name="tournament_payment_refund_reason",
     ).create(op.get_bind())
 
@@ -107,9 +109,7 @@ def upgrade() -> None:
             nullable=False,
         ),
         sa.Column("provider_payment_intent_id", sa.String(length=255), nullable=True),
-        sa.Column(
-            "status", payment_status, server_default="preparing", nullable=False
-        ),
+        sa.Column("status", payment_status, server_default="preparing", nullable=False),
         sa.Column("amount_cents", sa.BigInteger(), nullable=False),
         sa.Column(
             "currency", sa.String(length=3), server_default="USD", nullable=False
@@ -131,7 +131,9 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "amount_cents > 0", name="ck_tournament_payments_amount_positive"
         ),
-        sa.CheckConstraint("currency = 'USD'", name="ck_tournament_payments_currency_usd"),
+        sa.CheckConstraint(
+            "currency = 'USD'", name="ck_tournament_payments_currency_usd"
+        ),
         sa.ForeignKeyConstraint(
             ["checkout_id"], ["tournament_checkouts.id"], ondelete="RESTRICT"
         ),
@@ -169,9 +171,7 @@ def upgrade() -> None:
         sa.Column("payment_id", sa.UUID(), nullable=False),
         sa.Column("event_id", sa.UUID(), nullable=False),
         sa.Column("price_cents", sa.Integer(), nullable=False),
-        sa.Column(
-            "outcome", line_outcome, server_default="pending", nullable=False
-        ),
+        sa.Column("outcome", line_outcome, server_default="pending", nullable=False),
         sa.Column("entry_id", sa.UUID(), nullable=True),
         sa.ForeignKeyConstraint(
             ["payment_id"], ["tournament_payments.id"], ondelete="CASCADE"
@@ -249,12 +249,11 @@ def upgrade() -> None:
         ),
     )
 
-    # "Registered before payments" stamp (#1816 acceptance criteria): adding a
-    # NOT NULL column with a server_default backfills every EXISTING row to
-    # ``true`` as part of this single ALTER TABLE (PostgreSQL 11+ metadata-only
-    # fast path — no full table rewrite). New rows the payment admission path
-    # inserts explicitly pass ``False``; every other write path (free entry,
-    # director entry) is unaffected and keeps the ``true`` default.
+    # "Registered before payments" stamp (#1816 acceptance criteria). Adding
+    # the NOT NULL column with a ``true`` default stamps every registration
+    # that exists at deploy time, as a metadata-only change on PostgreSQL 11+.
+    # The default then drops to ``false``, so a registration created after
+    # this migration, by any path, is never stamped as pre-payments.
     op.add_column(
         "tournament_entry_registrations",
         sa.Column(
@@ -264,9 +263,29 @@ def upgrade() -> None:
             nullable=False,
         ),
     )
+    op.alter_column(
+        "tournament_entry_registrations",
+        "pre_payments_registration",
+        server_default=sa.text("false"),
+    )
+
+    # A verified payment consumes its checkout's hold (#1816). ``cancelled``
+    # already means the player's own cancellation, which a late success must
+    # never reverse, so admission needs its own status. ADD VALUE only extends
+    # the type: no existing row or merged migration changes.
+    op.execute(
+        "ALTER TYPE tournament_checkout_status ADD VALUE IF NOT EXISTS 'completed'"
+    )
 
 
 def downgrade() -> None:
+    # PostgreSQL cannot drop an enum value. Move completed checkouts to
+    # ``cancelled`` (both mean "no longer holds capacity") and leave the value
+    # on the type, which is harmless to the previous revision.
+    op.execute(
+        "UPDATE tournament_checkouts SET status = 'cancelled' "
+        "WHERE status = 'completed'"
+    )
     op.drop_column("tournament_entry_registrations", "pre_payments_registration")
     op.drop_table("tournament_payment_provider_events")
     op.drop_index(

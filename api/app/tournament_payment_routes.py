@@ -5,6 +5,7 @@ import uuid
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
+from sqlalchemy import delete
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,7 +19,11 @@ from app.schemas.tournament_payment import (
     TournamentPaymentRead,
 )
 from app.sessions import get_current_user
-from app.tournament_payment_errors import PaymentNotFoundError, PaymentNotReadyError
+from app.tournament_payment_errors import (
+    PaymentNotFoundError,
+    PaymentNotReadyError,
+    PaymentProviderUnavailableError,
+)
 from app.tournament_payments import (
     HANDLED_PROVIDER_EVENT_TYPES,
     find_payment_id_for_provider_event,
@@ -116,7 +121,7 @@ async def stripe_webhook(
     signature = request.headers.get("stripe-signature")
     secrets = get_settings().stripe_webhook_signing_secrets
     event = None
-    for secret in secrets:
+    for secret in secrets if signature else []:
         try:
             event = stripe.Webhook.construct_event(raw_body, signature, secret)
             break
@@ -152,8 +157,22 @@ async def stripe_webhook(
         and payment_id is not None
         and incoming.type in HANDLED_PROVIDER_EVENT_TYPES
     ):
-        await reconcile_payment(
-            db, payment_id=payment_id, provider=provider, source_event=incoming
-        )
+        try:
+            await reconcile_payment(
+                db, payment_id=payment_id, provider=provider, source_event=incoming
+            )
+        except PaymentProviderUnavailableError as error:
+            # Not acknowledged: forget the event so Stripe's retry processes it
+            # instead of hitting the replay no-op. The payment is unchanged.
+            await db.rollback()
+            await db.execute(
+                delete(TournamentPaymentProviderEvent).where(
+                    TournamentPaymentProviderEvent.provider_event_id == incoming.id
+                )
+            )
+            await db.commit()
+            raise HTTPException(
+                status_code=503, detail="Payment provider unavailable."
+            ) from error
 
     return StripeWebhookAck(received=True)

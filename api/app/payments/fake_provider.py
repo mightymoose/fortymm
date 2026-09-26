@@ -15,7 +15,8 @@ from app.payments.provider import (
     ProviderCreateUncertain,
     ProviderIntentCreated,
     ProviderPaymentIntent,
-    ProviderRetrievalFailed,
+    ProviderRefused,
+    ProviderUnavailable,
 )
 
 
@@ -38,7 +39,9 @@ class FakePaymentProvider:
     force_uncertain_once: bool = False
     _by_idempotency_key: dict[str, _FakeIntentState] = field(default_factory=dict)
     _by_intent_id: dict[str, _FakeIntentState] = field(default_factory=dict)
+    #: Intent ids whose retrieval fails as if Stripe could not be reached.
     retrieval_failures: set[str] = field(default_factory=set)
+    #: Intent ids whose retrieval Stripe refuses (wrong payee account).
     retrieval_wrong_account: set[str] = field(default_factory=set)
 
     async def create_payment_intent(
@@ -76,12 +79,12 @@ class FakePaymentProvider:
         self, *, payee_account: str | None, payment_intent_id: str
     ) -> _FakeIntentState:
         if payment_intent_id in self.retrieval_failures:
-            raise ProviderRetrievalFailed("fake retrieval failure")
+            raise ProviderUnavailable("fake: Stripe could not be reached")
         state = self._by_intent_id.get(payment_intent_id)
         if state is None:
-            raise ProviderRetrievalFailed("no such fake payment intent")
+            raise ProviderRefused("no such fake payment intent")
         if payment_intent_id in self.retrieval_wrong_account:
-            raise ProviderRetrievalFailed("fake: intent belongs to another account")
+            raise ProviderRefused("fake: intent belongs to another account")
         return state
 
     async def retrieve_payment_intent(
@@ -94,12 +97,10 @@ class FakePaymentProvider:
     async def cancel_payment_intent(
         self, *, payee_account: str | None, payment_intent_id: str
     ) -> ProviderPaymentIntent:
-        state = self._state_or_raise(
+        self._state_or_raise(
             payee_account=payee_account, payment_intent_id=payment_intent_id
         )
-        state.intent = state.intent.model_copy(update={"status": "canceled"})
-        self._by_intent_id[payment_intent_id] = state
-        return state.intent
+        return self._update(payment_intent_id, status="canceled")
 
     async def retrieve_account_id(self) -> str:
         return self.account_id
@@ -116,14 +117,13 @@ class FakePaymentProvider:
     ) -> ProviderPaymentIntent:
         """Move a fake PaymentIntent to a new status, as if the cardholder
         (or Stripe's fraud/3DS pipeline) had acted on it."""
-        state = self._by_intent_id[payment_intent_id]
-        updates: dict[str, object] = {"status": status}
+        updates: dict[str, object] = {
+            "status": status,
+            "last_payment_error_code": last_payment_error_code,
+        }
         if amount_received is not None:
             updates["amount_received"] = amount_received
-        updates["last_payment_error_code"] = last_payment_error_code
-        state.intent = state.intent.model_copy(update=updates)
-        self._by_intent_id[payment_intent_id] = state
-        return state.intent
+        return self._update(payment_intent_id, **updates)
 
     def corrupt_amount(
         self, payment_intent_id: str, amount: int
@@ -131,10 +131,12 @@ class FakePaymentProvider:
         """Test-only: make Stripe's retrieved intent report a DIFFERENT
         ``amount`` than what Fortymm billed — simulating a forged, stale or
         cross-account event that reconcile must quarantine."""
-        state = self._by_intent_id[payment_intent_id]
-        state.intent = state.intent.model_copy(update={"amount": amount})
-        self._by_intent_id[payment_intent_id] = state
-        return state.intent
+        return self._update(payment_intent_id, amount=amount)
 
-    def intent_for(self, payment_intent_id: str) -> ProviderPaymentIntent:
-        return self._by_intent_id[payment_intent_id].intent
+    def _update(
+        self, payment_intent_id: str, **fields: object
+    ) -> ProviderPaymentIntent:
+        # One state object is shared by both indexes, so no write-back.
+        state = self._by_intent_id[payment_intent_id]
+        state.intent = state.intent.model_copy(update=fields)
+        return state.intent

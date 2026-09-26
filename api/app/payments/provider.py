@@ -72,9 +72,29 @@ ProviderCreateOutcome = ProviderIntentCreated | ProviderCreateUncertain
 
 
 class ProviderRetrievalFailed(Exception):
-    """Stripe could not be reached, or refused the request (e.g. the intent
-    belongs to another account). Reconcile decides what this means
-    (quarantine "amount unverified"); this module only reports the failure."""
+    """A retrieve or cancel call produced no PaymentIntent. Reconcile decides
+    what this means; this module only reports which of the two kinds of
+    failure happened."""
+
+
+class ProviderUnavailable(ProviderRetrievalFailed):
+    """Stripe could not be reached, or failed on its side (a connection error,
+    a 5xx, a rate limit). This says nothing about the PaymentIntent, so it is
+    never a reason to quarantine a payment on its own."""
+
+
+class ProviderRefused(ProviderRetrievalFailed):
+    """Stripe answered and refused the request, for example because the
+    PaymentIntent does not exist on the payee account. Quarantine records this
+    as "amount unverified"."""
+
+
+def _retrieval_failure(error: stripe.StripeError) -> ProviderRetrievalFailed:
+    if isinstance(
+        error, (stripe.APIConnectionError, stripe.APIError, stripe.RateLimitError)
+    ):
+        return ProviderUnavailable(str(error))
+    return ProviderRefused(str(error))
 
 
 class PaymentProvider(Protocol):
@@ -159,7 +179,7 @@ class StripePaymentProvider:
                 },
                 options=self._options(payee_account, idempotency_key=idempotency_key),
             )
-        except (stripe.APIConnectionError, stripe.APIError):
+        except (stripe.APIConnectionError, stripe.APIError, stripe.RateLimitError):
             # Ambiguous by construction (#1816): a timeout or a 5xx does not
             # tell us whether Stripe committed the create. Never retry with a
             # NEW idempotency key here — that could double-create.
@@ -174,7 +194,7 @@ class StripePaymentProvider:
                 payment_intent_id, options=self._options(payee_account)
             )
         except stripe.StripeError as error:
-            raise ProviderRetrievalFailed(str(error)) from error
+            raise _retrieval_failure(error) from error
         return _parse_intent(raw)
 
     async def cancel_payment_intent(
@@ -185,7 +205,7 @@ class StripePaymentProvider:
                 payment_intent_id, options=self._options(payee_account)
             )
         except stripe.StripeError as error:
-            raise ProviderRetrievalFailed(str(error)) from error
+            raise _retrieval_failure(error) from error
         return _parse_intent(raw)
 
     async def retrieve_account_id(self) -> str:

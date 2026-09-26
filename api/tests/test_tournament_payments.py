@@ -27,6 +27,7 @@ from app.models import (
     TournamentPaymentLineOutcome,
     TournamentPaymentProviderCreateState,
     TournamentPaymentRefundObligation,
+    TournamentPaymentRefundReason,
     TournamentPaymentStatus,
     TournamentStatus,
     User,
@@ -36,18 +37,24 @@ from app.payments.fake_provider import FakePaymentProvider
 from app.schemas.tournament_checkout import (
     TournamentCheckoutCreate,
     TournamentCheckoutPaymentState,
+    TournamentCheckoutState,
 )
-from app.tournament_checkouts import read_checkout, start_checkout
+from app.tournament_checkouts import cancel_checkout, read_checkout, start_checkout
 from app.tournament_entries import admit_to_event
 from app.tournament_errors import RecordedPlayDeletionError
 from app.tournament_event_stages import mint_stages
 from app.tournament_events import delete_event
-from app.tournament_payment_errors import PaymentNotFoundError
+from app.tournament_payment_errors import (
+    PaymentNotFoundError,
+    PaymentNotReadyError,
+    PaymentProviderUnavailableError,
+)
 from app.tournament_payments import (
     prepare_or_resume_payment,
     read_payment_status,
     reconcile_payment,
 )
+from app.tournament_registration import set_registration_open
 from tests._helpers import make_raw_client, make_user
 
 
@@ -167,6 +174,8 @@ async def test_happy_path_prepare_then_webhook_success_admits_exactly_once(
         db_session, tournament_id=tournament.id, checkout_id=checkout_id, actor=payer
     )
     assert checkout_read.payment_state is TournamentCheckoutPaymentState.succeeded
+    # Admission consumed the hold. It is completed, not the player's cancel.
+    assert checkout_read.status is TournamentCheckoutState.completed
 
     # Replaying reconcile (a duplicate webhook, or a status read racing it)
     # must not admit a second time or touch the settled row.
@@ -374,29 +383,57 @@ async def test_amount_mismatch_quarantines_with_the_retrieved_amount(
     assert await _entered_player_ids(db_session, event.id) == []
 
 
-async def test_retrieval_failure_quarantines_with_amount_unverified_and_no_obligation(
-    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
-    payer = await make_user(db_session, f"payer-{uuid.uuid4().hex[:8]}")
-    tournament, (event,) = await _paid_tournament(db_session, owner=owner)
+async def _prepared_payment(
+    db: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    provider: FakePaymentProvider,
+    capacities: tuple[int | None, ...] | None = None,
+) -> tuple[User, User, Tournament, TournamentEvent, uuid.UUID, TournamentPayment]:
+    owner = await make_user(db, f"merchant-{uuid.uuid4().hex[:8]}")
+    payer = await make_user(db, f"payer-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(
+        db, owner=owner, capacities=capacities
+    )
     _setup(monkeypatch, owner=owner)
     checkout_id = await _checkout_for(
-        db_session, tournament=tournament, event=event, payer=payer
+        db, tournament=tournament, event=event, payer=payer
     )
-    provider = FakePaymentProvider()
     await prepare_or_resume_payment(
-        db_session,
+        db,
         tournament_id=tournament.id,
         checkout_id=checkout_id,
         actor=payer,
         provider=provider,
     )
-    payment = await db_session.scalar(
+    payment = await db.scalar(
         select(TournamentPayment).where(TournamentPayment.checkout_id == checkout_id)
     )
     assert payment is not None
-    provider.retrieval_failures.add(payment.provider_payment_intent_id)
+    assert payment.provider_payment_intent_id is not None
+    return owner, payer, tournament, event, checkout_id, payment
+
+
+async def _obligations(
+    db: AsyncSession, payment_id: uuid.UUID
+) -> list[TournamentPaymentRefundObligation]:
+    return list(
+        await db.scalars(
+            select(TournamentPaymentRefundObligation).where(
+                TournamentPaymentRefundObligation.payment_id == payment_id
+            )
+        )
+    )
+
+
+async def test_refused_retrieval_quarantines_with_amount_unverified_and_no_obligation(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stripe answers that the PaymentIntent is not on the payee account: no
+    verified captured amount exists, so quarantine records no obligation."""
+    provider = FakePaymentProvider()
+    *_, payment = await _prepared_payment(db_session, monkeypatch, provider=provider)
+    provider.retrieval_wrong_account.add(payment.provider_payment_intent_id)
 
     reconciled = await reconcile_payment(
         db_session, payment_id=payment.id, provider=provider
@@ -404,14 +441,42 @@ async def test_retrieval_failure_quarantines_with_amount_unverified_and_no_oblig
     assert reconciled is not None
     assert reconciled.status is TournamentPaymentStatus.quarantined
     assert reconciled.amount_unverified is True
-    obligations = list(
-        await db_session.scalars(
-            select(TournamentPaymentRefundObligation).where(
-                TournamentPaymentRefundObligation.payment_id == payment.id
-            )
-        )
+    assert await _obligations(db_session, payment.id) == []
+
+
+async def test_unreachable_stripe_leaves_the_payment_unchanged(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A network failure says nothing about the PaymentIntent. It must never
+    quarantine a payment that later succeeds, and the status read answers
+    with the last known state."""
+    provider = FakePaymentProvider()
+    _, payer, tournament, event, checkout_id, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
     )
-    assert obligations == []
+    provider.retrieval_failures.add(payment.provider_payment_intent_id)
+
+    with pytest.raises(PaymentProviderUnavailableError):
+        await reconcile_payment(db_session, payment_id=payment.id, provider=provider)
+    status_read = await read_payment_status(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+    )
+    assert status_read.status is TournamentCheckoutPaymentState.ready
+
+    provider.retrieval_failures.clear()
+    provider.set_status(
+        payment.provider_payment_intent_id, status="succeeded", amount_received=2000
+    )
+    reconciled = await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider
+    )
+    assert reconciled is not None
+    assert reconciled.status is TournamentPaymentStatus.succeeded
+    assert await _entered_player_ids(db_session, event.id) == [payer.primary_player.id]
 
 
 async def test_late_success_admits_after_the_checkout_has_expired(
@@ -870,3 +935,261 @@ async def test_event_with_payment_evidence_cannot_be_deleted(
         select(TournamentEvent.id).where(TournamentEvent.id == event.id)
     )
     assert survives == event.id
+
+
+async def test_late_success_after_the_player_cancelled_refunds_and_admits_nobody(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cancellation (and so selection replacement, which requires it) stays
+    permanent. A late success does not reverse it (#1816)."""
+    provider = FakePaymentProvider()
+    _, payer, tournament, event, checkout_id, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    await cancel_checkout(
+        db_session, tournament_id=tournament.id, checkout_id=checkout_id, actor=payer
+    )
+    provider.set_status(
+        payment.provider_payment_intent_id, status="succeeded", amount_received=2000
+    )
+
+    reconciled = await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider
+    )
+    assert reconciled is not None
+    assert reconciled.status is TournamentPaymentStatus.succeeded
+    assert reconciled.lines[0].outcome is TournamentPaymentLineOutcome.refund_due
+    assert await _entered_player_ids(db_session, event.id) == []
+    (obligation,) = await _obligations(db_session, payment.id)
+    assert obligation.reason is TournamentPaymentRefundReason.checkout_superseded
+    assert obligation.amount_cents == 2000
+    checkout_read = await read_checkout(
+        db_session, tournament_id=tournament.id, checkout_id=checkout_id, actor=payer
+    )
+    assert checkout_read.status is TournamentCheckoutState.cancelled
+
+
+async def test_late_success_after_registration_closed_and_reopened_refunds(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Closure stays permanent: reopening the window afterwards does not let
+    a payment for the closed window admit."""
+    provider = FakePaymentProvider()
+    owner, _, tournament, event, _, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    await set_registration_open(
+        db_session, tournament_id=tournament.id, actor=owner, is_open=False
+    )
+    await set_registration_open(
+        db_session, tournament_id=tournament.id, actor=owner, is_open=True
+    )
+    provider.set_status(
+        payment.provider_payment_intent_id, status="succeeded", amount_received=2000
+    )
+
+    reconciled = await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider
+    )
+    assert reconciled is not None
+    assert await _entered_player_ids(db_session, event.id) == []
+    (obligation,) = await _obligations(db_session, payment.id)
+    assert obligation.reason is TournamentPaymentRefundReason.checkout_superseded
+
+
+async def test_status_read_replays_an_uncertain_create_with_the_same_key(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    payer = await make_user(db_session, f"payer-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(db_session, owner=owner)
+    _setup(monkeypatch, owner=owner)
+    checkout_id = await _checkout_for(
+        db_session, tournament=tournament, event=event, payer=payer
+    )
+    provider = FakePaymentProvider(force_uncertain_once=True)
+    prepared = await prepare_or_resume_payment(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+    )
+    assert prepared.status is TournamentCheckoutPaymentState.preparing
+    assert prepared.client_secret is None
+
+    status_read = await read_payment_status(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+    )
+    assert status_read.status is TournamentCheckoutPaymentState.ready
+    payment = await db_session.get(TournamentPayment, prepared.id)
+    assert payment is not None
+    assert payment.provider_create_state is TournamentPaymentProviderCreateState.created
+
+    resumed = await prepare_or_resume_payment(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+    )
+    assert resumed.client_secret is not None
+
+
+async def test_an_expired_checkout_cannot_start_a_new_payment(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    payer = await make_user(db_session, f"payer-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(db_session, owner=owner)
+    _setup(monkeypatch, owner=owner)
+    checkout_id = await _checkout_for(
+        db_session, tournament=tournament, event=event, payer=payer
+    )
+    await db_session.execute(
+        update(TournamentCheckout)
+        .where(TournamentCheckout.id == checkout_id)
+        .values(
+            created_at=datetime.now(UTC) - timedelta(hours=1),
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(PaymentNotReadyError):
+        await prepare_or_resume_payment(
+            db_session,
+            tournament_id=tournament.id,
+            checkout_id=checkout_id,
+            actor=payer,
+            provider=FakePaymentProvider(),
+        )
+
+
+def _signed_event(
+    *, event_id: str, intent_id: str, payment_id: uuid.UUID, livemode: bool, secret: str
+) -> tuple[str, str]:
+    payload = json.dumps(
+        {
+            "id": event_id,
+            "type": "payment_intent.succeeded",
+            "livemode": livemode,
+            "account": None,
+            "data": {
+                "object": {"id": intent_id, "metadata": {"payment_id": str(payment_id)}}
+            },
+        }
+    )
+    return payload, stripe.WebhookSignature.generate_signature_header(payload, secret)
+
+
+async def test_webhook_mode_mismatch_quarantines_and_admits_nobody(
+    monkeypatch: pytest.MonkeyPatch, engine: AsyncEngine
+) -> None:
+    """An event's ``livemode`` must match the key mode (#1816). A live-mode
+    event against a test key quarantines, with the amount Fortymm retrieved."""
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+    provider = FakePaymentProvider()
+    async with make_session() as seed_session:
+        *_, event, _, payment = await _prepared_payment(
+            seed_session, monkeypatch, provider=provider
+        )
+        intent_id = payment.provider_payment_intent_id
+        assert intent_id is not None
+        provider.set_status(intent_id, status="succeeded", amount_received=2000)
+
+    secret = "whsec_test_secret"
+    monkeypatch.setenv("STRIPE_WEBHOOK_SIGNING_SECRETS", secret)
+    payload, signature = _signed_event(
+        event_id=f"evt_{uuid.uuid4().hex}",
+        intent_id=intent_id,
+        payment_id=payment.id,
+        livemode=True,
+        secret=secret,
+    )
+
+    async def _override_session():
+        async with make_session() as session:
+            yield session
+
+    fastapi_app.dependency_overrides[get_session] = _override_session
+    fastapi_app.dependency_overrides[get_payment_provider] = lambda: provider
+    try:
+        async with make_raw_client() as client:
+            response = await client.post(
+                "/v1/webhooks/stripe",
+                content=payload,
+                headers={"stripe-signature": signature},
+            )
+            assert response.status_code == 200
+            missing = await client.post("/v1/webhooks/stripe", content=payload)
+            assert missing.status_code == 400
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+    async with make_session() as verify_session:
+        settled = await verify_session.get(TournamentPayment, payment.id)
+        assert settled is not None
+        assert settled.status is TournamentPaymentStatus.quarantined
+        assert await _entered_player_ids(verify_session, event.id) == []
+        (obligation,) = await _obligations(verify_session, payment.id)
+        assert obligation.amount_cents == 2000
+
+
+async def test_webhook_retries_when_stripe_is_unreachable(
+    monkeypatch: pytest.MonkeyPatch, engine: AsyncEngine
+) -> None:
+    """An unreachable Stripe is not an acknowledgement. The endpoint answers
+    503 and forgets the event, so Stripe's retry of the SAME event admits."""
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+    provider = FakePaymentProvider()
+    async with make_session() as seed_session:
+        _, payer, _, event, _, payment = await _prepared_payment(
+            seed_session, monkeypatch, provider=provider
+        )
+        intent_id = payment.provider_payment_intent_id
+        assert intent_id is not None
+        provider.set_status(intent_id, status="succeeded", amount_received=2000)
+        player_id = payer.primary_player.id
+
+    secret = "whsec_test_secret"
+    monkeypatch.setenv("STRIPE_WEBHOOK_SIGNING_SECRETS", secret)
+    payload, signature = _signed_event(
+        event_id=f"evt_{uuid.uuid4().hex}",
+        intent_id=intent_id,
+        payment_id=payment.id,
+        livemode=False,
+        secret=secret,
+    )
+
+    async def _override_session():
+        async with make_session() as session:
+            yield session
+
+    fastapi_app.dependency_overrides[get_session] = _override_session
+    fastapi_app.dependency_overrides[get_payment_provider] = lambda: provider
+    headers = {"stripe-signature": signature}
+    try:
+        async with make_raw_client() as client:
+            provider.retrieval_failures.add(intent_id)
+            unavailable = await client.post(
+                "/v1/webhooks/stripe", content=payload, headers=headers
+            )
+            assert unavailable.status_code == 503
+            provider.retrieval_failures.clear()
+            retried = await client.post(
+                "/v1/webhooks/stripe", content=payload, headers=headers
+            )
+            assert retried.status_code == 200
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+    async with make_session() as verify_session:
+        settled = await verify_session.get(TournamentPayment, payment.id)
+        assert settled is not None
+        assert settled.status is TournamentPaymentStatus.succeeded
+        assert await _entered_player_ids(verify_session, event.id) == [player_id]

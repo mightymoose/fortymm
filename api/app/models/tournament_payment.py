@@ -10,8 +10,9 @@ so the outcome cannot live on the payment as a whole.
 the durable evidence trail: every Stripe webhook event Fortymm has ever seen
 (keyed uniquely on the Stripe event id, so a replay is a no-op), and every
 refund Fortymm owes a payer but has not yet executed (#1813 executes them; this
-ticket only records them). Deletion guards elsewhere (``app.tournament_events``)
-keep an event with payment evidence from being deleted out from under it.
+ticket only records them). Deletion guards elsewhere
+(``app.tournament_retention.require_no_recorded_play``) keep an event with
+payment evidence from being deleted out from under it.
 """
 
 import enum
@@ -101,6 +102,10 @@ class TournamentPaymentRefundReason(enum.Enum):
     quarantine = "quarantine"
     line_could_not_admit = "line_could_not_admit"
     superseded_by_director_entry = "superseded_by_director_entry"
+    #: The player cancelled or replaced the checkout, or the registration
+    #: window changed, before the payment succeeded. That decision stays
+    #: permanent, so every line is refunded.
+    checkout_superseded = "checkout_superseded"
 
 
 class TournamentPayment(Base):

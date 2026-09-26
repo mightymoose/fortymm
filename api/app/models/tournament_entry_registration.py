@@ -66,12 +66,10 @@ class TournamentEntryRegistration(Base):
         Enum(WithdrawalReason, native_enum=False, length=None)
     )
     withdrawal_explanation: Mapped[str | None] = mapped_column(String)
-    #: ``True`` for every registration that existed before #1816 shipped
-    #: (backfilled by that migration via a column-add default), and for every
-    #: later registration created OUTSIDE the payment path (free entry,
-    #: director entry). ``False`` only for a registration created by verified
-    #: payment admission. #1817/#1818 use this to scope reconcile sweeps and
-    #: the merchant problems list to payment-originated registrations.
+    #: ``True`` only for a registration that existed when #1816's migration
+    #: ran: "registered before payments". Every later registration, by any
+    #: path, defaults to ``False``. A payment-originated registration is found
+    #: through ``tournament_payment_lines.entry_id``, not through this flag.
     pre_payments_registration: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=text("true")
+        Boolean, nullable=False, server_default=text("false")
     )

@@ -5676,7 +5676,7 @@ export interface components {
          * TournamentCheckoutState
          * @enum {string}
          */
-        TournamentCheckoutState: "active" | "cancelled" | "expired" | "invalidated";
+        TournamentCheckoutState: "active" | "cancelled" | "expired" | "invalidated" | "completed";
         /**
          * TournamentCreate
          * @description A new tournament. It carries **no** ``status``: a tournament is born

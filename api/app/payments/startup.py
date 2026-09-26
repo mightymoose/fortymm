@@ -6,8 +6,12 @@ dies at boot, not at its first webhook — but this check needs a network call
 the ``Settings`` model itself; it runs from ``app.main``'s ``lifespan``.
 """
 
+import asyncio
+
 from app.config import Settings
 from app.payments.provider import PaymentProvider, ProviderRetrievalFailed
+
+_ACCOUNT_CHECK_TIMEOUT_S = 15.0
 
 
 class StripeAccountMismatch(Exception):
@@ -30,8 +34,12 @@ async def verify_stripe_account(settings: Settings, provider: PaymentProvider) -
             "own."
         )
     try:
-        actual_account_id = await provider.retrieve_account_id()
-    except ProviderRetrievalFailed as error:
+        # Bounded, so a slow Stripe fails the boot quickly instead of stalling
+        # readiness behind the SDK's long default timeout and retries.
+        actual_account_id = await asyncio.wait_for(
+            provider.retrieve_account_id(), timeout=_ACCOUNT_CHECK_TIMEOUT_S
+        )
+    except (ProviderRetrievalFailed, TimeoutError) as error:
         raise StripeAccountMismatch(
             f"Could not verify STRIPE_ACCOUNT_ID against Stripe: {error}"
         ) from error

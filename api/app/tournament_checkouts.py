@@ -129,7 +129,7 @@ def _price_cents(price: Decimal) -> int:
     return int(price * Decimal(100))
 
 
-async def _database_now(db: AsyncSession) -> datetime:
+async def database_now(db: AsyncSession) -> datetime:
     return cast(
         datetime, (await db.execute(select(func.clock_timestamp()))).scalar_one()
     )
@@ -145,6 +145,8 @@ def checkout_effective_state(
             return TournamentCheckoutState.expired
         case TournamentCheckoutStatus.invalidated:
             return TournamentCheckoutState.invalidated
+        case TournamentCheckoutStatus.completed:
+            return TournamentCheckoutState.completed
         case TournamentCheckoutStatus.active:
             if checkout.registration_generation != tournament.registration_generation:
                 return TournamentCheckoutState.invalidated
@@ -165,12 +167,14 @@ async def _read(
     # triggers Stripe — that only happens on the dedicated payment status
     # read/webhook/prepare paths (app.tournament_payments). This is a cheap,
     # already-known-state embed for the combined checkout view.
-    payment = await db.scalar(
-        select(TournamentPayment).where(TournamentPayment.checkout_id == checkout.id)
+    payment_status = await db.scalar(
+        select(TournamentPayment.status).where(
+            TournamentPayment.checkout_id == checkout.id
+        )
     )
     payment_state = (
-        payment_display_state(payment.status)
-        if payment is not None
+        payment_display_state(payment_status)
+        if payment_status is not None
         else TournamentCheckoutPaymentState.unavailable
     )
     return TournamentCheckoutRead(
@@ -210,7 +214,7 @@ async def _expire_stale_checkouts(
             .options(selectinload(TournamentCheckout.lines))
         )
     )
-    now = await _database_now(db)
+    now = await database_now(db)
     for checkout in checkouts:
         if (
             checkout.registration_generation != tournament.registration_generation
@@ -286,7 +290,7 @@ async def invalidate_checkout_for_entrant_event(
         .where(TournamentCheckout.id.in_(matching_checkout_ids))
         .values(status=TournamentCheckoutStatus.invalidated)
     )
-    now = await _database_now(db)
+    now = await database_now(db)
     cancel_requested_ids = (
         await db.execute(
             update(TournamentPayment)
@@ -459,7 +463,7 @@ async def _start_checkout_after_admission(
         )
         .options(selectinload(TournamentCheckout.lines))
     )
-    now = await _database_now(db)
+    now = await database_now(db)
     if prior_request is not None:
         if prior_request.tournament_id != tournament.id:
             raise CheckoutRefusedError(
@@ -634,7 +638,7 @@ async def _start_checkout_after_admission(
     db.add(checkout)
     await db.commit()
     await db.refresh(checkout)
-    now = await _database_now(db)
+    now = await database_now(db)
     return await _read(db, checkout, tournament, now)
 
 
@@ -662,7 +666,7 @@ async def read_checkout(
     tournament = await db.get(Tournament, tournament_id)
     if tournament is None:
         raise CheckoutNotFoundError()
-    return await _read(db, checkout, tournament, await _database_now(db))
+    return await _read(db, checkout, tournament, await database_now(db))
 
 
 async def read_current_checkout(
@@ -688,7 +692,7 @@ async def read_current_checkout(
     tournament = await db.get(Tournament, tournament_id)
     if tournament is None:
         raise CheckoutNotFoundError()
-    return await _read(db, checkout, tournament, await _database_now(db))
+    return await _read(db, checkout, tournament, await database_now(db))
 
 
 async def cancel_checkout(
@@ -725,7 +729,7 @@ async def cancel_checkout(
         and (player is None or checkout.entrant_player_id != player.id)
     ):
         raise CheckoutNotFoundError()
-    now = await _database_now(db)
+    now = await database_now(db)
     effective = checkout_effective_state(checkout, tournament, now)
     if effective is TournamentCheckoutState.active:
         checkout.status = TournamentCheckoutStatus.cancelled

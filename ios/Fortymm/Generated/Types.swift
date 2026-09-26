@@ -11791,6 +11791,7 @@ internal enum Components {
             case cancelled = "cancelled"
             case expired = "expired"
             case invalidated = "invalidated"
+            case completed = "completed"
         }
         /// A new tournament. It carries **no** ``status``: a tournament is born
         /// ``draft`` (the column's default) and moves only across a guarded lifecycle

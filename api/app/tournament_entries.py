@@ -472,12 +472,7 @@ async def admit_to_event(
             await restore_event_eligibility(db, entry.id, actor.id)
             db.add(
                 TournamentEntryRegistration(
-                    entry_id=entry.id,
-                    registered_by_account_id=actor.id,
-                    # #1816: false only for a registration this payment-verified
-                    # admission created; every other path keeps the column's
-                    # ``true`` default.
-                    pre_payments_registration=not payment_authorized,
+                    entry_id=entry.id, registered_by_account_id=actor.id
                 )
             )
             from app.event_lifecycle import reconcile_event
