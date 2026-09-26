@@ -2,16 +2,19 @@
 
 import uuid
 
-import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.db import get_session
 from app.models import User
 from app.payments.dependencies import get_payment_provider
-from app.payments.provider import PaymentProvider
+from app.payments.provider import (
+    PaymentProvider,
+    WebhookRejected,
+    verify_webhook_event,
+)
 from app.schemas.tournament_payment import (
     TournamentPaymentPrepared,
     TournamentPaymentRead,
@@ -46,6 +49,7 @@ async def prepare_tournament_payment(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
     provider: PaymentProvider = Depends(get_payment_provider),
+    settings: Settings = Depends(get_settings),
 ) -> TournamentPaymentPrepared:
     """Create (or resume) this checkout's Stripe PaymentIntent. The ONLY
     response that ever carries the Stripe client secret — call this again to
@@ -57,6 +61,7 @@ async def prepare_tournament_payment(
             checkout_id=checkout_id,
             actor=current_user,
             provider=provider,
+            settings=settings,
         )
     except PaymentNotFoundError as error:
         raise HTTPException(status_code=404, detail="Checkout not found.") from error
@@ -76,6 +81,7 @@ async def get_tournament_payment(
     db: AsyncSession = Depends(get_session),
     current_user: User = Depends(get_current_user),
     provider: PaymentProvider = Depends(get_payment_provider),
+    settings: Settings = Depends(get_settings),
 ) -> TournamentPaymentRead:
     """Read a payment's current status, refreshing it against Stripe first
     when it is not yet in a terminal state. Only the payer and the configured
@@ -88,6 +94,7 @@ async def get_tournament_payment(
             checkout_id=checkout_id,
             actor=current_user,
             provider=provider,
+            settings=settings,
         )
     except PaymentNotFoundError as error:
         raise HTTPException(status_code=404, detail="Payment not found.") from error
@@ -103,31 +110,31 @@ async def stripe_webhook(
     request: Request,
     db: AsyncSession = Depends(get_session),
     provider: PaymentProvider = Depends(get_payment_provider),
+    settings: Settings = Depends(get_settings),
 ) -> StripeWebhookAck:
     """Stripe's webhook endpoint (#1816).
 
     No auth dependency: ``app.sessions``'s CSRF layer already skips cookieless
     requests, so Stripe's signed, cookieless POST passes through unexempted.
-    The raw body is read BEFORE any JSON parsing — required for signature
-    verification — and the signature is checked against every configured
-    secret (more than one may be live at once, e.g. rotating a secret).
+    The raw body is read BEFORE any JSON parsing, because signature
+    verification needs it. The provider seam checks the signature against
+    every configured secret, then parses the event into a typed model. A bad
+    signature or a malformed event is a 400.
     """
-    raw_body = await request.body()
-    signature = request.headers.get("stripe-signature")
-    secrets = get_settings().stripe_webhook_signing_secrets
-    event = None
-    for secret in secrets if signature else []:
-        try:
-            event = stripe.Webhook.construct_event(raw_body, signature, secret)
-            break
-        except (ValueError, stripe.SignatureVerificationError):
-            continue
-    if event is None:
-        raise HTTPException(status_code=400, detail="Invalid Stripe webhook signature.")
+    try:
+        event = verify_webhook_event(
+            await request.body(),
+            signature=request.headers.get("stripe-signature"),
+            secrets=settings.stripe_webhook_signing_secrets,
+        )
+    except WebhookRejected as error:
+        raise HTTPException(
+            status_code=400, detail="Invalid Stripe webhook event."
+        ) from error
 
     try:
         await record_and_reconcile_provider_event(
-            db, raw=event.to_dict(), provider=provider
+            db, event=event, provider=provider, settings=settings
         )
     except PaymentProviderUnavailableError as error:
         raise HTTPException(

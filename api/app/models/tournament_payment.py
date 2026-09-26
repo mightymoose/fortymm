@@ -19,7 +19,7 @@ import enum
 import secrets
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import (
     BigInteger,
@@ -50,6 +50,10 @@ def generate_payment_reference() -> str:
     reference stays stable across a provider migration or a Connect payee
     change."""
     return "PAY-" + "".join(secrets.choice(_CROCKFORD_ALPHABET) for _ in range(8))
+
+
+#: The only currency a payment may take (``ck_tournament_payments_currency_usd``).
+PaymentCurrency = Literal["USD"]
 
 
 class TournamentPaymentProviderCreateState(enum.Enum):
@@ -90,6 +94,20 @@ class TournamentPaymentStatus(enum.Enum):
     #: reports this as ``failed`` — exactly as terminal, with a safe generic
     #: message rather than the raw validation reason.
     quarantined = "quarantined"
+
+
+class TournamentPaymentErrorCode(enum.StrEnum):
+    """The safe, player-facing decline codes (#1816). Never Stripe's raw
+    ``decline_code`` or message. A decline code outside the named set maps to
+    :attr:`card_error`."""
+
+    card_declined = "card_declined"
+    expired_card = "expired_card"
+    incorrect_cvc = "incorrect_cvc"
+    incorrect_number = "incorrect_number"
+    insufficient_funds = "insufficient_funds"
+    processing_error = "processing_error"
+    card_error = "card_error"
 
 
 class TournamentPaymentLineOutcome(enum.Enum):
@@ -138,6 +156,9 @@ class TournamentPayment(Base):
         ForeignKey("tournament_checkouts.id", ondelete="RESTRICT"),
         nullable=False,
     )
+    #: Owned state: an Account merge transfers it to the survivor
+    #: (``app.account_merge._transfer_account``), so the survivor can still
+    #: read the payment and is owed its refunds.
     payer_account_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("accounts.id", ondelete="RESTRICT"),
@@ -152,7 +173,8 @@ class TournamentPayment(Base):
     #: Connect (#1819) populates this with the organizer's connected account.
     payee_stripe_account: Mapped[str | None] = mapped_column(String(255))
     #: The Fortymm account with financial authority over this payment at the
-    #: time it was created (today always the configured merchant account).
+    #: time it was created (today always the configured merchant account). A
+    #: historical actor: an Account merge never repoints it.
     payee_fortymm_account_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("accounts.id", ondelete="RESTRICT"),
@@ -184,12 +206,19 @@ class TournamentPayment(Base):
         server_default=TournamentPaymentStatus.preparing.value,
     )
     amount_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    currency: Mapped[str] = mapped_column(
+    currency: Mapped[PaymentCurrency] = mapped_column(
         String(3), nullable=False, server_default="USD"
     )
     #: A safe, allowlisted decline code (never Stripe's raw decline_code or
     #: message — #1816's player-facing-errors constraint).
-    last_error_code: Mapped[str | None] = mapped_column(String(64))
+    last_error_code: Mapped[TournamentPaymentErrorCode | None] = mapped_column(
+        Enum(
+            TournamentPaymentErrorCode,
+            native_enum=False,
+            length=64,
+            values_callable=lambda values: [value.value for value in values],
+        )
+    )
     #: Set when quarantine's retrieval fails or the PaymentIntent is on
     #: another account: no refund obligation could be recorded because the
     #: captured amount could not be verified (#1816 acceptance criteria).

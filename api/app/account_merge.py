@@ -43,6 +43,7 @@ from app.models import (
     TournamentEvent,
     TournamentEventStage,
     TournamentFixture,
+    TournamentPayment,
     User,
     UserLeagueRating,
     UserRole,
@@ -472,6 +473,19 @@ async def _transfer_account(
             """
         ),
         {"from_id": from_user_id, "to_id": to_user_id},
+    )
+
+    # Payment identity policy (#1816). ``payer_account_id`` is owned state, not
+    # a historical actor: it decides who may read and resume the payment, and
+    # to whom a refund is owed. So it transfers to the survivor, which must
+    # still see its payments after the merge. ``payee_fortymm_account_id`` is a
+    # historical actor, the account that held financial authority when the
+    # payment was created, so it stays as recorded. The payment's checkout keeps
+    # its original payer, because ``merge_user`` already invalidated it.
+    await db.execute(
+        update(TournamentPayment)
+        .where(TournamentPayment.payer_account_id == from_user_id)
+        .values(payer_account_id=to_user_id)
     )
 
     # We tombstone rather than DELETE the user, so the rows that used to ride

@@ -247,20 +247,19 @@ async def request_payment_cancel(db: AsyncSession, payment_id: uuid.UUID) -> Non
     _stage(db, "payment_cancel", payment_id)
 
 
+DispatchKind = Literal["rating", "schedule", "payment_cancel"]
+
+
 @dataclass(frozen=True)
 class Dispatch:
-    kind: Literal["rating", "schedule", "payment_cancel"]
+    kind: DispatchKind
     target: uuid.UUID
 
 
 _STAGED = "app.required_repairs.dispatch"
 
 
-def _stage(
-    db: AsyncSession,
-    kind: Literal["rating", "schedule", "payment_cancel"],
-    target: uuid.UUID,
-) -> None:
+def _stage(db: AsyncSession, kind: DispatchKind, target: uuid.UUID) -> None:
     transaction = (
         db.sync_session.get_nested_transaction() or db.sync_session.get_transaction()
     )

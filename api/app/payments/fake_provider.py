@@ -14,6 +14,7 @@ from app.payments.provider import (
     ProviderCreateOutcome,
     ProviderCreateUncertain,
     ProviderIntentCreated,
+    ProviderIntentStatus,
     ProviderPaymentIntent,
     ProviderRefused,
     ProviderUnavailable,
@@ -43,6 +44,9 @@ class FakePaymentProvider:
     retrieval_failures: set[str] = field(default_factory=set)
     #: Intent ids whose retrieval Stripe refuses (wrong payee account).
     retrieval_wrong_account: set[str] = field(default_factory=set)
+    #: Every create call's payee account, in order, so a test can see the
+    #: call happen and see which account it targeted.
+    create_calls: list[str | None] = field(default_factory=list)
 
     async def create_payment_intent(
         self,
@@ -54,6 +58,7 @@ class FakePaymentProvider:
         metadata: dict[str, str],
         statement_descriptor_suffix: str,
     ) -> ProviderCreateOutcome:
+        self.create_calls.append(payee_account)
         if self.force_uncertain_once:
             self.force_uncertain_once = False
             return ProviderCreateUncertain()
@@ -62,7 +67,7 @@ class FakePaymentProvider:
             return ProviderIntentCreated(intent=existing.intent)
         intent = ProviderPaymentIntent(
             id=f"pi_fake_{uuid.uuid4().hex[:24]}",
-            status="requires_payment_method",
+            status=ProviderIntentStatus.REQUIRES_PAYMENT_METHOD,
             amount=amount_cents,
             currency=currency,
             livemode=False,
@@ -100,7 +105,7 @@ class FakePaymentProvider:
         self._state_or_raise(
             payee_account=payee_account, payment_intent_id=payment_intent_id
         )
-        return self._update(payment_intent_id, status="canceled")
+        return self._update(payment_intent_id, status=ProviderIntentStatus.CANCELED)
 
     async def retrieve_account_id(self) -> str:
         return self.account_id
@@ -137,6 +142,9 @@ class FakePaymentProvider:
         self, payment_intent_id: str, **fields: object
     ) -> ProviderPaymentIntent:
         # One state object is shared by both indexes, so no write-back.
+        # Re-validate, so a scripted status is parsed exactly as Stripe's is.
         state = self._by_intent_id[payment_intent_id]
-        state.intent = state.intent.model_copy(update=fields)
+        state.intent = ProviderPaymentIntent.model_validate(
+            {**state.intent.model_dump(), **fields}
+        )
         return state.intent

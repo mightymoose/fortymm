@@ -36,6 +36,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from functools import partial
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from anyio import to_thread
 from fastmcp import FastMCP
@@ -69,7 +70,6 @@ from app.draws import (
     UnsupportedDrawType,
     draw_error_detail,
 )
-from app.email import app_base_url
 from app.geocoding import AddressNotGeocodableError
 from app.geocoding.dependencies import get_geocoder
 from app.mappers.match_extras_mapper import empty_extras
@@ -1761,18 +1761,33 @@ def _map_entry_refused_tool_error(
     follows, so the agent is told both *which* rule refused and *why* in its own
     words.
 
-    ``payment_required`` (#1816) additionally carries the web checkout URL: MCP
-    has no card-entry surface of its own, so the only way an agent can get a
-    paid event's fee collected is to hand the player a link to go pay it there.
+    ``payment_required`` (#1816) always carries the web checkout URL: MCP has
+    no card-entry surface of its own, so the only way an agent can get a paid
+    event's fee collected is to hand the player a link to go pay it there.
     """
     if exc.refusal is EntryRefusal.payment_required:
-        base = app_base_url()
-        if base is not None:
-            checkout_url = f"{base.rstrip('/')}/tournaments/{tournament_id}"
-            return ToolError(
-                f"Entry refused [{exc.refusal.value}]: {exc} Pay at {checkout_url}"
-            )
+        return ToolError(
+            f"Entry refused [{exc.refusal.value}]: {exc} "
+            f"Pay at {_web_checkout_url(tournament_id)}"
+        )
     return ToolError(f"Entry refused [{exc.refusal.value}]: {exc}")
+
+
+def _web_checkout_url(tournament_id: uuid.UUID) -> str:
+    """The web page where a player pays a tournament's entry fees.
+
+    ``APP_BASE_URL`` names the web origin. When it is unset, the MCP server's
+    own public origin stands in, because nginx serves the web app and the MCP
+    endpoint from one host. When neither is set, the link stays root-relative
+    rather than disappearing, so the refusal never loses the checkout link."""
+    settings = get_settings()
+    path = f"/tournaments/{tournament_id}"
+    base = settings.web_app_base_url
+    if base is None:
+        resource = urlsplit(settings.mcp_public_resource_url.strip())
+        if resource.scheme and resource.netloc:
+            base = f"{resource.scheme}://{resource.netloc}"
+    return f"{base}{path}" if base is not None else path
 
 
 @mcp.tool

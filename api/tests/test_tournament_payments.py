@@ -11,6 +11,7 @@ import stripe
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from app.config import get_settings
 from app.db import get_session
 from app.leagues import get_default_league
 from app.main import app as fastapi_app
@@ -35,6 +36,7 @@ from app.models import (
 )
 from app.payments.dependencies import get_payment_provider
 from app.payments.fake_provider import FakePaymentProvider
+from app.payments.provider import ProviderWebhookEvent
 from app.schemas.tournament_checkout import (
     TournamentCheckoutCreate,
     TournamentCheckoutPaymentState,
@@ -51,7 +53,6 @@ from app.tournament_payment_errors import (
     PaymentProviderUnavailableError,
 )
 from app.tournament_payments import (
-    IncomingProviderEvent,
     prepare_or_resume_payment,
     read_payment_status,
     reconcile_payment,
@@ -152,8 +153,9 @@ async def test_happy_path_prepare_then_webhook_success_admits_exactly_once(
         checkout_id=checkout_id,
         actor=payer,
         provider=provider,
+        settings=get_settings(),
     )
-    assert prepared.status is TournamentCheckoutPaymentState.ready
+    assert prepared.payment_state is TournamentCheckoutPaymentState.ready
     assert prepared.client_secret is not None
 
     payment = await db_session.scalar(
@@ -166,7 +168,7 @@ async def test_happy_path_prepare_then_webhook_success_admits_exactly_once(
     )
 
     reconciled = await reconcile_payment(
-        db_session, payment_id=payment.id, provider=provider
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
     )
     assert reconciled is not None
     assert reconciled.status is TournamentPaymentStatus.succeeded
@@ -183,7 +185,7 @@ async def test_happy_path_prepare_then_webhook_success_admits_exactly_once(
     # Replaying reconcile (a duplicate webhook, or a status read racing it)
     # must not admit a second time or touch the settled row.
     again = await reconcile_payment(
-        db_session, payment_id=payment.id, provider=provider
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
     )
     assert again is not None
     assert again.status is TournamentPaymentStatus.succeeded
@@ -208,6 +210,7 @@ async def test_declined_card_reports_ready_with_safe_error_code(
         checkout_id=checkout_id,
         actor=payer,
         provider=provider,
+        settings=get_settings(),
     )
     payment = await db_session.scalar(
         select(TournamentPayment).where(TournamentPayment.checkout_id == checkout_id)
@@ -219,7 +222,7 @@ async def test_declined_card_reports_ready_with_safe_error_code(
         last_payment_error_code="card_declined",
     )
     reconciled = await reconcile_payment(
-        db_session, payment_id=payment.id, provider=provider
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
     )
     assert reconciled is not None
     assert reconciled.status is TournamentPaymentStatus.ready
@@ -231,9 +234,10 @@ async def test_declined_card_reports_ready_with_safe_error_code(
         checkout_id=checkout_id,
         actor=payer,
         provider=provider,
+        settings=get_settings(),
     )
-    assert status_read.status is TournamentCheckoutPaymentState.ready
-    assert status_read.last_error == "card_declined"
+    assert status_read.payment_state is TournamentCheckoutPaymentState.ready
+    assert status_read.last_error_code == "card_declined"
 
     # A raw, non-allowlisted Stripe decline code never reaches the response.
     provider.set_status(
@@ -242,7 +246,7 @@ async def test_declined_card_reports_ready_with_safe_error_code(
         last_payment_error_code="some_internal_stripe_detail",
     )
     reconciled_again = await reconcile_payment(
-        db_session, payment_id=payment.id, provider=provider
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
     )
     assert reconciled_again is not None
     assert reconciled_again.last_error_code == "card_error"
@@ -266,6 +270,7 @@ async def test_duplicate_prepare_reuses_the_same_payment_intent(
         checkout_id=checkout_id,
         actor=payer,
         provider=provider,
+        settings=get_settings(),
     )
     second = await prepare_or_resume_payment(
         db_session,
@@ -273,6 +278,7 @@ async def test_duplicate_prepare_reuses_the_same_payment_intent(
         checkout_id=checkout_id,
         actor=payer,
         provider=provider,
+        settings=get_settings(),
     )
     assert first.id == second.id
     payments = list(
@@ -307,6 +313,7 @@ async def test_unauthorized_caller_gets_not_found_for_status_and_secret(
         checkout_id=checkout_id,
         actor=payer,
         provider=provider,
+        settings=get_settings(),
     )
 
     with pytest.raises(PaymentNotFoundError):
@@ -316,6 +323,7 @@ async def test_unauthorized_caller_gets_not_found_for_status_and_secret(
             checkout_id=checkout_id,
             actor=stranger,
             provider=provider,
+            settings=get_settings(),
         )
     with pytest.raises(PaymentNotFoundError):
         await prepare_or_resume_payment(
@@ -324,6 +332,7 @@ async def test_unauthorized_caller_gets_not_found_for_status_and_secret(
             checkout_id=checkout_id,
             actor=stranger,
             provider=provider,
+            settings=get_settings(),
         )
 
     # The merchant account MAY read status (never the secret — that response
@@ -334,6 +343,7 @@ async def test_unauthorized_caller_gets_not_found_for_status_and_secret(
         checkout_id=checkout_id,
         actor=owner,
         provider=provider,
+        settings=get_settings(),
     )
     assert merchant_read.id is not None
 
@@ -355,6 +365,7 @@ async def test_amount_mismatch_quarantines_with_the_retrieved_amount(
         checkout_id=checkout_id,
         actor=payer,
         provider=provider,
+        settings=get_settings(),
     )
     payment = await db_session.scalar(
         select(TournamentPayment).where(TournamentPayment.checkout_id == checkout_id)
@@ -368,7 +379,7 @@ async def test_amount_mismatch_quarantines_with_the_retrieved_amount(
     provider.corrupt_amount(payment.provider_payment_intent_id, 999)
 
     reconciled = await reconcile_payment(
-        db_session, payment_id=payment.id, provider=provider
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
     )
     assert reconciled is not None
     assert reconciled.status is TournamentPaymentStatus.quarantined
@@ -408,6 +419,7 @@ async def _prepared_payment(
         checkout_id=checkout_id,
         actor=payer,
         provider=provider,
+        settings=get_settings(),
     )
     payment = await db.scalar(
         select(TournamentPayment).where(TournamentPayment.checkout_id == checkout_id)
@@ -439,7 +451,7 @@ async def test_refused_retrieval_quarantines_with_amount_unverified_and_no_oblig
     provider.retrieval_wrong_account.add(payment.provider_payment_intent_id)
 
     reconciled = await reconcile_payment(
-        db_session, payment_id=payment.id, provider=provider
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
     )
     assert reconciled is not None
     assert reconciled.status is TournamentPaymentStatus.quarantined
@@ -460,22 +472,28 @@ async def test_unreachable_stripe_leaves_the_payment_unchanged(
     provider.retrieval_failures.add(payment.provider_payment_intent_id)
 
     with pytest.raises(PaymentProviderUnavailableError):
-        await reconcile_payment(db_session, payment_id=payment.id, provider=provider)
+        await reconcile_payment(
+            db_session,
+            payment_id=payment.id,
+            provider=provider,
+            settings=get_settings(),
+        )
     status_read = await read_payment_status(
         db_session,
         tournament_id=tournament.id,
         checkout_id=checkout_id,
         actor=payer,
         provider=provider,
+        settings=get_settings(),
     )
-    assert status_read.status is TournamentCheckoutPaymentState.ready
+    assert status_read.payment_state is TournamentCheckoutPaymentState.ready
 
     provider.retrieval_failures.clear()
     provider.set_status(
         payment.provider_payment_intent_id, status="succeeded", amount_received=2000
     )
     reconciled = await reconcile_payment(
-        db_session, payment_id=payment.id, provider=provider
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
     )
     assert reconciled is not None
     assert reconciled.status is TournamentPaymentStatus.succeeded
@@ -500,6 +518,7 @@ async def test_late_success_admits_after_the_checkout_has_expired(
         checkout_id=checkout_id,
         actor=payer,
         provider=provider,
+        settings=get_settings(),
     )
     payment = await db_session.scalar(
         select(TournamentPayment).where(TournamentPayment.checkout_id == checkout_id)
@@ -522,7 +541,7 @@ async def test_late_success_admits_after_the_checkout_has_expired(
         payment.provider_payment_intent_id, status="succeeded", amount_received=2000
     )
     reconciled = await reconcile_payment(
-        db_session, payment_id=payment.id, provider=provider
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
     )
     assert reconciled is not None
     assert reconciled.status is TournamentPaymentStatus.succeeded
@@ -549,6 +568,7 @@ async def test_late_success_records_refund_when_capacity_has_filled(
         checkout_id=checkout_id,
         actor=payer,
         provider=provider,
+        settings=get_settings(),
     )
     payment = await db_session.scalar(
         select(TournamentPayment).where(TournamentPayment.checkout_id == checkout_id)
@@ -581,7 +601,7 @@ async def test_late_success_records_refund_when_capacity_has_filled(
         payment.provider_payment_intent_id, status="succeeded", amount_received=2000
     )
     reconciled = await reconcile_payment(
-        db_session, payment_id=payment.id, provider=provider
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
     )
     assert reconciled is not None
     assert reconciled.status is TournamentPaymentStatus.succeeded
@@ -618,6 +638,7 @@ async def test_webhook_verifies_signature_and_replay_is_a_no_op(
             checkout_id=checkout_id,
             actor=payer,
             provider=provider,
+            settings=get_settings(),
         )
         payment_id = prepared.id
         payment = await seed_session.get(TournamentPayment, payment_id)
@@ -745,6 +766,7 @@ async def test_concurrent_reconcile_of_the_same_success_admits_exactly_once(
             checkout_id=checkout_id,
             actor=payer,
             provider=provider,
+            settings=get_settings(),
         )
         payment_id = prepared.id
         payment = await seed_session.get(TournamentPayment, payment_id)
@@ -757,7 +779,10 @@ async def test_concurrent_reconcile_of_the_same_success_admits_exactly_once(
     async def _reconcile_once() -> TournamentPaymentStatus | None:
         async with make_session() as session:
             result = await reconcile_payment(
-                session, payment_id=payment_id, provider=provider
+                session,
+                payment_id=payment_id,
+                provider=provider,
+                settings=get_settings(),
             )
             return result.status if result is not None else None
 
@@ -808,6 +833,7 @@ async def test_director_entry_marks_open_payment_cancel_requested_and_enqueues_c
         checkout_id=checkout_id,
         actor=payer,
         provider=provider,
+        settings=get_settings(),
     )
     payment_id = prepared.id
 
@@ -850,6 +876,7 @@ async def test_late_success_after_director_entry_stands_and_records_refund(
         checkout_id=checkout_id,
         actor=payer,
         provider=provider,
+        settings=get_settings(),
     )
     payment_id = prepared.id
     payment = await db_session.get(TournamentPayment, payment_id)
@@ -876,7 +903,7 @@ async def test_late_success_after_director_entry_stands_and_records_refund(
 
     provider.set_status(intent_id, status="succeeded", amount_received=2000)
     reconciled = await reconcile_payment(
-        db_session, payment_id=payment_id, provider=provider
+        db_session, payment_id=payment_id, provider=provider, settings=get_settings()
     )
     assert reconciled is not None
     assert reconciled.status is TournamentPaymentStatus.succeeded
@@ -927,6 +954,7 @@ async def test_event_with_payment_evidence_cannot_be_deleted(
         checkout_id=checkout_id,
         actor=payer,
         provider=provider,
+        settings=get_settings(),
     )
 
     with pytest.raises(RecordedPlayDeletionError):
@@ -957,7 +985,7 @@ async def test_late_success_after_the_player_cancelled_refunds_and_admits_nobody
     )
 
     reconciled = await reconcile_payment(
-        db_session, payment_id=payment.id, provider=provider
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
     )
     assert reconciled is not None
     assert reconciled.status is TournamentPaymentStatus.succeeded
@@ -992,7 +1020,7 @@ async def test_late_success_after_registration_closed_and_reopened_refunds(
     )
 
     reconciled = await reconcile_payment(
-        db_session, payment_id=payment.id, provider=provider
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
     )
     assert reconciled is not None
     assert await _entered_player_ids(db_session, event.id) == []
@@ -1017,8 +1045,9 @@ async def test_status_read_replays_an_uncertain_create_with_the_same_key(
         checkout_id=checkout_id,
         actor=payer,
         provider=provider,
+        settings=get_settings(),
     )
-    assert prepared.status is TournamentCheckoutPaymentState.preparing
+    assert prepared.payment_state is TournamentCheckoutPaymentState.preparing
     assert prepared.client_secret is None
 
     status_read = await read_payment_status(
@@ -1027,8 +1056,9 @@ async def test_status_read_replays_an_uncertain_create_with_the_same_key(
         checkout_id=checkout_id,
         actor=payer,
         provider=provider,
+        settings=get_settings(),
     )
-    assert status_read.status is TournamentCheckoutPaymentState.ready
+    assert status_read.payment_state is TournamentCheckoutPaymentState.ready
     payment = await db_session.get(TournamentPayment, prepared.id)
     assert payment is not None
     assert payment.provider_create_state is TournamentPaymentProviderCreateState.created
@@ -1039,6 +1069,7 @@ async def test_status_read_replays_an_uncertain_create_with_the_same_key(
         checkout_id=checkout_id,
         actor=payer,
         provider=provider,
+        settings=get_settings(),
     )
     assert resumed.client_secret is not None
 
@@ -1070,6 +1101,7 @@ async def test_an_expired_checkout_cannot_start_a_new_payment(
             checkout_id=checkout_id,
             actor=payer,
             provider=FakePaymentProvider(),
+            settings=get_settings(),
         )
 
 
@@ -1221,16 +1253,22 @@ async def test_identity_mismatch_quarantines_and_admits_nobody(
     assert intent_id is not None
     provider.set_status(intent_id, status="succeeded", amount_received=2000)
     provider._update(intent_id, **fields)
-    source_event = IncomingProviderEvent(
-        id=f"evt_{uuid.uuid4().hex}",
-        type="payment_intent.succeeded",
-        livemode=False,
-        account=event_account,
-        payment_intent_id=intent_id,
+    source_event = ProviderWebhookEvent.model_validate(
+        {
+            "id": f"evt_{uuid.uuid4().hex}",
+            "type": "payment_intent.succeeded",
+            "livemode": False,
+            "account": event_account,
+            "data": {"object": {"id": intent_id}},
+        }
     )
 
     reconciled = await reconcile_payment(
-        db_session, payment_id=payment.id, provider=provider, source_event=source_event
+        db_session,
+        payment_id=payment.id,
+        provider=provider,
+        settings=get_settings(),
+        source_event=source_event,
     )
     assert reconciled is not None
     assert reconciled.status is TournamentPaymentStatus.quarantined
@@ -1247,17 +1285,20 @@ async def test_stored_webhook_evidence_never_keeps_the_client_secret(
     event_id = f"evt_{uuid.uuid4().hex}"
     await record_and_reconcile_provider_event(
         db_session,
-        raw={
-            "id": event_id,
-            "type": "payment_intent.processing",
-            "livemode": False,
-            "data": {
-                "object": {
-                    "id": payment.provider_payment_intent_id,
-                    "client_secret": "pi_secret_must_not_persist",
-                }
-            },
-        },
+        settings=get_settings(),
+        event=ProviderWebhookEvent.model_validate(
+            {
+                "id": event_id,
+                "type": "payment_intent.processing",
+                "livemode": False,
+                "data": {
+                    "object": {
+                        "id": payment.provider_payment_intent_id,
+                        "client_secret": "pi_secret_must_not_persist",
+                    }
+                },
+            }
+        ),
         provider=provider,
     )
     stored = await db_session.scalar(
@@ -1277,3 +1318,538 @@ def test_payment_routes_take_no_request_body() -> None:
     route = paths["/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment"]
     assert "requestBody" not in route["get"]
     assert "requestBody" not in route["post"]
+
+
+async def _post_webhook(
+    make_session: async_sessionmaker[AsyncSession],
+    provider: FakePaymentProvider,
+    *,
+    payload: str,
+    headers: dict[str, str],
+) -> int:
+    async def _override_session():
+        async with make_session() as session:
+            yield session
+
+    fastapi_app.dependency_overrides[get_session] = _override_session
+    fastapi_app.dependency_overrides[get_payment_provider] = lambda: provider
+    try:
+        async with make_raw_client() as client:
+            response = await client.post(
+                "/v1/webhooks/stripe", content=payload, headers=headers
+            )
+    finally:
+        fastapi_app.dependency_overrides.clear()
+    return response.status_code
+
+
+async def test_webhook_accepts_an_event_signed_with_the_second_configured_secret(
+    monkeypatch: pytest.MonkeyPatch, engine: AsyncEngine
+) -> None:
+    """#1816: "It accepts more than one configured signing secret." The first
+    secret does not verify this event. The second one does, so it admits."""
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+    provider = FakePaymentProvider()
+    async with make_session() as seed_session:
+        _, payer, _, event, _, payment = await _prepared_payment(
+            seed_session, monkeypatch, provider=provider
+        )
+        intent_id = payment.provider_payment_intent_id
+        assert intent_id is not None
+        provider.set_status(intent_id, status="succeeded", amount_received=2000)
+        player_id = payer.primary_player.id
+
+    monkeypatch.setenv(
+        "STRIPE_WEBHOOK_SIGNING_SECRETS", "whsec_rotated_out,whsec_current"
+    )
+    payload, signature = _signed_event(
+        event_id=f"evt_{uuid.uuid4().hex}",
+        intent_id=intent_id,
+        payment_id=payment.id,
+        livemode=False,
+        secret="whsec_current",
+    )
+    status_code = await _post_webhook(
+        make_session, provider, payload=payload, headers={"stripe-signature": signature}
+    )
+    assert status_code == 200
+
+    async with make_session() as verify_session:
+        settled = await verify_session.get(TournamentPayment, payment.id)
+        assert settled is not None
+        assert settled.status is TournamentPaymentStatus.succeeded
+        assert await _entered_player_ids(verify_session, event.id) == [player_id]
+
+
+@pytest.mark.parametrize(
+    "event_body",
+    [
+        {"id": "evt_no_type", "livemode": False, "data": {"object": {"id": "pi_x"}}},
+        {"id": "evt_no_data", "type": "payment_intent.succeeded", "livemode": False},
+        {
+            "id": "evt_bad_mode",
+            "type": "payment_intent.succeeded",
+            "livemode": "sometimes",
+            "data": {"object": {"id": "pi_x"}},
+        },
+    ],
+    ids=["missing-type", "missing-data", "non-boolean-livemode"],
+)
+async def test_webhook_refuses_a_malformed_signed_event_with_a_clean_400(
+    monkeypatch: pytest.MonkeyPatch,
+    engine: AsyncEngine,
+    event_body: dict[str, object],
+) -> None:
+    """A correctly signed body that is not a well-formed event fails parsing
+    at the webhook boundary: a 400, never a ``KeyError`` 500, and nothing is
+    persisted."""
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+    secret = "whsec_test_secret"
+    monkeypatch.setenv("STRIPE_WEBHOOK_SIGNING_SECRETS", secret)
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_fake")
+    payload = json.dumps(event_body)
+    signature = stripe.WebhookSignature.generate_signature_header(payload, secret)
+
+    status_code = await _post_webhook(
+        make_session,
+        FakePaymentProvider(),
+        payload=payload,
+        headers={"stripe-signature": signature},
+    )
+    assert status_code == 400
+    async with make_session() as verify_session:
+        stored = await verify_session.scalar(
+            select(TournamentPaymentProviderEvent.id).where(
+                TournamentPaymentProviderEvent.provider_event_id == event_body["id"]
+            )
+        )
+        assert stored is None
+
+
+async def test_requires_action_reports_action_required_and_resume_returns_the_secret(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A 3-D Secure challenge: Fortymm reports ``action_required``, and the
+    payer's resume still returns the client secret so the browser can finish
+    the challenge on the same PaymentIntent."""
+    provider = FakePaymentProvider()
+    _, payer, tournament, event, checkout_id, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    provider.set_status(payment.provider_payment_intent_id, status="requires_action")
+
+    status_read = await read_payment_status(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert status_read.payment_state is TournamentCheckoutPaymentState.action_required
+    assert status_read.last_error_code is None
+
+    resumed = await prepare_or_resume_payment(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert resumed.payment_state is TournamentCheckoutPaymentState.action_required
+    assert resumed.client_secret is not None
+    assert await _entered_player_ids(db_session, event.id) == []
+
+
+async def test_charge_refunded_adds_evidence_and_changes_no_obligation(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1816: ``charge.refunded`` adds to the evidence trail only. The paid
+    line stays admitted, the entry stands, and no obligation is recorded."""
+    provider = FakePaymentProvider()
+    _, payer, _, event, _, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    intent_id = payment.provider_payment_intent_id
+    provider.set_status(intent_id, status="succeeded", amount_received=2000)
+    await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
+    )
+
+    event_id = f"evt_{uuid.uuid4().hex}"
+    await record_and_reconcile_provider_event(
+        db_session,
+        event=ProviderWebhookEvent.model_validate(
+            {
+                "id": event_id,
+                "type": "charge.refunded",
+                "livemode": False,
+                "data": {
+                    "object": {
+                        "id": f"ch_{uuid.uuid4().hex}",
+                        "payment_intent": intent_id,
+                        "amount_refunded": 2000,
+                    }
+                },
+            }
+        ),
+        provider=provider,
+        settings=get_settings(),
+    )
+
+    stored = await db_session.scalar(
+        select(TournamentPaymentProviderEvent).where(
+            TournamentPaymentProviderEvent.provider_event_id == event_id
+        )
+    )
+    assert stored is not None
+    assert stored.payment_id == payment.id
+    assert stored.payload["data"]["object"]["amount_refunded"] == 2000
+    settled = await db_session.get(TournamentPayment, payment.id)
+    assert settled is not None
+    await db_session.refresh(settled)
+    assert settled.status is TournamentPaymentStatus.succeeded
+    assert [line.outcome for line in settled.lines] == [
+        TournamentPaymentLineOutcome.admitted
+    ]
+    assert await _obligations(db_session, payment.id) == []
+    assert await _entered_player_ids(db_session, event.id) == [payer.primary_player.id]
+
+
+async def test_charge_refunded_on_an_open_payment_admits_nobody(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The evidence-only branch holds even while the payment is still open:
+    a ``charge.refunded`` event never admits, and records no obligation."""
+    provider = FakePaymentProvider()
+    *_, event, _, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    intent_id = payment.provider_payment_intent_id
+    provider.set_status(intent_id, status="succeeded", amount_received=2000)
+    source_event = ProviderWebhookEvent.model_validate(
+        {
+            "id": f"evt_{uuid.uuid4().hex}",
+            "type": "charge.refunded",
+            "livemode": False,
+            "data": {"object": {"id": "ch_x", "payment_intent": intent_id}},
+        }
+    )
+    reconciled = await reconcile_payment(
+        db_session,
+        payment_id=payment.id,
+        provider=provider,
+        settings=get_settings(),
+        source_event=source_event,
+    )
+    assert reconciled is not None
+    assert reconciled.status is TournamentPaymentStatus.ready
+    assert await _obligations(db_session, payment.id) == []
+    assert await _entered_player_ids(db_session, event.id) == []
+
+
+async def test_entrant_account_that_is_not_the_payer_cannot_read_or_resume(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An Account that manages the entrant Player, but did not pay, is not the
+    payer. It gets the same 404 as a stranger, and never the secret."""
+    from app.models import AccountPlayer
+
+    provider = FakePaymentProvider()
+    _, payer, tournament, _, checkout_id, _ = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    manager = await make_user(db_session, f"manager-{uuid.uuid4().hex[:8]}")
+    db_session.add(
+        AccountPlayer(
+            account_id=manager.id, player_id=payer.primary_player.id, is_primary=False
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(PaymentNotFoundError):
+        await read_payment_status(
+            db_session,
+            tournament_id=tournament.id,
+            checkout_id=checkout_id,
+            actor=manager,
+            provider=provider,
+            settings=get_settings(),
+        )
+    with pytest.raises(PaymentNotFoundError):
+        await prepare_or_resume_payment(
+            db_session,
+            tournament_id=tournament.id,
+            checkout_id=checkout_id,
+            actor=manager,
+            provider=provider,
+            settings=get_settings(),
+        )
+
+
+async def test_anonymous_caller_gets_401_for_status_and_secret(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    provider = FakePaymentProvider()
+    _, _, tournament, _, checkout_id, _ = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    path = f"/v1/tournaments/{tournament.id}/checkouts/{checkout_id}/payment"
+
+    async def _override_session():
+        yield db_session
+
+    fastapi_app.dependency_overrides[get_session] = _override_session
+    fastapi_app.dependency_overrides[get_payment_provider] = lambda: provider
+    try:
+        async with make_raw_client() as client:
+            read = await client.get(path)
+            resume = await client.post(path)
+    finally:
+        fastapi_app.dependency_overrides.clear()
+    assert read.status_code == 401
+    assert resume.status_code == 401
+    assert "client_secret" not in resume.text
+
+
+async def test_account_merge_keeps_the_payment_visible_to_the_survivor(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1816 identity policy: the payer transfers to the surviving Account,
+    so the survivor still sees its payment. The payee Fortymm account is a
+    historical actor and stays as recorded."""
+    from app.account_merge import merge_user
+
+    provider = FakePaymentProvider()
+    owner, payer, tournament, _, checkout_id, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    survivor = await make_user(db_session, f"survivor-{uuid.uuid4().hex[:8]}")
+    payment_id, payer_id, survivor_id = payment.id, payer.id, survivor.id
+
+    await merge_user(db_session, from_user_id=payer_id, to_user_id=survivor_id)
+    await db_session.commit()
+
+    merged = await db_session.get(TournamentPayment, payment_id)
+    assert merged is not None
+    await db_session.refresh(merged)
+    assert merged.payer_account_id == survivor_id
+    assert merged.payee_fortymm_account_id == owner.id
+    status_read = await read_payment_status(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=survivor,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert status_read.id == payment_id
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [("", None), ("acct_fake_platform", None), ("acct_organizer", "acct_organizer")],
+    ids=["empty-means-platform", "platform-id-means-platform", "connected-payee"],
+)
+async def test_payee_stripe_account_comes_from_configuration(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    configured: str,
+    expected: str | None,
+) -> None:
+    """#1816: "At launch both come from configuration. An empty payee Stripe
+    account means the platform account." The row stores the payee, and the
+    create call targets that same account."""
+    monkeypatch.setenv("STRIPE_ACCOUNT_ID", "acct_fake_platform")
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_PAYEE_STRIPE_ACCOUNT", configured)
+    provider = FakePaymentProvider()
+    owner, *_, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    assert payment.payee_stripe_account == expected
+    assert payment.payee_fortymm_account_id == owner.id
+    assert provider.create_calls == [expected]
+
+
+async def test_provider_create_runs_with_no_payment_row_lock_held(
+    monkeypatch: pytest.MonkeyPatch, engine: AsyncEngine
+) -> None:
+    """#1816: "No Stripe call runs inside a transaction that holds capacity
+    locks." A director entry updates the payment row while it holds the
+    tournament lock, so the Stripe create must not wait on (or hold) that row.
+
+    A gatekeeper holds the payment row lock, uncommitted. A status read that
+    replays an uncertain create must still reach Stripe while the lock is
+    held, and only record the result once the gatekeeper lets go."""
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+    provider = FakePaymentProvider(force_uncertain_once=True)
+    async with make_session() as seed_session:
+        owner = await make_user(seed_session, f"merchant-{uuid.uuid4().hex[:8]}")
+        payer = await make_user(seed_session, f"payer-{uuid.uuid4().hex[:8]}")
+        tournament, (event,) = await _paid_tournament(seed_session, owner=owner)
+        _setup(monkeypatch, owner=owner)
+        checkout_id = await _checkout_for(
+            seed_session, tournament=tournament, event=event, payer=payer
+        )
+        prepared = await prepare_or_resume_payment(
+            seed_session,
+            tournament_id=tournament.id,
+            checkout_id=checkout_id,
+            actor=payer,
+            provider=provider,
+            settings=get_settings(),
+        )
+        assert prepared.payment_state is TournamentCheckoutPaymentState.preparing
+    assert len(provider.create_calls) == 1
+
+    async def _read_status() -> TournamentCheckoutPaymentState:
+        async with make_session() as session:
+            read = await read_payment_status(
+                session,
+                tournament_id=tournament.id,
+                checkout_id=checkout_id,
+                actor=payer,
+                provider=provider,
+                settings=get_settings(),
+            )
+            return read.payment_state
+
+    async with make_session() as gatekeeper:
+        await _hold_the_payment_lock(gatekeeper, prepared.id)
+        reader = asyncio.create_task(_read_status())
+        for _ in range(40):
+            if len(provider.create_calls) == 2:
+                break
+            await asyncio.sleep(0.05)
+        called_while_locked = len(provider.create_calls) == 2
+        await gatekeeper.commit()
+        state = await reader
+
+    assert called_while_locked, (
+        "the Stripe create waited for the payment row lock: it runs inside "
+        "the row-locked transaction"
+    )
+    assert state is TournamentCheckoutPaymentState.ready
+
+
+def test_only_the_provider_seam_imports_stripe() -> None:
+    """``app.payments.provider`` is the one module that talks to the Stripe
+    SDK, including webhook signature verification."""
+    from pathlib import Path
+
+    import app
+
+    root = Path(app.__file__).parent
+    importers = sorted(
+        str(path.relative_to(root))
+        for path in root.rglob("*.py")
+        if any(
+            line.strip() in ("import stripe",) or line.startswith("from stripe")
+            for line in path.read_text().splitlines()
+        )
+    )
+    assert importers == ["payments/provider.py"]
+
+
+def test_an_unknown_stripe_status_fails_parsing_as_unavailable() -> None:
+    """A PaymentIntent status outside Stripe's closed set never reaches
+    reconcile as a raw string. It is a provider failure, which leaves the
+    payment unchanged rather than quarantining it."""
+    from app.payments.provider import ProviderUnavailable, _parse_intent
+
+    with pytest.raises(ProviderUnavailable):
+        _parse_intent(
+            {
+                "id": "pi_x",
+                "status": "mystery_status",
+                "amount": 2000,
+                "currency": "usd",
+                "livemode": False,
+            }
+        )
+
+
+async def test_a_settled_payment_for_another_event_does_not_settle_this_fee(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``SettledPayment`` names the event it paid for. Evidence for one event
+    cannot admit the player to a different paid event."""
+    from app.tournament_entries import SettledPayment
+    from app.tournament_errors import EntryRefusal, EntryRefusedError
+
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    payer = await make_user(db_session, f"payer-{uuid.uuid4().hex[:8]}")
+    tournament, (paid, other) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("20.00"), Decimal("15.00"))
+    )
+    _setup(monkeypatch, owner=owner)
+    with pytest.raises(EntryRefusedError) as refused:
+        await admit_to_event(
+            db_session,
+            tournament_id=tournament.id,
+            event_id=other.id,
+            actor=payer,
+            user_id=None,
+            settled_payment=SettledPayment(payment_id=uuid.uuid4(), event_id=paid.id),
+        )
+    assert refused.value.refusal is EntryRefusal.payment_required
+
+
+async def test_reused_checkout_request_id_with_a_changed_selection_is_refused(
+    api_client, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1816: "A reused request ID with a changed payload is refused." The
+    request ID lives on the checkout (#1793), and the payment operation takes
+    none: a payment is keyed to its immutable checkout, so its amount can only
+    come from that checkout. End to end, a changed selection under a reused
+    request ID is refused, and the payment keeps its original checkout and
+    amount."""
+    from tests._helpers import start_session
+
+    payer = await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (first, second) = await _paid_tournament(
+        db_session, owner=owner, fees=(Decimal("20.00"), Decimal("35.00"))
+    )
+    _setup(monkeypatch, owner=owner)
+    provider = FakePaymentProvider()
+    fastapi_app.dependency_overrides[get_payment_provider] = lambda: provider
+    request_id = str(uuid.uuid4())
+    checkouts = f"/v1/tournaments/{tournament.id}/checkouts"
+
+    created = await api_client.post(
+        checkouts, json={"request_id": request_id, "event_ids": [str(first.id)]}
+    )
+    assert created.status_code == 201
+    checkout_id = created.json()["id"]
+    payment_path = f"{checkouts}/{checkout_id}/payment"
+    prepared = await api_client.post(payment_path)
+    assert prepared.status_code == 201
+    assert prepared.json()["amount_cents"] == 2000
+
+    changed = await api_client.post(
+        checkouts, json={"request_id": request_id, "event_ids": [str(second.id)]}
+    )
+    assert changed.status_code == 409
+    assert changed.json()["detail"]["code"] == "request_payload_conflict"
+
+    replayed = await api_client.post(
+        checkouts, json={"request_id": request_id, "event_ids": [str(first.id)]}
+    )
+    assert replayed.status_code == 201
+    assert replayed.json()["id"] == checkout_id
+    resumed = await api_client.post(payment_path)
+    assert resumed.status_code == 201
+    assert resumed.json()["id"] == prepared.json()["id"]
+    assert resumed.json()["amount_cents"] == 2000
+
+    payments = list(
+        await db_session.scalars(
+            select(TournamentPayment).where(
+                TournamentPayment.payer_account_id == payer.id
+            )
+        )
+    )
+    assert [p.amount_cents for p in payments] == [2000]
+    assert len(provider.create_calls) == 1

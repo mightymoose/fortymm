@@ -169,6 +169,11 @@ class Settings(BaseSettings):
     #: copy can never drift from what actually sends the mail.
     email_from: str = "noreply@fortymm.local"
 
+    #: Public origin of the web app (``APP_BASE_URL``), used to build links a
+    #: player follows: email deep links and the MCP paid-entry checkout link.
+    #: Empty means unconfigured. Each caller decides its own fallback.
+    app_base_url: str = ""
+
     #: Per-IP ceiling on tournament **self-entry** (``POST
     #: /v1/tournaments/{id}/events/{event_id}/entries`` with no body), per hour
     #: (#1092). Self-entry carries no permission any more, so this per-IP cap is
@@ -233,6 +238,12 @@ class Settings(BaseSettings):
     #: without touching this field's meaning.
     stripe_account_id: str = ""
 
+    #: The payee Stripe account stamped on each new payment row (#1816). Empty
+    #: means the platform account (:attr:`stripe_account_id`), which is the
+    #: launch posture. Stripe Connect (#1819) replaces this single setting
+    #: with a per-organizer account.
+    tournament_payment_payee_stripe_account: str = ""
+
     #: Comma-separated Stripe webhook signing secrets (plural — more than one
     #: must verify at once, e.g. rotating a secret, or a local ``stripe
     #: listen`` secret alongside a deployed one). Read as a single
@@ -250,6 +261,26 @@ class Settings(BaseSettings):
             if secret.strip()
         ]
 
+    @property
+    def stripe_key_is_live(self) -> bool:
+        return self.stripe_secret_key.startswith("sk_live_")
+
+    @property
+    def payee_stripe_account(self) -> str | None:
+        """The payee account for a new payment. ``None`` is the platform
+        account, whether the setting is empty or names the platform itself,
+        because a platform charge carries no ``Stripe-Account`` header and its
+        events carry no ``account`` field."""
+        account = self.tournament_payment_payee_stripe_account.strip()
+        if not account or account == self.stripe_account_id:
+            return None
+        return account
+
+    @property
+    def web_app_base_url(self) -> str | None:
+        base = self.app_base_url.strip().rstrip("/")
+        return base or None
+
     @model_validator(mode="after")
     def _refuse_live_key_outside_production(self) -> "Settings":
         """Refuse to boot with a live Stripe key anywhere but the explicit
@@ -260,7 +291,7 @@ class Settings(BaseSettings):
         FastAPI dependency path.
         """
         if (
-            self.stripe_secret_key.startswith("sk_live_")
+            self.stripe_key_is_live
             and self.environment is not DeployEnvironment.PRODUCTION
         ):
             raise ValueError(

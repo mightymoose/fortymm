@@ -75,6 +75,7 @@ from app.models.tournament_event_stage_group import TournamentEventStageGroup
 from app.models.tournament_fixture import TournamentFixture
 from app.models.tournament_payment import (
     TournamentPayment,
+    TournamentPaymentErrorCode,
     TournamentPaymentLine,
     TournamentPaymentLineOutcome,
     TournamentPaymentProviderCreateState,
@@ -151,6 +152,7 @@ __all__ = [
     "TournamentDrawRevision",
     "TournamentPayment",
     "TournamentPaymentLine",
+    "TournamentPaymentErrorCode",
     "TournamentPaymentLineOutcome",
     "TournamentPaymentProviderCreateState",
     "TournamentPaymentProviderEvent",

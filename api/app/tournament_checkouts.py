@@ -8,14 +8,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from math import ceil
-from typing import cast
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app import required_repairs
 from app.config import get_settings
+from app.db import database_now
 from app.models import (
     EventFormat,
     EventLifecycleState,
@@ -127,12 +127,6 @@ async def _enforce_checkout_rate_limit(
 def _price_cents(price: Decimal) -> int:
     """Convert the exact Numeric value to cents without passing through float."""
     return int(price * Decimal(100))
-
-
-async def database_now(db: AsyncSession) -> datetime:
-    return cast(
-        datetime, (await db.execute(select(func.clock_timestamp()))).scalar_one()
-    )
 
 
 def checkout_effective_state(

@@ -4932,15 +4932,36 @@ async def test_enter_event_full_event_raises_tool_error_naming_the_refusal(
     assert [r.user_id for r in rows] == [first_id]
 
 
+@pytest.mark.parametrize(
+    ("app_base_url", "mcp_resource_url", "expected_prefix"),
+    [
+        ("https://app.fortymm.example/", "", "https://app.fortymm.example"),
+        (None, "https://uat.fortymm.example/api/mcp", "https://uat.fortymm.example"),
+        (None, None, ""),
+    ],
+    ids=["app-base-url", "mcp-origin-fallback", "root-relative-fallback"],
+)
 async def test_enter_event_paid_event_refusal_includes_the_web_checkout_url(
     db_session: AsyncSession,
     default_league: League,
     monkeypatch: pytest.MonkeyPatch,
+    app_base_url: str | None,
+    mcp_resource_url: str | None,
+    expected_prefix: str,
 ) -> None:
     """#1816: MCP has no card-entry surface of its own, so a paid event's
     ``payment_required`` refusal hands the agent the web checkout URL rather
-    than leaving self-entry a dead end."""
-    monkeypatch.setenv("APP_BASE_URL", "https://app.fortymm.example")
+    than leaving self-entry a dead end. The URL is there whatever is
+    configured: ``APP_BASE_URL`` first, then the MCP server's own public
+    origin, then a root-relative path."""
+    for name, value in (
+        ("APP_BASE_URL", app_base_url),
+        ("MCP_PUBLIC_RESOURCE_URL", mcp_resource_url),
+    ):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
     owner = await make_user(db_session, "mcp-enter-paid-owner")
     me = await make_user(db_session, "mcp-enter-paid-me")
     await grant_permissions(db_session, me, [])
@@ -4956,9 +4977,7 @@ async def test_enter_event_paid_event_refusal_includes_the_web_checkout_url(
                 "enter_event",
                 {"tournament_id": str(tournament_id), "event_id": str(event_id)},
             )
-    assert f"https://app.fortymm.example/tournaments/{tournament_id}" in str(
-        excinfo.value
-    )
+    assert f"Pay at {expected_prefix}/tournaments/{tournament_id}" in str(excinfo.value)
 
 
 # ----- withdraw_from_event tool --------------------------------------------
