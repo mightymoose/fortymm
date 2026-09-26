@@ -1798,6 +1798,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tournament Payment
+         * @description Read a payment's current status, refreshing it against Stripe first
+         *     when it is not yet in a terminal state. Only the payer and the configured
+         *     merchant account may read it (#1816) — everyone else gets a 404. Never
+         *     carries the client secret.
+         */
+        get: operations["get_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_get"];
+        put?: never;
+        /**
+         * Prepare Tournament Payment
+         * @description Create (or resume) this checkout's Stripe PaymentIntent. The ONLY
+         *     response that ever carries the Stripe client secret — call this again to
+         *     resume an in-progress payment.
+         */
+        post: operations["prepare_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/schedule-solves": {
         parameters: {
             query?: never;
@@ -2700,6 +2729,16 @@ export interface components {
             end: string;
         };
         /**
+         * DeployEnvironment
+         * @description The explicit production gate (#1816).
+         *
+         *     Deliberately explicit configuration, never inferred from a hostname or a
+         *     key prefix: a deploy that forgets to set this stays ``development``, which
+         *     is the fail-safe direction for :meth:`Settings._refuse_live_key_outside_production`.
+         * @enum {string}
+         */
+        DeployEnvironment: "development" | "production";
+        /**
          * DeviceTokenResponse
          * @description Confirmation that the device token is registered to the current user.
          */
@@ -2980,6 +3019,19 @@ export interface components {
             /** Formatted */
             formatted: string;
         };
+        /**
+         * GeocoderChoice
+         * @description Which geocoding implementation this process uses — a closed set.
+         *
+         *     Selection is **explicit configuration**, never inferred from whether a key
+         *     happens to be present (ADR "a venue's coordinates are geocoded server-side
+         *     and not null", 2026-07-26 amendment). Inference failed silently open: an
+         *     environment meant to geocode for real, whose key was missing or rotated
+         *     out, quietly hashed addresses into pseudo-random coordinates and stored
+         *     them as though they were real.
+         * @enum {string}
+         */
+        GeocoderChoice: "google" | "fake";
         /**
          * GroupRead
          * @description One competitive group of an event's draw, as it is **read**: server-minted
@@ -5135,6 +5187,152 @@ export interface components {
              */
             email: string;
         };
+        /** Settings */
+        Settings: {
+            /**
+             * Solver Time Cap S
+             * @default 10
+             */
+            solver_time_cap_s: number;
+            /**
+             * Preview Solver Time Cap S
+             * @default 5
+             */
+            preview_solver_time_cap_s: number;
+            /**
+             * Auth0 Domain
+             * @default
+             */
+            auth0_domain: string;
+            /**
+             * Auth0 Audience
+             * @default
+             */
+            auth0_audience: string;
+            /**
+             * Mcp Public Base Url
+             * @default
+             */
+            mcp_public_base_url: string;
+            /**
+             * Mcp Public Resource Url
+             * @default
+             */
+            mcp_public_resource_url: string;
+            /**
+             * Mcp Oauth Client Id
+             * @default
+             */
+            mcp_oauth_client_id: string;
+            /**
+             * Realtime Coalesce Ms
+             * @default 250
+             */
+            realtime_coalesce_ms: number;
+            /**
+             * Realtime Max Stream Seconds
+             * @default 900
+             */
+            realtime_max_stream_seconds: number;
+            /**
+             * Realtime Max Connections Per User
+             * @default 4
+             */
+            realtime_max_connections_per_user: number;
+            /** @default google */
+            geocoder: components["schemas"]["GeocoderChoice"];
+            /** Google Geocoding Api Key */
+            google_geocoding_api_key?: string | null;
+            /**
+             * Realtime Retry Base Ms
+             * @default 3000
+             */
+            realtime_retry_base_ms: number;
+            /**
+             * Realtime Retry Spread Ms
+             * @default 5000
+             */
+            realtime_retry_spread_ms: number;
+            /**
+             * Email From
+             * @default noreply@fortymm.local
+             */
+            email_from: string;
+            /**
+             * Tournament Entry Ip Per Hour
+             * @default 30
+             */
+            tournament_entry_ip_per_hour: number;
+            /**
+             * Tournament Checkout Ip Per Hour
+             * @default 30
+             */
+            tournament_checkout_ip_per_hour: number;
+            /** Tournament Payment Merchant Account Id */
+            tournament_payment_merchant_account_id?: string | null;
+            /**
+             * Email Send Session Limit Per Hour
+             * @default 5
+             */
+            email_send_session_limit_per_hour: number;
+            /**
+             * Email Send Ip Limit Per Hour
+             * @default 20
+             */
+            email_send_ip_limit_per_hour: number;
+            /**
+             * Email Resend Session Limit Per Hour
+             * @default 3
+             */
+            email_resend_session_limit_per_hour: number;
+            /**
+             * Email Resend Ip Limit Per Hour
+             * @default 10
+             */
+            email_resend_ip_limit_per_hour: number;
+            /**
+             * Login Consume Ip Limit Per Hour
+             * @default 60
+             */
+            login_consume_ip_limit_per_hour: number;
+            /**
+             * Guest Creation Ip Limit Per Hour
+             * @default 60
+             */
+            guest_creation_ip_limit_per_hour: number;
+            /**
+             * Guest Creation Ip Limit Per Day
+             * @default 300
+             */
+            guest_creation_ip_limit_per_day: number;
+            /**
+             * Match Creation Account Limit Per Hour
+             * @default 60
+             */
+            match_creation_account_limit_per_hour: number;
+            /**
+             * Match Creation Account Limit Per Day
+             * @default 300
+             */
+            match_creation_account_limit_per_day: number;
+            /** @default development */
+            environment: components["schemas"]["DeployEnvironment"];
+            /**
+             * Stripe Secret Key
+             * @default
+             */
+            stripe_secret_key: string;
+            /**
+             * Stripe Account Id
+             * @default
+             */
+            stripe_account_id: string;
+            /**
+             * Stripe Webhook Signing Secrets
+             * @default
+             */
+            STRIPE_WEBHOOK_SIGNING_SECRETS: string;
+        };
         /**
          * Slot
          * @description A date-only (``YYYY-MM-DD``) window with ``HH:MM`` start/end. The strings
@@ -5417,7 +5615,7 @@ export interface components {
          * TournamentCheckoutPaymentState
          * @enum {string}
          */
-        TournamentCheckoutPaymentState: "unavailable";
+        TournamentCheckoutPaymentState: "unavailable" | "preparing" | "ready" | "checking" | "action_required" | "succeeded" | "failed" | "expired" | "canceled";
         /** TournamentCheckoutRead */
         TournamentCheckoutRead: {
             /**
@@ -5994,6 +6192,73 @@ export interface components {
             /** Call Notified Count */
             call_notified_count: number;
             completed_at: components["schemas"]["FixtureTimeRead"] | null;
+        };
+        /**
+         * TournamentPaymentPrepared
+         * @description The prepare/resume response — the ONE place the Stripe client secret is
+         *     ever returned. ``None`` when the create outcome was uncertain (Fortymm
+         *     state ``preparing``): the client has nothing to confirm yet and must
+         *     resume (call this operation again) shortly.
+         */
+        TournamentPaymentPrepared: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Checkout Id
+             * Format: uuid
+             */
+            checkout_id: string;
+            /** Reference */
+            reference: string;
+            status: components["schemas"]["TournamentCheckoutPaymentState"];
+            /** Last Error */
+            last_error: string | null;
+            /** Amount Cents */
+            amount_cents: number;
+            /** Currency */
+            currency: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Client Secret */
+            client_secret: string | null;
+        };
+        /**
+         * TournamentPaymentRead
+         * @description The payer's (or merchant's) view of a payment. Never carries the Stripe
+         *     client secret — only :class:`TournamentPaymentPrepared` does, and only the
+         *     prepare/resume operation returns that (#1816 constraint).
+         */
+        TournamentPaymentRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Checkout Id
+             * Format: uuid
+             */
+            checkout_id: string;
+            /** Reference */
+            reference: string;
+            status: components["schemas"]["TournamentCheckoutPaymentState"];
+            /** Last Error */
+            last_error: string | null;
+            /** Amount Cents */
+            amount_cents: number;
+            /** Currency */
+            currency: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** TournamentRead */
         TournamentRead: {
@@ -9115,6 +9380,82 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TournamentCheckoutRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+                checkout_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["Settings"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentPaymentRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prepare_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+                checkout_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["Settings"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentPaymentPrepared"];
                 };
             };
             /** @description Validation Error */
