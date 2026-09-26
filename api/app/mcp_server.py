@@ -69,6 +69,7 @@ from app.draws import (
     UnsupportedDrawType,
     draw_error_detail,
 )
+from app.email import app_base_url
 from app.geocoding import AddressNotGeocodableError
 from app.geocoding.dependencies import get_geocoder
 from app.mappers.match_extras_mapper import empty_extras
@@ -165,6 +166,7 @@ from app.tournament_errors import (
     DrawUnderWayError,
     EntryNotFoundError,
     EntryRateLimitedError,
+    EntryRefusal,
     EntryRefusedError,
     EventCancelledError,
     EventFormatMembershipError,
@@ -1746,16 +1748,30 @@ async def delete_event(
 # ----- enter_event tool ----------------------------------------------------
 
 
-def _map_entry_refused_tool_error(exc: EntryRefusedError) -> ToolError:
+def _map_entry_refused_tool_error(
+    exc: EntryRefusedError, *, tournament_id: uuid.UUID
+) -> ToolError:
     """Adapt a coded entry refusal (ADR-0968) to a ``ToolError`` that NAMES which of the
-    four refusals fired, then hands the agent the domain-authored fallback sentence.
+    five refusals fired, then hands the agent the domain-authored fallback sentence.
 
     The HTTP surface answers these with a machine-readable ``code`` a client switches
     on;
     an agent reads prose, so the code rides in the prose (``[event_full]`` …) and the
     verb's own message — a full event, a shut window, a rating cap, an existing entry —
     follows, so the agent is told both *which* rule refused and *why* in its own
-    words."""
+    words.
+
+    ``payment_required`` (#1816) additionally carries the web checkout URL: MCP
+    has no card-entry surface of its own, so the only way an agent can get a
+    paid event's fee collected is to hand the player a link to go pay it there.
+    """
+    if exc.refusal is EntryRefusal.payment_required:
+        base = app_base_url()
+        if base is not None:
+            checkout_url = f"{base.rstrip('/')}/tournaments/{tournament_id}"
+            return ToolError(
+                f"Entry refused [{exc.refusal.value}]: {exc} Pay at {checkout_url}"
+            )
     return ToolError(f"Entry refused [{exc.refusal.value}]: {exc}")
 
 
@@ -1842,7 +1858,9 @@ async def enter_event(
             # Carries its own sentence naming the event's (non-singles) format.
             raise ToolError(str(exc)) from exc
         except EntryRefusedError as exc:
-            raise _map_entry_refused_tool_error(exc) from exc
+            raise _map_entry_refused_tool_error(
+                exc, tournament_id=tournament_id
+            ) from exc
 
 
 class EntryWithdrawalConfirmation(BaseModel):

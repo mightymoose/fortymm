@@ -4750,6 +4750,7 @@ async def _seed_published_singles_event(
     league: League,
     *,
     max_players: int | None = None,
+    entry_fee: Decimal = Decimal("0.00"),
 ) -> tuple[Tournament, TournamentEvent]:
     """A ``published`` tournament (registration open, ADR-0017) owned by ``owner`` with
     one singles event — the target the entry tool needs. Written directly so the tool is
@@ -4763,7 +4764,7 @@ async def _seed_published_singles_event(
         format=EventFormat.singles,
         draw_settings=TournamentEventDrawSettings.for_draw_type(DrawType.round_robin),
         max_players=max_players,
-        entry_fee=Decimal("0.00"),
+        entry_fee=entry_fee,
         timezone="America/Chicago",
         slot={"date": "2026-08-01", "start": "09:00", "end": "17:00"},
         match_settings={"rated": False, "length_games": 3},
@@ -4929,6 +4930,35 @@ async def test_enter_event_full_event_raises_tool_error_naming_the_refusal(
         .all()
     )
     assert [r.user_id for r in rows] == [first_id]
+
+
+async def test_enter_event_paid_event_refusal_includes_the_web_checkout_url(
+    db_session: AsyncSession,
+    default_league: League,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1816: MCP has no card-entry surface of its own, so a paid event's
+    ``payment_required`` refusal hands the agent the web checkout URL rather
+    than leaving self-entry a dead end."""
+    monkeypatch.setenv("APP_BASE_URL", "https://app.fortymm.example")
+    owner = await make_user(db_session, "mcp-enter-paid-owner")
+    me = await make_user(db_session, "mcp-enter-paid-me")
+    await grant_permissions(db_session, me, [])
+    raw = await _mint(db_session, me)
+    tournament, event = await _seed_published_singles_event(
+        db_session, owner, default_league, entry_fee=Decimal("20.00")
+    )
+    tournament_id, event_id = tournament.id, event.id
+
+    async with _mcp_client(raw) as client, client:
+        with pytest.raises(ToolError, match="payment_required") as excinfo:
+            await client.call_tool(
+                "enter_event",
+                {"tournament_id": str(tournament_id), "event_id": str(event_id)},
+            )
+    assert f"https://app.fortymm.example/tournaments/{tournament_id}" in str(
+        excinfo.value
+    )
 
 
 # ----- withdraw_from_event tool --------------------------------------------
