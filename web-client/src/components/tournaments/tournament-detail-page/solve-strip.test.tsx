@@ -347,6 +347,19 @@ describe('SolveStrip', () => {
     },
   )
 
+  it('withholds Run scheduler while terminal solve placements are reconciling', () => {
+    const onRun = vi.fn(() => Promise.resolve())
+    solveStripPage.render({
+      solve: buildScheduleSolve({ status: 'succeeded' }),
+      reconciling: true,
+      onRun,
+    })
+
+    expect(solveStripPage.getRunButton()).toBeDisabled()
+    solveStripPage.clickRun()
+    expect(onRun).not.toHaveBeenCalled()
+  })
+
   // ----- the refusals, inline ------------------------------------------------
 
   it('words the 422 no_drawn_events refusal as the designed "cut a draw first" notice', async () => {

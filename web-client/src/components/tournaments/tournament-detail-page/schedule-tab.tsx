@@ -9,8 +9,10 @@ import {
   Plus,
   Users,
 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -33,6 +35,7 @@ import {
   type ScheduleMatch,
   type ScheduleTable,
 } from '../data/schedule'
+import { solveInFlight } from '../data/solve'
 import {
   buildTimelineBoard,
   calledAtLabel,
@@ -88,6 +91,9 @@ const isScheduleView = (v: string): v is ScheduleView =>
 
 export interface ScheduleTabProps {
   tournament: Tournament
+  /** The detail query's successful-update marker. It advances even when an
+   * equal response preserves `tournament` through structural sharing. */
+  tournamentDetailUpdatedAt: number
   /** The tournament's table catalogue (labels + courts), resolving a placement's
    * `tableId` to a table. Passed alongside the tournament because the domain
    * `Tournament` carries only table *ids* — the labels live on the catalogue. */
@@ -339,6 +345,7 @@ const MatchRow = ({
   tables,
   status,
   canEdit,
+  placementActionable,
   onSubmit,
   isPending,
   showTime,
@@ -347,6 +354,11 @@ const MatchRow = ({
   tables: TournamentTable[]
   status: TournamentStatus
   canEdit: boolean
+  /** Whether a placement write may be offered on the data being rendered. False
+   * while a schedule solve is queued/running: the row's placement is the
+   * server's last accepted one and a fresh plan may replace it at the next
+   * poll, so acting on it would be acting on stale data. */
+  placementActionable: boolean
   onSubmit: (fixtureId: string, body: PlacementBody) => Promise<void>
   isPending: boolean
   showTime: boolean
@@ -466,8 +478,11 @@ const MatchRow = ({
       )}
       {/* The control, for the director alone. A finished match (`!placeable`) is frozen
           server-side, so it gets no control — not a disabled one (ADR-0015). A non-owner
-          gets none either way. */}
-      {canEdit && match.placeable && (
+          gets none either way. While a solve is in flight the placements on screen are
+          provisional (the last accepted plan), so the control is withheld there too —
+          the same hidden-not-disabled rule, and the same restoration the moment a
+          terminal payload lands. */}
+      {canEdit && match.placeable && placementActionable && (
         <PlacementControl
           match={match}
           tables={tables}
@@ -528,6 +543,7 @@ const TableColumn = ({
   tables,
   status,
   canEdit,
+  placementActionable,
   onSubmit,
   isPending,
 }: {
@@ -535,6 +551,8 @@ const TableColumn = ({
   tables: TournamentTable[]
   status: TournamentStatus
   canEdit: boolean
+  /** The provisional-placement gate, threaded to every row — see `MatchRow`. */
+  placementActionable: boolean
   onSubmit: (fixtureId: string, body: PlacementBody) => Promise<void>
   isPending: boolean
 }) => (
@@ -561,6 +579,7 @@ const TableColumn = ({
           tables={tables}
           status={status}
           canEdit={canEdit}
+          placementActionable={placementActionable}
           onSubmit={onSubmit}
           isPending={isPending}
           showTime
@@ -583,13 +602,94 @@ const TableColumn = ({
  * and the placement re-renders from the server — the mutation invalidates the tournament
  * detail query, so `tournament` arrives again with the new table/time and this recomputes
  * (`buildSchedule`). A non-owner sees the same schedule with no control (ADR-0015: hidden,
- * never disabled). Conflict flagging (double-booked tables/players) is a later scheduler
- * slice and deliberately absent here — placement is soft (ADR-0790).
+ * never disabled). While a solve is queued/running the placements on screen are the last
+ * accepted plan: the tab says so and withholds the control (`placementActionable`) until
+ * a terminal solve lands. Conflict flagging (double-booked tables/players) is a later
+ * scheduler slice and deliberately absent here — placement is soft (ADR-0790).
  */
-export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
+export const ScheduleTab = ({
+  tournament,
+  tournamentDetailUpdatedAt,
+  tables,
+}: ScheduleTabProps) => {
   const canEdit = tournament.canEdit
   const place = usePlaceFixture(tournament.id)
-  const requestSolve = useRequestScheduleSolve(tournament.id)
+  const [detailUpdatedAtAtSettlement, setDetailUpdatedAtAtSettlement] = useState<
+    number | null
+  >(null)
+  const requestSolve = useRequestScheduleSolve(tournament.id, (queryUpdatedAt) => {
+    // The query cache is authoritative at settlement: it may already contain a
+    // successful overlapping read React has not committed as this prop yet.
+    // Keep the committed marker as a floor for cache-less standalone consumers.
+    setDetailUpdatedAtAtSettlement(
+      Math.max(queryUpdatedAt, tournamentDetailUpdatedAt),
+    )
+  })
+  // **Provisional placements** (#1614): while the latest solve is `queued` or
+  // `running`, the fixture placements this tab renders are the server's LAST
+  // ACCEPTED plan — the go-live transition commits matches and enqueues the
+  // solve before the worker applies its placements, and the same asynchronous
+  // window opens for every other trigger (`match_completed`, `settings_changed`,
+  // `manual`, `pin_tick`, `rerun` all share the one ledger and the one guarded
+  // apply). The parsed solve status is independent of trigger, so one flag
+  // covers them all: the tab keeps the last-good schedule on screen, marks it
+  // visibly as an update in progress, and withholds Place/Move — acting on a
+  // placement that a landing solve may replace is exactly how the Schedule tab
+  // ended up offering actions on a fixture the worker had already called.
+  // A terminal solve (`succeeded`/`infeasible`/`failed`) — or no solve — makes
+  // the placements actionable again; the poll carries that payload in without
+  // any reload, and a FAILED refetch cannot flip the flag (it derives from the
+  // last-good cache entry, which stays whatever it was).
+  //
+  // **The gate closes around the director's own click too** (#1614, the same
+  // race by hand): a manual "Run scheduler" has the previous terminal (or null)
+  // solve in `tournament.latestScheduleSolve` for the whole request — and the
+  // fire-and-forget invalidate that follows it re-reads only at the network's
+  // speed. Three bridges hold the gate shut across that window, so Place/Move
+  // never sit on data the just-accepted run may replace:
+  //
+  // 1. **While the request is out** (`requestSolve.isPending`) — nothing has
+  //    landed yet, so the request state is the only signal there is. A refused
+  //    run (the 422 "cut a draw first") flashes the notice only for the request's
+  //    own length, which is the honest reading of "an update is in progress".
+  // 2. **From the 202 onward**, `useRequestScheduleSolve` writes the accepted
+  //    row into the detail cache (`./api`) while it is still `queued`/`running`,
+  //    so this prop carries it the moment the server accepts — no poll, no
+  //    refetch needed. The next detail response (the settle refetch, then the
+  //    ~3s in-flight poll) hands back the same row or a later one, and a
+  //    terminal payload restores the actions, as the tests below pin.
+  // 3. **When the 202 itself arrives terminal** — or the request fails
+  //    ambiguously (#1614 review) — the cache write stands down, so the solve
+  //    mutation arms this tab's detail-query marker AFTER the POST settles and
+  //    immediately BEFORE it invalidates detail. Invalidation cancels any
+  //    older overlapping read and starts a new one; only completion of that
+  //    post-settlement read can advance the marker and reopen the gate.
+  //    Terminal-202: merging a
+  //    solved row would pair it with this snapshot's PRE-solve fixtures, a
+  //    state no server read ever produced. Ambiguous failure (a lost
+  //    transport or a proxy 5xx — `runOutcomeAmbiguous` in `../data/solve`):
+  //    the route commits the run before it answers, so the run may be
+  //    accepted while `mutateAsync` rejects, and once `isPending` clears the
+  //    cached terminal (or null) solve would make Place/Move actionable again
+  //    on placements the accepted worker may still replace. Either way, any
+  //    post-settlement detail payload reads the solve and its fixtures together,
+  //    so its successful completion IS the reconciliation.
+  //    This tracks the query marker rather than `tournament` identity because
+  //    structural sharing preserves that selected object after an equal read.
+  //    A failed refetch cannot open the gate — its marker does not advance — so
+  //    this bridge fails shut. A DEFINITE refusal (a 4xx, or the application's
+  //    exact queue-unavailable 503 body) arms nothing: the server answered
+  //    "nothing was queued", so the pre-click state is the truth.
+  // Bridge 3, derived — no effect, no clearing: the latch is held until a
+  // successful detail read advances the query marker. A later click re-arms it
+  // against the then-current marker.
+  const runAwaitingDetail =
+    detailUpdatedAtAtSettlement !== null &&
+    tournamentDetailUpdatedAt <= detailUpdatedAtAtSettlement
+  const placementActionable =
+    !solveInFlight(tournament.latestScheduleSolve) &&
+    !requestSolve.isPending &&
+    !runAwaitingDetail
   // Memoized on the query cache's stable references: the reduction walks every
   // fixture of every event, so it should re-run when the data changes, not on
   // every poll-driven re-render.
@@ -668,8 +768,31 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
       <SolveStrip
         solve={tournament.latestScheduleSolve}
         canEdit={canEdit}
+        reconciling={runAwaitingDetail}
         onRun={() => requestSolve.mutateAsync().then(() => undefined)}
       />
+
+      {/* The provisional half of the same fact: the strip above says the solver
+          is working, and THIS says what that means for the placements below —
+          the schedule on screen is the last accepted one, not the plan being
+          computed. Owner and viewer alike (a non-owner reads the same
+          schedule); `role="status"` keeps it a polite announcement, since the
+          strip's own `aria-live` region already speaks the solve state. Gone
+          the moment a terminal payload arrives — no reload, no navigation. */}
+      {!placementActionable && (
+        <Alert
+          role="status"
+          data-testid="schedule-placement-updating"
+          className="mb-6"
+        >
+          <Loader2 size={16} className="animate-spin" />
+          <AlertTitle>Placement updates in progress</AlertTitle>
+          <AlertDescription>
+            The scheduler is placing matches on tables. The placements shown
+            are the last accepted ones and can change when it finishes.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {schedule.isEmpty ? (
         <EmptyState
@@ -726,6 +849,7 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
               tables={tables}
               status={tournament.status}
               canEdit={canEdit}
+              placementActionable={placementActionable}
               onSubmit={onSubmit}
               isPending={place.isPending}
             />
@@ -749,6 +873,7 @@ export const ScheduleTab = ({ tournament, tables }: ScheduleTabProps) => {
                     tables={tables}
                     status={tournament.status}
                     canEdit={canEdit}
+                    placementActionable={placementActionable}
                     onSubmit={onSubmit}
                     isPending={place.isPending}
                     showTime={false}
