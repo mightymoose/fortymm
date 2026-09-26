@@ -14,6 +14,14 @@ class TournamentCheckoutState(StrEnum):
 
 class TournamentCheckoutPaymentState(StrEnum):
     unavailable = "unavailable"
+    preparing = "preparing"
+    ready = "ready"
+    checking = "checking"
+    action_required = "action_required"
+    succeeded = "succeeded"
+    failed = "failed"
+    expired = "expired"
+    canceled = "canceled"
 
 
 class TournamentCheckoutCreate(BaseModel):

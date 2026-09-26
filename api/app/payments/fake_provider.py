@@ -125,5 +125,16 @@ class FakePaymentProvider:
         self._by_intent_id[payment_intent_id] = state
         return state.intent
 
+    def corrupt_amount(
+        self, payment_intent_id: str, amount: int
+    ) -> ProviderPaymentIntent:
+        """Test-only: make Stripe's retrieved intent report a DIFFERENT
+        ``amount`` than what Fortymm billed — simulating a forged, stale or
+        cross-account event that reconcile must quarantine."""
+        state = self._by_intent_id[payment_intent_id]
+        state.intent = state.intent.model_copy(update={"amount": amount})
+        self._by_intent_id[payment_intent_id] = state
+        return state.intent
+
     def intent_for(self, payment_intent_id: str) -> ProviderPaymentIntent:
         return self._by_intent_id[payment_intent_id].intent
