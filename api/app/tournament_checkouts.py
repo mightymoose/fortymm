@@ -14,6 +14,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app import required_repairs
 from app.config import get_settings
 from app.models import (
     EventFormat,
@@ -27,6 +28,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentPayment,
+    TournamentPaymentStatus,
     User,
 )
 from app.rate_limiting import (
@@ -56,7 +58,10 @@ from app.tournament_eligibility import (
     evaluate_rating_eligibility,
     event_is_full,
 )
-from app.tournament_payment_state import payment_display_state
+from app.tournament_payment_state import (
+    TERMINAL_PAYMENT_STATUSES,
+    payment_display_state,
+)
 from app.tournament_queries import (
     active_entry_counts_by_event,
     entrant_rating,
@@ -251,20 +256,53 @@ async def invalidate_checkout_for_entrant_event(
     The caller owns the tournament lock, which serializes this transition with
     checkout admission. Only a quote containing the manually entered event is
     invalidated; an unrelated paid selection in the same tournament survives.
+
+    #1816: a checkout with an OPEN payment (one not yet in a terminal state)
+    is marked ``cancel_requested`` in this SAME transaction — the director's
+    entry supersedes it — and an RQ job is staged (dispatched only after this
+    transaction commits, via ``app.required_repairs``'s outbox) to cancel the
+    PaymentIntent itself: that is a Stripe network call, which cannot run
+    inside this locked transaction. If Stripe later reports success anyway,
+    ``reconcile_payment`` finds the entry already made and records a refund
+    obligation instead of reversing the director's action.
     """
-    checkout_ids = select(TournamentCheckoutLine.checkout_id).where(
+    checkout_ids_select = select(TournamentCheckoutLine.checkout_id).where(
         TournamentCheckoutLine.event_id == event_id
     )
+    matching_checkout_ids = list(
+        await db.scalars(
+            select(TournamentCheckout.id).where(
+                TournamentCheckout.id.in_(checkout_ids_select),
+                TournamentCheckout.tournament_id == tournament_id,
+                TournamentCheckout.entrant_player_id == entrant_player_id,
+                TournamentCheckout.status == TournamentCheckoutStatus.active,
+            )
+        )
+    )
+    if not matching_checkout_ids:
+        return
     await db.execute(
         update(TournamentCheckout)
-        .where(
-            TournamentCheckout.id.in_(checkout_ids),
-            TournamentCheckout.tournament_id == tournament_id,
-            TournamentCheckout.entrant_player_id == entrant_player_id,
-            TournamentCheckout.status == TournamentCheckoutStatus.active,
-        )
+        .where(TournamentCheckout.id.in_(matching_checkout_ids))
         .values(status=TournamentCheckoutStatus.invalidated)
     )
+    now = await _database_now(db)
+    cancel_requested_ids = (
+        await db.execute(
+            update(TournamentPayment)
+            .where(
+                TournamentPayment.checkout_id.in_(matching_checkout_ids),
+                TournamentPayment.status.not_in(TERMINAL_PAYMENT_STATUSES),
+            )
+            .values(
+                status=TournamentPaymentStatus.cancel_requested,
+                cancel_requested_at=now,
+            )
+            .returning(TournamentPayment.id)
+        )
+    ).scalars()
+    for payment_id in cancel_requested_ids:
+        await required_repairs.request_payment_cancel(db, payment_id)
 
 
 async def _load_tournament_locked(

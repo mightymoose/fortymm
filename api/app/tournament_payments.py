@@ -15,7 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
@@ -542,3 +542,43 @@ async def reconcile_payment(
             payment.status = TournamentPaymentStatus.expired
     await db.commit()
     return payment
+
+
+def run_cancel_payment_intent(payment_id: str) -> None:
+    """RQ entry point (the ``payments`` queue): best-effort cancel of the
+    PaymentIntent for a payment a director entry superseded (#1816). Thin
+    wrapper over ``app.rq_async.run_async_db_job``, matching
+    ``app.schedule_solves.run_schedule_solve``'s shape."""
+    from app.rq_async import run_async_db_job
+
+    run_async_db_job(
+        f"payment-cancel-{payment_id}",
+        lambda sessionmaker: _execute_cancel(sessionmaker, uuid.UUID(payment_id)),
+    )
+
+
+async def _execute_cancel(
+    sessionmaker: async_sessionmaker[AsyncSession], payment_id: uuid.UUID
+) -> None:
+    from app.payments.dependencies import get_payment_provider
+
+    async with sessionmaker() as db:
+        payment = await db.scalar(
+            select(TournamentPayment).where(TournamentPayment.id == payment_id)
+        )
+        if payment is None or payment.provider_payment_intent_id is None:
+            return
+        if payment.status in TERMINAL_PAYMENT_STATUSES:
+            return
+        provider = get_payment_provider()
+        try:
+            await provider.cancel_payment_intent(
+                payee_account=payment.payee_stripe_account,
+                payment_intent_id=payment.provider_payment_intent_id,
+            )
+        except ProviderRetrievalFailed:
+            # Best-effort (module docstring on ``run_cancel_payment_intent``):
+            # if Stripe cannot be reached, or the intent already settled
+            # (succeeded/canceled), correctness does not depend on this call
+            # succeeding — reconcile's own already-entered path covers it.
+            return

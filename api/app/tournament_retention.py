@@ -19,6 +19,8 @@ from app.models import (
     TournamentEvent,
     TournamentEventStage,
     TournamentFixture,
+    TournamentPaymentLine,
+    TournamentPaymentRefundObligation,
     VenueTableCallHistory,
 )
 from app.models.event_reconciliation import EventReconciliation
@@ -202,5 +204,35 @@ async def require_no_recorded_play(
     if await db.scalar(source_match) is not None:
         raise RecordedPlayDeletionError(
             "A surviving match requires this competition's rule history. "
+            "This event or tournament cannot be deleted."
+        )
+    # #1816: financial evidence and outstanding refund obligations are never
+    # cascaded away. ``tournament_payment_lines.event_id`` already carries a
+    # real ``ondelete=RESTRICT`` foreign key (unlike a checkout line's
+    # deliberate snapshot), so the database would refuse this delete anyway —
+    # this check only turns that into the same clean domain refusal every
+    # other retained-history reason above already gives.
+    if (
+        await db.scalar(
+            select(TournamentPaymentLine.id)
+            .where(TournamentPaymentLine.event_id.in_(event_ids))
+            .limit(1)
+        )
+        is not None
+    ):
+        raise RecordedPlayDeletionError(
+            "Payment evidence must be preserved. "
+            "This event or tournament cannot be deleted."
+        )
+    if (
+        await db.scalar(
+            select(TournamentPaymentRefundObligation.id)
+            .where(TournamentPaymentRefundObligation.event_id.in_(event_ids))
+            .limit(1)
+        )
+        is not None
+    ):
+        raise RecordedPlayDeletionError(
+            "An outstanding refund obligation must be preserved. "
             "This event or tournament cannot be deleted."
         )

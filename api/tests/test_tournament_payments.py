@@ -39,7 +39,9 @@ from app.schemas.tournament_checkout import (
 )
 from app.tournament_checkouts import start_checkout
 from app.tournament_entries import admit_to_event
+from app.tournament_errors import RecordedPlayDeletionError
 from app.tournament_event_stages import mint_stages
+from app.tournament_events import delete_event
 from app.tournament_payment_errors import PaymentNotFoundError
 from app.tournament_payments import (
     prepare_or_resume_payment,
@@ -713,3 +715,152 @@ async def test_concurrent_reconcile_of_the_same_success_admits_exactly_once(
             )
         )
         assert obligations == []
+
+
+async def test_director_entry_marks_open_payment_cancel_requested_and_enqueues_cancel(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, fake_payments_queue
+) -> None:
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    payer = await make_user(db_session, f"payer-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(db_session, owner=owner)
+    _setup(monkeypatch, owner=owner)
+    checkout_id = await _checkout_for(
+        db_session, tournament=tournament, event=event, payer=payer
+    )
+    provider = FakePaymentProvider()
+    prepared = await prepare_or_resume_payment(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+    )
+    payment_id = prepared.id
+
+    # The director enters the payer directly (phone/offline registration)
+    # while the payment is still open.
+    await admit_to_event(
+        db_session,
+        tournament_id=tournament.id,
+        event_id=event.id,
+        actor=owner,
+        user_id=payer.primary_player.id,
+    )
+    await db_session.commit()
+
+    payment = await db_session.get(TournamentPayment, payment_id)
+    assert payment is not None
+    assert payment.status is TournamentPaymentStatus.cancel_requested
+    assert payment.cancel_requested_at is not None
+    assert [job.args for job in fake_payments_queue.jobs] == [(str(payment_id),)]
+
+
+async def test_late_success_after_director_entry_stands_and_records_refund(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, fake_payments_queue
+) -> None:
+    """#1816: "If Stripe reports success after that cancel, the director
+    entry stands. The line records 'already registered' with a full refund
+    obligation."
+    """
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    payer = await make_user(db_session, f"payer-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(db_session, owner=owner)
+    _setup(monkeypatch, owner=owner)
+    checkout_id = await _checkout_for(
+        db_session, tournament=tournament, event=event, payer=payer
+    )
+    provider = FakePaymentProvider()
+    prepared = await prepare_or_resume_payment(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+    )
+    payment_id = prepared.id
+    payment = await db_session.get(TournamentPayment, payment_id)
+    assert payment is not None
+    intent_id = payment.provider_payment_intent_id
+    assert intent_id is not None
+
+    await admit_to_event(
+        db_session,
+        tournament_id=tournament.id,
+        event_id=event.id,
+        actor=owner,
+        user_id=payer.primary_player.id,
+    )
+    await db_session.commit()
+
+    entry_before = await db_session.scalar(
+        select(TournamentEntry.id).where(
+            TournamentEntry.event_id == event.id,
+            TournamentEntry.user_id == payer.primary_player.id,
+        )
+    )
+    assert entry_before is not None
+
+    provider.set_status(intent_id, status="succeeded", amount_received=2000)
+    reconciled = await reconcile_payment(
+        db_session, payment_id=payment_id, provider=provider
+    )
+    assert reconciled is not None
+    assert reconciled.status is TournamentPaymentStatus.succeeded
+    line = reconciled.lines[0]
+    assert line.outcome is TournamentPaymentLineOutcome.refund_due
+
+    # The director's entry stands — no second/duplicate entry was created.
+    entry_after = await db_session.scalar(
+        select(TournamentEntry.id).where(
+            TournamentEntry.event_id == event.id,
+            TournamentEntry.user_id == payer.primary_player.id,
+        )
+    )
+    assert entry_after == entry_before
+
+    obligations = list(
+        await db_session.scalars(
+            select(TournamentPaymentRefundObligation).where(
+                TournamentPaymentRefundObligation.payment_id == payment_id
+            )
+        )
+    )
+    assert len(obligations) == 1
+    assert obligations[0].event_id == event.id
+    assert obligations[0].amount_cents == 2000
+
+
+async def test_event_with_payment_evidence_cannot_be_deleted(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1816: deletion guards keep financial evidence — no cascade erases it.
+    ``tournament_payment_lines.event_id`` carries a real ``ondelete=RESTRICT``
+    foreign key (unlike a checkout line's deliberate snapshot), so this is
+    also enforced at the database level; the guard turns it into the same
+    clean domain refusal every other retained-history reason already gives.
+    """
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    payer = await make_user(db_session, f"payer-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(db_session, owner=owner)
+    _setup(monkeypatch, owner=owner)
+    checkout_id = await _checkout_for(
+        db_session, tournament=tournament, event=event, payer=payer
+    )
+    provider = FakePaymentProvider()
+    await prepare_or_resume_payment(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+    )
+
+    with pytest.raises(RecordedPlayDeletionError):
+        await delete_event(
+            db_session, tournament_id=tournament.id, event_id=event.id, actor=owner
+        )
+
+    survives = await db_session.scalar(
+        select(TournamentEvent.id).where(TournamentEvent.id == event.id)
+    )
+    assert survives == event.id

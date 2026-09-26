@@ -109,6 +109,20 @@ def fake_notifications_queue(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def fake_payments_queue(monkeypatch):
+    """Async-style RQ queue against fakeredis (like ``fake_ratings_queue``):
+    enqueues are recorded but ``run_cancel_payment_intent`` never runs — it
+    would open its own DB engine and a real Stripe client. Tests that want to
+    assert a director entry staged a cancel job read
+    ``fake_payments_queue.get_jobs()``; the cancel call itself is exercised
+    directly against ``app.tournament_payments._execute_cancel``."""
+    connection = fakeredis.FakeStrictRedis()
+    q = Queue(queue_module.PAYMENTS_QUEUE, connection=connection, is_async=True)
+    monkeypatch.setattr(queue_module, "get_payments_queue", lambda: q)
+    return q
+
+
+@pytest.fixture(autouse=True)
 def fake_email_queue(monkeypatch):
     """Sync RQ queue against fakeredis so enqueued jobs execute inline.
 
