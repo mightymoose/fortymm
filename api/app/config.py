@@ -226,7 +226,7 @@ class Settings(BaseSettings):
     environment: DeployEnvironment = DeployEnvironment.DEVELOPMENT
 
     #: The Stripe secret API key this process authenticates with. Empty means
-    #: card payments are unconfigured; ``TournamentPaymentService`` fails
+    #: card payments are unconfigured; ``app.tournament_payments`` fails
     #: closed rather than calling Stripe with no key.
     stripe_secret_key: str = ""
 

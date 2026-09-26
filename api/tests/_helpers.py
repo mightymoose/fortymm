@@ -47,6 +47,7 @@ from app.models import (
     TournamentEventStage,
     TournamentEventStageGroup,
     TournamentFixture,
+    TournamentStatus,
     User,
     UserRole,
     VenueTable,
@@ -61,7 +62,7 @@ from app.schemas.notification import NotificationJob
 from app.schemas.tournament import draw_settings_from_storage
 from app.sessions import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, CSRF_SAFE_METHODS
 from app.tournament_draw_settings import draw_settings_value
-from app.tournament_event_stages import stage_template
+from app.tournament_event_stages import mint_stages, stage_template
 from app.tournament_reservations import materialise_groups
 
 
@@ -177,6 +178,53 @@ async def make_user(
     await db_session.commit()
     await db_session.refresh(user)
     return user
+
+
+async def paid_tournament(
+    db: AsyncSession,
+    *,
+    owner: User,
+    fees: tuple[Decimal, ...] = (Decimal("20.00"),),
+    capacities: tuple[int | None, ...] | None = None,
+    status: TournamentStatus = TournamentStatus.published,
+) -> tuple[Tournament, list[TournamentEvent]]:
+    """Seed a tournament ``owner`` created, with one paid singles event per
+    fee. ``capacities`` caps each event in the same order. Only a published
+    tournament opens registration."""
+    league = await get_default_league(db)
+    assert league is not None
+    tournament = Tournament(
+        name="Paid Open",
+        status=status,
+        registration_open=status is TournamentStatus.published,
+        registration_generation=1 if status is TournamentStatus.published else 0,
+        league_id=league.id,
+        created_by_user_id=owner.id,
+    )
+    db.add(tournament)
+    await db.flush()
+    limits = capacities or tuple(None for _ in fees)
+    events = [
+        TournamentEvent(
+            tournament_id=tournament.id,
+            name=f"Event {index}",
+            format=EventFormat.singles,
+            draw_settings=TournamentEventDrawSettings.for_draw_type(
+                DrawType.single_elim
+            ),
+            stages=mint_stages(DrawType.single_elim),
+            max_players=limit,
+            entry_fee=fee,
+            timezone="America/Chicago",
+            slot={"date": "2030-04-20", "start": "09:00", "end": "17:00"},
+            match_settings={"rated": True, "length_games": 5},
+            predicates=[],
+        )
+        for index, (fee, limit) in enumerate(zip(fees, limits, strict=True), start=1)
+    ]
+    db.add_all(events)
+    await db.commit()
+    return tournament, events
 
 
 async def attach_match_to_director_tournament(

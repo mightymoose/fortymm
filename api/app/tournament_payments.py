@@ -12,14 +12,14 @@ service-layer conventions and the ticket's planning note for the full design.
 import uuid
 from typing import assert_never
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from app import required_repairs
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.db import database_now
 from app.models import (
     Tournament,
@@ -29,7 +29,6 @@ from app.models import (
     TournamentPaymentErrorCode,
     TournamentPaymentLine,
     TournamentPaymentLineOutcome,
-    TournamentPaymentProviderCreateState,
     TournamentPaymentProviderEvent,
     TournamentPaymentRefundObligation,
     TournamentPaymentRefundReason,
@@ -258,18 +257,21 @@ async def _drive_provider_create(
         select(TournamentPayment)
         .where(TournamentPayment.id == payment_id)
         .execution_options(populate_existing=True)
-        .options(selectinload(TournamentPayment.lines))
     )
     if payment is None:
         raise PaymentNotFoundError()
-    if payment.provider_create_state is TournamentPaymentProviderCreateState.created:
+    if payment.provider_payment_intent_id is not None:
         await db.commit()
         return payment, None
     payee_account = payment.payee_stripe_account
     amount_cents = payment.amount_cents
     currency = payment.currency.lower()
     idempotency_key = payment.idempotency_key
-    event_count = len(payment.lines)
+    event_count = await db.scalar(
+        select(func.count())
+        .select_from(TournamentPaymentLine)
+        .where(TournamentPaymentLine.payment_id == payment_id)
+    )
     await db.commit()
 
     outcome = await provider.create_payment_intent(
@@ -287,13 +289,7 @@ async def _drive_provider_create(
     client_secret: str | None = None
     match outcome:
         case ProviderIntentCreated(intent=intent):
-            if (
-                locked.provider_create_state
-                is not TournamentPaymentProviderCreateState.created
-            ):
-                locked.provider_create_state = (
-                    TournamentPaymentProviderCreateState.created
-                )
+            if locked.provider_payment_intent_id is None:
                 locked.provider_payment_intent_id = intent.id
                 locked.status = _map_provider_status(
                     intent.status, current=locked.status
@@ -337,7 +333,6 @@ async def _create_payment_row(
         idempotency_key=f"tournament-payment:{checkout.id}",
         amount_cents=checkout.total_cents,
         currency=checkout.currency,
-        provider_create_state=TournamentPaymentProviderCreateState.committed,
         lines=[
             TournamentPaymentLine(event_id=line.event_id, price_cents=line.price_cents)
             for line in checkout.lines
@@ -364,16 +359,17 @@ async def _reconcile_or_keep(
     payment: TournamentPayment,
     provider: PaymentProvider,
     settings: Settings,
-) -> TournamentPayment:
+) -> tuple[TournamentPayment, ProviderPaymentIntent | None]:
     """Reconcile for a read. If Stripe cannot be reached, keep the last known
-    state instead of failing the read."""
+    state instead of failing the read. Also returns the PaymentIntent that
+    reconcile retrieved and validated, or ``None``."""
     try:
-        reconciled = await reconcile_payment(
+        reconciled, intent = await _reconcile(
             db, payment_id=payment.id, provider=provider, settings=settings
         )
     except PaymentProviderUnavailableError:
-        return payment
-    return reconciled if reconciled is not None else payment
+        return payment, None
+    return (reconciled if reconciled is not None else payment), intent
 
 
 async def prepare_or_resume_payment(
@@ -415,18 +411,11 @@ async def prepare_or_resume_payment(
         raise PaymentNotFoundError()
     if client_secret is None and payment.provider_payment_intent_id is not None:
         # Resume: bring the state up to date, then hand back the secret only
-        # while the payer can still act on the PaymentIntent.
-        payment = await _reconcile_or_keep(db, payment, provider, settings)
-        intent_id = payment.provider_payment_intent_id
-        if intent_id is not None and payment.status in _PAYER_ACTIONABLE_STATUSES:
-            try:
-                intent = await provider.retrieve_payment_intent(
-                    payee_account=payment.payee_stripe_account,
-                    payment_intent_id=intent_id,
-                )
-                client_secret = intent.client_secret
-            except ProviderRetrievalFailed:
-                client_secret = None
+        # while the payer can still act on the PaymentIntent. An actionable
+        # status means reconcile validated this intent against the row.
+        payment, intent = await _reconcile_or_keep(db, payment, provider, settings)
+        if intent is not None and payment.status in _PAYER_ACTIONABLE_STATUSES:
+            client_secret = intent.client_secret
 
     return TournamentPaymentPrepared(
         **_to_read_schema(payment).model_dump(), client_secret=client_secret
@@ -464,13 +453,10 @@ async def read_payment_status(
         raise PaymentNotFoundError()
 
     if payment.status not in TERMINAL_PAYMENT_STATUSES:
-        if (
-            payment.provider_create_state
-            is not TournamentPaymentProviderCreateState.created
-        ):
+        if payment.provider_payment_intent_id is None:
             payment, _ = await _drive_provider_create(db, payment.id, provider)
         if payment.provider_payment_intent_id is not None:
-            payment = await _reconcile_or_keep(db, payment, provider, settings)
+            payment, _ = await _reconcile_or_keep(db, payment, provider, settings)
     return _to_read_schema(payment)
 
 
@@ -521,8 +507,7 @@ async def _admit(db: AsyncSession, payment: TournamentPayment) -> None:
     )
     tournament = await db.get(Tournament, payment.tournament_id)
     superseded = (
-        payer is None
-        or checkout is None
+        checkout is None
         or tournament is None
         or checkout.status is TournamentCheckoutStatus.cancelled
         or checkout.registration_generation != tournament.registration_generation
@@ -534,14 +519,19 @@ async def _admit(db: AsyncSession, payment: TournamentPayment) -> None:
         # Consume the hold. A completed checkout no longer counts toward
         # capacity, so the payer's own hold cannot block its own admission.
         checkout.status = TournamentCheckoutStatus.completed
-    for line in payment.lines:
-        if line.outcome is not TournamentPaymentLineOutcome.pending:
-            continue
-        if superseded or payer is None:
+    pending = [
+        line
+        for line in payment.lines
+        if line.outcome is TournamentPaymentLineOutcome.pending
+    ]
+    if payer is None or superseded:
+        for line in pending:
             _record_line_refund(
                 db, payment, line, TournamentPaymentRefundReason.checkout_superseded
             )
-            continue
+        payment.status = TournamentPaymentStatus.succeeded
+        return
+    for line in pending:
         try:
             entrant = await admit_to_event(
                 db,
@@ -550,9 +540,7 @@ async def _admit(db: AsyncSession, payment: TournamentPayment) -> None:
                 actor=payer,
                 user_id=None,
                 client_ip=None,
-                settled_payment=SettledPayment(
-                    payment_id=payment.id, event_id=line.event_id
-                ),
+                settled_payment=SettledPayment(event_id=line.event_id),
             )
         except _LINE_REFUSALS as refusal:
             already_entered = (
@@ -600,6 +588,26 @@ async def reconcile_payment(
     source_event: ProviderWebhookEvent | None = None,
 ) -> TournamentPayment | None:
     """The one function webhooks, the status read, and prepare/resume ALL
+    call. See :func:`_reconcile`, which also returns the validated intent."""
+    payment, _ = await _reconcile(
+        db,
+        payment_id=payment_id,
+        provider=provider,
+        settings=settings,
+        source_event=source_event,
+    )
+    return payment
+
+
+async def _reconcile(
+    db: AsyncSession,
+    *,
+    payment_id: uuid.UUID,
+    provider: PaymentProvider,
+    settings: Settings,
+    source_event: ProviderWebhookEvent | None = None,
+) -> tuple[TournamentPayment | None, ProviderPaymentIntent | None]:
+    """The one function webhooks, the status read, and prepare/resume ALL
     call. Validation, quarantine and admission live here exactly once, which
     is what makes exactly-once provable (#1816).
 
@@ -612,6 +620,9 @@ async def reconcile_payment(
     3. Recheck the terminal state under the lock, then validate, and either
        quarantine or apply the provider state.
 
+    Returns the payment and the retrieved PaymentIntent. The intent is
+    ``None`` unless it passed validation against the payment row.
+
     Raises :class:`PaymentProviderUnavailableError` when Stripe cannot be
     reached and nothing else is wrong. The payment is then left unchanged.
     """
@@ -621,12 +632,12 @@ async def reconcile_payment(
         .execution_options(populate_existing=True)
     )
     if snapshot is None:
-        return None
+        return None, None
     if (
         snapshot.status in TERMINAL_PAYMENT_STATUSES
         or snapshot.provider_payment_intent_id is None
     ):
-        return snapshot
+        return snapshot, None
     payee_account = snapshot.payee_stripe_account
     payment_intent_id = snapshot.provider_payment_intent_id
     payer_account_id = snapshot.payer_account_id
@@ -659,17 +670,17 @@ async def reconcile_payment(
     payment = await _lock_payment(db, payment_id)
     if payment is None:
         await db.commit()
-        return None
+        return None, None
     if payment.status in TERMINAL_PAYMENT_STATUSES:
         await db.commit()
-        return payment
+        return payment, None
 
     if intent is None:
         # The quarantine retrieval failed, or the PaymentIntent is not on the
         # payee account: no verified captured amount, so no obligation.
         _quarantine(db, payment, amount_received=None)
         await db.commit()
-        return payment
+        return payment, None
 
     identity_ok = (
         intent.id == payment.provider_payment_intent_id
@@ -681,12 +692,12 @@ async def reconcile_payment(
     if not identity_ok or not event_ok:
         _quarantine(db, payment, amount_received=intent.amount_received)
         await db.commit()
-        return payment
+        return payment, None
 
     if source_event is not None and source_event.type == "charge.refunded":
         # Evidence-only (#1816): adds to the trail, changes no obligation.
         await db.commit()
-        return payment
+        return payment, intent
 
     if intent.status is ProviderIntentStatus.SUCCEEDED:
         await _admit(db, payment)
@@ -710,7 +721,7 @@ async def reconcile_payment(
         ):
             payment.status = TournamentPaymentStatus.expired
     await db.commit()
-    return payment
+    return payment, intent
 
 
 def run_cancel_payment_intent(payment_id: str) -> None:
@@ -729,7 +740,7 @@ def run_cancel_payment_intent(payment_id: str) -> None:
 async def _execute_cancel(
     sessionmaker: async_sessionmaker[AsyncSession], payment_id: uuid.UUID
 ) -> None:
-    from app.payments.dependencies import get_payment_provider
+    from app.payments.dependencies import provider_for_settings
 
     async with sessionmaker() as db:
         payment = await db.scalar(
@@ -739,7 +750,7 @@ async def _execute_cancel(
             return
         if payment.status in TERMINAL_PAYMENT_STATUSES:
             return
-        provider = get_payment_provider()
+        provider = provider_for_settings(get_settings())
         try:
             await provider.cancel_payment_intent(
                 payee_account=payment.payee_stripe_account,

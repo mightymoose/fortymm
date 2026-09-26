@@ -20,13 +20,12 @@ class StripeAccountMismatch(Exception):
 
 async def verify_stripe_account(settings: Settings, provider: PaymentProvider) -> None:
     """Refuse to finish starting when ``STRIPE_ACCOUNT_ID`` names a different
-    account than the one that owns ``STRIPE_SECRET_KEY``. A no-op when Stripe
-    is unconfigured (empty secret key) — card payments are simply unavailable,
-    not a boot failure, matching how the rest of #1816 fails closed rather
-    than fails loudly for an unconfigured merchant.
+    account than the one that owns ``STRIPE_SECRET_KEY``. ``app.main`` calls
+    this only when a secret key is set. When Stripe is unconfigured, card
+    payments are simply unavailable, not a boot failure, matching how the
+    rest of #1816 fails closed rather than fails loudly for an unconfigured
+    merchant.
     """
-    if not settings.stripe_secret_key:
-        return
     if not settings.stripe_account_id:
         raise StripeAccountMismatch(
             "STRIPE_SECRET_KEY is set but STRIPE_ACCOUNT_ID is not — refusing "

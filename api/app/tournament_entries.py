@@ -282,7 +282,6 @@ class SettledPayment:
     the retrieved PaymentIntent. It names the event it paid for, so it cannot
     settle a different event's fee."""
 
-    payment_id: uuid.UUID
     event_id: uuid.UUID
 
 

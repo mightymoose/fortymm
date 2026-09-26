@@ -9,7 +9,7 @@ from datetime import datetime
 from decimal import Decimal
 from math import ceil
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -267,34 +267,33 @@ async def invalidate_checkout_for_entrant_event(
     checkout_ids_select = select(TournamentCheckoutLine.checkout_id).where(
         TournamentCheckoutLine.event_id == event_id
     )
-    matching_checkout_ids = list(
-        await db.scalars(
-            select(TournamentCheckout.id).where(
-                TournamentCheckout.id.in_(checkout_ids_select),
-                TournamentCheckout.tournament_id == tournament_id,
-                TournamentCheckout.entrant_player_id == entrant_player_id,
-                TournamentCheckout.status == TournamentCheckoutStatus.active,
+    invalidated_checkout_ids = list(
+        (
+            await db.execute(
+                update(TournamentCheckout)
+                .where(
+                    TournamentCheckout.id.in_(checkout_ids_select),
+                    TournamentCheckout.tournament_id == tournament_id,
+                    TournamentCheckout.entrant_player_id == entrant_player_id,
+                    TournamentCheckout.status == TournamentCheckoutStatus.active,
+                )
+                .values(status=TournamentCheckoutStatus.invalidated)
+                .returning(TournamentCheckout.id)
             )
-        )
+        ).scalars()
     )
-    if not matching_checkout_ids:
+    if not invalidated_checkout_ids:
         return
-    await db.execute(
-        update(TournamentCheckout)
-        .where(TournamentCheckout.id.in_(matching_checkout_ids))
-        .values(status=TournamentCheckoutStatus.invalidated)
-    )
-    now = await database_now(db)
     cancel_requested_ids = (
         await db.execute(
             update(TournamentPayment)
             .where(
-                TournamentPayment.checkout_id.in_(matching_checkout_ids),
+                TournamentPayment.checkout_id.in_(invalidated_checkout_ids),
                 TournamentPayment.status.not_in(TERMINAL_PAYMENT_STATUSES),
             )
             .values(
                 status=TournamentPaymentStatus.cancel_requested,
-                cancel_requested_at=now,
+                cancel_requested_at=func.clock_timestamp(),
             )
             .returning(TournamentPayment.id)
         )

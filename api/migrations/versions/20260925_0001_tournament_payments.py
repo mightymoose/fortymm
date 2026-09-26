@@ -18,20 +18,6 @@ def upgrade() -> None:
     # Each enum is created explicitly, then referenced with ``create_type=False``
     # inside its table's column so the table's own create/drop DDL does not ALSO
     # try to create/drop the type (the pattern the checkout migration set).
-    provider_create_state = postgresql.ENUM(
-        "not_started",
-        "committed",
-        "created",
-        name="tournament_payment_provider_create_state",
-        create_type=False,
-    )
-    postgresql.ENUM(
-        "not_started",
-        "committed",
-        "created",
-        name="tournament_payment_provider_create_state",
-    ).create(op.get_bind())
-
     payment_status = postgresql.ENUM(
         "preparing",
         "ready",
@@ -102,12 +88,6 @@ def upgrade() -> None:
         sa.Column("payee_fortymm_account_id", sa.UUID(), nullable=False),
         sa.Column("reference", sa.String(length=12), nullable=False),
         sa.Column("idempotency_key", sa.String(length=255), nullable=False),
-        sa.Column(
-            "provider_create_state",
-            provider_create_state,
-            server_default="not_started",
-            nullable=False,
-        ),
         sa.Column("provider_payment_intent_id", sa.String(length=255), nullable=True),
         sa.Column("status", payment_status, server_default="preparing", nullable=False),
         sa.Column("amount_cents", sa.BigInteger(), nullable=False),
@@ -304,4 +284,3 @@ def downgrade() -> None:
     sa.Enum(name="tournament_payment_refund_reason").drop(op.get_bind())
     sa.Enum(name="tournament_payment_line_outcome").drop(op.get_bind())
     sa.Enum(name="tournament_payment_status").drop(op.get_bind())
-    sa.Enum(name="tournament_payment_provider_create_state").drop(op.get_bind())

@@ -56,17 +56,6 @@ def generate_payment_reference() -> str:
 PaymentCurrency = Literal["USD"]
 
 
-class TournamentPaymentProviderCreateState(enum.Enum):
-    """The provider-create obligation, committed BEFORE any Stripe call
-    (#1816: "the server commits the provider-create obligation before any
-    Stripe call"), so a crash between commit and the Stripe response leaves a
-    durable record that a create was owed rather than losing it entirely."""
-
-    not_started = "not_started"
-    committed = "committed"
-    created = "created"
-
-
 class TournamentPaymentStatus(enum.Enum):
     """Fortymm's own payment lifecycle — a superset of the 8 API-facing
     states (``app.schemas.tournament_checkout.TournamentCheckoutPaymentState``)
@@ -184,17 +173,11 @@ class TournamentPayment(Base):
         String(12), nullable=False, default=generate_payment_reference
     )
     #: Durable across retries of the SAME logical create — never regenerated
-    #: once committed (see ``TournamentPaymentProviderCreateState``).
+    #: once committed. The row itself is the provider-create obligation,
+    #: committed BEFORE any Stripe call (#1816), so a crash between commit and
+    #: the Stripe response leaves a durable record that a create was owed.
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
-    provider_create_state: Mapped[TournamentPaymentProviderCreateState] = mapped_column(
-        Enum(
-            TournamentPaymentProviderCreateState,
-            name="tournament_payment_provider_create_state",
-            values_callable=lambda values: [value.value for value in values],
-        ),
-        nullable=False,
-        server_default=TournamentPaymentProviderCreateState.not_started.value,
-    )
+    #: ``NULL`` until the provider create succeeds. Set exactly once.
     provider_payment_intent_id: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[TournamentPaymentStatus] = mapped_column(
         Enum(
