@@ -1853,3 +1853,59 @@ async def test_reused_checkout_request_id_with_a_changed_selection_is_refused(
     )
     assert [p.amount_cents for p in payments] == [2000]
     assert len(provider.create_calls) == 1
+
+
+async def test_director_entry_during_an_uncertain_create_still_cancels_the_intent(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, fake_payments_queue
+) -> None:
+    """The Stripe create no longer holds the payment row, so a director entry
+    can mark the payment ``cancel_requested`` before its PaymentIntent id is
+    known. That first cancel job has nothing to cancel. When the replayed
+    create records the id, it stages a second cancel job for it, and the
+    director's cancel stays in force."""
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    payer = await make_user(db_session, f"payer-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await _paid_tournament(db_session, owner=owner)
+    _setup(monkeypatch, owner=owner)
+    checkout_id = await _checkout_for(
+        db_session, tournament=tournament, event=event, payer=payer
+    )
+    provider = FakePaymentProvider(force_uncertain_once=True)
+    prepared = await prepare_or_resume_payment(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert prepared.payment_state is TournamentCheckoutPaymentState.preparing
+
+    await admit_to_event(
+        db_session,
+        tournament_id=tournament.id,
+        event_id=event.id,
+        actor=owner,
+        user_id=payer.primary_player.id,
+    )
+    await db_session.commit()
+    assert len(fake_payments_queue.jobs) == 1
+
+    status_read = await read_payment_status(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert status_read.payment_state is TournamentCheckoutPaymentState.canceled
+    payment = await db_session.get(TournamentPayment, prepared.id)
+    assert payment is not None
+    await db_session.refresh(payment)
+    assert payment.status is TournamentPaymentStatus.cancel_requested
+    assert payment.provider_payment_intent_id is not None
+    assert [job.args for job in fake_payments_queue.jobs] == [
+        (str(prepared.id),),
+        (str(prepared.id),),
+    ]
