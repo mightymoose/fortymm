@@ -4,6 +4,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Enum,
@@ -65,3 +66,12 @@ class TournamentEntryRegistration(Base):
         Enum(WithdrawalReason, native_enum=False, length=None)
     )
     withdrawal_explanation: Mapped[str | None] = mapped_column(String)
+    #: ``True`` for every registration that existed before #1816 shipped
+    #: (backfilled by that migration via a column-add default), and for every
+    #: later registration created OUTSIDE the payment path (free entry,
+    #: director entry). ``False`` only for a registration created by verified
+    #: payment admission. #1817/#1818 use this to scope reconcile sweeps and
+    #: the merchant problems list to payment-originated registrations.
+    pre_payments_registration: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("true")
+    )
