@@ -12,6 +12,7 @@ export function buildSolveStripProps(
   return {
     solve: null,
     canEdit: true,
+    reconciling: false,
     onRun: () => Promise.resolve(),
     ...overrides,
   }
