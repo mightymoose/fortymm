@@ -73,6 +73,7 @@ async def _checkout_for(
 def _setup(monkeypatch: pytest.MonkeyPatch, *, owner: User) -> None:
     monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
     monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_fake")
+    monkeypatch.setenv("STRIPE_ACCOUNT_ID", "acct_fake_platform")
     monkeypatch.setenv("STRIPE_WEBHOOK_SIGNING_SECRETS", "whsec_test_default")
     monkeypatch.delenv("ENVIRONMENT", raising=False)
 
@@ -425,6 +426,107 @@ async def test_refused_retrieval_quarantines_with_amount_unverified_and_no_oblig
     assert reconciled.status is TournamentPaymentStatus.quarantined
     assert reconciled.amount_unverified is True
     assert await _obligations(db_session, payment.id) == []
+
+
+async def test_credentials_for_another_platform_account_do_not_quarantine(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Operations switch the Stripe key and ``STRIPE_ACCOUNT_ID`` from account A
+    to account B while an A payment is still open. Stripe refuses B's key for
+    A's PaymentIntent. That refusal says nothing about the payment, so it is
+    temporarily unavailable, never quarantined. Restoring A settles it."""
+    provider = FakePaymentProvider()
+    _, payer, tournament, event, checkout_id, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    assert payment.provider_payment_intent_id is not None
+    monkeypatch.setenv("STRIPE_ACCOUNT_ID", "acct_other_platform")
+    # What Stripe answers when B's key asks about A's PaymentIntent.
+    provider.retrieval_wrong_account.add(payment.provider_payment_intent_id)
+    provider.set_status(
+        payment.provider_payment_intent_id, status="succeeded", amount_received=2000
+    )
+
+    with pytest.raises(PaymentProviderUnavailableError):
+        await reconcile_payment(
+            db_session,
+            payment_id=payment.id,
+            provider=provider,
+            settings=get_settings(),
+        )
+    status_read = await read_payment_status(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert status_read.payment_state is TournamentCheckoutPaymentState.ready
+    unchanged = await db_session.scalar(
+        select(TournamentPayment)
+        .where(TournamentPayment.id == payment.id)
+        .execution_options(populate_existing=True)
+    )
+    assert unchanged is not None
+    assert unchanged.status is TournamentPaymentStatus.ready
+
+    monkeypatch.setenv("STRIPE_ACCOUNT_ID", "acct_fake_platform")
+    provider.retrieval_wrong_account.clear()
+    reconciled = await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
+    )
+    assert reconciled is not None
+    assert reconciled.status is TournamentPaymentStatus.succeeded
+    assert await _entered_player_ids(db_session, event.id) == [payer.primary_player.id]
+
+
+async def test_an_uncertain_create_is_not_replayed_under_another_platform_account(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A replayed create under account B's key would open a second
+    PaymentIntent on the wrong account. The payment stays ``preparing`` until
+    account A's credentials return."""
+    provider = FakePaymentProvider(force_uncertain_once=True)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    payer = await make_user(db_session, f"payer-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await paid_tournament(db_session, owner=owner)
+    _setup(monkeypatch, owner=owner)
+    checkout_id = await _checkout_for(
+        db_session, tournament=tournament, event=event, payer=payer
+    )
+    await prepare_or_resume_payment(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert provider.create_calls == [None]
+
+    monkeypatch.setenv("STRIPE_ACCOUNT_ID", "acct_other_platform")
+    status_read = await read_payment_status(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert provider.create_calls == [None]
+    assert status_read.payment_state is TournamentCheckoutPaymentState.preparing
+
+    monkeypatch.setenv("STRIPE_ACCOUNT_ID", "acct_fake_platform")
+    await read_payment_status(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert provider.create_calls == [None, None]
 
 
 async def test_unreachable_stripe_leaves_the_payment_unchanged(
@@ -1620,6 +1722,9 @@ async def test_payee_stripe_account_comes_from_configuration(
         db_session, monkeypatch, provider=provider
     )
     assert payment.payee_stripe_account == expected
+    # The platform account is stored concretely on every payment, even when
+    # the payee is the platform itself.
+    assert payment.platform_stripe_account == "acct_fake_platform"
     assert payment.payee_fortymm_account_id == owner.id
     assert provider.create_calls == [expected]
 
@@ -1928,7 +2033,7 @@ async def test_prepare_waits_for_a_cancellation_holding_the_tournament_lock(
 
 @pytest.mark.parametrize(
     "missing",
-    ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SIGNING_SECRETS"],
+    ["STRIPE_SECRET_KEY", "STRIPE_ACCOUNT_ID", "STRIPE_WEBHOOK_SIGNING_SECRETS"],
 )
 async def test_prepare_fails_closed_without_a_key_or_a_webhook_secret(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, missing: str

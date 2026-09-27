@@ -85,6 +85,7 @@ def upgrade() -> None:
         sa.Column("payer_account_id", sa.UUID(), nullable=False),
         sa.Column("tournament_id", sa.UUID(), nullable=False),
         sa.Column("payee_stripe_account", sa.String(length=255), nullable=True),
+        sa.Column("platform_stripe_account", sa.String(length=255), nullable=False),
         sa.Column("payee_fortymm_account_id", sa.UUID(), nullable=False),
         sa.Column("reference", sa.String(length=12), nullable=False),
         sa.Column("idempotency_key", sa.String(length=255), nullable=False),

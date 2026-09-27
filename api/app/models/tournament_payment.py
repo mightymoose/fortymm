@@ -161,6 +161,12 @@ class TournamentPayment(Base):
     #: ``NULL`` means the platform account — today's only posture. Stripe
     #: Connect (#1819) populates this with the organizer's connected account.
     payee_stripe_account: Mapped[str | None] = mapped_column(String(255))
+    #: The platform Stripe account (``STRIPE_ACCOUNT_ID``) whose credentials
+    #: created this payment. Stripe only answers for this payment's
+    #: PaymentIntent under those credentials, so a process configured for a
+    #: different platform account treats the payment as temporarily
+    #: unavailable rather than quarantining it.
+    platform_stripe_account: Mapped[str] = mapped_column(String(255), nullable=False)
     #: The Fortymm account with financial authority over this payment at the
     #: time it was created (today always the configured merchant account). A
     #: historical actor: an Account merge never repoints it.

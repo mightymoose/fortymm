@@ -273,6 +273,14 @@ def _intent_matches_payment(
     )
 
 
+def _credentials_own_payment(payment: TournamentPayment, settings: Settings) -> bool:
+    """Whether the configured Stripe credentials belong to the platform
+    account that created this payment. Under another account's key Stripe
+    refuses every call about the PaymentIntent. That refusal says nothing
+    about the payment, so it must never quarantine it."""
+    return payment.platform_stripe_account == settings.stripe_account_id
+
+
 async def _drive_provider_create(
     db: AsyncSession,
     payment_id: uuid.UUID,
@@ -295,7 +303,12 @@ async def _drive_provider_create(
     )
     if payment is None:
         raise PaymentNotFoundError()
-    if payment.provider_payment_intent_id is not None:
+    if payment.provider_payment_intent_id is not None or not _credentials_own_payment(
+        payment, settings
+    ):
+        # Under another platform account's key the create would open a second
+        # PaymentIntent on the wrong account. Keep the current status, as an
+        # uncertain create does, until the owning credentials return.
         await db.commit()
         return payment, None
     payee_account = payment.payee_stripe_account
@@ -423,6 +436,7 @@ async def _create_payment_row(
         payer_account_id=actor.id,
         tournament_id=checkout.tournament_id,
         payee_stripe_account=settings.payee_stripe_account,
+        platform_stripe_account=settings.stripe_account_id,
         payee_fortymm_account_id=checkout.merchant_account_id,
         idempotency_key=f"tournament-payment:{checkout.id}",
         amount_cents=checkout.total_cents,
@@ -721,7 +735,9 @@ async def _reconcile(
     ``None`` unless it passed validation against the payment row.
 
     Raises :class:`PaymentProviderUnavailableError` when Stripe cannot be
-    reached and nothing else is wrong. The payment is then left unchanged.
+    reached and nothing else is wrong, or when the configured credentials
+    belong to a different platform account than the payment's. The payment is
+    then left unchanged.
     """
     snapshot = await db.scalar(
         select(TournamentPayment)
@@ -735,6 +751,9 @@ async def _reconcile(
         or snapshot.provider_payment_intent_id is None
     ):
         return snapshot, None
+    if not _credentials_own_payment(snapshot, settings):
+        await db.commit()
+        raise PaymentProviderUnavailableError()
     payee_account = snapshot.payee_stripe_account
     payment_intent_id = snapshot.provider_payment_intent_id
     payer_account_id = snapshot.payer_account_id
@@ -847,7 +866,13 @@ async def _execute_cancel(
             return
         if payment.status in TERMINAL_PAYMENT_STATUSES:
             return
-        provider = provider_for_settings(get_settings())
+        settings = get_settings()
+        if not _credentials_own_payment(payment, settings):
+            # Another platform account's key cannot reach this PaymentIntent.
+            # Best-effort, as below: reconcile settles it once the owning
+            # credentials return.
+            return
+        provider = provider_for_settings(settings)
         try:
             await provider.cancel_payment_intent(
                 payee_account=payment.payee_stripe_account,

@@ -276,13 +276,16 @@ class Settings(BaseSettings):
     def card_payments_configured(self) -> bool:
         """Whether this process may start a new card payment (#1816).
 
-        It needs the merchant account, a Stripe key, and at least one webhook
-        signing secret. Without a signing secret every Stripe delivery is
+        It needs the merchant account, a Stripe key, the platform account
+        that owns the key, and at least one webhook signing secret. Each
+        payment records the platform account, so a payment is never created
+        without it. Without a signing secret every Stripe delivery is
         rejected, so a payer who closes the page after confirming would be
         charged and never admitted. So payments fail closed instead."""
         return (
             self.tournament_payment_merchant_account_id is not None
             and bool(self.stripe_secret_key)
+            and bool(self.stripe_account_id)
             and bool(self.stripe_webhook_signing_secrets)
         )
 
