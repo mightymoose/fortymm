@@ -4540,7 +4540,7 @@ async def test_update_event_fee_above_the_cap_raises_tool_error_and_writes_nothi
 
     async with _mcp_client(raw) as client, client:
         with pytest.raises(
-            ToolError, match=re.escape("The maximum entry fee is $500.")
+            ToolError, match=rf"^{re.escape('The maximum entry fee is $500.')}$"
         ):
             await client.call_tool(
                 "update_event",

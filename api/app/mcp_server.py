@@ -1109,9 +1109,11 @@ async def list_my_tournaments() -> list[TournamentDetailRead]:
 # ``_map_draw_write_tool_error`` here, and the HTTP side's ``_TOURNAMENT_WRITE_ERRORS``
 # + ``_map_tournament_write_error``. The genuinely verb-specific arms — the strict
 # league 404, the two draw freezes, the entry refusal, the placement freeze — stay
-# inline in their tool, because each is one tool's alone.
+# inline in their tool, because each is one tool's alone. The entry-fee refusal (#1807)
+# is shared by the event-write verbs, and its domain sentence rides through as prose.
 _TOURNAMENT_WRITE_TOOL_ERRORS = (
     DrawActorBusy,
+    EntryFeeOutOfBoundsError,
     EventFormatMembershipError,
     RecordedPlayDeletionError,
     TournamentArchivedError,
@@ -1665,11 +1667,11 @@ async def update_event(
             raise ToolError(
                 f"{exc} (reservations entry {exc.index} names “{exc.reservation_id}”)."
             ) from exc
-        except (EventReservationCapExceededError, EntryFeeOutOfBoundsError) as exc:
+        except EventReservationCapExceededError as exc:
             # A non-``rr-then-ko`` event would be left holding more than one
-            # reservation (#1482), or a changed fee breaks the paid-collection rules
-            # (#1807) — an agent reads prose, so the carried, domain-authored sentence
-            # rides straight through, same as the two freezes above.
+            # reservation (#1482) — an agent reads prose, so the carried,
+            # domain-authored sentence rides straight through, same as the two
+            # freezes above.
             raise ToolError(str(exc)) from exc
         except ReservationOutsideEventWindowError as exc:
             # A reservation's window would fall outside its event's own slot
