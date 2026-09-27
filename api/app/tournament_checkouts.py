@@ -9,7 +9,7 @@ from datetime import datetime
 from decimal import Decimal
 from math import ceil
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -51,7 +51,10 @@ from app.tournament_checkout_errors import (
     CheckoutRefusal,
     CheckoutRefusedError,
 )
-from app.tournament_checkout_invalidation import request_cancel_of_open_payments
+from app.tournament_checkout_invalidation import (
+    invalidate_active_checkouts,
+    request_cancel_of_open_payments,
+)
 from app.tournament_eligibility import (
     Eligible,
     evaluate_rating_eligibility,
@@ -128,6 +131,8 @@ def _price_cents(price: Decimal) -> int:
 def checkout_effective_state(
     checkout: TournamentCheckout, tournament: Tournament, now: datetime
 ) -> TournamentCheckoutState:
+    if checkout.completed_at is not None:
+        return TournamentCheckoutState.completed
     match checkout.status:
         case TournamentCheckoutStatus.cancelled:
             return TournamentCheckoutState.cancelled
@@ -135,8 +140,6 @@ def checkout_effective_state(
             return TournamentCheckoutState.expired
         case TournamentCheckoutStatus.invalidated:
             return TournamentCheckoutState.invalidated
-        case TournamentCheckoutStatus.completed:
-            return TournamentCheckoutState.completed
         case TournamentCheckoutStatus.active:
             if checkout.registration_generation != tournament.registration_generation:
                 return TournamentCheckoutState.invalidated
@@ -205,16 +208,24 @@ async def _expire_stale_checkouts(
         )
     )
     now = await database_now(db)
+    invalidated: list[uuid.UUID] = []
     for checkout in checkouts:
         if (
             checkout.registration_generation != tournament.registration_generation
             or checkout.merchant_account_id != tournament.owner_account_id
         ):
             checkout.status = TournamentCheckoutStatus.invalidated
+            invalidated.append(checkout.id)
         elif checkout.expires_at <= now:
             checkout.status = TournamentCheckoutStatus.expired
     if checkouts:
         await db.flush()
+    if invalidated:
+        # #1816: a permanent invalidation cancels the open PaymentIntent, as
+        # every other one does (``invalidate_active_checkouts``).
+        await request_cancel_of_open_payments(
+            db, TournamentPayment.checkout_id.in_(invalidated)
+        )
 
 
 async def invalidate_checkouts_for_event(db: AsyncSession, event_id: uuid.UUID) -> None:
@@ -228,14 +239,7 @@ async def invalidate_checkouts_for_event(db: AsyncSession, event_id: uuid.UUID) 
     checkout_ids = select(TournamentCheckoutLine.checkout_id).where(
         TournamentCheckoutLine.event_id == event_id
     )
-    await db.execute(
-        update(TournamentCheckout)
-        .where(
-            TournamentCheckout.id.in_(checkout_ids),
-            TournamentCheckout.status == TournamentCheckoutStatus.active,
-        )
-        .values(status=TournamentCheckoutStatus.invalidated)
-    )
+    await invalidate_active_checkouts(db, TournamentCheckout.id.in_(checkout_ids))
 
 
 async def invalidate_checkout_for_entrant_event(
@@ -263,25 +267,11 @@ async def invalidate_checkout_for_entrant_event(
     checkout_ids_select = select(TournamentCheckoutLine.checkout_id).where(
         TournamentCheckoutLine.event_id == event_id
     )
-    invalidated_checkout_ids = list(
-        (
-            await db.execute(
-                update(TournamentCheckout)
-                .where(
-                    TournamentCheckout.id.in_(checkout_ids_select),
-                    TournamentCheckout.tournament_id == tournament_id,
-                    TournamentCheckout.entrant_player_id == entrant_player_id,
-                    TournamentCheckout.status == TournamentCheckoutStatus.active,
-                )
-                .values(status=TournamentCheckoutStatus.invalidated)
-                .returning(TournamentCheckout.id)
-            )
-        ).scalars()
-    )
-    if not invalidated_checkout_ids:
-        return
-    await request_cancel_of_open_payments(
-        db, TournamentPayment.checkout_id.in_(invalidated_checkout_ids)
+    await invalidate_active_checkouts(
+        db,
+        TournamentCheckout.id.in_(checkout_ids_select),
+        TournamentCheckout.tournament_id == tournament_id,
+        TournamentCheckout.entrant_player_id == entrant_player_id,
     )
 
 

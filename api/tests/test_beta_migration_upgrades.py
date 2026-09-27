@@ -313,6 +313,26 @@ async def test_payments_migration_backfills_pre_payments_registration_stamp(
         assert later_default == "false"
 
 
+async def test_checkout_status_keeps_the_previous_release_values(postgres_server_url):
+    """N/N-1 (api/README.md): the previous release maps
+    ``tournament_checkout_status`` onto a closed Python enum and raises
+    ``LookupError`` on any value it does not know. A completed checkout must
+    therefore be stored with a value that release already reads."""
+    async with empty_database(postgres_server_url) as engine:
+        run_alembic(engine.url, "upgrade", "head")
+        async with engine.connect() as connection:
+            labels = (
+                await connection.scalars(
+                    text(
+                        "SELECT enumlabel FROM pg_enum "
+                        "WHERE enumtypid = 'tournament_checkout_status'::regtype "
+                        "ORDER BY enumsortorder"
+                    )
+                )
+            ).all()
+    assert labels == ["active", "cancelled", "expired", "invalidated"]
+
+
 async def test_payment_tables_hold_no_foreign_key_to_events(postgres_server_url):
     """N/N-1 (api/README.md): the previous release deletes an unstarted event
     without knowing about payment lines or refund obligations. A foreign key

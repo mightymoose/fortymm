@@ -96,7 +96,16 @@ class ProviderCreateUncertain(BaseModel):
     guarantees is safe to repeat."""
 
 
-ProviderCreateOutcome = ProviderIntentCreated | ProviderCreateUncertain
+class ProviderCreateRefused(BaseModel):
+    """Stripe answered the create and refused it as an invalid request, for
+    example because the configured payee account does not exist or cannot be
+    reached. No PaymentIntent exists, and replaying the same request cannot
+    create one, so the payment cannot proceed."""
+
+
+ProviderCreateOutcome = (
+    ProviderIntentCreated | ProviderCreateUncertain | ProviderCreateRefused
+)
 
 
 class ProviderRetrievalFailed(Exception):
@@ -252,6 +261,11 @@ class StripePaymentProvider:
             # flight. Never retry with a NEW idempotency key here, because
             # that could double-create.
             return ProviderCreateUncertain()
+        except stripe.InvalidRequestError:
+            # Stripe answered and refused, for example a stale or inaccessible
+            # ``Stripe-Account``. The payment row snapshots that account, so a
+            # replay would be refused again.
+            return ProviderCreateRefused()
         try:
             return ProviderIntentCreated(intent=_parse_intent(raw))
         except ProviderUnavailable:

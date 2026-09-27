@@ -250,23 +250,31 @@ def upgrade() -> None:
         server_default=sa.text("false"),
     )
 
-    # A verified payment consumes its checkout's hold (#1816). ``cancelled``
-    # already means the player's own cancellation, which a late success must
-    # never reverse, so admission needs its own status. ADD VALUE only extends
-    # the type: no existing row or merged migration changes.
-    op.execute(
-        "ALTER TYPE tournament_checkout_status ADD VALUE IF NOT EXISTS 'completed'"
+    # A verified payment consumes its checkout's hold (#1816). The previous
+    # release maps ``tournament_checkout_status`` onto a closed Python enum and
+    # cannot load a value it does not know. So completion stores the existing
+    # ``invalidated`` value, which the previous release reads as "no longer
+    # holds capacity", and marks the checkout completed with a new nullable
+    # column that the previous release never selects.
+    op.add_column(
+        "tournament_checkouts",
+        sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    op.create_check_constraint(
+        "ck_tournament_checkouts_completed_is_invalidated",
+        "tournament_checkouts",
+        "completed_at IS NULL OR status = 'invalidated'",
     )
 
 
 def downgrade() -> None:
-    # PostgreSQL cannot drop an enum value. Move completed checkouts to
-    # ``cancelled`` (both mean "no longer holds capacity") and leave the value
-    # on the type, which is harmless to the previous revision.
-    op.execute(
-        "UPDATE tournament_checkouts SET status = 'cancelled' "
-        "WHERE status = 'completed'"
+    # A completed checkout is already stored as ``invalidated``.
+    op.drop_constraint(
+        "ck_tournament_checkouts_completed_is_invalidated",
+        "tournament_checkouts",
+        type_="check",
     )
+    op.drop_column("tournament_checkouts", "completed_at")
     op.drop_column("tournament_entry_registrations", "pre_payments_registration")
     op.drop_table("tournament_payment_provider_events")
     op.drop_index(

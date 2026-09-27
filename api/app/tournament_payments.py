@@ -12,7 +12,7 @@ service-layer conventions and the ticket's planning note for the full design.
 import uuid
 from typing import assert_never
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -22,9 +22,12 @@ from app import required_repairs
 from app.config import Settings, get_settings
 from app.db import database_now
 from app.models import (
+    Player,
     Tournament,
     TournamentCheckout,
     TournamentCheckoutStatus,
+    TournamentEntry,
+    TournamentEntryStatus,
     TournamentPayment,
     TournamentPaymentErrorCode,
     TournamentPaymentLine,
@@ -38,6 +41,7 @@ from app.models import (
 from app.payments.provider import (
     STRIPE_MAX_AMOUNT_CENTS,
     PaymentProvider,
+    ProviderCreateRefused,
     ProviderCreateUncertain,
     ProviderIntentCreated,
     ProviderIntentStatus,
@@ -106,13 +110,15 @@ async def record_and_reconcile_provider_event(
 ) -> None:
     """Persist a verified webhook event uniquely, then reconcile its payment.
 
-    A replayed event hits the unique key and changes nothing. If Stripe cannot
-    be reached, the event row is removed again and
-    :class:`PaymentProviderUnavailableError` propagates, so the caller does
-    not acknowledge it and Stripe's retry reprocesses it.
+    A replayed event hits the unique key and stores nothing new. If Stripe
+    cannot be reached, :class:`PaymentProviderUnavailableError` propagates, so
+    the caller does not acknowledge the event and Stripe's retry reconciles
+    it again. The stored row stays. Another delivery of the same event can be
+    running concurrently and can already have been acknowledged, so removing
+    the row could erase the evidence of an acknowledged event.
     """
     payment_id = await find_payment_id_for_provider_event(db, event)
-    result = await db.execute(
+    await db.execute(
         pg_insert(TournamentPaymentProviderEvent)
         .values(
             provider_event_id=event.id,
@@ -121,9 +127,7 @@ async def record_and_reconcile_provider_event(
             payload=event.evidence(),
         )
         .on_conflict_do_nothing(index_elements=["provider_event_id"])
-        .returning(TournamentPaymentProviderEvent.id)
     )
-    newly_inserted = result.first() is not None
     await db.commit()
     if payment_id is None or not event.is_handled:
         return
@@ -141,13 +145,6 @@ async def record_and_reconcile_provider_event(
         )
     except PaymentProviderUnavailableError:
         await db.rollback()
-        if newly_inserted:
-            await db.execute(
-                delete(TournamentPaymentProviderEvent).where(
-                    TournamentPaymentProviderEvent.provider_event_id == event.id
-                )
-            )
-            await db.commit()
         raise
 
 
@@ -245,6 +242,37 @@ _PAYER_ACTIONABLE_STATUSES = frozenset(
 )
 
 
+async def _lock_players_then_checkout(
+    db: AsyncSession, *, payer: User | None, checkout_id: uuid.UUID
+) -> None:
+    """Take the Player and checkout locks in the global order, before the
+    payment row. Admission locks the payer's Player, and a retirement holds
+    the Player while it invalidates the checkout and cancels its payment. So
+    the Players come first, then the checkout, then the payment."""
+    player_ids: set[uuid.UUID] = set()
+    entrant_player_id = await db.scalar(
+        select(TournamentCheckout.entrant_player_id).where(
+            TournamentCheckout.id == checkout_id
+        )
+    )
+    if entrant_player_id is not None:
+        player_ids.add(entrant_player_id)
+    if payer is not None and payer.primary_player is not None:
+        player_ids.add(payer.primary_player.id)
+    if player_ids:
+        await db.execute(
+            select(Player.id)
+            .where(Player.id.in_(player_ids))
+            .order_by(Player.id)
+            .with_for_update(read=True)
+        )
+    await db.execute(
+        select(TournamentCheckout.id)
+        .where(TournamentCheckout.id == checkout_id)
+        .with_for_update()
+    )
+
+
 async def _lock_payment(
     db: AsyncSession, payment_id: uuid.UUID
 ) -> TournamentPayment | None:
@@ -307,12 +335,16 @@ async def _drive_provider_create(
     )
     if payment is None:
         raise PaymentNotFoundError()
-    if payment.provider_payment_intent_id is not None or not _credentials_own_payment(
-        payment, settings
+    if (
+        payment.provider_payment_intent_id is not None
+        or payment.status in TERMINAL_PAYMENT_STATUSES
+        or not _credentials_own_payment(payment, settings)
     ):
         # Under another platform account's key the create would open a second
         # PaymentIntent on the wrong account. Keep the current status, as an
-        # uncertain create does, until the owning credentials return.
+        # uncertain create does, until the owning credentials return. A
+        # terminal payment, such as one whose create Stripe refused, never
+        # creates again.
         await db.commit()
         return payment, None
     payee_account = payment.payee_stripe_account
@@ -400,6 +432,19 @@ async def _drive_provider_create(
             # Keep the current status. A later status read or resume replays
             # the create under the same key.
             pass
+        case ProviderCreateRefused():
+            # No PaymentIntent exists, and a replay would be refused again.
+            # End the payment so reads and resumes stop repeating the call. A
+            # payment a cancellation already superseded ends ``cancelled``.
+            if (
+                locked.provider_payment_intent_id is None
+                and locked.status not in TERMINAL_PAYMENT_STATUSES
+            ):
+                locked.status = (
+                    TournamentPaymentStatus.cancelled
+                    if locked.status is TournamentPaymentStatus.cancel_requested
+                    else TournamentPaymentStatus.failed
+                )
     await db.commit()
     return locked, client_secret
 
@@ -424,10 +469,9 @@ async def _create_payment_row(
 
     Two concurrent first prepares for one checkout serialize on those locks,
     and the second reuses the first one's row. The unique checkout constraint
-    stays as the backstop.
+    stays as the backstop. The caller has already refused a process without
+    working payment configuration.
     """
-    if not settings.card_payments_configured:
-        raise PaymentNotReadyError()
     await db.scalar(
         select(User)
         .where(User.id == actor.id)
@@ -529,7 +573,14 @@ async def prepare_or_resume_payment(
 ) -> TournamentPaymentPrepared:
     """Create the checkout's PaymentIntent, or resume it if one already
     exists. The ONLY operation that returns the Stripe client secret, and only
-    while the payer can still act on the PaymentIntent."""
+    while the payer can still act on the PaymentIntent.
+
+    Without working payment configuration, a resume fails closed exactly as a
+    new payment does. A payer who confirms an existing PaymentIntent while no
+    webhook signing secret is configured could be charged and never admitted,
+    because every Stripe delivery would be rejected."""
+    if not settings.card_payments_configured:
+        raise PaymentNotReadyError()
     checkout = await _load_checkout_for_payer(
         db, tournament_id=tournament_id, checkout_id=checkout_id, actor=actor
     )
@@ -667,7 +718,10 @@ async def _admit(db: AsyncSession, payment: TournamentPayment) -> None:
     ):
         # Consume the hold. A completed checkout no longer counts toward
         # capacity, so the payer's own hold cannot block its own admission.
-        checkout.status = TournamentCheckoutStatus.completed
+        # The stored status is one the previous release can read (N/N-1,
+        # api/README.md). ``completed_at`` is what marks it completed.
+        checkout.status = TournamentCheckoutStatus.invalidated
+        checkout.completed_at = await database_now(db)
     pending = [
         line
         for line in payment.lines
@@ -692,10 +746,14 @@ async def _admit(db: AsyncSession, payment: TournamentPayment) -> None:
                 settled_payment=SettledPayment(event_id=line.event_id),
             )
         except _LINE_REFUSALS as refusal:
+            # Admission checks the window, eligibility and capacity before it
+            # detects a duplicate entry. A director entry that took the last
+            # place therefore refuses as ``event_full``. Look for the entry
+            # itself, so the refund records why the paid line did not admit.
             already_entered = (
                 isinstance(refusal, EntryRefusedError)
                 and refusal.refusal is EntryRefusal.already_entered
-            )
+            ) or await _payer_already_entered(db, payer, line.event_id)
             _record_line_refund(
                 db,
                 payment,
@@ -708,6 +766,24 @@ async def _admit(db: AsyncSession, payment: TournamentPayment) -> None:
             line.outcome = TournamentPaymentLineOutcome.admitted
             line.entry_id = entrant.id
     payment.status = TournamentPaymentStatus.succeeded
+
+
+async def _payer_already_entered(
+    db: AsyncSession, payer: User, event_id: uuid.UUID
+) -> bool:
+    player = payer.primary_player
+    if player is None:
+        return False
+    entry_id = await db.scalar(
+        select(TournamentEntry.id)
+        .where(
+            TournamentEntry.event_id == event_id,
+            TournamentEntry.user_id == player.id,
+            TournamentEntry.status == TournamentEntryStatus.entered,
+        )
+        .limit(1)
+    )
+    return entry_id is not None
 
 
 def _quarantine(
@@ -762,10 +838,13 @@ async def _reconcile(
 
     1. Read the payment without a lock and retrieve the PaymentIntent with
        Fortymm's own key. No lock and no transaction is held across the call.
-    2. Take the admission lock order: payer Account (shared), Tournament, then
-       the payment row. A director entry takes Tournament before it touches
-       the payment, so the two paths cannot deadlock, and a webhook racing a
-       status read admits once.
+    2. Take the one lock order every path that touches a checkout or its
+       payment takes: payer Account (shared), Tournament, Player (shared),
+       checkout, then the payment row. A director entry takes Tournament
+       before it touches the payment. A player retirement or an account
+       lifecycle change takes the Player or Account before the checkout and
+       the payment. So none of them can deadlock with admission, and a
+       webhook racing a status read admits once.
     3. Recheck the terminal state under the lock, then validate, and either
        quarantine or apply the provider state.
 
@@ -796,6 +875,7 @@ async def _reconcile(
     payment_intent_id = snapshot.provider_payment_intent_id
     payer_account_id = snapshot.payer_account_id
     tournament_id = snapshot.tournament_id
+    checkout_id = snapshot.checkout_id
     await db.commit()
 
     key_is_live = settings.stripe_key_is_live
@@ -814,13 +894,14 @@ async def _reconcile(
         pass
 
     # Full rows, so ``_admit``'s lookups are served from the identity map.
-    await db.scalar(
+    payer = await db.scalar(
         select(User)
         .where(User.id == payer_account_id)
         .with_for_update(read=True)
         .execution_options(populate_existing=True)
     )
     await lock_tournament(db, tournament_id)
+    await _lock_players_then_checkout(db, payer=payer, checkout_id=checkout_id)
     payment = await _lock_payment(db, payment_id)
     if payment is None:
         await db.commit()

@@ -52,6 +52,7 @@ from app.models.tournament_entry_participation import WithdrawalReason
 from app.schedule_solves import request_solve, tournament_has_drawn_event
 from app.tournament_authority import lock_merge_tournaments, merge_authority
 from app.tournament_checkout_invalidation import (
+    invalidate_active_checkouts,
     invalidate_checkouts_for_account_lifecycle,
     request_cancel_of_open_payments,
 )
@@ -391,13 +392,8 @@ async def _merge_players(
     # carried over from the source can collide with an event held by the survivor,
     # which would otherwise count the merged Player once as an entrant and once as
     # a hold. The survivor can create a fresh checkout against reconciled capacity.
-    await db.execute(
-        update(TournamentCheckout)
-        .where(
-            TournamentCheckout.entrant_player_id.in_([from_user_id, to_user_id]),
-            TournamentCheckout.status == TournamentCheckoutStatus.active,
-        )
-        .values(status=TournamentCheckoutStatus.invalidated)
+    await invalidate_active_checkouts(
+        db, TournamentCheckout.entrant_player_id.in_([from_user_id, to_user_id])
     )
     # Recording the Player merge atomically repoints proposal representation
     # through the database trigger; original Account actors remain immutable.
@@ -483,24 +479,32 @@ async def _transfer_account(
     # historical actor, the account that held financial authority when the
     # payment was created, so it stays as recorded. The payment's checkout keeps
     # its original payer, because ``merge_user`` already invalidated it.
-    await db.execute(
-        update(TournamentPayment)
-        .where(TournamentPayment.payer_account_id == from_user_id)
-        .values(payer_account_id=to_user_id)
+    transferred_payment_ids = list(
+        (
+            await db.execute(
+                update(TournamentPayment)
+                .where(TournamentPayment.payer_account_id == from_user_id)
+                .values(payer_account_id=to_user_id)
+                .returning(TournamentPayment.id)
+            )
+        ).scalars()
     )
-    # An invalidated checkout cannot take or resume a payment, so neither
+    # The transferred payments' checkouts keep the source as payer, so neither
     # account can finish an open PaymentIntent the merge left behind. Cancel
     # it instead of leaving a client secret live in a browser. A late success
-    # still reconciles, and admits the survivor or records a refund obligation.
-    await request_cancel_of_open_payments(
-        db,
-        TournamentPayment.payer_account_id == to_user_id,
-        TournamentPayment.checkout_id.in_(
-            select(TournamentCheckout.id).where(
-                TournamentCheckout.status != TournamentCheckoutStatus.active
-            )
-        ),
-    )
+    # still reconciles, and admits the survivor or records a refund
+    # obligation. Only the transferred payments: the survivor's own payments
+    # are not the merge's to cancel.
+    if transferred_payment_ids:
+        await request_cancel_of_open_payments(
+            db,
+            TournamentPayment.id.in_(transferred_payment_ids),
+            TournamentPayment.checkout_id.in_(
+                select(TournamentCheckout.id).where(
+                    TournamentCheckout.status != TournamentCheckoutStatus.active
+                )
+            ),
+        )
 
     # We tombstone rather than DELETE the user, so the rows that used to ride
     # ``ON DELETE CASCADE`` must be dropped explicitly. Order doesn't matter —

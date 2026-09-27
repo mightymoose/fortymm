@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 from app.payments.provider import (
     ProviderCreateOutcome,
+    ProviderCreateRefused,
     ProviderCreateUncertain,
     ProviderIntentCreated,
     ProviderIntentStatus,
@@ -38,6 +39,9 @@ class FakePaymentProvider:
     #: Populated by a test before calling ``create_payment_intent`` to force the
     #: NEXT create to report an uncertain outcome (a timeout).
     force_uncertain_once: bool = False
+    #: Set by a test to make every create report that Stripe refused it as an
+    #: invalid request (a stale or inaccessible payee account).
+    refuse_creates: bool = False
     _by_idempotency_key: dict[str, _FakeIntentState] = field(default_factory=dict)
     _by_intent_id: dict[str, _FakeIntentState] = field(default_factory=dict)
     #: Intent ids whose retrieval fails as if Stripe could not be reached.
@@ -65,6 +69,8 @@ class FakePaymentProvider:
         if self.force_uncertain_once:
             self.force_uncertain_once = False
             return ProviderCreateUncertain()
+        if self.refuse_creates:
+            return ProviderCreateRefused()
         existing = self._by_idempotency_key.get(idempotency_key)
         if existing is not None:
             return ProviderIntentCreated(intent=existing.intent)
