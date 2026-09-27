@@ -275,10 +275,14 @@ def _intent_matches_payment(
 
 def _credentials_own_payment(payment: TournamentPayment, settings: Settings) -> bool:
     """Whether the configured Stripe credentials belong to the platform
-    account that created this payment. Under another account's key Stripe
-    refuses every call about the PaymentIntent. That refusal says nothing
-    about the payment, so it must never quarantine it."""
-    return payment.platform_stripe_account == settings.stripe_account_id
+    account and the key mode that created this payment. Under another
+    account's key, or the same account's other-mode key, Stripe refuses every
+    call about the PaymentIntent. That refusal says nothing about the payment,
+    so it must never quarantine it."""
+    return (
+        payment.platform_stripe_account == settings.stripe_account_id
+        and payment.platform_stripe_livemode == settings.stripe_key_is_live
+    )
 
 
 async def _drive_provider_create(
@@ -312,6 +316,9 @@ async def _drive_provider_create(
         await db.commit()
         return payment, None
     payee_account = payment.payee_stripe_account
+    payer_account_id = payment.payer_account_id
+    tournament_id = payment.tournament_id
+    checkout_id = payment.checkout_id
     amount_cents = payment.amount_cents
     currency = payment.currency.lower()
     idempotency_key = payment.idempotency_key
@@ -331,6 +338,22 @@ async def _drive_provider_create(
         statement_descriptor_suffix=f"FORTYMM{event_count}",
     )
 
+    # The admission lock order: payer Account (shared), Tournament, checkout,
+    # then the payment row. Every checkout invalidation takes the same order,
+    # so the recheck below sees any change that committed during the call.
+    await db.scalar(
+        select(User)
+        .where(User.id == payer_account_id)
+        .with_for_update(read=True)
+        .execution_options(populate_existing=True)
+    )
+    tournament = await lock_tournament(db, tournament_id)
+    checkout = await db.scalar(
+        select(TournamentCheckout)
+        .where(TournamentCheckout.id == checkout_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
     locked = await _lock_payment(db, payment_id)
     if locked is None:
         raise PaymentNotFoundError()
@@ -358,7 +381,21 @@ async def _drive_provider_create(
                 locked.provider_payment_intent_id == intent.id
                 and locked.status in _PAYER_ACTIONABLE_STATUSES
             ):
-                client_secret = intent.client_secret
+                now = await database_now(db)
+                if (
+                    checkout is not None
+                    and checkout_effective_state(checkout, tournament, now)
+                    is TournamentCheckoutState.active
+                ):
+                    client_secret = intent.client_secret
+                else:
+                    # The quote stopped being live while the create was in
+                    # flight, for example a registration window change. That
+                    # change marks no payment, so nobody would cancel this
+                    # intent. Withhold its secret and cancel it here.
+                    locked.status = TournamentPaymentStatus.cancel_requested
+                    locked.cancel_requested_at = now
+                    await required_repairs.request_payment_cancel(db, locked.id)
         case ProviderCreateUncertain():
             # Keep the current status. A later status read or resume replays
             # the create under the same key.
@@ -437,6 +474,7 @@ async def _create_payment_row(
         tournament_id=checkout.tournament_id,
         payee_stripe_account=settings.payee_stripe_account,
         platform_stripe_account=settings.stripe_account_id,
+        platform_stripe_livemode=settings.stripe_key_is_live,
         payee_fortymm_account_id=checkout.merchant_account_id,
         idempotency_key=f"tournament-payment:{checkout.id}",
         amount_cents=checkout.total_cents,

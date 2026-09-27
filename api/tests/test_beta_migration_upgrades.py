@@ -313,6 +313,44 @@ async def test_payments_migration_backfills_pre_payments_registration_stamp(
         assert later_default == "false"
 
 
+async def test_payment_tables_hold_no_foreign_key_to_events(postgres_server_url):
+    """N/N-1 (api/README.md): the previous release deletes an unstarted event
+    without knowing about payment lines or refund obligations. A foreign key
+    from either to ``tournament_events`` would make that delete fail, so the
+    migrated schema keeps only a snapshot of the event id."""
+    async with empty_database(postgres_server_url) as engine:
+        run_alembic(engine.url, "upgrade", "head")
+        async with engine.connect() as connection:
+            references = (
+                await connection.execute(
+                    text(
+                        "SELECT conrelid::regclass::text FROM pg_constraint "
+                        "WHERE contype = 'f' "
+                        "AND confrelid = 'tournament_events'::regclass "
+                        "AND conrelid IN ("
+                        "'tournament_payment_lines'::regclass, "
+                        "'tournament_payment_refund_obligations'::regclass)"
+                    )
+                )
+            ).all()
+            snapshot_columns = (
+                await connection.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.columns "
+                        "WHERE column_name = 'event_id' AND table_name IN ("
+                        "'tournament_payment_lines', "
+                        "'tournament_payment_refund_obligations') "
+                        "ORDER BY table_name"
+                    )
+                )
+            ).all()
+    assert references == []
+    assert [row[0] for row in snapshot_columns] == [
+        "tournament_payment_lines",
+        "tournament_payment_refund_obligations",
+    ]
+
+
 @pytest.mark.parametrize(
     "statement",
     [

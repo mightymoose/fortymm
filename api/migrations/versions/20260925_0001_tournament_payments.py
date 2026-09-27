@@ -86,6 +86,7 @@ def upgrade() -> None:
         sa.Column("tournament_id", sa.UUID(), nullable=False),
         sa.Column("payee_stripe_account", sa.String(length=255), nullable=True),
         sa.Column("platform_stripe_account", sa.String(length=255), nullable=False),
+        sa.Column("platform_stripe_livemode", sa.Boolean(), nullable=False),
         sa.Column("payee_fortymm_account_id", sa.UUID(), nullable=False),
         sa.Column("reference", sa.String(length=12), nullable=False),
         sa.Column("idempotency_key", sa.String(length=255), nullable=False),
@@ -157,9 +158,9 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["payment_id"], ["tournament_payments.id"], ondelete="CASCADE"
         ),
-        sa.ForeignKeyConstraint(
-            ["event_id"], ["tournament_events.id"], ondelete="RESTRICT"
-        ),
+        # ``event_id`` is a snapshot with no foreign key, like a checkout
+        # line's. The previous release deletes an unstarted event without
+        # knowing about payment lines, so a reference here would fail it.
         sa.ForeignKeyConstraint(
             ["entry_id"], ["tournament_entries.id"], ondelete="RESTRICT"
         ),
@@ -195,9 +196,8 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["payment_id"], ["tournament_payments.id"], ondelete="RESTRICT"
         ),
-        sa.ForeignKeyConstraint(
-            ["event_id"], ["tournament_events.id"], ondelete="RESTRICT"
-        ),
+        # ``event_id`` is a snapshot too: a late success can record a refund
+        # for an event the previous release already deleted.
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(

@@ -206,13 +206,12 @@ async def require_no_recorded_play(
             "This event or tournament cannot be deleted."
         )
     # #1816: financial evidence and outstanding refund obligations are never
-    # cascaded away. ``tournament_payment_lines.event_id`` already carries a
-    # real ``ondelete=RESTRICT`` foreign key (unlike a checkout line's
-    # deliberate snapshot), so the database would refuse this delete anyway —
-    # this check only turns that into the same clean domain refusal every
-    # other retained-history reason above already gives. An event-scoped
-    # refund obligation always comes from a payment line for the same event,
-    # so this one check also keeps outstanding obligations.
+    # deleted with their event. ``tournament_payment_lines.event_id`` is a
+    # snapshot with no foreign key, like a checkout line's, so the previous
+    # release can still delete an event it knows nothing about. This check is
+    # therefore the only thing that keeps the evidence. An event-scoped refund
+    # obligation always comes from a payment line for the same event, so this
+    # one check also keeps outstanding obligations.
     if (
         await db.scalar(
             select(TournamentPaymentLine.id)

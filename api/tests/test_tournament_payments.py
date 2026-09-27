@@ -10,7 +10,7 @@ from decimal import Decimal
 
 import pytest
 import stripe
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.config import get_settings
@@ -527,6 +527,201 @@ async def test_an_uncertain_create_is_not_replayed_under_another_platform_accoun
         settings=get_settings(),
     )
     assert provider.create_calls == [None, None]
+
+
+async def _set_payment_livemode(
+    db: AsyncSession, payment_id: uuid.UUID, *, livemode: bool
+) -> None:
+    """Stand in for a payment the other key mode created. A live key cannot
+    be configured outside production, so the stored mode flips instead."""
+    await db.execute(
+        update(TournamentPayment)
+        .where(TournamentPayment.id == payment_id)
+        .values(platform_stripe_livemode=livemode)
+    )
+    await db.commit()
+
+
+async def test_credentials_for_the_other_key_mode_do_not_quarantine(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Operations switch between the test and live keys of ONE Stripe account.
+    ``STRIPE_ACCOUNT_ID`` stays the same, but Stripe keeps test and live
+    objects apart, so it refuses the lookup. That refusal says nothing about
+    the payment, so it is temporarily unavailable, never quarantined."""
+    provider = FakePaymentProvider()
+    _, payer, tournament, event, checkout_id, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    assert payment.provider_payment_intent_id is not None
+    await _set_payment_livemode(db_session, payment.id, livemode=True)
+    # What Stripe answers when one mode's key asks about the other's intent.
+    provider.retrieval_wrong_account.add(payment.provider_payment_intent_id)
+    provider.set_status(
+        payment.provider_payment_intent_id, status="succeeded", amount_received=2000
+    )
+
+    with pytest.raises(PaymentProviderUnavailableError):
+        await reconcile_payment(
+            db_session,
+            payment_id=payment.id,
+            provider=provider,
+            settings=get_settings(),
+        )
+    status_read = await read_payment_status(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert status_read.payment_state is TournamentCheckoutPaymentState.ready
+    unchanged = await db_session.scalar(
+        select(TournamentPayment)
+        .where(TournamentPayment.id == payment.id)
+        .execution_options(populate_existing=True)
+    )
+    assert unchanged is not None
+    assert unchanged.status is TournamentPaymentStatus.ready
+
+    await _set_payment_livemode(db_session, payment.id, livemode=False)
+    provider.retrieval_wrong_account.clear()
+    reconciled = await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
+    )
+    assert reconciled is not None
+    assert reconciled.status is TournamentPaymentStatus.succeeded
+    assert await _entered_player_ids(db_session, event.id) == [payer.primary_player.id]
+
+
+async def test_an_uncertain_create_is_not_replayed_under_the_other_key_mode(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A replayed create under the other mode's key would open a second
+    PaymentIntent in the wrong mode. The payment stays ``preparing`` until the
+    owning mode's key returns."""
+    provider = FakePaymentProvider(force_uncertain_once=True)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    payer = await make_user(db_session, f"payer-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await paid_tournament(db_session, owner=owner)
+    _setup(monkeypatch, owner=owner)
+    checkout_id = await _checkout_for(
+        db_session, tournament=tournament, event=event, payer=payer
+    )
+    prepared = await prepare_or_resume_payment(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert provider.create_calls == [None]
+
+    await _set_payment_livemode(db_session, prepared.id, livemode=True)
+    status_read = await read_payment_status(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert provider.create_calls == [None]
+    assert status_read.payment_state is TournamentCheckoutPaymentState.preparing
+
+    await _set_payment_livemode(db_session, prepared.id, livemode=False)
+    await read_payment_status(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert provider.create_calls == [None, None]
+
+
+async def test_the_cancel_job_skips_a_payment_of_the_other_key_mode(
+    monkeypatch: pytest.MonkeyPatch, engine: AsyncEngine
+) -> None:
+    """The cancel job is best-effort. Under the other mode's key it cannot
+    reach the PaymentIntent, so it makes no Stripe call at all."""
+    from app.payments import dependencies
+    from app.tournament_payments import _execute_cancel
+
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+    provider = FakePaymentProvider()
+    async with make_session() as seed_session:
+        *_, payment = await _prepared_payment(
+            seed_session, monkeypatch, provider=provider
+        )
+        intent_id = payment.provider_payment_intent_id
+        assert intent_id is not None
+        await seed_session.execute(
+            update(TournamentPayment)
+            .where(TournamentPayment.id == payment.id)
+            .values(status=TournamentPaymentStatus.cancel_requested)
+        )
+        await seed_session.commit()
+        await _set_payment_livemode(seed_session, payment.id, livemode=True)
+    monkeypatch.setattr(dependencies, "provider_for_settings", lambda _: provider)
+
+    await _execute_cancel(make_session, payment.id)
+    assert provider._by_intent_id[intent_id].intent.status.value != "canceled"
+
+    async with make_session() as flip_session:
+        await _set_payment_livemode(flip_session, payment.id, livemode=False)
+    await _execute_cancel(make_session, payment.id)
+    assert provider._by_intent_id[intent_id].intent.status.value == "canceled"
+
+
+async def test_registration_closing_during_the_create_withholds_the_secret(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, fake_payments_queue
+) -> None:
+    """The Stripe create runs with no lock held. If the director closes
+    registration during that call, the quote is no longer live. That change
+    marks no payment, so the create must withhold the client secret itself,
+    mark the payment ``cancel_requested`` and stage the cancel job."""
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    payer = await make_user(db_session, f"payer-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await paid_tournament(db_session, owner=owner)
+    _setup(monkeypatch, owner=owner)
+    checkout_id = await _checkout_for(
+        db_session, tournament=tournament, event=event, payer=payer
+    )
+
+    class _ClosesRegistrationDuringCreate(FakePaymentProvider):
+        async def create_payment_intent(self, **kwargs):  # type: ignore[no-untyped-def]
+            outcome = await super().create_payment_intent(**kwargs)
+            await set_registration_open(
+                db_session, tournament_id=tournament.id, actor=owner, is_open=False
+            )
+            return outcome
+
+    provider = _ClosesRegistrationDuringCreate()
+    prepared = await prepare_or_resume_payment(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+
+    assert prepared.client_secret is None
+    assert prepared.payment_state is TournamentCheckoutPaymentState.cancelled
+    payment = await db_session.scalar(
+        select(TournamentPayment)
+        .where(TournamentPayment.id == prepared.id)
+        .execution_options(populate_existing=True)
+    )
+    assert payment is not None
+    assert payment.provider_payment_intent_id is not None
+    assert payment.status is TournamentPaymentStatus.cancel_requested
+    assert payment.cancel_requested_at is not None
+    assert [job.args for job in fake_payments_queue.jobs] == [(str(payment.id),)]
 
 
 async def test_unreachable_stripe_leaves_the_payment_unchanged(
@@ -1052,12 +1247,9 @@ async def test_late_success_after_director_entry_on_one_event_of_two(
 async def test_event_with_payment_evidence_cannot_be_deleted(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """#1816: deletion guards keep financial evidence — no cascade erases it.
-    ``tournament_payment_lines.event_id`` carries a real ``ondelete=RESTRICT``
-    foreign key (unlike a checkout line's deliberate snapshot), so this is
-    also enforced at the database level; the guard turns it into the same
-    clean domain refusal every other retained-history reason already gives.
-    """
+    """#1816: the retention guard keeps financial evidence. The payment line
+    holds only a snapshot of the event id, so this guard is the only thing
+    that refuses the delete."""
     owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
     payer = await make_user(db_session, f"payer-{uuid.uuid4().hex[:8]}")
     tournament, (event,) = await paid_tournament(db_session, owner=owner)
@@ -1084,6 +1276,42 @@ async def test_event_with_payment_evidence_cannot_be_deleted(
         select(TournamentEvent.id).where(TournamentEvent.id == event.id)
     )
     assert survives == event.id
+
+
+async def test_a_payment_line_does_not_block_the_previous_release_event_delete(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """N/N-1 (api/README.md): the previous release's retention guard knows
+    nothing about payment lines, so after it passes, that release issues the
+    plain event DELETE. The payment tables hold only a snapshot of the event
+    id, so the schema must accept that DELETE. A late success then records a
+    refund for the vanished event instead of failing."""
+    provider = FakePaymentProvider()
+    _, _, _, event, _, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+
+    # The previous release's delete, after its own retention guard passed.
+    await db_session.execute(
+        text("DELETE FROM tournament_events WHERE id = :event_id"),
+        {"event_id": event.id},
+    )
+    await db_session.commit()
+
+    provider.set_status(
+        payment.provider_payment_intent_id, status="succeeded", amount_received=2000
+    )
+    reconciled = await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
+    )
+    assert reconciled is not None
+    assert reconciled.status is TournamentPaymentStatus.succeeded
+    assert reconciled.lines[0].event_id == event.id
+    assert reconciled.lines[0].outcome is TournamentPaymentLineOutcome.refund_due
+    (obligation,) = await _obligations(db_session, payment.id)
+    assert obligation.event_id == event.id
+    assert obligation.reason is TournamentPaymentRefundReason.line_could_not_admit
+    assert obligation.amount_cents == 2000
 
 
 async def test_late_success_after_the_player_cancelled_refunds_and_admits_nobody(
@@ -1725,6 +1953,8 @@ async def test_payee_stripe_account_comes_from_configuration(
     # The platform account is stored concretely on every payment, even when
     # the payee is the platform itself.
     assert payment.platform_stripe_account == "acct_fake_platform"
+    # So is the key mode: Stripe keeps test and live objects apart.
+    assert payment.platform_stripe_livemode is False
     assert payment.payee_fortymm_account_id == owner.id
     assert provider.create_calls == [expected]
 

@@ -10,9 +10,11 @@ so the outcome cannot live on the payment as a whole.
 the durable evidence trail: every Stripe webhook event Fortymm has ever seen
 (keyed uniquely on the Stripe event id, so a replay is a no-op), and every
 refund Fortymm owes a payer but has not yet executed (#1813 executes them; this
-ticket only records them). Deletion guards elsewhere
-(``app.tournament_retention.require_no_recorded_play``) keep an event with
-payment evidence from being deleted out from under it.
+ticket only records them). The retention guard
+(``app.tournament_retention.require_no_recorded_play``) keeps an event with
+payment evidence from being deleted. The event references are snapshots with
+no foreign key, so the previous release can still delete an event it knows
+nothing about.
 """
 
 import enum
@@ -167,6 +169,10 @@ class TournamentPayment(Base):
     #: different platform account treats the payment as temporarily
     #: unavailable rather than quarantining it.
     platform_stripe_account: Mapped[str] = mapped_column(String(255), nullable=False)
+    #: Whether a live-mode key created this payment. Stripe keeps test and
+    #: live objects apart under one account id, so a process running the
+    #: other mode's key treats the payment as temporarily unavailable too.
+    platform_stripe_livemode: Mapped[bool] = mapped_column(Boolean, nullable=False)
     #: The Fortymm account with financial authority over this payment at the
     #: time it was created (today always the configured merchant account). A
     #: historical actor: an Account merge never repoints it.
@@ -260,15 +266,12 @@ class TournamentPaymentLine(Base):
         ForeignKey("tournament_payments.id", ondelete="CASCADE"),
         nullable=False,
     )
-    # Deliberately a REAL foreign key — unlike TournamentCheckoutLine's
-    # deliberate non-FK event snapshot. Once a payment line exists the event
-    # carries financial evidence and must not be deletable out from under it
-    # (the #1816 deletion guard in app.tournament_events).
-    event_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("tournament_events.id", ondelete="RESTRICT"),
-        nullable=False,
-    )
+    # A snapshot with no foreign key, like TournamentCheckoutLine's. The
+    # previous release knows nothing of payment lines, so a real reference
+    # would turn its event deletion into a foreign-key error (N/N-1 rule in
+    # api/README.md). This release keeps the evidence with the retention
+    # guard in app.tournament_retention.
+    event_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     outcome: Mapped[TournamentPaymentLineOutcome] = mapped_column(
         Enum(
@@ -307,9 +310,9 @@ class TournamentPaymentRefundObligation(Base):
         ForeignKey("tournament_payments.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    event_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tournament_events.id", ondelete="RESTRICT")
-    )
+    #: A snapshot with no foreign key, for the same reason as the payment
+    #: line's: the event can be gone when a late success records the refund.
+    event_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     amount_cents: Mapped[int] = mapped_column(BigInteger, nullable=False)
     reason: Mapped[TournamentPaymentRefundReason] = mapped_column(
         Enum(
