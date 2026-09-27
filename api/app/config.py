@@ -36,6 +36,22 @@ class McpConnectorConfig:
     client_id: str
 
 
+#: The prefixes of a live-mode Stripe API key: a secret key and a restricted key.
+_LIVE_STRIPE_KEY_PREFIXES = ("sk_live_", "rk_live_")
+
+
+class DeployEnvironment(StrEnum):
+    """The explicit production gate (#1816).
+
+    Deliberately explicit configuration, never inferred from a hostname or a
+    key prefix: a deploy that forgets to set this stays ``development``, which
+    is the fail-safe direction for :meth:`Settings._refuse_live_key_outside_production`.
+    """
+
+    DEVELOPMENT = "development"
+    PRODUCTION = "production"
+
+
 class GeocoderChoice(StrEnum):
     """Which geocoding implementation this process uses — a closed set.
 
@@ -157,6 +173,11 @@ class Settings(BaseSettings):
     #: copy can never drift from what actually sends the mail.
     email_from: str = "noreply@fortymm.local"
 
+    #: Public origin of the web app (``APP_BASE_URL``), used to build links a
+    #: player follows: email deep links and the MCP paid-entry checkout link.
+    #: Empty means unconfigured. Each caller decides its own fallback.
+    app_base_url: str = ""
+
     #: Per-IP ceiling on tournament **self-entry** (``POST
     #: /v1/tournaments/{id}/events/{event_id}/entries`` with no body), per hour
     #: (#1092). Self-entry carries no permission any more, so this per-IP cap is
@@ -203,6 +224,106 @@ class Settings(BaseSettings):
     guest_creation_ip_limit_per_day: Annotated[int, Field(gt=0)] = 300
     match_creation_account_limit_per_hour: Annotated[int, Field(gt=0)] = 60
     match_creation_account_limit_per_day: Annotated[int, Field(gt=0)] = 300
+
+    #: The explicit production gate (#1816). Never inferred from the Stripe key
+    #: prefix or anything else — see :class:`DeployEnvironment`.
+    environment: DeployEnvironment = DeployEnvironment.DEVELOPMENT
+
+    #: The Stripe secret API key this process authenticates with. Empty means
+    #: card payments are unconfigured; ``app.tournament_payments`` fails
+    #: closed rather than calling Stripe with no key.
+    stripe_secret_key: str = ""
+
+    #: The Stripe ``acct_…`` id that owns :attr:`stripe_secret_key`, verified at
+    #: startup against the account Stripe reports for that key (see
+    #: ``app.payments.startup.verify_stripe_account``). An empty payee Stripe
+    #: account on a payment row means charges run directly on THIS account
+    #: (the launch posture); Stripe Connect (#1819) adds connected payees
+    #: without touching this field's meaning.
+    stripe_account_id: str = ""
+
+    #: The payee Stripe account stamped on each new payment row (#1816). Empty
+    #: means the platform account (:attr:`stripe_account_id`), which is the
+    #: launch posture. Stripe Connect (#1819) replaces this single setting
+    #: with a per-organizer account.
+    tournament_payment_payee_stripe_account: str = ""
+
+    #: Comma-separated Stripe webhook signing secrets (plural — more than one
+    #: must verify at once, e.g. rotating a secret, or a local ``stripe
+    #: listen`` secret alongside a deployed one). Read as a single
+    #: comma-separated string rather than pydantic-settings' JSON-list env
+    #: parsing, so an operator can set it with a plain shell-quoted value.
+    stripe_webhook_signing_secrets_raw: str = Field(
+        default="", alias="STRIPE_WEBHOOK_SIGNING_SECRETS"
+    )
+
+    @property
+    def stripe_webhook_signing_secrets(self) -> list[str]:
+        return [
+            secret.strip()
+            for secret in self.stripe_webhook_signing_secrets_raw.split(",")
+            if secret.strip()
+        ]
+
+    @property
+    def stripe_key_is_live(self) -> bool:
+        """A live-mode key: a secret key (``sk_live_``) or a restricted key
+        (``rk_live_``). A restricted key can hold the permission to create
+        PaymentIntents, so it charges real cards just the same."""
+        return self.stripe_secret_key.startswith(_LIVE_STRIPE_KEY_PREFIXES)
+
+    @property
+    def card_payments_configured(self) -> bool:
+        """Whether this process may start a new card payment (#1816).
+
+        It needs the merchant account, a Stripe key, the platform account
+        that owns the key, and at least one webhook signing secret. Each
+        payment records the platform account, so a payment is never created
+        without it. Without a signing secret every Stripe delivery is
+        rejected, so a payer who closes the page after confirming would be
+        charged and never admitted. So payments fail closed instead."""
+        return (
+            self.tournament_payment_merchant_account_id is not None
+            and bool(self.stripe_secret_key)
+            and bool(self.stripe_account_id)
+            and bool(self.stripe_webhook_signing_secrets)
+        )
+
+    @property
+    def payee_stripe_account(self) -> str | None:
+        """The payee account for a new payment. ``None`` is the platform
+        account, whether the setting is empty or names the platform itself,
+        because a platform charge carries no ``Stripe-Account`` header and its
+        events carry no ``account`` field."""
+        account = self.tournament_payment_payee_stripe_account.strip()
+        if not account or account == self.stripe_account_id:
+            return None
+        return account
+
+    @property
+    def web_app_base_url(self) -> str | None:
+        base = self.app_base_url.strip().rstrip("/")
+        return base or None
+
+    @model_validator(mode="after")
+    def _refuse_live_key_outside_production(self) -> "Settings":
+        """Refuse to boot with a live Stripe key anywhere but the explicit
+        production posture (#1816 constraint: "production uses no live key
+        until launch"). Mirrors :meth:`_require_google_key`'s stance: one
+        guard on the model covers every entrypoint that constructs
+        ``Settings`` (the API, the RQ worker, ad hoc scripts), not just the
+        FastAPI dependency path.
+        """
+        if (
+            self.stripe_key_is_live
+            and self.environment is not DeployEnvironment.PRODUCTION
+        ):
+            raise ValueError(
+                "STRIPE_SECRET_KEY is a live key ('sk_live_...' or 'rk_live_...') but "
+                "ENVIRONMENT is not 'production'. Refusing to start rather "
+                "than risk a live charge from a non-production deploy."
+            )
+        return self
 
     @model_validator(mode="after")
     def _require_google_key(self) -> "Settings":

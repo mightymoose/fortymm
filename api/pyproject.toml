@@ -9,7 +9,10 @@ dependencies = [
     "ortools>=9.12",
     "redis>=5.0",
     "rq>=1.16,<3.0",
-    "sqlalchemy[asyncio]>=2.0.36",
+    # Capped below 2.1: SQLAlchemy 2.1 changed Select typing (32 mypy errors on
+    # untouched modules) and broke the archived-group-mapping tests. Lift the
+    # cap in a dedicated upgrade change, not as a side effect of a fresh install.
+    "sqlalchemy[asyncio]>=2.0.36,<2.1",
     "asyncpg>=0.30",
     "alembic>=1.14",
     "coolname>=2.2",
@@ -20,6 +23,7 @@ dependencies = [
     "fastapi-limiter>=0.1.6,<0.3",
     "pyjwt[crypto]>=2.9",
     "fastmcp>=4.0.3,<5",
+    "stripe==15.6.1",
 ]
 
 [project.optional-dependencies]

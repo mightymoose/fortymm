@@ -48,6 +48,10 @@ class TournamentCheckout(Base):
             "expires_at > created_at",
             name="ck_tournament_checkouts_deadline_after_create",
         ),
+        CheckConstraint(
+            "completed_at IS NULL OR status = 'invalidated'",
+            name="ck_tournament_checkouts_completed_is_invalidated",
+        ),
         UniqueConstraint(
             "payer_account_id",
             "request_id",
@@ -112,6 +116,11 @@ class TournamentCheckout(Base):
         server_default=text("clock_timestamp() + interval '10 minutes'"),
     )
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: Set when a verified payment converted this checkout's hold into
+    #: registrations (#1816). The stored status is then ``invalidated``, a
+    #: value the previous release can read, so it does not count toward
+    #: capacity. The API reports such a checkout as ``completed``.
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     tournament: Mapped["Tournament"] = relationship()
     lines: Mapped[list["TournamentCheckoutLine"]] = relationship(

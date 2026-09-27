@@ -36,6 +36,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from functools import partial
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from anyio import to_thread
 from fastmcp import FastMCP
@@ -165,6 +166,7 @@ from app.tournament_errors import (
     DrawUnderWayError,
     EntryNotFoundError,
     EntryRateLimitedError,
+    EntryRefusal,
     EntryRefusedError,
     EventCancelledError,
     EventFormatMembershipError,
@@ -1746,17 +1748,46 @@ async def delete_event(
 # ----- enter_event tool ----------------------------------------------------
 
 
-def _map_entry_refused_tool_error(exc: EntryRefusedError) -> ToolError:
+def _map_entry_refused_tool_error(
+    exc: EntryRefusedError, *, tournament_id: uuid.UUID
+) -> ToolError:
     """Adapt a coded entry refusal (ADR-0968) to a ``ToolError`` that NAMES which of the
-    four refusals fired, then hands the agent the domain-authored fallback sentence.
+    five refusals fired, then hands the agent the domain-authored fallback sentence.
 
     The HTTP surface answers these with a machine-readable ``code`` a client switches
     on;
     an agent reads prose, so the code rides in the prose (``[event_full]`` …) and the
     verb's own message — a full event, a shut window, a rating cap, an existing entry —
     follows, so the agent is told both *which* rule refused and *why* in its own
-    words."""
+    words.
+
+    ``payment_required`` (#1816) always carries the web checkout URL: MCP has
+    no card-entry surface of its own, so the only way an agent can get a paid
+    event's fee collected is to hand the player a link to go pay it there.
+    """
+    if exc.refusal is EntryRefusal.payment_required:
+        return ToolError(
+            f"Entry refused [{exc.refusal.value}]: {exc} "
+            f"Pay at {_web_checkout_url(tournament_id)}"
+        )
     return ToolError(f"Entry refused [{exc.refusal.value}]: {exc}")
+
+
+def _web_checkout_url(tournament_id: uuid.UUID) -> str:
+    """The web page where a player pays a tournament's entry fees.
+
+    ``APP_BASE_URL`` names the web origin. When it is unset, the MCP server's
+    own public origin stands in, because nginx serves the web app and the MCP
+    endpoint from one host. When neither is set, the link stays root-relative
+    rather than disappearing, so the refusal never loses the checkout link."""
+    settings = get_settings()
+    path = f"/tournaments/{tournament_id}"
+    base = settings.web_app_base_url
+    if base is None:
+        resource = urlsplit(settings.mcp_public_resource_url.strip())
+        if resource.scheme and resource.netloc:
+            base = f"{resource.scheme}://{resource.netloc}"
+    return f"{base}{path}" if base is not None else path
 
 
 @mcp.tool
@@ -1842,7 +1873,9 @@ async def enter_event(
             # Carries its own sentence naming the event's (non-singles) format.
             raise ToolError(str(exc)) from exc
         except EntryRefusedError as exc:
-            raise _map_entry_refused_tool_error(exc) from exc
+            raise _map_entry_refused_tool_error(
+                exc, tournament_id=tournament_id
+            ) from exc
 
 
 class EntryWithdrawalConfirmation(BaseModel):

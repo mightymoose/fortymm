@@ -26,6 +26,8 @@ from app.match_calls import pin_tick_loop
 from app.matches import router as matches_router
 from app.mcp_server import mcp
 from app.notifications.router import router as notifications_router
+from app.payments.dependencies import provider_for_settings
+from app.payments.startup import verify_stripe_account
 from app.players import router as players_router
 from app.rate_limiting import init_rate_limit_redis, shutdown_rate_limit_redis
 from app.rbac import router as rbac_router
@@ -42,6 +44,7 @@ from app.sessions import (
 from app.sessions import router as sessions_router
 from app.stream import router as stream_router
 from app.tournament_checkout_routes import router as tournament_checkouts_router
+from app.tournament_payment_routes import router as tournament_payments_router
 from app.tournaments import router as tournaments_router
 
 # Log on uvicorn's own error logger (not __name__): the app configures no
@@ -86,6 +89,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # connection from that client's pool, which is what pub/sub needs, so a
         # second client would buy nothing but another idle socket.
         settings = get_settings()
+        if settings.stripe_secret_key:
+            # A misconfigured deploy dies at boot, not at its first webhook
+            # (mirrors ``Settings._require_google_key``'s stance) — but this
+            # needs a network call, so it cannot live on the Settings model.
+            await verify_stripe_account(settings, provider_for_settings(settings))
         realtime_broker = RealtimeBroker(
             connection,
             coalesce_delay=settings.realtime_coalesce_ms / 1000,
@@ -244,6 +252,7 @@ app.include_router(dashboard_router)
 app.include_router(notifications_router)
 app.include_router(tournaments_router)
 app.include_router(tournament_checkouts_router)
+app.include_router(tournament_payments_router)
 app.include_router(admin_schedule_solves_router)
 app.include_router(stream_router)
 app.include_router(agent_access_router)

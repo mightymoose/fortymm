@@ -277,6 +277,100 @@ async def test_populated_beta_history_survives_upgrade_to_head(
                         await connection.execute(text(statement))
 
 
+async def test_payments_migration_backfills_pre_payments_registration_stamp(
+    postgres_server_url,
+):
+    """#1816's forward migration adds ``pre_payments_registration`` NOT NULL
+    with a ``true`` server default, so every registration that exists at
+    migration time (the frozen fixture's populated rows) comes back stamped
+    ``true``. The default then drops to ``false`` for later rows."""
+    fixture = json.loads(FIXTURE.read_text())
+    async with empty_database(postgres_server_url) as engine:
+        run_alembic(engine.url, "upgrade", "0001")
+        await load_frozen_fixture(engine, fixture)
+        async with engine.connect() as connection:
+            registration_count = await connection.scalar(
+                text("SELECT count(*) FROM tournament_entry_registrations")
+            )
+        assert registration_count and registration_count > 0
+        run_alembic(engine.url, "upgrade", "head")
+        async with engine.connect() as connection:
+            unstamped = await connection.scalar(
+                text(
+                    "SELECT count(*) FROM tournament_entry_registrations "
+                    "WHERE pre_payments_registration IS NOT TRUE"
+                )
+            )
+            later_default = await connection.scalar(
+                text(
+                    "SELECT column_default FROM information_schema.columns "
+                    "WHERE table_name = 'tournament_entry_registrations' "
+                    "AND column_name = 'pre_payments_registration'"
+                )
+            )
+        assert unstamped == 0
+        # A registration created after the migration is not "before payments".
+        assert later_default == "false"
+
+
+async def test_checkout_status_keeps_the_previous_release_values(postgres_server_url):
+    """N/N-1 (api/README.md): the previous release maps
+    ``tournament_checkout_status`` onto a closed Python enum and raises
+    ``LookupError`` on any value it does not know. A completed checkout must
+    therefore be stored with a value that release already reads."""
+    async with empty_database(postgres_server_url) as engine:
+        run_alembic(engine.url, "upgrade", "head")
+        async with engine.connect() as connection:
+            labels = (
+                await connection.scalars(
+                    text(
+                        "SELECT enumlabel FROM pg_enum "
+                        "WHERE enumtypid = 'tournament_checkout_status'::regtype "
+                        "ORDER BY enumsortorder"
+                    )
+                )
+            ).all()
+    assert labels == ["active", "cancelled", "expired", "invalidated"]
+
+
+async def test_payment_tables_hold_no_foreign_key_to_events(postgres_server_url):
+    """N/N-1 (api/README.md): the previous release deletes an unstarted event
+    without knowing about payment lines or refund obligations. A foreign key
+    from either to ``tournament_events`` would make that delete fail, so the
+    migrated schema keeps only a snapshot of the event id."""
+    async with empty_database(postgres_server_url) as engine:
+        run_alembic(engine.url, "upgrade", "head")
+        async with engine.connect() as connection:
+            references = (
+                await connection.execute(
+                    text(
+                        "SELECT conrelid::regclass::text FROM pg_constraint "
+                        "WHERE contype = 'f' "
+                        "AND confrelid = 'tournament_events'::regclass "
+                        "AND conrelid IN ("
+                        "'tournament_payment_lines'::regclass, "
+                        "'tournament_payment_refund_obligations'::regclass)"
+                    )
+                )
+            ).all()
+            snapshot_columns = (
+                await connection.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.columns "
+                        "WHERE column_name = 'event_id' AND table_name IN ("
+                        "'tournament_payment_lines', "
+                        "'tournament_payment_refund_obligations') "
+                        "ORDER BY table_name"
+                    )
+                )
+            ).all()
+    assert references == []
+    assert [row[0] for row in snapshot_columns] == [
+        "tournament_payment_lines",
+        "tournament_payment_refund_obligations",
+    ]
+
+
 @pytest.mark.parametrize(
     "statement",
     [

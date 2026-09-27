@@ -24,9 +24,9 @@ def _dev_mode() -> bool:
 
 
 def _app_base_url() -> str | None:
-    base = os.environ.get("APP_BASE_URL")
-    if base:
-        return base.rstrip("/")
+    base = get_settings().web_app_base_url
+    if base is not None:
+        return base
     if _dev_mode():
         return "http://localhost:5173"
     return None

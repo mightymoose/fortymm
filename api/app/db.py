@@ -1,6 +1,9 @@
 import os
 from collections.abc import AsyncIterator
+from datetime import datetime
+from typing import cast
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import (
     AsyncAttrs,
     AsyncEngine,
@@ -61,3 +64,11 @@ def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
 async def get_session() -> AsyncIterator[AsyncSession]:
     async with get_sessionmaker()() as session:
         yield session
+
+
+async def database_now(db: AsyncSession) -> datetime:
+    """The database's wall clock (``clock_timestamp()``), so holds, expiry and
+    payment state compare against one clock rather than each process's own."""
+    return cast(
+        datetime, (await db.execute(select(func.clock_timestamp()))).scalar_one()
+    )

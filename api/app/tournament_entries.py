@@ -55,6 +55,7 @@ to the exact response it produced before.
 """
 
 import uuid
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import assert_never
 
@@ -273,6 +274,17 @@ async def _enforce_event_has_room(db: AsyncSession, event: TournamentEvent) -> N
     )
 
 
+@dataclass(frozen=True)
+class SettledPayment:
+    """Evidence that a verified payment covers one event's fee (#1816).
+
+    Only ``app.tournament_payments`` builds one, after its own validation of
+    the retrieved PaymentIntent. It names the event it paid for, so it cannot
+    settle a different event's fee."""
+
+    event_id: uuid.UUID
+
+
 async def admit_to_event(
     db: AsyncSession,
     *,
@@ -281,6 +293,7 @@ async def admit_to_event(
     actor: User,
     user_id: uuid.UUID | None,
     client_ip: str | None = None,
+    settled_payment: SettledPayment | None = None,
 ) -> TournamentEntrantRead:
     """Enter a player in a singles event — ``actor`` themselves, or (as the tournament's
     owner) the player ``user_id`` names — and return the created
@@ -407,7 +420,15 @@ async def admit_to_event(
     # manual arm for phone, offline and complimentary registrations. Checkout can
     # only reserve the signed-in player's own place, so applying this guard to the
     # director arm would make those entrants impossible to record.
-    if self_registration and Decimal(event.entry_fee) > 0:
+    #
+    # ``settled_payment`` (#1816) comes ONLY from verified payment admission
+    # (app.tournament_payments._admit), never from an HTTP or MCP caller. It
+    # answers "has this player already paid for this event", nothing more.
+    # Every OTHER guard below (rating eligibility, capacity, already-entered)
+    # still applies exactly as it does for a free self-registration. This is
+    # not a second ``force`` (ADR-0784 already forbids one).
+    fee_settled = settled_payment is not None and settled_payment.event_id == event_id
+    if self_registration and Decimal(event.entry_fee) > 0 and not fee_settled:
         raise EntryRefusedError(
             EntryRefusal.payment_required,
             "This event requires paid checkout.",

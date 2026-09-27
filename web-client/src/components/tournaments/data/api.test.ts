@@ -9,6 +9,7 @@ import {
   buildTournamentFixtureRead,
 } from '@/mocks/factories/tournaments/tournament.factory'
 import {
+  apiToCheckout,
   apiToEntrant,
   apiToEntryState,
   apiToEvent,
@@ -57,6 +58,63 @@ describe('checkoutRefreshInterval', () => {
     expect(checkoutRefreshInterval(null)).toBe(5_000)
     expect(checkoutRefreshInterval(null, false)).toBe(false)
     expect(checkoutRefreshInterval(undefined)).toBe(false)
+  })
+})
+
+type TournamentCheckoutRead = components['schemas']['TournamentCheckoutRead']
+
+const checkoutRead: TournamentCheckoutRead = {
+  id: '00000000-0000-4000-8000-000000000001',
+  request_id: '00000000-0000-4000-8000-000000000002',
+  tournament_id: '00000000-0000-4000-8000-000000000003',
+  registration_generation: 0,
+  status: 'active',
+  payment_state: 'unavailable',
+  currency: 'USD',
+  total_cents: 4500,
+  created_at: '2030-04-20T14:00:00Z',
+  expires_at: '2030-04-20T14:10:00Z',
+  remaining_seconds: 600,
+  lines: [
+    {
+      event_id: '00000000-0000-4000-8000-000000000004',
+      event_name: 'Open Singles',
+      price_cents: 4500,
+    },
+  ],
+}
+
+describe('apiToCheckout', () => {
+  // #1816: once a payment exists the server embeds its state, and a paid checkout
+  // reads back `completed`. The parser must accept every state the API can emit.
+  it.each([
+    'unavailable',
+    'preparing',
+    'ready',
+    'checking',
+    'action_required',
+    'succeeded',
+    'failed',
+    'expired',
+    'cancelled',
+  ] as const)('accepts the %s payment state', (paymentState) => {
+    expect(apiToCheckout({ ...checkoutRead, payment_state: paymentState }).paymentState).toBe(
+      paymentState,
+    )
+  })
+
+  it('accepts a completed checkout', () => {
+    expect(
+      apiToCheckout({ ...checkoutRead, status: 'completed', payment_state: 'succeeded' }).status,
+    ).toBe('completed')
+  })
+
+  it('rejects a payment state the API never emits', () => {
+    const alien = {
+      ...checkoutRead,
+      payment_state: 'refunded',
+    } as unknown as TournamentCheckoutRead
+    expect(() => apiToCheckout(alien)).toThrow()
   })
 })
 
