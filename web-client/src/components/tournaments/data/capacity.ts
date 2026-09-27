@@ -55,6 +55,7 @@ type Capacity = Pick<TournamentEvent, 'entered' | 'maxPlayers'> & {
 
 export const HOLD_REFRESH_INTERVAL_MS = 5_000
 export const HOLD_DISCOVERY_INTERVAL_MS = 30_000
+
 /** Whether checkout can charge this fee: $0.50 to $500. A stored fee outside that
  * range survives an unrelated edit (#1807), and the server refuses to check it out
  * with `price_too_low` or `price_too_high`. */
