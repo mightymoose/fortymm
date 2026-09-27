@@ -22,7 +22,7 @@ class TournamentCheckoutPaymentState(StrEnum):
     succeeded = "succeeded"
     failed = "failed"
     expired = "expired"
-    canceled = "canceled"
+    cancelled = "cancelled"
 
 
 class TournamentCheckoutCreate(BaseModel):

@@ -835,6 +835,117 @@ async def test_late_success_after_director_entry_stands_and_records_refund(
     assert obligations[0].amount_cents == 2000
 
 
+@pytest.mark.parametrize("other_event_full", [False, True], ids=["free", "full"])
+async def test_late_success_after_director_entry_on_one_event_of_two(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_payments_queue,
+    other_event_full: bool,
+) -> None:
+    """#1816 P6 decision A: a director entry on one event of a two-event
+    checkout invalidates the whole checkout. If Stripe later reports success,
+    the director's line records ``superseded_by_director_entry`` with a full
+    refund. The other line runs admission again: it admits when capacity is
+    free, and records a full ``line_could_not_admit`` refund when it is not.
+    """
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    payer = await make_user(db_session, f"payer-{uuid.uuid4().hex[:8]}")
+    tournament, (director_event, other_event) = await paid_tournament(
+        db_session,
+        owner=owner,
+        fees=(Decimal("20.00"), Decimal("30.00")),
+        capacities=(None, 1),
+    )
+    _setup(monkeypatch, owner=owner)
+    checkout = await start_checkout(
+        db_session,
+        tournament_id=tournament.id,
+        actor=payer,
+        request=TournamentCheckoutCreate(
+            request_id=uuid.uuid4(), event_ids=[director_event.id, other_event.id]
+        ),
+        client_ip=f"203.0.113.{uuid.uuid4().int % 200 + 1}",
+    )
+    provider = FakePaymentProvider()
+    prepared = await prepare_or_resume_payment(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout.id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+    payment_id = prepared.id
+    payment = await db_session.get(TournamentPayment, payment_id)
+    assert payment is not None
+    intent_id = payment.provider_payment_intent_id
+    assert intent_id is not None
+
+    await admit_to_event(
+        db_session,
+        tournament_id=tournament.id,
+        event_id=director_event.id,
+        actor=owner,
+        user_id=payer.primary_player.id,
+    )
+    await db_session.commit()
+    await db_session.refresh(payment)
+    assert payment.status is TournamentPaymentStatus.cancel_requested
+
+    other_player = await make_user(db_session, f"other-{uuid.uuid4().hex[:8]}")
+    if other_event_full:
+        # The invalidated checkout no longer holds the single capped slot, so
+        # the director can give it to somebody else before Stripe reports.
+        await admit_to_event(
+            db_session,
+            tournament_id=tournament.id,
+            event_id=other_event.id,
+            actor=owner,
+            user_id=other_player.primary_player.id,
+        )
+        await db_session.commit()
+
+    provider.set_status(intent_id, status="succeeded", amount_received=5000)
+    reconciled = await reconcile_payment(
+        db_session, payment_id=payment_id, provider=provider, settings=get_settings()
+    )
+    assert reconciled is not None
+    assert reconciled.status is TournamentPaymentStatus.succeeded
+    outcomes = {line.event_id: line.outcome for line in reconciled.lines}
+    refunds = {
+        (obligation.event_id, obligation.reason, obligation.amount_cents)
+        for obligation in await _obligations(db_session, payment_id)
+    }
+    director_refund = (
+        director_event.id,
+        TournamentPaymentRefundReason.superseded_by_director_entry,
+        2000,
+    )
+    assert outcomes[director_event.id] is TournamentPaymentLineOutcome.refund_due
+    assert await _entered_player_ids(db_session, director_event.id) == [
+        payer.primary_player.id
+    ]
+    if other_event_full:
+        assert outcomes[other_event.id] is TournamentPaymentLineOutcome.refund_due
+        assert refunds == {
+            director_refund,
+            (
+                other_event.id,
+                TournamentPaymentRefundReason.line_could_not_admit,
+                3000,
+            ),
+        }
+        assert await _entered_player_ids(db_session, other_event.id) == [
+            other_player.primary_player.id
+        ]
+    else:
+        assert outcomes[other_event.id] is TournamentPaymentLineOutcome.admitted
+        assert refunds == {director_refund}
+        assert await _entered_player_ids(db_session, other_event.id) == [
+            payer.primary_player.id
+        ]
+
+
 async def test_event_with_payment_evidence_cannot_be_deleted(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1739,7 +1850,7 @@ async def test_director_entry_during_an_uncertain_create_still_cancels_the_inten
         provider=provider,
         settings=get_settings(),
     )
-    assert status_read.payment_state is TournamentCheckoutPaymentState.canceled
+    assert status_read.payment_state is TournamentCheckoutPaymentState.cancelled
     payment = await db_session.get(TournamentPayment, prepared.id)
     assert payment is not None
     await db_session.refresh(payment)

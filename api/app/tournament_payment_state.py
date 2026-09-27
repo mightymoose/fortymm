@@ -15,7 +15,7 @@ TERMINAL_PAYMENT_STATUSES = frozenset(
     {
         TournamentPaymentStatus.succeeded,
         TournamentPaymentStatus.failed,
-        TournamentPaymentStatus.canceled,
+        TournamentPaymentStatus.cancelled,
         TournamentPaymentStatus.quarantined,
     }
 )
@@ -28,7 +28,7 @@ def payment_display_state(
     lifecycle down to the 8 API-facing states (#1816). ``cancel_requested``
     and ``quarantined`` are internal-only — the director's action and a
     quarantine are both irreversible from the player's point of view, so they
-    fold onto ``canceled``/``failed`` rather than adding a ninth public state.
+    fold onto ``cancelled``/``failed`` rather than adding a ninth public state.
     """
     match status:
         case TournamentPaymentStatus.preparing:
@@ -46,9 +46,9 @@ def payment_display_state(
         case TournamentPaymentStatus.expired:
             return TournamentCheckoutPaymentState.expired
         case (
-            TournamentPaymentStatus.canceled | TournamentPaymentStatus.cancel_requested
+            TournamentPaymentStatus.cancelled | TournamentPaymentStatus.cancel_requested
         ):
-            return TournamentCheckoutPaymentState.canceled
+            return TournamentCheckoutPaymentState.cancelled
         case TournamentPaymentStatus.quarantined:
             return TournamentCheckoutPaymentState.failed
         case _:

@@ -69,13 +69,13 @@ class TournamentPaymentStatus(enum.Enum):
     succeeded = "succeeded"
     failed = "failed"
     expired = "expired"
-    canceled = "canceled"
+    cancelled = "cancelled"
     #: A director entered the player while this payment was still open
     #: (``app.tournament_checkouts.invalidate_checkout_for_entrant_event``).
     #: The RQ cancel job has been enqueued but Stripe has not yet confirmed
     #: the cancellation. The director's action is authoritative and
     #: irreversible (module docstring), so the API reports this as
-    #: ``canceled`` rather than exposing a ninth state.
+    #: ``cancelled`` rather than exposing a ninth state.
     cancel_requested = "cancel_requested"
     #: Reconcile's validation failed (wrong account/mode/amount/currency, or
     #: an unmatched PaymentIntent id/metadata). Admits nobody; a refund

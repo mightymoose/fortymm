@@ -11428,7 +11428,7 @@ internal enum Components {
             case succeeded = "succeeded"
             case failed = "failed"
             case expired = "expired"
-            case canceled = "canceled"
+            case cancelled = "cancelled"
         }
         /// - Remark: Generated from `#/components/schemas/TournamentCheckoutRead`.
         internal struct TournamentCheckoutRead: Codable, Hashable, Sendable {

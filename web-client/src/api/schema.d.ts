@@ -5446,7 +5446,7 @@ export interface components {
          * TournamentCheckoutPaymentState
          * @enum {string}
          */
-        TournamentCheckoutPaymentState: "unavailable" | "preparing" | "ready" | "checking" | "action_required" | "succeeded" | "failed" | "expired" | "canceled";
+        TournamentCheckoutPaymentState: "unavailable" | "preparing" | "ready" | "checking" | "action_required" | "succeeded" | "failed" | "expired" | "cancelled";
         /** TournamentCheckoutRead */
         TournamentCheckoutRead: {
             /**

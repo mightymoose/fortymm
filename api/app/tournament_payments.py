@@ -176,7 +176,7 @@ def _map_provider_status(
         case ProviderIntentStatus.PROCESSING | ProviderIntentStatus.REQUIRES_CAPTURE:
             return TournamentPaymentStatus.checking
         case ProviderIntentStatus.CANCELED:
-            return TournamentPaymentStatus.canceled
+            return TournamentPaymentStatus.cancelled
         case ProviderIntentStatus.SUCCEEDED:
             return current
         case _:
