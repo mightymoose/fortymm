@@ -4,7 +4,7 @@ import type { FieldErrors } from 'react-hook-form'
 import { drawTypeSchema } from '../data/draw-types'
 import {
   entryFeeRuleIssue,
-  entryFeeShapeSchema,
+  entryFeeSchema,
   maxPlayersSchema,
   nameSchema,
   reservationNameSchema,
@@ -367,7 +367,7 @@ export const eventSchema = z.object({
   // one whose director does.
   rounds: z.number().nullable(),
   maxPlayers: maxPlayersSchema,
-  entryFee: entryFeeShapeSchema,
+  entryFee: entryFeeSchema,
   // The fee this form was opened with (#1807), never shown. The paid-collection rules
   // below judge only a fee that differs from it. `NaN` for a blank form, so every fee
   // typed there is judged.

@@ -22,7 +22,7 @@
 // consulted about whether an Enter button appears. It is the client reading two
 // integers it was sent, which is all "how many places are left" has ever been.
 
-import { ENTRY_FEE_MAX } from './event-validation'
+import { ENTRY_FEE_MAX, ENTRY_FEE_MIN } from './event-validation'
 import type { Tournament, TournamentEvent } from './types'
 
 /** The three — mutually exclusive — things an event's capacity can say, as a sum
@@ -55,13 +55,11 @@ type Capacity = Pick<TournamentEvent, 'entered' | 'maxPlayers'> & {
 
 export const HOLD_REFRESH_INTERVAL_MS = 5_000
 export const HOLD_DISCOVERY_INTERVAL_MS = 30_000
-const MIN_CHECKOUT_FEE = 0.5
-
 /** Whether checkout can charge this fee: $0.50 to $500. A stored fee outside that
  * range survives an unrelated edit (#1807), and the server refuses to check it out
  * with `price_too_low` or `price_too_high`. */
 export function isChargeableFee(fee: number): boolean {
-  return fee >= MIN_CHECKOUT_FEE && fee <= ENTRY_FEE_MAX
+  return fee >= ENTRY_FEE_MIN && fee <= ENTRY_FEE_MAX
 }
 
 type HoldRefreshTournament = Pick<

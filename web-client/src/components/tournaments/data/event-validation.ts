@@ -120,6 +120,10 @@ export const PLAYERS_MAX = 512
  * guard: it catches `3000` typed for $30.00 before a player pays it. */
 export const ENTRY_FEE_MAX = 500
 
+/** The floor on a paid entry fee: the smallest positive fee checkout can charge, the
+ * server's `MIN_PAID_ENTRY_FEE`. A fee of `0` is free, not below it. */
+export const ENTRY_FEE_MIN = 0.5
+
 /** A fee is a price, and a price is in whole cents. The column is `Numeric(8, 2)`, and
  * Postgres does **not** refuse a third decimal — it silently *rounds* it, so `45.005` is
  * stored, read back and charged as `45.01`: a number the organizer never typed, with
@@ -238,7 +242,7 @@ export const maxPlayersSchema = z
  * rejects it under the CJS one (measured, Zod 4.4.3). A validator whose verdict depends
  * on the module system is not a validator, so the check is explicit.
  */
-export const entryFeeShapeSchema = z
+export const entryFeeSchema = z
   .union([z.nan(), z.number()])
   .superRefine((value, ctx) => {
     if (Number.isNaN(value)) {
@@ -265,16 +269,10 @@ export const entryFeeShapeSchema = z
  * them: $0, or $0.50 to $500. The server's `enforce_entry_fee_rules` judges only a new
  * or changed fee, and the event form does the same (`event-form`). */
 export function entryFeeRuleIssue(value: number): string | undefined {
-  if (value > 0 && value < 0.5) return 'A paid entry fee must be at least $0.50 USD.'
+  if (value > 0 && value < ENTRY_FEE_MIN) return 'A paid entry fee must be at least $0.50 USD.'
   if (value > ENTRY_FEE_MAX) return `The maximum entry fee is $${ENTRY_FEE_MAX}.`
   return undefined
 }
-
-/** A fee as a new event's form judges it: the shape, then the paid-collection rules. */
-export const entryFeeSchema = entryFeeShapeSchema.superRefine((value, ctx) => {
-  const issue = entryFeeRuleIssue(value)
-  if (issue) ctx.addIssue({ code: 'custom', message: issue })
-})
 
 /** The floor on **K** — the server's `QualifiersPerGroup = Annotated[int, Field(ge=1)]`,
  * stated once there and mirrored once here. Zero advances nobody into the knockout
