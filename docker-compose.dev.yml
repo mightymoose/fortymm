@@ -58,6 +58,14 @@ services:
       # docs/adr/20260725-a-venues-coordinates-are-geocoded-server-side-and-not-null.md
       # ("The geocoder is selected by explicit config, not inferred from key presence").
       GEOCODER: fake
+      # Stripe test-mode card payments (#1816). scripts/setup-stripe.sh writes
+      # these to the root .env, which compose reads for interpolation only, so
+      # each one is passed through by name. Empty means payments are off.
+      # TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID is a UUID, and an empty value
+      # fails Settings, so add it under this block by hand when you need it.
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_ACCOUNT_ID: ${STRIPE_ACCOUNT_ID:-}
+      STRIPE_WEBHOOK_SIGNING_SECRETS: ${STRIPE_WEBHOOK_SIGNING_SECRETS:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -92,6 +100,10 @@ services:
       # The worker builds its own Settings, so it needs the same explicit
       # geocoder choice as the api service above.
       GEOCODER: fake
+      # The payment-cancel job calls Stripe with the same key (#1816).
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_ACCOUNT_ID: ${STRIPE_ACCOUNT_ID:-}
+      STRIPE_WEBHOOK_SIGNING_SECRETS: ${STRIPE_WEBHOOK_SIGNING_SECRETS:-}
     depends_on:
       redis:
         condition: service_healthy

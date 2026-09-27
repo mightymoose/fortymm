@@ -73,6 +73,7 @@ async def _checkout_for(
 def _setup(monkeypatch: pytest.MonkeyPatch, *, owner: User) -> None:
     monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
     monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_fake")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SIGNING_SECRETS", "whsec_test_default")
     monkeypatch.delenv("ENVIRONMENT", raising=False)
 
 
@@ -1860,3 +1861,471 @@ async def test_director_entry_during_an_uncertain_create_still_cancels_the_inten
         (str(prepared.id),),
         (str(prepared.id),),
     ]
+
+
+# ----- Codex review round on PR #1820 --------------------------------------
+
+
+async def test_prepare_waits_for_a_cancellation_holding_the_tournament_lock(
+    monkeypatch: pytest.MonkeyPatch, engine: AsyncEngine, fake_payments_queue
+) -> None:
+    """Checkout validation and the payment insert are one serialized step.
+
+    A gatekeeper takes the tournament lock the way ``cancel_checkout`` does
+    and holds it. A first prepare must wait on it. The gatekeeper then cancels
+    the checkout and commits, so the prepare must refuse and create nothing.
+    An unlocked check would pass the still-active checkout, insert the
+    payment, and call Stripe for a checkout the payer had just cancelled."""
+    from app.tournament_authority import lock_tournament
+
+    make_session = async_sessionmaker(engine, expire_on_commit=False)
+    provider = FakePaymentProvider()
+    async with make_session() as seed_session:
+        owner = await make_user(seed_session, f"merchant-{uuid.uuid4().hex[:8]}")
+        payer = await make_user(seed_session, f"payer-{uuid.uuid4().hex[:8]}")
+        tournament, (event,) = await paid_tournament(seed_session, owner=owner)
+        _setup(monkeypatch, owner=owner)
+        checkout_id = await _checkout_for(
+            seed_session, tournament=tournament, event=event, payer=payer
+        )
+
+    async def _prepare() -> None:
+        async with make_session() as session:
+            await prepare_or_resume_payment(
+                session,
+                tournament_id=tournament.id,
+                checkout_id=checkout_id,
+                actor=payer,
+                provider=provider,
+                settings=get_settings(),
+            )
+
+    async with make_session() as gatekeeper:
+        await lock_tournament(gatekeeper, tournament.id)
+        preparer = asyncio.create_task(_prepare())
+        await asyncio.sleep(0.5)
+        waited = not preparer.done()
+        await cancel_checkout(
+            gatekeeper,
+            tournament_id=tournament.id,
+            checkout_id=checkout_id,
+            actor=payer,
+        )
+    assert waited, "prepare did not wait for the tournament lock"
+    with pytest.raises(PaymentNotReadyError):
+        await preparer
+    assert provider.create_calls == []
+    async with make_session() as verify_session:
+        assert (
+            await verify_session.scalar(
+                select(TournamentPayment).where(
+                    TournamentPayment.checkout_id == checkout_id
+                )
+            )
+            is None
+        )
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SIGNING_SECRETS"],
+)
+async def test_prepare_fails_closed_without_a_key_or_a_webhook_secret(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, missing: str
+) -> None:
+    """Without a Stripe key the create cannot authenticate. Without a webhook
+    signing secret every Stripe delivery is rejected, so a payer who closes
+    the page after confirming would be charged and never admitted. Both fail
+    closed before the create obligation commits."""
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    payer = await make_user(db_session, f"payer-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await paid_tournament(db_session, owner=owner)
+    _setup(monkeypatch, owner=owner)
+    monkeypatch.setenv(missing, "")
+    checkout_id = await _checkout_for(
+        db_session, tournament=tournament, event=event, payer=payer
+    )
+    provider = FakePaymentProvider()
+    with pytest.raises(PaymentNotReadyError):
+        await prepare_or_resume_payment(
+            db_session,
+            tournament_id=tournament.id,
+            checkout_id=checkout_id,
+            actor=payer,
+            provider=provider,
+            settings=get_settings(),
+        )
+    assert provider.create_calls == []
+    assert (
+        await db_session.scalar(
+            select(TournamentPayment).where(
+                TournamentPayment.checkout_id == checkout_id
+            )
+        )
+        is None
+    )
+
+
+async def test_prepare_refuses_when_the_merchant_setting_changed_since_the_quote(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The quote names the merchant that authorized it. A payment for it must
+    not be stamped with a different, newly configured merchant."""
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    payer = await make_user(db_session, f"payer-{uuid.uuid4().hex[:8]}")
+    other = await make_user(db_session, f"other-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await paid_tournament(db_session, owner=owner)
+    _setup(monkeypatch, owner=owner)
+    checkout_id = await _checkout_for(
+        db_session, tournament=tournament, event=event, payer=payer
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(other.id))
+    provider = FakePaymentProvider()
+    with pytest.raises(PaymentNotReadyError):
+        await prepare_or_resume_payment(
+            db_session,
+            tournament_id=tournament.id,
+            checkout_id=checkout_id,
+            actor=payer,
+            provider=provider,
+            settings=get_settings(),
+        )
+    assert provider.create_calls == []
+
+
+async def test_prepare_refuses_a_total_above_the_stripe_amount_limit(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stripe refuses an amount above eight digits. Fortymm refuses before it
+    commits a create obligation that no retry could ever fulfil."""
+    from app.payments.provider import STRIPE_MAX_AMOUNT_CENTS
+
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    payer = await make_user(db_session, f"payer-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await paid_tournament(db_session, owner=owner)
+    _setup(monkeypatch, owner=owner)
+    checkout_id = await _checkout_for(
+        db_session, tournament=tournament, event=event, payer=payer
+    )
+    await db_session.execute(
+        update(TournamentCheckout)
+        .where(TournamentCheckout.id == checkout_id)
+        .values(total_cents=STRIPE_MAX_AMOUNT_CENTS + 1)
+    )
+    await db_session.commit()
+    provider = FakePaymentProvider()
+    with pytest.raises(PaymentNotReadyError):
+        await prepare_or_resume_payment(
+            db_session,
+            tournament_id=tournament.id,
+            checkout_id=checkout_id,
+            actor=payer,
+            provider=provider,
+            settings=get_settings(),
+        )
+    assert provider.create_calls == []
+
+
+async def test_a_mismatched_create_response_is_quarantined_and_keeps_its_secret(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The create response passes the same identity checks as reconcile
+    before its client secret is used. A mismatch quarantines the payment and
+    the payer never gets the secret."""
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    payer = await make_user(db_session, f"payer-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await paid_tournament(db_session, owner=owner)
+    _setup(monkeypatch, owner=owner)
+    checkout_id = await _checkout_for(
+        db_session, tournament=tournament, event=event, payer=payer
+    )
+    provider = FakePaymentProvider(create_amount_override=1)
+    prepared = await prepare_or_resume_payment(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert prepared.client_secret is None
+    assert prepared.payment_state is TournamentCheckoutPaymentState.failed
+    payment = await db_session.get(TournamentPayment, prepared.id)
+    assert payment is not None
+    assert payment.status is TournamentPaymentStatus.quarantined
+    assert payment.provider_payment_intent_id is not None
+
+
+async def test_a_successful_retry_clears_the_earlier_decline(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A decline recorded on the first attempt must not survive a later state
+    that reports no current error, and never a success."""
+    provider = FakePaymentProvider()
+    *_, payment = await _prepared_payment(db_session, monkeypatch, provider=provider)
+    intent_id = payment.provider_payment_intent_id
+    settings = get_settings()
+
+    provider.set_status(
+        intent_id,
+        status="requires_payment_method",
+        last_payment_error_code="card_declined",
+    )
+    declined = await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, settings=settings
+    )
+    assert declined is not None
+    assert declined.last_error_code == "card_declined"
+
+    provider.set_status(intent_id, status="requires_action")
+    challenged = await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, settings=settings
+    )
+    assert challenged is not None
+    assert challenged.status is TournamentPaymentStatus.action_required
+    assert challenged.last_error_code is None
+
+    provider.set_status(
+        intent_id,
+        status="requires_payment_method",
+        last_payment_error_code="card_declined",
+    )
+    await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, settings=settings
+    )
+    provider.set_status(intent_id, status="succeeded", amount_received=2000)
+    settled = await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, settings=settings
+    )
+    assert settled is not None
+    assert settled.status is TournamentPaymentStatus.succeeded
+    assert settled.last_error_code is None
+
+
+@pytest.mark.parametrize(
+    ("code", "decline_code", "expected"),
+    [
+        ("card_declined", "insufficient_funds", "insufficient_funds"),
+        ("card_declined", "generic_decline", "card_declined"),
+        ("card_declined", None, "card_declined"),
+        ("some_internal_stripe_detail", "do_not_honor", "card_error"),
+    ],
+    ids=["decline-code-wins", "unknown-decline-code", "code-only", "neither-safe"],
+)
+async def test_the_player_error_prefers_stripes_decline_code(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    code: str,
+    decline_code: str | None,
+    expected: str,
+) -> None:
+    """Stripe reports most card declines as ``code: card_declined`` and puts
+    the actionable reason in ``decline_code``. A safe decline code wins."""
+    from app.payments.provider import ProviderPaymentIntent
+
+    parsed = ProviderPaymentIntent.model_validate(
+        {
+            "id": "pi_x",
+            "status": "requires_payment_method",
+            "amount": 2000,
+            "currency": "usd",
+            "livemode": False,
+            "last_payment_error": {"code": code, "decline_code": decline_code},
+        }
+    )
+    assert parsed.last_payment_error_code == code
+    assert parsed.last_payment_decline_code == decline_code
+
+    provider = FakePaymentProvider()
+    *_, payment = await _prepared_payment(db_session, monkeypatch, provider=provider)
+    provider.set_status(
+        payment.provider_payment_intent_id,
+        status="requires_payment_method",
+        last_payment_error_code=code,
+        last_payment_decline_code=decline_code,
+    )
+    reconciled = await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
+    )
+    assert reconciled is not None
+    assert reconciled.last_error_code == expected
+
+
+async def test_payer_cancel_cancels_the_open_payment_intent(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, fake_payments_queue
+) -> None:
+    """The payer's browser may still hold the client secret. Cancelling the
+    checkout cancels the PaymentIntent, as a director entry does."""
+    provider = FakePaymentProvider()
+    _, payer, tournament, _, checkout_id, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    payment_id = payment.id
+    await cancel_checkout(
+        db_session, tournament_id=tournament.id, checkout_id=checkout_id, actor=payer
+    )
+    cancelled = await db_session.get(TournamentPayment, payment_id)
+    assert cancelled is not None
+    await db_session.refresh(cancelled)
+    assert cancelled.status is TournamentPaymentStatus.cancel_requested
+    assert cancelled.cancel_requested_at is not None
+    assert [job.args for job in fake_payments_queue.jobs] == [(str(payment_id),)]
+
+
+async def test_account_merge_cancels_a_payment_nobody_can_resume(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, fake_payments_queue
+) -> None:
+    """The merge invalidates the checkout, so neither account can resume its
+    open payment. The merge cancels the PaymentIntent instead of leaving it
+    open, and the survivor can still read it."""
+    from app.account_merge import merge_user
+
+    provider = FakePaymentProvider()
+    _, payer, tournament, _, checkout_id, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    survivor = await make_user(db_session, f"survivor-{uuid.uuid4().hex[:8]}")
+    payment_id = payment.id
+
+    await merge_user(db_session, from_user_id=payer.id, to_user_id=survivor.id)
+    await db_session.commit()
+
+    merged = await db_session.get(TournamentPayment, payment_id)
+    assert merged is not None
+    await db_session.refresh(merged)
+    assert merged.status is TournamentPaymentStatus.cancel_requested
+    assert [job.args for job in fake_payments_queue.jobs] == [(str(payment_id),)]
+    status_read = await read_payment_status(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=survivor,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert status_read.payment_state is TournamentCheckoutPaymentState.cancelled
+
+
+async def test_a_replayed_webhook_finishes_a_reconcile_that_never_ran(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The process can die after the event row commits and before reconcile
+    runs. Stripe's retry then hits the stored event, and must still finish the
+    payment rather than acknowledge it and do nothing."""
+    provider = FakePaymentProvider()
+    _, payer, _, event, _, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    intent_id = payment.provider_payment_intent_id
+    provider.set_status(intent_id, status="succeeded", amount_received=2000)
+    webhook_event = ProviderWebhookEvent.model_validate(
+        {
+            "id": f"evt_{uuid.uuid4().hex}",
+            "type": "payment_intent.succeeded",
+            "livemode": False,
+            "data": {
+                "object": {"id": intent_id, "metadata": {"payment_id": str(payment.id)}}
+            },
+        }
+    )
+    # The first delivery's row committed, then the process died.
+    db_session.add(
+        TournamentPaymentProviderEvent(
+            provider_event_id=webhook_event.id,
+            event_type=webhook_event.type,
+            payment_id=payment.id,
+            payload=webhook_event.evidence(),
+        )
+    )
+    await db_session.commit()
+
+    await record_and_reconcile_provider_event(
+        db_session, event=webhook_event, provider=provider, settings=get_settings()
+    )
+
+    settled = await db_session.get(TournamentPayment, payment.id)
+    assert settled is not None
+    await db_session.refresh(settled)
+    assert settled.status is TournamentPaymentStatus.succeeded
+    assert await _entered_player_ids(db_session, event.id) == [payer.primary_player.id]
+
+
+async def test_merchant_reads_follow_the_payments_own_payee_snapshot(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """After ``TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID`` changes, the account
+    recorded on the payment keeps access and the new account gets none."""
+    provider = FakePaymentProvider()
+    owner, _, tournament, _, checkout_id, _ = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    newcomer = await make_user(db_session, f"newcomer-{uuid.uuid4().hex[:8]}")
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(newcomer.id))
+
+    read = await read_payment_status(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=owner,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert read.checkout_id == checkout_id
+    with pytest.raises(PaymentNotFoundError):
+        await read_payment_status(
+            db_session,
+            tournament_id=tournament.id,
+            checkout_id=checkout_id,
+            actor=newcomer,
+            provider=provider,
+            settings=get_settings(),
+        )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [stripe.AuthenticationError("revoked"), stripe.PermissionError("restricted")],
+    ids=["authentication", "permission"],
+)
+def test_a_credentials_failure_never_quarantines_a_retrieval(
+    error: stripe.StripeError,
+) -> None:
+    """A revoked key or a restricted key that lost a permission says nothing
+    about the PaymentIntent. It is ``ProviderUnavailable``, never the
+    ``ProviderRefused`` that quarantines the payment for good."""
+    from app.payments.provider import ProviderUnavailable, _retrieval_failure
+
+    assert isinstance(_retrieval_failure(error), ProviderUnavailable)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [stripe.AuthenticationError("revoked"), stripe.PermissionError("restricted")],
+    ids=["authentication", "permission"],
+)
+async def test_a_credentials_failure_on_create_leaves_the_payment_preparing(
+    error: stripe.StripeError,
+) -> None:
+    """A create that Stripe refuses for Fortymm's own key is translated at the
+    seam, not raised as a 500. The payment stays ``preparing`` and a resume
+    replays the create under the same idempotency key once the key works."""
+    from types import SimpleNamespace
+
+    from app.payments.provider import ProviderCreateUncertain, StripePaymentProvider
+
+    async def _refuse(*args: object, **kwargs: object) -> object:
+        raise error
+
+    adapter = StripePaymentProvider("sk_test_fake")
+    adapter._client = SimpleNamespace(  # type: ignore[assignment]
+        v1=SimpleNamespace(payment_intents=SimpleNamespace(create_async=_refuse))
+    )
+    outcome = await adapter.create_payment_intent(
+        payee_account=None,
+        amount_cents=2000,
+        currency="usd",
+        idempotency_key="tournament-payment:x",
+        metadata={"payment_id": "x"},
+        statement_descriptor_suffix="FORTYMM1",
+    )
+    assert isinstance(outcome, ProviderCreateUncertain)

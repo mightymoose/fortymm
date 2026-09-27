@@ -251,21 +251,34 @@ def test_auth_rate_limit_rejects_invalid_values(
         get_settings()
 
 
+@pytest.mark.parametrize(
+    "live_key", ["sk_live_abc123", "rk_live_abc123"], ids=["secret", "restricted"]
+)
 def test_live_stripe_key_outside_production_refuses_to_boot(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, live_key: str
 ) -> None:
     """#1816: a live key anywhere but the explicit production posture must
-    fail construction, mirroring ``_require_google_key``'s stance."""
-    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_live_abc123")
+    fail construction, mirroring ``_require_google_key``'s stance. A
+    restricted live key (``rk_live_``) can create PaymentIntents too."""
+    monkeypatch.setenv("STRIPE_SECRET_KEY", live_key)
     monkeypatch.delenv("ENVIRONMENT", raising=False)
     with pytest.raises(ValidationError):
         get_settings()
 
 
-def test_live_stripe_key_in_production_boots(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_live_abc123")
+@pytest.mark.parametrize(
+    "live_key", ["sk_live_abc123", "rk_live_abc123"], ids=["secret", "restricted"]
+)
+def test_live_stripe_key_in_production_boots(
+    monkeypatch: pytest.MonkeyPatch, live_key: str
+) -> None:
+    """A live key is live for reconcile's mode check too, so a live intent
+    created with a restricted key is not misread as a mode mismatch."""
+    monkeypatch.setenv("STRIPE_SECRET_KEY", live_key)
     monkeypatch.setenv("ENVIRONMENT", "production")
-    assert get_settings().stripe_secret_key == "sk_live_abc123"
+    settings = get_settings()
+    assert settings.stripe_secret_key == live_key
+    assert settings.stripe_key_is_live
 
 
 def test_test_mode_stripe_key_boots_without_the_production_setting(

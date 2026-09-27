@@ -53,6 +53,7 @@ from app.schedule_solves import request_solve, tournament_has_drawn_event
 from app.tournament_authority import lock_merge_tournaments, merge_authority
 from app.tournament_checkout_invalidation import (
     invalidate_checkouts_for_account_lifecycle,
+    request_cancel_of_open_payments,
 )
 from app.tournament_draws import (
     active_draw_entrants_by_event,
@@ -476,7 +477,7 @@ async def _transfer_account(
     )
 
     # Payment identity policy (#1816). ``payer_account_id`` is owned state, not
-    # a historical actor: it decides who may read and resume the payment, and
+    # a historical actor: it decides who may read the payment, and
     # to whom a refund is owed. So it transfers to the survivor, which must
     # still see its payments after the merge. ``payee_fortymm_account_id`` is a
     # historical actor, the account that held financial authority when the
@@ -486,6 +487,19 @@ async def _transfer_account(
         update(TournamentPayment)
         .where(TournamentPayment.payer_account_id == from_user_id)
         .values(payer_account_id=to_user_id)
+    )
+    # An invalidated checkout cannot take or resume a payment, so neither
+    # account can finish an open PaymentIntent the merge left behind. Cancel
+    # it instead of leaving a client secret live in a browser. A late success
+    # still reconciles, and admits the survivor or records a refund obligation.
+    await request_cancel_of_open_payments(
+        db,
+        TournamentPayment.payer_account_id == to_user_id,
+        TournamentPayment.checkout_id.in_(
+            select(TournamentCheckout.id).where(
+                TournamentCheckout.status != TournamentCheckoutStatus.active
+            )
+        ),
     )
 
     # We tombstone rather than DELETE the user, so the rows that used to ride

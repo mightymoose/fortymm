@@ -36,6 +36,10 @@ class McpConnectorConfig:
     client_id: str
 
 
+#: The prefixes of a live-mode Stripe API key: a secret key and a restricted key.
+_LIVE_STRIPE_KEY_PREFIXES = ("sk_live_", "rk_live_")
+
+
 class DeployEnvironment(StrEnum):
     """The explicit production gate (#1816).
 
@@ -263,7 +267,24 @@ class Settings(BaseSettings):
 
     @property
     def stripe_key_is_live(self) -> bool:
-        return self.stripe_secret_key.startswith("sk_live_")
+        """A live-mode key: a secret key (``sk_live_``) or a restricted key
+        (``rk_live_``). A restricted key can hold the permission to create
+        PaymentIntents, so it charges real cards just the same."""
+        return self.stripe_secret_key.startswith(_LIVE_STRIPE_KEY_PREFIXES)
+
+    @property
+    def card_payments_configured(self) -> bool:
+        """Whether this process may start a new card payment (#1816).
+
+        It needs the merchant account, a Stripe key, and at least one webhook
+        signing secret. Without a signing secret every Stripe delivery is
+        rejected, so a payer who closes the page after confirming would be
+        charged and never admitted. So payments fail closed instead."""
+        return (
+            self.tournament_payment_merchant_account_id is not None
+            and bool(self.stripe_secret_key)
+            and bool(self.stripe_webhook_signing_secrets)
+        )
 
     @property
     def payee_stripe_account(self) -> str | None:
@@ -295,7 +316,7 @@ class Settings(BaseSettings):
             and self.environment is not DeployEnvironment.PRODUCTION
         ):
             raise ValueError(
-                "STRIPE_SECRET_KEY is a live key ('sk_live_...') but "
+                "STRIPE_SECRET_KEY is a live key ('sk_live_...' or 'rk_live_...') but "
                 "ENVIRONMENT is not 'production'. Refusing to start rather "
                 "than risk a live charge from a non-production deploy."
             )

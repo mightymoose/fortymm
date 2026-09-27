@@ -47,6 +47,9 @@ class FakePaymentProvider:
     #: Every create call's payee account, in order, so a test can see the
     #: call happen and see which account it targeted.
     create_calls: list[str | None] = field(default_factory=list)
+    #: Set by a test to make the NEXT newly created intent report this amount
+    #: instead of the one Fortymm asked for, as a mismatched create response.
+    create_amount_override: int | None = None
 
     async def create_payment_intent(
         self,
@@ -65,10 +68,16 @@ class FakePaymentProvider:
         existing = self._by_idempotency_key.get(idempotency_key)
         if existing is not None:
             return ProviderIntentCreated(intent=existing.intent)
+        amount = (
+            amount_cents
+            if self.create_amount_override is None
+            else self.create_amount_override
+        )
+        self.create_amount_override = None
         intent = ProviderPaymentIntent(
             id=f"pi_fake_{uuid.uuid4().hex[:24]}",
             status=ProviderIntentStatus.REQUIRES_PAYMENT_METHOD,
-            amount=amount_cents,
+            amount=amount,
             currency=currency,
             livemode=False,
             client_secret=f"secret_{uuid.uuid4().hex}",
@@ -119,12 +128,14 @@ class FakePaymentProvider:
         status: str,
         amount_received: int | None = None,
         last_payment_error_code: str | None = None,
+        last_payment_decline_code: str | None = None,
     ) -> ProviderPaymentIntent:
         """Move a fake PaymentIntent to a new status, as if the cardholder
         (or Stripe's fraud/3DS pipeline) had acted on it."""
         updates: dict[str, object] = {
             "status": status,
             "last_payment_error_code": last_payment_error_code,
+            "last_payment_decline_code": last_payment_decline_code,
         }
         if amount_received is not None:
             updates["amount_received"] = amount_received

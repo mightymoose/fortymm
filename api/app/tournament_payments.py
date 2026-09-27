@@ -36,6 +36,7 @@ from app.models import (
     User,
 )
 from app.payments.provider import (
+    STRIPE_MAX_AMOUNT_CENTS,
     PaymentProvider,
     ProviderCreateUncertain,
     ProviderIntentCreated,
@@ -73,15 +74,27 @@ from app.tournament_payment_state import (
 )
 
 
-def _safe_error_code(raw_code: str | None) -> TournamentPaymentErrorCode | None:
-    """Map Stripe's raw decline code onto the safe, player-facing set. Never
-    pass Stripe's raw ``decline_code`` or message through (#1816)."""
-    if raw_code is None:
+def _safe_error_code(
+    intent: ProviderPaymentIntent,
+) -> TournamentPaymentErrorCode | None:
+    """Map Stripe's last payment error onto the safe, player-facing set. Never
+    pass Stripe's raw ``decline_code`` or message through (#1816).
+
+    Stripe often reports a decline as the generic ``code: card_declined`` and
+    puts the actionable reason, such as ``insufficient_funds``, in
+    ``decline_code``. So a ``decline_code`` in the safe set wins, then
+    ``code``, and any other error maps to ``card_error``."""
+    raw_codes = (intent.last_payment_decline_code, intent.last_payment_error_code)
+    if all(raw_code is None for raw_code in raw_codes):
         return None
-    try:
-        return TournamentPaymentErrorCode(raw_code)
-    except ValueError:
-        return TournamentPaymentErrorCode.card_error
+    for raw_code in raw_codes:
+        if raw_code is None:
+            continue
+        try:
+            return TournamentPaymentErrorCode(raw_code)
+        except ValueError:
+            continue
+    return TournamentPaymentErrorCode.card_error
 
 
 async def record_and_reconcile_provider_event(
@@ -112,8 +125,12 @@ async def record_and_reconcile_provider_event(
     )
     newly_inserted = result.first() is not None
     await db.commit()
-    if not newly_inserted or payment_id is None or not event.is_handled:
+    if payment_id is None or not event.is_handled:
         return
+    # A replay reconciles again. If the process died, or reconcile raised,
+    # after the event row committed, Stripe's retry is the only thing left to
+    # finish the payment. Reconcile is idempotent: a terminal payment returns
+    # at once, and each line admits or refunds exactly once.
     try:
         await reconcile_payment(
             db,
@@ -124,12 +141,13 @@ async def record_and_reconcile_provider_event(
         )
     except PaymentProviderUnavailableError:
         await db.rollback()
-        await db.execute(
-            delete(TournamentPaymentProviderEvent).where(
-                TournamentPaymentProviderEvent.provider_event_id == event.id
+        if newly_inserted:
+            await db.execute(
+                delete(TournamentPaymentProviderEvent).where(
+                    TournamentPaymentProviderEvent.provider_event_id == event.id
+                )
             )
-        )
-        await db.commit()
+            await db.commit()
         raise
 
 
@@ -199,13 +217,12 @@ async def _load_checkout_for_payer(
     return checkout
 
 
-def _can_view_payment(
-    payment: TournamentPayment, actor: User, settings: Settings
-) -> bool:
-    merchant_account_id = settings.tournament_payment_merchant_account_id
-    return payment.payer_account_id == actor.id or (
-        merchant_account_id is not None and merchant_account_id == actor.id
-    )
+def _can_view_payment(payment: TournamentPayment, actor: User) -> bool:
+    """The payer, or the merchant account that held financial authority when
+    the payment was created. Bound to the payment's own snapshot, so a later
+    change of ``TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID`` neither grants the new
+    account old payments nor removes them from the account that owns them."""
+    return actor.id in (payment.payer_account_id, payment.payee_fortymm_account_id)
 
 
 def _to_read_schema(payment: TournamentPayment) -> TournamentPaymentRead:
@@ -241,8 +258,26 @@ async def _lock_payment(
     return payment
 
 
+def _intent_matches_payment(
+    intent: ProviderPaymentIntent, payment: TournamentPayment, *, key_is_live: bool
+) -> bool:
+    """The identity checks every PaymentIntent must pass before Fortymm uses
+    it: the id Fortymm stored, the key's mode, the amount and currency on the
+    row, and the metadata ``payment_id`` Fortymm set."""
+    return (
+        intent.id == payment.provider_payment_intent_id
+        and intent.livemode == key_is_live
+        and intent.amount == payment.amount_cents
+        and intent.currency.upper() == payment.currency
+        and intent.metadata_payment_id == str(payment.id)
+    )
+
+
 async def _drive_provider_create(
-    db: AsyncSession, payment_id: uuid.UUID, provider: PaymentProvider
+    db: AsyncSession,
+    payment_id: uuid.UUID,
+    provider: PaymentProvider,
+    settings: Settings,
 ) -> tuple[TournamentPayment, str | None]:
     """Create the PaymentIntent under the payment's durable idempotency key.
 
@@ -291,9 +326,16 @@ async def _drive_provider_create(
         case ProviderIntentCreated(intent=intent):
             if locked.provider_payment_intent_id is None:
                 locked.provider_payment_intent_id = intent.id
-                locked.status = _map_provider_status(
-                    intent.status, current=locked.status
-                )
+                if not _intent_matches_payment(
+                    intent, locked, key_is_live=settings.stripe_key_is_live
+                ):
+                    # Validate before use, exactly as reconcile does. The
+                    # payer never gets the secret of a mismatched intent.
+                    _quarantine(db, locked, amount_received=intent.amount_received)
+                else:
+                    locked.status = _map_provider_status(
+                        intent.status, current=locked.status
+                    )
                 if locked.status is TournamentPaymentStatus.cancel_requested:
                     # A director entry superseded this payment while the create
                     # was in flight. Its cancel job found no PaymentIntent id
@@ -313,23 +355,75 @@ async def _drive_provider_create(
 
 
 async def _create_payment_row(
-    db: AsyncSession, checkout: TournamentCheckout, actor: User, settings: Settings
+    db: AsyncSession,
+    *,
+    tournament_id: uuid.UUID,
+    checkout_id: uuid.UUID,
+    actor: User,
+    settings: Settings,
 ) -> uuid.UUID:
     """Commit the provider-create obligation before any Stripe call (#1816).
 
-    Two concurrent first prepares for one checkout both reach the insert. The
-    unique checkout constraint lets exactly one win, and the loser reuses the
-    winner's row instead of answering with a 500.
+    A NEW charge needs a live quote. The checkout is validated and the row is
+    inserted under the lock order every checkout invalidation takes (payer
+    Account, then Tournament, then the checkout row). So a cancellation, a
+    director entry or another invalidation either commits first and this
+    refuses, or commits after and sees the payment it must cancel. An expired
+    or superseded hold can still finish a payment that already exists (a late
+    success), but it never starts one.
+
+    Two concurrent first prepares for one checkout serialize on those locks,
+    and the second reuses the first one's row. The unique checkout constraint
+    stays as the backstop.
     """
-    merchant_account_id = settings.tournament_payment_merchant_account_id
-    if merchant_account_id is None:
+    if not settings.card_payments_configured:
+        raise PaymentNotReadyError()
+    await db.scalar(
+        select(User)
+        .where(User.id == actor.id)
+        .with_for_update(read=True)
+        .execution_options(populate_existing=True)
+    )
+    try:
+        tournament = await lock_tournament(db, tournament_id)
+    except TournamentNotFoundError as error:
+        raise PaymentNotReadyError() from error
+    checkout = await db.scalar(
+        select(TournamentCheckout)
+        .where(
+            TournamentCheckout.id == checkout_id,
+            TournamentCheckout.tournament_id == tournament_id,
+        )
+        .with_for_update()
+        .execution_options(populate_existing=True)
+        .options(selectinload(TournamentCheckout.lines))
+    )
+    if checkout is None or checkout.payer_account_id != actor.id:
+        raise PaymentNotFoundError()
+    existing_id: uuid.UUID | None = await db.scalar(
+        select(TournamentPayment.id).where(TournamentPayment.checkout_id == checkout.id)
+    )
+    if existing_id is not None:
+        await db.commit()
+        return existing_id
+    if (
+        checkout_effective_state(checkout, tournament, await database_now(db))
+        is not TournamentCheckoutState.active
+        # The quote was authorized by the merchant it names. A later change of
+        # ``TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID`` must not re-bind it.
+        or checkout.merchant_account_id
+        != settings.tournament_payment_merchant_account_id
+        # Stripe refuses an amount above its limit. Refuse here, before the
+        # create obligation commits, rather than persist an impossible create.
+        or checkout.total_cents > STRIPE_MAX_AMOUNT_CENTS
+    ):
         raise PaymentNotReadyError()
     payment = TournamentPayment(
         checkout_id=checkout.id,
         payer_account_id=actor.id,
         tournament_id=checkout.tournament_id,
         payee_stripe_account=settings.payee_stripe_account,
-        payee_fortymm_account_id=merchant_account_id,
+        payee_fortymm_account_id=checkout.merchant_account_id,
         idempotency_key=f"tournament-payment:{checkout.id}",
         amount_cents=checkout.total_cents,
         currency=checkout.currency,
@@ -394,19 +488,17 @@ async def prepare_or_resume_payment(
         select(TournamentPayment.id).where(TournamentPayment.checkout_id == checkout.id)
     )
     if payment_id is None:
-        # A NEW charge needs a live quote. An expired or superseded hold can
-        # still finish a payment that already exists (a late success), but it
-        # never starts one.
-        tournament = await db.get(Tournament, tournament_id)
-        if (
-            tournament is None
-            or checkout_effective_state(checkout, tournament, await database_now(db))
-            is not TournamentCheckoutState.active
-        ):
-            raise PaymentNotReadyError()
-        payment_id = await _create_payment_row(db, checkout, actor, settings)
+        payment_id = await _create_payment_row(
+            db,
+            tournament_id=tournament_id,
+            checkout_id=checkout.id,
+            actor=actor,
+            settings=settings,
+        )
 
-    payment, client_secret = await _drive_provider_create(db, payment_id, provider)
+    payment, client_secret = await _drive_provider_create(
+        db, payment_id, provider, settings
+    )
     if payment.payer_account_id != actor.id:
         raise PaymentNotFoundError()
     if client_secret is None and payment.provider_payment_intent_id is not None:
@@ -449,12 +541,14 @@ async def read_payment_status(
     payment = await db.scalar(
         select(TournamentPayment).where(TournamentPayment.checkout_id == checkout.id)
     )
-    if payment is None or not _can_view_payment(payment, actor, settings):
+    if payment is None or not _can_view_payment(payment, actor):
         raise PaymentNotFoundError()
 
     if payment.status not in TERMINAL_PAYMENT_STATUSES:
         if payment.provider_payment_intent_id is None:
-            payment, _ = await _drive_provider_create(db, payment.id, provider)
+            payment, _ = await _drive_provider_create(
+                db, payment.id, provider, settings
+            )
         if payment.provider_payment_intent_id is not None:
             payment, _ = await _reconcile_or_keep(db, payment, provider, settings)
     return _to_read_schema(payment)
@@ -498,7 +592,10 @@ async def _admit(db: AsyncSession, payment: TournamentPayment) -> None:
     player's cancellation, which is also how a selection is replaced) or a
     registration window that changed since the quote stays permanent, so a
     late success refunds every line instead of reversing that decision.
+
+    A success clears any decline an earlier attempt recorded.
     """
+    payment.last_error_code = None
     payer = await db.get(User, payment.payer_account_id)
     checkout = await db.scalar(
         select(TournamentCheckout)
@@ -682,14 +779,9 @@ async def _reconcile(
         await db.commit()
         return payment, None
 
-    identity_ok = (
-        intent.id == payment.provider_payment_intent_id
-        and intent.livemode == key_is_live
-        and intent.amount == payment.amount_cents
-        and intent.currency.upper() == payment.currency
-        and intent.metadata_payment_id == str(payment.id)
-    )
-    if not identity_ok or not event_ok:
+    if not _intent_matches_payment(intent, payment, key_is_live=key_is_live) or (
+        not event_ok
+    ):
         _quarantine(db, payment, amount_received=intent.amount_received)
         await db.commit()
         return payment, None
@@ -703,8 +795,13 @@ async def _reconcile(
         await _admit(db, payment)
     else:
         payment.status = _map_provider_status(intent.status, current=payment.status)
-        if payment.status is TournamentPaymentStatus.ready:
-            payment.last_error_code = _safe_error_code(intent.last_payment_error_code)
+        # Only ``ready`` carries a decline the payer can act on. Every other
+        # state reports no current error, so a stale decline is cleared.
+        payment.last_error_code = (
+            _safe_error_code(intent)
+            if payment.status is TournamentPaymentStatus.ready
+            else None
+        )
         checkout = await db.get(TournamentCheckout, payment.checkout_id)
         tournament = await db.get(Tournament, payment.tournament_id)
         if (

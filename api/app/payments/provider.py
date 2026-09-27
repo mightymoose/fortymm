@@ -54,14 +54,25 @@ class ProviderPaymentIntent(BaseModel):
     amount_received: int = 0
     metadata: dict[str, str] = Field(default_factory=dict)
     last_payment_error_code: str | None = None
+    #: Stripe's ``last_payment_error.decline_code``. For a card decline Stripe
+    #: often reports the generic ``code: card_declined`` and puts the
+    #: actionable reason (``insufficient_funds``) here.
+    last_payment_decline_code: str | None = None
 
     @model_validator(mode="before")
     @classmethod
     def _flatten_last_payment_error(cls, data: object) -> object:
-        if isinstance(data, dict) and data.get("last_payment_error_code") is None:
+        if isinstance(data, dict):
             last_error = data.get("last_payment_error")
             if isinstance(last_error, dict):
-                data = {**data, "last_payment_error_code": last_error.get("code")}
+                flattened = {**data}
+                if data.get("last_payment_error_code") is None:
+                    flattened["last_payment_error_code"] = last_error.get("code")
+                if data.get("last_payment_decline_code") is None:
+                    flattened["last_payment_decline_code"] = last_error.get(
+                        "decline_code"
+                    )
+                data = flattened
         return data
 
     @property
@@ -78,7 +89,8 @@ class ProviderIntentCreated(BaseModel):
 
 class ProviderCreateUncertain(BaseModel):
     """The create call's outcome could not be determined — a timeout or a
-    connection error. The caller must assume NEITHER that the PaymentIntent
+    connection error — or Stripe refused Fortymm's own key, so no usable
+    PaymentIntent came back. The caller must assume NEITHER that the PaymentIntent
     was created NOR that it was not; it reports Fortymm state ``preparing``
     and a later resume retries the SAME idempotency key, which Stripe
     guarantees is safe to repeat."""
@@ -113,18 +125,34 @@ _STRIPE_UNAVAILABLE: tuple[type[stripe.StripeError], ...] = (
     stripe.RateLimitError,
 )
 
-#: A create whose outcome is unknown: Stripe was unavailable, or another
-#: request with the same idempotency key is still in flight.
+#: The Stripe errors that are about Fortymm's own credentials: a revoked key,
+#: or a restricted key without the permission the call needs. They say nothing
+#: about the PaymentIntent, and fixing the key makes the same call work again.
+_STRIPE_CREDENTIALS_REFUSED: tuple[type[stripe.StripeError], ...] = (
+    stripe.AuthenticationError,
+    stripe.PermissionError,
+)
+
+#: A create that produced no PaymentIntent Fortymm can use yet. Stripe was
+#: unavailable, another request with the same idempotency key is still in
+#: flight, or Stripe refused Fortymm's own key. In every case a later replay
+#: under the SAME idempotency key is safe and can succeed.
 _STRIPE_CREATE_UNCERTAIN: tuple[type[stripe.StripeError], ...] = (
     *_STRIPE_UNAVAILABLE,
+    *_STRIPE_CREDENTIALS_REFUSED,
     stripe.IdempotencyError,
 )
 
+#: Stripe's largest ``amount`` for a PaymentIntent: eight digits in the
+#: smallest currency unit (https://docs.stripe.com/currencies#minimum-and-maximum-charge-amounts).
+STRIPE_MAX_AMOUNT_CENTS = 99_999_999
+
 
 def _retrieval_failure(error: stripe.StripeError) -> ProviderRetrievalFailed:
-    # An authentication failure is about Fortymm's own key, not about the
-    # PaymentIntent, so it must not quarantine a payment either.
-    if isinstance(error, (*_STRIPE_UNAVAILABLE, stripe.AuthenticationError)):
+    # A credentials failure is about Fortymm's own key, not about the
+    # PaymentIntent, so it must not quarantine a payment either. Quarantine is
+    # terminal, and restoring the key's permissions must be able to recover.
+    if isinstance(error, (*_STRIPE_UNAVAILABLE, *_STRIPE_CREDENTIALS_REFUSED)):
         return ProviderUnavailable(str(error))
     return ProviderRefused(str(error))
 

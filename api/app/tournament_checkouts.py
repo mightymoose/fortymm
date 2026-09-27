@@ -9,11 +9,10 @@ from datetime import datetime
 from decimal import Decimal
 from math import ceil
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app import required_repairs
 from app.config import get_settings
 from app.db import database_now
 from app.models import (
@@ -28,7 +27,6 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentPayment,
-    TournamentPaymentStatus,
     User,
 )
 from app.rate_limiting import (
@@ -53,15 +51,13 @@ from app.tournament_checkout_errors import (
     CheckoutRefusal,
     CheckoutRefusedError,
 )
+from app.tournament_checkout_invalidation import request_cancel_of_open_payments
 from app.tournament_eligibility import (
     Eligible,
     evaluate_rating_eligibility,
     event_is_full,
 )
-from app.tournament_payment_state import (
-    TERMINAL_PAYMENT_STATUSES,
-    payment_display_state,
-)
+from app.tournament_payment_state import payment_display_state
 from app.tournament_queries import (
     active_entry_counts_by_event,
     entrant_rating,
@@ -284,22 +280,9 @@ async def invalidate_checkout_for_entrant_event(
     )
     if not invalidated_checkout_ids:
         return
-    cancel_requested_ids = (
-        await db.execute(
-            update(TournamentPayment)
-            .where(
-                TournamentPayment.checkout_id.in_(invalidated_checkout_ids),
-                TournamentPayment.status.not_in(TERMINAL_PAYMENT_STATUSES),
-            )
-            .values(
-                status=TournamentPaymentStatus.cancel_requested,
-                cancel_requested_at=func.clock_timestamp(),
-            )
-            .returning(TournamentPayment.id)
-        )
-    ).scalars()
-    for payment_id in cancel_requested_ids:
-        await required_repairs.request_payment_cancel(db, payment_id)
+    await request_cancel_of_open_payments(
+        db, TournamentPayment.checkout_id.in_(invalidated_checkout_ids)
+    )
 
 
 async def _load_tournament_locked(
@@ -727,6 +710,13 @@ async def cancel_checkout(
     if effective is TournamentCheckoutState.active:
         checkout.status = TournamentCheckoutStatus.cancelled
         checkout.cancelled_at = now
+        # #1816: the browser may still hold the open payment's client secret.
+        # Cancel the PaymentIntent, as a director entry does. A confirmation
+        # already in flight can still succeed, and reconcile then records a
+        # refund obligation for every line of the cancelled checkout.
+        await request_cancel_of_open_payments(
+            db, TournamentPayment.checkout_id == checkout.id
+        )
         await db.commit()
     elif effective is TournamentCheckoutState.expired:
         checkout.status = TournamentCheckoutStatus.expired

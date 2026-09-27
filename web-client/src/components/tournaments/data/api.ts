@@ -145,8 +145,20 @@ const checkoutSchema = z.object({
   request_id: z.string().uuid(),
   tournament_id: z.string().uuid(),
   registration_generation: z.number().int().nonnegative(),
-  status: z.enum(['active', 'cancelled', 'expired', 'invalidated']),
-  payment_state: z.literal('unavailable'),
+  status: z.enum(['active', 'cancelled', 'expired', 'invalidated', 'completed']),
+  // Every state the server's TournamentCheckoutPaymentState can emit (#1816).
+  // `unavailable` means no payment exists yet for this checkout.
+  payment_state: z.enum([
+    'unavailable',
+    'preparing',
+    'ready',
+    'checking',
+    'action_required',
+    'succeeded',
+    'failed',
+    'expired',
+    'cancelled',
+  ]),
   currency: z.literal('USD'),
   total_cents: z.number().int().positive(),
   created_at: z.iso.datetime({ offset: true }),
@@ -163,7 +175,7 @@ const checkoutSchema = z.object({
 
 export type TournamentCheckout = ReturnType<typeof apiToCheckout>
 
-function apiToCheckout(payload: TournamentCheckoutRead) {
+export function apiToCheckout(payload: TournamentCheckoutRead) {
   const checkout = checkoutSchema.parse(payload)
   return {
     id: checkout.id,

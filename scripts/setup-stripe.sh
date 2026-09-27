@@ -216,7 +216,7 @@ append_env_list() {
 # This wizard only ever configures Stripe TEST mode.
 refuse_live_key() {
   local value="$1"
-  if [[ "$value" == sk_live_* || "$value" == whsec_live_* ]]; then
+  if [[ "$value" == sk_live_* || "$value" == rk_live_* || "$value" == whsec_live_* ]]; then
     printf '\n  %s✗ that looks like a LIVE key, not a test key.%s\n' "$RED" "$RESET"
     printf '  %sThis wizard only configures Stripe TEST mode. Refusing to continue.%s\n' "$RED" "$RESET"
     exit 1
@@ -359,23 +359,54 @@ else
 fi
 
 # ── Stage 4: sync into the UAT Kubernetes Secret ───────────────────────────
-stage "UAT: sync .env into the fortymm-uat-env Secret"
-say "This pushes STRIPE_SECRET_KEY, STRIPE_ACCOUNT_ID and"
-say "STRIPE_WEBHOOK_SIGNING_SECRETS (plus everything else already in .env)"
-say "into the live 'fortymm-uat-env' Secret — the same one scripts/redeploy-uat.sh"
-say "syncs on every deploy, so this takes effect without a full redeploy."
+stage "UAT: add the Stripe keys to the fortymm-uat-env Secret"
+say "This patches ONLY STRIPE_SECRET_KEY, STRIPE_ACCOUNT_ID and"
+say "STRIPE_WEBHOOK_SIGNING_SECRETS into the live 'fortymm-uat-env' Secret."
+say "Every other key in that Secret (merchant, SMTP, Auth0, Tailscale...) stays"
+say "as it is, even if this checkout's .env holds only the Stripe values."
+# A merge patch of named keys, never a whole-Secret apply from .env: a fresh
+# checkout's .env holds only what this wizard wrote, and applying it would
+# delete every other UAT credential from the Secret.
+STRIPE_PATCH=""
+if command -v python3 >/dev/null 2>&1; then
+  STRIPE_PATCH=$(
+    STRIPE_SECRET_KEY="$(_existing STRIPE_SECRET_KEY || true)" \
+    STRIPE_ACCOUNT_ID="$(_existing STRIPE_ACCOUNT_ID || true)" \
+    STRIPE_WEBHOOK_SIGNING_SECRETS="$(_existing STRIPE_WEBHOOK_SIGNING_SECRETS || true)" \
+    python3 -c '
+import json, os, sys
+keys = ("STRIPE_SECRET_KEY", "STRIPE_ACCOUNT_ID", "STRIPE_WEBHOOK_SIGNING_SECRETS")
+values = {key: os.environ.get(key, "") for key in keys}
+if not all(values.values()):
+    sys.exit(0)  # an empty patch: the caller refuses to sync
+print(json.dumps({"stringData": values}))
+'
+  )
+fi
 if ! command -v kubectl >/dev/null 2>&1; then
-  warn "kubectl not found — sync this by hand later:"
-  note "    kubectl create secret generic fortymm-uat-env --namespace fortymm-uat \\"
-  note "      --from-env-file=.env --dry-run=client -o yaml | kubectl apply -f -"
-  SKIPPED+=("syncing .env into the fortymm-uat-env Secret (kubectl missing)")
+  warn "kubectl not found — patch the three Stripe keys by hand later:"
+  note "    kubectl -n fortymm-uat patch secret fortymm-uat-env --type merge \\"
+  note "      -p '{\"stringData\":{\"STRIPE_SECRET_KEY\":\"...\",...}}'"
+  SKIPPED+=("patching the Stripe keys into the fortymm-uat-env Secret (kubectl missing)")
+elif [[ -z "$STRIPE_PATCH" ]]; then
+  warn "$ENV_FILE is missing STRIPE_SECRET_KEY, STRIPE_ACCOUNT_ID or"
+  warn "STRIPE_WEBHOOK_SIGNING_SECRETS (or python3 is missing). Refusing to patch"
+  warn "the UAT Secret with a partial set. Finish stages 1-3, then re-run."
+  SKIPPED+=("patching the Stripe keys into the fortymm-uat-env Secret (incomplete Stripe values)")
 else
   CURRENT_CONTEXT=$(kubectl config current-context 2>/dev/null || echo "<none>")
   say "Current kubectl context: $CURRENT_CONTEXT"
-  if confirm "Is that the fortymm-uat (k3d) cluster? Continue syncing the Secret?"; then
-    kubectl create secret generic fortymm-uat-env \
-      --namespace fortymm-uat --from-env-file="$ENV_FILE" \
-      --dry-run=client -o yaml | kubectl apply -f -
+  if ! confirm "Is that the fortymm-uat (k3d) cluster? Continue patching the Secret?"; then
+    warn "wrong context — switch with 'kubectl config use-context <ctx>' and re-run this stage."
+    SKIPPED+=("patching the Stripe keys into the fortymm-uat-env Secret (wrong kubectl context)")
+  elif ! kubectl -n fortymm-uat get secret fortymm-uat-env >/dev/null 2>&1; then
+    warn "the fortymm-uat-env Secret does not exist yet. scripts/redeploy-uat.sh"
+    warn "creates it from the full UAT .env. Deploy UAT first, then re-run this stage."
+    SKIPPED+=("patching the Stripe keys into the fortymm-uat-env Secret (Secret missing)")
+  elif ! kubectl -n fortymm-uat patch secret fortymm-uat-env --type merge -p "$STRIPE_PATCH" >/dev/null; then
+    warn "kubectl could not patch the Secret. Nothing else in it changed."
+    SKIPPED+=("patching the Stripe keys into the fortymm-uat-env Secret (kubectl patch failed)")
+  else
     say "Secret updated. Existing pods keep their OLD environment until restarted:"
     note "    kubectl -n fortymm-uat rollout restart deployment/api deployment/worker"
     if confirm "Restart the api and worker deployments now to pick up the new Secret?"; then
@@ -385,9 +416,6 @@ else
     else
       SKIPPED+=("restarting UAT api/worker deployments to pick up the new Secret")
     fi
-  else
-    warn "wrong context — switch with 'kubectl config use-context <ctx>' and re-run this stage."
-    SKIPPED+=("syncing .env into the fortymm-uat-env Secret (wrong kubectl context)")
   fi
 fi
 
