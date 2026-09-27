@@ -32,3 +32,14 @@ it('rejects subminimum and newly ineligible checkout events', () => {
     isCheckoutEventEligible(tournament, buildEvent({ entryFee: 20 })),
   ).toBe(true)
 })
+
+it('rejects a preserved fee above the $500 cap, and accepts the cap itself', () => {
+  const tournament = buildTournament()
+
+  expect(
+    isCheckoutEventEligible(tournament, buildEvent({ entryFee: 500.01 })),
+  ).toBe(false)
+  expect(
+    isCheckoutEventEligible(tournament, buildEvent({ entryFee: 500 })),
+  ).toBe(true)
+})

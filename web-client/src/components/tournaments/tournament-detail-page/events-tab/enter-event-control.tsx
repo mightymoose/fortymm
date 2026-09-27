@@ -4,9 +4,9 @@ import { useSession } from '@/api/session'
 import { Button } from '@/components/ui/button'
 
 import { useEnterEvent, useWithdrawEntry } from '../../data/api'
+import { isChargeableFee } from '../../data/capacity'
 import { entryControlState } from '../../data/lifecycle'
 import type { Tournament, TournamentEvent } from '../../data/types'
-import { MIN_CHECKOUT_FEE } from './checkout-policy'
 import { LeadReason } from './lead-reason'
 
 export interface EnterEventControlProps {
@@ -154,7 +154,7 @@ export const EnterEventControl = ({
       // toggles keeps Cancel from revealing a second, previously invisible draft
       // and leaves Change selection as the sole path that seeds a replacement.
       if (event.entryFee > 0 && paidSelectionLocked) return null
-      if (event.entryFee > 0 && event.entryFee < MIN_CHECKOUT_FEE) {
+      if (event.entryFee > 0 && !isChargeableFee(event.entryFee)) {
         return (
           <LeadReason
             testId="checkout-unavailable-notice"

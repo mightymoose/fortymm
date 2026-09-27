@@ -148,9 +148,12 @@ struct TournamentEventDTO: Decodable, Identifiable {
     let entryFee: Double
     var isCancelled: Bool { lifecycleState == "cancelled" }
     var requiresCheckout: Bool { entryFee > 0 }
+    /// A stored paid fee checkout refuses until the organizer updates it: below $0.50,
+    /// or above the $500 cap (#1807).
+    var hasLegacyFee: Bool { entryFee > 0 && (entryFee < 0.50 || entryFee > TournamentCopy.maxEntryFee) }
     var hasHeldPlaces: Bool { (heldPlaces ?? 0) > 0 }
     func canStartCheckout(checkoutAvailable: Bool) -> Bool {
-        format == "singles" && entryFee >= 0.50 && checkoutAvailable && entryState.state == .open && !isCancelled
+        format == "singles" && requiresCheckout && !hasLegacyFee && checkoutAvailable && entryState.state == .open && !isCancelled
     }
     let slot: Slot
     let entrants: [Entrant]
@@ -302,9 +305,17 @@ enum TournamentCopy {
         guard decimal == cents else { return nil }
         return value
     }
+    static let maxEntryFee = 500.0
+    /// Why a typed fee breaks the paid-collection rules (#1807), in the API's own words,
+    /// or nil when the fee is free or between $0.50 and $500.
+    static func entryFeeIssue(_ text: String, locale: Locale = .current) -> String? {
+        guard let value = entryFee(text, locale: locale) else { return nil }
+        if value > 0 && value < 0.50 { return "A paid entry fee must be at least $0.50 USD." }
+        if value > maxEntryFee { return "The maximum entry fee is $500." }
+        return nil
+    }
     static func validEntryFee(_ text: String, locale: Locale = .current) -> Bool {
-        guard let value = entryFee(text, locale: locale) else { return false }
-        return value == 0 || value >= 0.50
+        entryFee(text, locale: locale) != nil && entryFeeIssue(text, locale: locale) == nil
     }
     static func count(_ count: Int, _ noun: String, plural: String? = nil) -> String {
         "\(count) \(count == 1 ? noun : (plural ?? noun + "s"))"

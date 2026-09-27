@@ -116,6 +116,19 @@ private final class TestLocationManager: CLLocationManager {
         TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: legacyFeePayload), encoding: .utf8)!
         let legacyFee = try await service.list()[0]
         precondition(!legacyFee.events[0].canStartCheckout(checkoutAvailable: true), "Preserved subminimum fees must not advertise checkout")
+        precondition(legacyFee.events[0].hasLegacyFee, "Preserved subminimum fees must show the legacy-fee notice")
+        legacyFeeEvent["entry_fee"] = 500.01
+        legacyFeePayload[0]["events"] = [legacyFeeEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: legacyFeePayload), encoding: .utf8)!
+        let overCapFee = try await service.list()[0]
+        precondition(!overCapFee.events[0].canStartCheckout(checkoutAvailable: true), "Preserved fees above the $500 cap must not advertise checkout")
+        precondition(overCapFee.events[0].hasLegacyFee, "Preserved fees above the $500 cap must show the legacy-fee notice")
+        legacyFeeEvent["entry_fee"] = 500
+        legacyFeePayload[0]["events"] = [legacyFeeEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: legacyFeePayload), encoding: .utf8)!
+        let atCapFee = try await service.list()[0]
+        precondition(atCapFee.events[0].canStartCheckout(checkoutAvailable: true), "A fee of exactly $500 must advertise checkout")
+        precondition(!atCapFee.events[0].hasLegacyFee, "A fee of exactly $500 is not a legacy fee")
         TournamentTransport.body = availableBody
         print("PASS: paid checkout guidance requires an eligible tournament and an open event")
         var retainedPayload = payload
@@ -248,6 +261,11 @@ private final class TestLocationManager: CLLocationManager {
         if TournamentCopy.validEntryFee("0.49", locale: Locale(identifier: "en_US")) { roundTwoFailures.append("sub-minimum paid fee admitted") }
         if !TournamentCopy.validEntryFee("0", locale: Locale(identifier: "en_US")) { roundTwoFailures.append("free entry fee refused") }
         if !TournamentCopy.validEntryFee("0.50", locale: Locale(identifier: "en_US")) { roundTwoFailures.append("minimum paid fee refused") }
+        if !TournamentCopy.validEntryFee("500", locale: Locale(identifier: "en_US")) { roundTwoFailures.append("fee at the $500 cap refused") }
+        if TournamentCopy.validEntryFee("500.01", locale: Locale(identifier: "en_US")) { roundTwoFailures.append("fee above the $500 cap admitted") }
+        if TournamentCopy.entryFeeIssue("500.01", locale: Locale(identifier: "en_US")) != "The maximum entry fee is $500." { roundTwoFailures.append("fee cap message differs from the API") }
+        if TournamentCopy.entryFeeIssue("0.49", locale: Locale(identifier: "en_US")) != "A paid entry fee must be at least $0.50 USD." { roundTwoFailures.append("fee minimum message differs from the API") }
+        if TournamentCopy.entryFeeIssue("45", locale: Locale(identifier: "en_US")) != nil { roundTwoFailures.append("valid fee reported an issue") }
         if TournamentEventLimits.players.upperBound != 512 { roundTwoFailures.append("player limit stops below 512") }
         let manager = TestLocationManager()
         let location = TournamentLocation(manager: manager, locationTimeout: .milliseconds(20))

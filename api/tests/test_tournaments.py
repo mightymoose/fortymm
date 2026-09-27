@@ -28,7 +28,7 @@ import pytest_asyncio
 from fastapi import HTTPException
 from httpx import AsyncClient, Response
 from rq import Queue
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
@@ -2708,6 +2708,172 @@ async def test_patch_event_with_an_unstorable_entry_fee_is_422_and_stores_nothin
     assert Decimal(str(row.entry_fee)) == Decimal("45.00")
 
 
+# ----- the paid-collection fee rules (#1807) ------------------------------------------
+#
+# A fee must be $0 or between $0.50 and $500. The $500 cap catches a typo such as
+# ``3000`` for $30.00 before a player pays it. Both rules judge only a new or changed
+# fee: a stored fee that breaks them never blocks an unrelated edit.
+
+MAX_FEE_REFUSAL = "The maximum entry fee is $500."
+
+
+async def test_create_event_above_the_fee_cap_is_refused_on_the_fee(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(entry_fee=500.01),
+    )
+
+    assert response.status_code == 422, response.text
+    error = response.json()["detail"][0]
+    assert error["loc"] == ["body", "entry_fee"]
+    assert MAX_FEE_REFUSAL in error["msg"]
+    count = (
+        await db_session.execute(select(func.count()).select_from(TournamentEvent))
+    ).scalar_one()
+    assert count == 0
+
+
+async def test_patch_event_to_a_fee_above_the_cap_is_refused_on_the_fee(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+
+    response = await patch_event(
+        client, created["id"], event["id"], {"entry_fee": 500.01}
+    )
+
+    assert response.status_code == 422, response.text
+    error = response.json()["detail"][0]
+    assert error["loc"] == ["body", "entry_fee"]
+    assert MAX_FEE_REFUSAL in error["msg"]
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == uuid.UUID(event["id"]))
+        )
+    ).scalar_one()
+    assert Decimal(str(row.entry_fee)) == Decimal("45.00")
+
+
+MIN_FEE_REFUSAL = "A paid entry fee must be at least $0.50 USD."
+
+
+async def test_create_event_below_the_fee_minimum_is_refused_on_the_fee(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+
+    response = await client.post(
+        f"/v1/tournaments/{created['id']}/events",
+        json=_event_payload(entry_fee=0.49),
+    )
+
+    assert response.status_code == 422, response.text
+    error = response.json()["detail"][0]
+    assert error["loc"] == ["body", "entry_fee"]
+    assert MIN_FEE_REFUSAL in error["msg"]
+
+
+async def test_patch_event_to_a_fee_below_the_minimum_is_refused_on_the_fee(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+
+    response = await patch_event(
+        client, created["id"], event["id"], {"entry_fee": 0.49}
+    )
+
+    assert response.status_code == 422, response.text
+    error = response.json()["detail"][0]
+    assert error["loc"] == ["body", "entry_fee"]
+    assert MIN_FEE_REFUSAL in error["msg"]
+    row = (
+        await db_session.execute(
+            select(TournamentEvent).where(TournamentEvent.id == uuid.UUID(event["id"]))
+        )
+    ).scalar_one()
+    assert Decimal(str(row.entry_fee)) == Decimal("45.00")
+
+
+async def test_patch_event_to_a_zero_fee_is_accepted(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+
+    response = await patch_event(client, created["id"], event["id"], {"entry_fee": 0})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["entry_fee"] == 0
+
+
+@pytest.mark.parametrize(
+    "stored_fee",
+    [
+        pytest.param(Decimal("0.30"), id="a-legacy-fee-below-the-minimum"),
+        pytest.param(Decimal("900.00"), id="a-legacy-fee-above-the-cap"),
+    ],
+)
+@pytest.mark.parametrize(
+    "resends_the_fee",
+    [pytest.param(False, id="fee-omitted"), pytest.param(True, id="fee-re-sent")],
+)
+async def test_an_unrelated_edit_keeps_a_stored_fee_the_rules_now_refuse(
+    authed_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+    stored_fee: Decimal,
+    resends_the_fee: bool,
+) -> None:
+    client, _ = authed_client
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    event = (
+        await client.post(
+            f"/v1/tournaments/{created['id']}/events", json=_event_payload()
+        )
+    ).json()
+    # No API path can store this fee any more, so the legacy row is seeded directly.
+    await db_session.execute(
+        update(TournamentEvent)
+        .where(TournamentEvent.id == uuid.UUID(event["id"]))
+        .values(entry_fee=stored_fee)
+    )
+    await db_session.commit()
+    edit: dict[str, Any] = {"name": "Renamed Singles"}
+    if resends_the_fee:
+        edit["entry_fee"] = float(stored_fee)
+
+    response = await patch_event(client, created["id"], event["id"], edit)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["name"] == "Renamed Singles"
+    assert Decimal(str(response.json()["entry_fee"])) == stored_fee
+
+
 @pytest.mark.parametrize(
     "entry_fee",
     [
@@ -2759,30 +2925,30 @@ async def test_create_event_at_the_very_edge_of_what_the_columns_hold_is_stored(
     """The bounds are inclusive, and the values they admit really do land.
 
     The 422s above prove nothing on their own — a schema of ``le=0`` would pass every
-    one of them and refuse every real event. So the extremes the columns *can* hold —
-    a 512-player draw and a fee of 999,999.99 — are created and read back out of the
-    database, which is the half of the boundary that says it is a bound and not a
-    wall.
+    one of them and refuse every real event. So the extremes an event *can* hold —
+    a 512-player draw and a fee of exactly $500, the paid-collection cap (#1807) — are
+    created and read back out of the database, which is the half of the boundary that
+    says it is a bound and not a wall.
     """
     client, _ = authed_client
     created = (await client.post("/v1/tournaments", json=_create_payload())).json()
 
     response = await client.post(
         f"/v1/tournaments/{created['id']}/events",
-        json=_event_payload(max_players=512, entry_fee=999_999.99),
+        json=_event_payload(max_players=512, entry_fee=500.00),
     )
 
     assert response.status_code == 201, response.text
     body = response.json()
     assert body["max_players"] == 512
-    assert body["entry_fee"] == 999_999.99
+    assert body["entry_fee"] == 500.00
     row = (
         await db_session.execute(
             select(TournamentEvent).where(TournamentEvent.id == uuid.UUID(body["id"]))
         )
     ).scalar_one()
     assert row.max_players == 512
-    assert Decimal(str(row.entry_fee)) == Decimal("999999.99")
+    assert Decimal(str(row.entry_fee)) == Decimal("500.00")
 
 
 async def test_delete_event_by_creator_returns_204(

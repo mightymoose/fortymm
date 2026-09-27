@@ -185,6 +185,19 @@ describe('EventsTab', () => {
       expect(eventsTabPage.querySelectButton('Legacy Singles')).toBeNull()
     })
 
+    it('does not offer checkout for a preserved fee above the cap', async () => {
+      eventsTabPage.render({
+        tournament: buildTournament({
+          events: [buildEvent({ name: 'Typo Singles', entryFee: 3000 })],
+        }),
+      })
+
+      expect(
+        await screen.findByTestId('checkout-unavailable-notice'),
+      ).toHaveTextContent('This legacy entry fee must be updated before checkout.')
+      expect(eventsTabPage.querySelectButton('Typo Singles')).toBeNull()
+    })
+
     it('prunes a selected event when refreshed data makes it ineligible', async () => {
       const eventId = '00000000-0000-4000-8000-000000000060'
       const paidEvent = buildEvent({

@@ -37,6 +37,7 @@ from app.rate_limiting import (
     renew_idempotent_budget_marker,
     wait_for_idempotent_budget_marker_change,
 )
+from app.schemas.tournament import MAX_PAID_ENTRY_FEE, MIN_PAID_ENTRY_FEE
 from app.schemas.tournament_checkout import (
     TournamentCheckoutCreate,
     TournamentCheckoutLineRead,
@@ -549,10 +550,18 @@ async def _start_checkout_after_admission(
                 "This event uses the separate free-entry action.",
                 event_id=event.id,
             )
-        if cents < 50:
+        if cents < _price_cents(MIN_PAID_ENTRY_FEE):
             raise CheckoutRefusedError(
                 CheckoutRefusal.price_too_low,
                 "Paid event fees must be at least $0.50 USD.",
+                event_id=event.id,
+            )
+        if cents > _price_cents(MAX_PAID_ENTRY_FEE):
+            # A legacy fee above the cap (#1807) stays stored, and an unrelated edit
+            # keeps it, but nobody pays it until the organizer corrects it.
+            raise CheckoutRefusedError(
+                CheckoutRefusal.price_too_high,
+                "The maximum entry fee is $500.",
                 event_id=event.id,
             )
         if event.id in entered_event_ids:

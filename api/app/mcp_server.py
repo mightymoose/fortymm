@@ -164,6 +164,7 @@ from app.tournament_entries import withdraw_from_event as withdraw_from_event_co
 from app.tournament_errors import (
     DrawTypeFrozenError,
     DrawUnderWayError,
+    EntryFeeOutOfBoundsError,
     EntryNotFoundError,
     EntryRateLimitedError,
     EntryRefusal,
@@ -1108,9 +1109,11 @@ async def list_my_tournaments() -> list[TournamentDetailRead]:
 # ``_map_draw_write_tool_error`` here, and the HTTP side's ``_TOURNAMENT_WRITE_ERRORS``
 # + ``_map_tournament_write_error``. The genuinely verb-specific arms — the strict
 # league 404, the two draw freezes, the entry refusal, the placement freeze — stay
-# inline in their tool, because each is one tool's alone.
+# inline in their tool, because each is one tool's alone. The entry-fee refusal (#1807)
+# is shared by the event-write verbs, and its domain sentence rides through as prose.
 _TOURNAMENT_WRITE_TOOL_ERRORS = (
     DrawActorBusy,
+    EntryFeeOutOfBoundsError,
     EventFormatMembershipError,
     RecordedPlayDeletionError,
     TournamentArchivedError,

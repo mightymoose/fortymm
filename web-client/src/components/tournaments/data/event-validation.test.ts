@@ -2,6 +2,7 @@ import type { z } from 'zod'
 
 import {
   ENTRY_FEE_MAX,
+  entryFeeRuleIssue,
   entryFeeSchema,
   maxPlayersSchema,
   NAME_MAX,
@@ -184,24 +185,21 @@ describe('the entry fee (`EventEntryFee`: required, `ge=0`, whole cents)', () =>
   })
 
   it('refuses a positive fee below the processor minimum', () => {
-    expect(messageFor(entryFeeSchema, 0.49)).toBe(
-      'A paid entry fee must be at least $0.50 USD.',
-    )
-    expect(messageFor(entryFeeSchema, 0.5)).toBeUndefined()
+    expect(entryFeeRuleIssue(0.49)).toBe('A paid entry fee must be at least $0.50 USD.')
+    expect(entryFeeRuleIssue(0.5)).toBeUndefined()
+    expect(entryFeeRuleIssue(0)).toBeUndefined()
   })
 
   it('refuses a negative fee', () => {
     expect(messageFor(entryFeeSchema, -1)).toBe('The entry fee cannot be negative.')
   })
 
-  it('refuses a fee no column could hold — the player limit’s bug, in its sibling', () => {
-    // `entry_fee` is `Numeric(8, 2)`: six digits and two decimals. A fee past that
-    // overflows it and 500s, exactly as `9999999999` did on the `Integer` limit — the
-    // same hole, one field over, found by looking rather than by waiting for QA.
-    expect(messageFor(entryFeeSchema, 9_999_999_999)).toBe(
-      'The entry fee must be 999,999.99 or less.',
-    )
-    expect(messageFor(entryFeeSchema, ENTRY_FEE_MAX)).toBeUndefined()
+  it('refuses a fee above the $500 cap, which also keeps it inside the column', () => {
+    // The cap (#1807) is a typo guard, and it sits far inside `Numeric(8, 2)`, so a fee
+    // that would overflow the column is refused by the same rule.
+    expect(entryFeeRuleIssue(500.01)).toBe('The maximum entry fee is $500.')
+    expect(entryFeeRuleIssue(9_999_999_999)).toBe('The maximum entry fee is $500.')
+    expect(entryFeeRuleIssue(ENTRY_FEE_MAX)).toBeUndefined()
   })
 
   /** The quieter half of the same fault: Postgres does not *refuse* a third decimal on

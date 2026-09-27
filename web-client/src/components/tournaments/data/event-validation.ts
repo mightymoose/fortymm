@@ -18,8 +18,8 @@
 //   | `name`        | `min_length=1, max_length=255`        | required, ≤ 255             |
 //   | `max_players` | `EventMaxPlayers | None`, `gt=0`,     | **optional** — blank is no  |
 //   |               | `le=512`, `default=None`              | cap; when present, 1 … 512  |
-//   | `entry_fee`   | `EventEntryFee`: `ge=0`, `le=999…99`, | required; 0 … 999,999.99,   |
-//   |               | whole cents                           | in whole cents              |
+//   | `entry_fee`   | `EventEntryFee`: `ge=0`, whole cents; | required; 0, or 0.50 … 500, |
+//   |               | a new or changed fee 0.50 … 500       | in whole cents              |
 //   | `qualifiers   | `QualifiersPerGroup`: `ge=1`, `le=1000`,| required and 1 … 1,000 **for|
 //   |  _per_group`  | required on the `rr-then-ko` union arm, | `rr-then-ko` only** — the   |
 //   |               | refused outright on the other three     | pair, not the field         |
@@ -116,10 +116,13 @@ export const PLAYERS_MIN = 1
  * of one. Both layers name the same number on purpose. */
 export const PLAYERS_MAX = 512
 
-/** The ceiling on an entry fee: `entry_fee` is `Numeric(8, 2)` — six digits before the
- * point, two after — so this is the largest fee the column can hold, and one cent more
- * is the same 500 the player limit was (the server's `MAX_ENTRY_FEE`). */
-export const ENTRY_FEE_MAX = 999_999.99
+/** The ceiling on an entry fee (#1807), the server's `MAX_PAID_ENTRY_FEE`. It is a typo
+ * guard: it catches `3000` typed for $30.00 before a player pays it. */
+export const ENTRY_FEE_MAX = 500
+
+/** The floor on a paid entry fee: the smallest positive fee checkout can charge, the
+ * server's `MIN_PAID_ENTRY_FEE`. A fee of `0` is free, not below it. */
+export const ENTRY_FEE_MIN = 0.5
 
 /** A fee is a price, and a price is in whole cents. The column is `Numeric(8, 2)`, and
  * Postgres does **not** refuse a third decimal — it silently *rounds* it, so `45.005` is
@@ -250,20 +253,6 @@ export const entryFeeSchema = z
       ctx.addIssue({ code: 'custom', message: 'The entry fee cannot be negative.' })
       return
     }
-    if (value > 0 && value < 0.5) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'A paid entry fee must be at least $0.50 USD.',
-      })
-      return
-    }
-    if (value > ENTRY_FEE_MAX) {
-      ctx.addIssue({
-        code: 'custom',
-        message: `The entry fee must be ${ENTRY_FEE_MAX.toLocaleString('en-US')} or less.`,
-      })
-      return
-    }
     // Read through the number's own shortest round-trip repr, exactly as the server does
     // (`Decimal(str(value))`), so what is judged is the number the organizer wrote:
     // `45.10` is two places, not the binary tail of 10.1.
@@ -275,6 +264,15 @@ export const entryFeeSchema = z
       })
     }
   })
+
+/** Why a fee breaks the paid-collection rules (#1807), or `undefined` when it keeps
+ * them: $0, or $0.50 to $500. The server's `enforce_entry_fee_rules` judges only a new
+ * or changed fee, and the event form does the same (`event-form`). */
+export function entryFeeRuleIssue(value: number): string | undefined {
+  if (value > 0 && value < ENTRY_FEE_MIN) return 'A paid entry fee must be at least $0.50 USD.'
+  if (value > ENTRY_FEE_MAX) return `The maximum entry fee is $${ENTRY_FEE_MAX}.`
+  return undefined
+}
 
 /** The floor on **K** — the server's `QualifiersPerGroup = Annotated[int, Field(ge=1)]`,
  * stated once there and mirrored once here. Zero advances nobody into the knockout
