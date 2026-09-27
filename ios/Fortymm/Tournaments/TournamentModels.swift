@@ -148,9 +148,12 @@ struct TournamentEventDTO: Decodable, Identifiable {
     let entryFee: Double
     var isCancelled: Bool { lifecycleState == "cancelled" }
     var requiresCheckout: Bool { entryFee > 0 }
+    /// A stored paid fee checkout refuses until the organizer updates it: below $0.50,
+    /// or above the $500 cap (#1807).
+    var hasLegacyFee: Bool { entryFee > 0 && (entryFee < 0.50 || entryFee > TournamentCopy.maxEntryFee) }
     var hasHeldPlaces: Bool { (heldPlaces ?? 0) > 0 }
     func canStartCheckout(checkoutAvailable: Bool) -> Bool {
-        format == "singles" && entryFee >= 0.50 && checkoutAvailable && entryState.state == .open && !isCancelled
+        format == "singles" && requiresCheckout && !hasLegacyFee && checkoutAvailable && entryState.state == .open && !isCancelled
     }
     let slot: Slot
     let entrants: [Entrant]

@@ -116,6 +116,19 @@ private final class TestLocationManager: CLLocationManager {
         TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: legacyFeePayload), encoding: .utf8)!
         let legacyFee = try await service.list()[0]
         precondition(!legacyFee.events[0].canStartCheckout(checkoutAvailable: true), "Preserved subminimum fees must not advertise checkout")
+        precondition(legacyFee.events[0].hasLegacyFee, "Preserved subminimum fees must show the legacy-fee notice")
+        legacyFeeEvent["entry_fee"] = 500.01
+        legacyFeePayload[0]["events"] = [legacyFeeEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: legacyFeePayload), encoding: .utf8)!
+        let overCapFee = try await service.list()[0]
+        precondition(!overCapFee.events[0].canStartCheckout(checkoutAvailable: true), "Preserved fees above the $500 cap must not advertise checkout")
+        precondition(overCapFee.events[0].hasLegacyFee, "Preserved fees above the $500 cap must show the legacy-fee notice")
+        legacyFeeEvent["entry_fee"] = 500
+        legacyFeePayload[0]["events"] = [legacyFeeEvent]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: legacyFeePayload), encoding: .utf8)!
+        let atCapFee = try await service.list()[0]
+        precondition(atCapFee.events[0].canStartCheckout(checkoutAvailable: true), "A fee of exactly $500 must advertise checkout")
+        precondition(!atCapFee.events[0].hasLegacyFee, "A fee of exactly $500 is not a legacy fee")
         TournamentTransport.body = availableBody
         print("PASS: paid checkout guidance requires an eligible tournament and an open event")
         var retainedPayload = payload

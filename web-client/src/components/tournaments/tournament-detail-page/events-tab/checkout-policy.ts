@@ -1,8 +1,7 @@
 import type { Tournament, TournamentEvent } from '../../data/types'
-import { MIN_CHECKOUT_FEE } from '../../data/capacity'
+import { isChargeableFee } from '../../data/capacity'
 
 export const MAX_CHECKOUT_EVENTS = 100
-export { MIN_CHECKOUT_FEE }
 
 export function isCheckoutEventEligible(
   tournament: Tournament,
@@ -15,7 +14,7 @@ export function isCheckoutEventEligible(
     tournament.registrationOpen !== false &&
     event.format === 'singles' &&
     event.lifecycleState !== 'cancelled' &&
-    event.entryFee >= MIN_CHECKOUT_FEE &&
+    isChargeableFee(event.entryFee) &&
     event.entryState.state === 'open' &&
     !event.entrants.some((entrant) => entrant.username === username)
   )
