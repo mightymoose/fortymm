@@ -365,6 +365,11 @@ describe('EventsTab', () => {
         http.get('*/v1/tournaments/:tournamentId/checkouts/:checkoutId', () =>
           HttpResponse.json({ ...heldCheckout, status: 'expired', remaining_seconds: 0 }),
         ),
+        // Review cancels first. The server answers an ended hold with its
+        // expired read.
+        http.delete('*/v1/tournaments/:tournamentId/checkouts/:checkoutId', () =>
+          HttpResponse.json({ ...heldCheckout, status: 'expired', remaining_seconds: 0 }),
+        ),
       )
       eventsTabPage.render({
         tournament: buildTournament({

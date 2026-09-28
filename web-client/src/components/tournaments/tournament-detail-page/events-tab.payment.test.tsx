@@ -525,6 +525,30 @@ describe('EventsTab checkout and payment (#1809)', () => {
       expect(screen.getByRole('button', { name: 'Check out · $75.00' })).toBeInTheDocument()
     })
 
+    it('keeps an ended checkout on screen when its cancel fails, and says so', async () => {
+      const world = mockCheckoutWorld({
+        checkout: buildCheckoutRead({ status: 'expired', payment_state: 'expired' }),
+        status: [buildPaymentRead({ payment_state: 'expired' })],
+        cancelRefusal: { status: 503, body: { detail: 'Unavailable.' } },
+      })
+      const user = userEvent.setup()
+      const url = renderCheckoutTab({ checkoutParam: CHECKOUT_ID })
+
+      const checkout = await panel()
+      await within(checkout).findByRole('heading', { name: 'Your hold ended' })
+      await user.click(within(checkout).getByRole('button', { name: 'Review availability' }))
+
+      await waitFor(() => expect(world.calls.log).toContain('cancel'))
+      expect(
+        await within(checkout).findByText(
+          'We couldn’t release this checkout’s payment. Try again in a moment.',
+        ),
+      ).toBeInTheDocument()
+      // The old payment may still be confirmable, so no replacement starts yet.
+      expect(url.param()).toBe(CHECKOUT_ID)
+      expect(screen.queryByRole('button', { name: /^Check out/ })).toBeNull()
+    })
+
     it('shows the result when another device completes the payment', async () => {
       const world = mockCheckoutWorld({
         current: buildCheckoutRead(),

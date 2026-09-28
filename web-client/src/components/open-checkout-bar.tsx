@@ -7,6 +7,9 @@ import { openCheckoutsQueryOptions, type OpenCheckout } from '@/api/checkouts'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 
+/** How often the bar re-reads while a hold it lists has passed its deadline. */
+const LAPSED_RETRY_MS = 3_000
+
 /** Whole seconds until `expiresAt`, never below zero. */
 function secondsLeft(expiresAt: string, now: number) {
   return Math.max(0, Math.ceil((Date.parse(expiresAt) - now) / 1_000))
@@ -75,16 +78,27 @@ function TournamentLink({
  * change, never a tick every second.
  */
 export function OpenCheckoutBar() {
-  const { data, refetch } = useQuery(openCheckoutsQueryOptions())
+  const { data, refetch } = useQuery({
+    ...openCheckoutsQueryOptions(),
+    // No polling while every hold is in date. Once a countdown has ended,
+    // keep re-reading until the server drops that hold or reports it
+    // checking: the browser clock can run ahead of the server's, and a
+    // re-read can fail. Passive expiry sends no realtime hint.
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some(
+        (checkout) => !isChecking(checkout) && secondsLeft(checkout.expiresAt, Date.now()) === 0,
+      )
+        ? LAPSED_RETRY_MS
+        : false,
+  })
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000)
     return () => window.clearInterval(timer)
   }, [])
 
-  // A hold that reaches zero has ended on the server, or is about to: refetch
-  // once for that deadline. Once, because a server that still lists it (a
-  // payment moved to checking at the last second) must not loop the fetch.
+  // A hold that reaches zero has ended on the server, or is about to: re-read
+  // at once for that deadline. `refetchInterval` above retries after that.
   const refetchedDeadlines = useRef(new Set<string>())
   const lapsed = (data ?? []).filter(
     (checkout) => !isChecking(checkout) && secondsLeft(checkout.expiresAt, now) === 0,

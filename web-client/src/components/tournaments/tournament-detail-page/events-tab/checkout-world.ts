@@ -42,6 +42,8 @@ export function mockCheckoutWorld(initial: {
   checkout?: CheckoutRead | null
   /** Hold every status read this long, to see what shows while it loads. */
   statusDelayMs?: number
+  /** Refuse every DELETE with this reply (e.g. a transient 503). */
+  cancelRefusal?: { status: number; body: unknown }
   created?: Reply<CheckoutRead>
   prepared?: Reply<PaymentPrepared>[]
   status?: Reply<PaymentRead>[]
@@ -87,6 +89,11 @@ export function mockCheckoutWorld(initial: {
     ),
     http.delete('*/v1/tournaments/:tournamentId/checkouts/:checkoutId', () => {
       world.calls.log.push('cancel')
+      if (initial.cancelRefusal) {
+        return HttpResponse.json(initial.cancelRefusal.body as never, {
+          status: initial.cancelRefusal.status,
+        })
+      }
       world.checkout = { ...(world.checkout ?? buildCheckoutRead()), status: 'cancelled' }
       world.current = null
       return HttpResponse.json(world.checkout)

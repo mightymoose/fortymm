@@ -168,4 +168,21 @@ describe('OpenCheckoutBar', () => {
     })
     expect(served.count).toBe(2)
   })
+
+  it('keeps asking while the server still lists a hold the countdown has ended', async () => {
+    // The browser clock can run ahead of the server's, so the first re-read
+    // at zero can still find the hold active.
+    const lapsed = buildOpenCheckoutRead({
+      expires_at: new Date(Date.now() + 1_200).toISOString(),
+    })
+    const served = mockOpenCheckouts([lapsed], [lapsed], [])
+
+    page.render()
+
+    expect(await page.findSummary()).toHaveTextContent(/Spring Open/)
+    await waitFor(() => expect(page.queryBar()).not.toBeInTheDocument(), {
+      timeout: 8_000,
+    })
+    expect(served.count).toBe(3)
+  }, 12_000)
 })

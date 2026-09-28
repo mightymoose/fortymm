@@ -46,6 +46,8 @@ export interface CheckoutPanelProps {
   onReviewAvailability: () => void
   /** A cancel or change is in flight. */
   pending: boolean
+  /** "Review availability" could not cancel the ended checkout. */
+  releaseFailed: boolean
   /** The panel opened from `?checkout=` (a reload or a 3-D Secure return): the
    * status read decides what shows before anything is prepared. */
   resumed: boolean
@@ -66,6 +68,7 @@ export function CheckoutPanel({
   onCancel,
   onReviewAvailability,
   pending,
+  releaseFailed,
   resumed,
   onDone,
 }: CheckoutPanelProps) {
@@ -124,7 +127,14 @@ export function CheckoutPanel({
         <p className="text-sm text-muted-foreground">
           Your places are no longer held. Check what’s still available and check out again.
         </p>
-        <Button onClick={onReviewAvailability}>Review availability</Button>
+        {releaseFailed && (
+          <p role="alert" className="text-sm text-[color:var(--loss)]">
+            We couldn’t release this checkout’s payment. Try again in a moment.
+          </p>
+        )}
+        <Button onClick={onReviewAvailability} disabled={pending}>
+          Review availability
+        </Button>
       </div>
     )
   } else if (prepared.isError && !prepared.isFetching) {

@@ -124,8 +124,10 @@ export const EventsTab = ({
       onCheckoutParamChange?.(panelCheckoutId)
     }
   }, [panelCheckoutId, checkoutParam, onCheckoutParamChange])
+  const [releaseFailed, setReleaseFailed] = useState(false)
   /** Leave the panel. `reselect` ticks those events again on the list. */
   const closePanel = (reselect?: string[]) => {
+    setReleaseFailed(false)
     if (panelCheckoutId) {
       setDismissedCheckoutIds((current) => new Set(current).add(panelCheckoutId))
     }
@@ -220,6 +222,7 @@ export const EventsTab = ({
             }}
             onConfirmStarted={() => onCheckoutParamChange?.(panelCheckout.id)}
             pending={cancelCheckout.isPending}
+            releaseFailed={releaseFailed}
             resumed={checkoutParam === panelCheckout.id}
             onDone={() => closePanel()}
             onCancel={() => {
@@ -247,14 +250,17 @@ export const EventsTab = ({
               // and a late success must refund rather than admit alongside a
               // replacement checkout. The server treats this as a no-op when
               // nothing is open.
-              void cancelCheckout
-                .mutateAsync(panelCheckout.id)
-                .catch(() => undefined)
-                .then(() => {
+              setReleaseFailed(false)
+              void cancelCheckout.mutateAsync(panelCheckout.id).then(
+                () => {
                   closePanel(previous)
                   // Fresh prices and availability for the re-ticked events.
                   refreshCheckout()
-                })
+                },
+                // Stay put: the old payment may still be confirmable, and a
+                // replacement checkout could charge the player twice.
+                () => setReleaseFailed(true),
+              )
             }}
           />
         ) : checkoutById.isError ? (
