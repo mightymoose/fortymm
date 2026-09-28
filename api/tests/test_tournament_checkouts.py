@@ -24,6 +24,8 @@ from app.models import (
     TournamentCheckoutLine,
     TournamentCheckoutStatus,
     TournamentEntry,
+    TournamentEvent,
+    TournamentPayment,
     TournamentStatus,
     User,
 )
@@ -2081,3 +2083,342 @@ async def test_database_enforces_one_active_checkout_and_processor_minimum(
         )
         await db_session.flush()
     await db_session.rollback()
+
+
+# ----- Receipt address PATCH (#1809) ---------------------------------------
+
+
+async def _create_checkout(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+    *,
+    owner: User | None = None,
+) -> tuple[Tournament, TournamentEvent, str]:
+    owner = owner or await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await paid_tournament(db_session, owner=owner)
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    created = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]},
+    )
+    assert created.status_code == 201, created.text
+    return tournament, event, created.json()["id"]
+
+
+async def test_patch_checkout_sets_then_blank_clears_the_receipt_address(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    """#1809: the PATCH sets and clears ``receipt_address``, and a blank
+    (whitespace-only) string is treated as ``null`` rather than refused."""
+    await start_session(api_client, db_session)
+    tournament, _event, checkout_id = await _create_checkout(
+        api_client, db_session, monkeypatch
+    )
+    path = f"/v1/tournaments/{tournament.id}/checkouts/{checkout_id}"
+
+    set_response = await api_client.patch(
+        path, json={"receipt_address": "receipts@example.com"}
+    )
+    assert set_response.status_code == 200, set_response.text
+    assert set_response.json() == {"receipt_address": "receipts@example.com"}
+
+    blank = await api_client.patch(path, json={"receipt_address": "   "})
+    assert blank.status_code == 200
+    assert blank.json() == {"receipt_address": None}
+
+    reset = await api_client.patch(
+        path, json={"receipt_address": "receipts@example.com"}
+    )
+    assert reset.status_code == 200
+    explicit_null = await api_client.patch(path, json={"receipt_address": None})
+    assert explicit_null.status_code == 200
+    assert explicit_null.json() == {"receipt_address": None}
+
+
+async def test_patch_checkout_rejects_an_unknown_field(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    await start_session(api_client, db_session)
+    tournament, _event, checkout_id = await _create_checkout(
+        api_client, db_session, monkeypatch
+    )
+    response = await api_client.patch(
+        f"/v1/tournaments/{tournament.id}/checkouts/{checkout_id}",
+        json={"receipt_address": "x@example.com", "surprise": 1},
+    )
+    assert response.status_code == 422
+
+
+async def test_patch_checkout_refuses_a_non_payer_with_404(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    await start_session(api_client, db_session)
+    tournament, _event, checkout_id = await _create_checkout(
+        api_client, db_session, monkeypatch, owner=owner
+    )
+
+    stranger_client = make_client()
+    async with stranger_client:
+        await start_session(stranger_client, db_session)
+        response = await stranger_client.patch(
+            f"/v1/tournaments/{tournament.id}/checkouts/{checkout_id}",
+            json={"receipt_address": "sneaky@example.com"},
+        )
+    assert response.status_code == 404
+
+
+async def test_patch_checkout_refuses_once_the_payment_has_succeeded(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    """#1809: the receipt address snapshot is already taken at success, so a
+    later PATCH must not move it."""
+    from app.config import get_settings
+    from app.main import app as fastapi_app
+    from app.payments.dependencies import get_payment_provider
+    from app.payments.fake_provider import FakePaymentProvider
+    from app.tournament_payments import prepare_or_resume_payment, reconcile_payment
+
+    payer = await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, event, checkout_id = await _create_checkout(
+        api_client, db_session, monkeypatch, owner=owner
+    )
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_fake")
+    monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", "pk_test_fake")
+    monkeypatch.setenv("STRIPE_ACCOUNT_ID", "acct_fake_platform")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SIGNING_SECRETS", "whsec_test")
+    path = f"/v1/tournaments/{tournament.id}/checkouts/{checkout_id}"
+
+    before = await api_client.patch(
+        path, json={"receipt_address": "before@example.com"}
+    )
+    assert before.status_code == 200
+
+    provider = FakePaymentProvider()
+    fastapi_app.dependency_overrides[get_payment_provider] = lambda: provider
+    try:
+        await prepare_or_resume_payment(
+            db_session,
+            tournament_id=tournament.id,
+            checkout_id=uuid.UUID(checkout_id),
+            actor=payer,
+            provider=provider,
+            settings=get_settings(),
+        )
+        payment = await db_session.scalar(
+            select(TournamentPayment).where(
+                TournamentPayment.checkout_id == uuid.UUID(checkout_id)
+            )
+        )
+        assert payment is not None
+        provider.set_status(
+            payment.provider_payment_intent_id,
+            status="succeeded",
+            amount_received=payment.amount_cents,
+        )
+        await reconcile_payment(
+            db_session,
+            payment_id=payment.id,
+            provider=provider,
+            settings=get_settings(),
+        )
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+    blocked = await api_client.patch(
+        path, json={"receipt_address": "after@example.com"}
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["detail"]["code"] == "payment_already_succeeded"
+    assert await _entered_player_ids_after_patch(db_session, event.id) == [
+        payer.primary_player.id
+    ]
+
+
+# ----- GET /v1/me/checkouts/open (#1809) -----------------------------------
+
+
+async def test_open_checkouts_lists_the_callers_own_active_checkouts_sorted(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    payer = await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    first_tournament, (first_event,) = await paid_tournament(
+        db_session, owner=owner, fees=(Decimal("10.00"),)
+    )
+    second_tournament, (second_event,) = await paid_tournament(
+        db_session, owner=owner, fees=(Decimal("25.00"),)
+    )
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+
+    first = await api_client.post(
+        f"/v1/tournaments/{first_tournament.id}/checkouts",
+        json={"request_id": str(uuid.uuid4()), "event_ids": [str(first_event.id)]},
+    )
+    assert first.status_code == 201
+    # The first checkout's deadline is pushed out so the second (created
+    # after it) expires sooner — proving the list sorts by expiry, not by
+    # creation order.
+    await db_session.execute(
+        text(
+            "UPDATE tournament_checkouts SET expires_at = "
+            "clock_timestamp() + interval '1 hour' WHERE id = :id"
+        ),
+        {"id": first.json()["id"]},
+    )
+    await db_session.commit()
+    second = await api_client.post(
+        f"/v1/tournaments/{second_tournament.id}/checkouts",
+        json={"request_id": str(uuid.uuid4()), "event_ids": [str(second_event.id)]},
+    )
+    assert second.status_code == 201
+
+    response = await api_client.get("/v1/me/checkouts/open")
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["checkout_id"] for item in payload] == [
+        second.json()["id"],
+        first.json()["id"],
+    ]
+    (second_item,) = [
+        item for item in payload if item["checkout_id"] == second.json()["id"]
+    ]
+    assert second_item["tournament_id"] == str(second_tournament.id)
+    assert second_item["tournament_name"] == second_tournament.name
+    assert second_item["payment_state"] == "unavailable"
+    assert second_item["total_cents"] == 2500
+    assert "client_secret" not in second_item
+    assert "expires_at" in second_item
+    assert payer.id is not None  # the caller is the seeded payer
+
+
+async def test_open_checkouts_excludes_another_accounts_checkout(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await paid_tournament(db_session, owner=owner)
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+
+    other_client = make_client()
+    async with other_client:
+        await start_session(other_client, db_session)
+        created = await other_client.post(
+            f"/v1/tournaments/{tournament.id}/checkouts",
+            json={"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]},
+        )
+        assert created.status_code == 201
+
+    await start_session(api_client, db_session)
+    response = await api_client.get("/v1/me/checkouts/open")
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+async def test_open_checkouts_includes_a_checking_payment_past_its_deadline(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch,
+) -> None:
+    """#1809: "open" also means a ``checking`` payment, even after its
+    checkout's own deadline has passed — it stays open until it resolves."""
+    from app.config import get_settings
+    from app.main import app as fastapi_app
+    from app.payments.dependencies import get_payment_provider
+    from app.payments.fake_provider import FakePaymentProvider
+    from app.tournament_payments import prepare_or_resume_payment, reconcile_payment
+
+    payer = await start_session(api_client, db_session)
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await paid_tournament(db_session, owner=owner)
+    monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_fake")
+    monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", "pk_test_fake")
+    monkeypatch.setenv("STRIPE_ACCOUNT_ID", "acct_fake_platform")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SIGNING_SECRETS", "whsec_test")
+    created = await api_client.post(
+        f"/v1/tournaments/{tournament.id}/checkouts",
+        json={"request_id": str(uuid.uuid4()), "event_ids": [str(event.id)]},
+    )
+    checkout_id = created.json()["id"]
+
+    provider = FakePaymentProvider()
+    fastapi_app.dependency_overrides[get_payment_provider] = lambda: provider
+    try:
+        prepared = await prepare_or_resume_payment(
+            db_session,
+            tournament_id=tournament.id,
+            checkout_id=uuid.UUID(checkout_id),
+            actor=payer,
+            provider=provider,
+            settings=get_settings(),
+        )
+        assert prepared.client_secret is not None
+        payment = await db_session.scalar(
+            select(TournamentPayment).where(
+                TournamentPayment.checkout_id == uuid.UUID(checkout_id)
+            )
+        )
+        assert payment is not None
+        provider.set_status(payment.provider_payment_intent_id, status="processing")
+        await reconcile_payment(
+            db_session,
+            payment_id=payment.id,
+            provider=provider,
+            settings=get_settings(),
+        )
+    finally:
+        fastapi_app.dependency_overrides.clear()
+
+    await db_session.execute(
+        text(
+            "UPDATE tournament_checkouts SET "
+            "created_at = clock_timestamp() - interval '601 seconds', "
+            "expires_at = clock_timestamp() - interval '1 second' "
+            "WHERE id = :id"
+        ),
+        {"id": checkout_id},
+    )
+    await db_session.commit()
+
+    response = await api_client.get("/v1/me/checkouts/open")
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["checkout_id"] for item in payload] == [checkout_id]
+    assert payload[0]["payment_state"] == "checking"
+
+
+async def test_open_checkouts_requires_authentication(
+    db_session: AsyncSession,
+) -> None:
+    from tests._helpers import make_raw_client
+
+    async with make_raw_client() as client:
+        response = await client.get("/v1/me/checkouts/open")
+    assert response.status_code == 401
+
+
+async def _entered_player_ids_after_patch(db, event_id):
+    from app.models import TournamentEntry, TournamentEntryStatus
+
+    return list(
+        await db.scalars(
+            select(TournamentEntry.user_id).where(
+                TournamentEntry.event_id == event_id,
+                TournamentEntry.status == TournamentEntryStatus.entered,
+            )
+        )
+    )

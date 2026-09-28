@@ -270,6 +270,71 @@ export class TournamentDetailPage {
     return this.page.getByRole('list', { name: `Entrants in ${eventName}` })
   }
 
+  // ----- paid checkout (#1809, Events tab) -----------------------------------
+
+  /** The paid-event selection toggle on an event's card, before it's ticked
+   * (`EnterEventControl`'s `aria-label` alternates `Select`/`Remove {name}`).
+   *
+   * `exact` matters here in the OTHER direction from `openEventButton`'s: once
+   * ticked, the `CheckoutSummary` card ALSO grows a button named `Remove
+   * {name} from entry summary` — a loose match on `Remove {name}` would
+   * resolve both it and this toggle. */
+  selectPaidEventButton(eventName: string): Locator {
+    return this.page.getByRole('button', { name: `Select ${eventName}`, exact: true })
+  }
+
+  /** The same toggle once selected — the assertion that the tick registered.
+   * `exact` for the reason documented on `selectPaidEventButton`. */
+  selectedPaidEventButton(eventName: string): Locator {
+    return this.page.getByRole('button', { name: `Remove ${eventName}`, exact: true })
+  }
+
+  /** "Check out · $X" — the `CheckoutSummary` card's one action, by the total
+   * it shows (`usd.format`, e.g. `"$20.00"`). Creates the hold and swaps the
+   * event list for `checkoutSection`. */
+  checkoutButton(total: string): Locator {
+    return this.page.getByRole('button', { name: `Check out · ${total}` })
+  }
+
+  /** The checkout panel (`<section aria-label="Checkout">`) that replaces the
+   * event list and summary while a hold is open. An implicit ARIA `region`
+   * (a `<section>` with an accessible name), not a testid — the panel has no
+   * hooks of its own to key off. */
+  get checkoutSection(): Locator {
+    return this.page.getByRole('region', { name: 'Checkout' })
+  }
+
+  /** The payment side's failure notice — "We couldn't start your payment. Your
+   * places are still held." — the state this stack's keyless Stripe config
+   * (`STRIPE_SECRET_KEY` unset) always lands the panel in: the server 409s
+   * `POST …/payment` before it ever asks Stripe for anything. */
+  get paymentUnavailableAlert(): Locator {
+    return this.checkoutSection.getByRole('alert')
+  }
+
+  /** The panel's **Cancel checkout** trigger — opens the confirm, does not
+   * itself cancel anything. Scoped to `checkoutSection`: the confirm dialog
+   * Radix portals to the body carries the SAME accessible name (`ConfirmButton`'s
+   * `confirmLabel` restates `label`), so an unscoped query is a strict-mode
+   * violation the moment the dialog is open. */
+  get cancelCheckoutButton(): Locator {
+    return this.checkoutSection.getByRole('button', { name: 'Cancel checkout' })
+  }
+
+  /** The confirm's own action button — scoped to the portalled `alertdialog`
+   * (Radix's `AlertDialog.Content` role), the other half of the same-name
+   * disambiguation `cancelCheckoutButton` documents. */
+  get confirmCancelCheckoutButton(): Locator {
+    return this.page.getByRole('alertdialog').getByRole('button', { name: 'Cancel checkout' })
+  }
+
+  /** Cancel the open checkout: click the trigger, then answer its confirm — one
+   * act, the same shape as `publishTournament`/`startTournament` above. */
+  async cancelCheckout(): Promise<void> {
+    await this.cancelCheckoutButton.click()
+    await this.confirmCancelCheckoutButton.click()
+  }
+
   // ----- draw (event card) --------------------------------------------------
 
   /** **Generate draw** — cuts an undrawn event's draw, by event name. */

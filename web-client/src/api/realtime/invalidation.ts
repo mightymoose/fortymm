@@ -1,6 +1,11 @@
 import { MATCH_QUERY_KEY_PREFIX } from '../matches'
 import { DASHBOARD_QUERY_KEY } from '../dashboard'
 import { MATCH_DETAILS_QUERY_KEY_PREFIX } from '@/components/matches/match-details/match-details-query'
+import {
+  TOURNAMENT_CHECKOUT_QUERY_KEY_PREFIX,
+  TOURNAMENT_PAYMENT_QUERY_KEY_PREFIX,
+} from '@/components/tournaments/data/api'
+import { OPEN_CHECKOUTS_QUERY_KEY } from '../checkouts'
 import { UNKNOWN_EVENT_KIND, type DecodedEventKind, type RealtimeEvent } from './events'
 
 /**
@@ -35,18 +40,34 @@ const OPEN_MATCH_QUERY_KEYS: readonly QueryKey[] = [
   MATCH_DETAILS_QUERY_KEY_PREFIX,
 ]
 
+/** Every checkout surface: the app-wide open-checkout bar, and each tournament
+ * page's checkout and payment reads (#1809). A checkout hint names no checkout,
+ * so it refreshes them all; only mounted queries actually refetch. */
+const CHECKOUT_QUERY_KEYS: readonly QueryKey[] = [
+  OPEN_CHECKOUTS_QUERY_KEY,
+  TOURNAMENT_CHECKOUT_QUERY_KEY_PREFIX,
+  TOURNAMENT_PAYMENT_QUERY_KEY_PREFIX,
+]
+
 const KEYS_BY_KIND = {
   /** Something the dashboard shows moved. */
   'dashboard.changed': [DASHBOARD_QUERY_KEY, ...OPEN_MATCH_QUERY_KEYS],
+  /** One of the caller's checkouts was created or cancelled, or its payment
+   * state moved. */
+  'checkout.changed': CHECKOUT_QUERY_KEYS,
   /** Sent on connect. Whatever was missed while disconnected is recovered by
    * refetching, which is exactly what an idempotent hint already does — so
    * resync is not a special case, it is the same case. */
-  resync: [DASHBOARD_QUERY_KEY, ...OPEN_MATCH_QUERY_KEYS],
+  resync: [DASHBOARD_QUERY_KEY, ...OPEN_MATCH_QUERY_KEYS, ...CHECKOUT_QUERY_KEYS],
   /** A kind from a newer server. Handled **coarsely**: refresh everything this
    * build knows how to refresh, because a hint we can't read is still evidence
    * that something moved. Doing nothing would silently reintroduce the staleness
    * the stream exists to remove. */
-  [UNKNOWN_EVENT_KIND]: [DASHBOARD_QUERY_KEY, ...OPEN_MATCH_QUERY_KEYS],
+  [UNKNOWN_EVENT_KIND]: [
+    DASHBOARD_QUERY_KEY,
+    ...OPEN_MATCH_QUERY_KEYS,
+    ...CHECKOUT_QUERY_KEYS,
+  ],
 } satisfies Record<DecodedEventKind, readonly QueryKey[]>
 
 /**

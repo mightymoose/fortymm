@@ -32,6 +32,7 @@ import type {
 } from './data/types'
 import { PageHeading } from './page-heading'
 import { StatusBadge } from './status-badge'
+import type { TournamentTab } from './data/tournament-detail-search'
 import { DetailsTab } from './tournament-detail-page/details-tab'
 import { EventEditor } from './tournament-detail-page/event-editor'
 import { EventsTab } from './tournament-detail-page/events-tab'
@@ -87,6 +88,11 @@ export interface TournamentDetailPageProps {
    * not a discard: a save has just persisted the work, and a delete raises a
    * confirmation of its own that must not be stacked on. */
   onCloseEditor: (options?: { force?: boolean }) => void
+  /** The tab `?tab=` names, shown on first render. Absent means Events. */
+  initialTab?: TournamentTab
+  /** `?checkout=`, handed through to the Events tab's checkout panel. */
+  checkoutParam?: string
+  onCheckoutParamChange?: (checkoutId: string | undefined) => void
 }
 
 /**
@@ -179,8 +185,11 @@ export const TournamentDetailPage = ({
   openEditorFor,
   onOpenEditor,
   onCloseEditor,
+  initialTab = 'events',
+  checkoutParam,
+  onCheckoutParamChange,
 }: TournamentDetailPageProps) => {
-  const [tab, setTab] = useState('events')
+  const [tab, setTab] = useState<string>(initialTab)
   const [pendingDelete, setPendingDelete] = useState<TournamentEvent | null>(null)
   const [checkoutDrafts, setCheckoutDrafts] = useState<Record<string, Set<string>>>({})
   const checkoutDraftIds = checkoutDrafts[tournament.id] ?? new Set<string>()
@@ -407,6 +416,8 @@ export const TournamentDetailPage = ({
               onOpenEvent={openEvent}
               onNewEvent={openNewEvent}
               checkoutDraftIds={checkoutDraftIds}
+              checkoutParam={checkoutParam}
+              onCheckoutParamChange={onCheckoutParamChange}
               onCheckoutDraftChange={setCheckoutDraftIds}
             />
           </TabsContent>

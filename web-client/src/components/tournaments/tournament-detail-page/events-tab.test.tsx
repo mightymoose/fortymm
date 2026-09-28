@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { mockEventEnterEndpoint } from '@/mocks/endpoints/tournaments/tournaments.endpoint'
 import { buildTournamentEntrantRead } from '@/mocks/factories/tournaments/tournament.factory'
 import { server } from '@/mocks/server'
-import { render, screen, waitFor } from '@/test/utilities'
+import { render, screen, waitFor, within } from '@/test/utilities'
 
 import {
   buildDrawnEvent,
@@ -314,32 +314,45 @@ describe('EventsTab', () => {
           name: 'Remove U1500 from entry summary',
         }),
       )
-      expect(screen.getByRole('button', { name: 'Hold 1 place' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Check out · $45.00' })).toBeInTheDocument()
       await userEvent.click(await eventsTabPage.findSelectButton('U1500'))
-      await userEvent.click(screen.getByRole('button', { name: 'Hold 2 places' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Check out · $75.00' }))
 
       await waitFor(() => expect(postedEventIds).toEqual([firstId, secondId]))
-      expect(await screen.findByText('Your held places')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Release hold' })).toBeInTheDocument()
+      expect(await eventsTabPage.findCheckoutPanel()).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Cancel checkout' })).toBeInTheDocument()
       expect(screen.getByRole('button', { name: 'Change selection' })).toBeInTheDocument()
       await userEvent.click(screen.getByRole('button', { name: 'Change selection' }))
-      expect(screen.getByText(/releases this checkout hold/i)).toBeInTheDocument()
-      await userEvent.click(screen.getByRole('button', { name: 'Keep hold' }))
-      await userEvent.click(screen.getByRole('button', { name: 'Change selection' }))
-      await userEvent.click(screen.getByRole('button', { name: 'Release and change' }))
+      expect(screen.getByText(/releases the places this checkout holds/i)).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Keep checkout' }))
+      await eventsTabPage.changeSelection()
       await waitFor(() => expect(cancelled).toBe(1))
       expect(await screen.findByText('Entry summary')).toBeInTheDocument()
-      await userEvent.click(screen.getByRole('button', { name: 'Hold 2 places' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Check out · $75.00' }))
       await waitFor(() => expect(createdCheckoutIds).toHaveLength(2))
       expect(createdCheckoutIds[1]).not.toBe(createdCheckoutIds[0])
-      expect(await screen.findByText('Your held places')).toBeInTheDocument()
-      await userEvent.click(screen.getByRole('button', { name: 'Release hold' }))
+      expect(await eventsTabPage.findCheckoutPanel()).toBeInTheDocument()
+      await eventsTabPage.cancelCheckout()
       await waitFor(() => expect(cancelled).toBe(2))
-      expect(screen.queryByText('Your held places')).toBeNull()
+      expect(eventsTabPage.queryCheckoutPanel()).toBeNull()
     })
 
-    it('refreshes checkout and tournament state when the hold expires', async () => {
+    it('says the hold ended, and review returns to the list with the old selection', async () => {
       const eventId = '00000000-0000-4000-8000-000000000031'
+      const heldCheckout = {
+        id: '00000000-0000-4000-8000-000000000032',
+        request_id: '00000000-0000-4000-8000-000000000033',
+        tournament_id: '00000000-0000-4000-8000-000000000020',
+        registration_generation: 0,
+        status: 'active',
+        payment_state: 'unavailable',
+        currency: 'USD',
+        total_cents: 4500,
+        created_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 50).toISOString(),
+        remaining_seconds: 1,
+        lines: [{ event_id: eventId, event_name: 'Open Singles', price_cents: 4500 }],
+      }
       let reads = 0
       server.use(
         http.get('*/v1/tournaments/:tournamentId/checkouts/current', () => {
@@ -347,27 +360,11 @@ describe('EventsTab', () => {
           if (reads > 1) {
             return HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 })
           }
-          return HttpResponse.json({
-            id: '00000000-0000-4000-8000-000000000032',
-            request_id: '00000000-0000-4000-8000-000000000033',
-            tournament_id: '00000000-0000-4000-8000-000000000020',
-            registration_generation: 0,
-            status: 'active',
-            payment_state: 'unavailable',
-            currency: 'USD',
-            total_cents: 4500,
-            created_at: new Date().toISOString(),
-            expires_at: new Date(Date.now() + 50).toISOString(),
-            remaining_seconds: 1,
-            lines: [
-              {
-                event_id: eventId,
-                event_name: 'Open Singles',
-                price_cents: 4500,
-              },
-            ],
-          })
+          return HttpResponse.json(heldCheckout)
         }),
+        http.get('*/v1/tournaments/:tournamentId/checkouts/:checkoutId', () =>
+          HttpResponse.json({ ...heldCheckout, status: 'expired', remaining_seconds: 0 }),
+        ),
       )
       eventsTabPage.render({
         tournament: buildTournament({
@@ -375,15 +372,33 @@ describe('EventsTab', () => {
         }),
       })
 
-      expect(await screen.findByText('Your held places')).toBeInTheDocument()
-      await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2), {
-        timeout: 2_000,
-      })
-      await waitFor(() => expect(screen.queryByText('Your held places')).toBeNull())
+      const panel = await eventsTabPage.findCheckoutPanel()
+      expect(
+        await within(panel).findByRole('heading', { name: 'Your hold ended' }),
+      ).toBeInTheDocument()
+      await userEvent.click(within(panel).getByRole('button', { name: 'Review availability' }))
+
+      expect(eventsTabPage.queryCheckoutPanel()).toBeNull()
+      expect(await screen.findByText('Entry summary')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Check out · $45.00' })).toBeInTheDocument()
     })
 
-    it('polls an active checkout so external invalidation releases the UI', async () => {
+    it('polls an active checkout so an external invalidation shows it ended', async () => {
       const eventId = '00000000-0000-4000-8000-000000000037'
+      const heldCheckout = {
+        id: '00000000-0000-4000-8000-000000000038',
+        request_id: '00000000-0000-4000-8000-000000000039',
+        tournament_id: '00000000-0000-4000-8000-000000000020',
+        registration_generation: 0,
+        status: 'active',
+        payment_state: 'unavailable',
+        currency: 'USD',
+        total_cents: 4500,
+        created_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 600_000).toISOString(),
+        remaining_seconds: 600,
+        lines: [{ event_id: eventId, event_name: 'Open Singles', price_cents: 4500 }],
+      }
       let reads = 0
       server.use(
         http.get('*/v1/tournaments/:tournamentId/checkouts/current', () => {
@@ -391,27 +406,11 @@ describe('EventsTab', () => {
           if (reads > 1) {
             return HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 })
           }
-          return HttpResponse.json({
-            id: '00000000-0000-4000-8000-000000000038',
-            request_id: '00000000-0000-4000-8000-000000000039',
-            tournament_id: '00000000-0000-4000-8000-000000000020',
-            registration_generation: 0,
-            status: 'active',
-            payment_state: 'unavailable',
-            currency: 'USD',
-            total_cents: 4500,
-            created_at: new Date().toISOString(),
-            expires_at: new Date(Date.now() + 600_000).toISOString(),
-            remaining_seconds: 600,
-            lines: [
-              {
-                event_id: eventId,
-                event_name: 'Open Singles',
-                price_cents: 4500,
-              },
-            ],
-          })
+          return HttpResponse.json(heldCheckout)
         }),
+        http.get('*/v1/tournaments/:tournamentId/checkouts/:checkoutId', () =>
+          HttpResponse.json({ ...heldCheckout, status: 'invalidated' }),
+        ),
       )
       eventsTabPage.render({
         tournament: buildTournament({
@@ -419,9 +418,15 @@ describe('EventsTab', () => {
         }),
       })
 
-      expect(await screen.findByText('Your held places')).toBeInTheDocument()
-      await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2), { timeout: 6_500 })
-      await waitFor(() => expect(screen.queryByText('Your held places')).toBeNull())
+      const panel = await eventsTabPage.findCheckoutPanel()
+      expect(
+        await within(panel).findByRole(
+          'heading',
+          { name: 'Your checkout ended' },
+          { timeout: 6_500 },
+        ),
+      ).toBeInTheDocument()
+      expect(reads).toBeGreaterThanOrEqual(2)
     }, 8_000)
 
     it('restores choices when a committed change cancellation loses its response', async () => {
@@ -463,12 +468,11 @@ describe('EventsTab', () => {
         }),
       })
 
-      expect(await screen.findByText('Your held places')).toBeInTheDocument()
-      await userEvent.click(screen.getByRole('button', { name: 'Change selection' }))
-      await userEvent.click(screen.getByRole('button', { name: 'Release and change' }))
+      expect(await eventsTabPage.findCheckoutPanel()).toBeInTheDocument()
+      await eventsTabPage.changeSelection()
 
       expect(await screen.findByText('Entry summary')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Hold 1 place' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Check out · $45.00' })).toBeInTheDocument()
       expect(toast.error).not.toHaveBeenCalled()
     })
 
@@ -517,14 +521,14 @@ describe('EventsTab', () => {
       })
 
       await userEvent.click(await eventsTabPage.findSelectButton('Open Singles'))
-      await userEvent.click(screen.getByRole('button', { name: 'Hold 1 place' }))
-      expect(await screen.findByText('Your held places')).toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Check out · $45.00' }))
+      expect(await eventsTabPage.findCheckoutPanel()).toBeInTheDocument()
       expect(toast.error).not.toHaveBeenCalled()
 
-      await userEvent.click(screen.getByRole('button', { name: 'Release hold' }))
-      await waitFor(() => expect(screen.queryByText('Your held places')).toBeNull())
+      await eventsTabPage.cancelCheckout()
+      await waitFor(() => expect(eventsTabPage.queryCheckoutPanel()).toBeNull())
       expect(screen.queryByText('Entry summary')).toBeNull()
-      expect(screen.queryByRole('button', { name: 'Hold 1 place' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Check out · $45.00' })).toBeNull()
     })
 
     it('hides paid selection toggles while a checkout is active', async () => {
@@ -562,7 +566,7 @@ describe('EventsTab', () => {
         }),
       })
 
-      expect(await screen.findByText('Your held places')).toBeInTheDocument()
+      expect(await eventsTabPage.findCheckoutPanel()).toBeInTheDocument()
       expect(eventsTabPage.querySelectButton('Open Singles')).toBeNull()
       expect(eventsTabPage.querySelectButton('U1500')).toBeNull()
     })
@@ -644,7 +648,7 @@ describe('EventsTab', () => {
       })
 
       await userEvent.click(await eventsTabPage.findSelectButton('Open Singles'))
-      await userEvent.click(screen.getByRole('button', { name: 'Hold 1 place' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Check out · $45.00' }))
 
       await waitFor(() =>
         expect(
@@ -656,7 +660,7 @@ describe('EventsTab', () => {
       expect(eventsTabPage.querySelectButton('U1500')).toBeNull()
 
       releaseRequest()
-      expect(await screen.findByText('Your held places')).toBeInTheDocument()
+      expect(await eventsTabPage.findCheckoutPanel()).toBeInTheDocument()
     })
 
     it('offers none on a doubles event', async () => {

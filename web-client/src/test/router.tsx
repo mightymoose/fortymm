@@ -19,6 +19,9 @@ export interface RenderWithRoutesOptions {
   linkTargets?: string[]
   /** The path the component under test is mounted at. */
   path?: string
+  /** The URL the history starts at, when it needs a query string. Defaults to
+   * `path`. */
+  initialEntry?: string
 }
 
 /**
@@ -36,7 +39,7 @@ export interface RenderWithRoutesOptions {
  */
 export function renderWithRoutes(
   ui: ReactNode,
-  { linkTargets = [], path = '/' }: RenderWithRoutesOptions = {},
+  { linkTargets = [], path = '/', initialEntry = path }: RenderWithRoutesOptions = {},
 ) {
   const rootRoute = createRootRoute()
   const hostRoute = createRoute({
@@ -53,7 +56,7 @@ export function renderWithRoutes(
   )
   const router = createRouter({
     routeTree: rootRoute.addChildren([hostRoute, ...targetRoutes]),
-    history: createMemoryHistory({ initialEntries: [path] }),
+    history: createMemoryHistory({ initialEntries: [initialEntry] }),
   })
 
   return render(<RouterProvider router={router} />)

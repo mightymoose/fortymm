@@ -64,6 +64,7 @@ services:
       # TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID is a UUID, and an empty value
       # fails Settings, so add it under this block by hand when you need it.
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY:-}
       STRIPE_ACCOUNT_ID: ${STRIPE_ACCOUNT_ID:-}
       STRIPE_WEBHOOK_SIGNING_SECRETS: ${STRIPE_WEBHOOK_SIGNING_SECRETS:-}
     depends_on:
@@ -102,6 +103,7 @@ services:
       GEOCODER: fake
       # The payment-cancel job calls Stripe with the same key (#1816).
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_PUBLISHABLE_KEY: ${STRIPE_PUBLISHABLE_KEY:-}
       STRIPE_ACCOUNT_ID: ${STRIPE_ACCOUNT_ID:-}
       STRIPE_WEBHOOK_SIGNING_SECRETS: ${STRIPE_WEBHOOK_SIGNING_SECRETS:-}
     depends_on:

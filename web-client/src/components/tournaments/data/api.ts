@@ -158,6 +158,8 @@ const checkoutSchema = z.object({
     'failed',
     'expired',
     'cancelled',
+    // A quarantined payment (#1809).
+    'needs_review',
   ]),
   currency: z.literal('USD'),
   total_cents: z.number().int().positive(),
@@ -647,7 +649,13 @@ export function eventToUpdateBody(ev: EditedEvent): TournamentEventUpdate {
 
 const TOURNAMENTS_KEY = ['tournaments'] as const
 const tournamentKey = (id: string) => ['tournaments', id] as const
-const checkoutKey = (id: string) => ['tournament-checkout', id] as const
+/** Every tournament's checkout read shares this prefix, so a `checkout.changed`
+ * hint (which names no tournament) can refresh them all. */
+export const TOURNAMENT_CHECKOUT_QUERY_KEY_PREFIX = ['tournament-checkout'] as const
+const checkoutKey = (id: string) =>
+  [...TOURNAMENT_CHECKOUT_QUERY_KEY_PREFIX, id] as const
+/** Every checkout's payment status read shares this prefix, for the same reason. */
+export const TOURNAMENT_PAYMENT_QUERY_KEY_PREFIX = ['tournament-payment'] as const
 
 /** A location + radius to filter the list to tournaments **near a point**. All three
  * are sent together or not at all — the API's `lat`/`lng`/`radius_miles` triple is
@@ -946,6 +954,22 @@ export function useRefreshTournamentCheckout(tournamentId: string) {
   }
 }
 
+const eventRefusalSchema = z.object({
+  detail: z.object({
+    code: z.string(),
+    message: z.string(),
+    event_id: z.string().uuid(),
+  }),
+})
+
+/** The event a checkout refusal names, when the server named one: that event
+ * can no longer be checked out (full, closed, or already entered). */
+export function refusedCheckoutEventId(error: unknown): string | null {
+  if (!(error instanceof ApiError) || error.status !== 409) return null
+  const parsed = eventRefusalSchema.safeParse(error.body)
+  return parsed.success ? parsed.data.detail.event_id : null
+}
+
 export function useStartCheckout(tournamentId: string) {
   const qc = useQueryClient()
   return useMutation({
@@ -970,6 +994,8 @@ export function useStartCheckout(tournamentId: string) {
       await reconcileTournamentCheckout(qc, tournamentId)
       if (
         error &&
+        // A refusal that names an event is the Events tab's to explain inline.
+        refusedCheckoutEventId(error) === null &&
         qc.getQueryData<TournamentCheckout | null>(checkoutKey(tournamentId))
           ?.status !== 'active'
       ) {

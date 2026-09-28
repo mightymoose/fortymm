@@ -9,7 +9,7 @@ from datetime import datetime
 from decimal import Decimal
 from math import ceil
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -27,6 +27,7 @@ from app.models import (
     TournamentEntryStatus,
     TournamentEvent,
     TournamentPayment,
+    TournamentPaymentStatus,
     User,
 )
 from app.rate_limiting import (
@@ -37,12 +38,15 @@ from app.rate_limiting import (
     renew_idempotent_budget_marker,
     wait_for_idempotent_budget_marker_change,
 )
+from app.realtime import EventKind, stage_event
 from app.schemas.tournament import MAX_PAID_ENTRY_FEE, MIN_PAID_ENTRY_FEE
 from app.schemas.tournament_checkout import (
+    OpenTournamentCheckout,
     TournamentCheckoutCreate,
     TournamentCheckoutLineRead,
     TournamentCheckoutPaymentState,
     TournamentCheckoutRead,
+    TournamentCheckoutReceiptAddressRead,
     TournamentCheckoutState,
 )
 from app.tournament_checkout_errors import (
@@ -611,6 +615,10 @@ async def _start_checkout_after_admission(
         ],
     )
     db.add(checkout)
+    # #1809: a freshly created checkout is the other checkout-level event
+    # (with an explicit cancel) the open-checkout bar and the panel refetch
+    # on — this is what first shows the checkout on the bar at all.
+    stage_event(db, locked_actor.id, EventKind.checkout_changed)
     await db.commit()
     await db.refresh(checkout)
     now = await database_now(db)
@@ -716,6 +724,9 @@ async def cancel_checkout(
         await request_cancel_of_open_payments(
             db, TournamentPayment.checkout_id == checkout.id
         )
+        # #1809: an explicit cancel is one of the two checkout-level events
+        # (with creation) the open-checkout bar and the panel refetch on.
+        stage_event(db, checkout.payer_account_id, EventKind.checkout_changed)
         await db.commit()
     elif effective is TournamentCheckoutState.expired:
         checkout.status = TournamentCheckoutStatus.expired
@@ -724,3 +735,120 @@ async def cancel_checkout(
         checkout.status = TournamentCheckoutStatus.invalidated
         await db.commit()
     return await _read(db, checkout, tournament, now)
+
+
+async def update_checkout_receipt_address(
+    db: AsyncSession,
+    *,
+    tournament_id: uuid.UUID,
+    checkout_id: uuid.UUID,
+    actor: User,
+    receipt_address: str | None,
+) -> TournamentCheckoutReceiptAddressRead:
+    """Payer-only set/clear of the checkout's receipt address (#1809).
+
+    Refuses once the linked payment has succeeded: ``_admit`` has already
+    copied the checkout's current value onto the payment as a permanent
+    snapshot, and this PATCH must not let it drift after that. Locking the
+    checkout row serializes this against that snapshot copy, which runs
+    under the same row's lock (``app.tournament_payments._admit``).
+    """
+    checkout = await db.scalar(
+        select(TournamentCheckout)
+        .where(
+            TournamentCheckout.id == checkout_id,
+            TournamentCheckout.tournament_id == tournament_id,
+        )
+        .with_for_update()
+    )
+    # Strictly the payer, never the entrant-player fallback ``read_checkout``/
+    # ``cancel_checkout`` allow: the receipt address is the PAYER's own
+    # detail, and a non-payer gets 404 like every other unauthorized checkout
+    # access (module convention).
+    if checkout is None or checkout.payer_account_id != actor.id:
+        raise CheckoutNotFoundError()
+    payment_status = await db.scalar(
+        select(TournamentPayment.status).where(
+            TournamentPayment.checkout_id == checkout.id
+        )
+    )
+    if payment_status is TournamentPaymentStatus.succeeded:
+        raise CheckoutRefusedError(
+            CheckoutRefusal.payment_already_succeeded,
+            "This checkout's payment has already succeeded.",
+        )
+    checkout.receipt_address = receipt_address
+    await db.commit()
+    return TournamentCheckoutReceiptAddressRead(
+        receipt_address=checkout.receipt_address
+    )
+
+
+async def list_open_checkouts(
+    db: AsyncSession, *, actor: User
+) -> list[OpenTournamentCheckout]:
+    """Every open checkout of the caller (#1809), for the app-wide
+    open-checkout bar. "Open" is a checkout whose effective state is
+    ``active`` (not yet expired by its own deadline), OR whose linked
+    payment's public state is ``checking`` — a checking payment stays open
+    past the deadline until it resolves, so the bar does not drop it mid-charge.
+
+    A DB-only read: unlike the dedicated payment status read, this never
+    calls Stripe. SQL narrows the payer's whole checkout history to the few
+    candidates (a still-``active`` row, or one whose payment is checking);
+    Python then applies the effective-state rules the checkout read uses.
+    """
+    rows = (
+        await db.execute(
+            select(TournamentCheckout, TournamentPayment.status)
+            .outerjoin(
+                TournamentPayment,
+                TournamentPayment.checkout_id == TournamentCheckout.id,
+            )
+            .where(
+                TournamentCheckout.payer_account_id == actor.id,
+                or_(
+                    and_(
+                        TournamentCheckout.status == TournamentCheckoutStatus.active,
+                        TournamentCheckout.completed_at.is_(None),
+                    ),
+                    TournamentPayment.status == TournamentPaymentStatus.checking,
+                ),
+            )
+            .options(selectinload(TournamentCheckout.tournament))
+        )
+    ).all()
+    if not rows:
+        return []
+    now = await database_now(db)
+    payment_statuses: dict[uuid.UUID, TournamentPaymentStatus | None] = {
+        checkout.id: payment_status for checkout, payment_status in rows
+    }
+    checkouts = [checkout for checkout, _ in rows]
+    open_checkouts: list[OpenTournamentCheckout] = []
+    for checkout in checkouts:
+        payment_status = payment_statuses.get(checkout.id)
+        payment_state = (
+            payment_display_state(payment_status)
+            if payment_status is not None
+            else TournamentCheckoutPaymentState.unavailable
+        )
+        effective = checkout_effective_state(checkout, checkout.tournament, now)
+        is_open = (
+            effective is TournamentCheckoutState.active
+            or payment_state is TournamentCheckoutPaymentState.checking
+        )
+        if not is_open:
+            continue
+        open_checkouts.append(
+            OpenTournamentCheckout(
+                checkout_id=checkout.id,
+                tournament_id=checkout.tournament_id,
+                tournament_name=checkout.tournament.name,
+                expires_at=checkout.expires_at,
+                payment_state=payment_state,
+                total_cents=checkout.total_cents,
+            )
+        )
+    open_checkouts.sort(key=lambda item: item.expires_at)
+    return open_checkouts

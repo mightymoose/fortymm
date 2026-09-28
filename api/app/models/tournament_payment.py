@@ -223,6 +223,14 @@ class TournamentPayment(Base):
     cancel_requested_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+    #: A snapshot of the checkout's ``receipt_address``, copied over exactly
+    #: once, at verified success (``_admit``) — never re-derived, never
+    #: touched by a later account-email edit or a later checkout PATCH
+    #: (#1809). ``NULL`` until success, or if no receipt address was ever
+    #: set. Merchant-invisible: only the payer-only prepare/resume response
+    #: ever carries it, and only before success (the checkout is invalidated
+    #: by then, so prepare/resume no longer runs).
+    receipt_address: Mapped[str | None] = mapped_column(String(320))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

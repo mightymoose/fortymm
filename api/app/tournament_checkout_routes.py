@@ -8,8 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db import get_session
 from app.models import User
 from app.schemas.tournament_checkout import (
+    OpenTournamentCheckout,
     TournamentCheckoutCreate,
     TournamentCheckoutRead,
+    TournamentCheckoutReceiptAddressRead,
+    TournamentCheckoutReceiptAddressUpdate,
     TournamentCheckoutRefusalResponse,
 )
 from app.sessions import get_current_user
@@ -21,9 +24,11 @@ from app.tournament_checkout_errors import (
 )
 from app.tournament_checkouts import (
     cancel_checkout,
+    list_open_checkouts,
     read_checkout,
     read_current_checkout,
     start_checkout,
+    update_checkout_receipt_address,
 )
 
 router = APIRouter(prefix="/v1")
@@ -122,6 +127,50 @@ async def get_tournament_checkout(
         )
     except CheckoutNotFoundError as error:
         raise HTTPException(status_code=404, detail="Checkout not found.") from error
+
+
+@router.patch(
+    "/tournaments/{tournament_id}/checkouts/{checkout_id}",
+    response_model=TournamentCheckoutReceiptAddressRead,
+    responses={409: {"model": TournamentCheckoutRefusalResponse}},
+)
+async def update_tournament_checkout(
+    tournament_id: uuid.UUID,
+    checkout_id: uuid.UUID,
+    payload: TournamentCheckoutReceiptAddressUpdate,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> TournamentCheckoutReceiptAddressRead:
+    """Set or clear this checkout's optional receipt address. Payer-only —
+    a non-payer gets 404, matching every other checkout authorization
+    failure. Refused once the payment has succeeded."""
+    try:
+        return await update_checkout_receipt_address(
+            db,
+            tournament_id=tournament_id,
+            checkout_id=checkout_id,
+            actor=current_user,
+            receipt_address=payload.receipt_address,
+        )
+    except CheckoutNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Checkout not found.") from error
+    except CheckoutRefusedError as error:
+        raise _checkout_refusal(error) from error
+
+
+@router.get(
+    "/me/checkouts/open",
+    response_model=list[OpenTournamentCheckout],
+)
+async def get_my_open_tournament_checkouts(
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> list[OpenTournamentCheckout]:
+    """Every open checkout of the caller — an active hold, or a checkout
+    whose payment is still ``checking`` past its own deadline — for the
+    app-wide open-checkout bar. Never carries the Stripe client secret.
+    Sorted by ``expires_at`` ascending."""
+    return await list_open_checkouts(db, actor=current_user)
 
 
 @router.delete(

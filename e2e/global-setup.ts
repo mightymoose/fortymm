@@ -2,12 +2,28 @@ import { spawnSync } from 'node:child_process'
 import { resolve } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 
+import { provisionMerchantAccount } from './support/merchant-checkout'
+
 const repoRoot = resolve(__dirname, '..')
 const baseFile = resolve(repoRoot, 'docker-compose.dev.yml')
 const overrideFile = resolve(repoRoot, 'docker-compose.e2e.yml')
 
 const NGINX_PORT = process.env.E2E_NGINX_PORT ?? '18080'
 const BASE_URL = process.env.E2E_BASE_URL ?? `http://127.0.0.1:${NGINX_PORT}`
+
+/** Poll `GET {BASE_URL}/api/v1/health` until the RQ `solver` worker has
+ * subscribed — see the call sites below for why this, and `waitForReady`
+ * itself, must run twice. */
+async function waitForSolverHealthy() {
+  await waitForReady(`${BASE_URL}/api/v1/health`, 120_000, {
+    sleepMs: 2000,
+    check: async (res) => {
+      if (!res.ok) return false
+      const body = (await res.json()) as { solver?: { healthy?: boolean } }
+      return body.solver?.healthy === true
+    },
+  })
+}
 
 // Docker compose `--wait` only gates on declared healthchecks. The web-client
 // service has none, so the container is considered ready as soon as the
@@ -67,12 +83,67 @@ export default async function globalSetup() {
   // solver.healthy: false. The admin-system-health test hits that state and
   // locks to it (staleTime: 0, retry: false, no refetchInterval). Poll until
   // solver.healthy is true so all workers are definitely up before tests run.
-  await waitForReady(`${BASE_URL}/api/v1/health`, 120_000, {
-    sleepMs: 2000,
-    check: async (res) => {
-      if (!res.ok) return false
-      const body = await res.json() as { solver?: { healthy?: boolean } }
-      return body.solver?.healthy === true
+  await waitForSolverHealthy()
+
+  // Paid tournament checkout (#1809): pin `TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID`
+  // to one real, server-minted Account id so `tests/tournament-checkout.spec.ts`
+  // has a tournament owner `checkout_available` says yes to. See
+  // `support/merchant-checkout.ts` for why this can only happen after boot.
+  //
+  // This whole block runs once here, before any test starts and before
+  // Playwright's `fullyParallel` workers exist — never from a spec. Recreating
+  // `api`/`worker` mid-suite, while unrelated specs hold open `/v1/stream`
+  // connections or are mid-request through nginx, would cut them (nginx's
+  // `upstream` blocks are resolved once, at nginx's own startup — see the
+  // restart below) and flake or fail every test running at that moment, not
+  // just this one. Doing it here instead costs a one-time delay all tests pay
+  // and nobody's isolation.
+  const merchant = await provisionMerchantAccount(BASE_URL)
+
+  const recreate = spawnSync(
+    'docker',
+    [
+      'compose',
+      '-f', baseFile,
+      '-f', overrideFile,
+      'up', '-d', '--no-deps', '--force-recreate', 'api', 'worker',
+    ],
+    {
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID: merchant.accountId,
+      },
     },
-  })
+  )
+  if (recreate.status !== 0) {
+    throw new Error(
+      `docker compose recreate (api, worker) with the merchant account pinned ` +
+        `failed with exit code ${recreate.status}`,
+    )
+  }
+
+  // Recreating api/worker gives them fresh container IPs. nginx resolved the
+  // OLD ones into its static `upstream` blocks (`nginx/dev.conf` — no
+  // `resolver` directive, so it never re-resolves) at ITS OWN startup, and is
+  // otherwise untouched by the recreate above — exactly the persistent-502
+  // trap this file's own header comment and `e2e/CLAUDE.md`'s gotchas
+  // document for a second `up --build` on top of an existing stack. Restart it
+  // now, before any test runs, the same remedy that trap names.
+  const nginxRestart = spawnSync(
+    'docker',
+    ['compose', '-f', baseFile, '-f', overrideFile, 'restart', 'nginx'],
+    { stdio: 'inherit' },
+  )
+  if (nginxRestart.status !== 0) {
+    throw new Error(
+      `docker compose restart nginx (after the merchant-pinned recreate) ` +
+        `failed with exit code ${nginxRestart.status}`,
+    )
+  }
+
+  // api, worker AND nginx are all new processes now — both readiness gates
+  // again, for the exact races they exist to close (see above).
+  await waitForReady(BASE_URL, 120_000)
+  await waitForSolverHealthy()
 }

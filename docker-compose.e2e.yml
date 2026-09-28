@@ -25,9 +25,37 @@ services:
       # The whole e2e suite is one host from the api's point of view, so the
       # per-IP self-entry ceiling must never fire mid-suite (the #1552 lesson).
       TOURNAMENT_ENTRY_IP_PER_HOUR: "1000000"
+      # Paid-checkout merchant pin (#1809). UNSET by default (the bare key with
+      # no inline value below pulls it from THIS shell's environment and, per
+      # the compose spec, drops the variable from the container entirely when
+      # this shell doesn't have it — never passing an empty string). That
+      # distinction is load-bearing: `tournament_payment_merchant_account_id`
+      # is `uuid.UUID | None`, and pydantic-settings refuses an empty-string
+      # value as an invalid UUID (the api crash-loops on boot) where it
+      # happily accepts the variable being absent — the same reason
+      # `docker-compose.dev.yml`'s own comment says to "add it under this
+      # block by hand" rather than default it with `${VAR:-}`.
+      #
+      # It CANNOT be given a real value here at all: `checkout_available`
+      # compares this setting to a tournament owner's Account id, and Account
+      # ids are minted server-side (`uuid.uuid4()`) the first time a guest
+      # session is created — there is no id to write into this file before the
+      # stack has ever run. `global-setup.ts` mints one dedicated "merchant"
+      # guest once the stack is healthy, learns the id the server gave it, and
+      # recreates `api`+`worker` (env-only, no rebuild) with THIS SHELL's copy
+      # of this variable set to that id — then restarts `nginx` so its static
+      # `upstream` block re-resolves the recreated containers' new IPs (see the
+      # note beside that restart in `global-setup.ts`) before any test runs.
+      # Only tournaments that one guest owns ever see checkout offered; every
+      # other test's tournaments are unaffected.
+      TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID:
   worker:
     environment:
       GEOCODER: fake
+      # See the api service's own comment above — the worker builds its own
+      # `Settings` too (e.g. the checkout-expiry sweep), so it needs the same
+      # pin, unset by default the same way.
+      TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID:
   web-client:
     ports: !reset []
   nginx:

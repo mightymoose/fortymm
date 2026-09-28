@@ -37,13 +37,17 @@ CHANNEL_PREFIX = "rt"
 class EventKind(StrEnum):
     """The closed set of hints the stream can carry.
 
-    ``dashboard_changed`` means "refetch ``GET /v1/dashboard``". ``resync`` means
-    the same thing plus "you may have missed events" — it is emitted on connect
-    and after any pub/sub reconnect, which is what lets a client recover without
-    a replay log or a cursor.
+    ``dashboard_changed`` means "refetch ``GET /v1/dashboard``". ``checkout_changed``
+    means "refetch ``GET /v1/me/checkouts/open``" (#1809) — staged to a checkout's
+    payer account when the checkout itself is created or cancelled, or when its
+    linked payment's state changes. ``resync`` means the same thing as every other
+    kind at once, plus "you may have missed events" — it is emitted on connect and
+    after any pub/sub reconnect, which is what lets a client recover without a
+    replay log or a cursor.
     """
 
     dashboard_changed = "dashboard.changed"
+    checkout_changed = "checkout.changed"
     resync = "resync"
 
 

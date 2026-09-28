@@ -3,6 +3,7 @@ import {
   createFileRoute,
   notFound,
   useBlocker,
+  useLocation,
   useNavigate,
   useRouter,
 } from '@tanstack/react-router'
@@ -24,7 +25,10 @@ import {
   useUpdateTableCatalogue,
   useUpdateTournament,
 } from '@/components/tournaments/data/api'
-import { eventEditorSearchSchema } from '@/components/tournaments/data/event-editor-search'
+import {
+  STRIPE_RETURN_PARAMS,
+  tournamentDetailSearchSchema,
+} from '@/components/tournaments/data/tournament-detail-search'
 import { pageTitle } from '@/lib/page-title'
 
 /** The tournament id segment. The API types `tournament_id` as a `uuid.UUID`, so a
@@ -45,8 +49,9 @@ export const Route = createFileRoute('/_app/tournaments/$tournamentId')({
       return { tournamentId: parsed.data }
     },
   },
-  // Which event's editor is open, parsed at the boundary beside the id above.
-  validateSearch: zodValidator(eventEditorSearchSchema),
+  // Which event's editor is open, which tab shows, and which checkout the Events
+  // tab's panel shows, parsed at the boundary beside the id above.
+  validateSearch: zodValidator(tournamentDetailSearchSchema),
   head: () => ({
     meta: [{ title: pageTitle('Tournament') }],
   }),
@@ -70,10 +75,31 @@ export const Route = createFileRoute('/_app/tournaments/$tournamentId')({
 
 function TournamentDetailRoute() {
   const { tournamentId } = Route.useParams()
-  const { event: openEditorFor } = Route.useSearch()
+  const search = Route.useSearch()
+  const { event: openEditorFor } = search
   const navigate = useNavigate()
   const editorNavigate = Route.useNavigate()
   const router = useRouter()
+  const rawSearch = useLocation({ select: (location) => location.search })
+
+  /** A 3-D Secure redirect returns here with Stripe's params appended, the
+   * PaymentIntent's client secret among them. Replace the entry at once, so
+   * neither the address bar nor Back keeps the secret (#1809). The payment's
+   * outcome is read from the server by `?checkout=`, never from these params. */
+  const carriesStripeParams = STRIPE_RETURN_PARAMS.some((key) => key in rawSearch)
+  useEffect(() => {
+    if (!carriesStripeParams) return
+    // Omitted by name: the router merges the raw query into every route's
+    // search, so a validated search alone would carry Stripe's params along.
+    void editorNavigate({
+      search: (current) => {
+        const kept: Record<string, unknown> = { ...current }
+        for (const key of STRIPE_RETURN_PARAMS) delete kept[key]
+        return kept
+      },
+      replace: true,
+    })
+  }, [carriesStripeParams, editorNavigate])
   const { data: tournament, isPending } = useTournament(tournamentId)
   const allTables = useTables(tournamentId)
   const updateTournament = useUpdateTournament()
@@ -188,6 +214,16 @@ function TournamentDetailRoute() {
       openEditorFor={openEditorFor}
       onOpenEditor={openEditor}
       onCloseEditor={closeEditor}
+      initialTab={search.tab}
+      // Which checkout the Events tab's panel shows (#1809). A replace, never a
+      // push: Back leaves the page rather than stepping through checkout states.
+      checkoutParam={search.checkout}
+      onCheckoutParamChange={(checkout) => {
+        void editorNavigate({
+          search: (current) => ({ ...current, checkout }),
+          replace: true,
+        })
+      }}
       // `mutateAsync`, and the rejection is deliberately NOT caught here: the
       // `DetailsTab` awaits it, keeps the draft (and its Save affordance) over a
       // refusal, and reports every failure inline — field-level where the server

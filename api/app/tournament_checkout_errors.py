@@ -17,6 +17,9 @@ class CheckoutRefusal(StrEnum):
     already_entered = "already_entered"
     active_checkout_conflict = "active_checkout_conflict"
     request_payload_conflict = "request_payload_conflict"
+    #: The receipt address PATCH (#1809), refused once the checkout's payment
+    #: has succeeded: the receipt snapshot is already taken and must not move.
+    payment_already_succeeded = "payment_already_succeeded"
 
 
 class CheckoutRefusedError(Exception):

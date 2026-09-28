@@ -52,8 +52,10 @@ from app.payments.provider import (
     ProviderWebhookEvent,
 )
 from app.player_accounts import PlayerAccessDenied
+from app.realtime import EventKind, stage_event
 from app.schemas.tournament_checkout import TournamentCheckoutState
 from app.schemas.tournament_payment import (
+    TournamentPaymentLineRead,
     TournamentPaymentPrepared,
     TournamentPaymentRead,
 )
@@ -75,6 +77,7 @@ from app.tournament_payment_errors import (
 from app.tournament_payment_state import (
     TERMINAL_PAYMENT_STATUSES,
     payment_display_state,
+    payment_line_outcome_state,
 )
 
 
@@ -222,7 +225,15 @@ def _can_view_payment(payment: TournamentPayment, actor: User) -> bool:
     return actor.id in (payment.payer_account_id, payment.payee_fortymm_account_id)
 
 
-def _to_read_schema(payment: TournamentPayment) -> TournamentPaymentRead:
+def _to_read_schema(
+    payment: TournamentPayment, checkout: TournamentCheckout
+) -> TournamentPaymentRead:
+    """``checkout`` supplies each line's ``event_name`` — a payment line only
+    snapshots ``event_id``/``price_cents`` (#1816), never the name, and a
+    payment is always one-to-one with the checkout that created its lines
+    with the SAME event ids (#1809). Line order matches the checkout read's
+    own order: both relationships are ``order_by`` event id."""
+    event_names = {line.event_id: line.event_name for line in checkout.lines}
     return TournamentPaymentRead(
         id=payment.id,
         checkout_id=payment.checkout_id,
@@ -232,6 +243,15 @@ def _to_read_schema(payment: TournamentPayment) -> TournamentPaymentRead:
         amount_cents=payment.amount_cents,
         currency=payment.currency,
         created_at=payment.created_at,
+        lines=[
+            TournamentPaymentLineRead(
+                event_id=line.event_id,
+                event_name=event_names[line.event_id],
+                price_cents=line.price_cents,
+                outcome=payment_line_outcome_state(line.outcome),
+            )
+            for line in payment.lines
+        ],
     )
 
 
@@ -389,6 +409,7 @@ async def _drive_provider_create(
     locked = await _lock_payment(db, payment_id)
     if locked is None:
         raise PaymentNotFoundError()
+    previous_status = locked.status
     client_secret: str | None = None
     match outcome:
         case ProviderIntentCreated(intent=intent):
@@ -445,6 +466,9 @@ async def _drive_provider_create(
                     if locked.status is TournamentPaymentStatus.cancel_requested
                     else TournamentPaymentStatus.failed
                 )
+    if locked.status is not previous_status:
+        # #1809: the open-checkout bar and the panel both refetch on this hint.
+        stage_event(db, locked.payer_account_id, EventKind.checkout_changed)
     await db.commit()
     return locked, client_secret
 
@@ -529,6 +553,9 @@ async def _create_payment_row(
         ],
     )
     db.add(payment)
+    # #1809: the payer's checking/preparing a payment is itself a checkout
+    # state change the open-checkout bar and the checkout panel refetch on.
+    stage_event(db, actor.id, EventKind.checkout_changed)
     try:
         await db.commit()
     except IntegrityError:
@@ -613,7 +640,10 @@ async def prepare_or_resume_payment(
             client_secret = intent.client_secret
 
     return TournamentPaymentPrepared(
-        **_to_read_schema(payment).model_dump(), client_secret=client_secret
+        **_to_read_schema(payment, checkout).model_dump(),
+        client_secret=client_secret,
+        publishable_key=settings.stripe_publishable_key,
+        receipt_address=checkout.receipt_address,
     )
 
 
@@ -654,7 +684,7 @@ async def read_payment_status(
             )
         if payment.provider_payment_intent_id is not None:
             payment, _ = await _reconcile_or_keep(db, payment, provider, settings)
-    return _to_read_schema(payment)
+    return _to_read_schema(payment, checkout)
 
 
 #: The refusals that mean "this line cannot admit", so the paid line becomes a
@@ -712,6 +742,10 @@ async def _admit(db: AsyncSession, payment: TournamentPayment) -> None:
         or checkout.status is TournamentCheckoutStatus.cancelled
         or checkout.registration_generation != tournament.registration_generation
     )
+    if checkout is not None:
+        # #1809: snapshotted exactly once, at verified success. A later
+        # account-email edit, or a later checkout PATCH, never changes it.
+        payment.receipt_address = checkout.receipt_address
     if checkout is not None and checkout.status in (
         TournamentCheckoutStatus.active,
         TournamentCheckoutStatus.expired,
@@ -914,6 +948,7 @@ async def _reconcile(
         # The quarantine retrieval failed, or the PaymentIntent is not on the
         # payee account: no verified captured amount, so no obligation.
         _quarantine(db, payment, amount_received=None)
+        stage_event(db, payment.payer_account_id, EventKind.checkout_changed)
         await db.commit()
         return payment, None
 
@@ -921,6 +956,7 @@ async def _reconcile(
         not event_ok
     ):
         _quarantine(db, payment, amount_received=intent.amount_received)
+        stage_event(db, payment.payer_account_id, EventKind.checkout_changed)
         await db.commit()
         return payment, None
 
@@ -929,6 +965,7 @@ async def _reconcile(
         await db.commit()
         return payment, intent
 
+    previous_status = payment.status
     if intent.status is ProviderIntentStatus.SUCCEEDED:
         await _admit(db, payment)
     else:
@@ -955,6 +992,10 @@ async def _reconcile(
             is not TournamentCheckoutState.active
         ):
             payment.status = TournamentPaymentStatus.expired
+    if payment.status is not previous_status:
+        # #1809: covers reconcile's success/fail/expiry transitions, whether
+        # driven by a status read or by the webhook.
+        stage_event(db, payment.payer_account_id, EventKind.checkout_changed)
     await db.commit()
     return payment, intent
 

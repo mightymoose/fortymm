@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppRouteRouteImport } from './routes/_app/route'
 import { Route as ConfirmEmailRouteImport } from './routes/confirm-email'
 import { Route as DesignSystemRouteImport } from './routes/design-system'
+import { Route as RefundTermsRouteImport } from './routes/refund-terms'
 import { Route as AppAdminRouteImport } from './routes/_app/admin'
 import { Route as AppDashboardRouteImport } from './routes/_app/dashboard'
 import { Route as AppNotificationsRouteImport } from './routes/_app/notifications'
@@ -60,6 +61,11 @@ const ConfirmEmailRoute = ConfirmEmailRouteImport.update({
 const DesignSystemRoute = DesignSystemRouteImport.update({
   id: '/design-system',
   path: '/design-system',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RefundTermsRoute = RefundTermsRouteImport.update({
+  id: '/refund-terms',
+  path: '/refund-terms',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppAdminRoute = AppAdminRouteImport.update({
@@ -217,6 +223,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/confirm-email': typeof ConfirmEmailRoute
   '/design-system': typeof DesignSystemRoute
+  '/refund-terms': typeof RefundTermsRoute
   '/admin': typeof AppAdminRouteWithChildren
   '/dashboard': typeof AppDashboardRoute
   '/notifications': typeof AppNotificationsRouteWithChildren
@@ -251,6 +258,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/confirm-email': typeof ConfirmEmailRoute
   '/design-system': typeof DesignSystemRoute
+  '/refund-terms': typeof RefundTermsRoute
   '/dashboard': typeof AppDashboardRoute
   '/settings': typeof AppSettingsRoute
   '/login/sent': typeof LoginSentRoute
@@ -284,6 +292,7 @@ export interface FileRoutesById {
   '/_app': typeof AppRouteRouteWithChildren
   '/confirm-email': typeof ConfirmEmailRoute
   '/design-system': typeof DesignSystemRoute
+  '/refund-terms': typeof RefundTermsRoute
   '/_app/admin': typeof AppAdminRouteWithChildren
   '/_app/dashboard': typeof AppDashboardRoute
   '/_app/notifications': typeof AppNotificationsRouteWithChildren
@@ -320,6 +329,7 @@ export interface FileRouteTypes {
     | '/'
     | '/confirm-email'
     | '/design-system'
+    | '/refund-terms'
     | '/admin'
     | '/dashboard'
     | '/notifications'
@@ -354,6 +364,7 @@ export interface FileRouteTypes {
     | '/'
     | '/confirm-email'
     | '/design-system'
+    | '/refund-terms'
     | '/dashboard'
     | '/settings'
     | '/login/sent'
@@ -386,6 +397,7 @@ export interface FileRouteTypes {
     | '/_app'
     | '/confirm-email'
     | '/design-system'
+    | '/refund-terms'
     | '/_app/admin'
     | '/_app/dashboard'
     | '/_app/notifications'
@@ -422,6 +434,7 @@ export interface RootRouteChildren {
   AppRouteRoute: typeof AppRouteRouteWithChildren
   ConfirmEmailRoute: typeof ConfirmEmailRoute
   DesignSystemRoute: typeof DesignSystemRoute
+  RefundTermsRoute: typeof RefundTermsRoute
   LoginSentRoute: typeof LoginSentRoute
   LoginVerifyingRoute: typeof LoginVerifyingRoute
   LoginWelcomeRoute: typeof LoginWelcomeRoute
@@ -456,6 +469,13 @@ declare module '@tanstack/react-router' {
       path: '/design-system'
       fullPath: '/design-system'
       preLoaderRoute: typeof DesignSystemRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/refund-terms': {
+      id: '/refund-terms'
+      path: '/refund-terms'
+      fullPath: '/refund-terms'
+      preLoaderRoute: typeof RefundTermsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app/admin': {
@@ -760,6 +780,7 @@ const rootRouteChildren: RootRouteChildren = {
   AppRouteRoute: AppRouteRouteWithChildren,
   ConfirmEmailRoute: ConfirmEmailRoute,
   DesignSystemRoute: DesignSystemRoute,
+  RefundTermsRoute: RefundTermsRoute,
   LoginSentRoute: LoginSentRoute,
   LoginVerifyingRoute: LoginVerifyingRoute,
   LoginWelcomeRoute: LoginWelcomeRoute,

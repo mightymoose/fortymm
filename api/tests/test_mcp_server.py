@@ -5054,7 +5054,9 @@ async def test_enter_event_paid_event_refusal_includes_the_web_checkout_url(
                 "enter_event",
                 {"tournament_id": str(tournament_id), "event_id": str(event_id)},
             )
-    assert f"Pay at {expected_prefix}/tournaments/{tournament_id}" in str(excinfo.value)
+    assert f"Pay at {expected_prefix}/tournaments/{tournament_id}?tab=events" in str(
+        excinfo.value
+    )
 
 
 # ----- withdraw_from_event tool --------------------------------------------

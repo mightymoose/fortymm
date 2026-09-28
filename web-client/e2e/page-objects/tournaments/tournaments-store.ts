@@ -1780,6 +1780,16 @@ export class TournamentsStore {
     if (path === '/v1/notifications/unread-count') {
       return json(route, 200, UNREAD_COUNT)
     }
+    // The app-wide open-checkout bar's own read (#1809) — it mounts in the
+    // shell on every signed-in page, tournament detail included, so like the
+    // bell above it has to be fed here or every spec that asserts
+    // `unhandled` stays empty goes red on a request this suite has nothing to
+    // do with. `[]` — no open checkouts — is the state every one of THESE
+    // specs is in; the checkout flow itself has its own dedicated stub
+    // (`checkout-store.ts`).
+    if (path === '/v1/me/checkouts/open') {
+      return json(route, 200, [])
+    }
     // Same story as the bell above, one layer down: `_app` holds a realtime
     // stream open on every page. Parked rather than left to the 404 below, so
     // the client stands down instead of reconnect-looping and filling
