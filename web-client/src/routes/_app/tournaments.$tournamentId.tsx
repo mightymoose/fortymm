@@ -214,7 +214,11 @@ function TournamentDetailRoute() {
       openEditorFor={openEditorFor}
       onOpenEditor={openEditor}
       onCloseEditor={closeEditor}
-      initialTab={search.tab}
+      tab={search.tab ?? 'events'}
+      // A replace, like the checkout param: Back leaves the page, not the tab.
+      onTabChange={(tab) => {
+        void editorNavigate({ search: (current) => ({ ...current, tab }), replace: true })
+      }}
       // Which checkout the Events tab's panel shows (#1809). A replace, never a
       // push: Back leaves the page rather than stepping through checkout states.
       checkoutParam={search.checkout}

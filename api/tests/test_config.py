@@ -330,6 +330,40 @@ def test_publishable_key_mode_mismatch_refuses_to_boot(
         get_settings()
 
 
+@pytest.mark.parametrize(
+    "publishable_key",
+    ["pkey_test_abc123", "sk_test_abc123", "pk_abc123"],
+    ids=["typo-prefix", "secret-key-pasted", "no-mode"],
+)
+def test_a_malformed_publishable_key_refuses_to_boot(
+    monkeypatch: pytest.MonkeyPatch, publishable_key: str
+) -> None:
+    """#1809: the web client parses the key as ``pk_test_…`` or ``pk_live_…``.
+    Any other non-empty value would make payments look configured while every
+    prepared payment is unusable, so the app refuses to start."""
+    monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", publishable_key)
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_abc123")
+    with pytest.raises(ValidationError):
+        get_settings()
+
+
+def test_the_publishable_key_is_trimmed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", "  pk_test_abc123\n")
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_abc123")
+    assert get_settings().stripe_publishable_key == "pk_test_abc123"
+
+
+def test_a_blank_publishable_key_leaves_payments_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Whitespace is an unset key, never a configured one."""
+    monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", "   ")
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_abc123")
+    settings = get_settings()
+    assert settings.stripe_publishable_key == ""
+    assert settings.card_payments_configured is False
+
+
 def test_matching_live_publishable_and_secret_keys_boot_in_production(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -105,7 +105,10 @@ export function CheckoutPanel({
     paymentArea = <PaymentResult payment={payment} onDone={onDone} />
   } else if (checking) {
     paymentArea = <PaymentChecking />
-  } else if (statusEnabled && status.isPending) {
+  } else if (statusEnabled && status.isPending && !preparedPayment?.clientSecret) {
+    // Only before there is a card form. After a confirm, the form stays
+    // mounted while the status re-reads, so the player's card details and
+    // Stripe's own inline messages survive a retryable decline.
     paymentArea = <p role="status">Checking your checkout…</p>
   } else if (!active) {
     paymentArea = (
@@ -130,6 +133,19 @@ export function CheckoutPanel({
         </Button>
       </div>
     )
+  } else if (
+    preparedPayment &&
+    !preparedPayment.clientSecret &&
+    (preparedPayment.state === 'failed' ||
+      preparedPayment.state === 'expired' ||
+      preparedPayment.state === 'cancelled')
+  ) {
+    // Terminal: asking again would get the same answer.
+    paymentArea = (
+      <p role="alert" className="text-sm">
+        This payment couldn’t be set up. Cancel this checkout and check out again.
+      </p>
+    )
   } else if (!preparedPayment?.clientSecret) {
     paymentArea = <p role="status">Preparing payment…</p>
   } else {
@@ -142,7 +158,8 @@ export function CheckoutPanel({
         defaultReceiptAddress={preparedPayment.receiptAddress ?? accountEmail}
         receiptOptional={accountEmail === ''}
         lastErrorCode={status.data?.lastErrorCode ?? null}
-        declined={declined}
+        // Wait for the server's safe code rather than flash a guessed message.
+        declined={declined && !status.isFetching}
         saveReceiptAddress={(address) => saveReceipt.mutateAsync(address)}
         onConfirmStarted={() => {
           setDeclined(false)

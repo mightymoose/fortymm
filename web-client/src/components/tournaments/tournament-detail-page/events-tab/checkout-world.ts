@@ -1,4 +1,4 @@
-import { http, HttpResponse } from 'msw'
+import { delay, http, HttpResponse } from 'msw'
 
 import {
   buildCheckoutRead,
@@ -38,7 +38,10 @@ const next = <T>(queue: T[], served: number) =>
  */
 export function mockCheckoutWorld(initial: {
   current?: CheckoutRead | null
-  checkout?: CheckoutRead
+  /** `null` makes the by-id read a 404: a checkout that is gone, or not yours. */
+  checkout?: CheckoutRead | null
+  /** Hold every status read this long, to see what shows while it loads. */
+  statusDelayMs?: number
   created?: Reply<CheckoutRead>
   prepared?: Reply<PaymentPrepared>[]
   status?: Reply<PaymentRead>[]
@@ -46,7 +49,7 @@ export function mockCheckoutWorld(initial: {
 } = {}) {
   const world = {
     current: initial.current ?? null,
-    checkout: initial.checkout ?? buildCheckoutRead(),
+    checkout: initial.checkout === undefined ? buildCheckoutRead() : initial.checkout,
     created: initial.created ?? buildCheckoutRead(),
     prepared: initial.prepared ?? [buildPaymentPrepared()],
     status: initial.status ?? [buildPaymentRead()],
@@ -78,11 +81,13 @@ export function mockCheckoutWorld(initial: {
       return respond(world.created, 201)
     }),
     http.get('*/v1/tournaments/:tournamentId/checkouts/:checkoutId', () =>
-      HttpResponse.json(world.checkout),
+      world.checkout
+        ? HttpResponse.json(world.checkout)
+        : HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 }),
     ),
     http.delete('*/v1/tournaments/:tournamentId/checkouts/:checkoutId', () => {
       world.calls.log.push('cancel')
-      world.checkout = { ...world.checkout, status: 'cancelled' }
+      world.checkout = { ...(world.checkout ?? buildCheckoutRead()), status: 'cancelled' }
       world.current = null
       return HttpResponse.json(world.checkout)
     }),
@@ -106,7 +111,8 @@ export function mockCheckoutWorld(initial: {
     ),
     http.get(
       '*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment',
-      () => {
+      async () => {
+        if (initial.statusDelayMs) await delay(initial.statusDelayMs)
         world.calls.log.push('status')
         const reply = next(world.status, world.calls.status)
         world.calls.status += 1

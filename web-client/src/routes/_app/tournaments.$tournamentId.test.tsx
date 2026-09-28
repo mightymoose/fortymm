@@ -860,6 +860,30 @@ describe('tournament detail route — the Stripe return URL (#1809)', () => {
     expect(await screen.findByRole('dialog')).toBeInTheDocument()
   })
 
+  it('keeps the selected tab in the URL, in both directions', async () => {
+    mockTournament()
+    const user = userEvent.setup()
+
+    const { router } = renderRoute(`/tournaments/${UNKNOWN_ID}`)
+
+    await user.click(await screen.findByRole('tab', { name: 'Details' }))
+    await waitFor(() => expect(router.state.location.search).toEqual({ tab: 'details' }))
+    // A tab change replaces the entry: Back leaves the page, not the tab.
+    expect(router.history.length).toBe(1)
+
+    // A link to the Events tab (the open-checkout bar's) switches the page back.
+    await act(() =>
+      router.navigate({
+        to: '/tournaments/$tournamentId',
+        params: { tournamentId: UNKNOWN_ID },
+        search: { tab: 'events' },
+      }),
+    )
+    expect(
+      await screen.findByRole('tab', { name: /Events/, selected: true }),
+    ).toBeInTheDocument()
+  })
+
   it('opens the tab `?tab=` names', async () => {
     mockTournament()
 

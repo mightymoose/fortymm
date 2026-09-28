@@ -52,7 +52,10 @@ function TournamentLink({
     <Link
       to="/tournaments/$tournamentId"
       params={{ tournamentId: checkout.tournamentId }}
-      search={{ tab: 'events' }}
+      // The checkout id rides along: once a hold passes its deadline the
+      // Events tab no longer finds it as "current", and a payment still being
+      // checked must stay reachable.
+      search={{ tab: 'events', checkout: checkout.checkoutId }}
       className="font-medium text-primary underline-offset-4 hover:underline focus-visible:underline"
     >
       {children}

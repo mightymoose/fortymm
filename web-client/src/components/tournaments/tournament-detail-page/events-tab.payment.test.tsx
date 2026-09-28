@@ -163,6 +163,88 @@ describe('EventsTab checkout and payment (#1809)', () => {
     expect(world.calls.prepare).toBe(2)
   })
 
+  it.each(['failed', 'expired', 'cancelled'] as const)(
+    'says a %s payment could not be set up, instead of preparing forever',
+    async (state) => {
+      mockCheckoutWorld({
+        current: buildCheckoutRead(),
+        prepared: [buildPaymentPrepared({ payment_state: state, client_secret: null })],
+      })
+      renderCheckoutTab()
+
+      const checkout = await panel()
+      expect(await within(checkout).findByRole('alert')).toHaveTextContent(
+        'This payment couldn’t be set up. Cancel this checkout and check out again.',
+      )
+      expect(within(checkout).queryByText('Preparing payment…')).toBeNull()
+      expect(within(checkout).getByRole('button', { name: 'Cancel checkout' })).toBeInTheDocument()
+    },
+  )
+
+  it('lets the player dismiss a payment under review while its checkout is still active', async () => {
+    mockCheckoutWorld({
+      // A quarantine leaves the checkout itself active.
+      current: buildCheckoutRead(),
+      prepared: [
+        buildPaymentPrepared({
+          payment_state: 'needs_review',
+          client_secret: null,
+          lines: paymentLines('refund_pending'),
+        }),
+      ],
+    })
+    const user = userEvent.setup()
+    renderCheckoutTab()
+
+    const checkout = await panel()
+    await within(checkout).findByRole('heading', { name: 'Your payment needs review' })
+    await user.click(within(checkout).getByRole('button', { name: 'Done' }))
+
+    expect(screen.queryByRole('region', { name: 'Checkout' })).toBeNull()
+    // Not re-pinned by the next poll of the still-active checkout either.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 5_500)))
+    expect(screen.queryByRole('region', { name: 'Checkout' })).toBeNull()
+  }, 10_000)
+
+  it('keeps the same card form mounted while it re-reads the status after a decline', async () => {
+    mockCheckoutWorld({
+      current: buildCheckoutRead(),
+      status: [buildPaymentRead({ payment_state: 'ready', last_error_code: 'incorrect_cvc' })],
+      statusDelayMs: 300,
+    })
+    stripeDouble.confirmPayment.mockResolvedValue({
+      error: { type: 'card_error', code: 'incorrect_cvc', message: 'raw' },
+    })
+    const user = userEvent.setup()
+    renderCheckoutTab()
+
+    const checkout = await panel()
+    const cardForm = await within(checkout).findByTestId('stripe-payment-element')
+    await user.click(within(checkout).getByRole('button', { name: 'Pay $75.00' }))
+    await act(() => new Promise((resolve) => setTimeout(resolve, 100)))
+
+    // Mid-read: the player's card details are still where they typed them,
+    // and no guessed decline message flashes before the server's code lands.
+    expect(cardForm).toBeInTheDocument()
+    expect(within(checkout).queryByText(/couldn’t be charged/)).toBeNull()
+    expect(
+      await within(checkout).findByText('The security code is incorrect. Check it and try again.'),
+    ).toBeInTheDocument()
+    expect(within(checkout).getByTestId('stripe-payment-element')).toBe(cardForm)
+  })
+
+  it('offers a way back when `?checkout=` names no checkout of yours', async () => {
+    mockCheckoutWorld({ checkout: null })
+    const user = userEvent.setup()
+    const url = renderCheckoutTab({ checkoutParam: CHECKOUT_ID })
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('We couldn’t find that checkout.')
+    await user.click(screen.getByRole('button', { name: 'Back to events' }))
+
+    expect(url.param()).toBeUndefined()
+    expect(await eventsTabPage.findSelectButton('Open Singles')).toBeInTheDocument()
+  })
+
   it('warns that a successful charge is refunded when cancelling a payment under check', async () => {
     mockCheckoutWorld({
       current: buildCheckoutRead({ payment_state: 'checking' }),

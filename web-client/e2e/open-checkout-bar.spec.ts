@@ -114,7 +114,10 @@ test.describe('Open-checkout bar', () => {
 
     await bar(page).getByRole('link', { name: 'Resume' }).click()
     await expect(page).toHaveURL(
-      new RegExp(`/tournaments/${checkout.tournament_id}\\?tab=events$`),
+      // The checkout id rides along, so a hold past its deadline stays reachable.
+      new RegExp(
+        `/tournaments/${checkout.tournament_id}\\?tab=events&checkout=${checkout.checkout_id}$`,
+      ),
     )
   })
 

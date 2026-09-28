@@ -25,12 +25,16 @@ describe('OpenCheckoutBar', () => {
     const summary = await page.findSummary()
     expect(summary).toHaveTextContent(/^Checkout open · Spring Open · 04:(30|29) left$/)
     const resume = within(await page.findBar()).getByRole('link', { name: /Resume/ })
-    expect(resume).toHaveAttribute('href', `/tournaments/${TOURNAMENT_ID}?tab=events`)
+    expect(resume).toHaveAttribute(
+      'href',
+      `/tournaments/${TOURNAMENT_ID}?tab=events&checkout=${mockUuid('open-checkout')}`,
+    )
   })
 
   it('shows a payment under check with no countdown, and a way to view it', async () => {
     mockOpenCheckouts([
       buildOpenCheckoutRead({
+        checkout_id: mockUuid('bar-checking-past-deadline'),
         tournament_id: TOURNAMENT_ID,
         tournament_name: 'Spring Open',
         // Past its deadline: a checking payment stays open until it resolves.
@@ -45,7 +49,12 @@ describe('OpenCheckoutBar', () => {
       /^Checking your payment · Spring Open$/,
     )
     const view = within(await page.findBar()).getByRole('link', { name: /View/ })
-    expect(view).toHaveAttribute('href', `/tournaments/${TOURNAMENT_ID}?tab=events`)
+    // The checkout id rides along: past its deadline, the Events tab would not
+    // otherwise find this checkout, and the player could not watch the payment.
+    expect(view).toHaveAttribute(
+      'href',
+      `/tournaments/${TOURNAMENT_ID}?tab=events&checkout=${mockUuid('bar-checking-past-deadline')}`,
+    )
   })
 
   it('leads with the nearest deadline and lists the rest behind “+N more”', async () => {
@@ -84,9 +93,12 @@ describe('OpenCheckoutBar', () => {
     const list = screen.getByRole('list', { name: 'All open checkouts' })
     const links = within(list).getAllByRole('link')
     expect(links.map((link) => [link.textContent, link.getAttribute('href')])).toEqual([
-      ['Spring Open', `/tournaments/${TOURNAMENT_ID}?tab=events`],
-      ['Winter Cup', `/tournaments/${mockUuid('bar-winter-cup')}?tab=events`],
-      ['Autumn Classic', `/tournaments/${mockUuid('bar-autumn-classic')}?tab=events`],
+      ['Spring Open', `/tournaments/${TOURNAMENT_ID}?tab=events&checkout=${mockUuid('bar-sooner')}`],
+      ['Winter Cup', `/tournaments/${mockUuid('bar-winter-cup')}?tab=events&checkout=${mockUuid('bar-later')}`],
+      [
+        'Autumn Classic',
+        `/tournaments/${mockUuid('bar-autumn-classic')}?tab=events&checkout=${mockUuid('bar-checking')}`,
+      ],
     ])
   })
 

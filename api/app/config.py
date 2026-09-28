@@ -7,12 +7,13 @@ ad hoc ``os.environ.get(...)`` call site scattered through the codebase (see
 are left as-is.
 """
 
+import re
 import uuid
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -241,6 +242,21 @@ class Settings(BaseSettings):
     #: unconfigured, exactly like an empty :attr:`stripe_secret_key`: the
     #: client cannot confirm a PaymentIntent it has no publishable key for.
     stripe_publishable_key: str = ""
+
+    @field_validator("stripe_publishable_key")
+    @classmethod
+    def _parse_publishable_key(cls, value: str) -> str:
+        """Trim the key, and refuse anything that is not a Stripe publishable
+        key (#1809). The web client parses ``pk_test_…``/``pk_live_…``, so any
+        other non-empty value would make payments look configured while every
+        prepared payment is unusable."""
+        key = value.strip()
+        if key and re.fullmatch(r"pk_(test|live)_\S+", key) is None:
+            raise ValueError(
+                "STRIPE_PUBLISHABLE_KEY must be a Stripe publishable key "
+                "('pk_test_...' or 'pk_live_...'), or empty."
+            )
+        return key
 
     #: The Stripe ``acct_…`` id that owns :attr:`stripe_secret_key`, verified at
     #: startup against the account Stripe reports for that key (see

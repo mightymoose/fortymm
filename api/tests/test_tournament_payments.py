@@ -1594,6 +1594,51 @@ async def test_late_success_after_the_player_cancelled_refunds_and_admits_nobody
     assert checkout_read.status is TournamentCheckoutState.cancelled
 
 
+async def test_cancel_past_the_deadline_is_authoritative_while_the_payment_is_open(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, fake_payments_queue
+) -> None:
+    """#1809: the panel offers "Cancel checkout" while a payment is checking,
+    and promises a refund if the charge still succeeds. A hold can pass its
+    deadline while the payment is checking. The cancel must still cancel the
+    checkout and its PaymentIntent, not merely record the expiry, or a late
+    success would admit the player and keep the charge."""
+    provider = FakePaymentProvider()
+    _, payer, tournament, event, checkout_id, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    provider.set_status(payment.provider_payment_intent_id, status="processing")
+    checking = await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
+    )
+    assert checking is not None
+    assert checking.status is TournamentPaymentStatus.checking
+    await db_session.execute(
+        update(TournamentCheckout)
+        .where(TournamentCheckout.id == checkout_id)
+        .values(
+            created_at=datetime.now(UTC) - timedelta(hours=1),
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        )
+    )
+    await db_session.commit()
+
+    cancelled = await cancel_checkout(
+        db_session, tournament_id=tournament.id, checkout_id=checkout_id, actor=payer
+    )
+
+    assert cancelled.status is TournamentCheckoutState.cancelled
+    assert [job.args for job in fake_payments_queue.jobs] == [(str(payment.id),)]
+    provider.set_status(
+        payment.provider_payment_intent_id, status="succeeded", amount_received=2000
+    )
+    reconciled = await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
+    )
+    assert reconciled is not None
+    assert reconciled.lines[0].outcome is TournamentPaymentLineOutcome.refund_due
+    assert await _entered_player_ids(db_session, event.id) == []
+
+
 async def test_late_success_after_registration_closed_and_reopened_refunds(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:

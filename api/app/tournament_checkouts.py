@@ -65,7 +65,10 @@ from app.tournament_eligibility import (
     evaluate_rating_eligibility,
     event_is_full,
 )
-from app.tournament_payment_state import payment_display_state
+from app.tournament_payment_state import (
+    TERMINAL_PAYMENT_STATUSES,
+    payment_display_state,
+)
 from app.tournament_queries import (
     active_entry_counts_by_event,
     entrant_rating,
@@ -714,7 +717,27 @@ async def cancel_checkout(
         raise CheckoutNotFoundError()
     now = await database_now(db)
     effective = checkout_effective_state(checkout, tournament, now)
-    if effective is TournamentCheckoutState.active:
+    # #1809: a hold can pass its deadline while its payment is still open
+    # (checking). The panel still offers the cancel, and promises a refund if
+    # the charge succeeds. Recording a bare expiry would let that late success
+    # admit the player, so the cancel stays authoritative until the payment
+    # reaches a terminal state.
+    cancels_open_payment = (
+        effective is TournamentCheckoutState.expired
+        and await db.scalar(
+            select(TournamentPayment.id).where(
+                TournamentPayment.checkout_id == checkout.id,
+                TournamentPayment.status.not_in(
+                    (
+                        *TERMINAL_PAYMENT_STATUSES,
+                        TournamentPaymentStatus.cancel_requested,
+                    )
+                ),
+            )
+        )
+        is not None
+    )
+    if effective is TournamentCheckoutState.active or cancels_open_payment:
         checkout.status = TournamentCheckoutStatus.cancelled
         checkout.cancelled_at = now
         # #1816: the browser may still hold the open payment's client secret.

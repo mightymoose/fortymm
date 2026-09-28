@@ -95,12 +95,22 @@ export const EventsTab = ({
   // player leaves it, so a hold that ends or a payment that completes stays on
   // screen instead of vanishing with the "current checkout" read.
   const [pinnedCheckoutId, setPinnedCheckoutId] = useState<string | undefined>()
-  if (activeCheckoutId && activeCheckoutId !== pinnedCheckoutId) {
+  // Checkouts the player has left with "Done" or "Back to events". A payment
+  // under review leaves its checkout active, and the panel must not pin it
+  // straight back.
+  const [dismissedCheckoutIds, setDismissedCheckoutIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  )
+  const liveCheckoutId =
+    activeCheckoutId && !dismissedCheckoutIds.has(activeCheckoutId)
+      ? activeCheckoutId
+      : undefined
+  if (liveCheckoutId && liveCheckoutId !== pinnedCheckoutId) {
     // Adjusting state to a new active checkout during render, React's pattern
     // for deriving state from changed input without an extra effect pass.
-    setPinnedCheckoutId(activeCheckoutId)
+    setPinnedCheckoutId(liveCheckoutId)
   }
-  const panelCheckoutId = checkoutParam ?? pinnedCheckoutId ?? activeCheckoutId
+  const panelCheckoutId = checkoutParam ?? pinnedCheckoutId ?? liveCheckoutId
   const checkoutById = useCheckoutById(
     tournament.id,
     panelCheckoutId !== undefined && panelCheckoutId !== activeCheckoutId
@@ -109,6 +119,9 @@ export const EventsTab = ({
   )
   /** Leave the panel. `reselect` ticks those events again on the list. */
   const closePanel = (reselect?: string[]) => {
+    if (panelCheckoutId) {
+      setDismissedCheckoutIds((current) => new Set(current).add(panelCheckoutId))
+    }
     setPinnedCheckoutId(undefined)
     onCheckoutParamChange?.(undefined)
     if (reselect) setSelectedIds(new Set(reselect))
@@ -227,6 +240,15 @@ export const EventsTab = ({
               refreshCheckout()
             }}
           />
+        ) : checkoutById.isError ? (
+          <Alert variant="destructive" className="mb-5">
+            <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+              <span>We couldn’t find that checkout.</span>
+              <Button variant="outline" size="sm" onClick={() => closePanel()}>
+                Back to events
+              </Button>
+            </AlertDescription>
+          </Alert>
         ) : (
           <p role="status" className="py-8 text-center text-muted-foreground">
             Loading your checkout…
