@@ -4,6 +4,7 @@ import { MATCH_DETAILS_QUERY_KEY_PREFIX } from '@/components/matches/match-detai
 import {
   TOURNAMENT_CHECKOUT_QUERY_KEY_PREFIX,
   TOURNAMENT_PAYMENT_QUERY_KEY_PREFIX,
+  TOURNAMENTS_QUERY_KEY_PREFIX,
 } from '@/components/tournaments/data/api'
 import { OPEN_CHECKOUTS_QUERY_KEY } from '../checkouts'
 import { UNKNOWN_EVENT_KIND, type DecodedEventKind, type RealtimeEvent } from './events'
@@ -47,6 +48,8 @@ const CHECKOUT_QUERY_KEYS: readonly QueryKey[] = [
   OPEN_CHECKOUTS_QUERY_KEY,
   TOURNAMENT_CHECKOUT_QUERY_KEY_PREFIX,
   TOURNAMENT_PAYMENT_QUERY_KEY_PREFIX,
+  // A paid admission creates entries: entrants, counts and capacity move too.
+  TOURNAMENTS_QUERY_KEY_PREFIX,
 ]
 
 const KEYS_BY_KIND = {

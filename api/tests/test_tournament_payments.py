@@ -1594,6 +1594,43 @@ async def test_late_success_after_the_player_cancelled_refunds_and_admits_nobody
     assert checkout_read.status is TournamentCheckoutState.cancelled
 
 
+async def test_a_checking_payment_stays_checking_after_its_hold_expires(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1809: "If the hold expires while the payment is checking, the panel
+    keeps showing 'Checking your payment' until the payment resolves." Stripe
+    is still processing the charge, which can still succeed, so the payment
+    must not report ``expired`` just because the hold's deadline passed."""
+    provider = FakePaymentProvider()
+    _, payer, tournament, _, checkout_id, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    provider.set_status(payment.provider_payment_intent_id, status="processing")
+    await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
+    )
+    await db_session.execute(
+        update(TournamentCheckout)
+        .where(TournamentCheckout.id == checkout_id)
+        .values(
+            created_at=datetime.now(UTC) - timedelta(hours=1),
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        )
+    )
+    await db_session.commit()
+
+    read = await read_payment_status(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+
+    assert read.payment_state is TournamentCheckoutPaymentState.checking
+
+
 async def test_cancel_past_the_deadline_is_authoritative_while_the_payment_is_open(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, fake_payments_queue
 ) -> None:

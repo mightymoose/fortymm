@@ -122,6 +122,14 @@ describe('EventsTab checkout and payment (#1809)', () => {
     expect(world.calls.createdEventIds).toEqual([[OPEN_SINGLES_ID, U1500_ID]])
   })
 
+  it('names the checkout it shows in the URL, so the bar can leave exactly that one out', async () => {
+    mockCheckoutWorld({ current: buildCheckoutRead() })
+    const url = renderCheckoutTab()
+
+    await panel()
+    await waitFor(() => expect(url.param()).toBe(CHECKOUT_ID))
+  })
+
   it('keeps preparing, with the hold counting down, and asks again until the payment is ready', async () => {
     const world = mockCheckoutWorld({
       current: buildCheckoutRead(),
@@ -495,7 +503,46 @@ describe('EventsTab checkout and payment (#1809)', () => {
       expect(within(checkout).queryByRole('button', { name: /^Pay / })).toBeNull()
       expect(within(checkout).queryByRole('heading', { name: 'Your hold ended' })).toBeNull()
       expect(within(checkout).queryByText(/entered/i)).toBeNull()
+      // The server still cancels a checkout whose payment is open, so the
+      // player keeps that choice after the deadline.
+      expect(within(checkout).getByRole('button', { name: 'Cancel checkout' })).toBeInTheDocument()
     })
+
+    it('cancels an ended checkout’s open payment before reviewing availability', async () => {
+      const world = mockCheckoutWorld({
+        checkout: buildCheckoutRead({ status: 'expired', payment_state: 'expired' }),
+        status: [buildPaymentRead({ payment_state: 'expired' })],
+      })
+      const user = userEvent.setup()
+      const url = renderCheckoutTab({ checkoutParam: CHECKOUT_ID })
+
+      const checkout = await panel()
+      await within(checkout).findByRole('heading', { name: 'Your hold ended' })
+      await user.click(within(checkout).getByRole('button', { name: 'Review availability' }))
+
+      await waitFor(() => expect(world.calls.log).toContain('cancel'))
+      await waitFor(() => expect(url.param()).toBeUndefined())
+      expect(screen.getByRole('button', { name: 'Check out · $75.00' })).toBeInTheDocument()
+    })
+
+    it('shows the result when another device completes the payment', async () => {
+      const world = mockCheckoutWorld({
+        current: buildCheckoutRead(),
+        status: [buildPaymentRead({ payment_state: 'succeeded', lines: paymentLines('admitted') })],
+      })
+      renderCheckoutTab()
+
+      const checkout = await panel()
+      await within(checkout).findByTestId('stripe-payment-element')
+      // Another device pays: the hold is consumed and "current" stops finding it.
+      world.current = null
+      world.checkout = buildCheckoutRead({ status: 'completed', payment_state: 'succeeded' })
+
+      expect(
+        await within(checkout).findByRole('heading', { name: 'You’re entered' }, { timeout: 7_000 }),
+      ).toBeInTheDocument()
+      expect(within(checkout).queryByRole('heading', { name: 'Your checkout ended' })).toBeNull()
+    }, 10_000)
   })
 })
 

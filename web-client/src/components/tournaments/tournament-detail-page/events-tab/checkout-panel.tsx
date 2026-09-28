@@ -79,7 +79,12 @@ export function CheckoutPanel({
   // just before a confirm; reading that as a resume would swap the card form
   // out while Stripe is still confirming.
   const [resumedOnOpen] = useState(resumed)
-  const statusEnabled = resumedOnOpen || confirmAttempted
+  // Also read the status once the checkout itself says a payment moved on:
+  // another tab or device may have confirmed it, or the hold may have ended.
+  const paymentMovedOn =
+    checkout.status !== 'active' ||
+    !['unavailable', 'preparing', 'ready'].includes(checkout.paymentState)
+  const statusEnabled = resumedOnOpen || confirmAttempted || paymentMovedOn
   const status = usePaymentStatus(checkout.tournamentId, checkout.id, statusEnabled)
   // Prepare (the only read with the client secret) only while there is still
   // something to pay. After a reload or a return, wait for the status first.
@@ -209,7 +214,9 @@ export function CheckoutPanel({
                 </a>
               </span>
             </p>
-            {active && !(payment && isSettled(payment)) && (
+            {/* A checking payment keeps its Cancel past the hold's deadline:
+                the server still cancels a checkout whose payment is open. */}
+            {(active || checking) && !(payment && isSettled(payment)) && (
               <div className="flex flex-wrap gap-2">
                 {!checking && (
                   <ConfirmButton

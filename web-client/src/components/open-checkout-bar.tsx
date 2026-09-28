@@ -30,15 +30,16 @@ function byUrgency(checkouts: OpenCheckout[]) {
   )
 }
 
-/** The tournament whose Events tab is on screen, if any. Its checkout panel
- * already shows its own checkout, so the bar leaves that one out. The Events tab
- * is the page's default, so a URL naming no tab counts. */
-function useTournamentOnItsEventsTab(): string | null {
+/** The checkout the Events tab's panel is showing, if any. The panel names it
+ * in `?checkout=`, so the bar leaves out exactly that one, and still shows any
+ * other open checkout of the same tournament. The Events tab is the page's
+ * default, so a URL naming no tab counts. */
+function useCheckoutShownOnItsEventsTab(): string | null {
   const { pathname, search } = useLocation()
-  const match = /^\/tournaments\/([0-9a-f-]{36})\/?$/i.exec(pathname)
-  if (!match) return null
-  const tab = (search as { tab?: unknown }).tab
-  return tab === undefined || tab === 'events' ? match[1] : null
+  if (!/^\/tournaments\/[0-9a-f-]{36}\/?$/i.test(pathname)) return null
+  const { tab, checkout } = search as { tab?: unknown; checkout?: unknown }
+  if (tab !== undefined && tab !== 'events') return null
+  return typeof checkout === 'string' ? checkout : null
 }
 
 function TournamentLink({
@@ -100,9 +101,9 @@ export function OpenCheckoutBar() {
     void refetch()
   }, [lapsedKey, refetch])
 
-  const onEventsTabOf = useTournamentOnItsEventsTab()
+  const shownCheckoutId = useCheckoutShownOnItsEventsTab()
   const open = byUrgency(
-    (data ?? []).filter((checkout) => checkout.tournamentId !== onEventsTabOf),
+    (data ?? []).filter((checkout) => checkout.checkoutId !== shownCheckoutId),
   )
   const nearest = open[0]
   if (!nearest) return null

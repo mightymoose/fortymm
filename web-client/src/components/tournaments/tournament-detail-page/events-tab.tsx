@@ -117,6 +117,13 @@ export const EventsTab = ({
       ? panelCheckoutId
       : undefined,
   )
+  // Name the shown checkout in `?checkout=`, so a reload lands on it and the
+  // open-checkout bar leaves out exactly this one (#1809).
+  useEffect(() => {
+    if (panelCheckoutId && panelCheckoutId !== checkoutParam) {
+      onCheckoutParamChange?.(panelCheckoutId)
+    }
+  }, [panelCheckoutId, checkoutParam, onCheckoutParamChange])
   /** Leave the panel. `reselect` ticks those events again on the list. */
   const closePanel = (reselect?: string[]) => {
     if (panelCheckoutId) {
@@ -235,9 +242,19 @@ export const EventsTab = ({
                 })
             }}
             onReviewAvailability={() => {
-              closePanel(panelCheckout.lines.map((line) => line.eventId))
-              // Fresh prices and availability for the re-ticked events.
-              refreshCheckout()
+              const previous = panelCheckout.lines.map((line) => line.eventId)
+              // Cancel first: an ended hold can still have an open payment,
+              // and a late success must refund rather than admit alongside a
+              // replacement checkout. The server treats this as a no-op when
+              // nothing is open.
+              void cancelCheckout
+                .mutateAsync(panelCheckout.id)
+                .catch(() => undefined)
+                .then(() => {
+                  closePanel(previous)
+                  // Fresh prices and availability for the re-ticked events.
+                  refreshCheckout()
+                })
             }}
           />
         ) : checkoutById.isError ? (

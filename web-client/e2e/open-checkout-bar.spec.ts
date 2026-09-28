@@ -164,7 +164,7 @@ test.describe('Open-checkout bar', () => {
     await expect(list).toContainText('Checking your payment')
   })
 
-  test('is absent on the tournament’s own Events tab, but shown for every other checkout', async ({
+  test('leaves out the checkout its Events tab panel names, but shows every other checkout', async ({
     page,
   }) => {
     const here = buildOpenCheckoutRead({
@@ -178,13 +178,14 @@ test.describe('Open-checkout bar', () => {
       tournament_name: 'A Different Tournament',
     })
     await installShellMock(page, [here, elsewhere])
-    await page.goto(`/tournaments/${here.tournament_id}?tab=events`)
+    // The panel names the checkout it shows in `?checkout=`.
+    await page.goto(`/tournaments/${here.tournament_id}?tab=events&checkout=${here.checkout_id}`)
 
-    // The tournament's own checkout is left out…
+    // The checkout the panel is showing is left out…
     await expect(bar(page)).toBeVisible()
     await expect(summary(page)).not.toContainText('This Very Tournament')
-    // …but the OTHER one still shows, proving the filter is scoped to this
-    // tournament and is not just an empty/broken list.
+    // …but the OTHER one still shows, proving the filter is scoped to that
+    // one checkout and is not just an empty/broken list.
     await expect(summary(page)).toContainText('A Different Tournament')
   })
 })

@@ -112,9 +112,12 @@ describe('OpenCheckoutBar', () => {
   })
 
   it.each([
-    ['with no tab named', `/tournaments/${TOURNAMENT_ID}`],
-    ['with the Events tab named', `/tournaments/${TOURNAMENT_ID}?tab=events`],
-  ])('hides on that tournament’s own Events tab, %s', async (_label, path) => {
+    ['with no tab named', `/tournaments/${TOURNAMENT_ID}?checkout=${mockUuid('open-checkout')}`],
+    [
+      'with the Events tab named',
+      `/tournaments/${TOURNAMENT_ID}?tab=events&checkout=${mockUuid('open-checkout')}`,
+    ],
+  ])('hides the checkout its Events tab is showing, %s', async (_label, path) => {
     const served = mockOpenCheckouts([
       buildOpenCheckoutRead({ tournament_id: TOURNAMENT_ID }),
     ])
@@ -123,6 +126,24 @@ describe('OpenCheckoutBar', () => {
 
     await waitFor(() => expect(served.count).toBe(1))
     expect(page.queryBar()).not.toBeInTheDocument()
+  })
+
+  it('still shows a second checkout of the same tournament that the panel is not showing', async () => {
+    mockOpenCheckouts([
+      buildOpenCheckoutRead({
+        checkout_id: mockUuid('bar-older-checking'),
+        tournament_id: TOURNAMENT_ID,
+        tournament_name: 'Spring Open',
+        expires_at: new Date(Date.now() - 60_000).toISOString(),
+        payment_state: 'checking',
+      }),
+      buildOpenCheckoutRead({ checkout_id: mockUuid('bar-shown'), tournament_id: TOURNAMENT_ID }),
+    ])
+
+    page.render(`/tournaments/${TOURNAMENT_ID}?tab=events&checkout=${mockUuid('bar-shown')}`)
+
+    expect(await page.findSummary()).toHaveTextContent(/^Checking your payment · Spring Open$/)
+    expect(within(await page.findBar()).queryByRole('button', { name: /more/ })).toBeNull()
   })
 
   it('still shows on another tournament’s page', async () => {

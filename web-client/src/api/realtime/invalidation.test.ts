@@ -7,6 +7,7 @@ import { OPEN_CHECKOUTS_QUERY_KEY } from '../checkouts'
 import {
   TOURNAMENT_CHECKOUT_QUERY_KEY_PREFIX,
   TOURNAMENT_PAYMENT_QUERY_KEY_PREFIX,
+  TOURNAMENTS_QUERY_KEY_PREFIX,
 } from '@/components/tournaments/data/api'
 import { decodeRealtimeEvent, UNKNOWN_EVENT_KIND, type DecodedEventKind } from './events'
 import { queryKeysToInvalidate } from './invalidation'
@@ -20,10 +21,14 @@ const event = (kind: DecodedEventKind) => ({ v: 1 as const, kind, ts: TS })
 // cache (`matchDetailsQueryKey`) alike, via their shared prefixes.
 // A checkout hint refreshes the app-wide open-checkout bar and every checkout
 // and payment read a tournament page holds (#1809). The hint names no checkout.
+// A paid admission creates entries, so the tournament's entrants, counts and
+// capacity refresh with it: otherwise "Done" returns to a list that still
+// offers the events the player just entered.
 const CHECKOUT_KEYS = [
   OPEN_CHECKOUTS_QUERY_KEY,
   TOURNAMENT_CHECKOUT_QUERY_KEY_PREFIX,
   TOURNAMENT_PAYMENT_QUERY_KEY_PREFIX,
+  TOURNAMENTS_QUERY_KEY_PREFIX,
 ]
 
 const EXPECTED_KEYS = [

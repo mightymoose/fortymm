@@ -648,6 +648,9 @@ export function eventToUpdateBody(ev: EditedEvent): TournamentEventUpdate {
 // ----- query keys ----------------------------------------------------------
 
 const TOURNAMENTS_KEY = ['tournaments'] as const
+/** Every tournament list and detail read shares this prefix. A paid admission
+ * (`checkout.changed`) refreshes them, since it creates entries (#1809). */
+export const TOURNAMENTS_QUERY_KEY_PREFIX = TOURNAMENTS_KEY
 const tournamentKey = (id: string) => ['tournaments', id] as const
 /** Every tournament's checkout read shares this prefix, so a `checkout.changed`
  * hint (which names no tournament) can refresh them all. */

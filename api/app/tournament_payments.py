@@ -982,10 +982,12 @@ async def _reconcile(
         if (
             checkout is not None
             and tournament is not None
+            # Only states waiting on the player expire with the hold. A
+            # checking payment is Stripe's to finish, and can still succeed
+            # after the deadline (#1809): it stays checking until it resolves.
             and payment.status
             in (
                 TournamentPaymentStatus.ready,
-                TournamentPaymentStatus.checking,
                 TournamentPaymentStatus.action_required,
             )
             and checkout_effective_state(checkout, tournament, await database_now(db))
