@@ -121,6 +121,12 @@ class TournamentCheckout(Base):
     #: value the previous release can read, so it does not count toward
     #: capacity. The API reports such a checkout as ``completed``.
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: The optional email the itemized receipt goes to (#1809, #1810 sends
+    #: it). Belongs to the checkout, NOT the account email — payer-settable
+    #: with ``PATCH .../checkouts/{checkout_id}`` until the payment succeeds,
+    #: never sent to the payment provider, never logged, never in any
+    #: non-payer response. ``NULL`` means no receipt email.
+    receipt_address: Mapped[str | None] = mapped_column(String(320))
 
     tournament: Mapped["Tournament"] = relationship()
     lines: Mapped[list["TournamentCheckoutLine"]] = relationship(

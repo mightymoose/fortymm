@@ -73,6 +73,7 @@ async def _checkout_for(
 def _setup(monkeypatch: pytest.MonkeyPatch, *, owner: User) -> None:
     monkeypatch.setenv("TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", str(owner.id))
     monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_fake")
+    monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", "pk_test_fake")
     monkeypatch.setenv("STRIPE_ACCOUNT_ID", "acct_fake_platform")
     monkeypatch.setenv("STRIPE_WEBHOOK_SIGNING_SECRETS", "whsec_test_default")
     monkeypatch.delenv("ENVIRONMENT", raising=False)
@@ -245,6 +246,214 @@ async def test_happy_path_prepare_then_webhook_success_admits_exactly_once(
     assert again is not None
     assert again.status is TournamentPaymentStatus.succeeded
     assert await _entered_player_ids(db_session, event.id) == [payer.primary_player.id]
+
+
+async def test_prepared_and_read_payments_report_per_event_line_outcomes(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1809: the prepare and status-read responses carry ``lines[]`` —
+    ``{event_id, event_name, price_cents, outcome}`` per line, in the same
+    order the checkout read's own ``lines[]`` uses (by event id). Every line
+    starts ``pending`` and never leaks an internal refund reason code."""
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    payer = await make_user(db_session, f"payer-{uuid.uuid4().hex[:8]}")
+    tournament, (first, second) = await paid_tournament(
+        db_session, owner=owner, fees=(Decimal("20.00"), Decimal("15.00"))
+    )
+    _setup(monkeypatch, owner=owner)
+    checkout_read = await start_checkout(
+        db_session,
+        tournament_id=tournament.id,
+        actor=payer,
+        request=TournamentCheckoutCreate(
+            request_id=uuid.uuid4(), event_ids=[first.id, second.id]
+        ),
+        client_ip="203.0.113.9",
+    )
+    ordered = sorted([first, second], key=lambda event: event.id)
+
+    provider = FakePaymentProvider()
+    prepared = await prepare_or_resume_payment(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_read.id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert [line.model_dump(mode="json") for line in prepared.lines] == [
+        {
+            "event_id": str(event.id),
+            "event_name": event.name,
+            "price_cents": int(event.entry_fee * 100),
+            "outcome": "pending",
+        }
+        for event in ordered
+    ]
+    # Matches the checkout read's own line order (both by event id).
+    assert [
+        line["event_id"] for line in checkout_read.model_dump(mode="json")["lines"]
+    ] == [line["event_id"] for line in prepared.model_dump(mode="json")["lines"]]
+
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(
+            TournamentPayment.checkout_id == checkout_read.id
+        )
+    )
+    assert payment is not None
+    provider.set_status(
+        payment.provider_payment_intent_id,
+        status="succeeded",
+        amount_received=payment.amount_cents,
+    )
+    reconciled = await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
+    )
+    assert reconciled is not None
+
+    status_read = await read_payment_status(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_read.id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert [line.outcome.value for line in status_read.lines] == [
+        "admitted",
+        "admitted",
+    ]
+
+
+async def test_read_payment_reports_refund_pending_never_the_internal_reason_code(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A line that cannot admit reports the public ``refund_pending`` outcome
+    — never the model's own ``refund_due`` spelling, and never the refund
+    obligation's reason code (#1809's "no internal refund reason codes")."""
+    provider = FakePaymentProvider()
+    _, payer, tournament, event, checkout_id, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    await cancel_checkout(
+        db_session, tournament_id=tournament.id, checkout_id=checkout_id, actor=payer
+    )
+    provider.set_status(
+        payment.provider_payment_intent_id, status="succeeded", amount_received=2000
+    )
+    reconciled = await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
+    )
+    assert reconciled is not None
+
+    status_read = await read_payment_status(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+    payload = status_read.model_dump(mode="json")
+    assert [line["outcome"] for line in payload["lines"]] == ["refund_pending"]
+    assert "reason" not in payload["lines"][0]
+    assert "checkout_superseded" not in json.dumps(payload)
+
+
+async def test_receipt_address_never_reaches_the_provider_create_call(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1809: the receipt address must never go to Stripe — not in the
+    PaymentIntent create call's metadata or any other param."""
+    from app.tournament_checkouts import update_checkout_receipt_address
+
+    owner = await make_user(db_session, f"merchant-{uuid.uuid4().hex[:8]}")
+    payer = await make_user(db_session, f"payer-{uuid.uuid4().hex[:8]}")
+    tournament, (event,) = await paid_tournament(db_session, owner=owner)
+    _setup(monkeypatch, owner=owner)
+    checkout_id = await _checkout_for(
+        db_session, tournament=tournament, event=event, payer=payer
+    )
+    await update_checkout_receipt_address(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        receipt_address="secret-receipts@example.com",
+    )
+
+    provider = FakePaymentProvider()
+    prepared = await prepare_or_resume_payment(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert prepared.receipt_address == "secret-receipts@example.com"
+
+    payment = await db_session.scalar(
+        select(TournamentPayment).where(TournamentPayment.checkout_id == checkout_id)
+    )
+    assert payment is not None
+    assert payment.provider_payment_intent_id is not None
+    # The payment row's own snapshot is not taken until verified success.
+    assert payment.receipt_address is None
+
+    intent = await provider.retrieve_payment_intent(
+        payee_account=payment.payee_stripe_account,
+        payment_intent_id=payment.provider_payment_intent_id,
+    )
+    assert intent.metadata == {"payment_id": str(payment.id)}
+    assert "secret-receipts@example.com" not in json.dumps(intent.metadata)
+
+    # Never on the merchant-visible plain read either.
+    status_read = await read_payment_status(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+    assert "receipt_address" not in status_read.model_dump()
+
+
+async def test_receipt_address_snapshots_at_success_and_survives_later_account_edits(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1809: the payment's receipt address snapshot is copied exactly once,
+    at verified success, from the checkout — and a later account email edit
+    never changes it."""
+    from app.tournament_checkouts import update_checkout_receipt_address
+
+    provider = FakePaymentProvider()
+    owner, payer, tournament, event, checkout_id, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    await update_checkout_receipt_address(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        receipt_address="receipts@example.com",
+    )
+    provider.set_status(
+        payment.provider_payment_intent_id,
+        status="succeeded",
+        amount_received=payment.amount_cents,
+    )
+    reconciled = await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
+    )
+    assert reconciled is not None
+    assert reconciled.receipt_address == "receipts@example.com"
+
+    payer.email = "brand-new-account-email@example.com"
+    await db_session.commit()
+    await db_session.refresh(reconciled)
+    assert reconciled.receipt_address == "receipts@example.com"
 
 
 async def test_declined_card_reports_ready_with_safe_error_code(
@@ -1385,6 +1594,88 @@ async def test_late_success_after_the_player_cancelled_refunds_and_admits_nobody
     assert checkout_read.status is TournamentCheckoutState.cancelled
 
 
+async def test_a_checking_payment_stays_checking_after_its_hold_expires(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#1809: "If the hold expires while the payment is checking, the panel
+    keeps showing 'Checking your payment' until the payment resolves." Stripe
+    is still processing the charge, which can still succeed, so the payment
+    must not report ``expired`` just because the hold's deadline passed."""
+    provider = FakePaymentProvider()
+    _, payer, tournament, _, checkout_id, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    provider.set_status(payment.provider_payment_intent_id, status="processing")
+    await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
+    )
+    await db_session.execute(
+        update(TournamentCheckout)
+        .where(TournamentCheckout.id == checkout_id)
+        .values(
+            created_at=datetime.now(UTC) - timedelta(hours=1),
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        )
+    )
+    await db_session.commit()
+
+    read = await read_payment_status(
+        db_session,
+        tournament_id=tournament.id,
+        checkout_id=checkout_id,
+        actor=payer,
+        provider=provider,
+        settings=get_settings(),
+    )
+
+    assert read.payment_state is TournamentCheckoutPaymentState.checking
+
+
+async def test_cancel_past_the_deadline_is_authoritative_while_the_payment_is_open(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch, fake_payments_queue
+) -> None:
+    """#1809: the panel offers "Cancel checkout" while a payment is checking,
+    and promises a refund if the charge still succeeds. A hold can pass its
+    deadline while the payment is checking. The cancel must still cancel the
+    checkout and its PaymentIntent, not merely record the expiry, or a late
+    success would admit the player and keep the charge."""
+    provider = FakePaymentProvider()
+    _, payer, tournament, event, checkout_id, payment = await _prepared_payment(
+        db_session, monkeypatch, provider=provider
+    )
+    provider.set_status(payment.provider_payment_intent_id, status="processing")
+    checking = await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
+    )
+    assert checking is not None
+    assert checking.status is TournamentPaymentStatus.checking
+    await db_session.execute(
+        update(TournamentCheckout)
+        .where(TournamentCheckout.id == checkout_id)
+        .values(
+            created_at=datetime.now(UTC) - timedelta(hours=1),
+            expires_at=datetime.now(UTC) - timedelta(minutes=1),
+        )
+    )
+    await db_session.commit()
+
+    cancelled = await cancel_checkout(
+        db_session, tournament_id=tournament.id, checkout_id=checkout_id, actor=payer
+    )
+
+    assert cancelled.status is TournamentCheckoutState.cancelled
+    assert [job.args for job in fake_payments_queue.jobs] == [(str(payment.id),)]
+    provider.set_status(
+        payment.provider_payment_intent_id, status="succeeded", amount_received=2000
+    )
+    reconciled = await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
+    )
+    assert reconciled is not None
+    assert reconciled.lines[0].outcome is TournamentPaymentLineOutcome.refund_due
+    assert await _entered_player_ids(db_session, event.id) == []
+
+
 async def test_late_success_after_registration_closed_and_reopened_refunds(
     db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2461,7 +2752,7 @@ async def test_a_mismatched_create_response_is_quarantined_and_keeps_its_secret(
         settings=get_settings(),
     )
     assert prepared.client_secret is None
-    assert prepared.payment_state is TournamentCheckoutPaymentState.failed
+    assert prepared.payment_state is TournamentCheckoutPaymentState.needs_review
     payment = await db_session.get(TournamentPayment, prepared.id)
     assert payment is not None
     assert payment.status is TournamentPaymentStatus.quarantined

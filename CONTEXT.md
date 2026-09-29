@@ -338,6 +338,48 @@ The machine-readable reason an entry was refused — `already_entered`,
 the copy; the server's `message` is a fallback, never a contract.
 _Avoid_: error string, detail (matching on the prose is the bug this replaced).
 
+## Entry payments
+
+**Checkout**:
+The server record of a player's selected paid events in one tournament. It holds
+a place in each event, the quoted price of each event, the total and a ten-minute
+deadline. A player holds at most one open checkout per tournament. The server
+computes the total. The client never supplies it.
+_Avoid_: cart, basket, order.
+
+**Payment**:
+The server record linked one-to-one to a **checkout**. It holds the Stripe
+PaymentIntent, the payment state and the **support reference**. Only the payer's
+prepare or resume response carries the Stripe client secret.
+_Avoid_: charge, transaction.
+
+**Support reference**:
+The `PAY-XXXXXXXX` code on each **payment**, in Crockford base32. Fortymm
+generates it. It never comes from a Stripe id, so it stays stable if the
+provider changes. The player quotes it to support.
+
+**Receipt address**:
+The optional email address that one **checkout**'s itemized receipt goes to. It
+is not the account email. An empty value means no receipt email. At verified
+success the server copies it onto the **payment** as a snapshot. It never goes
+to Stripe or into a response for anyone except the payer.
+
+**Per-event result**:
+The outcome of one event of a **payment**: "Entry confirmed" or "Not admitted —
+refund pending" (the screen's exact words). A combined payment can admit some events and refund others.
+The player sees results, never refund reasons.
+
+**Needs review**:
+The public state of a quarantined **payment**. The server found a mismatch and
+admitted nobody. The player sees a neutral message with the **support
+reference**, never the reason.
+_Avoid_: failed (a quarantine is not a decline).
+
+**Open-checkout bar**:
+The app-wide bar under the top header on every signed-in page. It shows the
+player's open checkouts, so a hold does not expire unnoticed. It hides on the
+checkout's own Events tab.
+
 ## Player profile
 
 **Career**:

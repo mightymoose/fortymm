@@ -15,6 +15,7 @@ from app.models import (
     TournamentPayment,
     TournamentPaymentStatus,
 )
+from app.realtime import EventKind, stage_event
 from app.tournament_payment_state import TERMINAL_PAYMENT_STATUSES
 
 
@@ -65,20 +66,25 @@ async def invalidate_active_checkouts(
     then locked before their payment rows, as in admission. Returns the ids of
     the invalidated checkouts.
     """
-    checkout_ids = list(
-        (
-            await db.execute(
-                update(TournamentCheckout)
-                .where(
-                    TournamentCheckout.status == TournamentCheckoutStatus.active,
-                    *criteria,
-                )
-                .values(status=TournamentCheckoutStatus.invalidated)
-                .returning(TournamentCheckout.id)
+    rows = (
+        await db.execute(
+            update(TournamentCheckout)
+            .where(
+                TournamentCheckout.status == TournamentCheckoutStatus.active,
+                *criteria,
             )
-        ).scalars()
-    )
+            .values(status=TournamentCheckoutStatus.invalidated)
+            .returning(TournamentCheckout.id, TournamentCheckout.payer_account_id)
+        )
+    ).all()
+    checkout_ids = [row.id for row in rows]
     if checkout_ids:
+        # #1809: a director entry, an event/tournament change, a player or
+        # account lifecycle transition, or an ownership transfer all funnel
+        # through here — one place to hint every payer whose checkout this
+        # permanently invalidates.
+        for row in rows:
+            stage_event(db, row.payer_account_id, EventKind.checkout_changed)
         await request_cancel_of_open_payments(
             db, TournamentPayment.checkout_id.in_(checkout_ids)
         )

@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   RouterProvider,
@@ -17,6 +17,12 @@ import {
   buildTournamentEntrantRead,
   buildTournamentEventRead,
 } from '@/mocks/factories/tournaments/tournament.factory'
+import {
+  buildCheckoutRead,
+  buildPaymentRead,
+  paymentLines,
+} from '@/mocks/factories/checkouts/checkout.factory'
+import { mockCheckoutWorld } from '@/components/tournaments/tournament-detail-page/events-tab/checkout-world'
 import { mockUuid } from '@/mocks/mock-uuid'
 import { server } from '@/mocks/server'
 import { Route } from './tournaments.$tournamentId'
@@ -764,6 +770,127 @@ describe('tournament detail route — a refused Details save is reported inline 
     )
     expect(
       screen.getByRole('button', { name: 'Tournaments' }),
+    ).toBeInTheDocument()
+  })
+})
+
+describe('tournament detail route — the Stripe return URL (#1809)', () => {
+  const CHECKOUT_ID = mockUuid('route-test-returned-checkout')
+
+  function mockTournament() {
+    server.use(
+      http.get('*/v1/tournaments/:id', () =>
+        HttpResponse.json(buildTournamentDetailRead({ id: UNKNOWN_ID })),
+      ),
+    )
+  }
+
+  it('drops Stripe’s params, client secret included, with a history replace', async () => {
+    mockTournament()
+    mockCheckoutWorld({
+      checkout: buildCheckoutRead({ id: CHECKOUT_ID, tournament_id: UNKNOWN_ID, status: 'completed' }),
+      status: [buildPaymentRead({ checkout_id: CHECKOUT_ID, payment_state: 'checking' })],
+    })
+
+    const { router } = renderRoute(
+      `/tournaments/${UNKNOWN_ID}?tab=events&checkout=${CHECKOUT_ID}` +
+        '&payment_intent=pi_123&payment_intent_client_secret=pi_123_secret_abc' +
+        '&redirect_status=succeeded',
+    )
+
+    await waitFor(() =>
+      expect(router.state.location.href).not.toContain('payment_intent'),
+    )
+    expect(router.state.location.href).not.toContain('secret')
+    expect(router.state.location.search).toEqual({
+      tab: 'events',
+      checkout: CHECKOUT_ID,
+    })
+    // Replaced, not pushed: Back must not return to the URL with the secret.
+    expect(router.history.length).toBe(1)
+  })
+
+  it('shows a payment’s result after a reload, from the status read alone, until Done', async () => {
+    mockTournament()
+    const world = mockCheckoutWorld({
+      checkout: buildCheckoutRead({ id: CHECKOUT_ID, tournament_id: UNKNOWN_ID, status: 'completed' }),
+      status: [
+        buildPaymentRead({
+          checkout_id: CHECKOUT_ID,
+          payment_state: 'succeeded',
+          lines: paymentLines('admitted'),
+        }),
+      ],
+    })
+    const user = userEvent.setup()
+
+    const { router } = renderRoute(`/tournaments/${UNKNOWN_ID}?tab=events&checkout=${CHECKOUT_ID}`)
+
+    const panel = await screen.findByRole('region', { name: 'Checkout' })
+    expect(await within(panel).findByRole('heading', { name: 'You’re entered' })).toBeInTheDocument()
+    expect(world.calls.log).toEqual(['status'])
+
+    await user.click(within(panel).getByRole('button', { name: 'Done' }))
+
+    await waitFor(() => expect(router.state.location.search).toEqual({ tab: 'events' }))
+    expect(screen.queryByRole('region', { name: 'Checkout' })).toBeNull()
+  })
+
+  it('keeps a malformed `?checkout=` from closing an open editor', async () => {
+    const EVENT_ID = mockUuid('route-test-return-url-event')
+    server.use(
+      http.get('*/v1/tournaments/:id', () =>
+        HttpResponse.json(
+          buildTournamentDetailRead({
+            id: UNKNOWN_ID,
+            events: [
+              buildTournamentEventRead({
+                id: EVENT_ID,
+                tournament_id: UNKNOWN_ID,
+                name: 'Open Singles',
+              }),
+            ],
+          }),
+        ),
+      ),
+    )
+
+    renderRoute(`/tournaments/${UNKNOWN_ID}?event=${EVENT_ID}&checkout=not-a-uuid`)
+
+    expect(await screen.findByRole('dialog')).toBeInTheDocument()
+  })
+
+  it('keeps the selected tab in the URL, in both directions', async () => {
+    mockTournament()
+    const user = userEvent.setup()
+
+    const { router } = renderRoute(`/tournaments/${UNKNOWN_ID}`)
+
+    await user.click(await screen.findByRole('tab', { name: 'Details' }))
+    await waitFor(() => expect(router.state.location.search).toEqual({ tab: 'details' }))
+    // A tab change replaces the entry: Back leaves the page, not the tab.
+    expect(router.history.length).toBe(1)
+
+    // A link to the Events tab (the open-checkout bar's) switches the page back.
+    await act(() =>
+      router.navigate({
+        to: '/tournaments/$tournamentId',
+        params: { tournamentId: UNKNOWN_ID },
+        search: { tab: 'events' },
+      }),
+    )
+    expect(
+      await screen.findByRole('tab', { name: /Events/, selected: true }),
+    ).toBeInTheDocument()
+  })
+
+  it('opens the tab `?tab=` names', async () => {
+    mockTournament()
+
+    renderRoute(`/tournaments/${UNKNOWN_ID}?tab=schedule`)
+
+    expect(
+      await screen.findByRole('tab', { name: 'Schedule', selected: true }),
     ).toBeInTheDocument()
   })
 })

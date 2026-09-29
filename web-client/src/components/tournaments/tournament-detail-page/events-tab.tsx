@@ -8,21 +8,26 @@ import {
 } from 'react'
 
 import { useSession } from '@/api/session'
+import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 
 import type { Tournament, TournamentEvent } from '../data/types'
+import type { TournamentCheckout } from '../data/api'
 import {
+  refusedCheckoutEventId,
   useCancelCheckout,
   useCurrentCheckout,
   useRefreshTournamentCheckout,
   useStartCheckout,
 } from '../data/api'
+import { useCheckoutById } from '../data/payments'
 import { EmptyState } from '../empty-state'
 import { SectionHeader } from './section-header'
 import { DrawPanel } from './events-tab/draw-panel'
 import { EventCard } from './events-tab/event-card'
 import { EnterEventControl } from './events-tab/enter-event-control'
 import { CheckoutSummary } from './events-tab/checkout-summary'
+import { CheckoutPanel } from './events-tab/checkout-panel'
 import {
   isCheckoutEventEligible,
   MAX_CHECKOUT_EVENTS,
@@ -38,6 +43,10 @@ export interface EventsTabProps {
   onNewEvent: () => void
   checkoutDraftIds?: Set<string>
   onCheckoutDraftChange?: Dispatch<SetStateAction<Set<string>>>
+  /** `?checkout=`: the checkout the panel shows after a reload or a 3-D Secure
+   * return, whatever its status (#1809). */
+  checkoutParam?: string
+  onCheckoutParamChange?: (checkoutId: string | undefined) => void
 }
 /** The Events tab: a list of event row-cards with a "New event" action and an
  * empty state. */
@@ -48,6 +57,8 @@ export const EventsTab = ({
   onNewEvent,
   checkoutDraftIds,
   onCheckoutDraftChange,
+  checkoutParam,
+  onCheckoutParamChange,
 }: EventsTabProps) => {
   // The draw formats the server offers (ADR 20260726), handed to each card so it can
   // name the event's draw type in the server's words. Read off the tournament rather
@@ -80,6 +91,66 @@ export const EventsTab = ({
   const refreshCheckout = useRefreshTournamentCheckout(tournament.id)
   const checkout = currentCheckout.data?.status === 'active' ? currentCheckout.data : null
   const activeCheckoutId = checkout?.id
+  // The checkout the panel shows. Once the panel opens it stays pinned until the
+  // player leaves it, so a hold that ends or a payment that completes stays on
+  // screen instead of vanishing with the "current checkout" read.
+  const [pinnedCheckoutId, setPinnedCheckoutId] = useState<string | undefined>()
+  // Checkouts the player has left with "Done" or "Back to events". A payment
+  // under review leaves its checkout active, and the panel must not pin it
+  // straight back.
+  const [dismissedCheckoutIds, setDismissedCheckoutIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  )
+  const liveCheckoutId =
+    activeCheckoutId && !dismissedCheckoutIds.has(activeCheckoutId)
+      ? activeCheckoutId
+      : undefined
+  if (liveCheckoutId && liveCheckoutId !== pinnedCheckoutId) {
+    // Adjusting state to a new active checkout during render, React's pattern
+    // for deriving state from changed input without an extra effect pass.
+    setPinnedCheckoutId(liveCheckoutId)
+  }
+  const panelCheckoutId = checkoutParam ?? pinnedCheckoutId ?? liveCheckoutId
+  const checkoutById = useCheckoutById(
+    tournament.id,
+    panelCheckoutId !== undefined && panelCheckoutId !== activeCheckoutId
+      ? panelCheckoutId
+      : undefined,
+  )
+  // Name the shown checkout in `?checkout=`, so a reload lands on it and the
+  // open-checkout bar leaves out exactly this one (#1809).
+  useEffect(() => {
+    if (panelCheckoutId && panelCheckoutId !== checkoutParam) {
+      onCheckoutParamChange?.(panelCheckoutId)
+    }
+  }, [panelCheckoutId, checkoutParam, onCheckoutParamChange])
+  const [releaseFailed, setReleaseFailed] = useState(false)
+  /** Leave the panel. `reselect` ticks those events again on the list. */
+  const closePanel = (reselect?: string[]) => {
+    setReleaseFailed(false)
+    if (panelCheckoutId) {
+      setDismissedCheckoutIds((current) => new Set(current).add(panelCheckoutId))
+    }
+    setPinnedCheckoutId(undefined)
+    onCheckoutParamChange?.(undefined)
+    if (reselect) setSelectedIds(new Set(reselect))
+  }
+  // The last copy of the panel's checkout this tab saw. When the "current"
+  // read drops a hold, the by-id read takes over; until it lands, the panel
+  // keeps this copy instead of flashing a loading state.
+  const [lastPanelCheckout, setLastPanelCheckout] = useState<TournamentCheckout | null>(null)
+  const freshPanelCheckout =
+    panelCheckoutId === undefined
+      ? null
+      : panelCheckoutId === activeCheckoutId
+        ? checkout
+        : (checkoutById.data ?? null)
+  if (freshPanelCheckout && freshPanelCheckout !== lastPanelCheckout) {
+    setLastPanelCheckout(freshPanelCheckout)
+  }
+  const panelCheckout =
+    freshPanelCheckout ??
+    (lastPanelCheckout?.id === panelCheckoutId ? lastPanelCheckout : null)
   // The POST response can be lost after the server commits. The mutation's
   // reconciliation then discovers the durable checkout; adopt that server state
   // and discard the draft after commit so a controlled draft does not update its
@@ -89,7 +160,7 @@ export const EventsTab = ({
       setSelectedIds(new Set())
     }
   }, [activeCheckoutId, selectedIds, setSelectedIds])
-  const hidePaidSelection = checkout !== null || startCheckout.isPending
+  const hidePaidSelection = panelCheckoutId !== undefined || startCheckout.isPending
   const disablePaidSelection = currentCheckout.isFetching
   const selectedEvents = useMemo(
     () =>
@@ -111,6 +182,10 @@ export const EventsTab = ({
       setSelectedIds(effectiveSelectedIds)
     }
   }, [activeCheckoutId, effectiveSelectedIds, selectedIds, setSelectedIds])
+  // The event the server refused when checkout started. The player stays on
+  // the list with the selection intact until they remove it (#1809).
+  const [refusedEventId, setRefusedEventId] = useState<string | null>(null)
+  const refusedEvent = selectedEvents.find((event) => event.id === refusedEventId)
   const togglePaid = (eventId: string) => {
     if (hidePaidSelection || disablePaidSelection) return
     setSelectedIds((current) => toggleCheckoutEvent(current, eventId))
@@ -137,39 +212,102 @@ export const EventsTab = ({
           )
         }
       />
+      {panelCheckoutId !== undefined ? (
+        panelCheckout ? (
+          <CheckoutPanel
+            checkout={panelCheckout}
+            onExpired={() => {
+              refreshCheckout()
+              void checkoutById.refetch()
+            }}
+            onConfirmStarted={() => onCheckoutParamChange?.(panelCheckout.id)}
+            pending={cancelCheckout.isPending}
+            releaseFailed={releaseFailed}
+            resumed={checkoutParam === panelCheckout.id}
+            onDone={() => closePanel()}
+            onCancel={() => {
+              void cancelCheckout
+                .mutateAsync(panelCheckout.id)
+                .then(() => closePanel())
+                .catch(() => undefined)
+            }}
+            onChangeSelection={() => {
+              const previous = panelCheckout.lines.map((line) => line.eventId)
+              void cancelCheckout
+                .mutateAsync(panelCheckout.id)
+                .catch(() => undefined)
+                .then(async () => {
+                  // A DELETE response can be lost after the server commits.
+                  // Restore the editable selection from durable reconciled
+                  // state, not only from the mutation's success callback.
+                  const reconciled = await currentCheckout.refetch()
+                  if (reconciled.data === null) closePanel(previous)
+                })
+            }}
+            onReviewAvailability={() => {
+              const previous = panelCheckout.lines.map((line) => line.eventId)
+              // Cancel first: an ended hold can still have an open payment,
+              // and a late success must refund rather than admit alongside a
+              // replacement checkout. The server treats this as a no-op when
+              // nothing is open.
+              setReleaseFailed(false)
+              void cancelCheckout.mutateAsync(panelCheckout.id).then(
+                () => {
+                  closePanel(previous)
+                  // Fresh prices and availability for the re-ticked events.
+                  refreshCheckout()
+                },
+                // Stay put: the old payment may still be confirmable, and a
+                // replacement checkout could charge the player twice.
+                () => setReleaseFailed(true),
+              )
+            }}
+          />
+        ) : checkoutById.isError ? (
+          <Alert variant="destructive" className="mb-5">
+            <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+              <span>We couldn’t find that checkout.</span>
+              <Button variant="outline" size="sm" onClick={() => closePanel()}>
+                Back to events
+              </Button>
+            </AlertDescription>
+          </Alert>
+        ) : (
+          <p role="status" className="py-8 text-center text-muted-foreground">
+            Loading your checkout…
+          </p>
+        )
+      ) : (
+        <>
       <CheckoutSummary
         selection={selectedEvents}
-        checkout={checkout}
-        pending={
-          currentCheckout.isFetching ||
-          startCheckout.isPending ||
-          cancelCheckout.isPending
-        }
-        onHold={() => {
+        pending={currentCheckout.isFetching || startCheckout.isPending}
+        onCheckout={() => {
+          setRefusedEventId(null)
           startCheckout.mutate(selectedEvents.map((event) => event.id), {
             onSuccess: () => setSelectedIds(new Set()),
+            onError: (error) => setRefusedEventId(refusedCheckoutEventId(error)),
           })
         }}
-        onCancel={() => {
-          if (checkout) cancelCheckout.mutate(checkout.id)
-        }}
-        onChange={() => {
-          if (!checkout) return
-          const previous = new Set(checkout.lines.map((line) => line.eventId))
-          void cancelCheckout
-            .mutateAsync(checkout.id)
-            .catch(() => undefined)
-            .then(async () => {
-              // A DELETE response can be lost after the server commits. Restore
-              // the editable selection from durable reconciled state, not only
-              // from the mutation's success callback.
-              const reconciled = await currentCheckout.refetch()
-              if (reconciled.data === null) setSelectedIds(previous)
-            })
-        }}
-        onExpired={refreshCheckout}
         onRemoveSelection={(eventId) => togglePaid(eventId)}
       />
+      {refusedEvent && (
+        <Alert variant="destructive" className="mb-5">
+          <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+            <span>{refusedEvent.name} is no longer available.</span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                togglePaid(refusedEvent.id)
+                setRefusedEventId(null)
+              }}
+            >
+              Remove {refusedEvent.name}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
       {tournament.events.length === 0 ? (
         <EmptyState
           icon={<Trophy size={28} />}
@@ -230,6 +368,8 @@ export const EventsTab = ({
             />
           ))}
         </div>
+      )}
+        </>
       )}
     </div>
   )

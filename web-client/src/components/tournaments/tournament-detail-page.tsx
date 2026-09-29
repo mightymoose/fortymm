@@ -32,6 +32,7 @@ import type {
 } from './data/types'
 import { PageHeading } from './page-heading'
 import { StatusBadge } from './status-badge'
+import { TOURNAMENT_TABS, type TournamentTab } from './data/tournament-detail-search'
 import { DetailsTab } from './tournament-detail-page/details-tab'
 import { EventEditor } from './tournament-detail-page/event-editor'
 import { EventsTab } from './tournament-detail-page/events-tab'
@@ -87,6 +88,14 @@ export interface TournamentDetailPageProps {
    * not a discard: a save has just persisted the work, and a delete raises a
    * confirmation of its own that must not be stacked on. */
   onCloseEditor: (options?: { force?: boolean }) => void
+  /** The selected tab, when the caller owns it (the route keeps it in `?tab=`,
+   * so a link can switch tabs and the open-checkout bar can see which one is
+   * showing). Without it, the page keeps its own, starting on Events. */
+  tab?: TournamentTab
+  onTabChange?: (tab: TournamentTab) => void
+  /** `?checkout=`, handed through to the Events tab's checkout panel. */
+  checkoutParam?: string
+  onCheckoutParamChange?: (checkoutId: string | undefined) => void
 }
 
 /**
@@ -179,8 +188,19 @@ export const TournamentDetailPage = ({
   openEditorFor,
   onOpenEditor,
   onCloseEditor,
+  tab: controlledTab,
+  onTabChange,
+  checkoutParam,
+  onCheckoutParamChange,
 }: TournamentDetailPageProps) => {
-  const [tab, setTab] = useState('events')
+  const [localTab, setLocalTab] = useState<TournamentTab>('events')
+  const tab = controlledTab ?? localTab
+  const setTab = (next: string) => {
+    const parsed = TOURNAMENT_TABS.find((candidate) => candidate === next)
+    if (!parsed) return
+    setLocalTab(parsed)
+    onTabChange?.(parsed)
+  }
   const [pendingDelete, setPendingDelete] = useState<TournamentEvent | null>(null)
   const [checkoutDrafts, setCheckoutDrafts] = useState<Record<string, Set<string>>>({})
   const checkoutDraftIds = checkoutDrafts[tournament.id] ?? new Set<string>()
@@ -379,7 +399,9 @@ export const TournamentDetailPage = ({
           <div className="mx-auto w-full max-w-[1320px] px-12">
             <TabsList
               variant="line"
-              className="h-auto p-0 [&_[data-slot=tabs-trigger]]:after:bg-[color:var(--ball-500)]"
+              // Wraps rather than scrolling the page sideways on a narrow phone,
+              // where the four tabs and their counts can be a few px too wide.
+              className="h-auto max-w-full flex-wrap p-0 [&_[data-slot=tabs-trigger]]:after:bg-[color:var(--ball-500)]"
             >
               <TabsTrigger value="events">
                 Events
@@ -407,6 +429,8 @@ export const TournamentDetailPage = ({
               onOpenEvent={openEvent}
               onNewEvent={openNewEvent}
               checkoutDraftIds={checkoutDraftIds}
+              checkoutParam={checkoutParam}
+              onCheckoutParamChange={onCheckoutParamChange}
               onCheckoutDraftChange={setCheckoutDraftIds}
             />
           </TabsContent>

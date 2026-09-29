@@ -331,6 +331,12 @@ export interface SeedEventOptions {
   /** The event's `max_players` cap. Omitted = uncapped — see
    * `SeedTournamentOptions.maxPlayers`. */
   readonly maxPlayers?: number
+  /** The event's entry fee, in whole dollars. Omitted = `0` (free), the
+   * original minimal shape every other spec relies on. A **paid** event
+   * (#1809) wants `MIN_PAID_ENTRY_FEE`–`MAX_PAID_ENTRY_FEE` ($0.50–$500,
+   * `api/app/schemas/tournament.py`) — `tournament-checkout.spec.ts` is the
+   * one caller that sets this. */
+  readonly entryFee?: number
 }
 
 /** One event as `addEvent` reads it back: the uuid the server minted for it, its
@@ -405,6 +411,9 @@ export interface SeedTournamentOptions {
    * `tournament-no-venue.spec.ts` drives that one through the UI. Both land on the
    * same SQL NULL, which is the single representation of "no venue". */
   readonly address?: AddressInput | null
+  /** The event's entry fee — see `SeedEventOptions.entryFee`, which is this same
+   * option on the one event `seedTournament` adds. Omitted = `0` (free). */
+  readonly entryFee?: number
 }
 
 /** A created tournament and the catalogue the server minted for it. */
@@ -562,6 +571,7 @@ export async function seedTournament(
       slot: options.slot,
       reservations: options.reservations,
       maxPlayers: options.maxPlayers,
+      entryFee: options.entryFee,
     },
   )
 
@@ -630,7 +640,7 @@ export async function addEvent(
         ...(options.qualifiersPerGroup !== undefined
           ? { qualifiers_per_group: options.qualifiersPerGroup }
           : {}),
-        entry_fee: 0,
+        entry_fee: options.entryFee ?? 0,
         // Only sent when the caller caps the field; omitting the key leaves the
         // event uncapped (the API treats a missing `max_players` as no cap).
         ...(options.maxPlayers !== undefined

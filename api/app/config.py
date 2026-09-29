@@ -7,12 +7,13 @@ ad hoc ``os.environ.get(...)`` call site scattered through the codebase (see
 are left as-is.
 """
 
+import re
 import uuid
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Annotated
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -234,6 +235,29 @@ class Settings(BaseSettings):
     #: closed rather than calling Stripe with no key.
     stripe_secret_key: str = ""
 
+    #: The Stripe publishable key the web client uses to confirm a
+    #: PaymentIntent with ``stripe.confirmPayment`` (#1809). Kept in config
+    #: beside the secret key — never in Redis or the web build — and handed
+    #: out only on the prepare/resume response. Empty means card payments are
+    #: unconfigured, exactly like an empty :attr:`stripe_secret_key`: the
+    #: client cannot confirm a PaymentIntent it has no publishable key for.
+    stripe_publishable_key: str = ""
+
+    @field_validator("stripe_publishable_key")
+    @classmethod
+    def _parse_publishable_key(cls, value: str) -> str:
+        """Trim the key, and refuse anything that is not a Stripe publishable
+        key (#1809). The web client parses ``pk_test_…``/``pk_live_…``, so any
+        other non-empty value would make payments look configured while every
+        prepared payment is unusable."""
+        key = value.strip()
+        if key and re.fullmatch(r"pk_(test|live)_\S+", key) is None:
+            raise ValueError(
+                "STRIPE_PUBLISHABLE_KEY must be a Stripe publishable key "
+                "('pk_test_...' or 'pk_live_...'), or empty."
+            )
+        return key
+
     #: The Stripe ``acct_…`` id that owns :attr:`stripe_secret_key`, verified at
     #: startup against the account Stripe reports for that key (see
     #: ``app.payments.startup.verify_stripe_account``). An empty payee Stripe
@@ -274,17 +298,21 @@ class Settings(BaseSettings):
 
     @property
     def card_payments_configured(self) -> bool:
-        """Whether this process may start a new card payment (#1816).
+        """Whether this process may start a new card payment (#1816, #1809).
 
-        It needs the merchant account, a Stripe key, the platform account
-        that owns the key, and at least one webhook signing secret. Each
-        payment records the platform account, so a payment is never created
-        without it. Without a signing secret every Stripe delivery is
-        rejected, so a payer who closes the page after confirming would be
-        charged and never admitted. So payments fail closed instead."""
+        It needs the merchant account, a Stripe secret key, a Stripe
+        publishable key, the platform account that owns the key, and at
+        least one webhook signing secret. Each payment records the platform
+        account, so a payment is never created without it. Without a
+        signing secret every Stripe delivery is rejected, so a payer who
+        closes the page after confirming would be charged and never
+        admitted. Without a publishable key the client has nothing to call
+        ``stripe.confirmPayment`` with, so a prepared payment could never be
+        confirmed. So payments fail closed instead."""
         return (
             self.tournament_payment_merchant_account_id is not None
             and bool(self.stripe_secret_key)
+            and bool(self.stripe_publishable_key)
             and bool(self.stripe_account_id)
             and bool(self.stripe_webhook_signing_secrets)
         )
@@ -322,6 +350,33 @@ class Settings(BaseSettings):
                 "STRIPE_SECRET_KEY is a live key ('sk_live_...' or 'rk_live_...') but "
                 "ENVIRONMENT is not 'production'. Refusing to start rather "
                 "than risk a live charge from a non-production deploy."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _refuse_publishable_secret_key_mode_mismatch(self) -> "Settings":
+        """Refuse to boot when the publishable key and the secret key
+        disagree on Stripe mode (#1809). A ``pk_test_...`` paired with a live
+        secret key, or a ``pk_live_...`` paired with a test-mode secret key,
+        is always a copy/paste mistake — the live-key half of that mistake
+        (a ``pk_test_`` publishable key next to a live secret key) is exactly
+        the "looks configured for test, actually charges real cards" case
+        :meth:`_refuse_live_key_outside_production` guards on the secret key
+        alone, so this closes the same gap on the publishable key. Silent
+        when either key is unset: an incomplete configuration is caught by
+        :attr:`card_payments_configured`, not here.
+        """
+        if not self.stripe_publishable_key or not self.stripe_secret_key:
+            return self
+        publishable_is_live = self.stripe_publishable_key.startswith("pk_live_")
+        publishable_is_test = self.stripe_publishable_key.startswith("pk_test_")
+        if (publishable_is_live and not self.stripe_key_is_live) or (
+            publishable_is_test and self.stripe_key_is_live
+        ):
+            raise ValueError(
+                "STRIPE_PUBLISHABLE_KEY and STRIPE_SECRET_KEY are in different "
+                "Stripe modes (one is 'test', the other 'live'). Refusing to "
+                "start rather than risk confirming against the wrong mode."
             )
         return self
 

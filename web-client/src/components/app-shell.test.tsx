@@ -1,3 +1,7 @@
+import { buildOpenCheckoutRead } from '@/mocks/factories/checkouts/open-checkout.factory'
+import { screen } from '@/test/utilities'
+
+import { mockOpenCheckouts, openCheckoutBarPage } from './open-checkout-bar.page'
 import { appShellPage } from './app-shell.page'
 
 /**
@@ -249,5 +253,20 @@ describe('AppShell sidebar footer', () => {
     )
     expect(link).toHaveAttribute('target', '_blank')
     expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+  })
+})
+
+describe('AppShell open-checkout bar (#1809)', () => {
+  it('shows the player’s open checkout under the top header, in the page flow', async () => {
+    mockOpenCheckouts([buildOpenCheckoutRead({ tournament_name: 'Spring Open' })])
+
+    appShellPage.render('/dashboard')
+
+    const bar = await openCheckoutBarPage.findBar()
+    const header = screen.getByRole('banner')
+    const main = screen.getByRole('main')
+    expect(header.compareDocumentPosition(bar)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(bar.compareDocumentPosition(main)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(main).not.toContainElement(bar)
   })
 })

@@ -4,6 +4,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.session import BoundedEmailStr
+
 
 class TournamentCheckoutState(StrEnum):
     active = "active"
@@ -23,6 +25,9 @@ class TournamentCheckoutPaymentState(StrEnum):
     failed = "failed"
     expired = "expired"
     cancelled = "cancelled"
+    #: A quarantined payment (#1809): shown to the player in a neutral tone
+    #: with the support reference, never lumped in with an ordinary decline.
+    needs_review = "needs_review"
 
 
 class TournamentCheckoutCreate(BaseModel):
@@ -73,3 +78,43 @@ class TournamentCheckoutRefusalResponse(BaseModel):
     """The FastAPI ``HTTPException`` envelope for a checkout conflict."""
 
     detail: TournamentCheckoutRefusal
+
+
+class TournamentCheckoutReceiptAddressUpdate(BaseModel):
+    """``PATCH .../checkouts/{checkout_id}`` (#1809), payer-only. ``null``
+    clears the receipt address. A blank/whitespace-only string is treated the
+    same as ``null`` rather than refused — the field means "no receipt email"
+    either way, and a player backspacing the field to empty should not have
+    to send an explicit ``null`` for that to take."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    receipt_address: BoundedEmailStr | None = None
+
+    @field_validator("receipt_address", mode="before")
+    @classmethod
+    def _blank_is_null(cls, value: object) -> object:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return value
+
+
+class TournamentCheckoutReceiptAddressRead(BaseModel):
+    """The payer-only response to the receipt-address PATCH. Never anywhere
+    else: the plain checkout/payment reads stay merchant-visible too, and the
+    address is payer-only (#1809 constraint)."""
+
+    receipt_address: str | None
+
+
+class OpenTournamentCheckout(BaseModel):
+    """One row of ``GET /v1/me/checkouts/open`` (#1809) — never the client
+    secret, and only the fields the app-wide open-checkout bar needs."""
+
+    checkout_id: uuid.UUID
+    tournament_id: uuid.UUID
+    tournament_name: str
+    expires_at: datetime
+    payment_state: TournamentCheckoutPaymentState
+    total_cents: int

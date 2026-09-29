@@ -57,7 +57,7 @@ describe('TournamentDetailPage', () => {
 
     expect(screen.getByText('Entry summary')).toBeInTheDocument()
     expect(
-      screen.getByRole('button', { name: 'Hold 1 place' }),
+      screen.getByRole('button', { name: 'Check out · $45.00' }),
     ).toBeEnabled()
   })
 

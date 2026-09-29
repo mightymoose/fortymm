@@ -32,7 +32,7 @@ import { z } from 'zod'
 export const REALTIME_PROTOCOL_VERSION = 1
 
 /** The kinds the server publishes today. */
-export const REALTIME_EVENT_KINDS = ['dashboard.changed', 'resync'] as const
+export const REALTIME_EVENT_KINDS = ['dashboard.changed', 'checkout.changed', 'resync'] as const
 export type RealtimeEventKind = (typeof REALTIME_EVENT_KINDS)[number]
 
 /** What a kind from a newer server decodes to. */

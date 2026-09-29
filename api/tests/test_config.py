@@ -294,3 +294,99 @@ def test_webhook_signing_secrets_split_on_commas_and_ignore_blanks(
 ) -> None:
     monkeypatch.setenv("STRIPE_WEBHOOK_SIGNING_SECRETS", "whsec_a, whsec_b,, ")
     assert get_settings().stripe_webhook_signing_secrets == ["whsec_a", "whsec_b"]
+
+
+def test_publishable_key_is_read_from_its_own_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1809: the prepare response's ``publishable_key`` comes from a
+    dedicated setting beside the secret key, not derived from it."""
+    monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", "pk_test_abc123")
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_abc123")
+    assert get_settings().stripe_publishable_key == "pk_test_abc123"
+
+
+@pytest.mark.parametrize(
+    ("publishable_key", "secret_key"),
+    [
+        ("pk_test_abc123", "sk_live_abc123"),
+        ("pk_test_abc123", "rk_live_abc123"),
+        ("pk_live_abc123", "sk_test_abc123"),
+        ("pk_live_abc123", "rk_test_abc123"),
+    ],
+    ids=["pk_test-sk_live", "pk_test-rk_live", "pk_live-sk_test", "pk_live-rk_test"],
+)
+def test_publishable_key_mode_mismatch_refuses_to_boot(
+    monkeypatch: pytest.MonkeyPatch, publishable_key: str, secret_key: str
+) -> None:
+    """#1809: a publishable key and a secret key from different Stripe modes
+    must never both be configured — that is always a copy/paste mistake, and
+    the live-key case in particular must never quietly run un-refused."""
+    monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", publishable_key)
+    monkeypatch.setenv("STRIPE_SECRET_KEY", secret_key)
+    if secret_key.startswith(("sk_live_", "rk_live_")):
+        monkeypatch.setenv("ENVIRONMENT", "production")
+    with pytest.raises(ValidationError):
+        get_settings()
+
+
+@pytest.mark.parametrize(
+    "publishable_key",
+    ["pkey_test_abc123", "sk_test_abc123", "pk_abc123"],
+    ids=["typo-prefix", "secret-key-pasted", "no-mode"],
+)
+def test_a_malformed_publishable_key_refuses_to_boot(
+    monkeypatch: pytest.MonkeyPatch, publishable_key: str
+) -> None:
+    """#1809: the web client parses the key as ``pk_test_…`` or ``pk_live_…``.
+    Any other non-empty value would make payments look configured while every
+    prepared payment is unusable, so the app refuses to start."""
+    monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", publishable_key)
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_abc123")
+    with pytest.raises(ValidationError):
+        get_settings()
+
+
+def test_the_publishable_key_is_trimmed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", "  pk_test_abc123\n")
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_abc123")
+    assert get_settings().stripe_publishable_key == "pk_test_abc123"
+
+
+def test_a_blank_publishable_key_leaves_payments_unconfigured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Whitespace is an unset key, never a configured one."""
+    monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", "   ")
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_abc123")
+    settings = get_settings()
+    assert settings.stripe_publishable_key == ""
+    assert settings.card_payments_configured is False
+
+
+def test_matching_live_publishable_and_secret_keys_boot_in_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", "pk_live_abc123")
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_live_abc123")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    settings = get_settings()
+    assert settings.stripe_publishable_key == "pk_live_abc123"
+
+
+def test_card_payments_are_not_configured_without_a_publishable_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#1809: the client cannot confirm a PaymentIntent without a publishable
+    key, so payments are not "configured" until one is set."""
+    monkeypatch.setenv(
+        "TOURNAMENT_PAYMENT_MERCHANT_ACCOUNT_ID", "11111111-1111-1111-1111-111111111111"
+    )
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_abc123")
+    monkeypatch.setenv("STRIPE_ACCOUNT_ID", "acct_fake")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SIGNING_SECRETS", "whsec_test")
+    monkeypatch.delenv("STRIPE_PUBLISHABLE_KEY", raising=False)
+    assert get_settings().card_payments_configured is False
+
+    monkeypatch.setenv("STRIPE_PUBLISHABLE_KEY", "pk_test_abc123")
+    assert get_settings().card_payments_configured is True

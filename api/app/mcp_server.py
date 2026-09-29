@@ -1782,9 +1782,12 @@ def _web_checkout_url(tournament_id: uuid.UUID) -> str:
     ``APP_BASE_URL`` names the web origin. When it is unset, the MCP server's
     own public origin stands in, because nginx serves the web app and the MCP
     endpoint from one host. When neither is set, the link stays root-relative
-    rather than disappearing, so the refusal never loses the checkout link."""
+    rather than disappearing, so the refusal never loses the checkout link.
+    ``?tab=events`` (#1809) lands the player straight on the Events tab,
+    where the checkout panel lives, rather than the tournament's default tab.
+    """
     settings = get_settings()
-    path = f"/tournaments/{tournament_id}"
+    path = f"/tournaments/{tournament_id}?tab=events"
     base = settings.web_app_base_url
     if base is None:
         resource = urlsplit(settings.mcp_public_resource_url.strip())

@@ -34,6 +34,8 @@ const NAV_LINK_PATHS = [
   '/admin/users',
   '/admin/broadcast',
   '/admin/schedule-solves',
+  // The open-checkout bar's links back to a tournament's Events tab.
+  '/tournaments/$tournamentId',
 ]
 
 /** Trimmed label of a nav link (the icon `<span>` contributes no text). */

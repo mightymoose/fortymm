@@ -1229,6 +1229,9 @@ function parseNearMe(params: URLSearchParams):
 }
 
 export const handlers = [
+  // The app-wide open-checkout bar (#1809). Empty by default, so the bar stays
+  // hidden; tests that need it serve rows with `mockOpenCheckouts`.
+  http.get('*/v1/me/checkouts/open', () => HttpResponse.json([])),
   http.get('*/v1/tournaments/:tournamentId/checkouts/current', ({ params }) => {
     const tournamentId = String(params.tournamentId)
     const checkout = readCurrentMockCheckout(tournamentId)
@@ -1295,6 +1298,47 @@ export const handlers = [
       }
       return HttpResponse.json(checkout)
     },
+  ),
+  http.get('*/v1/tournaments/:tournamentId/checkouts/:checkoutId', ({ params }) => {
+    const checkout = readCurrentMockCheckout(String(params.tournamentId))
+    if (checkout?.id === params.checkoutId) return HttpResponse.json(checkout)
+    return HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 })
+  }),
+  http.patch(
+    '*/v1/tournaments/:tournamentId/checkouts/:checkoutId',
+    async ({ request }) => {
+      const body = (await request.json()) as { receipt_address: string | null }
+      return HttpResponse.json({ receipt_address: body.receipt_address })
+    },
+  ),
+  // The dev world never reaches Stripe: a payment stays `preparing`, so the
+  // checkout panel shows "Preparing payment…" (#1809). Tests that pay serve
+  // their own payment with `mockCheckoutWorld`.
+  ...(['post', 'get'] as const).map((method) =>
+    http[method](
+      '*/v1/tournaments/:tournamentId/checkouts/:checkoutId/payment',
+      ({ params }) => {
+        const checkout = readCurrentMockCheckout(String(params.tournamentId))
+        if (!checkout || checkout.id !== params.checkoutId) {
+          return HttpResponse.json({ detail: 'Checkout not found.' }, { status: 404 })
+        }
+        const payment: components['schemas']['TournamentPaymentPrepared'] = {
+          id: crypto.randomUUID(),
+          checkout_id: checkout.id,
+          reference: 'PAY-DEV00000',
+          payment_state: 'preparing',
+          last_error_code: null,
+          amount_cents: checkout.total_cents,
+          currency: 'USD',
+          created_at: new Date().toISOString(),
+          lines: checkout.lines.map((line) => ({ ...line, outcome: 'pending' as const })),
+          client_secret: null,
+          publishable_key: 'pk_test_msw',
+          receipt_address: null,
+        }
+        return HttpResponse.json(payment, { status: method === 'post' ? 201 : 200 })
+      },
+    ),
   ),
   http.get('*/v1/health', async () => {
     await delay(400)

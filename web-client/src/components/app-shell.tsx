@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { OpenCheckoutBar } from '@/components/open-checkout-bar'
 import { Link, useLinkProps, useRouterState } from '@tanstack/react-router'
 import {
   Bell,
@@ -448,6 +449,8 @@ export function AppShell({ children }: AppShellProps) {
             <UserMenu />
           </div>
         </header>
+
+        <OpenCheckoutBar />
 
         <main className="app-shell__content">{children}</main>
       </div>
