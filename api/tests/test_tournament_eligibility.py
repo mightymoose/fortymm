@@ -113,48 +113,66 @@ def test_an_open_bound_on_between_is_no_bound(
     assert isinstance(decision, Eligible) is admitted
 
 
-# ----- the counterintuitive rule (ADR-0783 §3) -------------------------------
+# ----- the unrated rule (#1635, supersedes ADR-0783 §3) ----------------------
 
 
-@pytest.mark.parametrize("op", OPS)
-def test_an_unrated_player_passes_every_operator(op: str) -> None:
-    """**An unrated player passes EVERY rating rule.** Every operator, both
-    directions, no exceptions (ADR-0783 §3).
+@pytest.mark.parametrize(
+    "rule",
+    [
+        _rule(">", 1800),
+        _rule(">=", 2800),
+        _rule("=", 1500),
+        _rule("between", [1200, 1800]),
+        _rule("between", [1200, None]),
+    ],
+)
+def test_an_unrated_player_fails_a_rule_that_sets_a_lower_bound(
+    rule: dict[str, Any],
+) -> None:
+    """A floor ("at least 2800") is a claim about a rating, and an unrated player has
+    none to show, so the rule refuses them. This closes the hole where a sandbagger
+    stays unrated and enters every event with a floor (#1635)."""
+    decision = evaluate_rating_eligibility(rating=None, predicates=[rule])
+    assert isinstance(decision, RatingIneligible)
+    assert decision.predicate_id == rule["id"]
+    assert decision.rating is None
 
-    If you are reading this because you "fixed" the evaluator to refuse an unrated
-    player — most likely on a *lower-bound* rule like ``rating > 1800``, where refusing
-    them feels obviously right — that is the change this test exists to stop. The rule
-    is not "unrated is treated as 0" and it is not "unrated fails what it cannot
-    satisfy": it is that a rule has **no honest answer** about a player we hold no
-    rating for, and the product answers "yes", because the alternative locks a
-    brand-new player out of the *Under 1500 beginners' event*, which is the single
-    most likely event for them to be trying to enter.
 
-    The cost — a rating cap is opt-out, because a sandbagger can stay unrated forever
-    — is stated in the ADR, accepted, and mitigated by *marking* unrated entrants for
-    the director, not by guessing a rating we do not have.
-    """
+@pytest.mark.parametrize(
+    "rule",
+    [
+        _rule("<", 1500),
+        _rule("<=", 1500),
+        _rule("!=", 1500),
+        _rule("between", [None, 1500]),
+        _rule("between", [None, None]),
+    ],
+)
+def test_an_unrated_player_passes_a_rule_that_sets_no_lower_bound(
+    rule: dict[str, Any],
+) -> None:
+    """A cap ("under 1500") still admits an unrated player: a brand-new player is
+    genuinely weak, and the beginners' event exists for them."""
     assert isinstance(
-        evaluate_rating_eligibility(rating=None, predicates=[_fails(op)]), Eligible
+        evaluate_rating_eligibility(rating=None, predicates=[rule]), Eligible
     )
 
 
-def test_an_unrated_player_passes_a_lower_bound_rule_too() -> None:
-    """The case that most invites the "fix": an *elite* event (``rating > 1800``) does
-    not bar the unrated player either. Same rule, and the same reason — a rating we do
-    not hold cannot refuse anybody."""
-    assert isinstance(
-        evaluate_rating_eligibility(rating=None, predicates=[_rule(">", 1800)]),
-        Eligible,
+def test_an_unrated_player_fails_a_floor_inside_a_multi_rule_event() -> None:
+    """``>= 2800 AND < 1500`` is the #1635 repro: no rating satisfies both, and an
+    unrated player is refused on the floor, not admitted on the cap."""
+    decision = evaluate_rating_eligibility(
+        rating=None,
+        predicates=[_rule(">=", 2800, "floor"), _rule("<", 1500, "cap")],
     )
+    assert isinstance(decision, RatingIneligible)
+    assert decision.predicate_id == "floor"
 
 
-def test_an_unrated_player_passes_every_rule_of_a_multi_rule_event() -> None:
+def test_an_unrated_player_passes_an_unfilled_floor() -> None:
+    """A rule with no number constrains nobody, rated or not."""
     assert isinstance(
-        evaluate_rating_eligibility(
-            rating=None,
-            predicates=[_rule(">=", 1200, "a"), _rule("<", 1500, "b")],
-        ),
+        evaluate_rating_eligibility(rating=None, predicates=[_rule(">=", None)]),
         Eligible,
     )
 

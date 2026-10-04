@@ -224,6 +224,26 @@ describe('entryControlState', () => {
     })
   })
 
+  // An unrated player is refused by a minimum-rating rule (#1635). The server sends
+  // `rating: null`: there is no number they were judged on, so the reason says so
+  // instead of printing a dash.
+  it('says an INELIGIBLE unrated player has no rating yet', () => {
+    const base = buildIneligibleEvent()
+    const unrated = buildIneligibleEvent({
+      entryState: {
+        state: 'rating_ineligible',
+        predicateId: 'pr-u1500',
+        rating: null,
+      },
+    })
+    expect(base.predicates).toEqual(unrated.predicates)
+    expect(state({ event: unrated })).toEqual({
+      kind: 'ineligible',
+      lead: 'Not eligible',
+      reason: 'Rating is less than 1500. You have no rating yet.',
+    })
+  })
+
   // …and it prints that rating the way every OTHER surface in the app prints one:
   // rounded (`formatRating`). The fixture is the point of this test — a raw Glicko
   // float, thirteen decimals, exactly what the server sends. Its predecessor used a

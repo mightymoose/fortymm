@@ -31,14 +31,14 @@ describe('EligibilitySection', () => {
   // would bind would describe a constraint that does not exist.
   it('adds no rated/unrated qualifier to the no-rules empty state', () => {
     eligibilitySectionPage.render({ event: buildEvent({ predicates: [] }) })
-    expect(document.body).not.toHaveTextContent('Unrated players are exempt')
+    expect(document.body).not.toHaveTextContent('Unrated players cannot enter')
     expect(document.body).not.toHaveTextContent("rated on this tournament's ladder")
 
     eligibilitySectionPage.render({
       event: buildEvent({ predicates: [] }),
       canEdit: false,
     })
-    expect(document.body).not.toHaveTextContent('Unrated players are exempt')
+    expect(document.body).not.toHaveTextContent('Unrated players cannot enter')
     expect(document.body).not.toHaveTextContent("rated on this tournament's ladder")
   })
 
@@ -269,7 +269,7 @@ describe('EligibilitySection', () => {
         "All 2 rules must match for players rated on this tournament's ladder.",
       )
       expect(eligibilitySectionPage.getFootnote()).toHaveTextContent(
-        'Unrated players are exempt.',
+        'Unrated players cannot enter if a rule sets a minimum or exact rating.',
       )
       expect(eligibilitySectionPage.getFootnote()).not.toHaveTextContent(
         /Combine with/,
@@ -303,7 +303,7 @@ describe('EligibilitySection', () => {
         "All 2 rules must match for players rated on this tournament's ladder.",
       )
       expect(eligibilitySectionPage.getFootnote()).toHaveTextContent(
-        'Unrated players are exempt.',
+        'Unrated players cannot enter if a rule sets a minimum or exact rating.',
       )
       expect(eligibilitySectionPage.getFootnote()).toHaveTextContent(
         /Combine with/,

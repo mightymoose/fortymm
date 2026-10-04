@@ -69,7 +69,7 @@ const scoped = (container: Container) => ({
   },
 
   /** The line beneath the eligibility chips stating their true scope: the rules
-   * bind rated players, and unrated players may enter (ADR-0783 §3). Absent for
+   * bind rated players, and unrated players cannot enter on a minimum (#1635). Absent for
    * an event with no rules — an open event carries no rated/unrated qualifier. */
   queryEligibilityScope() {
     return container.queryByTestId('eligibility-scope')
