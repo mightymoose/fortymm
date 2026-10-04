@@ -11,11 +11,21 @@ struct MatchPlayer: Identifiable, Hashable {
     var rating: Int = 1500
     var you: Bool = false
     /// The API user id, present for players that came from the server. Drives
-    /// `opponent_user_id` on match creation; nil for the solo "Guest" sentinel.
+    /// `opponent_user_id` on match creation; nil for the solo `unlistedOpponent` sentinel.
     var userId: UUID? = nil
 
-    /// The "Guest" placeholder shown on the opponent side of a solo match.
-    static let guest = MatchPlayer(handle: "Guest", initials: "GU", avatarColor: .slate)
+    /// The name shown for a solo match's player-less side. A solo match records
+    /// a real opponent who is not on FortyMM, or a match played alone, so the
+    /// label must not say that nobody was there (#1522). Every iOS surface that
+    /// names that side reads it from here.
+    static let unlistedOpponentName = "Unlisted opponent"
+
+    /// The placeholder shown on the opponent side of a solo match.
+    static let unlistedOpponent = MatchPlayer(
+        handle: unlistedOpponentName,
+        initials: unlistedOpponentName.fmInitials,
+        avatarColor: .slate
+    )
 
     /// Build a picker/opponent player from an API `PlayerRead`, deriving the
     /// initials and avatar colour (the API carries neither) deterministically
@@ -273,7 +283,7 @@ struct FinalMatch: Identifiable {
     // participants without pretending side 1 is the viewer. ---
     /// Side 1 and side 2 players, in canonical side-number order.
     var sideA: MatchPlayer = MatchSeed.me
-    var sideB: MatchPlayer = .guest
+    var sideB: MatchPlayer = .unlistedOpponent
     /// Games won by side 1 / side 2.
     var sideAGames: Int = 0
     var sideBGames: Int = 0

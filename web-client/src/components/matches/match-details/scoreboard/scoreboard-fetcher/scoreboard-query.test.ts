@@ -892,7 +892,7 @@ describe("scoreboardQuery", () => {
     expect(second.cells[0]).toMatchObject({ editGameNumber: null });
   });
 
-  it("projects a playerless side as a ghost 'No opponent' row", async () => {
+  it("projects a playerless side as a ghost 'Unlisted opponent' row", async () => {
     scoreboardQueryPage.mockEndpoint(() =>
       HttpResponse.json(
         buildMatchDetails({
@@ -913,7 +913,7 @@ describe("scoreboardQuery", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     const [, ghost] = result.current.data!.gameGrid!.rows;
-    expect(ghost).toMatchObject({ name: "No opponent", isGhost: true });
+    expect(ghost).toMatchObject({ name: "Unlisted opponent", isGhost: true });
   });
 
   it("projects the hero scoreline from the perspective-ordered sides", async () => {
@@ -1025,8 +1025,8 @@ describe("scoreboardQuery", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.heroRow.right).toEqual({
-      name: "No opponent",
-      initials: "NO",
+      name: "Unlisted opponent",
+      initials: "UO",
       isGhost: true,
       won: false,
     });
@@ -1058,7 +1058,7 @@ describe("scoreboardQuery", () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(result.current.data?.heroRow.right).toMatchObject({
-      name: "No opponent",
+      name: "Unlisted opponent",
       isGhost: true,
     });
   });

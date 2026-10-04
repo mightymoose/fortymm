@@ -1,13 +1,13 @@
 import { noOpponentProfilePage } from "./no-opponent-profile.page";
 
 describe("NoOpponentProfile", () => {
-  it('names the missing side "No opponent" in the ghost tone', () => {
+  it('names the empty side "Unlisted opponent" in the ghost tone', () => {
     noOpponentProfilePage.render();
 
     expect(noOpponentProfilePage.getGhostName()).toBeInTheDocument();
   });
 
-  it("explains the half as a solo match", () => {
+  it("explains an unlisted opponent as off FortyMM, or no one at all", () => {
     noOpponentProfilePage.render();
 
     expect(noOpponentProfilePage.getSoloNote()).toBeInTheDocument();

@@ -1,6 +1,6 @@
 /** What a history row needs in order to name its match for a screen reader. */
 export interface MatchRowLinkNaming {
-  /** The opponent's display name, or "No opponent" for a solo match. */
+  /** The opponent's display name, or "Unlisted opponent" for a solo match. */
   opponent: string
   /** True for the player-less solo sentinel side (ADR-0008). */
   isSolo: boolean

@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import { matchDetailRoute, scoringNewRoute } from '@/api/matches'
 import type { DashboardAttentionItem } from '@/api/dashboard'
+import { UNLISTED_OPPONENT_LABEL } from '@/components/matches/unlisted-opponent-label'
 
 // The retirement deadline as it arrives on the attention item: an ISO datetime
 // string, null, or absent. Parsed at this projection boundary and soft-failed
@@ -17,10 +18,6 @@ const retirementDeadlineSchema = z
 const parseRetirementDeadline = (value: unknown): string | null =>
   retirementDeadlineSchema.parse(value ?? null)
 
-// Used wherever an opponent slot has no registered player — matches the label
-// the rest of the dashboard uses for solo matches.
-const NO_OPPONENT_LABEL = 'No opponent'
-
 // The panel never grows unbounded — show the top 3 rows, roll the rest into
 // the footer (PRD §6.4).
 export const ATTENTION_VISIBLE_LIMIT = 3
@@ -31,9 +28,9 @@ type RowRoute =
 
 export interface AttentionRowView {
   matchId: string
-  /** Avatar seed — null renders the "no opponent" placeholder avatar. */
+  /** Avatar seed — null renders the "unlisted opponent" placeholder avatar. */
   opponentName: string | null
-  /** Row headline, e.g. `vs nguyen.t` or `No opponent`. */
+  /** Row headline, e.g. `vs nguyen.t` or `Unlisted opponent`. */
   headline: string
   /** Button copy: `Review result` | `Enter score`. */
   actionLabel: string
@@ -129,7 +126,7 @@ export function projectAttentionPanelView(
       opponentName: item.opponent_username,
       headline: item.opponent_username
         ? `vs ${item.opponent_username}`
-        : NO_OPPONENT_LABEL,
+        : UNLISTED_OPPONENT_LABEL,
       actionLabel: actionLabelOf(item.kind),
       primary: bucketKey(item) === topBucket,
       route: routeOf(item),

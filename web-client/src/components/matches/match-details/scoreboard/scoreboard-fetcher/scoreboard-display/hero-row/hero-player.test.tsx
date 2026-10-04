@@ -49,10 +49,10 @@ describe("HeroPlayer", () => {
     );
   });
 
-  it('renders a ghost side as a "No opponent" placeholder without an initials avatar', () => {
+  it('renders a ghost side as an "Unlisted opponent" placeholder without an initials avatar', () => {
     heroPlayerPage.render({ side: buildGhostHeroSideView() });
 
-    const name = heroPlayerPage.getPlayerName("l", "No opponent");
+    const name = heroPlayerPage.getPlayerName("l", "Unlisted opponent");
     expect(name).toHaveClass("md-hero__name--ghost");
     expect(heroPlayerPage.queryPlayerAvatar("NO")).not.toBeInTheDocument();
   });

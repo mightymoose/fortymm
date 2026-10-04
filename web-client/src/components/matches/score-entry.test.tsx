@@ -1140,6 +1140,50 @@ describe('ScoreEntry — name layout (#566)', () => {
   })
 })
 
+describe('ScoreEntry — solo match (#1522)', () => {
+  // A solo match can record a real opponent who is not on FortyMM, so the
+  // player-less side's field must not say that nobody was there.
+  it('labels the player-less side "Unlisted opponent"', async () => {
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(
+          inProgressMatch({
+            affects_rating: false,
+            sides: [
+              {
+                side_number: 1,
+                players: [
+                  { user_id: 'u-me', username: 'me', is_current_user: true },
+                ],
+                games_won: 1,
+                won: null,
+                is_current_user_side: true,
+              },
+              {
+                side_number: 2,
+                players: [],
+                games_won: 1,
+                won: null,
+                is_current_user_side: false,
+              },
+            ],
+          }),
+        ),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    await screen.findByRole('heading', { name: /enter game 3 score/i })
+
+    expect(
+      screen.getByRole('textbox', { name: 'Unlisted opponent score' }),
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole('textbox', { name: 'No opponent score' }),
+    ).toBeNull()
+  })
+})
+
 describe('ScoreEntry — edit', () => {
   it('pre-populates inputs from the stored score and PUTs the new value', async () => {
     const user = userEvent.setup()

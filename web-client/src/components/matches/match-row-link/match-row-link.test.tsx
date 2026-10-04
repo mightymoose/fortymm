@@ -55,11 +55,11 @@ describe('MatchRowLink', () => {
     expect(await matchRowLinkPage.findMatchLink()).toHaveClass('match-row-link')
   })
 
-  it('reads a solo match as "Solo match", never "Match against No opponent"', () => {
+  it('reads a solo match as "Solo match", never "Match against Unlisted opponent"', () => {
     // The player-less sentinel side (ADR-0008) has nobody to be "against".
     expect(
       matchRowAriaLabel({
-        opponent: 'No opponent',
+        opponent: 'Unlisted opponent',
         isSolo: true,
         when: 'Mar 14',
       }),

@@ -143,7 +143,7 @@ export const vsOpponent = (
 /**
  * A **solo** match — the player-less sentinel side (ADR-0008). `id` and
  * `username` are both null on the wire, which is precisely the row that must
- * render "No opponent" as plain text and NOT a link to `/players/null` (#1005).
+ * render "Unlisted opponent" as plain text and NOT a link to `/players/null` (#1005).
  */
 export const soloMatch = (id: string): PlayerMatchRow =>
   ({

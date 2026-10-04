@@ -4,7 +4,7 @@ import { UserAvatar } from '@/components/ui/user-avatar'
 import { cn } from '@/lib/utils'
 
 export interface PlayerChipView {
-  /** Display label for the side — players joined by ' & ', or 'No opponent'. Pre-computed by the row projector via sideLabel. */
+  /** Display label for the side — players joined by ' & ', or 'Unlisted opponent'. Pre-computed by the row projector via sideLabel. */
   name: string
   /** True when the side is null or has no players: render the dashed ghost avatar instead of a UserAvatar, and italicise the name. */
   isEmpty: boolean

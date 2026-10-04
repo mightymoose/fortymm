@@ -34,12 +34,12 @@ describe('RecentResultsCard', () => {
     expect(recentResultsCardPage.getSummary(/last 3/)).toBeInTheDocument()
   })
 
-  it('labels an opponent-less solo match as "No opponent"', () => {
+  it('labels an opponent-less solo match as "Unlisted opponent"', () => {
     recentResultsCardPage.render({
       rows: [dashboardRecentResult({ opponent_username: null })],
     })
 
-    expect(recentResultsCardPage.queryOpponent('No opponent')).toBeInTheDocument()
+    expect(recentResultsCardPage.queryOpponent('Unlisted opponent')).toBeInTheDocument()
   })
 
   it('shows the signed rating delta when the match MOVED the rating', () => {

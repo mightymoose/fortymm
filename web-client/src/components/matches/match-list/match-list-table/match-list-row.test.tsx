@@ -13,10 +13,10 @@ describe('MatchListRow', () => {
   it('renders as a clickable role=link tr with the composed aria-label', async () => {
     // Wiring only: the label text is pre-projected onto the view.
     matchListRowPage.render({
-      row: buildMatchListRowView({ ariaLabel: 'Open match: a & b vs No opponent' }),
+      row: buildMatchListRowView({ ariaLabel: 'Open match: a & b vs Unlisted opponent' }),
     })
 
-    const row = await matchListRowPage.findRow('Open match: a & b vs No opponent')
+    const row = await matchListRowPage.findRow('Open match: a & b vs Unlisted opponent')
     expect(row.tagName).toBe('TR')
     expect(row).toHaveAttribute('role', 'link')
     expect(row).toHaveAttribute('tabindex', '0')

@@ -8,7 +8,7 @@ const SK = "md-sk animate-pulse";
  * shimmer-blocked. `.md-players` is a `1fr 1px 1fr` grid, so both halves
  * equalise to the taller profile's height; rendering two full profiles
  * therefore reserves the loaded panel's height even when one real side is the
- * shorter "No opponent" placeholder. Form list uses a representative three
+ * shorter "Unlisted opponent" placeholder. Form list uses a representative three
  * rows (the loaded count varies). */
 const ProfileSkeleton = () => (
   <div className="md-profile">

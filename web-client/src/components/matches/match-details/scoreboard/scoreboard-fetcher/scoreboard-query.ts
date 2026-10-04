@@ -5,6 +5,7 @@ import {
 import { orderedSides } from "../../ordered-sides";
 import type { Scoreboard } from "@/api/matches";
 import { initialsOf } from "@/lib/utils";
+import { UNLISTED_OPPONENT_LABEL } from "@/components/matches/unlisted-opponent-label";
 
 /** The status chip on the left of the strip. Its label comes from the
  * server's lifecycle `status_label` (Live / Awaiting acceptance / Final /
@@ -44,7 +45,7 @@ export type GameGridCellView =
     };
 
 export type GameGridRowView = {
-  /** Lead player's username, or "No opponent" for a playerless ghost side. */
+  /** Lead player's username, or "Unlisted opponent" for a playerless ghost side. */
   name: string;
   initials: string;
   isGhost: boolean;
@@ -64,9 +65,9 @@ export type GameGridView = {
 
 /** One competitor in the hero row. A ghost side stands in for a missing
  * opponent — a playerless side row, or no second side at all — and renders
- * as the dashed "No opponent" placeholder instead of an avatar. */
+ * as the dashed "Unlisted opponent" placeholder instead of an avatar. */
 export type HeroSideView = {
-  /** Lead player's username, or "No opponent" for a ghost side. */
+  /** Lead player's username, or "Unlisted opponent" for a ghost side. */
   name: string;
   initials: string;
   isGhost: boolean;
@@ -215,11 +216,9 @@ const selectHeading = (match: MatchDetailsResult): ScoreboardHeadingView => {
 type MatchDetailsSide = MatchDetailsResult["unmigrated"]["sides"][number];
 type MatchDetailsGame = MatchDetailsResult["unmigrated"]["games"][number];
 
-const NO_OPPONENT_LABEL = "No opponent";
-
 const selectHeroSide = (side: MatchDetailsSide | null): HeroSideView => {
   const player = side?.players[0] ?? null;
-  const name = player?.username ?? NO_OPPONENT_LABEL;
+  const name = player?.username ?? UNLISTED_OPPONENT_LABEL;
   return {
     name,
     initials: initialsOf(name),
@@ -251,7 +250,7 @@ const selectGameGridRow = (
   details: MatchDetailsResult["unmigrated"],
   editable: boolean,
 ): GameGridRowView => {
-  const name = side.players[0]?.username ?? NO_OPPONENT_LABEL;
+  const name = side.players[0]?.username ?? UNLISTED_OPPONENT_LABEL;
   return {
     name,
     initials: initialsOf(name),

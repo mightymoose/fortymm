@@ -57,7 +57,7 @@ describe("PlayersPanelDisplay", () => {
     expect(playersPanelDisplayPage.querySoloNote()).not.toBeInTheDocument();
   });
 
-  it('renders the "No opponent" placeholder for a null right side', () => {
+  it('renders the "Unlisted opponent" placeholder for a null right side', () => {
     playersPanelDisplayPage.render({
       panel: buildPlayersPanelView({ right: null }),
     });
@@ -66,7 +66,7 @@ describe("PlayersPanelDisplay", () => {
     expect(playersPanelDisplayPage.getSoloNote()).toBeInTheDocument();
   });
 
-  it('renders the "No opponent" placeholder for a null left side too', () => {
+  it('renders the "Unlisted opponent" placeholder for a null left side too', () => {
     playersPanelDisplayPage.render({
       panel: buildPlayersPanelView({ left: null }),
     });

@@ -90,4 +90,13 @@ describe('RecentOpponents', () => {
     // stay reachable even when the grid is empty.
     expect(recentOpponentsPage.querySearchAll()).toBeInTheDocument()
   })
+
+  it('says to leave the opponent blank when they are not on FortyMM (#1522)', async () => {
+    recentOpponentsPage.mockRecent(() => HttpResponse.json([]))
+    recentOpponentsPage.render()
+
+    expect(await recentOpponentsPage.findEmpty()).toHaveTextContent(
+      "No opponents yet. Use Search to find a player, or leave it blank if your opponent isn't on FortyMM.",
+    )
+  })
 })

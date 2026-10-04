@@ -19,8 +19,8 @@ export interface RecentMatchRowProps {
  * its opponents in plain text, which left the page's most obvious next step
  * unreachable.
  *
- * A **solo** match has nobody on the other side, so there is nothing to link to
- * and it stays plain text ("No opponent", in the ghost tone). That is not a
+ * A **solo** match has no account on the other side, so there is nothing to link
+ * to and it stays plain text ("Unlisted opponent", in the ghost tone). That is not a
  * defensive null-check bolted onto a link: the opponent view is a sum type, and
  * only its `player` variant carries an id, so the link cannot be built for the
  * variant that has none. A naive `to="/players/$userId"` fed a nullable id sends

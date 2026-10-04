@@ -41,6 +41,6 @@ describe("HeroRow", () => {
       heroRow: buildHeroRowView({ right: buildGhostHeroSideView() }),
     });
 
-    expect(heroRowPage.getPlayerName("r", "No opponent")).toBeInTheDocument();
+    expect(heroRowPage.getPlayerName("r", "Unlisted opponent")).toBeInTheDocument();
   });
 });

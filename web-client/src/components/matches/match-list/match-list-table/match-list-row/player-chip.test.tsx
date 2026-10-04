@@ -24,12 +24,12 @@ describe('PlayerChip', () => {
 
   it('renders the ghost dashed avatar and an italic is-empty name for an empty side', () => {
     playerChipPage.render({
-      chip: buildPlayerChipView({ name: 'No opponent', isEmpty: true }),
+      chip: buildPlayerChipView({ name: 'Unlisted opponent', isEmpty: true }),
     })
 
     expect(playerChipPage.queryGhostAvatar()).toBeInTheDocument()
-    expect(playerChipPage.queryRenderedAvatar('No opponent')).toBeNull()
-    expect(playerChipPage.getPlayerName('No opponent')).toHaveClass('is-empty')
+    expect(playerChipPage.queryRenderedAvatar('Unlisted opponent')).toBeNull()
+    expect(playerChipPage.getPlayerName('Unlisted opponent')).toHaveClass('is-empty')
   })
 
   it('renders a UserAvatar (not the ghost) for a present side', () => {

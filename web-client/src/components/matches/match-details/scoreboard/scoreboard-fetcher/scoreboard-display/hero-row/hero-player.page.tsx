@@ -6,7 +6,7 @@ import { buildHeroPlayerProps } from "./hero-player.factory";
 const scoped = (container: Container) => ({
   /**
    * The side's name element, resolved within the `--l`/`--r` positioned
-   * block; a ghost side reads "No opponent". Absent when no side with that
+   * block; a ghost side reads "Unlisted opponent". Absent when no side with that
    * name sits at that end of the row.
    */
   getPlayerName(pos: "l" | "r", name: string) {
@@ -35,7 +35,7 @@ const scoped = (container: Container) => ({
 
 /**
  * Test page-object for `HeroPlayer` — one side of the hero row (avatar +
- * name, or the ghost "No opponent" placeholder). Accessors take the `pos`
+ * name, or the ghost "Unlisted opponent" placeholder). Accessors take the `pos`
  * the component was given, mirroring how the row distinguishes its two ends.
  */
 export const heroPlayerPage = {

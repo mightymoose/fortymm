@@ -61,7 +61,7 @@ describe('RecentMatchesDisplay', () => {
 
     expect(recentMatchesDisplayPage.getRows()).toHaveLength(6)
     expect(recentMatchesDisplayPage.getRow('kai.zhou')).toBeInTheDocument()
-    expect(recentMatchesDisplayPage.getRow('No opponent')).toBeInTheDocument()
+    expect(recentMatchesDisplayPage.getRow('Unlisted opponent')).toBeInTheDocument()
   })
 
   it('has no result-chip column — the grid is Opponent, Score, Δ, When', async () => {
@@ -151,12 +151,12 @@ describe('RecentMatchesDisplay', () => {
     // that nothing in the row points at a *player*: the thing a naive
     // nullable-id fix gets wrong.
     expect(
-      recentMatchesDisplayPage.queryOpponentLink('No opponent'),
+      recentMatchesDisplayPage.queryOpponentLink('Unlisted opponent'),
     ).toBeNull()
     expect(
-      recentMatchesDisplayPage.getRow('No opponent').innerHTML,
+      recentMatchesDisplayPage.getRow('Unlisted opponent').innerHTML,
     ).not.toContain('/players/')
-    expect(recentMatchesDisplayPage.getRowLinks('No opponent')).toHaveLength(1)
+    expect(recentMatchesDisplayPage.getRowLinks('Unlisted opponent')).toHaveLength(1)
   })
 
   it('links to the full history, naming the all-inclusive total', async () => {

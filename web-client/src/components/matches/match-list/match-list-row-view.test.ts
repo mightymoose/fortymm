@@ -58,12 +58,12 @@ describe('sideLabel', () => {
     expect(sideLabel(side(['nguyen.t', 'silva.r']))).toBe('nguyen.t & silva.r')
   })
 
-  it('returns "No opponent" for a null side', () => {
-    expect(sideLabel(null)).toBe('No opponent')
+  it('returns "Unlisted opponent" for a null side', () => {
+    expect(sideLabel(null)).toBe('Unlisted opponent')
   })
 
-  it('returns "No opponent" for a player-less side', () => {
-    expect(sideLabel(side([]))).toBe('No opponent')
+  it('returns "Unlisted opponent" for a player-less side', () => {
+    expect(sideLabel(side([]))).toBe('Unlisted opponent')
   })
 })
 
@@ -142,7 +142,7 @@ describe('projectMatchListRow', () => {
     const row = matchListRow({ status: 'pending', sides: [solo] })
     const view = projectMatchListRow(row)
     expect(view.side1.name).toBe('only.player')
-    expect(view.side2.name).toBe('No opponent')
+    expect(view.side2.name).toBe('Unlisted opponent')
     expect(view.side2.isEmpty).toBe(true)
   })
 
@@ -211,20 +211,20 @@ describe('projectMatchListRow', () => {
     expect(projectMatchListRow(row).ariaLabel).toBe('Open match: alpha vs beta')
   })
 
-  it('reads an opponent-less row as "{s1} (no opponent)" (#175)', () => {
+  it('reads an opponent-less row as "{s1} vs Unlisted opponent" (#175, #1522)', () => {
     const s1 = side(['alpha'], { side_number: 1 })
     const row = matchListRow({ sides: [s1] })
     expect(projectMatchListRow(row).ariaLabel).toBe(
-      'Open match: alpha (no opponent)',
+      'Open match: alpha vs Unlisted opponent',
     )
   })
 
-  it('treats a player-less sentinel side 2 as no opponent (#175)', () => {
+  it('reads a player-less sentinel side 2 as an unlisted opponent (#175, #1522)', () => {
     const s1 = side(['alpha'], { side_number: 1 })
     const s2 = side([], { side_number: 2 })
     const row = matchListRow({ sides: [s1, s2] })
     expect(projectMatchListRow(row).ariaLabel).toBe(
-      'Open match: alpha (no opponent)',
+      'Open match: alpha vs Unlisted opponent',
     )
   })
 
