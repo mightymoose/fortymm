@@ -31,9 +31,9 @@ export interface EligibilitySectionProps {
 /** The event editor's "Eligibility" tab — a free-form, ANDed rule builder for
  * the creator; for everyone else, the same rules read back as prose. No rules
  * means the event is open to everyone, which reads the same either way. With
- * rules, both voices state the policy truthfully (ADR-0783 §3): the rules bind
- * players rated on this tournament's ladder, and an unrated player is exempt
- * from every one of them (#1608). */
+ * rules, both voices state the policy truthfully (#1608, #1635): the rules bind
+ * players rated on this tournament's ladder, and an unrated player cannot enter
+ * if a rule sets a minimum or exact rating. */
 export const EligibilitySection = ({
   control,
   canEdit,
@@ -61,8 +61,9 @@ export const EligibilitySection = ({
         //
         // Once a rule exists, the sentence names who it binds: the rules
         // constrain players RATED ON THIS TOURNAMENT'S LADDER, and an unrated
-        // player passes every one of them (ADR-0783 §3) — an unqualified
-        // "players must satisfy every rule" is the lie #1608 exists to correct.
+        // player fails any that sets a minimum or exact rating (#1635) — an
+        // unqualified "players must satisfy every rule" is the lie #1608 exists
+        // to correct.
         // The ladder qualifier is not decoration: the server compares against
         // the rating on this tournament's league, so a player rated elsewhere is
         // unrated here. With no rules the sentence stays as it is: a
@@ -171,14 +172,16 @@ export const EligibilitySection = ({
                   .
                 </>
               )}{' '}
-              {/* The exception the rule count alone would erase: an unrated
-                  player passes every one of these rules (ADR-0783 §3), so the
-                  exemption is stated beside the constraint, in text, never left
-                  to a color, an icon or a hover (#1608). "Exempt", not "may
-                  enter": these rules are the only thing being spoken for, and
-                  capacity and the registration window still refuse on their own
-                  terms. */}
-              Unrated players are exempt.
+              {/* What the rule count alone would erase: an unrated player fails
+                  any of these rules that sets a minimum or exact rating (#1635)
+                  and passes one that sets only a maximum, so that is stated
+                  beside the constraint, in text, never left to a color, an icon
+                  or a hover (#1608). "Cannot enter" is only ever promised, never
+                  "may enter": these rules are the only thing being spoken for,
+                  and capacity and the registration window still refuse on their
+                  own terms. */}
+              Unrated players cannot enter if a rule sets a minimum or exact
+              rating.
             </span>
           </div>
         </div>

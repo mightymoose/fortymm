@@ -452,9 +452,9 @@ test.describe('Tournaments · what the event refuses (#783)', () => {
 /**
  * The **visible loophole** (ADR-0783 §3).
  *
- * An unrated player passes every rating rule — `rating < 1200` admits someone who
- * holds no rating at all — because the alternative bars a beginner from the
- * beginners' event. The accepted cost: a rating cap is **opt-out**. Never play a
+ * An unrated player passes a cap — `rating < 1200` admits someone who holds no
+ * rating at all — because the alternative bars a beginner from the beginners'
+ * event. A floor such as `rating >= 1800` refuses them (#1635). The accepted cost: a rating cap is **opt-out**. Never play a
  * rated match, stay unrated, stay eligible for every capped event.
  *
  * The whole mitigation is that the entrants list *says so*. The director is the only

@@ -142,7 +142,7 @@ type StoredEvent = Omit<TournamentEventRead, 'entered' | 'held_places' | 'availa
   /** Older mock seeds predate lifecycle reads; they represent unstarted events. */
   lifecycle_state?: TournamentEventRead['lifecycle_state']
   /** Seeded: the dev user is refused by this rule, at this rating. */
-  ineligible?: { predicate_id: string; rating: number }
+  ineligible?: { predicate_id: string; rating: number | null }
 }
 
 /** What the store holds for a tournament: the wire shape minus its events (which are
@@ -210,8 +210,8 @@ function tables(count: number): TournamentTable[] {
  * never the dev user, so the Enter control is offered on every seeded event.
  *
  * **Every fourth one is UNRATED** (`rating: null`) — they hold no rating on the
- * tournament's ladder, so they pass every rating rule (ADR-0783 §3) and the roster
- * marks them. Seeded into the first eight, i.e. into the chips a card actually
+ * tournament's ladder, so a cap admits them, a floor refuses them (#1635), and the
+ * roster marks them. Seeded into the first eight, i.e. into the chips a card actually
  * shows, so `npm run dev` shows a *mixed* roster: without an unrated entrant in the
  * seed, the one mitigation this whole decision rests on would be invisible in the
  * only place a director looks at it. The rest carry a spread of real ratings. */

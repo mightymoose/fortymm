@@ -327,8 +327,11 @@ _Avoid_: filter, restriction, requirement (a predicate is the stored rule; the
 An entrant holding no rating in the tournament's league — they have never finished a
 rated match on that ladder. Note this is **not** "their `rating_value` is null": a new
 player is seeded 1500 on sign-up, so unratedness is `is_rated_member()`, the same
-predicate the profile and the roster read. They **pass every rating rule** (ADR-0783), because the
-alternative bars a beginner from the beginners' event. This makes a rating cap
+predicate the profile and the roster read. They **fail a rating rule that sets a lower
+bound** (`>`, `>=`, `=`, `between` with a minimum) and **pass a rule that sets only an
+upper bound** (`<`, `<=`, `!=`, `between` with only a maximum). This supersedes
+ADR-0783 §3, which let them pass every rule (ADR 20261004-unrated-fails-lower-bound-rules).
+A cap still admits them, because it is the beginners' event. That makes a cap
 opt-out, so an unrated entrant is *marked as such* in the entrants list: the director
 is the one who can act on it, and they can only act on what they can see.
 _Avoid_: unranked, provisional (they hold no rating at all, not a soft one).

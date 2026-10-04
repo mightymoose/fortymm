@@ -212,16 +212,14 @@ async def _enforce_rating_eligible(
     **tournament's** league (its ``league_id``), the ladder the tournament named when it
     was created.
 
-    **A player with no rating there passes every rule and is not refused** (ADR-0783
-    §3):
-    that is the beginners'-event case. ``match``, not ``if isinstance(...)``: a third
-    eligibility outcome added tomorrow is a type error here until it is answered, rather
-    than silently falling through and *admitting* the player — a guard must never fail
-    in
-    the permissive direction. ``user``, not the actor: the rules judge the person being
-    ENTERED, so a director adding a 1650 player to the "Under 1500" event is refused
-    with
-    the same code that player would have got — ownership is not an eligibility bypass.
+    **A player with no rating there fails a rule that sets a lower bound and passes
+    one that does not** (#1635): the beginners'-event case. ``match``, not ``if
+    isinstance(...)``: a third eligibility outcome added tomorrow is a type error here
+    until it is answered, rather than silently falling through and *admitting* the
+    player — a guard must never fail in the permissive direction. ``user``, not the
+    actor: the rules judge the person being ENTERED, so a director adding a 1650
+    player to the "Under 1500" event is refused with the same code that player would
+    have got — ownership is not an eligibility bypass.
     """
     rating = await entrant_rating(db, tournament.league_id, user.id)
     decision = evaluate_rating_eligibility(rating=rating, predicates=event.predicates)
