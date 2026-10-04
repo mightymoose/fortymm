@@ -9064,6 +9064,62 @@ async def test_patching_a_table_catalogue_that_authors_a_table_id_is_refused(
     assert [table["id"] for table in reread["table_catalogue"]] == minted
 
 
+@pytest.mark.parametrize("char", ["x", "🏆"])
+@pytest.mark.parametrize("route", ["create", "patch"])
+@pytest.mark.parametrize("field", ["label"])
+async def test_a_table_field_over_255_code_points_is_a_422_and_255_is_accepted(
+    authed_client: tuple[AsyncClient, User], field: str, route: str, char: str
+) -> None:
+    """A table ``label`` is a ``VARCHAR(255)`` column, so a longer one must be refused
+    as a 422 on that field and not reach the database as a 500 (#1595). The bound
+    counts code points: ``"🏆" * 256`` is 512 UTF-16 units, and a bound sized on bytes
+    or units would wrongly refuse ``"🏆" * 255``."""
+    client, _ = authed_client
+    default = {"label": "Table 1", "court": "A"}
+
+    if route == "create":
+        too_long = await client.post(
+            "/v1/tournaments",
+            json=_create_payload(table_catalogue=[{**default, field: char * 256}]),
+        )
+        assert too_long.status_code == 422, too_long.text
+        assert ["body", "table_catalogue", 0, field] in _error_locs(too_long)
+
+        fits = await client.post(
+            "/v1/tournaments",
+            json=_create_payload(table_catalogue=[{**default, field: char * 255}]),
+        )
+        assert fits.status_code == 201, fits.text
+        assert fits.json()["table_catalogue"][0][field] == char * 255
+        return
+
+    created = (await client.post("/v1/tournaments", json=_create_payload())).json()
+    before = created["table_catalogue"]
+
+    def cited(value: str) -> list[dict[str, Any]]:
+        return [
+            {"id": t["id"], "label": t["label"], "court": t["court"]}
+            | ({field: value} if i == 0 else {})
+            for i, t in enumerate(before)
+        ]
+
+    too_long = await client.patch(
+        f"/v1/tournaments/{created['id']}",
+        json={"table_catalogue": cited(char * 256)},
+    )
+    assert too_long.status_code == 422, too_long.text
+    assert ["body", "table_catalogue", 0, field] in _error_locs(too_long)
+    reread = (await client.get(f"/v1/tournaments/{created['id']}")).json()
+    assert reread["table_catalogue"] == before
+
+    fits = await client.patch(
+        f"/v1/tournaments/{created['id']}",
+        json={"table_catalogue": cited(char * 255)},
+    )
+    assert fits.status_code == 200, fits.text
+    assert fits.json()["table_catalogue"][0][field] == char * 255
+
+
 async def test_a_patched_catalogue_keeps_the_ids_of_the_tables_it_cited(
     authed_client: tuple[AsyncClient, User],
 ) -> None:

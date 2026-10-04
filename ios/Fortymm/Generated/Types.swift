@@ -13994,6 +13994,9 @@ internal enum Components {
         /// optional ``id`` naming the table they keep (:class:`TournamentTableUpsert`) — which
         /// is citing an id, not authoring one, and does not disturb who mints them.
         ///
+        /// The label is bounded at 255 code points to match the ``VARCHAR(255)`` column, so an
+        /// over-length value is a 422 and not a database fault (#1595).
+        ///
         /// - Remark: Generated from `#/components/schemas/TournamentTableWrite`.
         internal struct TournamentTableWrite: Codable, Hashable, Sendable {
             /// - Remark: Generated from `#/components/schemas/TournamentTableWrite/label`.
