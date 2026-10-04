@@ -587,3 +587,41 @@ def test_a_refused_recipient_never_puts_the_address_in_the_raised_error(
     assert "example.com" not in str(caught.value)
     assert caught.value.__cause__ is None
     assert caught.value.__suppress_context__ is True
+
+
+async def test_an_erase_revalidates_the_payer_under_the_lock(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The DELETE authorizes on an unlocked read. An account merge can move the
+    payment to the survivor before the erase takes its locks, and the erase must
+    then leave the survivor's receipt alone."""
+    from app import receipt_addresses, tournament_payments
+    from app.tournament_payment_errors import PaymentNotFoundError
+    from app.tournament_payments import erase_payment_receipt_address
+    from tests._helpers import make_user
+
+    payer, _owner, _provider, payment = await _paid_checkout(
+        api_client, db_session, monkeypatch, receipt_address="receipts@example.com"
+    )
+    survivor = await make_user(db_session, f"survivor-{uuid.uuid4().hex[:8]}")
+    real_erase = receipt_addresses.erase_receipt_address
+
+    async def merge_lands_first(db: AsyncSession, **kwargs: object) -> bool:
+        # What a merge does between the unlocked read and the lock.
+        payment.payer_account_id = survivor.id
+        await db.flush()
+        return await real_erase(db, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(tournament_payments, "erase_receipt_address", merge_lands_first)
+
+    with pytest.raises(PaymentNotFoundError):
+        await erase_payment_receipt_address(
+            db_session, payment_id=payment.id, actor=payer
+        )
+
+    await db_session.rollback()
+    await db_session.refresh(payment)
+    assert payment.receipt_address == "receipts@example.com"
+    assert payment.receipt_address_erased_at is None

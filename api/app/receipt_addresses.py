@@ -48,7 +48,11 @@ async def payment_is_resolved(db: AsyncSession, payment: TournamentPayment) -> b
 
 
 async def erase_receipt_address(
-    db: AsyncSession, *, checkout_id: uuid.UUID, only_if_resolved: bool = False
+    db: AsyncSession,
+    *,
+    checkout_id: uuid.UUID,
+    only_if_resolved: bool = False,
+    payer_account_id: uuid.UUID | None = None,
 ) -> bool:
     """Null the address on a checkout and on its payment, and stamp the payment.
 
@@ -61,7 +65,11 @@ async def erase_receipt_address(
     ``only_if_resolved`` is for the daily sweep. It rechecks, under both locks,
     that the payment owes no refund: reconciliation can record one between the
     sweep's unlocked check and this erase, and the address must then stay.
-    Returns whether it erased.
+
+    ``payer_account_id`` is for the payer's own request. It authorized on an
+    unlocked read, and an account merge can move the payment to the survivor
+    before the locks below. The erase rechecks the locked payment's payer and
+    changes nothing if it moved. Returns whether it erased.
     """
     checkout = await db.scalar(
         select(TournamentCheckout)
@@ -76,6 +84,10 @@ async def erase_receipt_address(
         .with_for_update()
         .execution_options(populate_existing=True)
     )
+    if payer_account_id is not None and (
+        payment is None or payment.payer_account_id != payer_account_id
+    ):
+        return False
     if only_if_resolved and payment is not None:
         if not await payment_is_resolved(db, payment):
             return False

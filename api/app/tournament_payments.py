@@ -783,7 +783,12 @@ async def erase_payment_receipt_address(
         or payment.payer_account_id != actor.id
     ):
         raise PaymentNotFoundError()
-    await erase_receipt_address(db, checkout_id=payment.checkout_id)
+    if not await erase_receipt_address(
+        db, checkout_id=payment.checkout_id, payer_account_id=actor.id
+    ):
+        # The payment moved to another payer between the read and the lock.
+        await db.rollback()
+        raise PaymentNotFoundError()
     await db.commit()
 
 
