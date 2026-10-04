@@ -15,7 +15,10 @@ from app.models import Account, Player
 from app.models.device_token import DeviceToken
 from app.models.email_intent import EmailIntent, FirstSignInIntent
 from app.models.user_token import EmailToken, SessionToken
-from app.receipt_addresses import erase_receipt_addresses_of_account
+from app.receipt_addresses import (
+    erase_receipt_addresses_of_account,
+    lock_receipt_checkouts_of_account,
+)
 from app.tournament_checkout_invalidation import (
     invalidate_checkouts_for_account_lifecycle,
     invalidate_checkouts_for_player,
@@ -78,6 +81,9 @@ async def reactivate_account(db: AsyncSession, account_id: uuid.UUID) -> None:
 
 async def erase_account(db: AsyncSession, account_id: uuid.UUID) -> None:
     account = await _account(db, account_id)
+    # Before deactivation locks the active checkouts one at a time: see
+    # ``lock_receipt_checkouts_of_account``.
+    await lock_receipt_checkouts_of_account(db, account_id=account_id)
     await deactivate_account(db, account_id)
     account.erased_at = datetime.now(UTC)
     account.email = None

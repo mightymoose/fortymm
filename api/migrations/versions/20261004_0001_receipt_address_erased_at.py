@@ -33,6 +33,23 @@ def upgrade() -> None:
             "receipt_address_erased_at", sa.DateTime(timezone=True), nullable=True
         ),
     )
+    # The moment a deletion left every remaining event finished or cancelled
+    # (see the model). A new table: the previous release never reads it.
+    op.create_table(
+        "tournament_completion_marks",
+        sa.Column(
+            "tournament_id",
+            sa.UUID(),
+            sa.ForeignKey("tournaments.id", ondelete="CASCADE"),
+            primary_key=True,
+        ),
+        sa.Column(
+            "observed_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.text("clock_timestamp()"),
+        ),
+    )
     op.execute(
         """
         UPDATE tournament_payments
@@ -180,6 +197,7 @@ def downgrade() -> None:
         type_="check",
     )
     op.drop_column("tournament_checkouts", "receipt_address_erased_at")
+    op.drop_table("tournament_completion_marks")
     op.drop_constraint(
         "ck_tournament_payments_erased_receipt_has_no_address",
         "tournament_payments",

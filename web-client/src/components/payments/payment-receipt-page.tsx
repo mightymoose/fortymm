@@ -1,4 +1,5 @@
 import { Receipt as ReceiptIcon } from 'lucide-react'
+import { useEffect, useRef } from 'react'
 
 import { ApiError } from '@/api/client'
 import { Button } from '@/components/ui/button'
@@ -22,6 +23,13 @@ const OUTCOME_TEXT = {
 export function PaymentReceiptPage({ paymentId }: { paymentId: string }) {
   const receipt = usePaymentReceipt(paymentId)
   const erase = useEraseReceiptAddress(paymentId)
+  // The Remove button unmounts with the address it removes. Move focus to the
+  // confirmation, so a keyboard or screen-reader user keeps their place and
+  // hears that the privacy action went through.
+  const removedRef = useRef<HTMLParagraphElement>(null)
+  useEffect(() => {
+    if (erase.isSuccess) removedRef.current?.focus()
+  }, [erase.isSuccess])
 
   if (receipt.data === undefined && receipt.isPending) {
     return (
@@ -42,6 +50,11 @@ export function PaymentReceiptPage({ paymentId }: { paymentId: string }) {
             ? 'We couldn’t find this receipt.'
             : 'We couldn’t load this receipt. Try again in a moment.'}
         </p>
+        {!notFound && (
+          <Button className="mt-3" variant="outline" onClick={() => void receipt.refetch()}>
+            Try again
+          </Button>
+        )}
       </div>
     )
   }
@@ -77,6 +90,16 @@ export function PaymentReceiptPage({ paymentId }: { paymentId: string }) {
             <dd className="tabular-nums font-semibold">{usd.format(totalCents / 100)}</dd>
           </dl>
           <p className="mt-4 text-sm text-muted-foreground">Support reference {reference}</p>
+          {erase.isSuccess && receiptAddress === null && (
+            <p
+              ref={removedRef}
+              role="status"
+              tabIndex={-1}
+              className="mt-4 border-t pt-4 text-sm outline-none"
+            >
+              Your email was removed from this receipt.
+            </p>
+          )}
           {receiptAddress !== null && (
             <div className="mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t pt-4 text-sm">
               <span className="text-muted-foreground">Receipt email</span>

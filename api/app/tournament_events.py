@@ -25,14 +25,18 @@ from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.db import database_now
 from app.draws import group_label
 from app.models import (
     DrawType,
     EventFormat,
     ScheduleSolveTrigger,
+    Tournament,
+    TournamentCompletionMark,
     TournamentEntry,
     TournamentEntryMember,
     TournamentEntryStatus,
@@ -254,6 +258,36 @@ async def _reload_reservation_tables(db: AsyncSession, event: TournamentEvent) -
     )
 
 
+async def _note_completion_by_deletion(
+    db: AsyncSession, tournament: Tournament
+) -> None:
+    """Record the moment a deletion leaves every remaining event finished or
+    cancelled. A deletion writes no lifecycle history, so without this the
+    receipt-address retention clock would still run from the last finish, however
+    long ago (#1810)."""
+    total, terminal = (
+        await db.execute(
+            select(
+                func.count(TournamentEvent.id),
+                func.count(TournamentEvent.id).filter(
+                    TournamentEvent.lifecycle_state.in_(
+                        (EventLifecycleState.finished, EventLifecycleState.cancelled)
+                    )
+                ),
+            ).where(TournamentEvent.tournament_id == tournament.id)
+        )
+    ).one()
+    if total > 0 and total == terminal:
+        await db.execute(
+            pg_insert(TournamentCompletionMark)
+            .values(tournament_id=tournament.id, observed_at=await database_now(db))
+            .on_conflict_do_update(
+                index_elements=["tournament_id"],
+                set_={"observed_at": await database_now(db)},
+            )
+        )
+
+
 async def delete_event(
     db: AsyncSession,
     *,
@@ -283,7 +317,7 @@ async def delete_event(
     when the event is deleted by a database cascade.
     """
     await lock_draw_actor(db, actor.id)
-    await _load_owned_tournament_for_update(db, tournament_id, actor)
+    tournament = await _load_owned_tournament_for_update(db, tournament_id, actor)
     event = await _load_event(db, tournament_id, event_id)
     await require_no_recorded_play(db, tournament_id=tournament_id, event_id=event.id)
     from app.tournament_checkouts import invalidate_checkouts_for_event
@@ -292,6 +326,7 @@ async def delete_event(
     # The explicit parent deletion owns its entire history. Let database cascades
     # remove children after the event disappears, even when ORM collections are loaded.
     await db.execute(delete(TournamentEvent).where(TournamentEvent.id == event.id))
+    await _note_completion_by_deletion(db, tournament)
     # Retired catalogue rows exist only to keep historical fixture references valid.
     # Once the last referencing event is deleted, reclaim those hidden rows.
     await db.execute(

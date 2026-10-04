@@ -125,4 +125,62 @@ describe('PaymentReceiptPage', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(screen.queryByText('receipts@example.com')).not.toBeInTheDocument()
   })
+
+  it('offers a retry when the first load fails, and shows the receipt after it', async () => {
+    const receipt = buildPaymentReceipt()
+    let reads = 0
+    server.use(
+      http.get(`*/v1/payments/${receipt.id}/receipt`, () => {
+        reads += 1
+        return reads === 1
+          ? HttpResponse.json({ detail: 'down' }, { status: 503 })
+          : HttpResponse.json(receipt)
+      }),
+    )
+    const user = userEvent.setup()
+
+    renderReceipt(receipt.id)
+    expect(await screen.findByRole('alert')).toHaveTextContent('We couldn’t load this receipt')
+    await user.click(screen.getByRole('button', { name: 'Try again' }))
+
+    expect(await screen.findByRole('list', { name: 'Events' })).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('does not offer a retry for a receipt that does not exist', async () => {
+    const receipt = buildPaymentReceipt()
+    server.use(
+      http.get(`*/v1/payments/${receipt.id}/receipt`, () =>
+        HttpResponse.json({ detail: 'Receipt not found.' }, { status: 404 }),
+      ),
+    )
+
+    renderReceipt(receipt.id)
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('We couldn’t find this receipt')
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
+  })
+
+  it('announces the removal and keeps focus on a status, not on a vanished button', async () => {
+    const receipt = buildPaymentReceipt({ receipt_address: 'receipts@example.com' })
+    let stored: string | null = receipt.receipt_address ?? null
+    server.use(
+      http.get(`*/v1/payments/${receipt.id}/receipt`, () =>
+        HttpResponse.json({ ...receipt, receipt_address: stored }),
+      ),
+      http.delete(`*/v1/payments/${receipt.id}/receipt-address`, () => {
+        stored = null
+        return new HttpResponse(null, { status: 204 })
+      }),
+    )
+    const user = userEvent.setup()
+
+    renderReceipt(receipt.id)
+    await user.click(await screen.findByRole('button', { name: 'Remove my email' }))
+
+    const status = await screen.findByRole('status')
+    expect(status).toHaveTextContent('Your email was removed from this receipt')
+    expect(status).toHaveFocus()
+    expect(screen.queryByText('receipts@example.com')).not.toBeInTheDocument()
+  })
 })

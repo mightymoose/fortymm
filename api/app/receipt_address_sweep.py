@@ -19,6 +19,7 @@ from app.models import (
     EventLifecycleState,
     Tournament,
     TournamentCheckout,
+    TournamentCompletionMark,
     TournamentEvent,
     TournamentPayment,
     TournamentPaymentRefundObligation,
@@ -38,9 +39,11 @@ async def _completion_milestone(
     db: AsyncSession, tournament_id: uuid.UUID
 ) -> datetime | None:
     """The tournament is complete when it has events and every one is finished
-    or cancelled right now. Its milestone is the latest time the database
-    observed an event enter one of those states. A reopened event ends
-    completion, so a recheck at sweep time sees the new state."""
+    or cancelled right now. Its milestone is the latest of two times the database
+    observed: an event entering one of those states, and a deletion that left
+    every remaining event in one (a deletion writes no lifecycle history). A
+    reopened event ends completion, so a recheck at sweep time sees the new
+    state."""
     events = (
         await db.execute(
             select(
@@ -62,7 +65,13 @@ async def _completion_milestone(
             EventLifecycleHistory.to_state.in_(_TERMINAL_STATES),
         )
     )
-    return latest
+    deleted_into_completion: datetime | None = await db.scalar(
+        select(TournamentCompletionMark.observed_at).where(
+            TournamentCompletionMark.tournament_id == tournament_id
+        )
+    )
+    observed = [moment for moment in (latest, deleted_into_completion) if moment]
+    return max(observed) if observed else None
 
 
 async def _end_milestone(db: AsyncSession, tournament_id: uuid.UUID) -> datetime | None:

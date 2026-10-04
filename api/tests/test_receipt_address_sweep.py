@@ -17,6 +17,7 @@ from app.models import (
     TournamentPaymentRefundReason,
     TournamentPaymentStatus,
     TournamentStatus,
+    User,
 )
 from app.receipt_address_sweep import sweep_receipt_addresses
 from tests.test_payment_receipts import _paid_checkout
@@ -593,3 +594,114 @@ async def test_the_account_erasure_trigger_locks_checkouts_before_payments(
         await asyncio.wait_for(eraser_task, timeout=10)
 
     assert payment_free, "the trigger locked the payment before the checkout"
+
+
+async def test_account_erasure_locks_the_receipt_checkouts_before_it_deactivates(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    engine: AsyncEngine,
+) -> None:
+    """Deactivation invalidates an account's active checkouts, which locks them
+    one by one before the receipt step runs. Taking the whole set in id order
+    first keeps an overlapping sweep from deadlocking against it."""
+    from sqlalchemy.exc import DBAPIError
+
+    from app import identity_lifecycle
+
+    payer, _owner, _provider, payment = await _paid_checkout(
+        api_client, db_session, monkeypatch, succeed=False, receipt_address=ADDRESS
+    )
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    real_deactivate = identity_lifecycle.deactivate_account
+    held_at_deactivation: list[bool] = []
+
+    async def probe_then_deactivate(db: AsyncSession, account_id: object) -> None:
+        async with sessions() as probe:
+            try:
+                await probe.execute(
+                    text(
+                        "SELECT id FROM tournament_checkouts "
+                        "WHERE id = :id FOR UPDATE NOWAIT"
+                    ),
+                    {"id": payment.checkout_id},
+                )
+                held_at_deactivation.append(False)
+            except DBAPIError:
+                held_at_deactivation.append(True)
+            await probe.rollback()
+        await real_deactivate(db, account_id)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(identity_lifecycle, "deactivate_account", probe_then_deactivate)
+
+    await identity_lifecycle.erase_account(db_session, payer.id)
+    await db_session.commit()
+
+    assert held_at_deactivation == [True]
+
+
+async def test_deleting_the_last_unfinished_event_restarts_the_retention_clock(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The events that took payment finished long ago, and one unstarted event
+    kept the tournament open. Deleting it makes the tournament complete today, so
+    the 30 days run from the deletion, not from the old finish."""
+    from sqlalchemy import select
+
+    from app.tournament_events import delete_event
+
+    _payer, owner, _provider, payment = await _paid_checkout(
+        api_client, db_session, monkeypatch, receipt_address=ADDRESS
+    )
+    paid_events = await _events_of(db_session, payment)
+    template = paid_events[0]
+    extra = TournamentEvent(
+        tournament_id=payment.tournament_id,
+        name="Unplayed",
+        format=template.format,
+        draw_settings=template.draw_settings,
+        stages=template.stages,
+        max_players=None,
+        entry_fee=template.entry_fee,
+        timezone=template.timezone,
+        slot=template.slot,
+        match_settings=template.match_settings,
+        predicates=[],
+    )
+    db_session.add(extra)
+    await db_session.commit()
+    await _cancel(db_session, paid_events)
+    # Those finishes happened 40 days ago.
+    long_ago = datetime.now(UTC) - timedelta(days=40)
+    await db_session.execute(text("SET LOCAL session_replication_role = replica"))
+    await db_session.execute(
+        text(
+            "UPDATE tournament_event_lifecycle_history "
+            "SET observed_at = :t, occurred_at = NULL"
+        ),
+        {"t": long_ago},
+    )
+    await db_session.commit()
+    # The sweep rolls back when it skips, which expires everything loaded here.
+    tournament_id, extra_id, owner_id = payment.tournament_id, extra.id, owner.id
+    assert await sweep_receipt_addresses(db_session, now=await _in_days(0)) == 0
+
+    owner_again = await db_session.get(User, owner_id)
+    assert owner_again is not None
+    await delete_event(
+        db_session,
+        tournament_id=tournament_id,
+        event_id=extra_id,
+        actor=owner_again,
+    )
+
+    # Complete today, so nothing is due now, and it is due 30 days from today.
+    assert await sweep_receipt_addresses(db_session, now=await _in_days(0)) == 0
+    assert await sweep_receipt_addresses(db_session, now=await _in_days(29)) == 0
+    assert await sweep_receipt_addresses(db_session, now=await _in_days(31)) == 1
+    remaining = await db_session.scalar(
+        select(TournamentEvent.id).where(TournamentEvent.id == extra_id)
+    )
+    assert remaining is None

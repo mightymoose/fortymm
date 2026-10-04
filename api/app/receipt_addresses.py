@@ -9,7 +9,7 @@ page, the payment, or any refund obligation.
 
 import uuid
 
-from sqlalchemy import or_, select
+from sqlalchemy import Select, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import database_now
@@ -105,19 +105,10 @@ async def erase_receipt_address(
     return True
 
 
-async def erase_receipt_addresses_of_account(
-    db: AsyncSession, *, account_id: uuid.UUID
-) -> None:
-    """Erase every receipt address held for the account. Does not commit.
-
-    Two ownership paths reach a checkout. The account is its payer, or it owns
-    a payment whose checkout still names another payer: an account merge moves
-    ``payer_account_id`` of a payment to the survivor and leaves the checkout
-    on the merged source. Erasing the survivor must reach both. Checkouts are
-    locked in id order, the same order the sweep uses, so two overlapping
-    erasures cannot deadlock.
-    """
-    checkout_ids = await db.scalars(
+def _account_checkout_ids(account_id: uuid.UUID) -> Select[tuple[uuid.UUID]]:
+    """Every checkout held for the account, in id order: the account is its
+    payer, or it owns a payment whose checkout still names another payer."""
+    return (
         select(TournamentCheckout.id)
         .where(
             or_(
@@ -131,5 +122,38 @@ async def erase_receipt_addresses_of_account(
         )
         .order_by(TournamentCheckout.id)
     )
+
+
+async def lock_receipt_checkouts_of_account(
+    db: AsyncSession, *, account_id: uuid.UUID
+) -> None:
+    """Take the account's checkout locks, in id order, before anything else.
+
+    ``erase_account`` deactivates first, and deactivation invalidates the active
+    checkouts, which locks them one at a time. An overlapping sweep locks
+    checkouts in id order, so two orders would deadlock. Locking the whole set
+    up front, in the sweep's order, removes that. Does not commit.
+    """
+    await db.execute(
+        select(TournamentCheckout.id)
+        .where(TournamentCheckout.id.in_(_account_checkout_ids(account_id)))
+        .order_by(TournamentCheckout.id)
+        .with_for_update()
+    )
+
+
+async def erase_receipt_addresses_of_account(
+    db: AsyncSession, *, account_id: uuid.UUID
+) -> None:
+    """Erase every receipt address held for the account. Does not commit.
+
+    Two ownership paths reach a checkout. The account is its payer, or it owns
+    a payment whose checkout still names another payer: an account merge moves
+    ``payer_account_id`` of a payment to the survivor and leaves the checkout
+    on the merged source. Erasing the survivor must reach both. Checkouts are
+    locked in id order, the same order the sweep uses, so two overlapping
+    erasures cannot deadlock.
+    """
+    checkout_ids = await db.scalars(_account_checkout_ids(account_id))
     for checkout_id in checkout_ids.all():
         await erase_receipt_address(db, checkout_id=checkout_id)

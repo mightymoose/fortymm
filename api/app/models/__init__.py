@@ -203,3 +203,6 @@ from app.models.required_repair import RequiredRepair as RequiredRepair
 from app.models.tournament_archive import (
     TournamentArchiveHistory as TournamentArchiveHistory,
 )
+from app.models.tournament_completion_mark import (
+    TournamentCompletionMark as TournamentCompletionMark,
+)
