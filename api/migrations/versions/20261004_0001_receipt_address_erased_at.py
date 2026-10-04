@@ -66,6 +66,11 @@ def upgrade() -> None:
         """
     )
     op.create_check_constraint(
+        "ck_tournament_checkouts_erased_receipt_has_no_address",
+        "tournament_checkouts",
+        "receipt_address IS NULL OR receipt_address_erased_at IS NULL",
+    )
+    op.create_check_constraint(
         "ck_tournament_payments_erased_receipt_has_no_address",
         "tournament_payments",
         "receipt_address IS NULL OR receipt_address_erased_at IS NULL",
@@ -73,6 +78,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_constraint(
+        "ck_tournament_checkouts_erased_receipt_has_no_address",
+        "tournament_checkouts",
+        type_="check",
+    )
     op.drop_column("tournament_checkouts", "receipt_address_erased_at")
     op.drop_constraint(
         "ck_tournament_payments_erased_receipt_has_no_address",

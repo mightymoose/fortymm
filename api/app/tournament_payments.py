@@ -846,6 +846,9 @@ async def _admit(db: AsyncSession, payment: TournamentPayment) -> None:
         # #1809: snapshotted exactly once, at verified success. A later
         # account-email edit, or a later checkout PATCH, never changes it.
         payment.receipt_address = checkout.receipt_address
+        # An erase that ran while the payment was still open (an account erased
+        # mid-payment, or the sweep) must not be lost when a late success lands.
+        payment.receipt_address_erased_at = checkout.receipt_address_erased_at
     if checkout is not None and checkout.status in (
         TournamentCheckoutStatus.active,
         TournamentCheckoutStatus.expired,
@@ -1110,6 +1113,9 @@ async def _reconcile(
     return payment, intent
 
 
+_RECEIPT_JOB_FAILURE_TTL_SECONDS = 7 * 24 * 60 * 60
+
+
 def _enqueue_receipt_email(payment_id: uuid.UUID) -> None:
     """Queue the one receipt email for a payment that just succeeded (#1810).
 
@@ -1123,7 +1129,10 @@ def _enqueue_receipt_email(payment_id: uuid.UUID) -> None:
             "app.tournament_payments.send_payment_receipt_email",
             str(payment_id),
             result_ttl=0,
-            failure_ttl=0,
+            # Kept for a week. The payload is only the payment id, and a worker
+            # that cannot yet import the handler (a rolling deploy) fails the
+            # job: it must stay in the failed registry so it can be requeued.
+            failure_ttl=_RECEIPT_JOB_FAILURE_TTL_SECONDS,
         )
     except RedisError:
         logger.warning(

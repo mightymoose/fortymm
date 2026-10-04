@@ -401,3 +401,62 @@ async def test_an_erased_checkout_refuses_a_new_address_but_still_clears(
     assert checkout is not None
     await db_session.refresh(checkout)
     assert checkout.receipt_address is None
+
+
+async def test_the_database_refuses_an_address_beside_a_checkout_tombstone(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The previous release's PATCH writes the address without knowing the
+    tombstone. In a rolling deploy it can resume after an erase commits, so the
+    database itself must refuse the pair."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.receipt_addresses import erase_receipt_address
+
+    _payer, _owner, _provider, payment = await _paid_checkout(
+        api_client, db_session, monkeypatch, succeed=False, receipt_address=ADDRESS
+    )
+    await erase_receipt_address(db_session, checkout_id=payment.checkout_id)
+    await db_session.commit()
+
+    with pytest.raises(IntegrityError):
+        await db_session.execute(
+            text(
+                "UPDATE tournament_checkouts SET receipt_address = 'old@example.com' "
+                "WHERE id = :id"
+            ),
+            {"id": payment.checkout_id},
+        )
+    await db_session.rollback()
+
+
+async def test_a_late_success_carries_the_checkout_erasure_onto_the_payment(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.config import get_settings
+    from app.receipt_addresses import erase_receipt_address
+    from app.tournament_payments import reconcile_payment
+
+    _payer, _owner, provider, payment = await _paid_checkout(
+        api_client, db_session, monkeypatch, succeed=False, receipt_address=ADDRESS
+    )
+    await erase_receipt_address(db_session, checkout_id=payment.checkout_id)
+    await db_session.commit()
+
+    provider.set_status(
+        payment.provider_payment_intent_id,
+        status="succeeded",
+        amount_received=payment.amount_cents,
+    )
+    await reconcile_payment(
+        db_session, payment_id=payment.id, provider=provider, settings=get_settings()
+    )
+
+    await db_session.refresh(payment)
+    assert payment.status is TournamentPaymentStatus.succeeded
+    assert payment.receipt_address is None
+    assert payment.receipt_address_erased_at is not None

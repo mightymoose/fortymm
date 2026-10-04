@@ -160,6 +160,9 @@ async def test_verified_success_enqueues_one_receipt_email_job_with_only_the_pay
     assert [(job.func_name, job.args, job.kwargs) for job in jobs] == [
         ("app.tournament_payments.send_payment_receipt_email", (str(payment.id),), {})
     ]
+    # A worker that cannot yet import the handler (a rolling deploy) fails the
+    # job. It must stay in the failed registry so it can be requeued.
+    assert jobs[0].failure_ttl is not None and jobs[0].failure_ttl >= 86_400
     assert "receipts@example.com" not in repr(jobs[0].__dict__)
 
 

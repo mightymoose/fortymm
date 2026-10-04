@@ -48,6 +48,13 @@ class TournamentCheckout(Base):
             "expires_at > created_at",
             name="ck_tournament_checkouts_deadline_after_create",
         ),
+        # The previous release's PATCH writes the address without knowing the
+        # tombstone. During a rolling deploy it can resume after an erase
+        # commits, so the database refuses the pair (#1810).
+        CheckConstraint(
+            "receipt_address IS NULL OR receipt_address_erased_at IS NULL",
+            name="ck_tournament_checkouts_erased_receipt_has_no_address",
+        ),
         CheckConstraint(
             "completed_at IS NULL OR status = 'invalidated'",
             name="ck_tournament_checkouts_completed_is_invalidated",
