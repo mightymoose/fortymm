@@ -1790,6 +1790,10 @@ export class TournamentsStore {
     if (path === '/v1/me/checkouts/open') {
       return json(route, 200, [])
     }
+    // The Events tab's list of the player's receipts (#1810): none here.
+    if (method === 'GET' && path === `/v1/tournaments/${TOURNAMENT_ID}/payments`) {
+      return json(route, 200, [])
+    }
     // Same story as the bell above, one layer down: `_app` holds a realtime
     // stream open on every page. Parked rather than left to the 404 below, so
     // the client stands down instead of reconnect-looping and filling

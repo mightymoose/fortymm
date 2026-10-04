@@ -9,15 +9,18 @@ each still-pending line exactly once (#1816). See ``api/CLAUDE.md``'s
 service-layer conventions and the ticket's planning note for the full design.
 """
 
+import logging
 import uuid
 from typing import assert_never
 
+from redis.exceptions import RedisError
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from sqlalchemy.orm import selectinload
 
+from app import queue as queue_module
 from app import required_repairs
 from app.config import Settings, get_settings
 from app.db import database_now
@@ -53,11 +56,14 @@ from app.payments.provider import (
 )
 from app.player_accounts import PlayerAccessDenied
 from app.realtime import EventKind, stage_event
+from app.receipt_addresses import erase_receipt_address
 from app.schemas.tournament_checkout import TournamentCheckoutState
 from app.schemas.tournament_payment import (
     TournamentPaymentLineRead,
     TournamentPaymentPrepared,
     TournamentPaymentRead,
+    TournamentPaymentReceiptRead,
+    TournamentPaymentSummary,
 )
 from app.tournament_authority import lock_tournament
 from app.tournament_checkouts import checkout_effective_state
@@ -199,6 +205,9 @@ def _map_provider_status(
             return current
         case _:
             assert_never(provider_status)
+
+
+logger = logging.getLogger(__name__)
 
 
 async def _load_checkout_for_payer(
@@ -687,6 +696,97 @@ async def read_payment_status(
     return _to_read_schema(payment, checkout)
 
 
+async def read_payment_receipt(
+    db: AsyncSession, *, payment_id: uuid.UUID, actor: User
+) -> TournamentPaymentReceiptRead:
+    """The itemized receipt of a ``succeeded`` payment (#1810).
+
+    Visible to the payer and the merchant account only. A payment in any other
+    state has no receipt, so the answer is the same 404 a stranger gets. No
+    provider call: a receipt describes a settled payment.
+    """
+    payment = await db.scalar(
+        select(TournamentPayment).where(TournamentPayment.id == payment_id)
+    )
+    if (
+        payment is None
+        or payment.status is not TournamentPaymentStatus.succeeded
+        or not _can_view_payment(payment, actor)
+    ):
+        raise PaymentNotFoundError()
+    checkout = await db.scalar(
+        select(TournamentCheckout)
+        .where(TournamentCheckout.id == payment.checkout_id)
+        .options(selectinload(TournamentCheckout.lines))
+    )
+    if checkout is None:
+        raise PaymentNotFoundError()
+    return TournamentPaymentReceiptRead(
+        **_to_read_schema(payment, checkout).model_dump(),
+        receipt_address=(
+            payment.receipt_address if actor.id == payment.payer_account_id else None
+        ),
+    )
+
+
+async def list_succeeded_payments(
+    db: AsyncSession, *, tournament_id: uuid.UUID, actor: User
+) -> list[TournamentPaymentSummary]:
+    """The actor's own succeeded payments in one tournament, newest first
+    (#1810). It lets a payer who left before success find their receipt. Only
+    the payer's own payments ever appear, so an unknown tournament and a payer
+    with none both answer an empty list."""
+    payments = await db.scalars(
+        select(TournamentPayment)
+        .where(
+            TournamentPayment.tournament_id == tournament_id,
+            TournamentPayment.payer_account_id == actor.id,
+            TournamentPayment.status == TournamentPaymentStatus.succeeded,
+        )
+        .order_by(TournamentPayment.created_at.desc(), TournamentPayment.id)
+    )
+    summaries: list[TournamentPaymentSummary] = []
+    for payment in payments.all():
+        checkout = await db.scalar(
+            select(TournamentCheckout)
+            .where(TournamentCheckout.id == payment.checkout_id)
+            .options(selectinload(TournamentCheckout.lines))
+        )
+        if checkout is None:
+            continue
+        summaries.append(
+            TournamentPaymentSummary(
+                id=payment.id,
+                reference=payment.reference,
+                amount_cents=payment.amount_cents,
+                created_at=payment.created_at,
+                event_names=[line.event_name for line in checkout.lines],
+            )
+        )
+    return summaries
+
+
+async def erase_payment_receipt_address(
+    db: AsyncSession, *, payment_id: uuid.UUID, actor: User
+) -> None:
+    """Erase the receipt address of a succeeded payment, at the payer's request
+    (#1810). Payer only: the merchant account can read the receipt but cannot
+    erase for the payer. Anyone else, and any payment that has not succeeded,
+    gets the same 404 as a missing payment. The payer clears an address before
+    success with the checkout PATCH instead."""
+    payment = await db.scalar(
+        select(TournamentPayment).where(TournamentPayment.id == payment_id)
+    )
+    if (
+        payment is None
+        or payment.status is not TournamentPaymentStatus.succeeded
+        or payment.payer_account_id != actor.id
+    ):
+        raise PaymentNotFoundError()
+    await erase_receipt_address(db, checkout_id=payment.checkout_id)
+    await db.commit()
+
+
 #: The refusals that mean "this line cannot admit", so the paid line becomes a
 #: refund obligation instead of an error that would leave the payment stuck.
 _LINE_REFUSALS = (
@@ -998,8 +1098,37 @@ async def _reconcile(
         # #1809: covers reconcile's success/fail/expiry transitions, whether
         # driven by a status read or by the webhook.
         stage_event(db, payment.payer_account_id, EventKind.checkout_changed)
+    sends_receipt = (
+        payment.status is TournamentPaymentStatus.succeeded
+        and previous_status is not TournamentPaymentStatus.succeeded
+        and payment.receipt_address is not None
+    )
+    payment_id = payment.id
     await db.commit()
+    if sends_receipt:
+        _enqueue_receipt_email(payment_id)
     return payment, intent
+
+
+def _enqueue_receipt_email(payment_id: uuid.UUID) -> None:
+    """Queue the one receipt email for a payment that just succeeded (#1810).
+
+    The job carries only the payment ID. It reads the address at send time, so
+    an erasure before the send suppresses the email and the address never sits
+    in Redis. Best-effort and after the commit: a Redis outage or a crash here
+    loses this one email, never the payment. The receipt page still exists, and
+    #1828 closes the gap."""
+    try:
+        queue_module.get_email_queue().enqueue(
+            "app.tournament_payments.send_payment_receipt_email",
+            str(payment_id),
+            result_ttl=0,
+            failure_ttl=0,
+        )
+    except RedisError:
+        logger.warning(
+            "payment_receipt_enqueue_failed", extra={"payment_id": str(payment_id)}
+        )
 
 
 def run_cancel_payment_intent(payment_id: str) -> None:
@@ -1046,3 +1175,91 @@ async def _execute_cancel(
             # (succeeded/canceled), correctness does not depend on this call
             # succeeding — reconcile's own already-entered path covers it.
             return
+
+
+def send_payment_receipt_email(payment_id: str) -> None:
+    """RQ entry point (the ``email`` queue): send the receipt email for a
+    succeeded payment (#1810). Thin wrapper over
+    ``app.rq_async.run_async_db_job``, like :func:`run_cancel_payment_intent`.
+    One attempt, no retry: #1828 adds delivery robustness."""
+    from app.rq_async import run_async_db_job
+
+    run_async_db_job(
+        f"payment-receipt-{payment_id}",
+        lambda sessionmaker: _execute_receipt_email(
+            sessionmaker, uuid.UUID(payment_id)
+        ),
+    )
+
+
+def _line_outcome_text(outcome: TournamentPaymentLineOutcome) -> str:
+    match outcome:
+        case TournamentPaymentLineOutcome.admitted:
+            return "Entry confirmed"
+        case TournamentPaymentLineOutcome.refund_due:
+            return "Not admitted — refund pending"
+        case TournamentPaymentLineOutcome.pending:
+            return "Under review"
+        case _:
+            assert_never(outcome)
+
+
+def _admission_headline(outcomes: list[TournamentPaymentLineOutcome]) -> str:
+    """ "You're entered" only when every line admitted. Any other mix says so,
+    because a player must never read "entered" for an event that refunds."""
+    if all(outcome is TournamentPaymentLineOutcome.admitted for outcome in outcomes):
+        return "You're entered"
+    return "Some entries weren't admitted"
+
+
+async def _execute_receipt_email(
+    sessionmaker: async_sessionmaker[AsyncSession], payment_id: uuid.UUID
+) -> None:
+    """Read the payment, and send nothing unless it succeeded and still holds
+    a receipt address. The address is read here, at send time, so an erasure
+    since the enqueue suppresses the email. The wording is combined when the
+    payer's ``tournament`` email cell is on, and receipt-only when it is off."""
+    from app import email
+    from app.notifications.service import effective_channels
+    from app.notifications.taxonomy import NotificationCategory, NotificationChannel
+
+    async with sessionmaker() as db:
+        payment = await db.scalar(
+            select(TournamentPayment).where(TournamentPayment.id == payment_id)
+        )
+        if (
+            payment is None
+            or payment.status is not TournamentPaymentStatus.succeeded
+            or payment.receipt_address is None
+        ):
+            return
+        checkout = await db.scalar(
+            select(TournamentCheckout)
+            .where(TournamentCheckout.id == payment.checkout_id)
+            .options(selectinload(TournamentCheckout.lines))
+        )
+        if checkout is None:
+            return
+        names = {line.event_id: line.event_name for line in checkout.lines}
+        channels = await effective_channels(
+            db,
+            payment.payer_account_id,
+            NotificationCategory.TOURNAMENT,
+            [NotificationChannel.EMAIL],
+        )
+        to_email = payment.receipt_address
+        lines = [
+            (names[line.event_id], line.price_cents, _line_outcome_text(line.outcome))
+            for line in payment.lines
+        ]
+        reference = payment.reference
+        total_cents = payment.amount_cents
+        headline = _admission_headline([line.outcome for line in payment.lines])
+    email.send_payment_receipt_email(
+        to_email,
+        reference=reference,
+        lines=lines,
+        total_cents=total_cents,
+        receipt_link=f"/payments/{payment_id}/receipt",
+        admission_headline=headline if NotificationChannel.EMAIL in channels else None,
+    )

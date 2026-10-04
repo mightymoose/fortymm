@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
   RouterProvider,
@@ -102,8 +102,14 @@ function renderRoute(initialEntry: string) {
     path: '/login',
     component: () => <div>login</div>,
   })
+  // Where a succeeded payment's result sends the player (#1810).
+  const receiptRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/payments/$paymentId/receipt',
+    component: () => <div>receipt page</div>,
+  })
   const router = createRouter({
-    routeTree: rootRoute.addChildren([listRoute, detailRoute, loginRoute]),
+    routeTree: rootRoute.addChildren([listRoute, detailRoute, loginRoute, receiptRoute]),
     history: createMemoryHistory({ initialEntries: [initialEntry] }),
   })
   return {
@@ -810,30 +816,26 @@ describe('tournament detail route — the Stripe return URL (#1809)', () => {
     expect(router.history.length).toBe(1)
   })
 
-  it('shows a payment’s result after a reload, from the status read alone, until Done', async () => {
+  it('opens the receipt after a reload, from the status read alone', async () => {
     mockTournament()
+    const payment = buildPaymentRead({
+      checkout_id: CHECKOUT_ID,
+      payment_state: 'succeeded',
+      lines: paymentLines('admitted'),
+    })
     const world = mockCheckoutWorld({
       checkout: buildCheckoutRead({ id: CHECKOUT_ID, tournament_id: UNKNOWN_ID, status: 'completed' }),
-      status: [
-        buildPaymentRead({
-          checkout_id: CHECKOUT_ID,
-          payment_state: 'succeeded',
-          lines: paymentLines('admitted'),
-        }),
-      ],
+      status: [payment],
     })
-    const user = userEvent.setup()
 
     const { router } = renderRoute(`/tournaments/${UNKNOWN_ID}?tab=events&checkout=${CHECKOUT_ID}`)
 
-    const panel = await screen.findByRole('region', { name: 'Checkout' })
-    expect(await within(panel).findByRole('heading', { name: 'You’re entered' })).toBeInTheDocument()
+    expect(await screen.findByText('receipt page')).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe(`/payments/${payment.id}/receipt`)
+    // Replaced, not pushed: Back must not return to a panel that sends the
+    // player straight on again.
+    expect(router.history.length).toBe(1)
     expect(world.calls.log).toEqual(['status'])
-
-    await user.click(within(panel).getByRole('button', { name: 'Done' }))
-
-    await waitFor(() => expect(router.state.location.search).toEqual({ tab: 'events' }))
-    expect(screen.queryByRole('region', { name: 'Checkout' })).toBeNull()
   })
 
   it('keeps a malformed `?checkout=` from closing an open editor', async () => {

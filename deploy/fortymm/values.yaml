@@ -188,6 +188,14 @@ emailTokenSweep:
   enabled: true
   schedule: "0 * * * *"
 
+# Daily receipt-address cleanup CronJob (#1810). Runs
+# `python -m app.receipt_address_sweep` to erase receipt addresses 30 days after
+# the tournament's end milestone, once no payment of it owes a refund. The sweep
+# is idempotent.
+receiptAddressSweep:
+  enabled: true
+  schedule: "17 3 * * *"
+
 # Fixed NodePort for the routing nginx Service. Empty means "let Kubernetes
 # allocate one from the node port range", which is the only portable answer — a
 # hard-coded port that another Service already holds fails the install outright

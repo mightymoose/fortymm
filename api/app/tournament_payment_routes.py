@@ -18,6 +18,8 @@ from app.payments.provider import (
 from app.schemas.tournament_payment import (
     TournamentPaymentPrepared,
     TournamentPaymentRead,
+    TournamentPaymentReceiptRead,
+    TournamentPaymentSummary,
 )
 from app.sessions import get_current_user
 from app.tournament_payment_errors import (
@@ -26,7 +28,10 @@ from app.tournament_payment_errors import (
     PaymentProviderUnavailableError,
 )
 from app.tournament_payments import (
+    erase_payment_receipt_address,
+    list_succeeded_payments,
     prepare_or_resume_payment,
+    read_payment_receipt,
     read_payment_status,
     record_and_reconcile_provider_event,
 )
@@ -98,6 +103,60 @@ async def get_tournament_payment(
         )
     except PaymentNotFoundError as error:
         raise HTTPException(status_code=404, detail="Payment not found.") from error
+
+
+@router.get(
+    "/payments/{payment_id}/receipt",
+    response_model=TournamentPaymentReceiptRead,
+)
+async def get_payment_receipt(
+    payment_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> TournamentPaymentReceiptRead:
+    """The itemized receipt of a succeeded payment (#1810). Only the payer and
+    the merchant account may read it. Everyone else, and every payment that has
+    not succeeded, gets a 404."""
+    try:
+        return await read_payment_receipt(db, payment_id=payment_id, actor=current_user)
+    except PaymentNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Receipt not found.") from error
+
+
+@router.get(
+    "/tournaments/{tournament_id}/payments",
+    response_model=list[TournamentPaymentSummary],
+)
+async def list_tournament_payments(
+    tournament_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> list[TournamentPaymentSummary]:
+    """The caller's own succeeded payments in this tournament (#1810), so a payer
+    who left before success can reach each receipt. It lists nobody else's."""
+    return await list_succeeded_payments(
+        db, tournament_id=tournament_id, actor=current_user
+    )
+
+
+@router.delete(
+    "/payments/{payment_id}/receipt-address",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_payment_receipt_address(
+    payment_id: uuid.UUID,
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    """Erase the receipt address of a succeeded payment at once (#1810). Only
+    the payer may. Everyone else, and every payment that has not succeeded,
+    gets a 404. The receipt, the payment and the Account email stay."""
+    try:
+        await erase_payment_receipt_address(
+            db, payment_id=payment_id, actor=current_user
+        )
+    except PaymentNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Receipt not found.") from error
 
 
 @router.post(

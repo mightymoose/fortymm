@@ -364,6 +364,22 @@ is not the account email. An empty value means no receipt email. At verified
 success the server copies it onto the **payment** as a snapshot. It never goes
 to Stripe or into a response for anyone except the payer.
 
+**Receipt page**:
+The in-app page at `/payments/{id}/receipt` for one succeeded **payment**. It lists
+each event's price and **per-event result**, the total and the **support
+reference**. Only the payer and the merchant account can read it. A payment that
+has not succeeded has none. The payer who stored a **receipt address** also gets
+one email, and can remove that address from this page.
+_Avoid_: invoice, confirmation page.
+
+**Receipt address erasure**:
+Removing a **receipt address** from the **checkout** and the **payment** snapshot.
+It happens when the payer asks, when the account is erased, and in a daily sweep
+30 days after the tournament's end (archival, or every event finished or
+cancelled) once no payment of it owes a refund. It sets `receipt_address_erased_at`
+on the payment. It never touches the account email, the receipt page or any
+refund obligation.
+
 **Per-event result**:
 The outcome of one event of a **payment**: "Entry confirmed" or "Not admitted —
 refund pending" (the screen's exact words). A combined payment can admit some events and refund others.

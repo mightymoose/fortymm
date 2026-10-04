@@ -5,6 +5,7 @@ type Schemas = components['schemas']
 export type CheckoutRead = Schemas['TournamentCheckoutRead']
 export type PaymentRead = Schemas['TournamentPaymentRead']
 export type PaymentPrepared = Schemas['TournamentPaymentPrepared']
+export type PaymentReceipt = Schemas['TournamentPaymentReceiptRead']
 export type PaymentLineRead = Schemas['TournamentPaymentLineRead']
 
 export const CHECKOUT_TOURNAMENT_ID = mockUuid('checkout-tournament')
@@ -72,4 +73,15 @@ export function paymentLines(
   outcome: PaymentLineRead['outcome'],
 ): PaymentLineRead[] {
   return CHECKOUT_LINES.map((line) => ({ ...line, outcome }))
+}
+
+/** The receipt of a succeeded payment on the two default events, both admitted. */
+export function buildPaymentReceipt(
+  overrides: Partial<PaymentReceipt> = {},
+): PaymentReceipt {
+  return {
+    ...buildPaymentRead({ payment_state: 'succeeded', lines: paymentLines('admitted') }),
+    receipt_address: null,
+    ...overrides,
+  }
 }

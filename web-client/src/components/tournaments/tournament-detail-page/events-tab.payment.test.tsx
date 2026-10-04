@@ -44,7 +44,10 @@ const tournament = () =>
  * Render the Events tab with `?checkout=` held in state, the way the route
  * holds it in the URL. `param()` reads its current value.
  */
-function renderCheckoutTab({ checkoutParam }: { checkoutParam?: string } = {}) {
+function renderCheckoutTab({
+  checkoutParam,
+  onViewReceipt,
+}: { checkoutParam?: string; onViewReceipt?: (paymentId: string) => void } = {}) {
   const url = { param: checkoutParam }
   function Harness() {
     const [param, setParam] = useState(checkoutParam)
@@ -54,6 +57,7 @@ function renderCheckoutTab({ checkoutParam }: { checkoutParam?: string } = {}) {
         {...buildEventsTabProps({ tournament: tournament(), canEdit: false })}
         checkoutParam={param}
         onCheckoutParamChange={setParam}
+        onViewReceipt={onViewReceipt}
       />
     )
   }
@@ -438,6 +442,25 @@ describe('EventsTab checkout and payment (#1809)', () => {
       expect(url.param()).toBeUndefined()
       expect(screen.queryByRole('region', { name: 'Checkout' })).not.toBeInTheDocument()
       expect(await eventsTabPage.findSelectButton('Open Singles')).toBeInTheDocument()
+    })
+
+    it('opens the receipt once the payment succeeded, and keeps a button to it', async () => {
+      const payment = buildPaymentRead({
+        payment_state: 'succeeded',
+        lines: paymentLines('admitted'),
+      })
+      mockCheckoutWorld({ checkout: completed(), status: [payment] })
+      const onViewReceipt = vi.fn()
+      const user = userEvent.setup()
+      renderCheckoutTab({ checkoutParam: CHECKOUT_ID, onViewReceipt })
+
+      const checkout = await panel()
+      await within(checkout).findByRole('heading', { name: 'You’re entered' })
+      await waitFor(() => expect(onViewReceipt).toHaveBeenCalledTimes(1))
+      expect(onViewReceipt).toHaveBeenCalledWith(payment.id)
+
+      await user.click(within(checkout).getByRole('button', { name: 'View receipt' }))
+      expect(onViewReceipt).toHaveBeenCalledTimes(2)
     })
 
     it('shows a mixed outcome per event, with no overall success message', async () => {

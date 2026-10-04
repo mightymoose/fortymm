@@ -96,6 +96,8 @@ export interface TournamentDetailPageProps {
   /** `?checkout=`, handed through to the Events tab's checkout panel. */
   checkoutParam?: string
   onCheckoutParamChange?: (checkoutId: string | undefined) => void
+  /** Open the receipt page of a succeeded payment (#1810). */
+  onViewReceipt?: (paymentId: string) => void
 }
 
 /**
@@ -192,6 +194,7 @@ export const TournamentDetailPage = ({
   onTabChange,
   checkoutParam,
   onCheckoutParamChange,
+  onViewReceipt,
 }: TournamentDetailPageProps) => {
   const [localTab, setLocalTab] = useState<TournamentTab>('events')
   const tab = controlledTab ?? localTab
@@ -431,6 +434,7 @@ export const TournamentDetailPage = ({
               checkoutDraftIds={checkoutDraftIds}
               checkoutParam={checkoutParam}
               onCheckoutParamChange={onCheckoutParamChange}
+              onViewReceipt={onViewReceipt}
               onCheckoutDraftChange={setCheckoutDraftIds}
             />
           </TabsContent>
