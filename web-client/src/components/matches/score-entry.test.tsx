@@ -1540,6 +1540,17 @@ function negotiationConflictBody() {
 
 // The finalized MatchDetails a successful POST /results returns: a completed
 // best-of-5 the current user swept 3–0.
+// The propose-result terminal 409 (#1651): a coded object detail, so the client
+// never has to match the English text to tell it from the lock-race string.
+function matchClosedBody() {
+  return {
+    detail: {
+      code: 'match_closed',
+      message: 'This match is no longer open to results.',
+    },
+  }
+}
+
 function completedMatch() {
   return matchDetails({
     id: 'm-1',
@@ -3593,6 +3604,69 @@ describe('ScoreEntry — stale finalize hits a posted result (409 → redirect) 
     ).toBeEnabled()
     // And no refetch was triggered — the string 409 doesn't invalidate.
     expect(getCalls).toBe(getsBeforePost)
+  })
+
+  it('a coded match_closed 409 refetches and swaps the dead form for the refusal, with a way to the match (#1651)', async () => {
+    // The opponent finalized while this page sat open. If the pushed hint was
+    // missed, the finalize attempt is the first time the page hears about it:
+    // the coded 409 must refetch so the `can_score` guard takes over.
+    const user = userEvent.setup()
+    let posted = false
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(posted ? completedMatch() : decidingGameMatch()),
+      ),
+      http.post('*/v1/matches/m-1/results', () => {
+        posted = true
+        return HttpResponse.json(matchClosedBody(), { status: 409 })
+      }),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    await user.type(meInput, '11')
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '3')
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+
+    const refusal = await screen.findByRole('alert')
+    expect(refusal).toHaveTextContent("Can't enter a score here")
+    expect(refusal).toHaveTextContent('This match is no longer scorable.')
+    expect(
+      screen.getByRole('link', { name: /view match/i }),
+    ).toHaveAttribute('href', '/matches/m-1')
+    expect(
+      screen.queryByRole('textbox', { name: 'rita.kovac score' }),
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /post result/i }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('a coded match_closed 409 whose refetch is still scorable keeps the red error and a live submit (#1651)', async () => {
+    // `MatchClosedError` also covers a cancelled/retired event, where the match
+    // row may not be terminal. The refetch can then say `can_score: true`; the
+    // page must not strand the user on a half state with no message.
+    const user = userEvent.setup()
+    server.use(
+      http.get('*/v1/matches/m-1', () => HttpResponse.json(decidingGameMatch())),
+      http.post('*/v1/matches/m-1/results', () =>
+        HttpResponse.json(matchClosedBody(), { status: 409 }),
+      ),
+    )
+
+    renderScoreEntry({ kind: 'create', matchId: 'm-1', gameNumber: 3 })
+    const meInput = await screen.findByRole('textbox', {
+      name: 'rita.kovac score',
+    })
+    await user.type(meInput, '11')
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '3')
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+
+    await screen.findByText(/no longer open to results/i)
+    expect(screen.queryByText(/taking you there/i)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /post result/i })).toBeEnabled()
   })
 })
 

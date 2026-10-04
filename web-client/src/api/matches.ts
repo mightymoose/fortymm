@@ -11,6 +11,7 @@ import {
   ApiError,
   api,
   conflictDetail,
+  isMatchClosed,
   isNegotiationConflict,
   resolveBaseUrl,
   unwrap,
@@ -853,15 +854,23 @@ export function useProposeResult(matchId: string) {
     // interstitial that ADR-0005 (#827) deleted — no interstitial, just re-sync +
     // the existing redirect.
     //
-    // Gate on `isNegotiationConflict` specifically, NOT every 409: the other two
-    // propose 409s carry a plain-STRING detail — the lock race ("a result is
-    // already being posted…") and the terminal guard ("no longer open to
-    // results") — where a concurrent post may not have committed yet, so a
-    // refetch can return a still-`in_progress` match with no `standing_result`
-    // and the redirect would never fire. Those (and a 422/500/transport drop)
-    // must stay put so score-entry surfaces them with a live retry.
+    // Gate on the two named 409s, NOT every 409: the lock race carries a
+    // plain-STRING detail ("a result is already being posted…") where a
+    // concurrent post may not have committed yet, so a refetch can return a
+    // still-`in_progress` match with no `standing_result` and the redirect
+    // would never fire. That (and a 422/500/transport drop) must stay put so
+    // score-entry surfaces it with a live retry.
+    //
+    // The coded "match closed" 409 (#1651) refetches too, for the opposite
+    // reason: the match is terminal, so unlike the lock race the refetch cannot
+    // come back "still in flight". It lets the `can_score` guard replace a form
+    // left open after the pushed hint was missed. A closed code on a match that
+    // is still scorable (a cancelled event) leaves the red error in place.
     onError: (error) => {
-      if (error instanceof ApiError && isNegotiationConflict(error)) {
+      if (
+        error instanceof ApiError &&
+        (isNegotiationConflict(error) || isMatchClosed(error))
+      ) {
         queryClient.invalidateQueries({ queryKey: matchQueryKey(matchId) })
       }
     },

@@ -1,4 +1,5 @@
 import createClient from 'openapi-fetch'
+import { z } from 'zod'
 import { rememberSessionEnd } from './browser-session'
 import type { paths } from './schema'
 
@@ -316,13 +317,12 @@ export function conflictDetail(
  * That's the "a result already exists" case: a refetch reliably surfaces the
  * standing result, so score-entry can redirect the poster to match detail (#801).
  *
- * It deliberately does NOT match the other two propose 409s, whose `detail` is a
- * plain STRING: the lock race ("A result is already being posted…") and the
- * terminal guard ("This match is no longer open to results.") — those are
- * transient/plain errors the caller should keep surfacing with a live retry,
- * never a permanent redirect. Nor does it match the score-write `committed_score`
- * conflict object (that shape has no `viewer_state`), keeping the two object-body
- * 409s distinct.
+ * It deliberately does NOT match the lock race, whose `detail` is a plain STRING
+ * ("A result is already being posted…") — a transient error the caller should
+ * keep surfacing with a live retry, never a permanent redirect. Nor does it
+ * match the coded terminal 409 (`isMatchClosed`) or the score-write
+ * `committed_score` conflict object (neither has a `viewer_state`), keeping the
+ * object-body 409s distinct.
  */
 export function isNegotiationConflict(error: ApiError): boolean {
   if (error.status !== 409) return false
@@ -332,6 +332,25 @@ export function isNegotiationConflict(error: ApiError): boolean {
     typeof detail === 'object' &&
     !Array.isArray(detail) &&
     'viewer_state' in detail
+  )
+}
+
+// The propose-result terminal 409 (`MatchClosedConflict`, #1651): the match is
+// completed or voided. Parsed, not cast, because the body crosses the network —
+// and keyed on the stable `code`, so the lock-race 409 (a plain string) can
+// never be mistaken for it, and neither can the negotiation-conflict object.
+const matchClosedBodySchema = z.object({
+  detail: z.object({ code: z.literal('match_closed') }),
+})
+
+/**
+ * True when `error` is the propose-result "match is closed" 409. Unlike the
+ * lock race, a refetch settles it: the match is terminal, so the fresh data
+ * says `can_score: false` and score-entry's refusal guard takes over.
+ */
+export function isMatchClosed(error: ApiError): boolean {
+  return (
+    error.status === 409 && matchClosedBodySchema.safeParse(error.body).success
   )
 }
 

@@ -408,13 +408,14 @@ function ScoreEntryInner({
   // Option A that replaces the #800 reconcile interstitial ADR-0005 (#827)
   // removed.
   //
-  // Only the negotiation-conflict 409 redirects. The other propose 409s carry a
-  // plain-STRING detail — the lock race ("a result is already being posted…") and
-  // the terminal guard ("no longer open to results") — and their concurrent post
-  // may not have committed, so a refetch could leave `standing_result` null and
-  // strand the screen on "Taking you there…" forever. Those fall through to the
-  // normal red-error path below (string detail rendered, submit live for retry),
-  // exactly as before this fix.
+  // Only the negotiation-conflict 409 redirects. The lock-race 409 carries a
+  // plain-STRING detail ("a result is already being posted…") and its concurrent
+  // post may not have committed, so a refetch could leave `standing_result` null
+  // and strand the screen on "Taking you there…" forever. It falls through to
+  // the normal red-error path below (string detail rendered, submit live for
+  // retry). The coded "match closed" 409 (#1651) also falls through, but its
+  // refetch (see `useProposeResult`) lets the `can_score` guard below replace
+  // the form.
   const finalizeRedirecting =
     finalizeApiError !== null && isNegotiationConflict(finalizeApiError)
 
@@ -470,6 +471,9 @@ function ScoreEntryInner({
             {scoreEntryRefusalMessage(data.not_scorable_reason)}
           </AlertDescription>
         </Alert>
+        <Link {...matchDetailRoute(matchId)} className="underline">
+          View match
+        </Link>
       </div>
     )
   }
