@@ -346,7 +346,9 @@ const matchClosedBodySchema = z.object({
 /**
  * True when `error` is the propose-result "match is closed" 409. Unlike the
  * lock race, a refetch settles it: the match is terminal, so the fresh data
- * says `can_score: false` and score-entry's refusal guard takes over.
+ * usually says `can_score: false` and score-entry's refusal guard takes over.
+ * A match that is still scorable (a cancelled event) keeps the red error; see
+ * `useProposeResult`.
  */
 export function isMatchClosed(error: ApiError): boolean {
   return (

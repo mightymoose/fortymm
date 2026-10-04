@@ -461,10 +461,11 @@ function ScoreEntryInner({
   // instead of a silent bounce. `can_score` is also true for the tournament
   // director on a called, unresolved match in their own tournament, even when
   // they hold no side (#1523), so a director on a scorable match falls
-  // through this guard same as a participant. The completed/posted-result
-  // case above already returned, so what's left here is: not yet called, no
-  // opponent, or some other terminal state (e.g. voided) — plus a spectator
-  // on a match none of those apply to.
+  // through this guard same as a participant. The negotiation-conflict
+  // redirect above already returned, so what's left here is: not yet called,
+  // no opponent, a completed match (a stale link, or the viewer's own finalize
+  // got the coded `match_closed` 409, #1651), or some other terminal state
+  // (e.g. voided) — plus a spectator on a match none of those apply to.
   if (!data.can_score) {
     return (
       <div className="entry-wrap">

@@ -1538,8 +1538,6 @@ function negotiationConflictBody() {
   }
 }
 
-// The finalized MatchDetails a successful POST /results returns: a completed
-// best-of-5 the current user swept 3–0.
 // The propose-result terminal 409 (#1651): a coded object detail, so the client
 // never has to match the English text to tell it from the lock-race string.
 function matchClosedBody() {
@@ -1551,6 +1549,8 @@ function matchClosedBody() {
   }
 }
 
+// The finalized MatchDetails a successful POST /results returns: a completed
+// best-of-5 the current user swept 3–0.
 function completedMatch() {
   return matchDetails({
     id: 'm-1',
