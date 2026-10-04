@@ -9,7 +9,7 @@ the payment, or any refund obligation.
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import database_now
@@ -47,10 +47,23 @@ async def erase_receipt_address(db: AsyncSession, *, checkout_id: uuid.UUID) -> 
 async def erase_receipt_addresses_of_account(
     db: AsyncSession, *, account_id: uuid.UUID
 ) -> None:
-    """Erase every receipt address the account's checkouts hold. Does not commit."""
+    """Erase every receipt address held for the account. Does not commit.
+
+    Two ownership paths reach a checkout. The account is its payer, or it owns
+    a payment whose checkout still names another payer: an account merge moves
+    ``payer_account_id`` of a payment to the survivor and leaves the checkout
+    on the merged source. Erasing the survivor must reach both.
+    """
     checkout_ids = await db.scalars(
         select(TournamentCheckout.id).where(
-            TournamentCheckout.payer_account_id == account_id
+            or_(
+                TournamentCheckout.payer_account_id == account_id,
+                TournamentCheckout.id.in_(
+                    select(TournamentPayment.checkout_id).where(
+                        TournamentPayment.payer_account_id == account_id
+                    )
+                ),
+            )
         )
     )
     for checkout_id in checkout_ids.all():

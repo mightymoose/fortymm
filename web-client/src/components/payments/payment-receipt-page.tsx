@@ -23,14 +23,16 @@ export function PaymentReceiptPage({ paymentId }: { paymentId: string }) {
   const receipt = usePaymentReceipt(paymentId)
   const erase = useEraseReceiptAddress(paymentId)
 
-  if (receipt.isPending) {
+  if (receipt.data === undefined && receipt.isPending) {
     return (
       <div className="mx-auto max-w-[680px] px-4 py-8 sm:px-8">
         <p role="status" className="text-muted-foreground">Loading your receipt…</p>
       </div>
     )
   }
-  if (receipt.isError) {
+  // A failed BACKGROUND refetch keeps the receipt already on screen: only a load
+  // with nothing to show is an error (the throwOnError note in web-client/CLAUDE.md).
+  if (receipt.data === undefined) {
     const notFound = receipt.error instanceof ApiError && receipt.error.status === 404
     return (
       <div className="mx-auto max-w-[680px] px-4 py-8 sm:px-8">

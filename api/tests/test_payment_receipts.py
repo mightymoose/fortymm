@@ -423,3 +423,51 @@ async def test_the_combined_email_never_says_entered_for_a_refund_pending_line(
     assert "entered" not in message["subject"].lower()
     assert "Not admitted — refund pending" in message["body"]
     assert "Entry confirmed" in message["body"]
+
+
+async def test_deactivating_an_account_keeps_its_receipt_address(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.identity_lifecycle import deactivate_account, reactivate_account
+
+    payer, _owner, _provider, payment = await _paid_checkout(
+        api_client, db_session, monkeypatch, receipt_address="receipts@example.com"
+    )
+
+    await deactivate_account(db_session, payer.id)
+    await reactivate_account(db_session, payer.id)
+    await db_session.commit()
+
+    await db_session.refresh(payment)
+    assert payment.receipt_address == "receipts@example.com"
+    assert payment.receipt_address_erased_at is None
+
+
+async def test_erasing_the_survivor_of_a_merge_erases_the_transferred_payments_address(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.identity_lifecycle import erase_account
+    from tests._helpers import make_user
+
+    _payer, _owner, _provider, payment = await _paid_checkout(
+        api_client, db_session, monkeypatch, receipt_address="receipts@example.com"
+    )
+    survivor = await make_user(db_session, f"survivor-{uuid.uuid4().hex[:8]}")
+    # What an account merge does: the payment moves to the survivor, and the
+    # checkout keeps the source account as its payer.
+    payment.payer_account_id = survivor.id
+    await db_session.commit()
+
+    await erase_account(db_session, survivor.id)
+    await db_session.commit()
+
+    await db_session.refresh(payment)
+    checkout = await db_session.get(TournamentCheckout, payment.checkout_id)
+    assert checkout is not None
+    await db_session.refresh(checkout)
+    assert (checkout.receipt_address, payment.receipt_address) == (None, None)
+    assert payment.receipt_address_erased_at is not None

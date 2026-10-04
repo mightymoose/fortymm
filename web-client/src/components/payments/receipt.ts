@@ -78,7 +78,14 @@ export function useEraseReceiptAddress(paymentId: string) {
         }),
         { allowEmpty: true },
       ),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: receiptKey(paymentId) }),
+    onSuccess: async () => {
+      // The server erased it: show that now, so even a failed refetch cannot put
+      // a stale address back on screen.
+      queryClient.setQueryData<Receipt>(receiptKey(paymentId), (receipt) =>
+        receipt && { ...receipt, receiptAddress: null },
+      )
+      await queryClient.invalidateQueries({ queryKey: receiptKey(paymentId) })
+    },
   })
 }
 
@@ -99,8 +106,9 @@ export function apiToPaymentSummaries(payload: unknown) {
   }))
 }
 
+export const MY_PAYMENTS_QUERY_KEY_PREFIX = ['tournament-my-payments'] as const
 export const myPaymentsKey = (tournamentId: string) =>
-  ['tournament-my-payments', tournamentId] as const
+  [...MY_PAYMENTS_QUERY_KEY_PREFIX, tournamentId] as const
 
 /** The caller's own succeeded payments in one tournament, so a payer who left
  * before success can still reach each receipt. A failed read shows nothing:

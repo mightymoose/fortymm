@@ -49,9 +49,6 @@ async def deactivate_account(db: AsyncSession, account_id: uuid.UUID) -> None:
     await invalidate_checkouts_for_account_lifecycle(db, account_id)
     await db.execute(delete(SessionToken).where(SessionToken.user_id == account_id))
     await db.execute(delete(DeviceToken).where(DeviceToken.user_id == account_id))
-    # A receipt address is PII held on the account's checkouts and payments
-    # (#1810). The payments and their refund obligations stay.
-    await erase_receipt_addresses_of_account(db, account_id=account_id)
     await db.execute(
         delete(EmailToken).where(
             or_(
@@ -90,6 +87,9 @@ async def erase_account(db: AsyncSession, account_id: uuid.UUID) -> None:
     account.agent_access_linked_at = None
     account.agent_access_revoked_at = None
     account.login_identities.clear()
+    # A receipt address is PII held on the account's checkouts and payments
+    # (#1810). The payments and their refund obligations stay.
+    await erase_receipt_addresses_of_account(db, account_id=account_id)
     await db.execute(
         delete(EmailToken).where(
             or_(

@@ -97,4 +97,32 @@ describe('PaymentReceiptPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('We couldn’t remove your email')
     expect(screen.getByText('receipts@example.com')).toBeInTheDocument()
   })
+
+  it('keeps the receipt on screen when the refetch after removing the email fails', async () => {
+    const receipt = buildPaymentReceipt({ receipt_address: 'receipts@example.com' })
+    let reads = 0
+    server.use(
+      http.get(`*/v1/payments/${receipt.id}/receipt`, () => {
+        reads += 1
+        return reads === 1
+          ? HttpResponse.json(receipt)
+          : HttpResponse.json({ detail: 'down' }, { status: 503 })
+      }),
+      http.delete(`*/v1/payments/${receipt.id}/receipt-address`, () =>
+        new HttpResponse(null, { status: 204 }),
+      ),
+    )
+    const user = userEvent.setup()
+
+    renderReceipt(receipt.id)
+    await user.click(await screen.findByRole('button', { name: 'Remove my email' }))
+
+    await waitFor(() => expect(reads).toBe(2))
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Remove my email' })).not.toBeInTheDocument(),
+    )
+    expect(screen.getByRole('list', { name: 'Events' })).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByText('receipts@example.com')).not.toBeInTheDocument()
+  })
 })
