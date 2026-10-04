@@ -5352,7 +5352,7 @@ OPEN: dict[str, Any] = {"state": "open"}
 EVENT_FULL: dict[str, Any] = {"state": "event_full"}
 
 
-def _ineligible(predicate_id: str, rating: float) -> dict[str, Any]:
+def _ineligible(predicate_id: str, rating: float | None) -> dict[str, Any]:
     """The refusal as the wire carries it: WHICH rule refused you, and the rating it
     judged. Nothing else — no sentence for the client to render (ADR-0968), and no
     copy of the rule's ``op``/``value``, which the client already holds on the event's
@@ -5593,6 +5593,26 @@ async def test_an_uncapped_event_still_refuses_a_caller_its_rules_bar(
     assert event["entry_state"] == _ineligible("pr-cap", 1650.0)
 
 
+async def test_an_unrated_caller_reads_ineligible_on_a_floor_event(
+    authed_client: tuple[AsyncClient, User],
+) -> None:
+    """**An unrated player is told a floor event refuses them** (#1635), and
+    ``rating`` is ``null``: there is no number they were judged on. This is the
+    read-side twin of the entry route's 409."""
+    client, _ = authed_client
+    tournament_id, _ = await _tournament_with_events(
+        client, _event_payload(predicates=[FLOOR_OVER_1600])
+    )
+
+    (event,) = await _events_of(client, tournament_id)
+
+    assert event["entry_state"] == {
+        "state": "rating_ineligible",
+        "predicate_id": "pr-floor",
+        "rating": None,
+    }
+
+
 async def test_an_unrated_caller_reads_open_on_a_capped_event(
     authed_client: tuple[AsyncClient, User],
 ) -> None:
@@ -5694,7 +5714,7 @@ def test_the_entry_state_names_are_the_entry_refusal_codes() -> None:
 # ---------------------------------------------------------------------------
 # The entrant's rating on the tournament's ladder — the unrated marker (ADR-0783 §3)
 #
-# An unrated player passes every rating rule, which makes a rating cap OPT-OUT: stay
+# An unrated player passes a cap (#1635), which makes a rating cap OPT-OUT: stay
 # unrated, stay eligible for every capped event, forever. The agreed mitigation is not
 # a guess at their strength — it is VISIBILITY. The director is the only person who can
 # act on it (they can withdraw a ringer), and they can only act on what they can see, so

@@ -1699,17 +1699,49 @@ async def test_a_player_under_the_events_rating_cap_enters(
     assert [e.user_id for e in await _active_entries(db_session, event.id)] == [user.id]
 
 
+async def test_an_unrated_player_is_refused_by_a_rating_floor(
+    entrant_client: tuple[AsyncClient, User],
+    db_session: AsyncSession,
+) -> None:
+    """**A player with NO rating cannot enter an event whose rules set a lower bound**
+    (#1635). 409 ``rating_ineligible``, no row.
+
+    The repro is ``>= 2800 AND < 1500``: no rating satisfies both, and the unrated
+    player is refused on the floor instead of being admitted on the cap.
+    ``_all_entries`` for the same reason as the rated refusal above: a handler that
+    inserted before judging would leave a row an active filter hides.
+    """
+    client, _ = entrant_client
+    event = await _make_event(
+        db_session,
+        predicates=[
+            {"id": "pr-floor", "field": "rating", "op": ">=", "value": 2800},
+            {"id": "pr-cap", "field": "rating", "op": "<", "value": 1500},
+        ],
+    )
+    event_id = event.id
+
+    response = await client.post(_entries_url(event))
+
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "rating_ineligible"
+    assert response.json()["detail"]["message"], (
+        "a refusal with no words to fall back on"
+    )
+    assert await _all_entries(db_session, event_id) == []
+
+
 async def test_an_unrated_player_enters_a_capped_event(
     entrant_client: tuple[AsyncClient, User],
     db_session: AsyncSession,
 ) -> None:
     """**A player with NO rating enters the "Under 1500" event.** 201, not 409.
 
-    This is the counterintuitive rule of ADR-0783 §3, and it is deliberate. A player
-    holds no rating on a league until they finish a rated match there, so the brand-new
-    player — the one the beginners' event exists *for* — has nothing to compare against
-    the cap. Refusing them would lock them out of the only event they belong in, and it
-    would do so on the strength of a fact we do not have.
+    This is deliberate: a cap admits an unrated player, a floor refuses one (#1635). A
+    player holds no rating on a league until they finish a rated match there, so the
+    brand-new player — the one the beginners' event exists *for* — has nothing to
+    compare against the cap. Refusing them would lock them out of the only event they
+    belong in, and it would do so on the strength of a fact we do not have.
 
     The known cost, accepted rather than overlooked: this makes a rating cap **opt-out**
     (a sandbagger can stay unrated forever). It is mitigated by *marking* unrated
@@ -2195,7 +2227,7 @@ async def test_a_directors_entry_over_the_rating_cap_is_rating_ineligible(
 
     The director themselves is unrated — so a handler that judged the *caller's* rating
     (the obvious copy-paste of the self-registration line) would sail through, because
-    an unrated player passes every rule (ADR-0783 §3). That is the bug this test is
+    an unrated player passes a cap (#1635). That is the bug this test is
     shaped to catch: eligibility as an accidental function of who is holding the phone.
     """
     client, owner = director_client

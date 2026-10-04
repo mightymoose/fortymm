@@ -1348,21 +1348,23 @@ class EventEntryRatingIneligible(BaseModel):
       chips, so the page can point at the one that is in the way. Repeating the
       rule's ``op``/``value`` here would be carrying a field *and its own
       derivation* (api/CLAUDE.md), and the two copies could disagree.
-    * ``rating`` — the number you were judged on. The client cannot derive it: a
-      player's rating on the tournament's league is not otherwise on this page, and
-      "you are not eligible" without it is a fact the player cannot act on.
+    * ``rating`` — the number you were judged on, or ``null`` when you have no rating
+      on the ladder yet. The client cannot derive it: a player's rating on the
+      tournament's league is not otherwise on this page, and "you are not eligible"
+      without it is a fact the player cannot act on.
 
     **No sentence.** The refusal is a state, not prose: the client owns the copy
     (ADR-0968), and a raw API string must never reach the UI. The words that the
     *entry route's* 409 falls back on are built from these same two facts by
     ``app.tournament_eligibility``.
 
-    A player with **no rating** on the ladder is never in this state — they pass every
-    rule (ADR-0783 §3), so ``rating`` here is always a real number."""
+    A player with **no rating** on the ladder is in this state only for a rule that sets
+    a lower bound (#1635), and ``rating`` is ``null`` then. A rule with only an upper
+    bound still admits them."""
 
     state: Literal["rating_ineligible"] = "rating_ineligible"
     predicate_id: str
-    rating: float
+    rating: float | None
 
 
 EventEntryState = Annotated[
@@ -1413,8 +1415,8 @@ class TournamentEntrantRead(BaseModel):
     #
     # ``None`` means **Unrated**: we hold no rating for this player on this ladder.
     # That is not an absent number to be filled in later — it is the state ADR-0783 §3
-    # is about. An unrated player passes every rating rule, which makes a rating cap
-    # opt-out (never play a rated match, remain eligible for every capped event), and
+    # is about. An unrated player passes a rule that sets only an upper bound (#1635),
+    # which makes a rating cap opt-out (never play a rated match, stay eligible), and
     # the agreed mitigation is that the one person who can act on it — the director,
     # who may withdraw them — can SEE it. An invisible loophole and a visible one are
     # different things, and this field is the difference.

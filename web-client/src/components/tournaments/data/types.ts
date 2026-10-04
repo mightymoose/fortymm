@@ -635,12 +635,12 @@ export interface Entrant {
    * re-derives that nor second-guesses it: it reads `null` and says so
    * (`isUnrated`, `./helpers`).
    *
-   * Why the client is told at all: an unrated player **passes every rating rule**
-   * (ADR-0783 §3), which makes a rating cap opt-out. The agreed mitigation is that
-   * an unrated entrant is *marked as such in the entrants list*, so the one person
-   * who can act on a ringer — the director, who may withdraw them — can see who
-   * took the opt-out. An invisible loophole and a visible one are different
-   * things. */
+   * Why the client is told at all: an unrated player **passes a rule that sets only
+   * an upper bound** (a cap is opt-out) and fails one that sets a lower bound
+   * (#1635). An unrated entrant is *marked as such in the entrants list*, so the
+   * one person who can act on a ringer — the director, who may withdraw them —
+   * can see who took the opt-out. An invisible loophole and a visible one are
+   * different things. */
   rating: number | null
 }
 
@@ -665,8 +665,8 @@ export interface Entrant {
 export type EventEntryState =
   /** Retirement blocks new entries, but an existing held entry can still be withdrawn. */
   | { state: 'retired' }
-  /** Room, and your rating passes every rule. (An *unrated* player passes every
-   * rule — ADR-0783 §3.) */
+  /** Room, and your rating passes every rule. (An *unrated* player passes a rule
+   * that sets only an upper bound and fails one that sets a lower bound — #1635.) */
   | { state: 'open' }
   /** `max_players` active entrants already. Nothing about *you*: the one arm of
    * the union that is a fact about the event alone. */
@@ -680,11 +680,12 @@ export type EventEntryState =
        * The rule's `op`/`value` are not repeated here — that would be a field and
        * its own derivation, and the two copies could disagree. */
       predicateId: string
-      /** The rating you were judged on, on the tournament's ladder. The client
-       * cannot derive it (a player's rating on that league is nowhere else on this
-       * page), and "you are not eligible" without it is a fact the player cannot
-       * act on. */
-      rating: number
+      /** The rating you were judged on, on the tournament's ladder, or `null` when
+       * you hold none there (#1635): an unrated player is refused by a rule that
+       * sets a lower bound. The client cannot derive it (a player's rating on that
+       * league is nowhere else on this page), and "you are not eligible" without
+       * it is a fact the player cannot act on. */
+      rating: number | null
     }
 
 export interface TournamentEvent {

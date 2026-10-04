@@ -16,8 +16,8 @@ this module can be exercised in a unit test with no database at all, which is wh
 operator matrix below is cheap enough to cover every operator at, above and below its
 boundary.
 
-**An unrated player passes every rule, and that is not a bug (ADR-0783 §3).**
-See ``evaluate_rating_eligibility``. Do not "fix" it.
+**An unrated player fails a rule that sets a lower bound and passes one that does
+not (#1635, which supersedes ADR-0783 §3).** See ``evaluate_rating_eligibility``.
 """
 
 from __future__ import annotations
@@ -108,6 +108,8 @@ class Eligible:
 @dataclass(frozen=True)
 class RatingIneligible:
     """The player's rating fails one of the event's rules — the *first* one it fails.
+    An unrated player (``rating`` is ``None``) fails the first rule that sets a lower
+    bound.
 
     The rule and the rating both ride along, so a caller can say more than "no": the
     entry route puts them in the refusal's fallback message, and the detail read (6a)
@@ -117,7 +119,7 @@ class RatingIneligible:
 
     predicate_id: str
     rule: RatingBound | RatingRange
-    rating: float
+    rating: float | None
 
     @property
     def message(self) -> str:
@@ -128,6 +130,11 @@ class RatingIneligible:
         human reads in a log. Both facts are in it, because "you are not eligible"
         with neither the rating nor the rule tells the player nothing they can act on.
         """
+        if self.rating is None:
+            return (
+                "You have no rating on this tournament's ladder yet,"
+                f" and this event is for {describe_rule(self.rule)}."
+            )
         return (
             f"Your rating on this tournament's ladder is {_format_rating(self.rating)},"
             f" and this event is for {describe_rule(self.rule)}."
@@ -146,7 +153,10 @@ def evaluate_rating_eligibility(
     Rules are **ANDed** — a player must satisfy every one — so the first failure ends
     it, and an event with no rules admits everybody.
 
-    **AN UNRATED PLAYER PASSES EVERY RULE. THIS IS DELIBERATE — DO NOT "FIX" IT.**
+    **An unrated player fails every rule that sets a lower bound** (``>``, ``>=``,
+    ``=``, and ``between`` with a minimum), and **passes every rule that sets no lower
+    bound** (``<``, ``<=``, ``!=``, and ``between`` with only a maximum). #1635
+    decided this, superseding ADR-0783 §3, which let an unrated player past every rule.
 
     ``rating`` is ``None`` when the player holds no rating on the tournament's league:
     they have never finished a rated match there (CONTEXT.md, "Unrated entrant"). That
@@ -155,35 +165,35 @@ def evaluate_rating_eligibility(
     ``tournament_queries.entrant_rating`` through ``app.ratings.rated.is_rated_member``,
     the same predicate the profile and the roster use. Read its docstring before
     changing how a rating reaches this function; a seeded 1500 arriving here as a
-    *rating* silently refuses every beginner from the beginners' event. A rule of
-    ``rating < 1500`` **admits** an unrated player, and so does ``rating > 1800`` —
-    every operator, no exceptions, both directions. The reason (ADR-0783 §3): the
-    alternative, where unrated fails every rule, locks a brand-new player out of the
-    *Under 1500 beginners' event*, which is precisely the event that exists for them,
-    and a genuinely new player is genuinely weak — that is the common case, not the
-    edge one.
+    *rating* silently refuses every beginner from the beginners' event.
 
-    The cost is known and accepted, not overlooked: it makes a rating **cap** opt-out
-    — a sandbagger can stay unrated forever and remain eligible for every capped
-    event. It is mitigated where it can be acted on, by marking unrated entrants in
-    the entrants list so the director (who may withdraw them) can see who took the
-    opt-out. It is *not* mitigated by guessing a rating we do not have, which is what
-    refusing them would amount to.
-
-    So: the ``None`` check is first, before a single rule is read. If you are here
-    because a lower-bound rule "obviously" should refuse an unrated player, read
-    ADR-0783 §3 — and ``test_an_unrated_player_passes_every_operator``, which exists
-    to make this decision expensive to reverse by accident.
+    A floor ("at least 2800") is a claim about a rating, and an unrated player has none
+    to show. Admitting them let a sandbagger stay unrated and enter every event with a
+    floor. A cap ("under 1500") still admits them: a brand-new player is genuinely
+    weak, and the beginners' event exists for them.
     """
-    if rating is None:
-        return Eligible()
     for predicate in _PREDICATES.validate_python(list(predicates)):
         rule = rating_rule(predicate)
         if isinstance(rule, Unconstrained):
             continue
-        if not _satisfies(rule, rating):
+        if rating is None:
+            if _sets_lower_bound(rule):
+                return RatingIneligible(
+                    predicate_id=predicate.id, rule=rule, rating=None
+                )
+        elif not _satisfies(rule, rating):
             return RatingIneligible(predicate_id=predicate.id, rule=rule, rating=rating)
     return Eligible()
+
+
+def _sets_lower_bound(rule: RatingBound | RatingRange) -> bool:
+    """Whether a rule bars every rating below some number — the rules an unrated
+    player fails. ``=`` counts: it admits one rating, so it sets a floor."""
+    match rule:
+        case RatingBound():
+            return rule.op in (">", ">=", "=")
+        case RatingRange():
+            return rule.minimum is not None
 
 
 def _satisfies(rule: RatingBound | RatingRange, rating: float) -> bool:

@@ -242,13 +242,13 @@ async def active_entrants_by_event(
     derived from it.
 
     **The rating rides along on that same statement**, and it has to. An unrated player
-    passes every rating rule (ADR-0783 §3), which makes a rating cap **opt-out**: a
-    sandbagger's optimal move is to never play a rated match and stay eligible for every
-    capped event forever. The agreed mitigation is that the director can SEE who took
-    that option — so the rating is a fact about *every entrant of every event on the
-    page*, not about the caller, and fetching it per entrant would be an N+1 that grows
-    with the field it is describing. The statement-count tripwires in
-    ``tests/test_tournaments.py`` fail if one appears. Instead the entry's own event
+    passes a rating rule that sets only an upper bound and fails one that sets a lower
+    bound (#1635), so an unrated entrant is in a capped event by the cap's own rule.
+    The director can SEE who they are — so the rating is a fact about *every entrant
+    of every event on the page*, not about the caller, and fetching it per entrant
+    would be an N+1 that grows with the field it is describing. The statement-count
+    tripwires in ``tests/test_tournaments.py`` fail if one appears. Instead the
+    entry's own event
     names its tournament, the tournament names the ladder (``league_id``, ADR-0783
     §2), and the rating LEFT-joins onto that — so the league is read from the rows
     rather than passed in by a caller who could pass the wrong one.
@@ -1038,11 +1038,10 @@ async def entrant_rating(
     played a thing. So a brand-new player *does* have a ``rating_value``, and it is
     1500. Key eligibility off that column alone and the "Under 1500" beginners' event
     refuses every beginner on the platform — a 1500 seed fails ``rating < 1500`` — which
-    is the precise harm ADR-0783 §3 exists to prevent, arriving through the back door.
-    (ADR-0783 §3 says "``rating_value`` is nullable, so an unrated player has none". The
-    *rule* it states is right and is honoured here; the mechanism it names is not how
-    this codebase spells "Unrated", and coding to the mechanism would have inverted the
-    rule.)
+    is the harm the unrated rule exists to prevent, arriving through the back door.
+    (ADR-0783 §3 says "``rating_value`` is nullable, so an unrated player has none".
+    That mechanism is not how this codebase spells "Unrated", and coding to it would
+    have inverted the rule.)
 
     The one definition of "not Unrated" is ``app.ratings.rated.is_rated_member`` — the
     rating row has been MOVED by something real (a non-``initial`` ``rating_history``
@@ -1054,8 +1053,8 @@ async def entrant_rating(
 
     Everything else is ``None``: no row, a NULL value (a manual league awaiting its
     import), or a seed nothing has moved. All three mean "we hold no rating for this
-    player here", they are worth no distinction, and each one passes every rule
-    (ADR-0783 §3).
+    player here", they are worth no distinction, and each one is judged as unrated
+    (``app.tournament_eligibility``).
 
     ONE query, one column: the entry guard runs it inside the tournament's row lock,
     and loading the whole ``UserLeagueRating`` row to read one float off it would drag

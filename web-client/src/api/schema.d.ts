@@ -1393,8 +1393,9 @@ export interface paths {
          *     tournament's league, and they must satisfy **every** one of them: failing a rule
          *     (the 1650-rated player entering the "Under 1500" event) is a `409`. A player who
          *     holds **no rating** on that league — nobody has a rating until they finish a rated
-         *     match — **passes every rule**, so a brand-new player is not shut out of the
-         *     beginners' event that exists for them.
+         *     match — **fails a rule that sets a lower bound** (`>`, `>=`, `=`, or `between` with
+         *     a minimum) and **passes a rule that sets only an upper bound**, so a brand-new
+         *     player is not shut out of the beginners' event that exists for them.
          *
          *     Entering an event the player is already in is a `409`; withdrawing first frees them
          *     to enter it again. Entering an event that already holds its `max_players`
@@ -2913,17 +2914,19 @@ export interface components {
          *       chips, so the page can point at the one that is in the way. Repeating the
          *       rule's ``op``/``value`` here would be carrying a field *and its own
          *       derivation* (api/CLAUDE.md), and the two copies could disagree.
-         *     * ``rating`` — the number you were judged on. The client cannot derive it: a
-         *       player's rating on the tournament's league is not otherwise on this page, and
-         *       "you are not eligible" without it is a fact the player cannot act on.
+         *     * ``rating`` — the number you were judged on, or ``null`` when you have no rating
+         *       on the ladder yet. The client cannot derive it: a player's rating on the
+         *       tournament's league is not otherwise on this page, and "you are not eligible"
+         *       without it is a fact the player cannot act on.
          *
          *     **No sentence.** The refusal is a state, not prose: the client owns the copy
          *     (ADR-0968), and a raw API string must never reach the UI. The words that the
          *     *entry route's* 409 falls back on are built from these same two facts by
          *     ``app.tournament_eligibility``.
          *
-         *     A player with **no rating** on the ladder is never in this state — they pass every
-         *     rule (ADR-0783 §3), so ``rating`` here is always a real number.
+         *     A player with **no rating** on the ladder is in this state only for a rule that sets
+         *     a lower bound (#1635), and ``rating`` is ``null`` then. A rule with only an upper
+         *     bound still admits them.
          */
         EventEntryRatingIneligible: {
             /**
@@ -2934,7 +2937,7 @@ export interface components {
             /** Predicate Id */
             predicate_id: string;
             /** Rating */
-            rating: number;
+            rating: number | null;
         };
         /**
          * EventEntryRetired

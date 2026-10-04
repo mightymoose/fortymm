@@ -270,7 +270,7 @@ struct TournamentEventDTO: Decodable, Identifiable {
     }
     var ineligibilityMessage: String {
         let rule = predicates?.first { $0.id == entryState.predicateId }?.label ?? "Your rating does not meet this event’s eligibility rules"
-        return entryState.rating.map { "\(rule). Your rating is \(Int($0.rounded()))." } ?? rule + "."
+        return entryState.rating.map { "\(rule). Your rating is \(Int($0.rounded()))." } ?? "\(rule). You have no rating yet."
     }
     func groupLabel(_ id: UUID) -> String {
         guard let group = groups.first(where: { $0.id == id }) else { return "Group" }
