@@ -460,3 +460,71 @@ async def test_a_late_success_carries_the_checkout_erasure_onto_the_payment(
     assert payment.status is TournamentPaymentStatus.succeeded
     assert payment.receipt_address is None
     assert payment.receipt_address_erased_at is not None
+
+
+async def test_the_database_carries_a_checkout_tombstone_onto_an_n_minus_1_late_success(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """During a rolling deploy the previous release can finish a late success
+    after a new pod erased the checkout. Its ``_admit`` copies only the
+    checkout's address, so the database must add the tombstone."""
+    from app.receipt_addresses import erase_receipt_address
+
+    _payer, _owner, _provider, payment = await _paid_checkout(
+        api_client, db_session, monkeypatch, succeed=False, receipt_address=ADDRESS
+    )
+    await erase_receipt_address(db_session, checkout_id=payment.checkout_id)
+    await db_session.commit()
+
+    # Exactly what the previous release writes when it records the success.
+    await db_session.execute(
+        text(
+            "UPDATE tournament_payments SET status = 'succeeded', "
+            "receipt_address = NULL WHERE id = :id"
+        ),
+        {"id": payment.id},
+    )
+    await db_session.commit()
+
+    await db_session.refresh(payment)
+    assert payment.receipt_address is None
+    assert payment.receipt_address_erased_at is not None
+
+
+async def test_the_database_erases_receipt_addresses_for_an_n_minus_1_account_erasure(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After a rollback, the previous release's ``erase_account`` knows nothing
+    about receipt addresses, and the account is then too erased for the new
+    release to repair. So the erase itself must reach them."""
+    payer, _owner, _provider, payment = await _paid_checkout(
+        api_client, db_session, monkeypatch, receipt_address=ADDRESS
+    )
+
+    from app import identity_lifecycle
+
+    async def previous_release_knows_nothing_of_receipts(
+        *_args: object, **_kw: object
+    ) -> None:
+        return None
+
+    # The previous release's erase_account is this one without the receipt step.
+    monkeypatch.setattr(
+        identity_lifecycle,
+        "erase_receipt_addresses_of_account",
+        previous_release_knows_nothing_of_receipts,
+    )
+    await identity_lifecycle.erase_account(db_session, payer.id)
+    await db_session.commit()
+
+    await db_session.refresh(payment)
+    checkout = await db_session.get(TournamentCheckout, payment.checkout_id)
+    assert checkout is not None
+    await db_session.refresh(checkout)
+    assert (checkout.receipt_address, payment.receipt_address) == (None, None)
+    assert payment.receipt_address_erased_at is not None
+    assert checkout.receipt_address_erased_at is not None
