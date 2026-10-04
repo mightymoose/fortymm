@@ -369,13 +369,17 @@ function ScoreEntryInner({
   // regardless of render timing. Reset in each mutation's `onSettled` so a
   // later clear of a *different* game works normally.
   const clearingRef = useRef(false)
+  // A draft typed before the match closed stays dirty, but the `can_score`
+  // refusal below has no form left to lose and never renders the leave dialog,
+  // so the blocker stands down there (#1651).
+  const guardsDraft = isDirty && data?.can_score !== false
   const { status, proceed, reset } = useBlocker({
     // Blocks browser refresh/close (beforeunload) only while genuinely dirty.
-    enableBeforeUnload: () => isDirty,
+    enableBeforeUnload: () => guardsDraft,
     // Blocks in-app route changes the same way. The app's own hops opt out per
     // navigation via `ignoreBlocker: true`, so there's nothing to check here but
-    // the dirty flag (ADR 0014, #818).
-    shouldBlockFn: () => isDirty,
+    // the draft guard (ADR 0014, #818).
+    shouldBlockFn: () => guardsDraft,
     withResolver: true,
   })
 
@@ -471,10 +475,7 @@ function ScoreEntryInner({
             {scoreEntryRefusalMessage(data.not_scorable_reason)}
           </AlertDescription>
         </Alert>
-        {/* `ignoreBlocker`: a draft typed before the match closed still arms the
-            unsaved-input blocker, but this screen has no form left to lose and
-            never renders the blocker's dialog, so without it the link goes dead. */}
-        <Link {...matchDetailRoute(matchId)} className="underline" ignoreBlocker>
+        <Link {...matchDetailRoute(matchId)} className="underline">
           View match
         </Link>
       </div>

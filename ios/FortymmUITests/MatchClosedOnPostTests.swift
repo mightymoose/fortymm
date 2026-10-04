@@ -93,11 +93,11 @@ final class MatchClosedOnPostTests: XCTestCase {
         alert.buttons["OK"].tap()
 
         // 5. …and the screen is the match as it now stands, not the dead form.
-        XCTAssertFalse(post.waitForExistence(timeout: 5), "The score form's \"Post result\" must be gone")
         XCTAssertTrue(
             app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] 'Final'")).firstMatch
                 .waitForExistence(timeout: 15),
             "Expected the match detail to show the finished match"
         )
+        XCTAssertFalse(post.exists, "The score form's \"Post result\" must be gone")
     }
 }

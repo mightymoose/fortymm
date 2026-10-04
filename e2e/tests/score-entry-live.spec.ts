@@ -191,7 +191,8 @@ test.describe('Score entry — the page follows the other side', () => {
       { game_number: 1, side_1_points: 5, side_2_points: 11 },
     ])
 
-    // A's page is still the dead form: the stream is cut, so no hint can arrive.
+    // Precondition: A's form is still live. The stream route is aborted, so no
+    // hint can replace it.
     await expect(entry.refusal).toBeHidden()
     await expect(entry.finalizeButton).toBeVisible()
 

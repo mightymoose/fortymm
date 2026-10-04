@@ -3650,6 +3650,45 @@ describe('ScoreEntry — stale finalize hits a posted result (409 → redirect) 
     expect(await screen.findByText('match-page m-1')).toBeInTheDocument()
   })
 
+  it('a dirty draft does not block other exits from the match_closed refusal (#1651)', async () => {
+    // The refusal screen has no form and no leave dialog, so a blocker still
+    // armed by the old draft would swallow every exit but the "View match" link.
+    const user = userEvent.setup()
+    let posted = false
+    server.use(
+      http.get('*/v1/matches/m-1', () =>
+        HttpResponse.json(posted ? completedMatch() : decidingGameMatch()),
+      ),
+      http.post('*/v1/matches/m-1/results', () => {
+        posted = true
+        return HttpResponse.json(matchClosedBody(), { status: 409 })
+      }),
+    )
+
+    const { router } = renderScoreEntry({
+      kind: 'create',
+      matchId: 'm-1',
+      gameNumber: 3,
+    })
+    await user.type(
+      await screen.findByRole('textbox', { name: 'rita.kovac score' }),
+      '11',
+    )
+    await user.type(screen.getByRole('textbox', { name: 'nguyen.t score' }), '3')
+    await user.click(screen.getByRole('button', { name: /post result/i }))
+    await screen.findByText("Can't enter a score here")
+
+    // Not awaited: a blocked navigation never settles, and the red must name
+    // the screen it stayed on rather than time out.
+    act(() => {
+      void router.navigate({
+        to: '/matches/$matchId/games/$gameNumber/scores/edit',
+        params: { matchId: 'm-1', gameNumber: '1' },
+      })
+    })
+    expect(await screen.findByText('scoring-edit m-1 1')).toBeInTheDocument()
+  })
+
   it('a coded match_closed 409 whose refetch is still scorable keeps the red error and a live submit (#1651)', async () => {
     // `MatchClosedError` also covers a cancelled/retired event, where the match
     // row may not be terminal. The refetch can then say `can_score: true`; the
