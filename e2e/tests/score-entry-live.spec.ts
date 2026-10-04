@@ -191,8 +191,7 @@ test.describe('Score entry — the page follows the other side', () => {
       { game_number: 1, side_1_points: 5, side_2_points: 11 },
     ])
 
-    // A's page is still the dead form: no hint came, so nothing has changed.
-    await page.waitForTimeout(3_000)
+    // A's page is still the dead form: the stream is cut, so no hint can arrive.
     await expect(entry.refusal).toBeHidden()
     await expect(entry.finalizeButton).toBeVisible()
 
@@ -204,9 +203,8 @@ test.describe('Score entry — the page follows the other side', () => {
     await expect(entry.refusal).toContainText('scores are frozen')
     await expect(entry.finalizeButton).toBeHidden()
     await expect(entry.scoreInput(a.username)).toBeHidden()
-    const viewMatch = page.getByRole('link', { name: 'View match' })
-    await expect(viewMatch).toHaveAttribute('href', `/matches/${matchId}`)
-    await viewMatch.click()
+    await expect(entry.viewMatchLink).toHaveAttribute('href', `/matches/${matchId}`)
+    await entry.viewMatchLink.click()
     await expect(page).toHaveURL(new RegExp(`/matches/${matchId}$`))
 
     await b.ctx.dispose()
