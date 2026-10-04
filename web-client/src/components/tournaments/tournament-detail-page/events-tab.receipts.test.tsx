@@ -66,4 +66,37 @@ describe('EventsTab receipts (#1810)', () => {
     await screen.findByText('Open Singles')
     expect(screen.queryByRole('region', { name: 'Your receipts' })).not.toBeInTheDocument()
   })
+
+  it.each([
+    ['Control', '{Control>}', '{/Control}'],
+    ['Meta', '{Meta>}', '{/Meta}'],
+    ['Shift', '{Shift>}', '{/Shift}'],
+  ])('leaves a %s-click to the browser, so the link can open elsewhere', async (_name, down, up) => {
+    servePayments([
+      {
+        id: PAYMENT_ID,
+        reference: 'PAY-7K3M9QX2',
+        amount_cents: 7_500,
+        created_at: new Date().toISOString(),
+        event_names: ['Open Singles'],
+      },
+    ])
+    const onViewReceipt = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <EventsTab
+        {...buildEventsTabProps({ tournament: tournament(), canEdit: false })}
+        onViewReceipt={onViewReceipt}
+      />,
+    )
+    const link = await screen.findByRole('link', { name: /Open Singles/ })
+    // jsdom does not navigate; swallow the default so the test stays in place.
+    link.addEventListener('click', (event) => event.preventDefault())
+
+    await user.keyboard(down)
+    await user.click(link)
+    await user.keyboard(up)
+
+    expect(onViewReceipt).not.toHaveBeenCalled()
+  })
 })

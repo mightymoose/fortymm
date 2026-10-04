@@ -30,7 +30,20 @@ export function YourReceipts({
               className="text-sm underline underline-offset-4"
               href={`/payments/${payment.id}/receipt`}
               onClick={(event) => {
-                if (!onViewReceipt) return
+                // Only a plain primary click navigates in the app. Ctrl, Cmd,
+                // Shift, Alt and the middle button keep the browser's own link
+                // behavior (a new tab or window).
+                if (
+                  !onViewReceipt ||
+                  event.defaultPrevented ||
+                  event.button !== 0 ||
+                  event.metaKey ||
+                  event.ctrlKey ||
+                  event.shiftKey ||
+                  event.altKey
+                ) {
+                  return
+                }
                 event.preventDefault()
                 onViewReceipt(payment.id)
               }}

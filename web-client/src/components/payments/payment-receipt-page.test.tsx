@@ -183,4 +183,28 @@ describe('PaymentReceiptPage', () => {
     expect(status).toHaveFocus()
     expect(screen.queryByText('receipts@example.com')).not.toBeInTheDocument()
   })
+
+  it('announces the removal even when the refetch after it never returns', async () => {
+    const receipt = buildPaymentReceipt({ receipt_address: 'receipts@example.com' })
+    let reads = 0
+    server.use(
+      http.get(`*/v1/payments/${receipt.id}/receipt`, async () => {
+        reads += 1
+        if (reads === 1) return HttpResponse.json(receipt)
+        // The invalidation's GET hangs for the rest of the test.
+        return new Promise<never>(() => {})
+      }),
+      http.delete(`*/v1/payments/${receipt.id}/receipt-address`, () =>
+        new HttpResponse(null, { status: 204 }),
+      ),
+    )
+    const user = userEvent.setup()
+
+    renderReceipt(receipt.id)
+    await user.click(await screen.findByRole('button', { name: 'Remove my email' }))
+
+    const status = await screen.findByRole('status')
+    expect(status).toHaveTextContent('Your email was removed from this receipt')
+    expect(status).toHaveFocus()
+  })
 })

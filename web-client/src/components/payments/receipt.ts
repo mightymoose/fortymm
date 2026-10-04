@@ -78,13 +78,16 @@ export function useEraseReceiptAddress(paymentId: string) {
         }),
         { allowEmpty: true },
       ),
-    onSuccess: async () => {
+    onSuccess: () => {
       // The server erased it: show that now, so even a failed refetch cannot put
       // a stale address back on screen.
       queryClient.setQueryData<Receipt>(receiptKey(paymentId), (receipt) =>
         receipt && { ...receipt, receiptAddress: null },
       )
-      await queryClient.invalidateQueries({ queryKey: receiptKey(paymentId) })
+      // Fire and forget. TanStack reports the mutation as succeeded only after
+      // this callback returns, so awaiting a slow GET would hold the
+      // confirmation back after the address has already gone from the screen.
+      void queryClient.invalidateQueries({ queryKey: receiptKey(paymentId) })
     },
   })
 }
