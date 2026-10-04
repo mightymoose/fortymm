@@ -164,4 +164,51 @@ test.describe('Score entry — the page follows the other side', () => {
 
     await b.ctx.dispose()
   })
+
+  test('a page that never hears the pushed hint recovers when its own finalize is refused (#1651)', async ({
+    page,
+    baseURL,
+  }) => {
+    expect(baseURL, 'baseURL must be set for the API seed').toBeTruthy()
+    // The pushed hint is the fast path (the test above). This is the safety net
+    // under it: a page that missed the hint — a dropped stream, a sleeping
+    // phone — must not strand the player on a dead form. Cut the stream before
+    // the page loads, so nothing ever tells it the match is over.
+    await page.route('**/v1/stream', (route) => route.abort())
+
+    const a = await guestFromContext(page.request)
+    const b = await mintGuest(baseURL!)
+    const matchId = await createMatch(a, await findUserId(a, b.username), 1)
+
+    // A types a match-winning score on a one-game match.
+    const entry = await ScoreEntryPage.navigateToNew(page, matchId, 1)
+    await entry.scoreInput(a.username).fill('11')
+    await entry.scoreInput(b.username).fill('2')
+    await expect(entry.finalizeButton).toBeVisible()
+
+    // B finalizes first. Unrated, so the match is final at once.
+    await completeUnratedMatch(b, matchId, [
+      { game_number: 1, side_1_points: 5, side_2_points: 11 },
+    ])
+
+    // A's page is still the dead form: no hint came, so nothing has changed.
+    await page.waitForTimeout(3_000)
+    await expect(entry.refusal).toBeHidden()
+    await expect(entry.finalizeButton).toBeVisible()
+
+    // A's finalize is refused by the API, and that refusal is the first news.
+    await entry.finalizeButton.click()
+
+    // The page now says the match is over, drops the form, and offers the way out.
+    await expect(entry.refusal).toBeVisible({ timeout: 15_000 })
+    await expect(entry.refusal).toContainText('scores are frozen')
+    await expect(entry.finalizeButton).toBeHidden()
+    await expect(entry.scoreInput(a.username)).toBeHidden()
+    const viewMatch = page.getByRole('link', { name: 'View match' })
+    await expect(viewMatch).toHaveAttribute('href', `/matches/${matchId}`)
+    await viewMatch.click()
+    await expect(page).toHaveURL(new RegExp(`/matches/${matchId}$`))
+
+    await b.ctx.dispose()
+  })
 })

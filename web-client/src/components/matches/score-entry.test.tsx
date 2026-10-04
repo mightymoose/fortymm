@@ -3642,6 +3642,12 @@ describe('ScoreEntry — stale finalize hits a posted result (409 → redirect) 
     expect(
       screen.queryByRole('button', { name: /post result/i }),
     ).not.toBeInTheDocument()
+
+    // The typed draft made the page dirty, so the unsaved-input blocker is
+    // armed. The link must still go: the draft it guards is gone with the form,
+    // and the blocker's own dialog is not rendered on the refusal screen.
+    await user.click(screen.getByRole('link', { name: /view match/i }))
+    expect(await screen.findByText('match-page m-1')).toBeInTheDocument()
   })
 
   it('a coded match_closed 409 whose refetch is still scorable keeps the red error and a live submit (#1651)', async () => {

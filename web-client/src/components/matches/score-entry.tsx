@@ -471,7 +471,10 @@ function ScoreEntryInner({
             {scoreEntryRefusalMessage(data.not_scorable_reason)}
           </AlertDescription>
         </Alert>
-        <Link {...matchDetailRoute(matchId)} className="underline">
+        {/* `ignoreBlocker`: a draft typed before the match closed still arms the
+            unsaved-input blocker, but this screen has no form left to lose and
+            never renders the blocker's dialog, so without it the link goes dead. */}
+        <Link {...matchDetailRoute(matchId)} className="underline" ignoreBlocker>
           View match
         </Link>
       </div>
