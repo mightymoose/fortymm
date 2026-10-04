@@ -155,6 +155,18 @@ struct MatchFlowView: View {
                     supersedes: resume?.supersedesResultId
                 )
                 withAnimation { step = .detail }
+            } catch MatchPostError.matchClosed {
+                // The match finished while this board sat open (the other player
+                // finalized, or a director did). Nothing here can be posted any
+                // more: tell the player, then show the match as it now stands.
+                // Checked before the correction branch below — a closed match
+                // is the more specific reason, and a correction cannot succeed
+                // on it either.
+                errorMessage = "\(MatchPostError.matchClosed.fmMessage) Here is the final result."
+                if let fresh = try? await service.matchDetails(matchId) {
+                    final = fresh
+                    withAnimation { step = .detail }
+                }
             } catch APIError.http(409, _) where resume?.isCorrection == true {
                 errorMessage = "This result changed while you were editing — reopen the match to review the latest score."
             } catch {

@@ -26,6 +26,9 @@ jobs:
       - name: Score clear regression tests
         run: bash Tests/run-score-clear-tests.sh
 
+      - name: Match closed regression tests
+        run: bash Tests/run-match-closed-tests.sh
+
       - name: Build
         run: |
           xcodebuild \

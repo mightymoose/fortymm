@@ -94,3 +94,10 @@ Run the tournament transport/model/store checks with:
 ```bash
 bash Tests/run-tournament-tests.sh
 ```
+
+Run the result-post checks (the closed-match `409` and its `match_closed` code)
+with:
+
+```bash
+bash Tests/run-match-closed-tests.sh
+```
