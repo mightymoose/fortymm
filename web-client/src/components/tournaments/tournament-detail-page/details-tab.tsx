@@ -17,7 +17,7 @@ import {
   blankAddress,
   hasVenue,
 } from '../data/helpers'
-import { exceedsCodePoints } from '../data/code-points'
+import { atMostCodePoints } from '../data/code-points'
 import {
   TOURNAMENT_SAVE_TARGET,
   saveFailure,
@@ -59,17 +59,6 @@ export interface DetailsTabProps {
 // a save submits is the value in the box (#1593 review).
 const NAME_MAX = 255
 const DESCRIPTION_MAX = 1024
-
-/** One bound, counted the way the server counts it. Zod's `.max` caps a string
- * by UTF-16 code units (`string.length`), but the server's Pydantic bounds cap
- * by Unicode code points: a supplementary character — most emoji, some CJK — is
- * one code point yet two code units, so `.max(255)` would refuse a name of 255
- * emoji, whose `length` is 510 and which the server would take. The count is
- * `exceedsCodePoints`'s, which stops at the first code point past the limit —
- * so re-validating a huge pasted value on every keystroke costs at most the
- * limit, not the value (#1593 review). */
-const atMostCodePoints = (max: number, message: string) =>
-  z.string().refine((v) => !exceedsCodePoints(v, max), { message })
 
 /**
  * One address component, bounded — the client's mirror of the server's
