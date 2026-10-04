@@ -35,8 +35,9 @@ import type {
 import { SectionHeader } from './section-header'
 
 /** The server bounds `TournamentTableWrite.label` and `.court` at 255 code points
- * (`Field(max_length=255)`, #1595). This schema mirrors the `label` bound with
- * `atMostCodePoints`, which counts code points the way the server does. The
+ * (`Field(max_length=255)`, #1595). This schema mirrors both the `label` and the
+ * `court` bound with `atMostCodePoints`, which counts code points the way the
+ * server does. The
  * inputs carry no `maxLength` attribute, because the DOM counts UTF-16 units and
  * would refuse 255 emoji that the server accepts (`details-tab.tsx` explains).
  * `label` must also be non-empty. That is a client-only rule, because an empty
@@ -52,7 +53,10 @@ const addTableSchema = z.object({
     .trim()
     .min(1, { message: 'Label is required.' })
     .pipe(atMostCodePoints(TABLE_FIELD_MAX, 'Label must be 255 characters or fewer.')),
-  court: z.string(),
+  court: z
+    .string()
+    .trim()
+    .pipe(atMostCodePoints(TABLE_FIELD_MAX, 'Court must be 255 characters or fewer.')),
 })
 
 type AddTableValues = z.infer<typeof addTableSchema>
@@ -288,17 +292,25 @@ export const TablesTab = ({
                 </p>
               )}
             </div>
-            <Input
-              // The card renders "Court {court}", so the field is already
-              // labeled "Court" (aria-label) — the value is a bare identifier.
-              // Placeholder hints a bare value ("A"), never "Court", so a user
-              // following it types "A" → card reads "Court A", not the
-              // "Court Court A" a "Court" placeholder would nudge them into.
-              aria-label="Court"
-              placeholder="e.g. A"
-              className="w-28"
-              {...addTableForm.register('court')}
-            />
+            <div>
+              <Input
+                // The card renders "Court {court}", so the field is already
+                // labeled "Court" (aria-label) — the value is a bare identifier.
+                // Placeholder hints a bare value ("A"), never "Court", so a user
+                // following it types "A" → card reads "Court A", not the
+                // "Court Court A" a "Court" placeholder would nudge them into.
+                aria-label="Court"
+                aria-invalid={!!addTableForm.formState.errors.court}
+                placeholder="e.g. A"
+                className="w-28"
+                {...addTableForm.register('court')}
+              />
+              {addTableForm.formState.errors.court && (
+                <p className="mt-1.5 text-xs text-[color:var(--loss)]">
+                  {addTableForm.formState.errors.court.message}
+                </p>
+              )}
+            </div>
             {/* Not gated on form validity: `handleSubmit` already blocks an empty
                 label and renders the inline error, so a dead disabled button never
                 stands between the organizer and finding out why (web-client/CLAUDE.md,

@@ -188,6 +188,38 @@ describe('TablesTab', () => {
     expect(spy.calls[0].entries.at(-1)).toMatchObject({ kind: 'added', label: emoji })
   })
 
+  // The server refuses a court over 255 code points; the box must refuse the same
+  // set before the request, and must not refuse 255 emoji (510 UTF-16 units).
+  it('refuses a court over 255 characters inline, sends nothing, and adds one of 255 emoji', async () => {
+    const spy = spyCatalogue()
+    tablesTabPage.render({ catalogue: buildTables(2), ...spy })
+
+    fireEvent.change(tablesTabPage.getLabelInput(), { target: { value: 'T9' } })
+    fireEvent.change(tablesTabPage.getCourtInput(), {
+      target: { value: 'x'.repeat(256) },
+    })
+    await flush()
+    await userEvent.click(tablesTabPage.getAddButton())
+
+    expect(
+      tablesTabPage.queryFieldMessage('Court must be 255 characters or fewer.'),
+    ).toBeInTheDocument()
+    expect(tablesTabPage.getCourtInput()).toHaveAttribute('aria-invalid', 'true')
+    expect(spy.calls).toHaveLength(0)
+
+    const emoji = '🏆'.repeat(255)
+    fireEvent.change(tablesTabPage.getCourtInput(), { target: { value: emoji } })
+    await flush()
+    await userEvent.click(tablesTabPage.getAddButton())
+
+    await waitFor(() => expect(spy.calls).toHaveLength(1))
+    expect(spy.calls[0].entries.at(-1)).toMatchObject({
+      kind: 'added',
+      label: 'T9',
+      court: emoji,
+    })
+  })
+
   // A modal/form that clears itself over a rejected write has silently thrown the
   // organizer's work away (#614, #933). The add form is the same contract: it empties
   // only on the success path.
