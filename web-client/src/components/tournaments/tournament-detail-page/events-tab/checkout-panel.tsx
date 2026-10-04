@@ -1,5 +1,5 @@
 import { ShieldCheck } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { useSession } from '@/api/session'
 import {
@@ -53,6 +53,9 @@ export interface CheckoutPanelProps {
   resumed: boolean
   /** Leave a settled payment's result. */
   onDone: () => void
+  /** Open the receipt page of a succeeded payment (#1810). The panel calls it
+   * once the payment succeeded, and the result keeps a button to it. */
+  onViewReceipt?: (paymentId: string, options?: { replace?: boolean }) => void
 }
 
 /**
@@ -71,6 +74,7 @@ export function CheckoutPanel({
   releaseFailed,
   resumed,
   onDone,
+  onViewReceipt,
 }: CheckoutPanelProps) {
   const session = useSession()
   const user = session.data?.data.user
@@ -106,11 +110,24 @@ export function CheckoutPanel({
   const preparedPayment = prepared.data
   const payment = status.data ?? preparedPayment
   const checking = payment?.state === 'checking'
+  // A succeeded payment has a receipt (#1810): go there once, the moment the
+  // status says so. The callback rides a ref so its identity never re-fires it.
+  const viewReceiptRef = useRef(onViewReceipt)
+  useEffect(() => {
+    viewReceiptRef.current = onViewReceipt
+  })
+  const succeededPaymentId = payment?.state === 'succeeded' ? payment.id : undefined
+  useEffect(() => {
+    // Replace: the panel's own history entry must not sit behind the receipt.
+    if (succeededPaymentId !== undefined) {
+      viewReceiptRef.current?.(succeededPaymentId, { replace: true })
+    }
+  }, [succeededPaymentId])
   const active = checkout.status === 'active'
 
   let paymentArea: React.ReactNode
   if (payment && isSettled(payment)) {
-    paymentArea = <PaymentResult payment={payment} onDone={onDone} />
+    paymentArea = <PaymentResult payment={payment} onDone={onDone} onViewReceipt={onViewReceipt} />
   } else if (checking) {
     paymentArea = <PaymentChecking />
   } else if (statusEnabled && status.isPending && !preparedPayment?.clientSecret) {

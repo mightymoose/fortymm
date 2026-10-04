@@ -8,6 +8,7 @@ import {
   buildCheckoutRead,
   buildPaymentPrepared,
   buildPaymentRead,
+  buildPaymentReceipt,
   CHECKOUT_ID,
   CHECKOUT_LINES,
   CHECKOUT_TOURNAMENT_ID,
@@ -333,6 +334,17 @@ export class CheckoutStore {
         if (this.record) this.record = { ...this.record, status: 'completed' }
       }
       return respond(route, reply)
+    }
+
+    // The receipt a succeeded payment sends the player to (#1810), and the
+    // Events tab's list of the player's receipts. Neither is part of the
+    // checkout log the specs assert on.
+    if (method === 'GET' && path === `/v1/tournaments/${TOURNAMENT_ID}/payments`) {
+      return json(route, 200, [])
+    }
+    const receipt = path.match(/^\/v1\/payments\/([^/]+)\/receipt$/)
+    if (method === 'GET' && receipt) {
+      return json(route, 200, buildPaymentReceipt({ id: receipt[1] }))
     }
 
     this.unhandled.push({ method, path })

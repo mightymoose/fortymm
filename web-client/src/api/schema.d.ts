@@ -1857,6 +1857,71 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/payments/{payment_id}/receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Payment Receipt
+         * @description The itemized receipt of a succeeded payment (#1810). Only the payer and
+         *     the merchant account may read it. Everyone else, and every payment that has
+         *     not succeeded, gets a 404.
+         */
+        get: operations["get_payment_receipt_v1_payments__payment_id__receipt_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/tournaments/{tournament_id}/payments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Tournament Payments
+         * @description The caller's own succeeded payments in this tournament (#1810), so a payer
+         *     who left before success can reach each receipt. It lists nobody else's.
+         */
+        get: operations["list_tournament_payments_v1_tournaments__tournament_id__payments_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/payments/{payment_id}/receipt-address": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete Payment Receipt Address
+         * @description Erase the receipt address of a succeeded payment at once (#1810). Only
+         *     the payer may. Everyone else, and every payment that has not succeeded,
+         *     gets a 404. The receipt, the payment and the Account email stay.
+         */
+        delete: operations["delete_payment_receipt_address_v1_payments__payment_id__receipt_address_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/schedule-solves": {
         parameters: {
             query?: never;
@@ -6228,6 +6293,69 @@ export interface components {
             /** Lines */
             lines: components["schemas"]["TournamentPaymentLineRead"][];
         };
+        /**
+         * TournamentPaymentReceiptRead
+         * @description The itemized receipt page's payload (#1810): the payment read, only ever
+         *     returned for a ``succeeded`` payment.
+         *
+         *     ``receipt_address`` is the payment's snapshot, and it is payer-only: the
+         *     merchant account reads this same response and always sees ``None`` here.
+         */
+        TournamentPaymentReceiptRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Checkout Id
+             * Format: uuid
+             */
+            checkout_id: string;
+            /** Reference */
+            reference: string;
+            payment_state: components["schemas"]["TournamentCheckoutPaymentState"];
+            last_error_code: components["schemas"]["TournamentPaymentErrorCode"] | null;
+            /** Amount Cents */
+            amount_cents: number;
+            /**
+             * Currency
+             * @constant
+             */
+            currency: "USD";
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Lines */
+            lines: components["schemas"]["TournamentPaymentLineRead"][];
+            /** Receipt Address */
+            receipt_address: string | null;
+        };
+        /**
+         * TournamentPaymentSummary
+         * @description One succeeded payment in the payer's list for a tournament (#1810): enough
+         *     to name it and link to its receipt page.
+         */
+        TournamentPaymentSummary: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Reference */
+            reference: string;
+            /** Amount Cents */
+            amount_cents: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Event Names */
+            event_names: string[];
+        };
         /** TournamentRead */
         TournamentRead: {
             /** Details Version */
@@ -9495,6 +9623,103 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TournamentPaymentPrepared"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_payment_receipt_v1_payments__payment_id__receipt_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                payment_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentPaymentReceiptRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_tournament_payments_v1_tournaments__tournament_id__payments_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tournament_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TournamentPaymentSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_payment_receipt_address_v1_payments__payment_id__receipt_address_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                payment_id: string;
+            };
+            cookie?: {
+                session?: string | null;
+            };
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

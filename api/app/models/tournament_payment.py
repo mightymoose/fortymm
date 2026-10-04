@@ -127,6 +127,10 @@ class TournamentPayment(Base):
             "amount_cents > 0", name="ck_tournament_payments_amount_positive"
         ),
         CheckConstraint("currency = 'USD'", name="ck_tournament_payments_currency_usd"),
+        CheckConstraint(
+            "receipt_address IS NULL OR receipt_address_erased_at IS NULL",
+            name="ck_tournament_payments_erased_receipt_has_no_address",
+        ),
         UniqueConstraint("checkout_id", name="uq_tournament_payments_checkout"),
         UniqueConstraint("reference", name="uq_tournament_payments_reference"),
         UniqueConstraint(
@@ -226,11 +230,19 @@ class TournamentPayment(Base):
     #: A snapshot of the checkout's ``receipt_address``, copied over exactly
     #: once, at verified success (``_admit``) — never re-derived, never
     #: touched by a later account-email edit or a later checkout PATCH
-    #: (#1809). ``NULL`` until success, or if no receipt address was ever
-    #: set. Merchant-invisible: only the payer-only prepare/resume response
-    #: ever carries it, and only before success (the checkout is invalidated
-    #: by then, so prepare/resume no longer runs).
+    #: (#1809). ``NULL`` until success, if no receipt address was ever set, or
+    #: once it was erased (``receipt_address_erased_at``, #1810).
+    #: Merchant-invisible: only the payer sees it, on the prepare/resume
+    #: response before success and on the receipt read (#1810) after it. The
+    #: receipt email job reads it at send time.
     receipt_address: Mapped[str | None] = mapped_column(String(320))
+    #: Set once the receipt address was erased, on the payer's request, with the
+    #: payer's account, or by the daily cleanup (#1810). Only a ``succeeded``
+    #: payment gets it. The CHECK constraint keeps an address from ever sitting
+    #: beside it, so nothing refills an erased snapshot. Holds no address.
+    receipt_address_erased_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

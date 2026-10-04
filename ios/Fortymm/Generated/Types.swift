@@ -1167,6 +1167,32 @@ internal protocol APIProtocol: Sendable {
     /// - Remark: HTTP `POST /v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment`.
     /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/checkouts/{checkout_id}/payment/post(prepare_tournament_payment_v1_tournaments__tournament_id__checkouts__checkout_id__payment_post)`.
     func prepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost(_ input: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input) async throws -> Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Output
+    /// Get Payment Receipt
+    ///
+    /// The itemized receipt of a succeeded payment (#1810). Only the payer and
+    /// the merchant account may read it. Everyone else, and every payment that has
+    /// not succeeded, gets a 404.
+    ///
+    /// - Remark: HTTP `GET /v1/payments/{payment_id}/receipt`.
+    /// - Remark: Generated from `#/paths//v1/payments/{payment_id}/receipt/get(get_payment_receipt_v1_payments__payment_id__receipt_get)`.
+    func getPaymentReceiptV1PaymentsPaymentIdReceiptGet(_ input: Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.Input) async throws -> Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.Output
+    /// List Tournament Payments
+    ///
+    /// The caller's own succeeded payments in this tournament (#1810), so a payer
+    /// who left before success can reach each receipt. It lists nobody else's.
+    ///
+    /// - Remark: HTTP `GET /v1/tournaments/{tournament_id}/payments`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/payments/get(list_tournament_payments_v1_tournaments__tournament_id__payments_get)`.
+    func listTournamentPaymentsV1TournamentsTournamentIdPaymentsGet(_ input: Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.Input) async throws -> Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.Output
+    /// Delete Payment Receipt Address
+    ///
+    /// Erase the receipt address of a succeeded payment at once (#1810). Only
+    /// the payer may. Everyone else, and every payment that has not succeeded,
+    /// gets a 404. The receipt, the payment and the Account email stay.
+    ///
+    /// - Remark: HTTP `DELETE /v1/payments/{payment_id}/receipt-address`.
+    /// - Remark: Generated from `#/paths//v1/payments/{payment_id}/receipt-address/delete(delete_payment_receipt_address_v1_payments__payment_id__receipt_address_delete)`.
+    func deletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete(_ input: Operations.DeletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete.Input) async throws -> Operations.DeletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete.Output
     /// List Schedule Solves
     ///
     /// Paginated cross-tournament solve ledger backing the Administration area's
@@ -3035,6 +3061,56 @@ extension APIProtocol {
         headers: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input.Headers = .init()
     ) async throws -> Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Output {
         try await prepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost(Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// Get Payment Receipt
+    ///
+    /// The itemized receipt of a succeeded payment (#1810). Only the payer and
+    /// the merchant account may read it. Everyone else, and every payment that has
+    /// not succeeded, gets a 404.
+    ///
+    /// - Remark: HTTP `GET /v1/payments/{payment_id}/receipt`.
+    /// - Remark: Generated from `#/paths//v1/payments/{payment_id}/receipt/get(get_payment_receipt_v1_payments__payment_id__receipt_get)`.
+    internal func getPaymentReceiptV1PaymentsPaymentIdReceiptGet(
+        path: Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.Input.Path,
+        headers: Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.Input.Headers = .init()
+    ) async throws -> Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.Output {
+        try await getPaymentReceiptV1PaymentsPaymentIdReceiptGet(Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// List Tournament Payments
+    ///
+    /// The caller's own succeeded payments in this tournament (#1810), so a payer
+    /// who left before success can reach each receipt. It lists nobody else's.
+    ///
+    /// - Remark: HTTP `GET /v1/tournaments/{tournament_id}/payments`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/payments/get(list_tournament_payments_v1_tournaments__tournament_id__payments_get)`.
+    internal func listTournamentPaymentsV1TournamentsTournamentIdPaymentsGet(
+        path: Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.Input.Path,
+        headers: Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.Input.Headers = .init()
+    ) async throws -> Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.Output {
+        try await listTournamentPaymentsV1TournamentsTournamentIdPaymentsGet(Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.Input(
+            path: path,
+            headers: headers
+        ))
+    }
+    /// Delete Payment Receipt Address
+    ///
+    /// Erase the receipt address of a succeeded payment at once (#1810). Only
+    /// the payer may. Everyone else, and every payment that has not succeeded,
+    /// gets a 404. The receipt, the payment and the Account email stay.
+    ///
+    /// - Remark: HTTP `DELETE /v1/payments/{payment_id}/receipt-address`.
+    /// - Remark: Generated from `#/paths//v1/payments/{payment_id}/receipt-address/delete(delete_payment_receipt_address_v1_payments__payment_id__receipt_address_delete)`.
+    internal func deletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete(
+        path: Operations.DeletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete.Input.Path,
+        headers: Operations.DeletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete.Input.Headers = .init()
+    ) async throws -> Operations.DeletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete.Output {
+        try await deletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete(Operations.DeletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete.Input(
             path: path,
             headers: headers
         ))
@@ -13471,6 +13547,149 @@ internal enum Components {
                 case currency
                 case createdAt = "created_at"
                 case lines
+            }
+        }
+        /// The itemized receipt page's payload (#1810): the payment read, only ever
+        /// returned for a ``succeeded`` payment.
+        ///
+        /// ``receipt_address`` is the payment's snapshot, and it is payer-only: the
+        /// merchant account reads this same response and always sees ``None`` here.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TournamentPaymentReceiptRead`.
+        internal struct TournamentPaymentReceiptRead: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentReceiptRead/id`.
+            internal var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentReceiptRead/checkout_id`.
+            internal var checkoutId: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentReceiptRead/reference`.
+            internal var reference: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentReceiptRead/payment_state`.
+            internal var paymentState: Components.Schemas.TournamentCheckoutPaymentState
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentReceiptRead/last_error_code`.
+            internal struct LastErrorCodePayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/TournamentPaymentReceiptRead/last_error_code/value1`.
+                internal var value1: Components.Schemas.TournamentPaymentErrorCode
+                /// Creates a new `LastErrorCodePayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                internal init(value1: Components.Schemas.TournamentPaymentErrorCode) {
+                    self.value1 = value1
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    self.value1 = try decoder.decodeFromSingleValueContainer()
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeToSingleValueContainer(self.value1)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentReceiptRead/last_error_code`.
+            internal var lastErrorCode: Components.Schemas.TournamentPaymentReceiptRead.LastErrorCodePayload?
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentReceiptRead/amount_cents`.
+            internal var amountCents: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentReceiptRead/currency`.
+            internal enum CurrencyPayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case usd = "USD"
+            }
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentReceiptRead/currency`.
+            internal var currency: Components.Schemas.TournamentPaymentReceiptRead.CurrencyPayload
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentReceiptRead/created_at`.
+            internal var createdAt: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentReceiptRead/lines`.
+            internal var lines: [Components.Schemas.TournamentPaymentLineRead]
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentReceiptRead/receipt_address`.
+            internal var receiptAddress: Swift.String?
+            /// Creates a new `TournamentPaymentReceiptRead`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - checkoutId:
+            ///   - reference:
+            ///   - paymentState:
+            ///   - lastErrorCode:
+            ///   - amountCents:
+            ///   - currency:
+            ///   - createdAt:
+            ///   - lines:
+            ///   - receiptAddress:
+            internal init(
+                id: Swift.String,
+                checkoutId: Swift.String,
+                reference: Swift.String,
+                paymentState: Components.Schemas.TournamentCheckoutPaymentState,
+                lastErrorCode: Components.Schemas.TournamentPaymentReceiptRead.LastErrorCodePayload? = nil,
+                amountCents: Swift.Int,
+                currency: Components.Schemas.TournamentPaymentReceiptRead.CurrencyPayload,
+                createdAt: Foundation.Date,
+                lines: [Components.Schemas.TournamentPaymentLineRead],
+                receiptAddress: Swift.String? = nil
+            ) {
+                self.id = id
+                self.checkoutId = checkoutId
+                self.reference = reference
+                self.paymentState = paymentState
+                self.lastErrorCode = lastErrorCode
+                self.amountCents = amountCents
+                self.currency = currency
+                self.createdAt = createdAt
+                self.lines = lines
+                self.receiptAddress = receiptAddress
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case id
+                case checkoutId = "checkout_id"
+                case reference
+                case paymentState = "payment_state"
+                case lastErrorCode = "last_error_code"
+                case amountCents = "amount_cents"
+                case currency
+                case createdAt = "created_at"
+                case lines
+                case receiptAddress = "receipt_address"
+            }
+        }
+        /// One succeeded payment in the payer's list for a tournament (#1810): enough
+        /// to name it and link to its receipt page.
+        ///
+        /// - Remark: Generated from `#/components/schemas/TournamentPaymentSummary`.
+        internal struct TournamentPaymentSummary: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentSummary/id`.
+            internal var id: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentSummary/reference`.
+            internal var reference: Swift.String
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentSummary/amount_cents`.
+            internal var amountCents: Swift.Int
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentSummary/created_at`.
+            internal var createdAt: Foundation.Date
+            /// - Remark: Generated from `#/components/schemas/TournamentPaymentSummary/event_names`.
+            internal var eventNames: [Swift.String]
+            /// Creates a new `TournamentPaymentSummary`.
+            ///
+            /// - Parameters:
+            ///   - id:
+            ///   - reference:
+            ///   - amountCents:
+            ///   - createdAt:
+            ///   - eventNames:
+            internal init(
+                id: Swift.String,
+                reference: Swift.String,
+                amountCents: Swift.Int,
+                createdAt: Foundation.Date,
+                eventNames: [Swift.String]
+            ) {
+                self.id = id
+                self.reference = reference
+                self.amountCents = amountCents
+                self.createdAt = createdAt
+                self.eventNames = eventNames
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case id
+                case reference
+                case amountCents = "amount_cents"
+                case createdAt = "created_at"
+                case eventNames = "event_names"
             }
         }
         /// - Remark: Generated from `#/components/schemas/TournamentRead`.
@@ -30376,6 +30595,538 @@ internal enum Operations {
             /// - Throws: An error if `self` is not `.unprocessableContent`.
             /// - SeeAlso: `.unprocessableContent`.
             internal var unprocessableContent: Operations.PrepareTournamentPaymentV1TournamentsTournamentIdCheckoutsCheckoutIdPaymentPost.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Get Payment Receipt
+    ///
+    /// The itemized receipt of a succeeded payment (#1810). Only the payer and
+    /// the merchant account may read it. Everyone else, and every payment that has
+    /// not succeeded, gets a 404.
+    ///
+    /// - Remark: HTTP `GET /v1/payments/{payment_id}/receipt`.
+    /// - Remark: Generated from `#/paths//v1/payments/{payment_id}/receipt/get(get_payment_receipt_v1_payments__payment_id__receipt_get)`.
+    internal enum GetPaymentReceiptV1PaymentsPaymentIdReceiptGet {
+        internal static let id: Swift.String = "get_payment_receipt_v1_payments__payment_id__receipt_get"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/payments/{payment_id}/receipt/GET/path`.
+            internal struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/payments/{payment_id}/receipt/GET/path/payment_id`.
+                internal var paymentId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - paymentId:
+                internal init(paymentId: Swift.String) {
+                    self.paymentId = paymentId
+                }
+            }
+            internal var path: Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.Input.Path
+            /// - Remark: Generated from `#/paths/v1/payments/{payment_id}/receipt/GET/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            internal init(
+                path: Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.Input.Path,
+                headers: Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/payments/{payment_id}/receipt/GET/responses/200/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/payments/{payment_id}/receipt/GET/responses/200/content/application\/json`.
+                    case json(Components.Schemas.TournamentPaymentReceiptRead)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.TournamentPaymentReceiptRead {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/payments/{payment_id}/receipt/get(get_payment_receipt_v1_payments__payment_id__receipt_get)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            internal var ok: Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/payments/{payment_id}/receipt/GET/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/payments/{payment_id}/receipt/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/payments/{payment_id}/receipt/get(get_payment_receipt_v1_payments__payment_id__receipt_get)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.GetPaymentReceiptV1PaymentsPaymentIdReceiptGet.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// List Tournament Payments
+    ///
+    /// The caller's own succeeded payments in this tournament (#1810), so a payer
+    /// who left before success can reach each receipt. It lists nobody else's.
+    ///
+    /// - Remark: HTTP `GET /v1/tournaments/{tournament_id}/payments`.
+    /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/payments/get(list_tournament_payments_v1_tournaments__tournament_id__payments_get)`.
+    internal enum ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet {
+        internal static let id: Swift.String = "list_tournament_payments_v1_tournaments__tournament_id__payments_get"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/payments/GET/path`.
+            internal struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/payments/GET/path/tournament_id`.
+                internal var tournamentId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - tournamentId:
+                internal init(tournamentId: Swift.String) {
+                    self.tournamentId = tournamentId
+                }
+            }
+            internal var path: Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.Input.Path
+            /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/payments/GET/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            internal init(
+                path: Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.Input.Path,
+                headers: Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct Ok: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/payments/GET/responses/200/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/payments/GET/responses/200/content/application\/json`.
+                    case json([Components.Schemas.TournamentPaymentSummary])
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: [Components.Schemas.TournamentPaymentSummary] {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.Output.Ok.Body
+                /// Creates a new `Ok`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.Output.Ok.Body) {
+                    self.body = body
+                }
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/payments/get(list_tournament_payments_v1_tournaments__tournament_id__payments_get)/responses/200`.
+            ///
+            /// HTTP response code: `200 ok`.
+            case ok(Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.Output.Ok)
+            /// The associated value of the enum case if `self` is `.ok`.
+            ///
+            /// - Throws: An error if `self` is not `.ok`.
+            /// - SeeAlso: `.ok`.
+            internal var ok: Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.Output.Ok {
+                get throws {
+                    switch self {
+                    case let .ok(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "ok",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/payments/GET/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/tournaments/{tournament_id}/payments/GET/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/tournaments/{tournament_id}/payments/get(list_tournament_payments_v1_tournaments__tournament_id__payments_get)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.ListTournamentPaymentsV1TournamentsTournamentIdPaymentsGet.Output.UnprocessableContent {
+                get throws {
+                    switch self {
+                    case let .unprocessableContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "unprocessableContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            /// Undocumented response.
+            ///
+            /// A response with a code that is not documented in the OpenAPI document.
+            case undocumented(statusCode: Swift.Int, OpenAPIRuntime.UndocumentedPayload)
+        }
+        internal enum AcceptableContentType: AcceptableProtocol {
+            case json
+            case other(Swift.String)
+            internal init?(rawValue: Swift.String) {
+                switch rawValue.lowercased() {
+                case "application/json":
+                    self = .json
+                default:
+                    self = .other(rawValue)
+                }
+            }
+            internal var rawValue: Swift.String {
+                switch self {
+                case let .other(string):
+                    return string
+                case .json:
+                    return "application/json"
+                }
+            }
+            internal static var allCases: [Self] {
+                [
+                    .json
+                ]
+            }
+        }
+    }
+    /// Delete Payment Receipt Address
+    ///
+    /// Erase the receipt address of a succeeded payment at once (#1810). Only
+    /// the payer may. Everyone else, and every payment that has not succeeded,
+    /// gets a 404. The receipt, the payment and the Account email stay.
+    ///
+    /// - Remark: HTTP `DELETE /v1/payments/{payment_id}/receipt-address`.
+    /// - Remark: Generated from `#/paths//v1/payments/{payment_id}/receipt-address/delete(delete_payment_receipt_address_v1_payments__payment_id__receipt_address_delete)`.
+    internal enum DeletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete {
+        internal static let id: Swift.String = "delete_payment_receipt_address_v1_payments__payment_id__receipt_address_delete"
+        internal struct Input: Sendable, Hashable {
+            /// - Remark: Generated from `#/paths/v1/payments/{payment_id}/receipt-address/DELETE/path`.
+            internal struct Path: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/payments/{payment_id}/receipt-address/DELETE/path/payment_id`.
+                internal var paymentId: Swift.String
+                /// Creates a new `Path`.
+                ///
+                /// - Parameters:
+                ///   - paymentId:
+                internal init(paymentId: Swift.String) {
+                    self.paymentId = paymentId
+                }
+            }
+            internal var path: Operations.DeletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete.Input.Path
+            /// - Remark: Generated from `#/paths/v1/payments/{payment_id}/receipt-address/DELETE/header`.
+            internal struct Headers: Sendable, Hashable {
+                internal var accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.DeletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete.AcceptableContentType>]
+                /// Creates a new `Headers`.
+                ///
+                /// - Parameters:
+                ///   - accept:
+                internal init(accept: [OpenAPIRuntime.AcceptHeaderContentType<Operations.DeletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete.AcceptableContentType>] = .defaultValues()) {
+                    self.accept = accept
+                }
+            }
+            internal var headers: Operations.DeletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete.Input.Headers
+            /// Creates a new `Input`.
+            ///
+            /// - Parameters:
+            ///   - path:
+            ///   - headers:
+            internal init(
+                path: Operations.DeletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete.Input.Path,
+                headers: Operations.DeletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete.Input.Headers = .init()
+            ) {
+                self.path = path
+                self.headers = headers
+            }
+        }
+        internal enum Output: Sendable, Hashable {
+            internal struct NoContent: Sendable, Hashable {
+                /// Creates a new `NoContent`.
+                internal init() {}
+            }
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/payments/{payment_id}/receipt-address/delete(delete_payment_receipt_address_v1_payments__payment_id__receipt_address_delete)/responses/204`.
+            ///
+            /// HTTP response code: `204 noContent`.
+            case noContent(Operations.DeletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete.Output.NoContent)
+            /// Successful Response
+            ///
+            /// - Remark: Generated from `#/paths//v1/payments/{payment_id}/receipt-address/delete(delete_payment_receipt_address_v1_payments__payment_id__receipt_address_delete)/responses/204`.
+            ///
+            /// HTTP response code: `204 noContent`.
+            internal static var noContent: Self {
+                .noContent(.init())
+            }
+            /// The associated value of the enum case if `self` is `.noContent`.
+            ///
+            /// - Throws: An error if `self` is not `.noContent`.
+            /// - SeeAlso: `.noContent`.
+            internal var noContent: Operations.DeletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete.Output.NoContent {
+                get throws {
+                    switch self {
+                    case let .noContent(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "noContent",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct UnprocessableContent: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/payments/{payment_id}/receipt-address/DELETE/responses/422/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/payments/{payment_id}/receipt-address/DELETE/responses/422/content/application\/json`.
+                    case json(Components.Schemas.HTTPValidationError)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.HTTPValidationError {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.DeletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete.Output.UnprocessableContent.Body
+                /// Creates a new `UnprocessableContent`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.DeletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete.Output.UnprocessableContent.Body) {
+                    self.body = body
+                }
+            }
+            /// Validation Error
+            ///
+            /// - Remark: Generated from `#/paths//v1/payments/{payment_id}/receipt-address/delete(delete_payment_receipt_address_v1_payments__payment_id__receipt_address_delete)/responses/422`.
+            ///
+            /// HTTP response code: `422 unprocessableContent`.
+            case unprocessableContent(Operations.DeletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete.Output.UnprocessableContent)
+            /// The associated value of the enum case if `self` is `.unprocessableContent`.
+            ///
+            /// - Throws: An error if `self` is not `.unprocessableContent`.
+            /// - SeeAlso: `.unprocessableContent`.
+            internal var unprocessableContent: Operations.DeletePaymentReceiptAddressV1PaymentsPaymentIdReceiptAddressDelete.Output.UnprocessableContent {
                 get throws {
                     switch self {
                     case let .unprocessableContent(response):

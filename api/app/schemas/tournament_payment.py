@@ -58,6 +58,27 @@ class TournamentPaymentRead(BaseModel):
     lines: list[TournamentPaymentLineRead]
 
 
+class TournamentPaymentReceiptRead(TournamentPaymentRead):
+    """The itemized receipt page's payload (#1810): the payment read, only ever
+    returned for a ``succeeded`` payment.
+
+    ``receipt_address`` is the payment's snapshot, and it is payer-only: the
+    merchant account reads this same response and always sees ``None`` here."""
+
+    receipt_address: str | None
+
+
+class TournamentPaymentSummary(BaseModel):
+    """One succeeded payment in the payer's list for a tournament (#1810): enough
+    to name it and link to its receipt page."""
+
+    id: uuid.UUID
+    reference: PaymentReference
+    amount_cents: int
+    created_at: datetime
+    event_names: list[str]
+
+
 class TournamentPaymentPrepared(TournamentPaymentRead):
     """The prepare/resume response — the ONE place the Stripe client secret is
     ever returned. ``None`` when the create outcome was uncertain (Fortymm

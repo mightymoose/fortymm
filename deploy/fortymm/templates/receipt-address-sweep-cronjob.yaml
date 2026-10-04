@@ -1,0 +1,47 @@
+{{- if .Values.receiptAddressSweep.enabled }}
+# Daily receipt-address cleanup (#1810). Erases a payer's receipt address 30
+# days after the tournament's end milestone (archival, or every event finished
+# or cancelled) once no payment of the tournament owes a refund, by running
+# the sweep inline (see api/app/receipt_address_sweep.py) once per tick. The
+# sweep is idempotent, so a missed or repeated tick changes nothing. A CronJob
+# runs exactly one pod per schedule regardless of how many api replicas are up,
+# and concurrencyPolicy: Forbid prevents a slow sweep from overlapping the next
+# tick. Same image + env wiring as the email-token sweep: it touches only the
+# database.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: receipt-address-sweep
+  labels:
+    {{- include "fortymm.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.receiptAddressSweep.schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            {{- include "fortymm.selector" (dict "component" "receipt-address-sweep") | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: receipt-address-sweep
+              image: {{ include "fortymm.apiImage" . }}
+              imagePullPolicy: {{ .Values.pullPolicy }}
+              command: ["python", "-m", "app.receipt_address_sweep"]
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              envFrom:
+                {{- include "fortymm.appEnvFrom" . | nindent 16 }}
+{{- end }}

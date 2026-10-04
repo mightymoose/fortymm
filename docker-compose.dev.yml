@@ -118,7 +118,8 @@ services:
   # email-token sweep (#1616) deletes replaced confirmation-token rows once
   # they age out of EMAIL_CONFIRM_TOKEN_LIFETIME — an independent cleanup that
   # does not wait on the user's next request or confirm. Both run inline
-  # (python -m app.retirement_sweep / app.email_token_sweep), not through the
+  # (python -m app.retirement_sweep / app.email_token_sweep), plus the receipt-
+  # address sweep (#1810, idempotent, so hourly here is harmless), not through the
   # rq worker/queue, so this is a plain loop rather than a queue consumer.
   # Hourly by default; must stay at least daily for the reminder's 24h-before
   # guarantee. Override the interval (seconds) with RETIREMENT_SWEEP_INTERVAL.
@@ -141,6 +142,7 @@ services:
     command: >
       sh -c "while true; do python -m app.retirement_sweep || true;
              python -m app.email_token_sweep || true;
+             python -m app.receipt_address_sweep || true;
              sleep ${RETIREMENT_SWEEP_INTERVAL:-3600}; done"
 
   web-client:

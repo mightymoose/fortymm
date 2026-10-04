@@ -291,6 +291,8 @@ async def delete_event(
     await invalidate_checkouts_for_event(db, event.id)
     # The explicit parent deletion owns its entire history. Let database cascades
     # remove children after the event disappears, even when ORM collections are loaded.
+    # The tournament_events_mark_completion trigger records, for every release,
+    # that this deletion left the tournament complete (#1810).
     await db.execute(delete(TournamentEvent).where(TournamentEvent.id == event.id))
     # Retired catalogue rows exist only to keep historical fixture references valid.
     # Once the last referencing event is deleted, reclaim those hidden rows.

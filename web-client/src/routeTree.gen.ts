@@ -39,6 +39,7 @@ import { Route as AppSettingsClaudeRouteImport } from './routes/_app/settings_.c
 import { Route as AppTournamentsIndexRouteImport } from './routes/_app/tournaments/index'
 import { Route as AppTournamentsTournamentIdRouteImport } from './routes/_app/tournaments.$tournamentId'
 import { Route as AppMatchesMatchIdIndexRouteImport } from './routes/_app/matches.$matchId.index'
+import { Route as AppPaymentsPaymentIdReceiptRouteImport } from './routes/_app/payments.$paymentId.receipt'
 import { Route as AppPlayersUserIdMatchesRouteImport } from './routes/_app/players/$userId_.matches'
 import { Route as AppMatchesMatchIdResultsNewRouteImport } from './routes/_app/matches.$matchId.results.new'
 import { Route as AppMatchesMatchIdGamesGameNumberScoresEditRouteImport } from './routes/_app/matches.$matchId.games.$gameNumber.scores.edit'
@@ -195,6 +196,12 @@ const AppMatchesMatchIdIndexRoute = AppMatchesMatchIdIndexRouteImport.update({
   path: '/matches/$matchId/',
   getParentRoute: () => AppRouteRoute,
 } as any)
+const AppPaymentsPaymentIdReceiptRoute =
+  AppPaymentsPaymentIdReceiptRouteImport.update({
+    id: '/payments/$paymentId/receipt',
+    path: '/payments/$paymentId/receipt',
+    getParentRoute: () => AppRouteRoute,
+  } as any)
 const AppPlayersUserIdMatchesRoute = AppPlayersUserIdMatchesRouteImport.update({
   id: '/players/$userId_/matches',
   path: '/players/$userId/matches',
@@ -248,6 +255,7 @@ export interface FileRoutesByFullPath {
   '/notifications/': typeof AppNotificationsIndexRoute
   '/players/': typeof AppPlayersIndexRoute
   '/tournaments/': typeof AppTournamentsIndexRoute
+  '/payments/$paymentId/receipt': typeof AppPaymentsPaymentIdReceiptRoute
   '/players/$userId/matches': typeof AppPlayersUserIdMatchesRoute
   '/matches/$matchId/': typeof AppMatchesMatchIdIndexRoute
   '/matches/$matchId/results/new': typeof AppMatchesMatchIdResultsNewRoute
@@ -280,6 +288,7 @@ export interface FileRoutesByTo {
   '/notifications': typeof AppNotificationsIndexRoute
   '/players': typeof AppPlayersIndexRoute
   '/tournaments': typeof AppTournamentsIndexRoute
+  '/payments/$paymentId/receipt': typeof AppPaymentsPaymentIdReceiptRoute
   '/players/$userId/matches': typeof AppPlayersUserIdMatchesRoute
   '/matches/$matchId': typeof AppMatchesMatchIdIndexRoute
   '/matches/$matchId/results/new': typeof AppMatchesMatchIdResultsNewRoute
@@ -317,6 +326,7 @@ export interface FileRoutesById {
   '/_app/notifications/': typeof AppNotificationsIndexRoute
   '/_app/players/': typeof AppPlayersIndexRoute
   '/_app/tournaments/': typeof AppTournamentsIndexRoute
+  '/_app/payments/$paymentId/receipt': typeof AppPaymentsPaymentIdReceiptRoute
   '/_app/players/$userId_/matches': typeof AppPlayersUserIdMatchesRoute
   '/_app/matches/$matchId/': typeof AppMatchesMatchIdIndexRoute
   '/_app/matches/$matchId/results/new': typeof AppMatchesMatchIdResultsNewRoute
@@ -354,6 +364,7 @@ export interface FileRouteTypes {
     | '/notifications/'
     | '/players/'
     | '/tournaments/'
+    | '/payments/$paymentId/receipt'
     | '/players/$userId/matches'
     | '/matches/$matchId/'
     | '/matches/$matchId/results/new'
@@ -386,6 +397,7 @@ export interface FileRouteTypes {
     | '/notifications'
     | '/players'
     | '/tournaments'
+    | '/payments/$paymentId/receipt'
     | '/players/$userId/matches'
     | '/matches/$matchId'
     | '/matches/$matchId/results/new'
@@ -422,6 +434,7 @@ export interface FileRouteTypes {
     | '/_app/notifications/'
     | '/_app/players/'
     | '/_app/tournaments/'
+    | '/_app/payments/$paymentId/receipt'
     | '/_app/players/$userId_/matches'
     | '/_app/matches/$matchId/'
     | '/_app/matches/$matchId/results/new'
@@ -653,6 +666,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppMatchesMatchIdIndexRouteImport
       parentRoute: typeof AppRouteRoute
     }
+    '/_app/payments/$paymentId/receipt': {
+      id: '/_app/payments/$paymentId/receipt'
+      path: '/payments/$paymentId/receipt'
+      fullPath: '/payments/$paymentId/receipt'
+      preLoaderRoute: typeof AppPaymentsPaymentIdReceiptRouteImport
+      parentRoute: typeof AppRouteRoute
+    }
     '/_app/players/$userId_/matches': {
       id: '/_app/players/$userId_/matches'
       path: '/players/$userId/matches'
@@ -744,6 +764,7 @@ interface AppRouteRouteChildren {
   AppSettingsClaudeRoute: typeof AppSettingsClaudeRoute
   AppMatchesIndexRoute: typeof AppMatchesIndexRoute
   AppPlayersIndexRoute: typeof AppPlayersIndexRoute
+  AppPaymentsPaymentIdReceiptRoute: typeof AppPaymentsPaymentIdReceiptRoute
   AppPlayersUserIdMatchesRoute: typeof AppPlayersUserIdMatchesRoute
   AppMatchesMatchIdIndexRoute: typeof AppMatchesMatchIdIndexRoute
   AppMatchesMatchIdResultsNewRoute: typeof AppMatchesMatchIdResultsNewRoute
@@ -762,6 +783,7 @@ const AppRouteRouteChildren: AppRouteRouteChildren = {
   AppSettingsClaudeRoute: AppSettingsClaudeRoute,
   AppMatchesIndexRoute: AppMatchesIndexRoute,
   AppPlayersIndexRoute: AppPlayersIndexRoute,
+  AppPaymentsPaymentIdReceiptRoute: AppPaymentsPaymentIdReceiptRoute,
   AppPlayersUserIdMatchesRoute: AppPlayersUserIdMatchesRoute,
   AppMatchesMatchIdIndexRoute: AppMatchesMatchIdIndexRoute,
   AppMatchesMatchIdResultsNewRoute: AppMatchesMatchIdResultsNewRoute,
