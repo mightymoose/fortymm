@@ -374,7 +374,8 @@ function ScoreEntryInner({
   // so the blocker stands down there (#1651).
   const guardsDraft = isDirty && data?.can_score !== false
   const { status, proceed, reset } = useBlocker({
-    // Blocks browser refresh/close (beforeunload) only while genuinely dirty.
+    // Blocks browser refresh/close (beforeunload) only while the draft guard
+    // holds (a dirty draft on a scorable match).
     enableBeforeUnload: () => guardsDraft,
     // Blocks in-app route changes the same way. The app's own hops opt out per
     // navigation via `ignoreBlocker: true`, so there's nothing to check here but
