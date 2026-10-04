@@ -12,7 +12,7 @@ dependencies = [
     # Capped below 2.1: SQLAlchemy 2.1 changed Select typing (32 mypy errors on
     # untouched modules) and broke the archived-group-mapping tests. Lift the
     # cap in a dedicated upgrade change, not as a side effect of a fresh install.
-    "sqlalchemy[asyncio]>=2.0.36,<2.1",
+    "sqlalchemy[asyncio]>=2.0.36,<2.2",
     "asyncpg>=0.30",
     "alembic>=1.14",
     "coolname>=2.2",
