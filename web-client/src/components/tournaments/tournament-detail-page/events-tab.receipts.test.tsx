@@ -99,4 +99,52 @@ describe('EventsTab receipts (#1810)', () => {
 
     expect(onViewReceipt).not.toHaveBeenCalled()
   })
+
+  it('offers a retry when the receipt list fails to load, and lists them after it', async () => {
+    let reads = 0
+    server.use(
+      http.get(`*/v1/tournaments/${CHECKOUT_TOURNAMENT_ID}/payments`, () => {
+        reads += 1
+        return reads === 1
+          ? HttpResponse.json({ detail: 'down' }, { status: 503 })
+          : HttpResponse.json([
+              {
+                id: PAYMENT_ID,
+                reference: 'PAY-7K3M9QX2',
+                amount_cents: 7_500,
+                created_at: new Date().toISOString(),
+                event_names: ['Open Singles'],
+              },
+            ])
+      }),
+    )
+    const user = userEvent.setup()
+    render(
+      <EventsTab {...buildEventsTabProps({ tournament: tournament(), canEdit: false })} />,
+    )
+
+    const section = await screen.findByRole('region', { name: 'Your receipts' })
+    expect(within(section).getByRole('alert')).toHaveTextContent(
+      'We couldn’t load your receipts',
+    )
+    await user.click(within(section).getByRole('button', { name: 'Try again' }))
+
+    expect(await screen.findByRole('link', { name: /Open Singles/ })).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('says nothing when the viewer is not signed in to see receipts', async () => {
+    server.use(
+      http.get(`*/v1/tournaments/${CHECKOUT_TOURNAMENT_ID}/payments`, () =>
+        HttpResponse.json({ detail: 'Not authenticated' }, { status: 401 }),
+      ),
+    )
+    render(
+      <EventsTab {...buildEventsTabProps({ tournament: tournament(), canEdit: false })} />,
+    )
+
+    await screen.findByText('Open Singles')
+    expect(screen.queryByRole('region', { name: 'Your receipts' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
 })

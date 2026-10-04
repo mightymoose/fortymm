@@ -174,6 +174,39 @@ def upgrade() -> None:
         $$ LANGUAGE plpgsql
         """
     )
+    # 3. Deleting the last unfinished event completes the tournament. A deletion
+    #    writes no lifecycle history, and the previous release deletes events too,
+    #    so the database records the moment for every writer.
+    op.execute(
+        """
+        CREATE FUNCTION mark_completion_by_event_deletion() RETURNS trigger AS $$
+        BEGIN
+          IF EXISTS (
+               SELECT 1 FROM tournament_events WHERE tournament_id = OLD.tournament_id
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM tournament_events
+               WHERE tournament_id = OLD.tournament_id
+                 AND lifecycle_state NOT IN ('finished', 'cancelled')
+             ) THEN
+            -- Selecting from tournaments skips a tournament deleted with its events.
+            INSERT INTO tournament_completion_marks (tournament_id, observed_at)
+            SELECT t.id, clock_timestamp() FROM tournaments t
+            WHERE t.id = OLD.tournament_id
+            ON CONFLICT (tournament_id) DO UPDATE SET observed_at = EXCLUDED.observed_at;
+          END IF;
+          RETURN NULL;
+        END
+        $$ LANGUAGE plpgsql
+        """
+    )
+    op.execute(
+        """
+        CREATE TRIGGER tournament_events_mark_completion
+        AFTER DELETE ON tournament_events
+        FOR EACH ROW EXECUTE FUNCTION mark_completion_by_event_deletion()
+        """
+    )
     op.execute(
         """
         CREATE TRIGGER accounts_erase_receipt_addresses
@@ -184,6 +217,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("DROP TRIGGER tournament_events_mark_completion ON tournament_events")
+    op.execute("DROP FUNCTION mark_completion_by_event_deletion()")
     op.execute("DROP TRIGGER accounts_erase_receipt_addresses ON accounts")
     op.execute("DROP FUNCTION erase_receipt_addresses_of_erased_account()")
     op.execute(

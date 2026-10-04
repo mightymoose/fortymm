@@ -640,10 +640,12 @@ async def test_account_erasure_locks_the_receipt_checkouts_before_it_deactivates
     assert held_at_deactivation == [True]
 
 
+@pytest.mark.parametrize("deleted_by", ["this_release", "n_minus_1_sql"])
 async def test_deleting_the_last_unfinished_event_restarts_the_retention_clock(
     api_client: AsyncClient,
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
+    deleted_by: str,
 ) -> None:
     """The events that took payment finished long ago, and one unstarted event
     kept the tournament open. Deleting it makes the tournament complete today, so
@@ -688,14 +690,21 @@ async def test_deleting_the_last_unfinished_event_restarts_the_retention_clock(
     tournament_id, extra_id, owner_id = payment.tournament_id, extra.id, owner.id
     assert await sweep_receipt_addresses(db_session, now=await _in_days(0)) == 0
 
-    owner_again = await db_session.get(User, owner_id)
-    assert owner_again is not None
-    await delete_event(
-        db_session,
-        tournament_id=tournament_id,
-        event_id=extra_id,
-        actor=owner_again,
-    )
+    if deleted_by == "this_release":
+        owner_again = await db_session.get(User, owner_id)
+        assert owner_again is not None
+        await delete_event(
+            db_session,
+            tournament_id=tournament_id,
+            event_id=extra_id,
+            actor=owner_again,
+        )
+    else:
+        # The previous release deletes the row and knows nothing of the mark.
+        await db_session.execute(
+            text("DELETE FROM tournament_events WHERE id = :id"), {"id": extra_id}
+        )
+        await db_session.commit()
 
     # Complete today, so nothing is due now, and it is due 30 days from today.
     assert await sweep_receipt_addresses(db_session, now=await _in_days(0)) == 0
@@ -705,3 +714,33 @@ async def test_deleting_the_last_unfinished_event_restarts_the_retention_clock(
         select(TournamentEvent.id).where(TournamentEvent.id == extra_id)
     )
     assert remaining is None
+
+
+async def test_the_retention_sweep_tombstones_checkouts_that_never_had_an_address(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A checkout with no address gets no tombstone from the erase, so once the
+    retention period ended the payer could still PATCH an address onto it. The
+    sweep must tombstone every checkout of an eligible tournament, and count
+    only the addresses it actually removed."""
+    _payer, _owner, _provider, payment = await _paid_checkout(
+        api_client, db_session, monkeypatch, succeed=False
+    )
+    tournament = await _tournament_of(db_session, payment)
+    tournament.status = TournamentStatus.archived
+    # The payment is terminal, so nothing holds the cleanup back.
+    payment.status = TournamentPaymentStatus.cancelled
+    await db_session.commit()
+    checkout_path = (
+        f"/v1/tournaments/{payment.tournament_id}/checkouts/{payment.checkout_id}"
+    )
+
+    assert await sweep_receipt_addresses(db_session, now=await _in_days(31)) == 0
+
+    refused = await api_client.patch(
+        checkout_path, json={"receipt_address": "late@example.com"}
+    )
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == "receipt_address_erased"

@@ -112,13 +112,17 @@ async def _payments_are_resolved(db: AsyncSession, tournament_id: uuid.UUID) -> 
 async def sweep_receipt_addresses(
     db: AsyncSession, *, now: datetime | None = None
 ) -> int:
-    """Erase every receipt address that is due. Returns how many checkouts
-    lost one. Commits once per tournament, and logs only that count."""
+    """Erase every receipt address that is due. Returns how many addresses it
+    removed. Commits once per tournament, and logs only that count.
+
+    Every checkout of an eligible tournament gets its erasure tombstone, with or
+    without an address. A checkout that never held one would otherwise let the
+    payer PATCH an address onto it after the retention period ended."""
     now = now or datetime.now(UTC)
     tournament_ids = list(
         await db.scalars(
             select(TournamentCheckout.tournament_id)
-            .where(TournamentCheckout.receipt_address.is_not(None))
+            .where(TournamentCheckout.receipt_address_erased_at.is_(None))
             .distinct()
         )
     )
@@ -136,21 +140,24 @@ async def sweep_receipt_addresses(
         ):
             await db.rollback()
             continue
-        checkout_ids = list(
-            await db.scalars(
-                select(TournamentCheckout.id)
+        checkouts = (
+            await db.execute(
+                select(
+                    TournamentCheckout.id,
+                    TournamentCheckout.receipt_address.is_not(None),
+                )
                 .where(
                     TournamentCheckout.tournament_id == tournament_id,
-                    TournamentCheckout.receipt_address.is_not(None),
+                    TournamentCheckout.receipt_address_erased_at.is_(None),
                 )
                 .order_by(TournamentCheckout.id)
             )
-        )
-        for checkout_id in checkout_ids:
+        ).all()
+        for checkout_id, held_an_address in checkouts:
             if await erase_receipt_address(
                 db, checkout_id=checkout_id, only_if_resolved=True
             ):
-                erased += 1
+                erased += int(held_an_address)
         await db.commit()
     logger.info("Receipt-address sweep: erased %d addresses", erased)
     return erased
