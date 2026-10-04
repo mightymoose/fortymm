@@ -14,7 +14,7 @@ import {
 import { recentMatchRowPage } from './recent-match-row.page'
 
 const OPPONENT = 'ada.lovelace'
-const NO_OPPONENT = 'No opponent'
+const NO_OPPONENT = 'Unlisted opponent'
 
 describe('RecentMatchRow', () => {
   it('renders a decided win as a green dot, its game chips and a signed delta', async () => {
@@ -170,7 +170,7 @@ describe('RecentMatchRow', () => {
     )
   })
 
-  it('keeps a solo match in the list, as "No opponent"', async () => {
+  it('keeps a solo match in the list, as "Unlisted opponent"', async () => {
     // ADR-0008: the player-less sentinel side is rendered, not dropped.
     recentMatchRowPage.render({ row: buildSoloRecentMatchRowView() })
 
@@ -183,8 +183,8 @@ describe('RecentMatchRow', () => {
   it('does NOT link a solo match to a PLAYER — there is nobody to link to', async () => {
     // The null-id case, and the one a naive fix breaks: `id` is null exactly for
     // the player-less sentinel side, so a link built from it would point at
-    // `/players/null` and land the reader on a not-found page. "No opponent" is
-    // an absence, not a player: it must be plain text.
+    // `/players/null` and land the reader on a not-found page. "Unlisted opponent" has
+    // no profile to open: it must be plain text.
     //
     // The row still links to its MATCH — a solo match is a match — so the claim is
     // not "no anchors in the row" but "nothing in the row points at a player".
@@ -263,7 +263,7 @@ describe('RecentMatchRow', () => {
     ])
   })
 
-  it('names a solo match’s link "Solo match", not "Match against No opponent"', async () => {
+  it('names a solo match’s link "Solo match", not "Match against Unlisted opponent"', async () => {
     recentMatchRowPage.render({ row: buildSoloRecentMatchRowView() })
     await recentMatchRowPage.findRow(NO_OPPONENT)
 

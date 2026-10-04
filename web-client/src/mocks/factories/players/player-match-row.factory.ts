@@ -147,7 +147,7 @@ export function buildVoidedMatchRow(
 
 /**
  * A solo match: the player-less sentinel side the API sends for a match with no
- * opponent (ADR-0008). The row renders it as "No opponent" rather than dropping
+ * opponent (ADR-0008). The row renders it as "Unlisted opponent" rather than dropping
  * the match.
  */
 export function buildSoloMatchRow(

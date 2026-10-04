@@ -70,7 +70,7 @@ const scoped = (container: Container) => ({
     return rowsIn(container)
   },
   /** Every opponent name in the table, top to bottom. The solo sentinel row
-   * reads "No opponent". */
+   * reads "Unlisted opponent". */
   getOpponentNames(): string[] {
     return rowsIn(container).map(
       (row) => row.querySelector('.player-name')?.textContent ?? '',

@@ -290,7 +290,7 @@ describe("MatchDetails — page wiring", () => {
   // the #514 429 retry path) is owned by the `MatchDetailsError` quartet — see
   // match-details/match-details-error.test.tsx.
 
-  it('renders no-opponent matches with a "No opponent" placeholder, still scorable', async () => {
+  it('renders no-opponent matches with an "Unlisted opponent" placeholder, still scorable', async () => {
     const game1 = { id: "g-solo-1", game_number: 1, score: null };
     const match = matchDetails({
       id: "m-solo",
@@ -320,24 +320,24 @@ describe("MatchDetails — page wiring", () => {
     const { container } = matchDetailsPage.render("m-solo");
 
     // The participant shows on the left; the player-less opponent side renders
-    // a "No opponent" placeholder rather than a blank slot.
+    // an "Unlisted opponent" placeholder rather than a blank slot.
     await waitFor(() =>
       expect(container.querySelectorAll(".md-hero__name").length).toBe(2),
     );
     const heroNames = Array.from(
       container.querySelectorAll(".md-hero__name"),
     ).map((el) => el.textContent);
-    expect(heroNames).toEqual(["me", "No opponent"]);
+    expect(heroNames).toEqual(["me", "Unlisted opponent"]);
     // The placeholder is styled as a ghost (dashed avatar + muted name), not a
     // real player.
     expect(container.querySelector(".md-hero__name--ghost")).toHaveTextContent(
-      "No opponent",
+      "Unlisted opponent",
     );
     expect(container.querySelector(".md-avatar--ghost")).toBeInTheDocument();
     // The Players snapshot card mirrors it on the opponent side.
     expect(
       container.querySelector(".md-profile__name--ghost"),
-    ).toHaveTextContent("No opponent");
+    ).toHaveTextContent("Unlisted opponent");
     // A no-opponent match is now scorable: the Score CTA is present.
     expect(await screen.findByRole("link", { name: "Score" })).toHaveAttribute(
       "href",

@@ -3,29 +3,29 @@ import { render, screen, type Container } from "@/test/utilities";
 import { NoOpponentProfile } from "./no-opponent-profile";
 
 const scoped = (container: Container) => ({
-  /** The ghost-toned "No opponent" name; absent when a real profile renders
+  /** The ghost-toned "Unlisted opponent" name; absent when a real profile renders
    * that half of the panel. */
   getGhostName() {
-    return container.getByText("No opponent", {
+    return container.getByText("Unlisted opponent", {
       selector: ".md-profile__name--ghost",
     });
   },
   queryGhostName() {
-    return container.queryByText("No opponent", {
+    return container.queryByText("Unlisted opponent", {
       selector: ".md-profile__name--ghost",
     });
   },
-  /** The solo-match explainer line. */
+  /** The line that explains what an unlisted opponent is. */
   getSoloNote() {
-    return container.getByText("Solo match — no second player.");
+    return container.getByText("This player is not on FortyMM, or the match was played alone.");
   },
   querySoloNote() {
-    return container.queryByText("Solo match — no second player.");
+    return container.queryByText("This player is not on FortyMM, or the match was played alone.");
   },
 });
 
 /**
- * Test page-object for `NoOpponentProfile` — the static "No opponent"
+ * Test page-object for `NoOpponentProfile` — the static "Unlisted opponent"
  * placeholder half of the players panel. The component takes no props, so
  * there's no factory.
  */

@@ -262,17 +262,17 @@ test.describe('Player profile (desktop)', () => {
     await expect(profile.heading(SILVA.username)).toBeVisible()
   })
 
-  test('a Recent-matches opponent opens their profile; a solo match’s "No opponent" is not a link', async ({
+  test('a Recent-matches opponent opens their profile; a solo match’s "Unlisted opponent" is not a link', async ({
     page,
   }) => {
     const profile = await PlayerProfilePage.create(page)
     await profile.openProfile(OKAFOR.id)
 
     // The solo row: a name for an absence, so there is nobody to link to.
-    const solo = profile.recentMatches.getByText('No opponent', { exact: true })
+    const solo = profile.recentMatches.getByText('Unlisted opponent', { exact: true })
     await expect(solo).toBeVisible()
     await expect(
-      profile.recentMatches.getByRole('link', { name: 'No opponent' }),
+      profile.recentMatches.getByRole('link', { name: 'Unlisted opponent' }),
       'a solo match offers nothing to click',
     ).toHaveCount(0)
     await expect(
@@ -305,7 +305,7 @@ test.describe('Player profile (desktop)', () => {
    * live here, and why they click by *coordinate* rather than by locator.
    */
 
-  const SOLO = 'No opponent'
+  const SOLO = 'Unlisted opponent'
   const OKAFOR_VS_SILVA = '/matches/aaaaaaaa-0000-4000-8000-000000000001'
   const OKAFOR_SOLO = '/matches/aaaaaaaa-0000-4000-8000-000000000002'
 
@@ -331,7 +331,7 @@ test.describe('Player profile (desktop)', () => {
     await expect(page).toHaveURL(OKAFOR_VS_SILVA)
   })
 
-  test('Recent matches: a solo row’s "No opponent" is not clickable, and the row still opens the match', async ({
+  test('Recent matches: a solo row’s "Unlisted opponent" is not clickable, and the row still opens the match', async ({
     page,
   }) => {
     const profile = await PlayerProfilePage.create(page)
@@ -343,7 +343,7 @@ test.describe('Player profile (desktop)', () => {
     await expect(row.getByRole('link')).toHaveCount(1)
     await expect(row.getByRole('link', { name: SOLO })).toHaveCount(0)
 
-    // Clicking the words "No opponent" is a click on the row, and the row is the
+    // Clicking the words "Unlisted opponent" is a click on the row, and the row is the
     // match. It must not be a dead spot, and it must not go to a player.
     await profile.clickRowBody(row, 0)
     await expect(page).toHaveURL(OKAFOR_SOLO)
@@ -373,7 +373,7 @@ test.describe('Player profile (desktop)', () => {
     await expect(profile.heading(SILVA.username)).toBeVisible()
   })
 
-  test('Match history: a solo row’s "No opponent" is not clickable, and the row still opens the match', async ({
+  test('Match history: a solo row’s "Unlisted opponent" is not clickable, and the row still opens the match', async ({
     page,
   }) => {
     const profile = await PlayerProfilePage.create(page)

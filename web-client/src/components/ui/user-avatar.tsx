@@ -20,7 +20,7 @@ function monogram(name: string): string {
 }
 
 export interface UserAvatarProps {
-  /** Username. `null` renders the dashed-circle "no opponent" placeholder. */
+  /** Username. `null` renders the dashed-circle "unlisted opponent" placeholder. */
   name: string | null
   /** Pixel diameter. */
   size?: number

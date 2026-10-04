@@ -283,7 +283,7 @@ struct DashboardRecentResultsCard: View {
                 color: FMColor.ink600,
                 foreground: FMColor.fg2
             )
-            Text(opponent ?? "No opponent")
+            Text(opponent ?? MatchPlayer.unlistedOpponentName)
                 .font(FMFont.ui(FMFont.sm, weight: .medium))
                 .foregroundStyle(opponent == nil ? FMColor.fgMuted : FMColor.fg1)
                 .italic(opponent == nil)

@@ -4,15 +4,13 @@ import { matchDetailRoute } from '@/api/matches'
 import type { PlayerMatchRow } from '@/api/players'
 import { MatchRowLink } from '@/components/matches/match-row-link/match-row-link'
 import { matchRowAriaLabel } from '@/components/matches/match-row-link/match-row-naming'
+import { UNLISTED_OPPONENT_LABEL } from '@/components/matches/unlisted-opponent-label'
 import { UserAvatar } from '@/components/ui/user-avatar'
 
 export interface MatchHistoryRowProps {
   /** One row of the player's history, straight off the wire. */
   match: PlayerMatchRow
 }
-
-/** What the Opponent cell reads when there is nobody on the other side. */
-const NO_OPPONENT = 'No opponent'
 
 /**
  * Who the match was against — and therefore whether the cell is a **link**.
@@ -26,20 +24,20 @@ const NO_OPPONENT = 'No opponent'
  */
 type OpponentView =
   | { kind: 'player'; id: string; name: string }
-  | { kind: 'solo'; name: typeof NO_OPPONENT }
+  | { kind: 'solo'; name: typeof UNLISTED_OPPONENT_LABEL }
 
 const selectOpponent = (opponent: PlayerMatchRow['opponent']): OpponentView =>
   opponent.id != null && opponent.username != null
     ? { kind: 'player', id: opponent.id, name: opponent.username }
-    : { kind: 'solo', name: NO_OPPONENT }
+    : { kind: 'solo', name: UNLISTED_OPPONENT_LABEL }
 
 /**
  * The Opponent cell: the name, as a **link to that player's profile** (#1005).
  * The history named its opponents in plain text, and the most obvious next step
  * from a list of people you have played was unreachable.
  *
- * A solo match has nobody to link to, so it stays plain text — ghost-toned and
- * italic, to say that "No opponent" is an absence and not a person.
+ * A solo match has no account to link to, so it stays plain text — ghost-toned
+ * and italic, to say that "Unlisted opponent" has no FortyMM profile.
  *
  * The link wears `match-row-inline-link` because the *row* is a link too, to the
  * match (#989), and that link's `::after` is stretched over every cell in the row
@@ -100,7 +98,7 @@ function OpponentCell({ opponent }: { opponent: OpponentView }) {
  */
 export function MatchHistoryRow({ match }: MatchHistoryRowProps) {
   // Solo matches carry a player-less sentinel side — the row renders it as an
-  // italic "No opponent" rather than dropping the match (ADR-0008).
+  // italic "Unlisted opponent" rather than dropping the match (ADR-0008).
   const opponent = selectOpponent(match.opponent)
   const when = formatDate(match.created_at)
   const won = match.result === 'W'

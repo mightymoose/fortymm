@@ -65,7 +65,7 @@ struct ScoreEntryView: View {
         guard let name = meName, !name.isEmpty else { return MatchSeed.me }
         return MatchPlayer(handle: name, initials: name.fmInitials, you: true)
     }
-    private var opp: MatchPlayer { config.opponent ?? .guest }
+    private var opp: MatchPlayer { config.opponent ?? .unlistedOpponent }
 
     private var current: Game { games.indices.contains(active) ? games[active].points : Game() }
     private var currentValid: Bool { MatchRules.gameComplete(current) }

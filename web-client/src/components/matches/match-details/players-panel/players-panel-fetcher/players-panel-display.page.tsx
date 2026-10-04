@@ -48,7 +48,7 @@ const scoped = (container: Container) => ({
       .closest(".md-profile") as HTMLElement;
     return playerProfilePage.within(within(profile) as Container);
   },
-  /** The "No opponent" placeholder half; absent with two real players. */
+  /** The "Unlisted opponent" placeholder half; absent with two real players. */
   ...noOpponentProfilePage.within(container),
 });
 

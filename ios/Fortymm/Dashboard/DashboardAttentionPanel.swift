@@ -15,7 +15,7 @@ enum AttentionTarget: Equatable {
 /// route, with all ranking/labels/targets decided by `projectAttentionPanel`.
 struct AttentionRowView: Identifiable {
     let matchId: UUID
-    /// Avatar/headline seed — nil renders the "No opponent" placeholder.
+    /// Avatar/headline seed — nil renders the "Unlisted opponent" placeholder.
     let opponentUsername: String?
     /// Row headline, e.g. `vs nguyen.t` or `No opponent`.
     let headline: String
@@ -52,8 +52,6 @@ func isAttentionPanelEmpty(_ view: AttentionPanelView) -> Bool {
 /// The panel never grows unbounded — show the top 3 rows, roll the rest into
 /// the footer (mirrors the web's `ATTENTION_VISIBLE_LIMIT`).
 private let attentionVisibleLimit = 3
-
-private let noOpponentLabel = "No opponent"
 
 // A row's attention "bucket" — the unit the primary-button rule operates on
 // (score rows split rated vs unrated; review is its own bucket). The priority
@@ -103,7 +101,7 @@ func projectAttentionPanel(
             AttentionRowView(
                 matchId: item.matchId,
                 opponentUsername: item.opponentUsername,
-                headline: item.opponentUsername.map { "vs \($0)" } ?? noOpponentLabel,
+                headline: item.opponentUsername.map { "vs \($0)" } ?? MatchPlayer.unlistedOpponentName,
                 actionLabel: actionLabel(item.kind),
                 primary: bucketKey(item) == topBucket,
                 target: target(item)

@@ -5,6 +5,7 @@ import type { MatchListFilter, MatchListRow } from '@/api/matches'
 import type { components } from '@/api/schema'
 import { matchDetailRoute, scoringNewRoute } from '@/api/matches'
 import { parseApiDate } from '@/lib/dates'
+import { UNLISTED_OPPONENT_LABEL } from '../unlisted-opponent-label'
 import { API_TO_TONE, STATUS_TONE, type StatusKey } from './match-list-status'
 import type {
   MatchListRowView,
@@ -119,9 +120,9 @@ export function topActionableKind(rows: MatchListRow[]): ActionableKind | null {
   return best
 }
 
-/** Players joined by ' & ', or 'No opponent' for a null/empty side. (was sideLabel) */
+/** Players joined by ' & ', or 'Unlisted opponent' for a null/empty side. (was sideLabel) */
 export function sideLabel(side: MatchListRowSide | null): string {
-  return side?.players.map((p) => p.username).join(' & ') || 'No opponent'
+  return side?.players.map((p) => p.username).join(' & ') || UNLISTED_OPPONENT_LABEL
 }
 
 /** Last 6 chars upper-cased, zero-padded (was shortId). */
@@ -145,7 +146,7 @@ export function formatCreatedAt(iso: string, now: Date = new Date()): string {
 }
 
 /** One side projected into the PlayerChip view model. A null side (legacy) or a
- * player-less sentinel side reads as "No opponent" with the ghost avatar. */
+ * player-less sentinel side reads as "Unlisted opponent" with the ghost avatar. */
 function projectPlayerChip(side: MatchListRowSide | null): {
   name: string
   isEmpty: boolean
@@ -206,12 +207,9 @@ export function projectMatchListRow(
     id: row.id,
     detailRoute: matchDetailRoute(row.id),
     shortLabel: `M-${shortId(row.id)}`,
-    // A null or player-less sentinel side 2 both render as "No opponent"; read
-    // that to the screen reader as a clause rather than an awkward "vs No
-    // opponent" (#175).
-    ariaLabel: side2?.players.length
-      ? `Open match: ${sideLabel(side1)} vs ${sideLabel(side2)}`
-      : `Open match: ${sideLabel(side1)} (no opponent)`,
+    // A null or player-less sentinel side 2 both read "Unlisted opponent",
+    // which reads naturally after "vs" (#175, #1522).
+    ariaLabel: `Open match: ${sideLabel(side1)} vs ${sideLabel(side2)}`,
     isLive,
     side1: projectPlayerChip(side1),
     side2: projectPlayerChip(side2),

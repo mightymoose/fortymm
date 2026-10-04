@@ -265,6 +265,16 @@ describe('NewMatchPage', () => {
     })
   })
 
+  it('tells the player to leave the opponent blank when they are not on FortyMM (#1522)', async () => {
+    renderNewMatch()
+
+    expect(
+      await screen.findByText(
+        "Optional · leave blank if your opponent isn't on FortyMM",
+      ),
+    ).toBeInTheDocument()
+  })
+
   it('resets Rated to off when the opponent is cleared, so re-picking does not silently re-engage rating', async () => {
     const user = userEvent.setup()
     let captured: unknown = null

@@ -1,5 +1,6 @@
 import type { DashboardRecentResult } from '@/api/dashboard'
 import { UserAvatar } from '@/components/ui/user-avatar'
+import { UNLISTED_OPPONENT_LABEL } from '@/components/matches/unlisted-opponent-label'
 import { Overline } from '@/components/overline'
 import { fmtDateShort } from '@/lib/dates'
 import {
@@ -11,12 +12,6 @@ import { C, UI } from '@/components/dashboard/dashboard-tokens'
 
 import { Card } from './card'
 import { Mono } from './mono'
-
-// Used everywhere an opponent slot has no registered player — the form's
-// solo-match path produces this. Matches the label used on the match-details
-// hero and form-history rows so the same match reads identically wherever it
-// surfaces.
-const NO_OPPONENT_LABEL = 'No opponent'
 
 export interface RecentResultsCardProps {
   rows: DashboardRecentResult[]
@@ -94,7 +89,7 @@ export const RecentResultsCard = ({ rows }: RecentResultsCardProps) => {
           <tbody>
             {rows.map((r, i) => {
               const opponent = r.opponent_username
-              const opponentLabel = opponent ?? NO_OPPONENT_LABEL
+              const opponentLabel = opponent ?? UNLISTED_OPPONENT_LABEL
               const score = `${r.my_games_won}-${r.opponent_games_won}`
               // Two nulls, one em dash. `my_rating_change` is null when the match
               // moved no rating at all; a *present* change with a null `delta` is
@@ -129,7 +124,7 @@ export const RecentResultsCard = ({ rows }: RecentResultsCardProps) => {
                       />
                       <UserAvatar name={opponent} size={24} />
                       {/* Only a real username needs the tooltip: the
-                          `No opponent` placeholder would just echo its own
+                          `Unlisted opponent` placeholder would just echo its own
                           visible text on hover. */}
                       <span
                         title={opponent ?? undefined}

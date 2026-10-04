@@ -88,7 +88,7 @@ struct NewMatchView: View {
                     .font(FMFont.ui(16, weight: .semibold))
                     .foregroundStyle(FMColor.fg1)
                 Spacer()
-                Text("OPTIONAL · SOLO IF BLANK")
+                Text("OPTIONAL · BLANK IF NOT ON FORTYMM")
                     .font(FMFont.ui(10, weight: .medium))
                     .tracking(1.0)
                     .foregroundStyle(FMColor.fgMuted)
@@ -169,7 +169,7 @@ struct NewMatchView: View {
             } else if recentFailed {
                 pickerNote("Couldn't load players. Search to find an opponent.")
             } else if recent.isEmpty {
-                pickerNote("No opponents yet — use Search to find a player, or start a solo match.")
+                pickerNote("No opponents yet. Use Search to find a player, or leave it blank if your opponent isn't on FortyMM.")
             } else {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 9), GridItem(.flexible(), spacing: 9)], spacing: 9) {
                     ForEach(recent) { p in

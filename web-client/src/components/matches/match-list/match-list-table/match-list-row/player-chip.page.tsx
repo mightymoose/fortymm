@@ -5,7 +5,7 @@ import { buildPlayerChipProps } from './player-chip.factory'
 
 const scoped = (container: Container, root: ParentNode) => ({
   /** The side's display label rendered as the `.player-name` text. Pass the
-   * label the chip was built with (e.g. 'rita.kovac', 'No opponent'). */
+   * label the chip was built with (e.g. 'rita.kovac', 'Unlisted opponent'). */
   getPlayerName(name: string) {
     return container.getByText(name)
   },

@@ -249,10 +249,10 @@ describe('recentMatchesQuery', () => {
     })
   })
 
-  it('renders the solo sentinel as "No opponent" rather than dropping the match', async () => {
+  it('renders the solo sentinel as "Unlisted opponent" rather than dropping the match', async () => {
     const row = await selectRow(buildSoloMatchRow())
 
-    expect(row.opponent).toEqual({ kind: 'solo', name: 'No opponent' })
+    expect(row.opponent).toEqual({ kind: 'solo', name: 'Unlisted opponent' })
   })
 
   it('gives the solo sentinel NO id — there is nobody to link to', async () => {
@@ -369,7 +369,7 @@ describe('recentMatchesQuery', () => {
     const row = await selectRow(buildSoloMatchRow())
 
     expect(row.ariaLabel).toBe('Solo match, Mar 14')
-    expect(row.ariaLabel).not.toContain('No opponent')
+    expect(row.ariaLabel).not.toContain('Unlisted opponent')
   })
 
   it('keeps the link’s spoken date and the printed one the same', async () => {

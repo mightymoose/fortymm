@@ -114,7 +114,7 @@ describe('PlayerMatchHistory', () => {
       'LOSS',
       'WIN',
     ])
-    expect(page.getOpponentNames()).toContain('No opponent')
+    expect(page.getOpponentNames()).toContain('Unlisted opponent')
   })
 
   it('shows the designed empty state for a player with no matches', async () => {

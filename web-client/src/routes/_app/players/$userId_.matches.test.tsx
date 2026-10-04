@@ -207,7 +207,7 @@ describe('player match history', () => {
     expect(screen.getByText('LIVE')).toBeInTheDocument()
     expect(screen.getByText('UP NEXT')).toBeInTheDocument()
     expect(screen.getByText('VOIDED')).toBeInTheDocument()
-    expect(screen.getByText('No opponent')).toBeInTheDocument()
+    expect(screen.getByText('Unlisted opponent')).toBeInTheDocument()
 
     // The footer counts the whole inclusive history, not just this page.
     expect(screen.getByText(/showing/i).textContent).toContain('1–25')
@@ -375,9 +375,9 @@ describe('player match history', () => {
     ).toHaveAttribute('href', '/players/opp-0')
 
     // The solo sentinel row (ADR-0008) is a real match too — it opens, and it is
-    // not announced as a match "against No opponent". It has nobody to link to,
+    // not announced as a match "against Unlisted opponent". It has nobody to link to,
     // so its Opponent cell is plain text: one anchor, the match's.
-    const soloRow = screen.getByText('No opponent').closest('tr')!
+    const soloRow = screen.getByText('Unlisted opponent').closest('tr')!
     const soloLink = within(dateCell(soloRow)).getByRole('link')
     expect(soloLink).toHaveAttribute('href', `/matches/${matchId(102)}`)
     expect(soloLink.getAttribute('aria-label')).toMatch(/^Solo match, /)
