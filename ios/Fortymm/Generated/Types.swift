@@ -5965,6 +5965,39 @@ internal enum Components {
                 ])
             }
         }
+        /// 409 ``detail`` for a propose against a terminal (completed/voided) match.
+        ///
+        /// ``code`` is the stable discriminator a client matches on, so the lock-race
+        /// 409 (a plain string) and this one never have to be told apart by their
+        /// English text (#1651). ``message`` is the human copy.
+        ///
+        /// - Remark: Generated from `#/components/schemas/MatchClosedConflict`.
+        internal struct MatchClosedConflict: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/MatchClosedConflict/code`.
+            internal enum CodePayload: String, Codable, Hashable, Sendable, CaseIterable {
+                case matchClosed = "match_closed"
+            }
+            /// - Remark: Generated from `#/components/schemas/MatchClosedConflict/code`.
+            internal var code: Components.Schemas.MatchClosedConflict.CodePayload?
+            /// - Remark: Generated from `#/components/schemas/MatchClosedConflict/message`.
+            internal var message: Swift.String
+            /// Creates a new `MatchClosedConflict`.
+            ///
+            /// - Parameters:
+            ///   - code:
+            ///   - message:
+            internal init(
+                code: Components.Schemas.MatchClosedConflict.CodePayload? = nil,
+                message: Swift.String
+            ) {
+                self.code = code
+                self.message = message
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case code
+                case message
+            }
+        }
         /// Request body for ``POST /v1/matches``.
         ///
         /// ``opponent_user_id`` is optional: a solo match (the client submits one
@@ -20548,6 +20581,57 @@ internal enum Operations {
                     default:
                         try throwUnexpectedResponseStatus(
                             expectedStatus: "created",
+                            response: self
+                        )
+                    }
+                }
+            }
+            internal struct Conflict: Sendable, Hashable {
+                /// - Remark: Generated from `#/paths/v1/matches/{match_id}/results/POST/responses/409/content`.
+                internal enum Body: Sendable, Hashable {
+                    /// - Remark: Generated from `#/paths/v1/matches/{match_id}/results/POST/responses/409/content/application\/json`.
+                    case json(Components.Schemas.MatchClosedConflict)
+                    /// The associated value of the enum case if `self` is `.json`.
+                    ///
+                    /// - Throws: An error if `self` is not `.json`.
+                    /// - SeeAlso: `.json`.
+                    internal var json: Components.Schemas.MatchClosedConflict {
+                        get throws {
+                            switch self {
+                            case let .json(body):
+                                return body
+                            }
+                        }
+                    }
+                }
+                /// Received HTTP response body
+                internal var body: Operations.PostMatchResultV1MatchesMatchIdResultsPost.Output.Conflict.Body
+                /// Creates a new `Conflict`.
+                ///
+                /// - Parameters:
+                ///   - body: Received HTTP response body
+                internal init(body: Operations.PostMatchResultV1MatchesMatchIdResultsPost.Output.Conflict.Body) {
+                    self.body = body
+                }
+            }
+            /// Conflict
+            ///
+            /// - Remark: Generated from `#/paths//v1/matches/{match_id}/results/post(post_match_result_v1_matches__match_id__results_post)/responses/409`.
+            ///
+            /// HTTP response code: `409 conflict`.
+            case conflict(Operations.PostMatchResultV1MatchesMatchIdResultsPost.Output.Conflict)
+            /// The associated value of the enum case if `self` is `.conflict`.
+            ///
+            /// - Throws: An error if `self` is not `.conflict`.
+            /// - SeeAlso: `.conflict`.
+            internal var conflict: Operations.PostMatchResultV1MatchesMatchIdResultsPost.Output.Conflict {
+                get throws {
+                    switch self {
+                    case let .conflict(response):
+                        return response
+                    default:
+                        try throwUnexpectedResponseStatus(
+                            expectedStatus: "conflict",
                             response: self
                         )
                     }

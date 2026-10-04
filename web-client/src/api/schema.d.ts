@@ -3206,6 +3206,24 @@ export interface components {
             ids: string[];
         };
         /**
+         * MatchClosedConflict
+         * @description 409 ``detail`` for a propose against a terminal (completed/voided) match.
+         *
+         *     ``code`` is the stable discriminator a client matches on, so the lock-race
+         *     409 (a plain string) and this one never have to be told apart by their
+         *     English text (#1651). ``message`` is the human copy.
+         */
+        MatchClosedConflict: {
+            /**
+             * Code
+             * @default match_closed
+             * @constant
+             */
+            code: "match_closed";
+            /** Message */
+            message: string;
+        };
+        /**
          * MatchCreate
          * @description Request body for ``POST /v1/matches``.
          *
@@ -7761,6 +7779,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["app__schemas__match__MatchDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchClosedConflict"];
                 };
             };
             /** @description Validation Error */

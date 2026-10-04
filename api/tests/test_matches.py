@@ -2633,6 +2633,33 @@ async def test_propose_first_post_requires_no_existing_result(
         )
 
 
+async def test_propose_on_a_closed_match_409s_with_a_machine_readable_code(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """#1651: a propose against a completed match 409s with a coded body, so a
+    client can tell "the match is over" from the lock-race 409 without matching
+    English. The human text rides along as ``detail.message``."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "closed-rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        payload = {
+            "games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 5}]
+        }
+        first = await api_client.post(
+            f"/v1/matches/{match['id']}/results", json=payload
+        )
+        assert first.status_code == 201
+        await accept_standing_result(opp_client, match["id"])
+
+        late = await api_client.post(f"/v1/matches/{match['id']}/results", json=payload)
+
+    assert late.status_code == 409
+    assert late.json()["detail"] == {
+        "code": "match_closed",
+        "message": "This match is no longer open to results.",
+    }
+
+
 async def test_propose_first_post_no_longer_guards_scratchpad_divergence(
     api_client: AsyncClient, db_session: AsyncSession
 ):
