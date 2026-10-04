@@ -528,3 +528,68 @@ async def test_the_database_erases_receipt_addresses_for_an_n_minus_1_account_er
     assert (checkout.receipt_address, payment.receipt_address) == (None, None)
     assert payment.receipt_address_erased_at is not None
     assert checkout.receipt_address_erased_at is not None
+
+
+async def test_the_account_erasure_trigger_locks_checkouts_before_payments(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    engine: AsyncEngine,
+) -> None:
+    """``erase_receipt_address`` and the daily sweep lock a checkout, then its
+    payment. The accounts trigger runs the same two tables for the same rows, so
+    it must keep that order, or an overlapping sweep and erasure deadlock. With
+    another session holding the checkout, the trigger must be waiting on it and
+    must not yet hold the payment."""
+    import asyncio
+
+    from sqlalchemy.exc import DBAPIError
+
+    payer, _owner, _provider, payment = await _paid_checkout(
+        api_client, db_session, monkeypatch, receipt_address=ADDRESS
+    )
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    shape = (
+        "UPDATE accounts SET erased_at = now(), deactivated_at = now(), email = NULL, "
+        "display_name = 'Erased account', confirmed_at = NULL, last_seen_at = NULL, "
+        "agent_access_linked_at = NULL, agent_access_revoked_at = NULL WHERE id = :id"
+    )
+
+    async def erase_the_account() -> None:
+        async with sessions() as eraser:
+            await eraser.execute(text(shape), {"id": payer.id})
+            # The credentials check is deferred to commit, so remove them after.
+            for table, column in (
+                ("account_session_tokens", "user_id"),
+                ("login_identities", "account_id"),
+            ):
+                await eraser.execute(
+                    text(f"DELETE FROM {table} WHERE {column} = :id"), {"id": payer.id}
+                )
+            await eraser.commit()
+
+    async with sessions() as holder, sessions() as probe:
+        await holder.execute(
+            text("SELECT id FROM tournament_checkouts WHERE id = :id FOR UPDATE"),
+            {"id": payment.checkout_id},
+        )
+        eraser_task = asyncio.create_task(erase_the_account())
+        await asyncio.sleep(0.5)
+        assert not eraser_task.done(), "the trigger did not wait for the checkout"
+        # The payment row must still be free: the trigger is queued behind the checkout.
+        try:
+            await probe.execute(
+                text(
+                    "SELECT id FROM tournament_payments "
+                    "WHERE id = :id FOR UPDATE NOWAIT"
+                ),
+                {"id": payment.id},
+            )
+            payment_free = True
+        except DBAPIError:
+            payment_free = False
+        await probe.rollback()
+        await holder.rollback()
+        await asyncio.wait_for(eraser_task, timeout=10)
+
+    assert payment_free, "the trigger locked the payment before the checkout"

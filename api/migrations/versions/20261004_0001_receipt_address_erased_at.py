@@ -120,6 +120,17 @@ def upgrade() -> None:
         RETURNS trigger AS $$
         BEGIN
           IF OLD.erased_at IS NULL AND NEW.erased_at IS NOT NULL THEN
+            -- The application locks a checkout, then its payment, and the daily
+            -- sweep locks checkouts in id order. Keep both, or an overlapping
+            -- sweep and erasure deadlock.
+            PERFORM 1 FROM tournament_checkouts
+            WHERE payer_account_id = NEW.id
+               OR id IN (
+                 SELECT checkout_id FROM tournament_payments
+                 WHERE payer_account_id = NEW.id
+               )
+            ORDER BY id
+            FOR UPDATE;
             UPDATE tournament_payments
             SET receipt_address = NULL,
                 receipt_address_erased_at =
