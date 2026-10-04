@@ -9066,7 +9066,7 @@ async def test_patching_a_table_catalogue_that_authors_a_table_id_is_refused(
 
 @pytest.mark.parametrize("char", ["x", "🏆"])
 @pytest.mark.parametrize("route", ["create", "patch"])
-@pytest.mark.parametrize("field", ["label"])
+@pytest.mark.parametrize("field", ["label", "court"])
 async def test_a_table_field_over_255_code_points_is_a_422_and_255_is_accepted(
     authed_client: tuple[AsyncClient, User], field: str, route: str, char: str
 ) -> None:
