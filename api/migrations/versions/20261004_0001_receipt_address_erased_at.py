@@ -22,6 +22,43 @@ def upgrade() -> None:
             "receipt_address_erased_at", sa.DateTime(timezone=True), nullable=True
         ),
     )
+    # The previous release erased an account without touching its receipt
+    # addresses, and ``erase_account`` rejects an account that is already erased,
+    # so nothing could clear these later. Clean them here, before the check
+    # constraint below. A payment is reached through its own payer or through
+    # its checkout's payer: an account merge moves the first and not the second.
+    op.execute(
+        """
+        UPDATE tournament_payments
+        SET receipt_address = NULL, receipt_address_erased_at = clock_timestamp()
+        WHERE receipt_address IS NOT NULL
+          AND (
+            payer_account_id IN (SELECT id FROM accounts WHERE erased_at IS NOT NULL)
+            OR checkout_id IN (
+              SELECT id FROM tournament_checkouts
+              WHERE payer_account_id IN (
+                SELECT id FROM accounts WHERE erased_at IS NOT NULL
+              )
+            )
+          )
+        """
+    )
+    op.execute(
+        """
+        UPDATE tournament_checkouts
+        SET receipt_address = NULL
+        WHERE receipt_address IS NOT NULL
+          AND (
+            payer_account_id IN (SELECT id FROM accounts WHERE erased_at IS NOT NULL)
+            OR id IN (
+              SELECT checkout_id FROM tournament_payments
+              WHERE payer_account_id IN (
+                SELECT id FROM accounts WHERE erased_at IS NOT NULL
+              )
+            )
+          )
+        """
+    )
     op.create_check_constraint(
         "ck_tournament_payments_erased_receipt_has_no_address",
         "tournament_payments",

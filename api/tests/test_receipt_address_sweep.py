@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app.models import (
     Tournament,
@@ -305,3 +305,63 @@ async def test_the_sweep_and_account_erasure_lock_checkouts_in_id_order(
     visited.clear()
     await erase_account(db_session, payer.id)
     assert visited == sorted(visited)
+
+
+@pytest.mark.parametrize(
+    "in_flight",
+    [
+        TournamentPaymentStatus.cancel_requested,
+        TournamentPaymentStatus.checking,
+        TournamentPaymentStatus.preparing,
+    ],
+)
+async def test_a_payment_that_may_still_capture_money_keeps_the_address(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    in_flight: TournamentPaymentStatus,
+) -> None:
+    """A cancel is best-effort and a processing payment is Stripe's to finish, so
+    either can still succeed after the sweep. Its late success would snapshot an
+    erased address and send no receipt email."""
+    payment = await _archived_quarantine(
+        api_client, db_session, monkeypatch, amount_unverified=False
+    )
+    payment.status = in_flight
+    await db_session.commit()
+
+    assert await sweep_receipt_addresses(db_session, now=await _in_days(400)) == 0
+    assert (await _address_state(db_session, payment))[0] == ADDRESS
+
+
+async def test_the_sweep_holds_the_tournament_lock_while_it_checks_and_erases(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    engine: AsyncEngine,
+) -> None:
+    """Reconciliation takes the tournament lock before it records a refund. The
+    sweep takes the same lock before it reads the tournament-wide predicate, so
+    no refund can land between the check and the erasures of a partial sweep."""
+    import asyncio
+
+    from app.tournament_authority import lock_tournament
+
+    _payer, _owner, _provider, payment = await _paid_checkout(
+        api_client, db_session, monkeypatch, receipt_address=ADDRESS
+    )
+    tournament = await _tournament_of(db_session, payment)
+    tournament.status = TournamentStatus.archived
+    await db_session.commit()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with sessions() as gatekeeper:
+        await lock_tournament(gatekeeper, payment.tournament_id)  # held
+        async with sessions() as sweeper:
+            sweep = asyncio.create_task(
+                sweep_receipt_addresses(sweeper, now=await _in_days(31))
+            )
+            await asyncio.sleep(0.5)
+            assert not sweep.done(), "the sweep did not wait for the tournament lock"
+            await gatekeeper.rollback()
+            assert await asyncio.wait_for(sweep, timeout=10) == 1

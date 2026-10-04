@@ -20,12 +20,23 @@ from app.models import (
     TournamentPaymentStatus,
 )
 
+#: Statuses in which money may still move. A cancel is best-effort, a processing
+#: payment is Stripe's to finish, and a create may have gone through unseen: any
+#: of them can still succeed. Erasing the address first would make that late
+#: success snapshot nothing, and send no receipt.
+IN_FLIGHT_PAYMENT_STATUSES = (
+    TournamentPaymentStatus.preparing,
+    TournamentPaymentStatus.checking,
+    TournamentPaymentStatus.cancel_requested,
+)
+
 
 async def payment_is_resolved(db: AsyncSession, payment: TournamentPayment) -> bool:
-    """The payment owes nobody a refund, and no refund is hiding behind an
-    unverified amount. Nothing marks an obligation settled until #1813 executes
-    refunds, so until then any obligation counts as unresolved."""
-    if payment.amount_unverified:
+    """The payment owes nobody a refund, no refund is hiding behind an
+    unverified amount, and no money is still in flight. Nothing marks an
+    obligation settled until #1813 executes refunds, so until then any
+    obligation counts as unresolved."""
+    if payment.amount_unverified or payment.status in IN_FLIGHT_PAYMENT_STATUSES:
         return False
     obligation = await db.scalar(
         select(TournamentPaymentRefundObligation.id)

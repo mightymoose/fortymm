@@ -72,6 +72,10 @@ def _absolute_link(link: str | None) -> str | None:
     return f"{base}/{link.lstrip('/')}"
 
 
+#: Seconds each SMTP socket operation may wait.
+SMTP_TIMEOUT_SECONDS = 30
+
+
 def _smtp_configured() -> bool:
     return bool(os.environ.get("SMTP_HOST"))
 
@@ -82,7 +86,9 @@ def _send_via_smtp(message: EmailMessage) -> None:
     user = os.environ.get("SMTP_USERNAME")
     password = os.environ.get("SMTP_PASSWORD")
     use_tls = os.environ.get("SMTP_USE_TLS", "true").lower() != "false"
-    with smtplib.SMTP(host, port) as smtp:
+    # Bounded: a server that accepts the connection and then goes quiet must not
+    # hold a worker (and any row lock the job holds) for ever.
+    with smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT_SECONDS) as smtp:
         if use_tls:
             smtp.starttls()
         if user and password:
@@ -231,19 +237,26 @@ def send_payment_receipt_email(
     if url:
         body_lines += ["", f"View this receipt in FortyMM: {url}"]
     body_lines.append("")
-    _deliver(
-        to_email=to_email,
-        subject=(
-            f"FortyMM · Your receipt {reference}"
-            if admission_headline is None
-            else f"FortyMM · {admission_headline} · Receipt {reference}"
-        ),
-        body="\n".join(body_lines),
-        log_event="email_payment_receipt",
-        log_url=url or "(no link)",
-        dev_label="receipt",
-        log_recipient=False,
-    )
+    try:
+        _deliver(
+            to_email=to_email,
+            subject=(
+                f"FortyMM · Your receipt {reference}"
+                if admission_headline is None
+                else f"FortyMM · {admission_headline} · Receipt {reference}"
+            ),
+            body="\n".join(body_lines),
+            log_event="email_payment_receipt",
+            log_url=url or "(no link)",
+            dev_label="receipt",
+            log_recipient=False,
+        )
+    except smtplib.SMTPRecipientsRefused:
+        # The exception renders the refused address, and the RQ worker would
+        # write it to its log. Fail visibly, without the address or its chain.
+        raise RuntimeError(
+            "receipt email recipient refused by the SMTP server"
+        ) from None
 
 
 def send_merge_email(to_email: str, raw_token: str, username: str) -> None:

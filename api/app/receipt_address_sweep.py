@@ -23,7 +23,8 @@ from app.models import (
     TournamentPayment,
     TournamentPaymentRefundObligation,
 )
-from app.receipt_addresses import erase_receipt_address
+from app.receipt_addresses import IN_FLIGHT_PAYMENT_STATUSES, erase_receipt_address
+from app.tournament_authority import lock_tournament
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +77,10 @@ async def _end_milestone(db: AsyncSession, tournament_id: uuid.UUID) -> datetime
 
 
 async def _payments_are_resolved(db: AsyncSession, tournament_id: uuid.UUID) -> bool:
-    """No payment of the tournament owes a refund, or may owe one it could not
-    verify. Unlocked, so only a first filter: the erase rechecks each payment
-    under its own lock. A quarantine that captured nothing owes nothing."""
+    """No payment of the tournament owes a refund, may owe one it could not
+    verify, or has money still in flight. A quarantine that captured nothing
+    owes nothing. Callers hold the tournament lock, the one reconciliation takes
+    before it records a refund."""
     owes = await db.scalar(
         select(TournamentPayment.id)
         .outerjoin(
@@ -90,6 +92,7 @@ async def _payments_are_resolved(db: AsyncSession, tournament_id: uuid.UUID) -> 
             or_(
                 TournamentPaymentRefundObligation.id.is_not(None),
                 TournamentPayment.amount_unverified.is_(True),
+                TournamentPayment.status.in_(IN_FLIGHT_PAYMENT_STATUSES),
             ),
         )
         .limit(1)
@@ -112,10 +115,17 @@ async def sweep_receipt_addresses(
     )
     erased = 0
     for tournament_id in tournament_ids:
+        # Reconciliation takes this lock before it records a refund or admits a
+        # late success. Holding it across the check and every erase means no
+        # refund can appear between them, and a partial sweep cannot happen.
+        await lock_tournament(db, tournament_id)
         milestone = await _end_milestone(db, tournament_id)
-        if milestone is None or now < milestone + RETENTION:
-            continue
-        if not await _payments_are_resolved(db, tournament_id):
+        if (
+            milestone is None
+            or now < milestone + RETENTION
+            or not await _payments_are_resolved(db, tournament_id)
+        ):
+            await db.rollback()
             continue
         checkout_ids = list(
             await db.scalars(

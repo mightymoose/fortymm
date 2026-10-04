@@ -523,3 +523,64 @@ async def test_an_erasure_cannot_complete_while_the_receipt_email_is_being_sent(
     await _run_receipt_job(engine, payment)
 
     assert outcome == ["blocked"]
+
+
+def test_smtp_connects_with_a_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The receipt job holds a payment row lock while it sends, so a server that
+    accepts the connection and then stops answering must not hold it forever."""
+    import smtplib
+    from email.message import EmailMessage
+
+    seen: dict[str, object] = {}
+
+    class RecordingSMTP:
+        def __init__(self, host: str, port: int, **kwargs: object) -> None:
+            seen.update(kwargs)
+
+        def __enter__(self) -> "RecordingSMTP":
+            return self
+
+        def __exit__(self, *_exc: object) -> None:
+            return None
+
+        def starttls(self) -> None:
+            return None
+
+        def send_message(self, _message: EmailMessage) -> None:
+            return None
+
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setattr(smtplib, "SMTP", RecordingSMTP)
+
+    email._send_via_smtp(EmailMessage())
+
+    assert isinstance(seen.get("timeout"), int | float)
+    assert 0 < float(seen["timeout"]) <= 60  # type: ignore[arg-type]
+
+
+def test_a_refused_recipient_never_puts_the_address_in_the_raised_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import smtplib
+
+    def refuse(**_kwargs: str) -> None:
+        raise smtplib.SMTPRecipientsRefused(
+            {"receipts@example.com": (550, b"no such user")}
+        )
+
+    monkeypatch.setattr(email, "_deliver", refuse)
+
+    with pytest.raises(Exception) as caught:  # noqa: PT011
+        email.send_payment_receipt_email(
+            "receipts@example.com",
+            reference="PAY-7K3M9QX2",
+            lines=[("Open Singles", 4500, "Entry confirmed")],
+            total_cents=4500,
+            receipt_link="/payments/x/receipt",
+            admission_headline=None,
+        )
+
+    # The worker logs the exception and its chain. Neither may name the address.
+    assert "example.com" not in str(caught.value)
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__ is True
