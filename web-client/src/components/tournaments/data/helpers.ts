@@ -51,8 +51,9 @@ export function myEntrant(
  *   from a rating of 1500, from anything — is the trap ADR-0783 flags in bold, and
  *   it inverts the decision it is trying to implement.
  *
- * It matters because an unrated player **passes every rating rule**, so a rating
- * cap is opt-out; marking them is the mitigation the ADR accepts that cost under.
+ * It matters because an unrated player **passes a rule that sets only an upper
+ * bound** (#1635), so a rating cap is opt-out; marking them lets the director see
+ * who took it.
  */
 export function isUnrated(entrant: Entrant): boolean {
   return entrant.rating === null

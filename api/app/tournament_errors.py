@@ -59,10 +59,10 @@ class EntryRefusal(StrEnum):
     or loses depending on how their last rated match went, so "not now" (409) is the
     truth, where 403 would claim a permission they have never lacked.
 
-    Note what does **not** land here: a player with **no rating at all** passes every
-    rule and is never refused with this code (ADR-0783 §3). Unrated is not "fails the
-    rule"; it is "there is no fact to judge", and the beginners' event is exactly the
-    one a brand-new player needs to get into."""
+    A player with **no rating at all** is refused with this code by a rule that sets a
+    lower bound (``>``, ``>=``, ``=``, ``between`` with a minimum), and admitted by a
+    rule that sets only an upper bound (#1635). The beginners' event is exactly the one
+    a brand-new player needs to get into."""
 
     payment_required = "payment_required"
     """The event has a positive fee and must be entered through paid checkout."""

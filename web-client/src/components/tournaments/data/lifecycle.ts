@@ -459,6 +459,9 @@ function ineligibleReason(
 ): string {
   const rule = event.predicates.find((p) => p.id === state.predicateId)
   if (!rule) return ENTRY_REFUSAL_NOTICE.rating_ineligible.description
+  if (state.rating === null) {
+    return `${predicateSentence(rule)}. You have no rating yet.`
+  }
   return `${predicateSentence(rule)}. Your rating is ${formatRating(state.rating)}.`
 }
 

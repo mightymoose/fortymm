@@ -28,16 +28,16 @@ describe('EventCard', () => {
   })
 
   /**
-   * #1608: a badge like `Rating ≥ 1800` reads as "unrated players excluded",
-   * while the server admits them — an unrated player passes every rule
-   * (ADR-0783 §3). The card states the rules' true scope beside the badges, in
-   * visible text, so the exception reaches every reader. It speaks only for the
+   * #1608: a badge like `Rating < 1500` reads as "unrated players excluded",
+   * while the server admits them, and a floor refuses them (#1635). The card
+   * states the rules' true scope beside the badges, in visible text, so it
+   * reaches every reader. It speaks only for the
    * RULES — capacity and the registration window refuse on their own terms, so
    * the line must never promise entry beside an `Event full` notice.
    */
   describe('the eligibility scope line', () => {
     const SCOPE =
-      "Players rated on this tournament's ladder must satisfy every rule. Unrated players are exempt."
+      "Players rated on this tournament's ladder must satisfy every rule. Unrated players cannot enter if a rule sets a minimum or exact rating."
 
     it('tells the reader the rules bind ladder-rated players and exempt unrated ones', () => {
       // The exact rule QA reproduced against: `Rating ≥ 1800` still admitted an
@@ -90,7 +90,7 @@ describe('EventCard', () => {
     it('carries no rated/unrated qualifier for an event with no rules', () => {
       eventCardPage.render({ event: buildEvent({ predicates: [] }) })
       expect(eventCardPage.queryEligibilityScope()).toBeNull()
-      expect(document.body).not.toHaveTextContent('Unrated players are exempt')
+      expect(document.body).not.toHaveTextContent('Unrated players cannot enter')
       expect(document.body).not.toHaveTextContent('must satisfy every rule')
     })
   })

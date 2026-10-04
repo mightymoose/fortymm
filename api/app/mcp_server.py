@@ -1828,8 +1828,8 @@ async def enter_event(
     Registration is open only while the tournament is ``published`` (its status *is* its
     window, ADR-0017), for the director too. An event's eligibility rules are judged
     against the entrant's rating on the tournament's ladder (a player with NO rating
-    passes every rule, ADR-0783 §3). Doubles/teams events cannot be entered directly
-    (one
+    fails a rule that sets a lower bound and passes one that does not, #1635).
+    Doubles/teams events cannot be entered directly (one
     row per player, nowhere to seat a partner). Returns the created
     ``TournamentEntrantRead``
     — the ENTRANT (the player, on a director entry, not you), carrying their rating on

@@ -145,6 +145,16 @@ describe('apiToEntryState', () => {
     ).toEqual({ state: 'rating_ineligible', predicateId: 'pr-2', rating: 1650 })
   })
 
+  it('keeps a null rating: an unrated player refused by a minimum-rating rule', () => {
+    expect(
+      apiToEntryState({
+        state: 'rating_ineligible',
+        predicate_id: 'pr-2',
+        rating: null,
+      }),
+    ).toEqual({ state: 'rating_ineligible', predicateId: 'pr-2', rating: null })
+  })
+
   // The wire is untrusted: a `state` from a schema that is not ours must not reach
   // a component whose `switch` would fall through it and render an unnameable card.
   // It degrades to `open` — the server refuses the click with a coded 409 anyway,

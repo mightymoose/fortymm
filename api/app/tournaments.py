@@ -1224,8 +1224,9 @@ async def enter_event(
     tournament's league, and they must satisfy **every** one of them: failing a rule
     (the 1650-rated player entering the "Under 1500" event) is a `409`. A player who
     holds **no rating** on that league — nobody has a rating until they finish a rated
-    match — **passes every rule**, so a brand-new player is not shut out of the
-    beginners' event that exists for them.
+    match — **fails a rule that sets a lower bound** (`>`, `>=`, `=`, or `between` with
+    a minimum) and **passes a rule that sets only an upper bound**, so a brand-new
+    player is not shut out of the beginners' event that exists for them.
 
     Entering an event the player is already in is a `409`; withdrawing first frees them
     to enter it again. Entering an event that already holds its `max_players`

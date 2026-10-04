@@ -47,8 +47,8 @@ export function buildTournamentTable(
  * — not the player's.
  *
  * `rating: null` is the *unrated* entrant (ADR-0783 §3): the server resolved that
- * this player holds no rating on the tournament's league, so they pass every rating
- * rule and the roster marks them. It is a state a fixture asks for explicitly —
+ * this player holds no rating on the tournament's league, so a cap admits them, a
+ * floor refuses them (#1635), and the roster marks them. It is a state a fixture asks for explicitly —
  * rated is the ordinary case. */
 export function buildTournamentEntrantRead(
   overrides: Partial<TournamentEntrantRead> = {},

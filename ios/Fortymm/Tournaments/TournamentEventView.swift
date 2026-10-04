@@ -197,7 +197,7 @@ struct TournamentEventView: View {
                 Text("Eligibility").font(FMFont.ui(20, weight: .bold))
                 if let predicates = event.predicates, !predicates.isEmpty {
                     ForEach(predicates) { Text($0.label) }
-                    Text("Unrated players satisfy rating restrictions. Registration and capacity limits still apply.").foregroundStyle(FMColor.fg3)
+                    Text("Unrated players cannot enter if a rule sets a minimum or exact rating. Registration and capacity limits still apply.").foregroundStyle(FMColor.fg3)
                 } else { Text("No rating restrictions.") }
             }.font(FMFont.ui(14))
         }

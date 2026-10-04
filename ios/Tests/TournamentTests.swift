@@ -232,6 +232,20 @@ private final class TestLocationManager: CLLocationManager {
         precondition(empty.rosterEmptyMessage == "No players entered yet.")
         TournamentTransport.body = activeBody
         print("PASS: empty roster copy distinguishes held hidden registrations from no entries")
+        var ineligibleEventPayload = emptyEvent
+        ineligibleEventPayload["predicates"] = [["id": "rating-floor", "field": "rating", "op": ">=", "value": 2800]]
+        ineligibleEventPayload["entry_state"] = ["state": "rating_ineligible", "predicate_id": "rating-floor", "rating": NSNull()]
+        retainedPayload[0]["events"] = [ineligibleEventPayload]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: retainedPayload), encoding: .utf8)!
+        let ineligibleUnrated = try await service.list()[0].events[0]
+        precondition(ineligibleUnrated.ineligibilityMessage == "Rating ≥ 2800. You have no rating yet.", "An unrated player refused by a minimum rating needs the no-rating reason, got \(ineligibleUnrated.ineligibilityMessage)")
+        ineligibleEventPayload["entry_state"] = ["state": "rating_ineligible", "predicate_id": "rating-floor", "rating": 1662.4]
+        retainedPayload[0]["events"] = [ineligibleEventPayload]
+        TournamentTransport.body = String(data: try JSONSerialization.data(withJSONObject: retainedPayload), encoding: .utf8)!
+        let ineligibleRated = try await service.list()[0].events[0]
+        precondition(ineligibleRated.ineligibilityMessage == "Rating ≥ 2800. Your rating is 1662.", "A rated player keeps the rating reason, got \(ineligibleRated.ineligibilityMessage)")
+        TournamentTransport.body = activeBody
+        print("PASS: ineligible reason names the rating, or says an unrated player has none")
         var retiredEventPayload = emptyEvent
         retiredEventPayload["entry_state"] = ["state": "retired"]
         retainedPayload[0]["events"] = [retiredEventPayload]

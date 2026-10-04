@@ -29,7 +29,7 @@ const MAX_VISIBLE = 8
  * The mark on an entrant who holds **no rating on the tournament's ladder**
  * (`isUnrated`, `../../data/helpers`) — the visible half of ADR-0783 §3.
  *
- * It is there because an unrated player **passes every rating rule**: `rating <
+ * It is there because an unrated player **passes a cap**: `rating <
  * 1500` admits someone who holds no rating at all, since the alternative locks a
  * beginner out of the beginners' event. The accepted cost is that a rating cap
  * becomes **opt-out** — a sandbagger's best move is to never play a rated match and
