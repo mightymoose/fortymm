@@ -213,6 +213,17 @@ enum MatchAPI {
         return id
     }
 
+    /// Complete an **unrated** match in one POST: an unrated result self-accepts,
+    /// so no standing result is left to read back (the reason `proposeResult`
+    /// throws for these). Returns once the API says `201`; the match is final.
+    static func completeUnratedMatch(proposer: APITestGuest, matchId: UUID, games: [ResultGame]) async throws {
+        struct Body: Encodable { let games: [ResultGame] }
+        _ = try await send(
+            "POST", "/v1/matches/\(matchId.uuidString)/results",
+            body: Body(games: games), guest: proposer, expect: 201
+        )
+    }
+
     // MARK: - Wire mechanics
 
     /// A single verb request that requires a specific success status, mirroring
