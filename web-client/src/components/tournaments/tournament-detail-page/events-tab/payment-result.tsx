@@ -23,7 +23,7 @@ export function PaymentResult({
   payment: Payment
   onDone: () => void
   /** Open the receipt page, offered once the payment succeeded (#1810). */
-  onViewReceipt?: (paymentId: string) => void
+  onViewReceipt?: (paymentId: string, options?: { replace?: boolean }) => void
 }) {
   const review = payment.state === 'needs_review'
   const allAdmitted = !review && payment.lines.every((line) => line.outcome === 'admitted')

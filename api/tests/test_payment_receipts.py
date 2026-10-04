@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 from httpx import AsyncClient
 from rq import Queue
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from app import email
@@ -471,3 +471,55 @@ async def test_erasing_the_survivor_of_a_merge_erases_the_transferred_payments_a
     await db_session.refresh(checkout)
     assert (checkout.receipt_address, payment.receipt_address) == (None, None)
     assert payment.receipt_address_erased_at is not None
+
+
+async def test_an_erasure_cannot_complete_while_the_receipt_email_is_being_sent(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    engine: AsyncEngine,
+    postgres_url: str,
+) -> None:
+    """The job reads the address and then talks to SMTP. If an erasure could
+    commit in between, the email would go to an address already reported erased.
+    So the job keeps a read lock on the payment row until the send returns. A
+    separate connection tries the erasure from inside the send."""
+    import asyncio
+    import threading
+
+    from sqlalchemy.exc import DBAPIError
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from app.receipt_addresses import erase_receipt_address
+
+    _payer, _owner, _provider, payment = await _paid_checkout(
+        api_client, db_session, monkeypatch, receipt_address="receipts@example.com"
+    )
+    outcome: list[str] = []
+
+    def try_to_erase_during_the_send(**_kwargs: str) -> None:
+        async def attempt() -> None:
+            other = create_async_engine(postgres_url, poolclass=NullPool)
+            try:
+                async with AsyncSession(other) as session:
+                    await session.execute(text("SET LOCAL lock_timeout = '400ms'"))
+                    await erase_receipt_address(
+                        session, checkout_id=payment.checkout_id
+                    )
+                    await session.commit()
+                outcome.append("erased")
+            except DBAPIError:
+                outcome.append("blocked")
+            finally:
+                await other.dispose()
+
+        worker = threading.Thread(target=lambda: asyncio.run(attempt()))
+        worker.start()
+        worker.join()
+
+    monkeypatch.setattr(email, "_deliver", try_to_erase_during_the_send)
+
+    await _run_receipt_job(engine, payment)
+
+    assert outcome == ["blocked"]

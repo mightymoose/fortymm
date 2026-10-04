@@ -55,7 +55,7 @@ export interface CheckoutPanelProps {
   onDone: () => void
   /** Open the receipt page of a succeeded payment (#1810). The panel calls it
    * once the payment succeeded, and the result keeps a button to it. */
-  onViewReceipt?: (paymentId: string) => void
+  onViewReceipt?: (paymentId: string, options?: { replace?: boolean }) => void
 }
 
 /**
@@ -118,7 +118,10 @@ export function CheckoutPanel({
   })
   const succeededPaymentId = payment?.state === 'succeeded' ? payment.id : undefined
   useEffect(() => {
-    if (succeededPaymentId !== undefined) viewReceiptRef.current?.(succeededPaymentId)
+    // Replace: the panel's own history entry must not sit behind the receipt.
+    if (succeededPaymentId !== undefined) {
+      viewReceiptRef.current?.(succeededPaymentId, { replace: true })
+    }
   }, [succeededPaymentId])
   const active = checkout.status === 'active'
 

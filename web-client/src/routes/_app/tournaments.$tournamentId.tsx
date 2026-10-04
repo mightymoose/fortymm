@@ -221,13 +221,15 @@ function TournamentDetailRoute() {
       }}
       // Which checkout the Events tab's panel shows (#1809). A replace, never a
       // push: Back leaves the page rather than stepping through checkout states.
-      // The receipt is the durable result of a paid checkout (#1810). A replace,
-      // so Back does not return to a panel that would send the player straight on.
-      onViewReceipt={(paymentId) => {
+      // The receipt is the durable result of a paid checkout (#1810). The
+      // automatic redirect after success asks for a replace, so Back does not
+      // return to a panel that would send the player straight on. A deliberate
+      // click on a listed receipt pushes, so Back returns to the tournament.
+      onViewReceipt={(paymentId, options) => {
         void navigate({
           to: '/payments/$paymentId/receipt',
           params: { paymentId },
-          replace: true,
+          replace: options?.replace ?? false,
         })
       }}
       checkoutParam={search.checkout}

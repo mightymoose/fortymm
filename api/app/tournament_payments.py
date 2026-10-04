@@ -1218,14 +1218,20 @@ async def _execute_receipt_email(
     """Read the payment, and send nothing unless it succeeded and still holds
     a receipt address. The address is read here, at send time, so an erasure
     since the enqueue suppresses the email. The wording is combined when the
-    payer's ``tournament`` email cell is on, and receipt-only when it is off."""
+    payer's ``tournament`` email cell is on, and receipt-only when it is off.
+
+    The payment row stays share-locked until the send returns. An erasure takes
+    the same row's update lock, so it waits for the send, and a completed
+    erasure is never followed by an email to the erased address."""
     from app import email
     from app.notifications.service import effective_channels
     from app.notifications.taxonomy import NotificationCategory, NotificationChannel
 
     async with sessionmaker() as db:
         payment = await db.scalar(
-            select(TournamentPayment).where(TournamentPayment.id == payment_id)
+            select(TournamentPayment)
+            .where(TournamentPayment.id == payment_id)
+            .with_for_update(read=True)
         )
         if (
             payment is None
@@ -1247,19 +1253,21 @@ async def _execute_receipt_email(
             NotificationCategory.TOURNAMENT,
             [NotificationChannel.EMAIL],
         )
-        to_email = payment.receipt_address
-        lines = [
-            (names[line.event_id], line.price_cents, _line_outcome_text(line.outcome))
-            for line in payment.lines
-        ]
-        reference = payment.reference
-        total_cents = payment.amount_cents
         headline = _admission_headline([line.outcome for line in payment.lines])
-    email.send_payment_receipt_email(
-        to_email,
-        reference=reference,
-        lines=lines,
-        total_cents=total_cents,
-        receipt_link=f"/payments/{payment_id}/receipt",
-        admission_headline=headline if NotificationChannel.EMAIL in channels else None,
-    )
+        email.send_payment_receipt_email(
+            payment.receipt_address,
+            reference=payment.reference,
+            lines=[
+                (
+                    names[line.event_id],
+                    line.price_cents,
+                    _line_outcome_text(line.outcome),
+                )
+                for line in payment.lines
+            ],
+            total_cents=payment.amount_cents,
+            receipt_link=f"/payments/{payment_id}/receipt",
+            admission_headline=(
+                headline if NotificationChannel.EMAIL in channels else None
+            ),
+        )

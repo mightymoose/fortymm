@@ -838,6 +838,33 @@ describe('tournament detail route — the Stripe return URL (#1809)', () => {
     expect(world.calls.log).toEqual(['status'])
   })
 
+  it('pushes history when a listed receipt is opened, so Back returns to the tournament', async () => {
+    mockTournament()
+    const paymentId = mockUuid('route-test-listed-receipt')
+    server.use(
+      http.get(`*/v1/tournaments/${UNKNOWN_ID}/payments`, () =>
+        HttpResponse.json([
+          {
+            id: paymentId,
+            reference: 'PAY-7K3M9QX2',
+            amount_cents: 7_500,
+            created_at: new Date().toISOString(),
+            event_names: ['Open Singles'],
+          },
+        ]),
+      ),
+    )
+    const user = userEvent.setup()
+
+    const { router } = renderRoute(`/tournaments/${UNKNOWN_ID}?tab=events`)
+    await user.click(await screen.findByRole('link', { name: /Open Singles · \$75\.00/ }))
+
+    expect(await screen.findByText('receipt page')).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe(`/payments/${paymentId}/receipt`)
+    // Pushed, not replaced: the tournament page is still one step back.
+    expect(router.history.length).toBe(2)
+  })
+
   it('keeps a malformed `?checkout=` from closing an open editor', async () => {
     const EVENT_ID = mockUuid('route-test-return-url-event')
     server.use(

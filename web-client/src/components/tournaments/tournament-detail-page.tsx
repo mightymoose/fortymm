@@ -97,7 +97,7 @@ export interface TournamentDetailPageProps {
   checkoutParam?: string
   onCheckoutParamChange?: (checkoutId: string | undefined) => void
   /** Open the receipt page of a succeeded payment (#1810). */
-  onViewReceipt?: (paymentId: string) => void
+  onViewReceipt?: (paymentId: string, options?: { replace?: boolean }) => void
 }
 
 /**

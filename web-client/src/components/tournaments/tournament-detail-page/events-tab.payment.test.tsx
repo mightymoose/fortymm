@@ -47,7 +47,7 @@ const tournament = () =>
 function renderCheckoutTab({
   checkoutParam,
   onViewReceipt,
-}: { checkoutParam?: string; onViewReceipt?: (paymentId: string) => void } = {}) {
+}: { checkoutParam?: string; onViewReceipt?: (paymentId: string, options?: { replace?: boolean }) => void } = {}) {
   const url = { param: checkoutParam }
   function Harness() {
     const [param, setParam] = useState(checkoutParam)
@@ -457,10 +457,13 @@ describe('EventsTab checkout and payment (#1809)', () => {
       const checkout = await panel()
       await within(checkout).findByRole('heading', { name: 'You’re entered' })
       await waitFor(() => expect(onViewReceipt).toHaveBeenCalledTimes(1))
-      expect(onViewReceipt).toHaveBeenCalledWith(payment.id)
+      // The automatic redirect replaces the panel's history entry.
+      expect(onViewReceipt).toHaveBeenCalledWith(payment.id, { replace: true })
 
       await user.click(within(checkout).getByRole('button', { name: 'View receipt' }))
       expect(onViewReceipt).toHaveBeenCalledTimes(2)
+      // A deliberate click is an ordinary navigation: no options, so it pushes.
+      expect(onViewReceipt).toHaveBeenLastCalledWith(payment.id)
     })
 
     it('shows a mixed outcome per event, with no overall success message', async () => {

@@ -14,7 +14,7 @@ export function YourReceipts({
 }: {
   tournamentId: string
   /** Open the receipt inside the app. Without it, the link is an ordinary one. */
-  onViewReceipt?: (paymentId: string) => void
+  onViewReceipt?: (paymentId: string, options?: { replace?: boolean }) => void
 }) {
   const payments = useMyTournamentPayments(tournamentId)
   if (!payments.data || payments.data.length === 0) return null

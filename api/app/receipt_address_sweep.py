@@ -22,7 +22,6 @@ from app.models import (
     TournamentEvent,
     TournamentPayment,
     TournamentPaymentRefundObligation,
-    TournamentPaymentStatus,
 )
 from app.receipt_addresses import erase_receipt_address
 
@@ -77,12 +76,9 @@ async def _end_milestone(db: AsyncSession, tournament_id: uuid.UUID) -> datetime
 
 
 async def _payments_are_resolved(db: AsyncSession, tournament_id: uuid.UUID) -> bool:
-    """No payment of the tournament owes a refund or sits in quarantine.
-
-    Nothing marks a refund obligation as settled until #1813 executes refunds,
-    so until then any obligation counts as unresolved. A quarantined payment is
-    unresolved too, because its refund may not be recorded yet (amount
-    unverified)."""
+    """No payment of the tournament owes a refund, or may owe one it could not
+    verify. Unlocked, so only a first filter: the erase rechecks each payment
+    under its own lock. A quarantine that captured nothing owes nothing."""
     owes = await db.scalar(
         select(TournamentPayment.id)
         .outerjoin(
@@ -93,7 +89,7 @@ async def _payments_are_resolved(db: AsyncSession, tournament_id: uuid.UUID) -> 
             TournamentPayment.tournament_id == tournament_id,
             or_(
                 TournamentPaymentRefundObligation.id.is_not(None),
-                TournamentPayment.status == TournamentPaymentStatus.quarantined,
+                TournamentPayment.amount_unverified.is_(True),
             ),
         )
         .limit(1)
@@ -123,16 +119,20 @@ async def sweep_receipt_addresses(
             continue
         checkout_ids = list(
             await db.scalars(
-                select(TournamentCheckout.id).where(
+                select(TournamentCheckout.id)
+                .where(
                     TournamentCheckout.tournament_id == tournament_id,
                     TournamentCheckout.receipt_address.is_not(None),
                 )
+                .order_by(TournamentCheckout.id)
             )
         )
         for checkout_id in checkout_ids:
-            await erase_receipt_address(db, checkout_id=checkout_id)
+            if await erase_receipt_address(
+                db, checkout_id=checkout_id, only_if_resolved=True
+            ):
+                erased += 1
         await db.commit()
-        erased += len(checkout_ids)
     logger.info("Receipt-address sweep: erased %d addresses", erased)
     return erased
 
