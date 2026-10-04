@@ -127,6 +127,11 @@ class TournamentCheckout(Base):
     #: never sent to the payment provider, never logged, never in any
     #: non-payer response. ``NULL`` means no receipt email.
     receipt_address: Mapped[str | None] = mapped_column(String(320))
+    #: Set when the receipt address was erased (#1810). The setter refuses a new
+    #: address once it is set, so nothing writes an erased address back.
+    receipt_address_erased_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
     tournament: Mapped["Tournament"] = relationship()
     lines: Mapped[list["TournamentCheckoutLine"]] = relationship(

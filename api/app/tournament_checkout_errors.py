@@ -20,6 +20,9 @@ class CheckoutRefusal(StrEnum):
     #: The receipt address PATCH (#1809), refused once the checkout's payment
     #: has succeeded: the receipt snapshot is already taken and must not move.
     payment_already_succeeded = "payment_already_succeeded"
+    #: The receipt address PATCH (#1810), refused with a new address once the
+    #: address was erased. Clearing stays allowed.
+    receipt_address_erased = "receipt_address_erased"
 
 
 class CheckoutRefusedError(Exception):

@@ -308,26 +308,30 @@ async def test_the_sweep_and_account_erasure_lock_checkouts_in_id_order(
 
 
 @pytest.mark.parametrize(
-    "in_flight",
+    "unsettled",
     [
-        TournamentPaymentStatus.cancel_requested,
-        TournamentPaymentStatus.checking,
         TournamentPaymentStatus.preparing,
+        TournamentPaymentStatus.ready,
+        TournamentPaymentStatus.action_required,
+        TournamentPaymentStatus.checking,
+        TournamentPaymentStatus.expired,
+        TournamentPaymentStatus.cancel_requested,
     ],
 )
 async def test_a_payment_that_may_still_capture_money_keeps_the_address(
     api_client: AsyncClient,
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
-    in_flight: TournamentPaymentStatus,
+    unsettled: TournamentPaymentStatus,
 ) -> None:
-    """A cancel is best-effort and a processing payment is Stripe's to finish, so
-    either can still succeed after the sweep. Its late success would snapshot an
-    erased address and send no receipt email."""
+    """Financial resolution means every payment is terminal. A payment that is not
+    can still succeed after the sweep: a cancel is best-effort, a processing
+    payment is Stripe's to finish, and an expired one is deliberately not
+    terminal. Its late success would snapshot an erased address."""
     payment = await _archived_quarantine(
         api_client, db_session, monkeypatch, amount_unverified=False
     )
-    payment.status = in_flight
+    payment.status = unsettled
     await db_session.commit()
 
     assert await sweep_receipt_addresses(db_session, now=await _in_days(400)) == 0
@@ -365,3 +369,35 @@ async def test_the_sweep_holds_the_tournament_lock_while_it_checks_and_erases(
             assert not sweep.done(), "the sweep did not wait for the tournament lock"
             await gatekeeper.rollback()
             assert await asyncio.wait_for(sweep, timeout=10) == 1
+
+
+async def test_an_erased_checkout_refuses_a_new_address_but_still_clears(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A checkout without a succeeded payment has no payment tombstone, and the
+    payer may still PATCH its address. Without its own erasure state, the same
+    PATCH would write the erased address back after the sweep or an account
+    erasure (including one that was waiting on the lock)."""
+    from app.receipt_addresses import erase_receipt_address
+
+    _payer, _owner, _provider, payment = await _paid_checkout(
+        api_client, db_session, monkeypatch, succeed=False, receipt_address=ADDRESS
+    )
+    await erase_receipt_address(db_session, checkout_id=payment.checkout_id)
+    await db_session.commit()
+    path = f"/v1/tournaments/{payment.tournament_id}/checkouts/{payment.checkout_id}"
+
+    refused = await api_client.patch(
+        path, json={"receipt_address": "again@example.com"}
+    )
+    cleared = await api_client.patch(path, json={"receipt_address": None})
+
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["code"] == "receipt_address_erased"
+    assert cleared.status_code == 200
+    checkout = await db_session.get(TournamentCheckout, payment.checkout_id)
+    assert checkout is not None
+    await db_session.refresh(checkout)
+    assert checkout.receipt_address is None

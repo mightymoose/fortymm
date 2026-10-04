@@ -19,24 +19,25 @@ from app.models import (
     TournamentPaymentRefundObligation,
     TournamentPaymentStatus,
 )
+from app.tournament_payment_state import TERMINAL_PAYMENT_STATUSES
 
-#: Statuses in which money may still move. A cancel is best-effort, a processing
-#: payment is Stripe's to finish, and a create may have gone through unseen: any
-#: of them can still succeed. Erasing the address first would make that late
-#: success snapshot nothing, and send no receipt.
-IN_FLIGHT_PAYMENT_STATUSES = (
-    TournamentPaymentStatus.preparing,
-    TournamentPaymentStatus.checking,
-    TournamentPaymentStatus.cancel_requested,
+#: Statuses a payment can still leave. Financial resolution means every payment
+#: is terminal: a cancel is best-effort, a processing payment is Stripe's to
+#: finish, and ``expired`` is deliberately not terminal (a late success can
+#: still land). Erasing the address first would make that late success snapshot
+#: nothing. #1817's background reconciliation settles abandoned payments.
+UNSETTLED_PAYMENT_STATUSES = tuple(
+    status
+    for status in TournamentPaymentStatus
+    if status not in TERMINAL_PAYMENT_STATUSES
 )
 
 
 async def payment_is_resolved(db: AsyncSession, payment: TournamentPayment) -> bool:
-    """The payment owes nobody a refund, no refund is hiding behind an
-    unverified amount, and no money is still in flight. Nothing marks an
-    obligation settled until #1813 executes refunds, so until then any
-    obligation counts as unresolved."""
-    if payment.amount_unverified or payment.status in IN_FLIGHT_PAYMENT_STATUSES:
+    """The payment is terminal, owes nobody a refund, and hides no refund behind
+    an unverified amount. Nothing marks an obligation settled until #1813
+    executes refunds, so until then any obligation counts as unresolved."""
+    if payment.amount_unverified or payment.status in UNSETTLED_PAYMENT_STATUSES:
         return False
     obligation = await db.scalar(
         select(TournamentPaymentRefundObligation.id)
@@ -53,8 +54,9 @@ async def erase_receipt_address(
 
     Idempotent. Takes the checkout lock, then the payment lock: the same order
     every payment writer uses, so it cannot deadlock with admission. A payment
-    that has not succeeded keeps no tombstone, because the payer may still set
-    a new address on that checkout until success. Does not commit.
+    that has not succeeded keeps no payment tombstone. The checkout always gets
+    one, which is what stops a later PATCH from writing the address back. Does
+    not commit.
 
     ``only_if_resolved`` is for the daily sweep. It rechecks, under both locks,
     that the payment owes no refund: reconciliation can record one between the
@@ -77,7 +79,12 @@ async def erase_receipt_address(
     if only_if_resolved and payment is not None:
         if not await payment_is_resolved(db, payment):
             return False
+    # The checkout's own tombstone: its setter refuses a new address once this is
+    # set, so a PATCH cannot write the address back, even one that was waiting
+    # on the lock this erase held.
     checkout.receipt_address = None
+    if checkout.receipt_address_erased_at is None:
+        checkout.receipt_address_erased_at = await database_now(db)
     if payment is None or payment.status is not TournamentPaymentStatus.succeeded:
         return True
     payment.receipt_address = None

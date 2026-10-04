@@ -23,7 +23,7 @@ from app.models import (
     TournamentPayment,
     TournamentPaymentRefundObligation,
 )
-from app.receipt_addresses import IN_FLIGHT_PAYMENT_STATUSES, erase_receipt_address
+from app.receipt_addresses import UNSETTLED_PAYMENT_STATUSES, erase_receipt_address
 from app.tournament_authority import lock_tournament
 
 logger = logging.getLogger(__name__)
@@ -77,9 +77,9 @@ async def _end_milestone(db: AsyncSession, tournament_id: uuid.UUID) -> datetime
 
 
 async def _payments_are_resolved(db: AsyncSession, tournament_id: uuid.UUID) -> bool:
-    """No payment of the tournament owes a refund, may owe one it could not
-    verify, or has money still in flight. A quarantine that captured nothing
-    owes nothing. Callers hold the tournament lock, the one reconciliation takes
+    """Every payment of the tournament is terminal, owes no refund, and hides
+    none behind an unverified amount. A quarantine that captured nothing owes
+    nothing. Callers hold the tournament lock, the one reconciliation takes
     before it records a refund."""
     owes = await db.scalar(
         select(TournamentPayment.id)
@@ -92,7 +92,7 @@ async def _payments_are_resolved(db: AsyncSession, tournament_id: uuid.UUID) -> 
             or_(
                 TournamentPaymentRefundObligation.id.is_not(None),
                 TournamentPayment.amount_unverified.is_(True),
-                TournamentPayment.status.in_(IN_FLIGHT_PAYMENT_STATUSES),
+                TournamentPayment.status.in_(UNSETTLED_PAYMENT_STATUSES),
             ),
         )
         .limit(1)

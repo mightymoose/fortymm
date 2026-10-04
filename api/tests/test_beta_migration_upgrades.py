@@ -623,7 +623,8 @@ async def test_receipt_erasure_migration_backfills_addresses_of_erased_accounts(
                     text(
                         """
                         SELECT p.payer_account_id, p.receipt_address,
-                               c.receipt_address, p.receipt_address_erased_at
+                               c.receipt_address, p.receipt_address_erased_at,
+                               c.receipt_address_erased_at
                         FROM tournament_payments p
                         JOIN tournament_checkouts c ON c.id = p.checkout_id
                         """
@@ -635,4 +636,10 @@ async def test_receipt_erasure_migration_backfills_addresses_of_erased_accounts(
     kept = by_account[accounts[1]]
     assert (erased[1], erased[2]) == (None, None)
     assert erased[3] is not None
-    assert (kept[1], kept[2], kept[3]) == ("old@example.com", "old@example.com", None)
+    assert erased[4] is not None
+    assert (kept[1], kept[2], kept[3], kept[4]) == (
+        "old@example.com",
+        "old@example.com",
+        None,
+        None,
+    )
