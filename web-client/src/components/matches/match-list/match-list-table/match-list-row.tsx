@@ -34,7 +34,7 @@ export interface MatchListRowView {
   shortLabel: string
   /** True for in_progress rows — adds the is-live class (the orange rail). */
   isLive: boolean
-  /** aria-label for the clickable row, e.g. 'Open match: a & b vs No opponent'. Pre-built from the two side labels. */
+  /** aria-label for the clickable row, e.g. 'Open match: a & b vs Unlisted opponent'. Pre-built from the two side labels. */
   ariaLabel: string
   side1: PlayerChipView
   side2: PlayerChipView

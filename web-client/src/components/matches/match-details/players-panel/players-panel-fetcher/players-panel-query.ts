@@ -1,5 +1,6 @@
 import { fmtDateShort, fmtDateTimeShort } from "@/lib/dates";
 import { initialsOf } from "@/lib/utils";
+import { UNLISTED_OPPONENT_LABEL } from "@/components/matches/unlisted-opponent-label";
 
 import {
   matchDetailsQuery,
@@ -12,7 +13,7 @@ export type FormRowView = {
   /** The past match's id — used as the list key; rows don't link anywhere. */
   matchId: string;
   won: boolean;
-  /** That match's opponent username, or "No opponent" when it had none. */
+  /** That match's opponent username, or "Unlisted opponent" when it had none. */
   opponentLabel: string;
   /** When the past match completed, e.g. "May 9". */
   dateLabel: string;
@@ -72,7 +73,7 @@ export type PlayerProfileView = {
 /** The "Players · going into this match" panel. Sides are perspective-ordered
  * like the scoreboard: the viewer's side reads left when they're a
  * participant, otherwise side 1 is left. A null side is a missing opponent —
- * no second side, or a playerless ghost side — rendered as the "No opponent"
+ * no second side, or a playerless ghost side — rendered as the "Unlisted opponent"
  * placeholder. */
 export type PlayersPanelView = {
   /** When these numbers were captured (match creation),
@@ -111,7 +112,7 @@ const careerWinRate = (form: PlayerFormFacts): number | null =>
 const selectFormRow = (result: MatchDetailsFormResult): FormRowView => ({
   matchId: result.match_id,
   won: result.is_win,
-  opponentLabel: result.opponent_username ?? "No opponent",
+  opponentLabel: result.opponent_username ?? UNLISTED_OPPONENT_LABEL,
   dateLabel: fmtDateShort(result.completed_at),
   scoreLabel: `${result.player_games_won}–${result.opponent_games_won}`,
 });

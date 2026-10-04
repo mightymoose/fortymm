@@ -167,7 +167,9 @@ function MatchCard() {
         <div className="nm-section-head">
           <span className="title">Opponent</span>
           <span className="hint">
-            {opponent ? 'Rated-eligible' : 'Optional · leave blank for a solo match'}
+            {opponent
+              ? 'Rated-eligible'
+              : "Optional · leave blank if your opponent isn't on FortyMM"}
           </span>
         </div>
 

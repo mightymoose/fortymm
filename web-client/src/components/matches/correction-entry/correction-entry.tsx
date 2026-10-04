@@ -17,10 +17,7 @@ import {
   validateGameScore,
 } from "../score-pad/validate-game-score";
 import { CorrectionScoreline } from "./correction-scoreline";
-
-// Placeholder identity for a player-less (solo) opponent side, mirroring the
-// scratchpad entry screen so the correction board reads the same.
-const NO_OPPONENT_LABEL = "No opponent";
+import { UNLISTED_OPPONENT_LABEL } from "../unlisted-opponent-label";
 
 /** The one inline red error line this screen uses for its several mutually-
  * exclusive messages (API error, connection failure, board hint) — one place to
@@ -141,7 +138,7 @@ export function CorrectionEntry({ matchId }: { matchId: string }) {
   const meName = mySide.players[0]?.username ?? "You";
   const meInitials = initialsOf(meName);
   const oppUsername = oppSide.players[0]?.username ?? null;
-  const oppName = oppUsername ?? NO_OPPONENT_LABEL;
+  const oppName = oppUsername ?? UNLISTED_OPPONENT_LABEL;
   const oppHasPlayer = oppUsername !== null;
 
   // The proposer editing their own still-pending proposal (reached via the

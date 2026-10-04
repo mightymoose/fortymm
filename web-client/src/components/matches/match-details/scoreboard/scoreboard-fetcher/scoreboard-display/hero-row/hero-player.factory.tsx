@@ -14,12 +14,12 @@ export function buildHeroSideView(
   };
 }
 
-/** A ghost "No opponent" side — the dashed placeholder for a solo match. */
+/** A ghost "Unlisted opponent" side — the dashed placeholder for a solo match. */
 export function buildGhostHeroSideView(
   overrides: Partial<HeroSideView> = {},
 ): HeroSideView {
   return {
-    name: "No opponent",
+    name: "Unlisted opponent",
     initials: "NO",
     isGhost: true,
     won: false,

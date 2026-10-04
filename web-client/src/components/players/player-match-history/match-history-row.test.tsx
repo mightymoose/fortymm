@@ -115,16 +115,16 @@ describe('MatchHistoryRow', () => {
   it('does NOT link a solo match to a PLAYER — there is nobody to link to', async () => {
     // `id` is null exactly for the player-less sentinel side, so a link built from
     // it would point at `/players/null` and land the reader on a not-found page.
-    // "No opponent" is an absence, not a person: plain text. The row still opens
+    // "Unlisted opponent" has no profile to open: plain text. The row still opens
     // its match — that is the one link it has.
     matchHistoryRowPage.render({ match: buildSoloMatchRow() })
-    await matchHistoryRowPage.findRow('No opponent')
+    await matchHistoryRowPage.findRow('Unlisted opponent')
 
-    expect(matchHistoryRowPage.queryOpponentLink('No opponent')).toBeNull()
-    expect(matchHistoryRowPage.getRow('No opponent').innerHTML).not.toContain(
+    expect(matchHistoryRowPage.queryOpponentLink('Unlisted opponent')).toBeNull()
+    expect(matchHistoryRowPage.getRow('Unlisted opponent').innerHTML).not.toContain(
       '/players/',
     )
-    expect(matchHistoryRowPage.getRowLinks('No opponent')).toHaveLength(1)
+    expect(matchHistoryRowPage.getRowLinks('Unlisted opponent')).toHaveLength(1)
   })
 
   it('links a solo match too, named "Solo match" (ADR-0008)', async () => {
@@ -132,12 +132,12 @@ describe('MatchHistoryRow', () => {
     // match, so it opens. Nobody is "against" it, so the label doesn't pretend.
     const id = 'c1e5a70b-3d46-4b92-a0f7-8e2d1c9b4f60'
     matchHistoryRowPage.render({ match: buildSoloMatchRow({ id }) })
-    await matchHistoryRowPage.findRow('No opponent')
+    await matchHistoryRowPage.findRow('Unlisted opponent')
 
-    const link = matchHistoryRowPage.getDetailLink('No opponent')
+    const link = matchHistoryRowPage.getDetailLink('Unlisted opponent')
     expect(link).toHaveAttribute('href', `/matches/${id}`)
     expect(link.getAttribute('aria-label')).toMatch(/^Solo match, /)
-    expect(link.getAttribute('aria-label')).not.toContain('No opponent')
+    expect(link.getAttribute('aria-label')).not.toContain('Unlisted opponent')
   })
 
   it('renders one score chip per game, from the player’s perspective', async () => {

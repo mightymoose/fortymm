@@ -115,7 +115,7 @@ describe('projectAttentionPanelView', () => {
     })
   })
 
-  it('builds the headline from the opponent handle, falling back to "No opponent"', () => {
+  it('builds the headline from the opponent handle, falling back to "Unlisted opponent"', () => {
     const view = projectAttentionPanelView(
       [
         dashboardAttentionItem({ opponent_username: 'lively.otter' }),
@@ -125,7 +125,7 @@ describe('projectAttentionPanelView', () => {
     )
 
     expect(view.rows[0].headline).toBe('vs lively.otter')
-    expect(view.rows[1].headline).toBe('No opponent')
+    expect(view.rows[1].headline).toBe('Unlisted opponent')
   })
 
   it('carries a parsed retirement deadline onto the row', () => {

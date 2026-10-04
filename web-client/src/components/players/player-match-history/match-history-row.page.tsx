@@ -32,7 +32,7 @@ const opponentCellOf = (container: Container, opponent: string) =>
   cellsOf(container, opponent)[1]
 
 const scoped = (container: Container) => ({
-  /** One match's row, by opponent ("No opponent" for a solo match). */
+  /** One match's row, by opponent ("Unlisted opponent" for a solo match). */
   getRow(opponent: string) {
     return rowOf(container, opponent)
   },

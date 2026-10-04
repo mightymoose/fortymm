@@ -78,7 +78,7 @@ export function buildPlayerMatchPage(
 /**
  * The all-inclusive mix the history is required to show (ADR-0008): a live
  * match, one awaiting acceptance, an up-next one, a voided one, a loss, and the
- * player-less solo sentinel that renders as "No opponent". Nothing here may be
+ * player-less solo sentinel that renders as "Unlisted opponent". Nothing here may be
  * filtered out of the table.
  */
 export function buildMixedStatusMatchRows(): PlayerMatchRow[] {

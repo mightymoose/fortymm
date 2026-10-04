@@ -139,10 +139,12 @@ _Avoid_: casual match, friendly (a friendly is one *kind* of unrated match, not 
 synonym).
 
 **Solo match**:
-An unrated match with no opponent — the player records their own games against a
-player-less second side. Rendered as "No opponent" in a match list, and always
-unrated (a rated match needs an opponent). Its empty second side is a structural
-sentinel, not an absence to be filtered away.
+An unrated match whose opponent has no FortyMM account, or that the player played
+alone. The player records the games against a player-less second side. Rendered
+as "Unlisted opponent", and always unrated (a rated match needs a registered
+opponent). Its result is real: a solo loss counts in career stats like any other
+unrated loss (#1522). Its empty second side is a structural sentinel, not an
+absence to be filtered away.
 _Avoid_: practice match, single-player match, self match.
 
 **Match history**:

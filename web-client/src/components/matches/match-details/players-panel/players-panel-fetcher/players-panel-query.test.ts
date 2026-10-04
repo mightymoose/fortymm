@@ -130,7 +130,7 @@ describe("playersPanelQuery", () => {
     }
   });
 
-  it("labels a form row's missing opponent as No opponent", async () => {
+  it("labels a form row's missing opponent as Unlisted opponent", async () => {
     playersPanelQueryPage.mockEndpoint(() =>
       HttpResponse.json(
         buildMatchDetails({
@@ -149,7 +149,7 @@ describe("playersPanelQuery", () => {
 
     const form = result.current.data?.left?.form;
     if (form?.kind === "history") {
-      expect(form.rows[0].opponentLabel).toBe("No opponent");
+      expect(form.rows[0].opponentLabel).toBe("Unlisted opponent");
     }
     expect(form?.kind).toBe("history");
   });

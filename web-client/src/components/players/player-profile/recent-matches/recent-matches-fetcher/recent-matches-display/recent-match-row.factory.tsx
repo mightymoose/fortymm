@@ -1,8 +1,8 @@
 import { matchDetailRoute } from '@/api/matches'
 import { matchRowAriaLabel } from '@/components/matches/match-row-link/match-row-naming'
+import { UNLISTED_OPPONENT_LABEL } from '@/components/matches/unlisted-opponent-label'
 
 import {
-  NO_OPPONENT,
   type RecentMatchDeltaView,
   type RecentMatchGameView,
   type RecentMatchOpponentView,
@@ -27,11 +27,11 @@ export function buildRecentMatchOpponentView(
 }
 
 /** The **solo** opponent — the player-less sentinel side (ADR-0008). It carries
- * no id, because there is no player behind it: the row must print "No opponent"
+ * no id, because there is no player behind it: the row must print "Unlisted opponent"
  * as plain text rather than link to `/players/null`. (The *row* still links to
  * the match — a solo match is a match.) */
 export function buildSoloOpponentView(): RecentMatchOpponentView {
-  return { kind: 'solo', name: NO_OPPONENT }
+  return { kind: 'solo', name: UNLISTED_OPPONENT_LABEL }
 }
 
 export function buildRecentMatchGameView(

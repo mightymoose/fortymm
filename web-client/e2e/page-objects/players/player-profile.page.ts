@@ -88,7 +88,7 @@ export class PlayerProfilePage {
 
   /**
    * One row of the Recent-matches card, found by who the match was against
-   * ("No opponent" for a solo one) — the way a reader tells rows apart.
+   * ("Unlisted opponent" for a solo one) — the way a reader tells rows apart.
    *
    * A row carries **two** links, to two different places: the row itself opens
    * the match (#989) and the opponent's name opens that player (#1005). The

@@ -7,6 +7,7 @@ import {
 } from '@/api/players'
 import type { MatchDetailRoute } from '@/components/matches/match-row-link/match-row-link'
 import { matchRowAriaLabel } from '@/components/matches/match-row-link/match-row-naming'
+import { UNLISTED_OPPONENT_LABEL } from '@/components/matches/unlisted-opponent-label'
 import {
   emptyRatingDeltaAria,
   formatRatingDelta,
@@ -25,10 +26,6 @@ export const NO_VALUE = '—'
  * can never silently turn the overview into a long table. The full history lives
  * behind the "view all" link, on its own paginated surface. */
 export const RECENT_MATCHES_SHOWN = 6
-
-/** What the Opponent cell reads for a solo match — one with nobody on the other
- * side (ADR-0008). It is a name for an absence, not a player. */
-export const NO_OPPONENT = 'No opponent'
 
 /**
  * What the row's status dot says. With the result chip gone, this dot — and the
@@ -105,7 +102,7 @@ export type RecentMatchDeltaView =
  */
 export type RecentMatchOpponentView =
   | { kind: 'player'; id: string; name: string }
-  | { kind: 'solo'; name: typeof NO_OPPONENT }
+  | { kind: 'solo'; name: typeof UNLISTED_OPPONENT_LABEL }
 
 /**
  * One row of the card — and it carries **two** destinations, on purpose.
@@ -126,7 +123,7 @@ export type RecentMatchOpponentView =
 export type RecentMatchRowView = {
   id: string
   /** The opponent, and whether there is one: a `player` is linked to their
-   * profile, a solo match reads "No opponent" as plain text. */
+   * profile, a solo match reads "Unlisted opponent" as plain text. */
   opponent: RecentMatchOpponentView
   status: RecentMatchStatusView
   score: RecentMatchScoreView
@@ -279,7 +276,7 @@ const selectOpponent = (
 ): RecentMatchOpponentView =>
   opponent.id != null && opponent.username != null
     ? { kind: 'player', id: opponent.id, name: opponent.username }
-    : { kind: 'solo', name: NO_OPPONENT }
+    : { kind: 'solo', name: UNLISTED_OPPONENT_LABEL }
 
 const selectRow = (
   row: PlayerMatchRow,

@@ -146,7 +146,7 @@ export function player(overrides: Partial<Player> = {}): Player {
  * agree on the canonical "rita.kovac vs faker-name" shape. */
 function defaultSides(opponentName: string | null): {
   mySide: MatchDetailsSide
-  // Always present: a real opponent, or the player-less sentinel "No opponent"
+  // Always present: a real opponent, or the player-less sentinel "Unlisted opponent"
   // side that keeps an opponent-less match scorable (mirrors the API).
   opponentSide: MatchDetailsSide
 } {

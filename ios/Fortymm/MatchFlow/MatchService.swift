@@ -338,7 +338,7 @@ struct MatchService {
             userId: mine?.players.first?.userId
         )
         let opponent: MatchPlayer = solo
-            ? .guest
+            ? .unlistedOpponent
             : MatchPlayer(
                 handle: theirName,
                 initials: theirName.fmInitials,
@@ -352,9 +352,9 @@ struct MatchService {
         // spectator row shows both real participants rather than labelling side 1
         // "You". This projection is deliberately viewer-agnostic, so `you` stays
         // false; the viewer-relative `you`/`opponent` fields carry that flag
-        // instead. A player-less side (solo opponent) reads as the Guest sentinel.
+        // instead. A player-less side (solo opponent) reads as the unlisted-opponent sentinel.
         func sidePlayer(_ side: MatchSideDTO?) -> MatchPlayer {
-            guard let p = side?.players.first else { return .guest }
+            guard let p = side?.players.first else { return .unlistedOpponent }
             return MatchPlayer(
                 handle: p.username,
                 initials: p.username.fmInitials,
@@ -413,7 +413,7 @@ struct MatchService {
             scoredGames: scoredGames,
             h2h: h2h.map { mapH2H($0, mineIsSide1: mineIsSide1) },
             sideA: sidePlayer(side1),
-            sideB: (side2?.players.isEmpty ?? true) ? .guest : sidePlayer(side2),
+            sideB: (side2?.players.isEmpty ?? true) ? .unlistedOpponent : sidePlayer(side2),
             sideAGames: side1?.gamesWon ?? 0,
             sideBGames: side2?.gamesWon ?? 0,
             viewerIsParticipant: viewerIsParticipant,

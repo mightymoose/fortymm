@@ -92,8 +92,8 @@ export const RecentOpponents = ({
         <RecentSkeleton />
       ) : players.length === 0 ? (
         <div className="nm-no-match">
-          No opponents yet — use Search to find a player, or start the match
-          without one for a casual solo session.
+          No opponents yet. Use Search to find a player, or leave it blank if
+          your opponent isn't on FortyMM.
         </div>
       ) : (
         <div className="nm-recent-grid">

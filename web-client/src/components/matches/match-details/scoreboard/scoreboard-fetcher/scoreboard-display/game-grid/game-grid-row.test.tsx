@@ -27,7 +27,7 @@ describe("GameGridRow", () => {
   it("renders a ghost row with the placeholder avatar and no initials", async () => {
     gameGridRowPage.render({
       row: buildGameGridRowView({
-        name: "No opponent",
+        name: "Unlisted opponent",
         initials: "NO",
         isGhost: true,
       }),
@@ -35,7 +35,7 @@ describe("GameGridRow", () => {
     });
 
     expect(await gameGridRowPage.findPlayerName("right")).toHaveTextContent(
-      "No opponent",
+      "Unlisted opponent",
     );
     // Ghost rows show the dashed placeholder, never the computed initials.
     const avatar = gameGridRowPage.getAvatar("right");

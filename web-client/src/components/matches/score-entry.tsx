@@ -60,6 +60,7 @@ import {
   type GameScoreInput,
 } from './score-pad/game-score-schema'
 import { mapGameScoreValidation } from './score-pad/game-score-ui'
+import { UNLISTED_OPPONENT_LABEL } from './unlisted-opponent-label'
 
 /** The non-null persisted score on a game. */
 type PersistedScore = NonNullable<MatchDetails['games'][number]['score']>
@@ -125,11 +126,6 @@ function seedScoreValues(
           : '',
   }
 }
-
-// Placeholder for the opponent label on solo matches — mirrors the match
-// details hero. Distinct from `initialsOf('Opponent')` so users can tell
-// "no opponent" apart from a real two-letter monogram.
-const NO_OPPONENT_LABEL = 'No opponent'
 
 /**
  * `not_scorable_reason` is match-relative, not viewer-relative, so it's
@@ -594,14 +590,14 @@ function ScoreEntryInner({
 
   const mySideNumber: 1 | 2 = firstSide.side_number === 2 ? 2 : 1
   const oppUsername = secondSide.players[0]?.username ?? null
-  const oppName = oppUsername ?? NO_OPPONENT_LABEL
+  const oppName = oppUsername ?? UNLISTED_OPPONENT_LABEL
   // A director names both sides by player — no "you" framing — so the first
-  // slot falls back to the same "No opponent" placeholder as the second
+  // slot falls back to the same "Unlisted opponent" placeholder as the second
   // rather than defaulting to "You" (#1523). A participant keeps the
   // unchanged "You" fallback (defensive only: their own side always carries
   // their own player).
   const meName =
-    firstSide.players[0]?.username ?? (isDirectorView ? NO_OPPONENT_LABEL : 'You')
+    firstSide.players[0]?.username ?? (isDirectorView ? UNLISTED_OPPONENT_LABEL : 'You')
   const meInitials = initialsOf(meName)
   const oppHasPlayer = oppUsername !== null
 

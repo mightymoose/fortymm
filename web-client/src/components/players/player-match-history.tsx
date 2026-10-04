@@ -23,7 +23,7 @@ const PAGE_SIZE = 25
  *
  * Per ADR-0008 this list is deliberately all-inclusive: every match the player
  * is a side of, any status, rated or not — live, up-next, awaiting-acceptance,
- * voided, and the player-less "No opponent" solo sentinel. Do not narrow it to
+ * voided, and the player-less "Unlisted opponent" solo sentinel. Do not narrow it to
  * rated or completed play; that reconciliation was considered and rejected.
  *
  * The route owns the page number (it lives in the URL) and the player identity
