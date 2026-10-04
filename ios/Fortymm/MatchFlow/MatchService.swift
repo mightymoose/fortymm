@@ -98,11 +98,8 @@ struct MatchService {
         switch result {
         case .success(let details):
             return Self.finalMatch(from: details)
-        case .failure(let coded) where coded.detail.code == "match_closed":
+        case .failure:
             throw MatchPostError.matchClosed
-        case .failure(let coded):
-            // The only coded 4xx this endpoint sends is a 409.
-            throw APIError.http(status: 409, detail: coded.detail.message)
         }
     }
 

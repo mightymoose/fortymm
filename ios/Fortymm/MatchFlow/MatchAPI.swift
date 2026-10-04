@@ -339,14 +339,17 @@ struct CreateMatchBody: Encodable {
 
 /// The coded 4xx body `POST /v1/matches/{id}/results` sends when the match is
 /// already over: `{"detail": {"code": "match_closed", "message": "..."}}`. Any
-/// other coded 4xx decodes too, so `postResult` keeps its message as a plain
-/// HTTP error.
+/// other code fails to decode, so `sendExpectingCodedError` throws it as a
+/// plain `APIError.http` with its real status and message.
 struct MatchPostCodedError: Decodable, Error {
     let detail: Detail
 
     struct Detail: Decodable {
-        let code: String
-        let message: String
+        let code: Code
+    }
+
+    enum Code: String, Decodable {
+        case matchClosed = "match_closed"
     }
 }
 
