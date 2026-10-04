@@ -54,8 +54,7 @@ const scoped = (container: Container) => ({
   },
   /** The add-table form's own root-level error — `addTableForm.formState.errors.root`,
    * rendered beside the field it belongs to rather than the shared page-level banner
-   * above. `label`/`court` carry no server-mirrored constraint to pin a 422 to
-   * (both are bare, unconstrained `str`), so every submit failure lands here. */
+   * above. The add-table form's server failures land here. */
   queryAddTableError() {
     return container.queryByTestId('add-table-error')
   },
@@ -63,6 +62,10 @@ const scoped = (container: Container) => ({
    * "Label is required.", never sent to the server. */
   queryLabelError() {
     return container.queryByText('Label is required.')
+  },
+  /** Finds a field's inline validation message by its text. */
+  queryFieldMessage(text: string) {
+    return container.queryByText(text)
   },
   /** The add-table submit button — absent for a non-creator (`canEdit: false`),
    * along with the rest of the add-table form. */
