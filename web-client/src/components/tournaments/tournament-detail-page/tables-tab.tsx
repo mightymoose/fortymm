@@ -196,7 +196,7 @@ export const TablesTab = ({
   const submitTable = addTableForm.handleSubmit(async (values) => {
     addTableForm.clearErrors('root')
     const saved = await save(
-      [...keepTables(catalogue), addTable(values.label.trim(), values.court.trim())],
+      [...keepTables(catalogue), addTable(values.label, values.court)],
       false,
       (message) => addTableForm.setError('root', { type: 'server', message }),
     )

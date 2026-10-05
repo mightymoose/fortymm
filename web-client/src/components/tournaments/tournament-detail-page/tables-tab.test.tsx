@@ -80,6 +80,20 @@ describe('TablesTab', () => {
     expect(spy.calls[0].options).toEqual({ unplaceFixturesOnRemovedTables: false })
   })
 
+  it('adds a table with the label and court the organizer padded, trimmed', async () => {
+    const spy = spyCatalogue()
+    tablesTabPage.render({ catalogue: buildTables(1), ...spy })
+
+    await userEvent.type(tablesTabPage.getLabelInput(), ' T9 ')
+    await userEvent.type(tablesTabPage.getCourtInput(), ' 9 ')
+    await userEvent.click(tablesTabPage.getAddButton())
+
+    await waitFor(() => expect(spy.calls).toHaveLength(1))
+    // The schema's trim is the only one: the resolver hands `submitTable` the parsed
+    // value, so the value the length bound checked is the value the request carries.
+    expect(spy.calls[0].entries[1]).toEqual({ kind: 'added', label: 'T9', court: '9' })
+  })
+
   it('removes a table by leaving it OUT of the cited catalogue', async () => {
     const spy = spyCatalogue()
     tablesTabPage.render({ catalogue: buildTables(3), ...spy })
