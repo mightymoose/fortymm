@@ -142,7 +142,7 @@ describe('TablesTab', () => {
     expect(tablesTabPage.getAddButton()).toBeEnabled()
     await userEvent.click(tablesTabPage.getAddButton())
 
-    expect(await tablesTabPage.queryLabelError()).not.toBeNull()
+    expect(tablesTabPage.queryFieldMessage('Label is required.')).not.toBeNull()
     expect(tablesTabPage.getLabelInput()).toHaveAttribute('aria-invalid', 'true')
     expect(spy.calls).toHaveLength(0)
   })
@@ -156,7 +156,7 @@ describe('TablesTab', () => {
     await userEvent.type(tablesTabPage.getLabelInput(), '   ')
     await userEvent.click(tablesTabPage.getAddButton())
 
-    expect(await tablesTabPage.queryLabelError()).not.toBeNull()
+    expect(tablesTabPage.queryFieldMessage('Label is required.')).not.toBeNull()
     expect(spy.calls).toHaveLength(0)
   })
 

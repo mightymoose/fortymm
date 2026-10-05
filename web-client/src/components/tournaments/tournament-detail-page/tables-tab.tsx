@@ -34,29 +34,38 @@ import type {
 } from '../data/types'
 import { SectionHeader } from './section-header'
 
+const TABLE_FIELD_MAX = 255
+
 /** The server bounds `TournamentTableWrite.label` and `.court` at 255 code points
  * (`Field(max_length=255)`, #1595). This schema mirrors both the `label` and the
  * `court` bound with `atMostCodePoints`, which counts code points the way the
- * server does. The
- * inputs carry no `maxLength` attribute, because the DOM counts UTF-16 units and
- * would refuse 255 emoji that the server accepts (`details-tab.tsx` explains).
- * `label` must also be non-empty. That is a client-only rule, because an empty
- * key is a well-formed request the server would store. `court` is optional in
- * this UI: the card renders `Court {court}` with an empty string as it does any
- * other, and requiring it would invent a constraint the prior `useState` version
- * never had. */
-const TABLE_FIELD_MAX = 255
-
+ * server does. The inputs carry no `maxLength` attribute, because the DOM counts
+ * UTF-16 units and would refuse 255 emoji that the server accepts
+ * (`details-tab.tsx` explains). `label` must also be non-empty. That is a
+ * client-only rule, because an empty key is a well-formed request the server
+ * would store. `court` is optional in this UI: the card renders `Court {court}`
+ * with an empty string as it does any other, and requiring it would invent a
+ * constraint the prior `useState` version never had. */
 const addTableSchema = z.object({
   label: z
     .string()
     .trim()
     .min(1, { message: 'Label is required.' })
-    .pipe(atMostCodePoints(TABLE_FIELD_MAX, 'Label must be 255 characters or fewer.')),
+    .pipe(
+      atMostCodePoints(
+        TABLE_FIELD_MAX,
+        `Label must be ${TABLE_FIELD_MAX} characters or fewer.`,
+      ),
+    ),
   court: z
     .string()
     .trim()
-    .pipe(atMostCodePoints(TABLE_FIELD_MAX, 'Court must be 255 characters or fewer.')),
+    .pipe(
+      atMostCodePoints(
+        TABLE_FIELD_MAX,
+        `Court must be ${TABLE_FIELD_MAX} characters or fewer.`,
+      ),
+    ),
 })
 
 type AddTableValues = z.infer<typeof addTableSchema>

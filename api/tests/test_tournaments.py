@@ -9064,35 +9064,40 @@ async def test_patching_a_table_catalogue_that_authors_a_table_id_is_refused(
     assert [table["id"] for table in reread["table_catalogue"]] == minted
 
 
-@pytest.mark.parametrize("char", ["x", "🏆"])
-@pytest.mark.parametrize("route", ["create", "patch"])
 @pytest.mark.parametrize("field", ["label", "court"])
-async def test_a_table_field_over_255_code_points_is_a_422_and_255_is_accepted(
-    authed_client: tuple[AsyncClient, User], field: str, route: str, char: str
+async def test_a_created_table_field_over_255_code_points_is_a_422(
+    authed_client: tuple[AsyncClient, User], field: str
 ) -> None:
-    """A table ``label`` is a ``VARCHAR(255)`` column, so a longer one must be refused
-    as a 422 on that field and not reach the database as a 500 (#1595). The bound
-    counts code points: ``"🏆" * 256`` is 512 UTF-16 units, and a bound sized on bytes
-    or units would wrongly refuse ``"🏆" * 255``."""
+    """A table ``label`` and ``court`` are each a ``VARCHAR(255)`` column, so a
+    longer value must be refused as a 422 on that field and not reach the database as
+    a 500 (#1595). The bound counts code points: ``"🏆" * 255`` is 510 UTF-16 units and
+    1020 bytes, so a bound sized on units or bytes would wrongly refuse it."""
     client, _ = authed_client
     default = {"label": "Table 1", "court": "A"}
 
-    if route == "create":
-        too_long = await client.post(
-            "/v1/tournaments",
-            json=_create_payload(table_catalogue=[{**default, field: char * 256}]),
-        )
-        assert too_long.status_code == 422, too_long.text
-        assert ["body", "table_catalogue", 0, field] in _error_locs(too_long)
+    too_long = await client.post(
+        "/v1/tournaments",
+        json=_create_payload(table_catalogue=[{**default, field: "x" * 256}]),
+    )
+    assert too_long.status_code == 422, too_long.text
+    assert ["body", "table_catalogue", 0, field] in _error_locs(too_long)
 
-        fits = await client.post(
-            "/v1/tournaments",
-            json=_create_payload(table_catalogue=[{**default, field: char * 255}]),
-        )
-        assert fits.status_code == 201, fits.text
-        assert fits.json()["table_catalogue"][0][field] == char * 255
-        return
+    fits = await client.post(
+        "/v1/tournaments",
+        json=_create_payload(table_catalogue=[{**default, field: "🏆" * 255}]),
+    )
+    assert fits.status_code == 201, fits.text
+    assert fits.json()["table_catalogue"][0][field] == "🏆" * 255
 
+
+@pytest.mark.parametrize("field", ["label", "court"])
+async def test_a_patched_table_field_over_255_code_points_is_a_422(
+    authed_client: tuple[AsyncClient, User], field: str
+) -> None:
+    """The patch verb holds a table ``label`` and ``court`` to the same 255-code-point
+    bound as the create verb (#1595). A refused patch leaves the catalogue unchanged,
+    and ``"🏆" * 255`` still fits, because the bound counts code points."""
+    client, _ = authed_client
     created = (await client.post("/v1/tournaments", json=_create_payload())).json()
     before = created["table_catalogue"]
 
@@ -9105,7 +9110,7 @@ async def test_a_table_field_over_255_code_points_is_a_422_and_255_is_accepted(
 
     too_long = await client.patch(
         f"/v1/tournaments/{created['id']}",
-        json={"table_catalogue": cited(char * 256)},
+        json={"table_catalogue": cited("x" * 256)},
     )
     assert too_long.status_code == 422, too_long.text
     assert ["body", "table_catalogue", 0, field] in _error_locs(too_long)
@@ -9114,10 +9119,10 @@ async def test_a_table_field_over_255_code_points_is_a_422_and_255_is_accepted(
 
     fits = await client.patch(
         f"/v1/tournaments/{created['id']}",
-        json={"table_catalogue": cited(char * 255)},
+        json={"table_catalogue": cited("🏆" * 255)},
     )
     assert fits.status_code == 200, fits.text
-    assert fits.json()["table_catalogue"][0][field] == char * 255
+    assert fits.json()["table_catalogue"][0][field] == "🏆" * 255
 
 
 async def test_a_patched_catalogue_keeps_the_ids_of_the_tables_it_cited(

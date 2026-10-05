@@ -26,6 +26,7 @@ import {
   tablesInUseDetail,
   type TournamentsStoreOptions,
 } from '../page-objects/tournaments/tournaments-store'
+import { expectNoHorizontalScroll } from '../support/viewport'
 
 /** A tournament whose JOURNEY event has a cut draw, so there are fixtures to place. */
 const DRAWN: TournamentsStoreOptions = { drawable: true, drawn: [EVENT.JOURNEY] }
@@ -240,19 +241,23 @@ test.describe('the Tables tab · a field error keeps the add form in place', () 
     await page.setViewportSize({ width: 375, height: 900 })
     const { pom } = await TournamentDetailPage.navigateTo(page)
     await pom.openTablesTab()
-    const noSideScroll = () =>
-      page.evaluate(() => document.documentElement.scrollWidth <= 375)
 
     const none = await measureForm(pom)
     expect(none.court.y).toBe(none.label.y)
     expect(none.button.x).toBe(none.label.x)
     expect(none.button.y).toBeGreaterThan(none.label.y + none.label.height)
-    expect(await noSideScroll()).toBe(true)
+    await expectNoHorizontalScroll(
+      pom.documentElement,
+      'the tournament detail page',
+    )
 
     await pom.tableLabelInput.fill('x'.repeat(256))
     await pom.addTableButton.click()
     await expect(page.getByText(LABEL_ERROR, { exact: true })).toBeVisible()
-    expect(await noSideScroll()).toBe(true)
+    await expectNoHorizontalScroll(
+      pom.documentElement,
+      'the tournament detail page',
+    )
     await pom.tableCourtInput.fill('y'.repeat(256))
     await pom.addTableButton.click()
     await expect(page.getByText(COURT_ERROR, { exact: true })).toBeVisible()
@@ -262,6 +267,9 @@ test.describe('the Tables tab · a field error keeps the add form in place', () 
     expect(both.button.x).toBe(both.label.x)
     expect(both.court.y).toBeGreaterThan(both.label.y + both.label.height)
     expect(both.button.y).toBeGreaterThan(both.court.y + both.court.height)
-    expect(await noSideScroll()).toBe(true)
+    await expectNoHorizontalScroll(
+      pom.documentElement,
+      'the tournament detail page',
+    )
   })
 })

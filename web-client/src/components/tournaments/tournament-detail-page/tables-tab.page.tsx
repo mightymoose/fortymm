@@ -58,11 +58,6 @@ const scoped = (container: Container) => ({
   queryAddTableError() {
     return container.queryByTestId('add-table-error')
   },
-  /** The label field's own inline validation message — RHF+Zod's client-side
-   * "Label is required.", never sent to the server. */
-  queryLabelError() {
-    return container.queryByText('Label is required.')
-  },
   /** Finds a field's inline validation message by its text. */
   queryFieldMessage(text: string) {
     return container.queryByText(text)
