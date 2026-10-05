@@ -278,7 +278,7 @@ export const TablesTab = ({
             onSubmit={submitTable}
             noValidate
           >
-            <div>
+            <div className="sm:w-36">
               <Input
                 aria-label="Table label"
                 aria-invalid={!!addTableForm.formState.errors.label}
@@ -292,7 +292,7 @@ export const TablesTab = ({
                 </p>
               )}
             </div>
-            <div>
+            <div className="sm:w-28">
               <Input
                 // The card renders "Court {court}", so the field is already
                 // labeled "Court" (aria-label) — the value is a bare identifier.

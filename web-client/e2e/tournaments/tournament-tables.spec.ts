@@ -18,7 +18,7 @@
  * remove) and both of its refusals, so these specs cannot pass against a stub more
  * permissive than the API.
  */
-import { expect, test } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 
 import { TournamentDetailPage } from '../page-objects/tournaments/tournament-detail.page'
 import {
@@ -154,5 +154,114 @@ test.describe('the Tables tab · removing a table matches are placed at', () => 
     await expect(pom.tablesError).toHaveCount(0)
     // The placed fixture on the OTHER table was not touched.
     expect(store.fixturesOf(EVENT.JOURNEY)[0].table_id).toBe(store.tables[0].id)
+  })
+})
+
+// A field error wraps under its own input. jsdom computes no layout, so only a real
+// browser can see an error widen its column and push its neighbours sideways.
+test.describe('the Tables tab · a field error keeps the add form in place', () => {
+  const LABEL_ERROR = 'Label must be 255 characters or fewer.'
+  const COURT_ERROR = 'Court must be 255 characters or fewer.'
+
+  type Box = { x: number; y: number; width: number; height: number }
+
+  async function box(locator: Locator): Promise<Box> {
+    const b = await locator.boundingBox()
+    if (!b) throw new Error('element has no box')
+    return {
+      x: Math.round(b.x),
+      y: Math.round(b.y),
+      width: Math.round(b.width),
+      height: Math.round(b.height),
+    }
+  }
+
+  async function measureForm(pom: TournamentDetailPage) {
+    return {
+      label: await box(pom.tableLabelInput),
+      court: await box(pom.tableCourtInput),
+      button: await box(pom.addTableButton),
+    }
+  }
+
+  /** The three measured states: no error, label error, both errors. */
+  async function measureThreeStates(page: Page, pom: TournamentDetailPage) {
+    await pom.openTablesTab()
+    const none = await measureForm(pom)
+    await pom.tableLabelInput.fill('x'.repeat(256))
+    await pom.addTableButton.click()
+    await expect(page.getByText(LABEL_ERROR, { exact: true })).toBeVisible()
+    const labelError = await measureForm(pom)
+    await pom.tableCourtInput.fill('y'.repeat(256))
+    await pom.addTableButton.click()
+    await expect(page.getByText(COURT_ERROR, { exact: true })).toBeVisible()
+    const both = await measureForm(pom)
+    return { none, labelError, both }
+  }
+
+  for (const width of [1280, 1920]) {
+    test(`an error message does not push the fields or the button sideways at ${width}px`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 900 })
+      const { pom } = await TournamentDetailPage.navigateTo(page)
+      const { none, labelError, both } = await measureThreeStates(page, pom)
+
+      for (const state of [labelError, both]) {
+        for (const key of ['label', 'court', 'button'] as const) {
+          expect({ key, x: state[key].x, width: state[key].width }).toEqual({
+            key,
+            x: none[key].x,
+            width: none[key].width,
+          })
+        }
+      }
+
+      const pairs = [
+        { message: LABEL_ERROR, input: both.label },
+        { message: COURT_ERROR, input: both.court },
+      ]
+      for (const { message, input } of pairs) {
+        const error = page.getByText(message, { exact: true })
+        await expect(error).toHaveText(message)
+        const errorBox = await box(error)
+        expect(errorBox.x).toBe(input.x)
+        expect(errorBox.x + errorBox.width).toBeLessThanOrEqual(input.x + input.width)
+        const clipped = await error.evaluate((el) => ({
+          x: el.scrollWidth > el.clientWidth,
+          y: el.scrollHeight > el.clientHeight,
+        }))
+        expect(clipped).toEqual({ x: false, y: false })
+      }
+    })
+  }
+
+  test('a phone keeps its stacked layout', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 900 })
+    const { pom } = await TournamentDetailPage.navigateTo(page)
+    await pom.openTablesTab()
+    const noSideScroll = () =>
+      page.evaluate(() => document.documentElement.scrollWidth <= 375)
+
+    const none = await measureForm(pom)
+    expect(none.court.y).toBe(none.label.y)
+    expect(none.button.x).toBe(none.label.x)
+    expect(none.button.y).toBeGreaterThan(none.label.y + none.label.height)
+    expect(await noSideScroll()).toBe(true)
+
+    await pom.tableLabelInput.fill('x'.repeat(256))
+    await pom.addTableButton.click()
+    await expect(page.getByText(LABEL_ERROR, { exact: true })).toBeVisible()
+    expect(await noSideScroll()).toBe(true)
+    await pom.tableCourtInput.fill('y'.repeat(256))
+    await pom.addTableButton.click()
+    await expect(page.getByText(COURT_ERROR, { exact: true })).toBeVisible()
+
+    const both = await measureForm(pom)
+    expect(both.court.x).toBe(both.label.x)
+    expect(both.button.x).toBe(both.label.x)
+    expect(both.court.y).toBeGreaterThan(both.label.y + both.label.height)
+    expect(both.button.y).toBeGreaterThan(both.court.y + both.court.height)
+    expect(await noSideScroll()).toBe(true)
   })
 })
