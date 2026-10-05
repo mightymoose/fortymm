@@ -9102,11 +9102,7 @@ async def test_a_patched_table_field_over_255_code_points_is_a_422(
     before = created["table_catalogue"]
 
     def cited(value: str) -> list[dict[str, Any]]:
-        return [
-            {"id": t["id"], "label": t["label"], "court": t["court"]}
-            | ({field: value} if i == 0 else {})
-            for i, t in enumerate(before)
-        ]
+        return [{**before[0], field: value}, *before[1:]]
 
     too_long = await client.patch(
         f"/v1/tournaments/{created['id']}",
