@@ -1,3 +1,5 @@
+import { z } from 'zod'
+
 /**
  * How the server's Pydantic bounds count a string: Unicode code points. Zod's
  * own `.max` counts UTF-16 code units (`string.length`), under which a
@@ -30,3 +32,14 @@ export function exceedsCodePoints(value: string, max: number): boolean {
   }
   return false
 }
+
+/** One bound, counted the way the server counts it. Zod's `.max` caps a string
+ * by UTF-16 code units (`string.length`), but the server's Pydantic bounds cap
+ * by Unicode code points: a supplementary character — most emoji, some CJK — is
+ * one code point yet two code units, so `.max(255)` would refuse a name of 255
+ * emoji, whose `length` is 510 and which the server would take. The count is
+ * `exceedsCodePoints`'s, which stops at the first code point past the limit —
+ * so re-validating a huge pasted value on every keystroke costs at most the
+ * limit, not the value (#1593 review). */
+export const atMostCodePoints = (max: number, message: string) =>
+  z.string().refine((v) => !exceedsCodePoints(v, max), { message })
