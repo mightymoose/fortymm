@@ -28,6 +28,7 @@ import { EventCard } from './events-tab/event-card'
 import { EnterEventControl } from './events-tab/enter-event-control'
 import { CheckoutSummary } from './events-tab/checkout-summary'
 import { CheckoutPanel } from './events-tab/checkout-panel'
+import { YourReceipts } from './events-tab/your-receipts'
 import {
   isCheckoutEventEligible,
   MAX_CHECKOUT_EVENTS,
@@ -47,6 +48,8 @@ export interface EventsTabProps {
    * return, whatever its status (#1809). */
   checkoutParam?: string
   onCheckoutParamChange?: (checkoutId: string | undefined) => void
+  /** Open the receipt page of a succeeded payment (#1810). */
+  onViewReceipt?: (paymentId: string, options?: { replace?: boolean }) => void
 }
 /** The Events tab: a list of event row-cards with a "New event" action and an
  * empty state. */
@@ -59,6 +62,7 @@ export const EventsTab = ({
   onCheckoutDraftChange,
   checkoutParam,
   onCheckoutParamChange,
+  onViewReceipt,
 }: EventsTabProps) => {
   // The draw formats the server offers (ADR 20260726), handed to each card so it can
   // name the event's draw type in the server's words. Read off the tournament rather
@@ -212,6 +216,7 @@ export const EventsTab = ({
           )
         }
       />
+      <YourReceipts tournamentId={tournament.id} onViewReceipt={onViewReceipt} />
       {panelCheckoutId !== undefined ? (
         panelCheckout ? (
           <CheckoutPanel
@@ -225,6 +230,7 @@ export const EventsTab = ({
             releaseFailed={releaseFailed}
             resumed={checkoutParam === panelCheckout.id}
             onDone={() => closePanel()}
+            onViewReceipt={onViewReceipt}
             onCancel={() => {
               void cancelCheckout
                 .mutateAsync(panelCheckout.id)

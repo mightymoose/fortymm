@@ -15,7 +15,16 @@ const OUTCOME_TEXT = {
  * payment gets the success tone: a mixed outcome and a payment under review
  * stay neutral. Every result carries words, never color alone.
  */
-export function PaymentResult({ payment, onDone }: { payment: Payment; onDone: () => void }) {
+export function PaymentResult({
+  payment,
+  onDone,
+  onViewReceipt,
+}: {
+  payment: Payment
+  onDone: () => void
+  /** Open the receipt page, offered once the payment succeeded (#1810). */
+  onViewReceipt?: (paymentId: string, options?: { replace?: boolean }) => void
+}) {
   const review = payment.state === 'needs_review'
   const allAdmitted = !review && payment.lines.every((line) => line.outcome === 'admitted')
   return (
@@ -52,7 +61,14 @@ export function PaymentResult({ payment, onDone }: { payment: Payment; onDone: (
         ))}
       </ul>
       <p className="text-sm text-muted-foreground">Support reference {payment.reference}</p>
-      <Button className="self-start" onClick={onDone}>Done</Button>
+      <div className="flex flex-wrap gap-2 self-start">
+        <Button onClick={onDone}>Done</Button>
+        {payment.state === 'succeeded' && onViewReceipt && (
+          <Button variant="outline" onClick={() => onViewReceipt(payment.id)}>
+            View receipt
+          </Button>
+        )}
+      </div>
     </div>
   )
 }

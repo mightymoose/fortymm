@@ -7,6 +7,7 @@ import {
   TOURNAMENTS_QUERY_KEY_PREFIX,
 } from '@/components/tournaments/data/api'
 import { OPEN_CHECKOUTS_QUERY_KEY } from '../checkouts'
+import { MY_PAYMENTS_QUERY_KEY_PREFIX } from '@/components/payments/receipt'
 import { UNKNOWN_EVENT_KIND, type DecodedEventKind, type RealtimeEvent } from './events'
 
 /**
@@ -48,6 +49,8 @@ const CHECKOUT_QUERY_KEYS: readonly QueryKey[] = [
   OPEN_CHECKOUTS_QUERY_KEY,
   TOURNAMENT_CHECKOUT_QUERY_KEY_PREFIX,
   TOURNAMENT_PAYMENT_QUERY_KEY_PREFIX,
+  // A succeeded checkout adds a receipt to the Events tab's "Your receipts" list (#1810).
+  MY_PAYMENTS_QUERY_KEY_PREFIX,
   // A paid admission creates entries: entrants, counts and capacity move too.
   TOURNAMENTS_QUERY_KEY_PREFIX,
 ]

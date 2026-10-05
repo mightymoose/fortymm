@@ -115,35 +115,18 @@ test.describe('Checkout · happy path', () => {
     await expect(panel.getByRole('heading', { name: 'Checking your payment' })).toBeVisible()
 
     // The status-read stub's SECOND reply — served on the next 5s poll —
-    // resolves the payment.
-    await expect(panel.getByRole('heading', { name: 'You’re entered' })).toBeVisible({
+    // resolves the payment, and the app opens the receipt (#1810).
+    await expect(page.getByRole('heading', { level: 1, name: 'Receipt' })).toBeVisible({
       timeout: 8_000,
     })
-    const results = panel.getByRole('list', { name: 'Results' })
-    await expect(results.getByRole('listitem')).toHaveCount(2)
-    await expect(results).toContainText('Entry confirmed')
-    expect(await results.getByText('Entry confirmed').count()).toBe(2)
+    expect(page.url()).toMatch(/\/payments\/[0-9a-f-]{36}\/receipt$/)
+    const events = page.getByRole('list', { name: 'Events' })
+    await expect(events.getByRole('listitem')).toHaveCount(2)
+    expect(await events.getByText('Entry confirmed').count()).toBe(2)
+    await expect(page.getByText('Total')).toBeVisible()
 
     // Never more than one confirm, even after the poll settled.
     expect(await stripeConfirmCallCount(page)).toBe(1)
-
-    // In production a `checkout.changed` realtime push discovers a settled
-    // checkout near-instantly; this suite's stream is permanently parked
-    // (`../support/realtime`), so the discovery here is the client's own 5s
-    // poll of `GET …/checkouts/current`. Wait for a FRESH read of it — one
-    // that lands after the payment settled and so reads the checkout as gone
-    // — before pressing Done, or Done's own "un-pin" can be immediately
-    // reverted by a render that still sees the stale, still-`active` cache.
-    const readsBeforeDone = store.currentReadCount
-    await expect
-      .poll(() => store.currentReadCount, { timeout: 8_000 })
-      .toBeGreaterThan(readsBeforeDone)
-
-    await panel.getByRole('button', { name: 'Done' }).click()
-
-    expect(page.url()).not.toContain('checkout=')
-    await expect(checkoutPanel(page)).toHaveCount(0)
-    await expect(selectButton(page, EVENT.OPEN_SINGLES)).toBeVisible()
 
     expect(store.createdEventIds).toEqual([[OPEN_SINGLES_ID, U1500_ID]])
     expect(store.log).toEqual(['create', 'prepare', 'receipt', 'status', 'status'])
@@ -223,8 +206,8 @@ test.describe('Checkout · a 3-D Secure return', () => {
       '&payment_intent=pi_x&payment_intent_client_secret=pi_x_secret_y&redirect_status=succeeded'
     await page.goto(returnUrl)
 
-    const panel = checkoutPanel(page)
-    await expect(panel.getByRole('heading', { name: 'You’re entered' })).toBeVisible()
+    // A succeeded payment opens its receipt, replacing the return URL (#1810).
+    await expect(page.getByRole('heading', { level: 1, name: 'Receipt' })).toBeVisible()
 
     const url = page.url()
     expect(url).not.toContain('payment_intent')

@@ -800,6 +800,14 @@ async def update_checkout_receipt_address(
             CheckoutRefusal.payment_already_succeeded,
             "This checkout's payment has already succeeded.",
         )
+    if receipt_address is not None and checkout.receipt_address_erased_at is not None:
+        # Erased on purpose (the payer's account was erased, or the retention
+        # sweep ran). Without this, a PATCH waiting on the erase's lock would
+        # write the address back as soon as the erase committed.
+        raise CheckoutRefusedError(
+            CheckoutRefusal.receipt_address_erased,
+            "This checkout's receipt address was removed.",
+        )
     checkout.receipt_address = receipt_address
     await db.commit()
     return TournamentCheckoutReceiptAddressRead(

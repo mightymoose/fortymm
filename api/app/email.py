@@ -11,6 +11,7 @@ moves it to ``failed_job_registry`` for an operator to notice.
 import logging
 import os
 import smtplib
+from collections.abc import Sequence
 from email.message import EmailMessage
 from urllib.parse import urlencode
 
@@ -71,6 +72,10 @@ def _absolute_link(link: str | None) -> str | None:
     return f"{base}/{link.lstrip('/')}"
 
 
+#: Seconds each SMTP socket operation may wait.
+SMTP_TIMEOUT_SECONDS = 30
+
+
 def _smtp_configured() -> bool:
     return bool(os.environ.get("SMTP_HOST"))
 
@@ -81,7 +86,9 @@ def _send_via_smtp(message: EmailMessage) -> None:
     user = os.environ.get("SMTP_USERNAME")
     password = os.environ.get("SMTP_PASSWORD")
     use_tls = os.environ.get("SMTP_USE_TLS", "true").lower() != "false"
-    with smtplib.SMTP(host, port) as smtp:
+    # Bounded: a server that accepts the connection and then goes quiet must not
+    # hold a worker (and any row lock the job holds) for ever.
+    with smtplib.SMTP(host, port, timeout=SMTP_TIMEOUT_SECONDS) as smtp:
         if use_tls:
             smtp.starttls()
         if user and password:
@@ -97,6 +104,7 @@ def _deliver(
     log_event: str,
     log_url: str,
     dev_label: str,
+    log_recipient: bool = True,
 ) -> None:
     """Deliver an email via SMTP, or print + log it in dev. The ``log_event``
     and ``log_url`` are kept in dev logs only (gated on FORTYMM_DEV) so a
@@ -109,8 +117,9 @@ def _deliver(
                 "SMTP is not configured and FORTYMM_DEV is not set — "
                 f"refusing to silently drop a {dev_label} email."
             )
-        log.info(log_event, extra={"to": to_email, "url": log_url})
-        print(f"[email] {dev_label} link for {to_email}: {log_url}")
+        shown = to_email if log_recipient else "(recipient withheld)"
+        log.info(log_event, extra={"to": shown, "url": log_url})
+        print(f"[email] {dev_label} link for {shown}: {log_url}")
         return
 
     message = EmailMessage()
@@ -186,6 +195,68 @@ def send_notification_email(
         log_url=url or "(no link)",
         dev_label="notification",
     )
+
+
+def _dollars(cents: int) -> str:
+    """Whole cents as dollars, with integer arithmetic only (no float money)."""
+    return f"${cents // 100}.{cents % 100:02d}"
+
+
+def send_payment_receipt_email(
+    to_email: str,
+    *,
+    reference: str,
+    lines: Sequence[tuple[str, int, str]],
+    total_cents: int,
+    receipt_link: str,
+    admission_headline: str | None,
+) -> None:
+    """Render and deliver the itemized receipt for a paid checkout (#1810).
+
+    ``lines`` is ``(event name, price in cents, outcome text)`` per event.
+    ``admission_headline`` is the admission wording ("You're entered" or "Some
+    entries weren't admitted"), set when the player's tournament email
+    preference is on: it makes this the one email that stands in for a separate
+    admission email. ``None`` makes it receipt-only. Carries no bearer token.
+    The recipient is never written to a log line."""
+    url = _absolute_link(receipt_link)
+    body_lines = [
+        "Here is your itemized receipt."
+        if admission_headline is None
+        else f"{admission_headline}. Here is what happened to each entry.",
+        "",
+    ]
+    body_lines += [
+        f"{name}: {_dollars(price)} ({outcome})" for name, price, outcome in lines
+    ]
+    body_lines += [
+        "",
+        f"Total: {_dollars(total_cents)}",
+        f"Support reference: {reference}",
+    ]
+    if url:
+        body_lines += ["", f"View this receipt in FortyMM: {url}"]
+    body_lines.append("")
+    try:
+        _deliver(
+            to_email=to_email,
+            subject=(
+                f"FortyMM · Your receipt {reference}"
+                if admission_headline is None
+                else f"FortyMM · {admission_headline} · Receipt {reference}"
+            ),
+            body="\n".join(body_lines),
+            log_event="email_payment_receipt",
+            log_url=url or "(no link)",
+            dev_label="receipt",
+            log_recipient=False,
+        )
+    except smtplib.SMTPRecipientsRefused:
+        # The exception renders the refused address, and the RQ worker would
+        # write it to its log. Fail visibly, without the address or its chain.
+        raise RuntimeError(
+            "receipt email recipient refused by the SMTP server"
+        ) from None
 
 
 def send_merge_email(to_email: str, raw_token: str, username: str) -> None:

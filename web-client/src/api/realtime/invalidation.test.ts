@@ -9,6 +9,7 @@ import {
   TOURNAMENT_PAYMENT_QUERY_KEY_PREFIX,
   TOURNAMENTS_QUERY_KEY_PREFIX,
 } from '@/components/tournaments/data/api'
+import { MY_PAYMENTS_QUERY_KEY_PREFIX } from '@/components/payments/receipt'
 import { decodeRealtimeEvent, UNKNOWN_EVENT_KIND, type DecodedEventKind } from './events'
 import { queryKeysToInvalidate } from './invalidation'
 
@@ -28,6 +29,8 @@ const CHECKOUT_KEYS = [
   OPEN_CHECKOUTS_QUERY_KEY,
   TOURNAMENT_CHECKOUT_QUERY_KEY_PREFIX,
   TOURNAMENT_PAYMENT_QUERY_KEY_PREFIX,
+  // A succeeded checkout adds a receipt to the Events tab's "Your receipts" list (#1810).
+  MY_PAYMENTS_QUERY_KEY_PREFIX,
   TOURNAMENTS_QUERY_KEY_PREFIX,
 ]
 

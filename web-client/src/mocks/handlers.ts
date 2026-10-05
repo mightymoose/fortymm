@@ -1340,6 +1340,9 @@ export const handlers = [
       },
     ),
   ),
+  // The dev world has no completed payments, so the Events tab lists no
+  // receipts (#1810). Tests that need some serve their own.
+  http.get('*/v1/tournaments/:tournamentId/payments', () => HttpResponse.json([])),
   http.get('*/v1/health', async () => {
     await delay(400)
     return HttpResponse.json(mockHealthy)

@@ -551,3 +551,95 @@ async def test_rating_replay_may_regenerate_projection_bookkeeping(postgres_serv
             )
         await assert_foreign_keys(engine)
         assert await retained_history(engine, fixture) == expected
+
+
+async def test_receipt_erasure_migration_backfills_addresses_of_erased_accounts(
+    postgres_server_url,
+):
+    """#1810's migration adds the erasure tombstone. The previous release erased
+    an account without touching receipt addresses, so rows it left behind must be
+    cleaned at upgrade: ``erase_account`` rejects an already-erased account, so
+    nothing could repair them later. Another account's address stays."""
+    fixture = json.loads(FIXTURE.read_text())
+    async with empty_database(postgres_server_url) as engine:
+        run_alembic(engine.url, "upgrade", "0001")
+        await load_frozen_fixture(engine, fixture)
+        run_alembic(engine.url, "upgrade", "20260927_0001")
+        async with engine.begin() as connection:
+            accounts = (
+                await connection.scalars(
+                    text("SELECT id FROM accounts ORDER BY id LIMIT 2")
+                )
+            ).all()
+            tournament_id = await connection.scalar(
+                text("SELECT id FROM tournaments LIMIT 1")
+            )
+            player_id = await connection.scalar(text("SELECT id FROM players LIMIT 1"))
+            for index, account_id in enumerate(accounts):
+                await connection.execute(
+                    text(
+                        """
+                        WITH checkout AS (
+                          INSERT INTO tournament_checkouts
+                            (request_id, payer_account_id, entrant_player_id,
+                             tournament_id, merchant_account_id,
+                             registration_generation, total_cents, status,
+                             receipt_address)
+                          VALUES (gen_random_uuid(), :account, :player, :tournament,
+                                  :account, 0, 1000, 'invalidated', 'old@example.com')
+                          RETURNING id
+                        )
+                        INSERT INTO tournament_payments
+                          (checkout_id, payer_account_id, tournament_id,
+                           platform_stripe_account, platform_stripe_livemode,
+                           payee_fortymm_account_id, reference, idempotency_key,
+                           status, amount_cents, receipt_address)
+                        SELECT id, :account, :tournament, 'acct_x', false, :account,
+                               :reference, :key, 'succeeded', 1000, 'old@example.com'
+                        FROM checkout
+                        """
+                    ),
+                    {
+                        "account": account_id,
+                        "player": player_id,
+                        "tournament": tournament_id,
+                        "reference": f"PAY-0000000{index}",
+                        "key": f"key-{index}",
+                    },
+                )
+            await connection.execute(
+                text("SET LOCAL session_replication_role = replica")
+            )
+            await connection.execute(
+                text("UPDATE accounts SET erased_at = now() WHERE id = :id"),
+                {"id": accounts[0]},
+            )
+
+        run_alembic(engine.url, "upgrade", "head")
+
+        async with engine.connect() as connection:
+            rows = (
+                await connection.execute(
+                    text(
+                        """
+                        SELECT p.payer_account_id, p.receipt_address,
+                               c.receipt_address, p.receipt_address_erased_at,
+                               c.receipt_address_erased_at
+                        FROM tournament_payments p
+                        JOIN tournament_checkouts c ON c.id = p.checkout_id
+                        """
+                    )
+                )
+            ).all()
+    by_account = {row[0]: row for row in rows}
+    erased = by_account[accounts[0]]
+    kept = by_account[accounts[1]]
+    assert (erased[1], erased[2]) == (None, None)
+    assert erased[3] is not None
+    assert erased[4] is not None
+    assert (kept[1], kept[2], kept[3], kept[4]) == (
+        "old@example.com",
+        "old@example.com",
+        None,
+        None,
+    )
