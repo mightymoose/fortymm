@@ -6971,6 +6971,83 @@ internal enum Components {
             case notCalled = "not_called"
             case notScorable = "not_scorable"
         }
+        /// HTTP 409 envelope of the propose-result route. ``detail`` is the coded
+        /// closed-match refusal, the negotiation snapshot, or the lock-race string.
+        ///
+        /// - Remark: Generated from `#/components/schemas/MatchResultConflict`.
+        internal struct MatchResultConflict: Codable, Hashable, Sendable {
+            /// - Remark: Generated from `#/components/schemas/MatchResultConflict/detail`.
+            internal struct DetailPayload: Codable, Hashable, Sendable {
+                /// - Remark: Generated from `#/components/schemas/MatchResultConflict/detail/value1`.
+                internal var value1: Components.Schemas.MatchClosedConflict?
+                /// - Remark: Generated from `#/components/schemas/MatchResultConflict/detail/value2`.
+                internal var value2: Components.Schemas.MatchNegotiation?
+                /// - Remark: Generated from `#/components/schemas/MatchResultConflict/detail/value3`.
+                internal var value3: Swift.String?
+                /// Creates a new `DetailPayload`.
+                ///
+                /// - Parameters:
+                ///   - value1:
+                ///   - value2:
+                ///   - value3:
+                internal init(
+                    value1: Components.Schemas.MatchClosedConflict? = nil,
+                    value2: Components.Schemas.MatchNegotiation? = nil,
+                    value3: Swift.String? = nil
+                ) {
+                    self.value1 = value1
+                    self.value2 = value2
+                    self.value3 = value3
+                }
+                internal init(from decoder: any Swift.Decoder) throws {
+                    var errors: [any Swift.Error] = []
+                    do {
+                        self.value1 = try .init(from: decoder)
+                    } catch {
+                        errors.append(error)
+                    }
+                    do {
+                        self.value2 = try .init(from: decoder)
+                    } catch {
+                        errors.append(error)
+                    }
+                    do {
+                        self.value3 = try decoder.decodeFromSingleValueContainer()
+                    } catch {
+                        errors.append(error)
+                    }
+                    try Swift.DecodingError.verifyAtLeastOneSchemaIsNotNil(
+                        [
+                            self.value1,
+                            self.value2,
+                            self.value3
+                        ],
+                        type: Self.self,
+                        codingPath: decoder.codingPath,
+                        errors: errors
+                    )
+                }
+                internal func encode(to encoder: any Swift.Encoder) throws {
+                    try encoder.encodeFirstNonNilValueToSingleValueContainer([
+                        self.value3
+                    ])
+                    try self.value1?.encode(to: encoder)
+                    try self.value2?.encode(to: encoder)
+                }
+            }
+            /// - Remark: Generated from `#/components/schemas/MatchResultConflict/detail`.
+            internal var detail: Components.Schemas.MatchResultConflict.DetailPayload
+            /// Creates a new `MatchResultConflict`.
+            ///
+            /// - Parameters:
+            ///   - detail:
+            internal init(detail: Components.Schemas.MatchResultConflict.DetailPayload) {
+                self.detail = detail
+            }
+            internal enum CodingKeys: String, CodingKey {
+                case detail
+            }
+        }
         /// One game inside a finalize-the-match payload. Per-game point legality
         /// is checked here; cross-game checks (contiguous numbering, decided result,
         /// no scores past the decider) live in the handler against the full list.
@@ -20817,12 +20894,12 @@ internal enum Operations {
                 /// - Remark: Generated from `#/paths/v1/matches/{match_id}/results/POST/responses/409/content`.
                 internal enum Body: Sendable, Hashable {
                     /// - Remark: Generated from `#/paths/v1/matches/{match_id}/results/POST/responses/409/content/application\/json`.
-                    case json(Components.Schemas.MatchClosedConflict)
+                    case json(Components.Schemas.MatchResultConflict)
                     /// The associated value of the enum case if `self` is `.json`.
                     ///
                     /// - Throws: An error if `self` is not `.json`.
                     /// - SeeAlso: `.json`.
-                    internal var json: Components.Schemas.MatchClosedConflict {
+                    internal var json: Components.Schemas.MatchResultConflict {
                         get throws {
                             switch self {
                             case let .json(body):

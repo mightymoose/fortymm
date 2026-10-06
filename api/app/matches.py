@@ -118,6 +118,7 @@ from app.schemas.match import (
     MatchListFilter,
     MatchListResponse,
     MatchListRow,
+    MatchResultConflict,
     MatchResultsWrite,
 )
 from app.services.dependencies import get_match_service
@@ -855,9 +856,10 @@ def _negotiation_conflict(
     "/matches/{match_id}/results",
     response_model=MatchDetails,
     status_code=status.HTTP_201_CREATED,
-    # Documents only the coded 409. The route's other 409s (the negotiation
-    # conflict object, the lock-race string) keep their existing shapes.
-    responses={409: {"model": MatchClosedConflict}},
+    # The 409 body is ``{"detail": ...}``. ``detail`` is one of: the coded
+    # closed-match refusal (MatchClosedConflict), the negotiation snapshot
+    # (MatchNegotiation) or the lock-race string.
+    responses={409: {"model": MatchResultConflict}},
 )
 async def post_match_result(
     match_id: uuid.UUID,

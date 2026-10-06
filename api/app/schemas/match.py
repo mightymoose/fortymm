@@ -463,6 +463,13 @@ class MatchClosedConflict(BaseModel):
     message: str
 
 
+class MatchResultConflict(BaseModel):
+    """HTTP 409 envelope of the propose-result route. ``detail`` is the coded
+    closed-match refusal, the negotiation snapshot, or the lock-race string."""
+
+    detail: MatchClosedConflict | MatchNegotiation | str
+
+
 # ----- finalize body (POST /v1/matches/{id}/results) -----------------------
 
 

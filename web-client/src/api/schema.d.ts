@@ -3622,6 +3622,15 @@ export interface components {
          */
         MatchNotScorableReason: "no_opponent" | "result_posted" | "not_called" | "not_scorable";
         /**
+         * MatchResultConflict
+         * @description HTTP 409 envelope of the propose-result route. ``detail`` is the coded
+         *     closed-match refusal, the negotiation snapshot, or the lock-race string.
+         */
+        MatchResultConflict: {
+            /** Detail */
+            detail: components["schemas"]["MatchClosedConflict"] | components["schemas"]["MatchNegotiation"] | string;
+        };
+        /**
          * MatchResultsGameWrite
          * @description One game inside a finalize-the-match payload. Per-game point legality
          *     is checked here; cross-game checks (contiguous numbering, decided result,
@@ -7922,7 +7931,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MatchClosedConflict"];
+                    "application/json": components["schemas"]["MatchResultConflict"];
                 };
             };
             /** @description Validation Error */
