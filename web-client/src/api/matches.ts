@@ -861,17 +861,20 @@ export function useProposeResult(matchId: string) {
     // would never fire. That (and a 422/500/transport drop) must stay put so
     // score-entry surfaces it with a live retry.
     //
-    // The coded "match closed" 409 (#1651) refetches too, for the opposite
-    // reason: the match is terminal, so unlike the lock race the refetch cannot
-    // come back "still in flight". It lets the `can_score` guard replace a form
-    // left open after the pushed hint was missed. A closed code on a match that
-    // is still scorable (a cancelled event) leaves the red error in place.
+    // The coded "match closed" 409 (#1651) refreshes every view of the match,
+    // for the opposite reason: the match is terminal, so unlike the lock race
+    // the refetch cannot come back "still in flight". `matchQueryKey` lets the
+    // `can_score` guard replace a form left open after the pushed hint was
+    // missed. `matchDetailsQueryKey` is the key the match page reads, so the
+    // "View match" link shows the match as it now stands instead of a cached
+    // copy that is up to `staleTime` old. A closed code on a match that is
+    // still scorable (a cancelled event) leaves the red error in place.
     onError: (error) => {
-      if (
-        error instanceof ApiError &&
-        (isNegotiationConflict(error) || isMatchClosed(error))
-      ) {
+      if (!(error instanceof ApiError)) return
+      if (isNegotiationConflict(error)) {
         queryClient.invalidateQueries({ queryKey: matchQueryKey(matchId) })
+      } else if (isMatchClosed(error)) {
+        invalidateMatchViews(queryClient, matchId)
       }
     },
   })
