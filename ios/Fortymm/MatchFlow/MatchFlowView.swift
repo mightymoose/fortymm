@@ -162,13 +162,15 @@ struct MatchFlowView: View {
                 // Checked before the correction branch below — a closed match
                 // is the more specific reason, and a correction cannot succeed
                 // on it either.
-                // Claim the result is shown only once the refetch has it.
-                if let fresh = try? await service.matchDetails(matchId) {
-                    errorMessage = "\(MatchPostError.matchClosed.fmMessage) Here is the final result."
-                    final = fresh
+                // Claim the result is shown only once the refetch has a final
+                // match. `MatchClosedOutcome` holds that decision.
+                switch MatchClosedOutcome(refetched: try? await service.matchDetails(matchId)) {
+                case let .showFinal(match, message):
+                    errorMessage = message
+                    final = match
                     withAnimation { step = .detail }
-                } else {
-                    errorMessage = MatchPostError.matchClosed.fmMessage
+                case let .stay(message):
+                    errorMessage = message
                 }
             } catch APIError.http(409, _) where resume?.isCorrection == true {
                 errorMessage = "This result changed while you were editing — reopen the match to review the latest score."

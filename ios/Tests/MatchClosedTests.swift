@@ -81,5 +81,32 @@ struct MatchClosedTests {
         } else {
             preconditionFailure("An unknown code must stay an APIError.http")
         }
+
+        func fixture(id: String, decided: Bool) -> FinalMatch {
+            FinalMatch(
+                id: id, you: MatchSeed.me, opponent: .unlistedOpponent, solo: true, games: [],
+                bestOf: 3, rated: false, setsWon: SetScore(a: 0, b: 0), win: false,
+                ratingOutcome: nil, when: "now", context: "Casual", decided: decided
+            )
+        }
+
+        let completed = MatchClosedOutcome(refetched: fixture(id: "m-1651-final", decided: true))
+        if case let .showFinal(match, message) = completed {
+            precondition(match.id == "m-1651-final", "The final result is the refetched match")
+            precondition(message == "This match has already finished. Here is the final result.",
+                         "A completed refetch keeps today's message")
+            print("PASS: a completed refetch shows the final result")
+        } else {
+            preconditionFailure("A completed refetch must show the final result")
+        }
+
+        let open = MatchClosedOutcome(refetched: fixture(id: "m-1651-voided", decided: false))
+        if case let .stay(message) = open {
+            precondition(message == "This match is no longer open to results.",
+                         "A refetched match that is not final says it is closed to results")
+            print("PASS: a refetched match that is not final stays on the score screen")
+        } else {
+            preconditionFailure("A refetched match that is not final must stay on the score screen")
+        }
     }
 }

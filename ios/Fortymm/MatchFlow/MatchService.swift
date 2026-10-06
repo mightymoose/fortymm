@@ -14,6 +14,28 @@ enum MatchPostError: LocalizedError {
     }
 }
 
+/// What the score screen does after a `match_closed` post failure, given the
+/// refetched match. Only a decided (completed) match may claim a final result
+/// and move on. A voided or otherwise not-final match keeps the player here.
+enum MatchClosedOutcome {
+    case showFinal(FinalMatch, message: String)
+    case stay(message: String)
+
+    static let notOpenMessage = "This match is no longer open to results."
+
+    init(refetched: FinalMatch?) {
+        guard let refetched else {
+            self = .stay(message: "This match has already finished.")
+            return
+        }
+        if refetched.decided {
+            self = .showFinal(refetched, message: "This match has already finished. Here is the final result.")
+        } else {
+            self = .stay(message: Self.notOpenMessage)
+        }
+    }
+}
+
 /// The match flow's gateway to the API. Wraps `APIClient` with the specific
 /// match/player endpoints and maps the server's perspective-neutral DTOs into
 /// the view models (`MatchPlayer`, `Game`, `FinalMatch`) the SwiftUI screens
