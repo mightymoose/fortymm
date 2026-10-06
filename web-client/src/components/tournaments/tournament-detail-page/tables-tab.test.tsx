@@ -1,5 +1,6 @@
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
+import { act } from 'react'
 
 import { server } from '@/mocks/server'
 import { SUMMER_SLAM_ID } from '@/mocks/factories/tournaments/tournament-ids'
@@ -8,7 +9,7 @@ import {
   placeFixture,
   resetTournamentsStore,
 } from '@/mocks/tournaments-store'
-import { render, screen, waitFor } from '@/test/utilities'
+import { fireEvent, render, screen, waitFor } from '@/test/utilities'
 
 import {
   useTables,
@@ -19,6 +20,12 @@ import { buildTable, buildTables } from '../data/seed.factory'
 import type { TournamentTableEntry } from '../data/types'
 import { TablesTab } from './tables-tab'
 import { tablesTabPage } from './tables-tab.page'
+
+/** Drain the microtask React Hook Form's async resolver settles one tick after
+ * a `fireEvent.change`, outside the event's own act window. */
+const flush = async () => {
+  await act(async () => {})
+}
 
 /** The recorded calls of a fake `onChangeCatalogue`, plus the answer it gives.
  * Resolves by default — the tab clears the add form only on the success path. */
@@ -71,6 +78,20 @@ describe('TablesTab', () => {
     expect('id' in entries[2]).toBe(false)
     // The destructive opt-in is never volunteered — an add removes nothing.
     expect(spy.calls[0].options).toEqual({ unplaceFixturesOnRemovedTables: false })
+  })
+
+  it('adds a table with the label and court the organizer padded, trimmed', async () => {
+    const spy = spyCatalogue()
+    tablesTabPage.render({ catalogue: buildTables(1), ...spy })
+
+    await userEvent.type(tablesTabPage.getLabelInput(), ' T9 ')
+    await userEvent.type(tablesTabPage.getCourtInput(), ' 9 ')
+    await userEvent.click(tablesTabPage.getAddButton())
+
+    await waitFor(() => expect(spy.calls).toHaveLength(1))
+    // The schema's trim is the only one: the resolver hands `submitTable` the parsed
+    // value, so the value the length bound checked is the value the request carries.
+    expect(spy.calls[0].entries[1]).toEqual({ kind: 'added', label: 'T9', court: '9' })
   })
 
   it('removes a table by leaving it OUT of the cited catalogue', async () => {
@@ -135,7 +156,7 @@ describe('TablesTab', () => {
     expect(tablesTabPage.getAddButton()).toBeEnabled()
     await userEvent.click(tablesTabPage.getAddButton())
 
-    expect(await tablesTabPage.queryLabelError()).not.toBeNull()
+    expect(tablesTabPage.queryFieldMessage('Label is required.')).not.toBeNull()
     expect(tablesTabPage.getLabelInput()).toHaveAttribute('aria-invalid', 'true')
     expect(spy.calls).toHaveLength(0)
   })
@@ -149,8 +170,68 @@ describe('TablesTab', () => {
     await userEvent.type(tablesTabPage.getLabelInput(), '   ')
     await userEvent.click(tablesTabPage.getAddButton())
 
-    expect(await tablesTabPage.queryLabelError()).not.toBeNull()
+    expect(tablesTabPage.queryFieldMessage('Label is required.')).not.toBeNull()
     expect(spy.calls).toHaveLength(0)
+  })
+
+  // The server refuses a label over 255 code points; the box must refuse the same
+  // set before the request, and must not refuse 255 emoji (510 UTF-16 units).
+  it('refuses a label over 255 characters inline, sends nothing, and adds one of 255 emoji', async () => {
+    const spy = spyCatalogue()
+    tablesTabPage.render({ catalogue: buildTables(2), ...spy })
+
+    fireEvent.change(tablesTabPage.getLabelInput(), {
+      target: { value: 'x'.repeat(256) },
+    })
+    await flush()
+    await userEvent.click(tablesTabPage.getAddButton())
+
+    expect(
+      tablesTabPage.queryFieldMessage('Label must be 255 characters or fewer.'),
+    ).toBeInTheDocument()
+    expect(tablesTabPage.getLabelInput()).toHaveAttribute('aria-invalid', 'true')
+    expect(spy.calls).toHaveLength(0)
+
+    const emoji = '🏆'.repeat(255)
+    expect(emoji.length).toBe(510)
+    fireEvent.change(tablesTabPage.getLabelInput(), { target: { value: emoji } })
+    await flush()
+    await userEvent.click(tablesTabPage.getAddButton())
+
+    await waitFor(() => expect(spy.calls).toHaveLength(1))
+    expect(spy.calls[0].entries.at(-1)).toMatchObject({ kind: 'added', label: emoji })
+  })
+
+  // The server refuses a court over 255 code points; the box must refuse the same
+  // set before the request, and must not refuse 255 emoji (510 UTF-16 units).
+  it('refuses a court over 255 characters inline, sends nothing, and adds one of 255 emoji', async () => {
+    const spy = spyCatalogue()
+    tablesTabPage.render({ catalogue: buildTables(2), ...spy })
+
+    fireEvent.change(tablesTabPage.getLabelInput(), { target: { value: 'T9' } })
+    fireEvent.change(tablesTabPage.getCourtInput(), {
+      target: { value: 'x'.repeat(256) },
+    })
+    await flush()
+    await userEvent.click(tablesTabPage.getAddButton())
+
+    expect(
+      tablesTabPage.queryFieldMessage('Court must be 255 characters or fewer.'),
+    ).toBeInTheDocument()
+    expect(tablesTabPage.getCourtInput()).toHaveAttribute('aria-invalid', 'true')
+    expect(spy.calls).toHaveLength(0)
+
+    const emoji = '🏆'.repeat(255)
+    fireEvent.change(tablesTabPage.getCourtInput(), { target: { value: emoji } })
+    await flush()
+    await userEvent.click(tablesTabPage.getAddButton())
+
+    await waitFor(() => expect(spy.calls).toHaveLength(1))
+    expect(spy.calls[0].entries.at(-1)).toMatchObject({
+      kind: 'added',
+      label: 'T9',
+      court: emoji,
+    })
   })
 
   // A modal/form that clears itself over a rejected write has silently thrown the
@@ -164,10 +245,9 @@ describe('TablesTab', () => {
     await userEvent.type(tablesTabPage.getCourtInput(), '9')
     await userEvent.click(tablesTabPage.getAddButton())
 
-    // The add form's OWN root error, not the shared remove/confirm banner: `label`
-    // and `court` carry no server-mirrored field constraint to pin a 422 to, so
-    // every submit failure here is root-level — same shape as `NewTournamentModal`'s
-    // non-field-attributable case.
+    // The add form's OWN root error, not the shared remove/confirm banner: the tab
+    // maps no server 422 to a field, so every add failure that reaches the server
+    // lands in the add form's root error.
     await waitFor(() => expect(tablesTabPage.queryAddTableError()).not.toBeNull())
     expect(tablesTabPage.getLabelInput()).toHaveValue('T9')
     expect(tablesTabPage.getCourtInput()).toHaveValue('9')

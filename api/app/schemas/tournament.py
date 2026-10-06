@@ -796,12 +796,16 @@ class TournamentTableWrite(BaseModel):
     diff over tables that already exist, so its entries derive from this one and add an
     optional ``id`` naming the table they keep (:class:`TournamentTableUpsert`) — which
     is citing an id, not authoring one, and does not disturb who mints them.
+
+    The label and the court are each bounded at 255 code points to match their
+    ``VARCHAR(255)`` columns, so an over-length value is a 422 and not a database fault
+    (#1595).
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    label: str
-    court: str
+    label: str = Field(max_length=255)
+    court: str = Field(max_length=255)
 
 
 class TournamentTableUpsert(TournamentTableWrite):

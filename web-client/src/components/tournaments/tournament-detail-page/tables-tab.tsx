@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 
+import { atMostCodePoints } from '../data/code-points'
 import {
   saveFailure,
   saveFailureMessage,
@@ -33,18 +34,38 @@ import type {
 } from '../data/types'
 import { SectionHeader } from './section-header'
 
-/** Mirrors the server's boundary: `TournamentTableWrite.label`/`.court` are bare,
- * unconstrained `str` (no `min_length`/`max_length` — the schema drops them
- * entirely, same situation `NewTournamentModal`'s `addressComponent` comment is
- * about), so there is no length bound to mirror. `label` still has to be
- * non-empty — that's a client-only rule the server never states, because an
- * empty key is a well-formed request the server would happily store. `court` is
- * genuinely optional in this UI: the card already renders `Court {court}` with
- * an empty string same as any other, and requiring it here would invent a
- * constraint neither the schema nor the prior `useState` version had. */
+const TABLE_FIELD_MAX = 255
+
+/** The server bounds `TournamentTableWrite.label` and `.court` at 255 code points
+ * (`Field(max_length=255)`, #1595). This schema mirrors both the `label` and the
+ * `court` bound with `atMostCodePoints`, which counts code points the way the
+ * server does. The inputs carry no `maxLength` attribute, because the DOM counts
+ * UTF-16 units and would refuse 255 emoji that the server accepts
+ * (`details-tab.tsx` explains). `label` must also be non-empty. That is a
+ * client-only rule, because an empty key is a well-formed request the server
+ * would store. `court` is optional in this UI: the card renders `Court {court}`
+ * with an empty string as it does any other, and requiring it would invent a
+ * constraint the prior `useState` version never had. */
 const addTableSchema = z.object({
-  label: z.string().trim().min(1, { message: 'Label is required.' }),
-  court: z.string(),
+  label: z
+    .string()
+    .trim()
+    .min(1, { message: 'Label is required.' })
+    .pipe(
+      atMostCodePoints(
+        TABLE_FIELD_MAX,
+        `Label must be ${TABLE_FIELD_MAX} characters or fewer.`,
+      ),
+    ),
+  court: z
+    .string()
+    .trim()
+    .pipe(
+      atMostCodePoints(
+        TABLE_FIELD_MAX,
+        `Court must be ${TABLE_FIELD_MAX} characters or fewer.`,
+      ),
+    ),
 })
 
 type AddTableValues = z.infer<typeof addTableSchema>
@@ -169,14 +190,13 @@ export const TablesTab = ({
    * id** — the server mints it (ADR 20260801). The form resets only when the write
    * landed, so a refused add leaves the words the organizer typed on screen.
    *
-   * `label`/`court` carry no server-mirrored constraint beyond "present" (both are
-   * bare, unconstrained `str` on the write schema — see `addTableSchema`), so there is
-   * no field this tab could plausibly pin a 422 to: every failure here is a root-level
-   * banner, same as `NewTournamentModal`'s non-field-attributable case. */
+   * The schema refuses an over-length value before any request, so a server failure
+   * here stays a root-level banner, same as `NewTournamentModal`'s non-field-attributable
+   * case. */
   const submitTable = addTableForm.handleSubmit(async (values) => {
     addTableForm.clearErrors('root')
     const saved = await save(
-      [...keepTables(catalogue), addTable(values.label.trim(), values.court.trim())],
+      [...keepTables(catalogue), addTable(values.label, values.court)],
       false,
       (message) => addTableForm.setError('root', { type: 'server', message }),
     )
@@ -267,7 +287,7 @@ export const TablesTab = ({
             onSubmit={submitTable}
             noValidate
           >
-            <div>
+            <div className="sm:w-36">
               <Input
                 aria-label="Table label"
                 aria-invalid={!!addTableForm.formState.errors.label}
@@ -281,17 +301,25 @@ export const TablesTab = ({
                 </p>
               )}
             </div>
-            <Input
-              // The card renders "Court {court}", so the field is already
-              // labeled "Court" (aria-label) — the value is a bare identifier.
-              // Placeholder hints a bare value ("A"), never "Court", so a user
-              // following it types "A" → card reads "Court A", not the
-              // "Court Court A" a "Court" placeholder would nudge them into.
-              aria-label="Court"
-              placeholder="e.g. A"
-              className="w-28"
-              {...addTableForm.register('court')}
-            />
+            <div className="sm:w-28">
+              <Input
+                // The card renders "Court {court}", so the field is already
+                // labeled "Court" (aria-label) — the value is a bare identifier.
+                // Placeholder hints a bare value ("A"), never "Court", so a user
+                // following it types "A" → card reads "Court A", not the
+                // "Court Court A" a "Court" placeholder would nudge them into.
+                aria-label="Court"
+                aria-invalid={!!addTableForm.formState.errors.court}
+                placeholder="e.g. A"
+                className="w-28"
+                {...addTableForm.register('court')}
+              />
+              {addTableForm.formState.errors.court && (
+                <p className="mt-1.5 text-xs text-[color:var(--loss)]">
+                  {addTableForm.formState.errors.court.message}
+                </p>
+              )}
+            </div>
             {/* Not gated on form validity: `handleSubmit` already blocks an empty
                 label and renders the inline error, so a dead disabled button never
                 stands between the organizer and finding out why (web-client/CLAUDE.md,
