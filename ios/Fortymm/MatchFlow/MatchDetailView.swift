@@ -122,6 +122,11 @@ struct MatchDetailView: View {
                 matchId: id, games: match.games, yourSideNumber: match.yourSideNumber
             )
             withAnimation { live = updated }
+        } catch MatchPostError.matchClosed {
+            // Someone else finished the match while this screen was open: say so
+            // and pull the real state, as `accept()` does for its own 409.
+            actionError = MatchPostError.matchClosed.fmMessage
+            await refresh(force: true)
         } catch {
             actionError = error.fmMessage
         }

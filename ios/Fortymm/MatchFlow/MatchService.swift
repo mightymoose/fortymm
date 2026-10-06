@@ -1,5 +1,41 @@
 import Foundation
 
+/// Why a result post failed in a way the screens act on instead of just showing.
+enum MatchPostError: LocalizedError {
+    /// The match is already completed or voided, so nobody can post to it. The
+    /// screen holding the form is stale; refresh the match instead of retrying.
+    case matchClosed
+
+    var errorDescription: String? {
+        switch self {
+        case .matchClosed:
+            return "This match has already finished."
+        }
+    }
+}
+
+/// What the score screen does after a `match_closed` post failure, given the
+/// refetched match. Only a decided (completed) match may claim a final result
+/// and move on. A voided or otherwise not-final match keeps the player here.
+enum MatchClosedOutcome {
+    case showFinal(FinalMatch, message: String)
+    case stay(message: String)
+
+    static let notOpenMessage = "This match is no longer open to results."
+
+    init(refetched: FinalMatch?) {
+        guard let refetched else {
+            self = .stay(message: Self.notOpenMessage)
+            return
+        }
+        if refetched.decided {
+            self = .showFinal(refetched, message: "This match has already finished. Here is the final result.")
+        } else {
+            self = .stay(message: Self.notOpenMessage)
+        }
+    }
+}
+
 /// The match flow's gateway to the API. Wraps `APIClient` with the specific
 /// match/player endpoints and maps the server's perspective-neutral DTOs into
 /// the view models (`MatchPlayer`, `Game`, `FinalMatch`) the SwiftUI screens
@@ -74,10 +110,19 @@ struct MatchService {
             },
             supersedesResultId: supersedes
         )
-        let details: MatchDetailsDTO = try await client.post(
-            "/v1/matches/\(matchId.uuidString)/results", body: payload
+        // Coded-error send, not `post`: the closed-match 409 is told apart by its
+        // stable `code`, never by its English text (#1651). Every other failure
+        // (the lock-race string, the negotiation object, a 422) reaches the
+        // caller as the same `APIError` `post` would have thrown.
+        let result: Result<MatchDetailsDTO, MatchPostCodedError> = try await client.sendExpectingCodedError(
+            "POST", "/v1/matches/\(matchId.uuidString)/results", body: payload
         )
-        return Self.finalMatch(from: details)
+        switch result {
+        case .success(let details):
+            return Self.finalMatch(from: details)
+        case .failure:
+            throw MatchPostError.matchClosed
+        }
     }
 
     // MARK: Per-game scratchpad writes

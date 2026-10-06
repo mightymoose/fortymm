@@ -452,6 +452,24 @@ class MatchGameScoreConflict(BaseModel):
     committed_score: MatchDetailsScore | None
 
 
+class MatchClosedConflict(BaseModel):
+    """409 ``detail`` for a propose against a terminal (completed/voided) match.
+
+    ``code`` is the stable discriminator a client matches on, so the lock-race
+    409 (a plain string) and this one never have to be told apart by their
+    English text (#1651). ``message`` is the human copy."""
+
+    code: Literal["match_closed"] = "match_closed"
+    message: str
+
+
+class MatchResultConflict(BaseModel):
+    """HTTP 409 envelope of the propose-result route. ``detail`` is the coded
+    closed-match refusal, the negotiation snapshot, or the lock-race string."""
+
+    detail: MatchClosedConflict | MatchNegotiation | str
+
+
 # ----- finalize body (POST /v1/matches/{id}/results) -----------------------
 
 

@@ -369,13 +369,18 @@ function ScoreEntryInner({
   // regardless of render timing. Reset in each mutation's `onSettled` so a
   // later clear of a *different* game works normally.
   const clearingRef = useRef(false)
+  // A draft typed before the match closed stays dirty, but the `can_score`
+  // refusal below has no form left to lose and never renders the leave dialog,
+  // so the blocker stands down there (#1651).
+  const guardsDraft = isDirty && data?.can_score !== false
   const { status, proceed, reset } = useBlocker({
-    // Blocks browser refresh/close (beforeunload) only while genuinely dirty.
-    enableBeforeUnload: () => isDirty,
+    // Blocks browser refresh/close (beforeunload) only while the draft guard
+    // holds (a dirty draft on a scorable match).
+    enableBeforeUnload: () => guardsDraft,
     // Blocks in-app route changes the same way. The app's own hops opt out per
     // navigation via `ignoreBlocker: true`, so there's nothing to check here but
-    // the dirty flag (ADR 0014, #818).
-    shouldBlockFn: () => isDirty,
+    // the draft guard (ADR 0014, #818).
+    shouldBlockFn: () => guardsDraft,
     withResolver: true,
   })
 
@@ -408,13 +413,14 @@ function ScoreEntryInner({
   // Option A that replaces the #800 reconcile interstitial ADR-0005 (#827)
   // removed.
   //
-  // Only the negotiation-conflict 409 redirects. The other propose 409s carry a
-  // plain-STRING detail — the lock race ("a result is already being posted…") and
-  // the terminal guard ("no longer open to results") — and their concurrent post
-  // may not have committed, so a refetch could leave `standing_result` null and
-  // strand the screen on "Taking you there…" forever. Those fall through to the
-  // normal red-error path below (string detail rendered, submit live for retry),
-  // exactly as before this fix.
+  // Only the negotiation-conflict 409 redirects. The lock-race 409 carries a
+  // plain-STRING detail ("a result is already being posted…") and its concurrent
+  // post may not have committed, so a refetch could leave `standing_result` null
+  // and strand the screen on "Taking you there…" forever. It falls through to
+  // the normal red-error path below (string detail rendered, submit live for
+  // retry). The coded "match closed" 409 (#1651) also falls through, but its
+  // refetch (see `useProposeResult`) lets the `can_score` guard below replace
+  // the form.
   const finalizeRedirecting =
     finalizeApiError !== null && isNegotiationConflict(finalizeApiError)
 
@@ -456,10 +462,11 @@ function ScoreEntryInner({
   // instead of a silent bounce. `can_score` is also true for the tournament
   // director on a called, unresolved match in their own tournament, even when
   // they hold no side (#1523), so a director on a scorable match falls
-  // through this guard same as a participant. The completed/posted-result
-  // case above already returned, so what's left here is: not yet called, no
-  // opponent, or some other terminal state (e.g. voided) — plus a spectator
-  // on a match none of those apply to.
+  // through this guard same as a participant. The negotiation-conflict
+  // redirect above already returned, so what's left here is: not yet called,
+  // no opponent, a completed match (a stale link, or the viewer's own finalize
+  // got the coded `match_closed` 409, #1651), or some other terminal state
+  // (e.g. voided) — plus a spectator on a match none of those apply to.
   if (!data.can_score) {
     return (
       <div className="entry-wrap">
@@ -470,6 +477,9 @@ function ScoreEntryInner({
             {scoreEntryRefusalMessage(data.not_scorable_reason)}
           </AlertDescription>
         </Alert>
+        <Link {...matchDetailRoute(matchId)} className="underline">
+          View match
+        </Link>
       </div>
     )
   }

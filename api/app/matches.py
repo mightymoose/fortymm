@@ -106,6 +106,7 @@ from app.result_proposal import (
     propose_result,
 )
 from app.schemas.match import (
+    MatchClosedConflict,
     MatchCreate,
     MatchDetails,
     MatchDetailsScore,
@@ -117,6 +118,7 @@ from app.schemas.match import (
     MatchListFilter,
     MatchListResponse,
     MatchListRow,
+    MatchResultConflict,
     MatchResultsWrite,
 )
 from app.services.dependencies import get_match_service
@@ -854,6 +856,10 @@ def _negotiation_conflict(
     "/matches/{match_id}/results",
     response_model=MatchDetails,
     status_code=status.HTTP_201_CREATED,
+    # The 409 body is ``{"detail": ...}``. ``detail`` is one of: the coded
+    # closed-match refusal (MatchClosedConflict), the negotiation snapshot
+    # (MatchNegotiation) or the lock-race string.
+    responses={409: {"model": MatchResultConflict}},
 )
 async def post_match_result(
     match_id: uuid.UUID,
@@ -916,7 +922,10 @@ async def post_match_result(
     except MatchClosedError as exc:
         # A terminal match (completed/voided) is closed to new proposals.
         raise HTTPException(
-            status_code=409, detail="This match is no longer open to results."
+            status_code=409,
+            detail=MatchClosedConflict(
+                message="This match is no longer open to results."
+            ).model_dump(mode="json"),
         ) from exc
     except UndecidedBoardError as exc:
         # The strict decided-board precondition failed — an undecided/invalid

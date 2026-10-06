@@ -7,6 +7,7 @@ import {
   ApiError,
   api,
   extractDetail,
+  isMatchClosed,
   isSessionEndedError,
   setSessionEndedHandler,
   validationFields,
@@ -255,4 +256,42 @@ it('returns null — not [] — for a refusal the server wrote in words', () => 
 
   expect(validationFields(new ApiError(500, null, 'x'))).toBeNull()
   expect(validationFields(new Error('offline'))).toBeNull()
+})
+
+it('isMatchClosed keys on the stable code, not the English text (#1651)', () => {
+  const closed = new ApiError(
+    409,
+    'This match is no longer open to results.',
+    'post match result',
+    {
+      detail: {
+        code: 'match_closed',
+        message: 'This match is no longer open to results.',
+      },
+    },
+  )
+  expect(isMatchClosed(closed)).toBe(true)
+
+  // The lock-race 409 is a plain string, and so is a legacy closed body: the
+  // words alone never count.
+  const lockRace = new ApiError(409, 'busy', 'post match result', {
+    detail: 'A result is already being posted for this match.',
+  })
+  const legacy = new ApiError(409, 'closed', 'post match result', {
+    detail: 'This match is no longer open to results.',
+  })
+  // The negotiation conflict is an object with no code.
+  const negotiation = new ApiError(409, null, 'post match result', {
+    detail: { viewer_state: 'review', your_turn: true },
+  })
+  // A different status or a different code must not match.
+  const wrongStatus = new ApiError(422, 'x', 'post match result', {
+    detail: { code: 'match_closed' },
+  })
+  const otherCode = new ApiError(409, 'x', 'post match result', {
+    detail: { code: 'something_else' },
+  })
+  for (const error of [lockRace, legacy, negotiation, wrongStatus, otherCode]) {
+    expect(isMatchClosed(error)).toBe(false)
+  }
 })

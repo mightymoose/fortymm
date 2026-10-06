@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider, onlineManager, useQuery } from '@tans
 import { act, render, renderHook, screen, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 
+import { matchDetailsQueryKey } from '@/components/matches/match-details/match-details-query'
 import { server } from '@/mocks/server'
 import { matchDetails, matchListResponse, matchListRow } from '@/test/factories'
 import { RenderBoundary } from '@/test/utilities'
@@ -1075,6 +1076,52 @@ describe('useProposeResult', () => {
     expect(invalidateSpy).not.toHaveBeenCalledWith({
       queryKey: matchQueryKey(matchId),
     })
+  })
+
+  it('refreshes the match page details on a match_closed 409, so View match shows the match as it now stands (#1651)', async () => {
+    const matchId = 'm-1651-closed'
+    queryClient.setQueryData(matchDetailsQueryKey(matchId), matchDetails())
+    server.use(
+      http.post('*/v1/matches/:matchId/results', () =>
+        HttpResponse.json(
+          {
+            detail: {
+              code: 'match_closed',
+              message: 'This match is no longer open to results.',
+            },
+          },
+          { status: 409 },
+        ),
+      ),
+    )
+
+    const { result } = renderHook(() => useProposeResult(matchId), { wrapper })
+    result.current.mutate({ games: [] })
+
+    await waitFor(() => expect(result.current.isError).toBe(true))
+
+    expect(
+      queryClient.getQueryState(matchDetailsQueryKey(matchId))?.isInvalidated,
+    ).toBe(true)
+  })
+
+  it('keeps a negotiation-conflict 409 to the score-entry query only, leaving the match page details alone', async () => {
+    const matchId = 'm-801-details'
+    queryClient.setQueryData(matchDetailsQueryKey(matchId), matchDetails())
+    server.use(
+      http.post('*/v1/matches/:matchId/results', () =>
+        HttpResponse.json(negotiationConflict, { status: 409 }),
+      ),
+    )
+
+    const { result } = renderHook(() => useProposeResult(matchId), { wrapper })
+    result.current.mutate({ games: [] })
+
+    await waitFor(() => expect(result.current.isError).toBe(true))
+
+    expect(
+      queryClient.getQueryState(matchDetailsQueryKey(matchId))?.isInvalidated,
+    ).toBe(false)
   })
 
   it('does NOT refetch on a non-409 finalize error, so score-entry can surface it for retry', async () => {

@@ -121,4 +121,10 @@ export class ScoreEntryPage {
       .getByRole('alert')
       .filter({ hasText: "Can't enter a score here" })
   }
+
+  /** The refusal's `View match` link — the way out to the match page once the
+   * match is over. */
+  get viewMatchLink(): Locator {
+    return this.page.getByRole('link', { name: 'View match' })
+  }
 }

@@ -337,6 +337,22 @@ struct CreateMatchBody: Encodable {
     // opponentUserId → opponent_user_id, bestOf → best_of via convertToSnakeCase.
 }
 
+/// The coded 4xx body `POST /v1/matches/{id}/results` sends when the match is
+/// already over: `{"detail": {"code": "match_closed", "message": "..."}}`. Any
+/// other code fails to decode, so `sendExpectingCodedError` throws it as a
+/// plain `APIError.http` with its real status and message.
+struct MatchPostCodedError: Decodable, Error {
+    let detail: Detail
+
+    struct Detail: Decodable {
+        let code: Code
+    }
+
+    enum Code: String, Decodable {
+        case matchClosed = "match_closed"
+    }
+}
+
 struct PostResultsBody: Encodable {
     let games: [GameWrite]
     /// The standing result this posting supersedes (a correction/counter).

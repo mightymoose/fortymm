@@ -3274,6 +3274,24 @@ export interface components {
             ids: string[];
         };
         /**
+         * MatchClosedConflict
+         * @description 409 ``detail`` for a propose against a terminal (completed/voided) match.
+         *
+         *     ``code`` is the stable discriminator a client matches on, so the lock-race
+         *     409 (a plain string) and this one never have to be told apart by their
+         *     English text (#1651). ``message`` is the human copy.
+         */
+        MatchClosedConflict: {
+            /**
+             * Code
+             * @default match_closed
+             * @constant
+             */
+            code: "match_closed";
+            /** Message */
+            message: string;
+        };
+        /**
          * MatchCreate
          * @description Request body for ``POST /v1/matches``.
          *
@@ -3603,6 +3621,15 @@ export interface components {
          * @enum {string}
          */
         MatchNotScorableReason: "no_opponent" | "result_posted" | "not_called" | "not_scorable";
+        /**
+         * MatchResultConflict
+         * @description HTTP 409 envelope of the propose-result route. ``detail`` is the coded
+         *     closed-match refusal, the negotiation snapshot, or the lock-race string.
+         */
+        MatchResultConflict: {
+            /** Detail */
+            detail: components["schemas"]["MatchClosedConflict"] | components["schemas"]["MatchNegotiation"] | string;
+        };
         /**
          * MatchResultsGameWrite
          * @description One game inside a finalize-the-match payload. Per-game point legality
@@ -7896,6 +7923,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["app__schemas__match__MatchDetails"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchResultConflict"];
                 };
             };
             /** @description Validation Error */

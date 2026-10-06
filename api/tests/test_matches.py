@@ -2,6 +2,7 @@ import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import jsonschema
 import pytest
 from fastapi import HTTPException
 from httpx import AsyncClient
@@ -46,8 +47,11 @@ from app.repositories.match_details_repository import (
     MatchDetailsRepository,
 )
 from app.schemas.match import (
+    MatchClosedConflict,
     MatchGameScoreUpdate,
     MatchGameScoreWrite,
+    MatchNegotiation,
+    MatchResultConflict,
     MatchResultsGameWrite,
     MatchResultsWrite,
 )
@@ -2631,6 +2635,106 @@ async def test_propose_first_post_requires_no_existing_result(
             detail["standing_result"]["id"]
             == first.json()["negotiation"]["standing_result"]["id"]
         )
+
+
+async def test_propose_on_a_closed_match_409s_with_a_machine_readable_code(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """#1651: a propose against a completed match 409s with a coded body, so a
+    client can tell "the match is over" from the lock-race 409 without matching
+    English. The human text rides along as ``detail.message``."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "closed-rival") as (opp_client, opp):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        payload = {
+            "games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 5}]
+        }
+        first = await api_client.post(
+            f"/v1/matches/{match['id']}/results", json=payload
+        )
+        assert first.status_code == 201
+        await accept_standing_result(opp_client, match["id"])
+
+        late = await api_client.post(f"/v1/matches/{match['id']}/results", json=payload)
+
+    assert late.status_code == 409
+    assert late.json()["detail"] == {
+        "code": "match_closed",
+        "message": "This match is no longer open to results.",
+    }
+
+
+_RESULTS_409 = ("paths", "/v1/matches/{match_id}/results", "post", "responses", "409")
+
+
+def _results_409_schema(openapi: dict) -> dict:
+    node = openapi
+    for key in _RESULTS_409:
+        node = node[key]
+    return node["content"]["application/json"]["schema"]
+
+
+async def test_post_result_openapi_declares_the_409_detail_envelope(
+    api_client: AsyncClient,
+):
+    """The served contract describes the ``{"detail": ...}`` body the route
+    really sends, so the generated clients do not misread it."""
+    openapi = (await api_client.get("/openapi.json")).json()
+
+    assert _results_409_schema(openapi) == {
+        "$ref": "#/components/schemas/MatchResultConflict"
+    }
+    component = openapi["components"]["schemas"]["MatchResultConflict"]
+    assert component["required"] == ["detail"]
+    assert component["properties"]["detail"]["anyOf"] == [
+        {"$ref": "#/components/schemas/MatchClosedConflict"},
+        {"$ref": "#/components/schemas/MatchNegotiation"},
+        {"type": "string"},
+    ]
+
+
+async def test_every_post_result_409_body_fits_the_declared_conflict_model(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    """Each of the three 409 bodies the route sends validates against the
+    declared envelope, both as the model and as the served JSON schema."""
+    await start_session(api_client, db_session)
+    async with opponent_session(db_session, "conflict-shape-rival") as (
+        opp_client,
+        opp,
+    ):
+        match = await _create_match(api_client, opp.id, best_of=1)
+        url = f"/v1/matches/{match['id']}/results"
+        payload = {
+            "games": [{"game_number": 1, "side_1_points": 11, "side_2_points": 5}]
+        }
+        first = await api_client.post(url, json=payload)
+        assert first.status_code == 201
+        negotiation_409 = await api_client.post(url, json=payload)
+        assert negotiation_409.status_code == 409
+        await accept_standing_result(opp_client, match["id"])
+        closed_409 = await api_client.post(url, json=payload)
+        assert closed_409.status_code == 409
+
+    openapi = (await api_client.get("/openapi.json")).json()
+    schema = _results_409_schema(openapi)
+    lock_race_text = (
+        "A result is already being posted for this match. Refresh to see the latest."
+    )
+    lock_race_body = {"detail": lock_race_text}
+
+    assert MatchResultConflict.model_validate(
+        closed_409.json()
+    ).detail == MatchClosedConflict(
+        code="match_closed", message="This match is no longer open to results."
+    )
+    assert isinstance(
+        MatchResultConflict.model_validate(negotiation_409.json()).detail,
+        MatchNegotiation,
+    )
+    assert MatchResultConflict.model_validate(lock_race_body).detail == lock_race_text
+    for body in (closed_409.json(), negotiation_409.json(), lock_race_body):
+        jsonschema.validate(body, {**schema, "components": openapi["components"]})
 
 
 async def test_propose_first_post_no_longer_guards_scratchpad_divergence(
