@@ -108,5 +108,14 @@ struct MatchClosedTests {
         } else {
             preconditionFailure("A refetched match that is not final must stay on the score screen")
         }
+
+        let failedRefetch = MatchClosedOutcome(refetched: nil)
+        if case let .stay(message) = failedRefetch {
+            precondition(message == "This match is no longer open to results.",
+                         "A failed refetch must not claim the match finished")
+            print("PASS: a failed refetch stays on the score screen without claiming the match finished")
+        } else {
+            preconditionFailure("A failed refetch must stay on the score screen")
+        }
     }
 }

@@ -25,7 +25,7 @@ enum MatchClosedOutcome {
 
     init(refetched: FinalMatch?) {
         guard let refetched else {
-            self = .stay(message: "This match has already finished.")
+            self = .stay(message: Self.notOpenMessage)
             return
         }
         if refetched.decided {
