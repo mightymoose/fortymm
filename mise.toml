@@ -1,0 +1,6 @@
+# Host config: tasks that drive the Docker Compose stack.
+# Tool versions used inside the dev container live in mise.container.toml.
+
+[tasks.hello]
+description = "Print Hello World using Node inside the dev container"
+run = "docker compose run --rm dev node -e 'console.log(\"Hello World\")'"
