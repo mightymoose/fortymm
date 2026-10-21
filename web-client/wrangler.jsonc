@@ -18,5 +18,13 @@
   ],
   // Required by `wrangler preview` (the Preview deploys CI makes for
   // branches); empty because Previews use the settings above.
-  "previews": {}
+  "previews": {},
+  // TEMPORARY (claude/test-custom-domain, not for merging): a separate
+  // Worker on test.fortymm.com to try Custom Domains before production.
+  "env": {
+    "domain-test": {
+      "name": "fortymm-domain-test",
+      "routes": [{ "pattern": "test.fortymm.com", "custom_domain": true }]
+    }
+  }
 }

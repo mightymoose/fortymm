@@ -23,6 +23,15 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+      # TEMPORARY (claude/test-custom-domain, not for merging): deploy the
+      # domain-test Worker to try Custom Domains on test.fortymm.com.
+      - name: Deploy the Custom Domain test Worker
+        if: ${{ github.ref == 'refs/heads/claude/test-custom-domain' }}
+        run: docker compose run --rm -T -e CLOUDFLARE_API_TOKEN -e CLOUDFLARE_ACCOUNT_ID -w /app/web-client dev npx wrangler deploy --env domain-test
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       # Every other branch gets a Preview; its URL is in this step's log.
       - name: Deploy a Cloudflare Preview
         if: ${{ github.ref != 'refs/heads/main' }}
