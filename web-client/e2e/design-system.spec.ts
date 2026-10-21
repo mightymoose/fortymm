@@ -1,3 +1,4 @@
+import type { Locator } from '@playwright/test'
 import { expect, test } from './fixtures.ts'
 
 test('shows the Design System title', async ({ designSystemPage }) => {
@@ -93,3 +94,59 @@ test.describe('Button card', () => {
     )
   })
 })
+
+// Nothing is focused or typed into first, so these show the inputs' resting
+// styles, with no focus ring or caret.
+test.describe('Input · Label · Form Field card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.inputCard).toHaveScreenshot('input-card.png')
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.inputCard).toHaveScreenshot('input-card.png')
+  })
+})
+
+// Focuses an input and returns the area to screenshot: the input plus its
+// 3px focus ring, which an element screenshot of the input would cut off.
+async function focusWithRing(input: Locator) {
+  await input.focus()
+  const box = (await input.boundingBox())!
+  const ring = 4
+  return {
+    x: box.x - ring,
+    y: box.y - ring,
+    width: box.width + 2 * ring,
+    height: box.height + 2 * ring,
+  }
+}
+
+// Player tag shows the focus style; Email shows it on an invalid input, where
+// the error border stays and the focus ring is added. The caret is hidden.
+for (const [name, screenshot] of [
+  ['Player tag', 'player-tag-focused.png'],
+  ['Email', 'email-focused.png'],
+] as const) {
+  test.describe(`focused ${name} input`, () => {
+    test('matches the screenshot', async ({ designSystemPage, page }) => {
+      await designSystemPage.goto()
+      const clip = await focusWithRing(designSystemPage.input(name))
+
+      await expect(page).toHaveScreenshot(screenshot, { clip })
+    })
+
+    test('matches the reference kit input', async ({
+      referenceKitPage,
+      page,
+    }) => {
+      await referenceKitPage.goto()
+      const clip = await focusWithRing(referenceKitPage.input(name))
+
+      await expect(page).toHaveScreenshot(screenshot, { clip })
+    })
+  })
+}

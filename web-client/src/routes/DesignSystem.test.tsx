@@ -58,4 +58,57 @@ describe('DesignSystem', () => {
 
     expect(designSystemPage.button('Disabled')).toBeDisabled()
   })
+
+  it('has an Input · Label · Form Field card in the Forms & Input section', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.inputCardHeading).toHaveTextContent(
+      'Input · Label · Form Field',
+    )
+    expect(designSystemPage.inputCard).toHaveTextContent('composite')
+  })
+
+  it('describes the Player tag input with its help text', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const input = designSystemPage.input('Player tag')
+    expect(input).toHaveValue('@nguyen.t')
+    expect(input).toHaveAttribute('placeholder', '@yourname')
+    expect(input).toHaveAccessibleDescription(
+      'Visible to opponents in match invites.',
+    )
+    expect(input).toBeValid()
+    expect(input).not.toBeRequired()
+  })
+
+  it('shows a required, invalid Email input with an error', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    // The label's asterisk isn't part of the input's name.
+    const input = designSystemPage.input('Email')
+    expect(input).toHaveValue('not-an-email')
+    expect(input).toBeRequired()
+    expect(input).toBeInvalid()
+    expect(input).toHaveAccessibleDescription('Enter a valid email address.')
+  })
+
+  it('shows a disabled input', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const input = designSystemPage.input('Disabled')
+    expect(input).toBeDisabled()
+    expect(input).toHaveValue('Locked field')
+  })
+
+  it('shows a Search input with no description', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const input = designSystemPage.input('Search')
+    expect(input).toHaveAttribute(
+      'placeholder',
+      'Search clubs, players, tournaments…',
+    )
+    expect(input).toHaveValue('')
+    expect(input).not.toHaveAccessibleDescription()
+  })
 })
