@@ -20,6 +20,27 @@ services:
       # Keep node_modules in the container so native deps match its platform.
       - web-client-node-modules:/app/web-client/node_modules
 
+  # Runs the web-client's Playwright suite (`mise run web-client:e2e`). The
+  # image ships the browsers and their system libraries; keep its tag in sync
+  # with @playwright/test in web-client/package.json.
+  playwright:
+    image: mcr.microsoft.com/playwright:v1.64.1-noble
+    command: ["sleep", "infinity"]
+    init: true
+    # Share dev's network so its dev server is on localhost:5173 (Vite rejects
+    # requests addressed to other hostnames, such as `dev`).
+    network_mode: service:dev
+    depends_on:
+      - dev
+    # Chromium can crash when /dev/shm is small; Playwright recommends this.
+    ipc: host
+    working_dir: /app/web-client
+    environment:
+      CI: ${CI:-}
+    volumes:
+      - .:/app
+      - web-client-node-modules:/app/web-client/node_modules
+
 volumes:
   mise:
   web-client-node-modules:

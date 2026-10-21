@@ -11,12 +11,26 @@ run = """
 docker compose up -d --build --wait
 trap 'docker compose rm --force --stop >/dev/null 2>&1' EXIT INT TERM
 ./bin/mise run web-client:ci
+./bin/mise run web-client:e2e
 """
 
 [tasks."web-client:ci"]
 description = "Install, lint, build and test the web-client inside the running dev container (start it with `mise run ci`)"
 # exec bypasses the image entrypoint, so call it to get the container's tools on PATH.
 run = "docker compose exec -T -w /app/web-client dev /app/bin/docker-entrypoint sh -c 'npm ci && npm run lint && npm run build && npm test'"
+
+[tasks."web-client:e2e"]
+description = "Start the dev server in the running dev container and run the Playwright suite against it (start the stack with `mise run ci`)"
+# Expects node_modules installed (web-client:ci runs `npm ci` first).
+# Traces and the HTML report land in web-client/test-results and
+# web-client/playwright-report on the host.
+run = """
+docker compose exec -d -T -w /app/web-client dev /app/bin/docker-entrypoint npm run dev
+docker compose exec -T playwright sh -c '
+  for i in $(seq 60); do curl -sf -o /dev/null http://localhost:5173 && exit 0; sleep 1; done
+  echo "dev server did not start on :5173" >&2; exit 1'
+docker compose exec -T playwright npx playwright test
+"""
 
 [tasks."web-client:test"]
 description = "Run the web-client unit tests inside the dev container"

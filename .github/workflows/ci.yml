@@ -2,9 +2,64 @@ name: CI
 
 on: push
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - run: ./bin/mise run ci
+        env:
+          CI: "true"
+
+      # Playwright writes its traces and HTML report into the bind-mounted
+      # checkout, so they're here once the stack is gone.
+      - name: Upload Playwright traces
+        id: upload-traces
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-traces
+          path: |
+            web-client/test-results/
+            web-client/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Link the traces from the pull request
+        if: ${{ !cancelled() && steps.upload-traces.outputs.artifact-url }}
+        uses: actions/github-script@v8
+        env:
+          ARTIFACT_URL: ${{ steps.upload-traces.outputs.artifact-url }}
+          JOB_STATUS: ${{ job.status }}
+        with:
+          script: |
+            const { owner, repo } = context.repo
+            const { data: pulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner, repo, commit_sha: context.sha,
+            })
+            const marker = '<!-- playwright-traces -->'
+            const body = [
+              marker,
+              `### Playwright traces (${process.env.JOB_STATUS})`,
+              '',
+              `Commit ${context.sha.slice(0, 7)}: [download the traces and HTML report](${process.env.ARTIFACT_URL}).`,
+              '',
+              'Unzip it, then open a test\'s `trace.zip` from `test-results/` with',
+              '`npx playwright show-trace <path>` or by dropping it on https://trace.playwright.dev,',
+              'or run `npx playwright show-report playwright-report`.',
+            ].join('\n')
+            for (const pull of pulls.filter((p) => p.state === 'open')) {
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: pull.number,
+              })
+              const existing = comments.find((c) => c.body?.startsWith(marker))
+              if (existing) {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body })
+              } else {
+                await github.rest.issues.createComment({ owner, repo, issue_number: pull.number, body })
+              }
+            }
