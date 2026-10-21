@@ -111,4 +111,30 @@ describe('DesignSystem', () => {
     expect(input).toHaveValue('')
     expect(input).not.toHaveAccessibleDescription()
   })
+
+  it('shows the Textarea card after the Input card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.textareaCardHeading).toHaveTextContent('Textarea')
+    expect(designSystemPage.textareaCard).toHaveTextContent('resizable')
+    expect(
+      designSystemPage.inputCard.compareDocumentPosition(
+        designSystemPage.textareaCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('shows a labelled Match notes textarea', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const textarea = designSystemPage.textarea
+    expect(textarea).toHaveValue(
+      "Played in the back hall. Andrew's forehand was on fire today — three straight games to 11.",
+    )
+    expect(textarea).toHaveAttribute(
+      'placeholder',
+      'Add context — venue, conditions, anything memorable.',
+    )
+    expect(textarea).not.toHaveAccessibleDescription()
+  })
 })

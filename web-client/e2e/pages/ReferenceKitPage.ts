@@ -22,6 +22,8 @@ export class ReferenceKitPage {
   readonly formsSectionLead: Locator
   readonly buttonCard: Locator
   readonly inputCard: Locator
+  readonly textareaCard: Locator
+  readonly textarea: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -50,6 +52,16 @@ export class ReferenceKitPage {
         exact: true,
       }),
     })
+    this.textareaCard = this.formsSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Textarea',
+        exact: true,
+      }),
+    })
+    // The kit's label isn't tied to its textarea, so take the card's only
+    // textarea.
+    this.textarea = this.textareaCard.locator('textarea')
   }
 
   async goto(): Promise<void> {

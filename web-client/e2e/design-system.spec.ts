@@ -111,11 +111,31 @@ test.describe('Input · Label · Form Field card', () => {
   })
 })
 
-// Focuses an input and returns the area to screenshot: the input plus its
-// 3px focus ring, which an element screenshot of the input would cut off.
-async function focusWithRing(input: Locator) {
-  await input.focus()
-  const box = (await input.boundingBox())!
+// Nothing is focused or typed into first, so these show the textarea's
+// resting style, with no focus ring or caret.
+test.describe('Textarea card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.textareaCard).toHaveScreenshot(
+      'textarea-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.textareaCard).toHaveScreenshot(
+      'textarea-card.png',
+    )
+  })
+})
+
+// Focuses a text control and returns the area to screenshot: the control plus
+// its 3px focus ring, which an element screenshot of it would cut off.
+async function focusWithRing(control: Locator) {
+  await control.focus()
+  const box = (await control.boundingBox())!
   const ring = 4
   return {
     x: box.x - ring,
@@ -150,3 +170,23 @@ for (const [name, screenshot] of [
     })
   })
 }
+
+// The Match notes textarea shows the focus style. The caret is hidden.
+test.describe('focused Match notes textarea', () => {
+  test('matches the screenshot', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+    const clip = await focusWithRing(designSystemPage.textarea)
+
+    await expect(page).toHaveScreenshot('match-notes-focused.png', { clip })
+  })
+
+  test('matches the reference kit textarea', async ({
+    referenceKitPage,
+    page,
+  }) => {
+    await referenceKitPage.goto()
+    const clip = await focusWithRing(referenceKitPage.textarea)
+
+    await expect(page).toHaveScreenshot('match-notes-focused.png', { clip })
+  })
+})

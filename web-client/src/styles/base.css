@@ -401,11 +401,18 @@ h4, .h4 {
 }
 
 /* =========================================================================
-   Form fields (the reference kit's .form-field, .label, .input and .help):
-   a .form-field wraps a .field-label, a control and a .field-help.
+   Form fields (the reference kit's .form-field, .label, .input, .textarea
+   and .help): a .form-field wraps a .field-label, a control and a
+   .field-help.
    ========================================================================= */
 .form-field {
   margin-bottom: 18px;
+}
+
+/* The last field in a container, e.g. a card's only field, ends flush with
+   it. */
+.form-field:last-child {
+  margin-bottom: 0;
 }
 
 .field-label {
@@ -425,39 +432,49 @@ h4, .h4 {
   margin-left: 4px;
 }
 
-.input {
+/* The text controls, .input and .textarea, share their look and states. */
+.input, .textarea {
   font-family: var(--font-ui);
   font-size: 14px;
   font-weight: 400;
   /* The kit sets the font shorthand, which resets the line height. */
   line-height: normal;
-  height: 40px;
-  padding: 0 12px;
   width: 100%;
   background: var(--bg-panel);
   color: var(--fg-1);
   border: 1px solid var(--border-default);
   border-radius: var(--r-md);
+}
+
+.input {
+  height: 40px;
+  padding: 0 12px;
   transition: border-color var(--dur-fast);
 }
 
-.input::placeholder {
+.textarea {
+  padding: 10px 12px;
+  min-height: 96px;
+  resize: vertical;
+}
+
+.input::placeholder, .textarea::placeholder {
   color: var(--fg-muted);
 }
 
-.input:focus {
+.input:focus, .textarea:focus {
   outline: none;
   border-color: var(--ball-500);
   box-shadow: 0 0 0 3px rgb(from var(--ball-500) r g b / 0.15);
 }
 
-.input:disabled {
+.input:disabled, .textarea:disabled {
   opacity: 0.5;
 }
 
 /* The error state follows aria-invalid, so it always matches what assistive
    tech is told. */
-.input[aria-invalid="true"] {
+.input[aria-invalid="true"], .textarea[aria-invalid="true"] {
   border-color: var(--loss);
 }
 

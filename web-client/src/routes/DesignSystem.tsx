@@ -5,6 +5,7 @@ import { Input } from '../components/Input'
 import { PageHeader } from '../components/PageHeader'
 import { PageIntro } from '../components/PageIntro'
 import { Section } from '../components/Section'
+import { Textarea } from '../components/Textarea'
 
 export function DesignSystem() {
   return (
@@ -68,6 +69,15 @@ export function DesignSystem() {
               <Input placeholder="Search clubs, players, tournaments…" />
             </Field>
           </div>
+        </ComponentCard>
+        <ComponentCard title="Textarea" tag="resizable">
+          <Field>
+            <Label>Match notes</Label>
+            <Textarea
+              placeholder="Add context — venue, conditions, anything memorable."
+              defaultValue="Played in the back hall. Andrew's forehand was on fire today — three straight games to 11."
+            />
+          </Field>
         </ComponentCard>
       </Section>
     </>
