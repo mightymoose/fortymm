@@ -1,16 +1,10 @@
-import { render, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
-import App from './App'
+import { HomePage } from './test/pages/HomePage'
 
 describe('App', () => {
-  it('increments the counter when the button is clicked', async () => {
-    const user = userEvent.setup()
-    render(<App />)
+  it('shows the FortyMM title', () => {
+    const homePage = HomePage.render()
 
-    const button = screen.getByRole('button', { name: /count is 0/i })
-    await user.click(button)
-
-    expect(button).toHaveTextContent('Count is 1')
+    expect(homePage.title).toHaveTextContent('FortyMM')
   })
 })

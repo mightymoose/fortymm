@@ -77,6 +77,11 @@ environment). `web-client/src/setupTests.ts` loads the jest-dom matchers and
 cleans up rendered components after each test. Tests live next to the code as
 `*.test.tsx`.
 
+Tests go through page objects in `web-client/src/test/pages/`. A static
+`render()` renders the page and returns the object, whose getters query
+`screen` on each access (e.g. `HomePage.render().title`). Page objects expose
+elements located by accessible role; assertions stay in the tests.
+
 ### End-to-end tests
 
 The Playwright suite lives in `web-client/e2e/` (`*.spec.ts`, excluded from
@@ -85,6 +90,11 @@ Vitest) and is configured in `web-client/playwright.config.ts`. It runs in the
 browsers, sharing the `dev` service's network so the dev server is on
 `localhost:5173`. Keep the image tag in `compose.yaml` in sync with
 `@playwright/test` in `package.json` (pinned exactly).
+
+Specs import `test` and `expect` from `e2e/fixtures.ts`, which provides page
+objects (`e2e/pages/`) as fixtures: `test('...', async ({ homePage }) => ...)`.
+As in the unit tests, page objects expose role-based locators and actions like
+`goto()`, and the specs do the asserting.
 
 Every run records a trace: `web-client/test-results/<test>/trace.zip` (open
 with `npx playwright show-trace` or https://trace.playwright.dev) and an HTML
