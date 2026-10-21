@@ -4,4 +4,6 @@
 set -euo pipefail
 
 /app/bin/mise install --quiet
+# The compose healthcheck reports the container ready once this exists.
+touch /tmp/tools-installed
 exec /app/bin/mise exec -- "$@"

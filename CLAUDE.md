@@ -33,6 +33,24 @@ tasks that use `docker compose run`, like `web-client:dev`), otherwise its
 Compose service name. Containers are matched to this checkout by Compose's
 working-directory label.
 
+## CI
+
+```sh
+./bin/mise run ci
+```
+
+`ci` brings the whole Compose stack up in the background (`docker compose up
+-d --wait`), runs each project's CI task inside it with `docker compose exec`,
+then removes the stack's containers. The `dev` service stays up by running
+`sleep infinity`, and its healthcheck passes once the entrypoint has installed
+the container's tools, so `--wait` returns only when commands can be exec'd.
+To add a project's checks, call its `<project>:ci` task from `[tasks.ci]`.
+
+`web-client:ci` runs `npm ci`, lint, build and tests in the running `dev`
+container, so it needs the stack up (run it via `ci`).
+
+`.github/workflows/ci.yml` runs `./bin/mise run ci` on every push.
+
 ## web-client
 
 `web-client/` is a Vite + React + TypeScript app, tested with Vitest and React
