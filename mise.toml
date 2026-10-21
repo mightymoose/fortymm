@@ -32,6 +32,21 @@ docker compose exec -T playwright sh -c '
 docker compose exec -T playwright npx playwright test
 """
 
+[tasks."web-client:deploy"]
+description = "Deploy web-client/dist to Cloudflare Workers (needs a build, e.g. from `mise run ci`, and CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID)"
+# Uses the node_modules volume `npm ci` filled; `run` works after `ci` has
+# removed the stack's containers.
+run = "docker compose run --rm -T -e CLOUDFLARE_API_TOKEN -e CLOUDFLARE_ACCOUNT_ID -w /app/web-client dev npx wrangler deploy"
+
+[tasks."web-client:preview"]
+description = "Upload web-client/dist as a Cloudflare Workers Preview named after the current git branch (same needs as web-client:deploy)"
+# Preview names become part of a hostname, so slug the branch name
+# (claude/foo_bar -> claude-foo-bar).
+run = """
+name=$(git rev-parse --abbrev-ref HEAD | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g' | cut -c1-40 | sed -E 's/^-+|-+$//g')
+docker compose run --rm -T -e CLOUDFLARE_API_TOKEN -e CLOUDFLARE_ACCOUNT_ID -w /app/web-client dev npx wrangler preview --name "$name"
+"""
+
 [tasks."web-client:test"]
 description = "Run the web-client unit tests inside the dev container"
 run = "docker compose run --rm -w /app/web-client dev sh -c 'npm install && npm test'"

@@ -54,8 +54,8 @@ container, so it needs the stack up (run it via `ci`).
 `playwright` container. It also needs the stack up and `npm ci` done, so it
 runs after `web-client:ci`.
 
-`.github/workflows/ci.yml` runs `./bin/mise run ci` on every push, then
-uploads the Playwright traces and HTML report as the `playwright-traces`
+`.github/workflows/ci.yml` runs `./bin/mise run ci` on every push, deploys
+the web-client on pushes to `main` (see Deploy below), then uploads the Playwright traces and HTML report as the `playwright-traces`
 artifact and posts (or updates) a comment linking it on the commit's open PR.
 
 ## web-client
@@ -101,6 +101,27 @@ free host port. `web-client:dev`:
 - then streams the server's logs. Ctrl-C stops and removes the container.
 
 `./bin/mise run list-ports` shows the port again later.
+
+### Deploy
+
+The web-client is served by Cloudflare Workers static assets, configured in
+`web-client/wrangler.jsonc`. `not_found_handling: "single-page-application"`
+serves `index.html` for any path with no matching file in `dist/`, so
+client-side routes load directly.
+
+```sh
+./bin/mise run web-client:deploy    # wrangler deploy of web-client/dist
+./bin/mise run web-client:preview   # a Preview named after the git branch
+```
+
+CI deploys `main` to production and every other branch as a Preview (`wrangler
+preview`, open beta), whose URL is printed in the "Deploy a Cloudflare
+Preview" step's log.
+
+It deploys whatever is in `web-client/dist`, so build first (CI deploys the
+build `ci` just tested). It needs `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` in the environment; CI reads them from the repo's
+Actions secrets of the same names.
 
 ### Dependencies
 
