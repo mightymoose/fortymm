@@ -110,8 +110,13 @@ serves `index.html` for any path with no matching file in `dist/`, so
 client-side routes load directly.
 
 ```sh
-./bin/mise run web-client:deploy   # wrangler deploy of web-client/dist
+./bin/mise run web-client:deploy    # wrangler deploy of web-client/dist
+./bin/mise run web-client:preview   # a Preview named after the git branch
 ```
+
+CI deploys `main` to production and every other branch as a Preview (`wrangler
+preview`, open beta), whose URL is printed in the "Deploy a Cloudflare
+Preview" step's log.
 
 It deploys whatever is in `web-client/dist`, so build first (CI deploys the
 build `ci` just tested). It needs `CLOUDFLARE_API_TOKEN` and
