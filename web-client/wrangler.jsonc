@@ -9,5 +9,8 @@
     // Serve index.html for paths with no matching file, so client-side
     // (TanStack Router) routes work on a direct load or refresh.
     "not_found_handling": "single-page-application"
-  }
+  },
+  // Required by `wrangler preview` (the Preview deploys CI makes for
+  // branches); empty because Previews use the settings above.
+  "previews": {}
 }
