@@ -58,6 +58,13 @@ runs after `web-client:ci`.
 the web-client on pushes to `main` (see Deploy below), then uploads the Playwright traces and HTML report as the `playwright-traces`
 artifact and posts (or updates) a comment linking it on the commit's open PR.
 
+## References
+
+`references/` holds reference material that isn't built or deployed (see
+`references/README.md`). `references/fortymm-design-system/` is the FortyMM
+design system: read its `README.md` and `colors_and_type.css` before designing
+or styling UI.
+
 ## web-client
 
 `web-client/` is a Vite + React + TypeScript app, tested with Vitest and React
@@ -104,9 +111,37 @@ objects (`e2e/pages/`) as fixtures: `test('...', async ({ homePage }) => ...)`.
 As in the unit tests, page objects expose role-based locators and actions like
 `goto()`, and the specs do the asserting.
 
+Screenshot tests use `toHaveScreenshot`; their baselines live next to the spec
+in `e2e/<spec>-snapshots/` and only match when taken in the `playwright`
+container, so regenerate them there (`docker compose exec playwright npx
+playwright test --update-snapshots`, with the stack and dev server up as in
+`web-client:e2e`). `design-system.spec.ts` checks the design system page's
+header against the same screenshot as the reference kit's header
+(`references/fortymm-design-system/ui_kits/shadcn/index.html`, opened from
+disk with the app's copy swapped in), so the two must render identically.
+
 Every run records a trace: `web-client/test-results/<test>/trace.zip` (open
 with `npx playwright show-trace` or https://trace.playwright.dev) and an HTML
 report in `web-client/playwright-report/`.
+
+### Styles
+
+The design system's styles apply to the whole app; `main.tsx` imports them:
+
+- `src/styles/tokens.css`: the tokens (CSS variables) from
+  `references/fortymm-design-system/colors_and_type.css`, plus the self-hosted
+  display and mono fonts in `src/assets/fonts/`. Space Grotesk, the UI font,
+  comes from `@fontsource-variable/space-grotesk`.
+- `src/styles/base.css`: the reset, type styles (also applied to `h1`-`h4`,
+  `p` and `code`) and brand utilities from the same file, then the page
+  chrome from the reference shadcn/ui kit: `.page` (the root route's
+  wrapper, `src/routes/Root.tsx`) and `.page-header`
+  (`src/components/PageHeader.tsx`, the title and subtitle every page starts
+  with).
+
+Use these classes and CSS variables rather than raw values or page-specific
+styles. `/design-system` is where the app's styles are checked against the
+reference (see the screenshot tests above).
 
 ### Dev server
 

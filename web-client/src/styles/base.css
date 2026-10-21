@@ -1,0 +1,200 @@
+/* App-wide base styles: the reset, type and brand utilities from
+   references/fortymm-design-system/colors_and_type.css (with its heading
+   classes also applied to h1-h4), then the page chrome from the reference
+   shadcn/ui kit (references/fortymm-design-system/ui_kits/shadcn/index.html).
+   Every page gets these; /design-system shows them next to the reference. */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+/* =========================================================================
+   Base / Reset
+   ========================================================================= */
+html, body {
+  background: var(--bg-app);
+  color: var(--fg-1);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  line-height: var(--lh-normal);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* =========================================================================
+   Semantic type classes
+   ========================================================================= */
+.h-display {
+  font-family: var(--font-display);
+  font-size: var(--text-4xl);
+  line-height: var(--lh-tight);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--fg-1);
+}
+h1, .h1 {
+  font-family: var(--font-ui);
+  font-size: var(--text-3xl);
+  font-weight: 700;
+  line-height: var(--lh-tight);
+  letter-spacing: -0.02em;
+  color: var(--fg-1);
+}
+h2, .h2 {
+  font-family: var(--font-ui);
+  font-size: var(--text-2xl);
+  font-weight: 600;
+  line-height: var(--lh-snug);
+  letter-spacing: -0.01em;
+  color: var(--fg-1);
+}
+h3, .h3 {
+  font-family: var(--font-ui);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  line-height: var(--lh-snug);
+  color: var(--fg-1);
+}
+h4, .h4 {
+  font-family: var(--font-ui);
+  font-size: var(--text-lg);
+  font-weight: 600;
+  line-height: var(--lh-snug);
+  color: var(--fg-1);
+}
+.p, p {
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  line-height: var(--lh-normal);
+  color: var(--fg-2);
+}
+.caption {
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  color: var(--fg-3);
+  letter-spacing: 0.01em;
+}
+.overline {
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.score {
+  font-family: var(--font-mono);
+  font-size: var(--text-score);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  color: var(--fg-1);
+}
+.seed, .stat {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-2);
+}
+.code, code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  color: var(--fg-2);
+  background: var(--bg-panel);
+  padding: 0.1em 0.35em;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border-subtle);
+}
+
+/* =========================================================================
+   Utility: the ball dot — brand motif
+   ========================================================================= */
+.ball-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ball-500);
+  box-shadow: 0 0 10px rgba(255,122,26,0.55);
+}
+.ball-dot--live {
+  background: var(--serve-500);
+  box-shadow: 0 0 10px rgba(0,226,154,0.65);
+  animation: ball-pulse 1.4s ease-in-out infinite;
+}
+@keyframes ball-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.88); }
+}
+
+/* Dotted-40mm grid texture, used as hero background */
+.fortymm-grid-bg {
+  background-image:
+    radial-gradient(circle at center, rgba(255,122,26,0.14) 1.5px, transparent 2px);
+  background-size: 40px 40px;
+  background-position: 0 0;
+}
+
+/* =========================================================================
+   Page chrome (the reference kit's .doc and .doc-h)
+   ========================================================================= */
+.page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 64px 48px 120px;
+}
+
+.page-header {
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  margin-bottom: 56px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.page-header h1 {
+  font-family: var(--font-display);
+  font-size: 56px;
+  letter-spacing: 0.02em;
+  margin: 0;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.page-header .sub {
+  font-family: var(--font-mono);
+  color: var(--fg-3);
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* Pill links, from the reference kit's .toc. */
+.toc {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 40px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-3);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.toc a {
+  color: var(--fg-3);
+  text-decoration: none;
+  padding: 4px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-pill);
+}
+
+.toc a:hover {
+  color: var(--fg-accent);
+  border-color: var(--fg-accent);
+}

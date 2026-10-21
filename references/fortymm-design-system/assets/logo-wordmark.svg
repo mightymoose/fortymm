@@ -1,0 +1,15 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 80" width="320" height="80" fill="none">
+  <defs>
+    <radialGradient id="ball" cx="35%" cy="35%" r="65%">
+      <stop offset="0%" stop-color="#FFB57A"></stop>
+      <stop offset="55%" stop-color="#FF7A1A"></stop>
+      <stop offset="100%" stop-color="#B94700"></stop>
+    </radialGradient>
+  </defs>
+  
+  <circle cx="40" cy="40" r="28" fill="url(#ball)"></circle>
+  <circle cx="40" cy="40" r="28" fill="none" stroke="#FF7A1A" stroke-opacity="0.4" stroke-width="1"></circle>
+  
+  <text x="84" y="54" font-family="&#39;Bebas Neue&#39;, &#39;Space Grotesk&#39;, sans-serif" font-size="46" letter-spacing="2" fill="#F7F8FB">FORTYMM</text>
+</svg>

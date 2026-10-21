@@ -6,8 +6,9 @@ import {
 } from '@tanstack/react-router'
 import { DesignSystem } from './routes/DesignSystem'
 import { Home } from './routes/Home'
+import { Root } from './routes/Root'
 
-const rootRoute = createRootRoute()
+const rootRoute = createRootRoute({ component: Root })
 
 const homeRoute = createRoute({
   getParentRoute: () => rootRoute,

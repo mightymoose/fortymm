@@ -1,3 +1,5 @@
+import { PageHeader } from '../components/PageHeader'
+
 export function Home() {
-  return <h1>FortyMM</h1>
+  return <PageHeader title="FortyMM" subtitle="Play more. Pay never." />
 }

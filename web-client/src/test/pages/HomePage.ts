@@ -12,4 +12,8 @@ export class HomePage {
   get title(): HTMLElement {
     return screen.getByRole('heading', { level: 1 })
   }
+
+  get designSystemLink(): HTMLElement {
+    return screen.getByRole('link', { name: 'Design System' })
+  }
 }

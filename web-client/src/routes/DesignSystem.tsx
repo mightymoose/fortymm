@@ -1,3 +1,7 @@
+import { PageHeader } from '../components/PageHeader'
+
 export function DesignSystem() {
-  return <h1>Design System</h1>
+  return (
+    <PageHeader title="Design System" subtitle="FortyMM · tokens · components" />
+  )
 }
