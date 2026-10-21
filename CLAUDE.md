@@ -128,7 +128,10 @@ certificates Cloudflare manages) and on `fortymm.mightymoose.workers.dev`.
 
 CI deploys `main` to production and every other branch as a Preview (`wrangler
 preview`, open beta), whose URL is printed in the "Deploy a Cloudflare
-Preview" step's log.
+Preview" step's log. Previews are served on
+`<preview-name>-fortymm.mightymoose.workers.dev` because `preview_urls` is on in
+`wrangler.jsonc`; changes to that setting only take effect after a production
+deploy.
 
 It deploys whatever is in `web-client/dist`, so build first (CI deploys the
 build `ci` just tested). It needs `CLOUDFLARE_API_TOKEN` and
