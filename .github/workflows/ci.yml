@@ -15,6 +15,14 @@ jobs:
         env:
           CI: "true"
 
+      # Ships the web-client/dist that `ci` just built and tested.
+      - name: Deploy to Cloudflare
+        if: ${{ github.ref == 'refs/heads/main' }}
+        run: ./bin/mise run web-client:deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       # Playwright writes its traces and HTML report into the bind-mounted
       # checkout, so they're here once the stack is gone.
       - name: Upload Playwright traces
