@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import type { Locator, Page } from '@playwright/test'
 
 // The design system's shadcn/ui kit page, opened straight from references/.
@@ -7,26 +8,53 @@ const kitUrl = new URL(
   import.meta.url,
 ).href
 
+// The app's fonts, where its self-hosted Space Grotesk stylesheet lives.
+const fontsDir = new URL('../../src/assets/fonts/', import.meta.url)
+
 export class ReferenceKitPage {
   readonly page: Page
   readonly header: Locator
   readonly title: Locator
   readonly subtitle: Locator
+  readonly intro: Locator
+  readonly formsSection: Locator
+  readonly formsSectionHeading: Locator
+  readonly formsSectionLead: Locator
 
   constructor(page: Page) {
     this.page = page
     this.header = page.getByRole('banner')
     this.title = this.header.getByRole('heading', { level: 1 })
     this.subtitle = this.header.locator('.sub')
+    // The paragraph right after the header.
+    this.intro = page.getByRole('paragraph').first()
+    // The kit's sections have ids but no accessible names, so they aren't
+    // regions; find this one by its heading instead.
+    this.formsSection = page.locator('section', {
+      has: page.getByRole('heading', { level: 2, name: 'Forms & Input' }),
+    })
+    this.formsSectionHeading = this.formsSection.getByRole('heading', {
+      level: 2,
+    })
+    this.formsSectionLead = this.formsSection.getByRole('paragraph').first()
   }
 
   async goto(): Promise<void> {
-    // The kit embeds its display and mono fonts; skip the Google Fonts
-    // request for Space Grotesk so the page renders offline and the same way
-    // every run.
-    await this.page.route('https://fonts.googleapis.com/**', (route) =>
-      route.abort(),
-    )
+    // The kit embeds its display and mono fonts but loads Space Grotesk from
+    // Google Fonts. Serve it the app's own Space Grotesk stylesheet instead,
+    // unchanged, so both pages load the same font files the same way, offline.
+    // The stylesheet's relative URLs resolve to Google Fonts' host too, so
+    // the font files come through this route as well.
+    await this.page.route('https://fonts.googleapis.com/**', (route) => {
+      const file = new URL(route.request().url()).pathname.slice(1)
+      return route.fulfill({
+        path: fileURLToPath(
+          new URL(file.endsWith('.woff2') ? file : 'space-grotesk.css', fontsDir),
+        ),
+        // The kit is opened from disk, so its fonts are cross-origin.
+        headers: { 'Access-Control-Allow-Origin': '*' },
+      })
+    })
     await this.page.goto(kitUrl)
   }
 

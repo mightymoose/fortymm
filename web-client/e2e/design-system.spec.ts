@@ -31,3 +31,45 @@ test.describe('header', () => {
     await expect(referenceKitPage.header).toHaveScreenshot('header.png')
   })
 })
+
+// The intro and the Forms & Input section use the reference kit's own copy,
+// so they're compared with the kit as is. The kit's section goes on to its
+// component cards, which the app doesn't have yet, so the section's heading
+// and lead are compared on their own.
+test.describe('intro', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.intro).toHaveScreenshot('intro.png')
+  })
+
+  test('matches the reference kit intro', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.intro).toHaveScreenshot('intro.png')
+  })
+})
+
+test.describe('Forms & Input section', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.formsSectionHeading).toHaveScreenshot(
+      'forms-heading.png',
+    )
+    await expect(designSystemPage.formsSectionLead).toHaveScreenshot(
+      'forms-lead.png',
+    )
+  })
+
+  test('matches the reference kit section', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.formsSectionHeading).toHaveScreenshot(
+      'forms-heading.png',
+    )
+    await expect(referenceKitPage.formsSectionLead).toHaveScreenshot(
+      'forms-lead.png',
+    )
+  })
+})

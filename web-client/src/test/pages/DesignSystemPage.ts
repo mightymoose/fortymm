@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react'
+import { screen, within } from '@testing-library/react'
 import { renderRoute } from '../renderRoute'
 
 // Page object for the design system page in unit tests. Elements are looked
@@ -12,5 +12,22 @@ export class DesignSystemPage {
 
   get title(): HTMLElement {
     return screen.getByRole('heading', { level: 1 })
+  }
+
+  // The paragraph right after the page's header.
+  get intro(): HTMLElement {
+    return screen.getAllByRole('paragraph')[0]
+  }
+
+  get formsSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Forms & Input' })
+  }
+
+  get formsSectionHeading(): HTMLElement {
+    return within(this.formsSection).getByRole('heading', { level: 2 })
+  }
+
+  get formsSectionLead(): HTMLElement {
+    return within(this.formsSection).getByRole('paragraph')
   }
 }
