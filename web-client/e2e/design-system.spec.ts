@@ -32,10 +32,10 @@ test.describe('header', () => {
   })
 })
 
-// The intro and the Forms & Input section use the reference kit's own copy,
-// so they're compared with the kit as is. The kit's section goes on to its
-// component cards, which the app doesn't have yet, so the section's heading
-// and lead are compared on their own.
+// The intro, the Forms & Input section and its component cards use the
+// reference kit's own copy, so they're compared with the kit as is. The kit's
+// section goes on to more cards than the app has yet, so the section's
+// heading, lead and cards are compared one by one.
 test.describe('intro', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
@@ -70,6 +70,26 @@ test.describe('Forms & Input section', () => {
     )
     await expect(referenceKitPage.formsSectionLead).toHaveScreenshot(
       'forms-lead.png',
+    )
+  })
+})
+
+// Nothing is hovered or focused first, so these show the buttons' resting
+// styles.
+test.describe('Button card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.buttonCard).toHaveScreenshot(
+      'button-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.buttonCard).toHaveScreenshot(
+      'button-card.png',
     )
   })
 })

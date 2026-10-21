@@ -1,7 +1,8 @@
 /* App-wide base styles: the reset, type and brand utilities from
    references/fortymm-design-system/colors_and_type.css (with its heading
    classes also applied to h1-h4), then the page chrome from the reference
-   shadcn/ui kit (references/fortymm-design-system/ui_kits/shadcn/index.html).
+   shadcn/ui kit (references/fortymm-design-system/ui_kits/shadcn/index.html)
+   and the components built from it.
    Every page gets these; /design-system shows them next to the reference. */
 
 *, *::before, *::after {
@@ -231,4 +232,163 @@ h4, .h4 {
   margin: 0 0 32px;
   max-width: 640px;
   line-height: 1.5;
+}
+
+/* A card showing one component, from the reference kit's .comp and .comp-h:
+   a header with the component's name and a mono tag, then the demo. */
+.component-card {
+  padding: 32px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  background: var(--bg-card);
+  margin-bottom: 24px;
+}
+
+.component-card-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 24px;
+}
+
+.component-card-header h3 {
+  font-family: var(--font-ui);
+  font-size: 18px;
+  font-weight: 600;
+  /* The kit sets the font shorthand, which resets the line height. */
+  line-height: normal;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.component-card-header .tag {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--fg-3);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* Layout: items side by side, wrapping (.row), or stacked (.col). */
+.row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* =========================================================================
+   Button (the reference kit's .btn): one variant class and at most one
+   size class on top of .button.
+   ========================================================================= */
+.button {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 500;
+  /* The kit sets the font shorthand, which resets the line height. */
+  line-height: normal;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: var(--r-md);
+  border: 1px solid transparent;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast);
+  white-space: nowrap;
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.button--default {
+  background: var(--ball-500);
+  color: var(--ink-950);
+}
+
+.button--default:hover {
+  background: var(--ball-400);
+}
+
+.button--secondary {
+  background: var(--ink-700);
+  color: var(--fg-1);
+}
+
+.button--secondary:hover {
+  background: var(--ink-600);
+}
+
+.button--outline {
+  background: transparent;
+  color: var(--fg-1);
+  border-color: var(--border-default);
+}
+
+.button--outline:hover {
+  background: var(--bg-hover);
+}
+
+.button--ghost {
+  background: transparent;
+  color: var(--fg-2);
+}
+
+.button--ghost:hover {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+
+.button--destructive {
+  background: var(--loss);
+  color: white;
+}
+
+.button--destructive:hover {
+  background: oklch(from var(--loss) calc(l - 0.05) c h);
+}
+
+.button--link {
+  background: transparent;
+  color: var(--ball-500);
+  padding: 0;
+  height: auto;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.button--sm {
+  height: 32px;
+  padding: 0 12px;
+  font-size: var(--text-sm);
+}
+
+.button--lg {
+  height: 48px;
+  padding: 0 24px;
+  font-size: 16px;
+}
+
+.button--icon {
+  width: 40px;
+  height: 40px;
+  padding: 0;
 }

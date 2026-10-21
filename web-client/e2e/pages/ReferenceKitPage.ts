@@ -20,6 +20,7 @@ export class ReferenceKitPage {
   readonly formsSection: Locator
   readonly formsSectionHeading: Locator
   readonly formsSectionLead: Locator
+  readonly buttonCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -37,6 +38,10 @@ export class ReferenceKitPage {
       level: 2,
     })
     this.formsSectionLead = this.formsSection.getByRole('paragraph').first()
+    // The kit's component cards are plain divs; find this one by its heading.
+    this.buttonCard = this.formsSection.locator('.comp', {
+      has: page.getByRole('heading', { level: 3, name: 'Button', exact: true }),
+    })
   }
 
   async goto(): Promise<void> {
