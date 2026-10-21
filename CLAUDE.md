@@ -70,6 +70,12 @@ container, then runs.
 ./bin/mise run web-client:dev    # start the Vite dev server on a free host port
 ```
 
+### Routing
+
+Routes are defined in code with TanStack Router in `web-client/src/router.tsx`
+(`createAppRouter()`); each page's component lives in `web-client/src/routes/`.
+To add a page, add its route to the route tree there.
+
 ### Tests
 
 Vitest is configured in the `test` block of `web-client/vite.config.ts` (jsdom
@@ -77,10 +83,12 @@ environment). `web-client/src/setupTests.ts` loads the jest-dom matchers and
 cleans up rendered components after each test. Tests live next to the code as
 `*.test.tsx`.
 
-Tests go through page objects in `web-client/src/test/pages/`. A static
-`render()` renders the page and returns the object, whose getters query
-`screen` on each access (e.g. `HomePage.render().title`). Page objects expose
-elements located by accessible role; assertions stay in the tests.
+Tests go through page objects in `web-client/src/test/pages/`. A static async
+`render()` renders the app's router at the page's path (via
+`src/test/renderRoute.tsx`, using a memory history) and returns the object,
+whose getters query `screen` on each access (e.g.
+`(await HomePage.render()).title`). Page objects expose elements located by
+accessible role; assertions stay in the tests.
 
 ### End-to-end tests
 
