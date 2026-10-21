@@ -1,7 +1,7 @@
 /* FortyMM design tokens, copied from
-   references/fortymm-design-system/colors_and_type.css. Keep them in sync.
-   Space Grotesk comes from @fontsource-variable/space-grotesk (imported in
-   main.tsx), which names it 'Space Grotesk Variable'. */
+   references/fortymm-design-system/colors_and_type.css. Keep them in sync. */
+
+@import '../assets/fonts/space-grotesk.css';
 
 @font-face {
   font-family: 'Bebas Neue';
@@ -123,7 +123,7 @@
   --dur-slow: 360ms;
 
   /* ---------- Type stacks ---------- */
-  --font-ui: 'Space Grotesk Variable', 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+  --font-ui: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
   --font-display: 'Bebas Neue', 'Space Grotesk', sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 

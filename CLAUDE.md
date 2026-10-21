@@ -130,8 +130,7 @@ The design system's styles apply to the whole app; `main.tsx` imports them:
 
 - `src/styles/tokens.css`: the tokens (CSS variables) from
   `references/fortymm-design-system/colors_and_type.css`, plus the self-hosted
-  display and mono fonts in `src/assets/fonts/`. Space Grotesk, the UI font,
-  comes from `@fontsource-variable/space-grotesk`.
+  fonts in `src/assets/fonts/`.
 - `src/styles/base.css`: the reset, type styles (also applied to `h1`-`h4`,
   `p` and `code`) and brand utilities from the same file, then the page
   chrome from the reference shadcn/ui kit: `.page` (the root route's

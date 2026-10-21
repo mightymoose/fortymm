@@ -6,12 +6,23 @@ export class DesignSystemPage {
   readonly header: Locator
   readonly title: Locator
   readonly subtitle: Locator
+  readonly intro: Locator
+  readonly formsSection: Locator
+  readonly formsSectionHeading: Locator
+  readonly formsSectionLead: Locator
 
   constructor(page: Page) {
     this.page = page
     this.header = page.getByRole('banner')
     this.title = this.header.getByRole('heading', { level: 1 })
     this.subtitle = this.header.locator('.sub')
+    // The paragraph right after the header.
+    this.intro = page.getByRole('paragraph').first()
+    this.formsSection = page.getByRole('region', { name: 'Forms & Input' })
+    this.formsSectionHeading = this.formsSection.getByRole('heading', {
+      level: 2,
+    })
+    this.formsSectionLead = this.formsSection.getByRole('paragraph')
   }
 
   async goto(): Promise<void> {

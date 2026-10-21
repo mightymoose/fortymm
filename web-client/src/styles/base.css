@@ -198,3 +198,37 @@ h4, .h4 {
   color: var(--fg-accent);
   border-color: var(--fg-accent);
 }
+
+/* The intro paragraph under the page header (the reference kit's inline
+   styled <p> after .doc-h). The negative top margin pulls it up into the
+   header's bottom margin. */
+.page-intro {
+  font-size: 14px;
+  color: var(--fg-3);
+  max-width: 680px;
+  line-height: 1.6;
+  margin: -32px 0 56px;
+}
+
+/* A titled section of a page, from the reference kit's section.cat. */
+.section {
+  margin-bottom: 80px;
+}
+
+.section > h2 {
+  font-family: var(--font-display);
+  font-size: 36px;
+  letter-spacing: 0.04em;
+  /* The kit's h2 gets the body's line height, not h2's snug one. */
+  line-height: var(--lh-normal);
+  margin: 0 0 8px;
+  color: var(--fg-1);
+}
+
+.section > .lead {
+  font-size: 14px;
+  color: var(--fg-3);
+  margin: 0 0 32px;
+  max-width: 640px;
+  line-height: 1.5;
+}
