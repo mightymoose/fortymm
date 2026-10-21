@@ -10,6 +10,7 @@ export class DesignSystemPage {
   readonly formsSection: Locator
   readonly formsSectionHeading: Locator
   readonly formsSectionLead: Locator
+  readonly buttonCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -23,6 +24,7 @@ export class DesignSystemPage {
       level: 2,
     })
     this.formsSectionLead = this.formsSection.getByRole('paragraph')
+    this.buttonCard = this.formsSection.getByRole('article', { name: 'Button' })
   }
 
   async goto(): Promise<void> {

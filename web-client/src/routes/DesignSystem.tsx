@@ -1,3 +1,5 @@
+import { Button } from '../components/Button'
+import { ComponentCard } from '../components/ComponentCard'
 import { PageHeader } from '../components/PageHeader'
 import { PageIntro } from '../components/PageIntro'
 import { Section } from '../components/Section'
@@ -21,7 +23,29 @@ export function DesignSystem() {
             primary action per screen.
           </>
         }
-      />
+      >
+        <ComponentCard title="Button" tag="7 variants · 4 sizes">
+          <div className="col">
+            <div className="row">
+              <Button>Log a match</Button>
+              <Button variant="secondary">Save draft</Button>
+              <Button variant="outline">Cancel</Button>
+              <Button variant="ghost">Skip</Button>
+              <Button variant="destructive">Forfeit match</Button>
+              <Button variant="link">Read manifesto</Button>
+              <Button disabled>Disabled</Button>
+            </div>
+            <div className="row">
+              <Button size="sm">Small</Button>
+              <Button>Default</Button>
+              <Button size="lg">Large</Button>
+              <Button size="icon" aria-label="Add">
+                +
+              </Button>
+            </div>
+          </div>
+        </ComponentCard>
+      </Section>
     </>
   )
 }

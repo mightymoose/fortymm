@@ -26,4 +26,36 @@ describe('DesignSystem', () => {
       /^Buttons, inputs, selectors\./,
     )
   })
+
+  it('has a Button card in the Forms & Input section', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.buttonCardHeading).toHaveTextContent('Button')
+    expect(designSystemPage.buttonCard).toHaveTextContent(
+      '7 variants · 4 sizes',
+    )
+  })
+
+  it.each([
+    'Log a match',
+    'Save draft',
+    'Cancel',
+    'Skip',
+    'Forfeit match',
+    'Read manifesto',
+    'Small',
+    'Default',
+    'Large',
+    'Add',
+  ])('shows an enabled %s button', async (name) => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.button(name)).toBeEnabled()
+  })
+
+  it('shows a disabled button', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.button('Disabled')).toBeDisabled()
+  })
 })

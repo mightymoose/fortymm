@@ -30,4 +30,16 @@ export class DesignSystemPage {
   get formsSectionLead(): HTMLElement {
     return within(this.formsSection).getByRole('paragraph')
   }
+
+  get buttonCard(): HTMLElement {
+    return within(this.formsSection).getByRole('article', { name: 'Button' })
+  }
+
+  get buttonCardHeading(): HTMLElement {
+    return within(this.buttonCard).getByRole('heading', { level: 3 })
+  }
+
+  button(name: string): HTMLElement {
+    return within(this.buttonCard).getByRole('button', { name })
+  }
 }
