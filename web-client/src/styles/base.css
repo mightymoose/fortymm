@@ -173,3 +173,28 @@ h4, .h4 {
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
+
+/* Pill links, from the reference kit's .toc. */
+.toc {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 40px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-3);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.toc a {
+  color: var(--fg-3);
+  text-decoration: none;
+  padding: 4px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-pill);
+}
+
+.toc a:hover {
+  color: var(--fg-accent);
+  border-color: var(--fg-accent);
+}
