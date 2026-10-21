@@ -283,6 +283,13 @@ h4, .h4 {
   gap: 12px;
 }
 
+/* Layout: two equal columns (the reference kit's .grid2). */
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
 /* =========================================================================
    Button (the reference kit's .btn): one variant class and at most one
    size class on top of .button.
@@ -391,4 +398,75 @@ h4, .h4 {
   width: 40px;
   height: 40px;
   padding: 0;
+}
+
+/* =========================================================================
+   Form fields (the reference kit's .form-field, .label, .input and .help):
+   a .form-field wraps a .field-label, a control and a .field-help.
+   ========================================================================= */
+.form-field {
+  margin-bottom: 18px;
+}
+
+.field-label {
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  /* The kit sets the font shorthand, which resets the line height. */
+  line-height: normal;
+  color: var(--fg-2);
+  display: block;
+  margin-bottom: 6px;
+  letter-spacing: -0.005em;
+}
+
+.field-label .req {
+  color: var(--loss);
+  margin-left: 4px;
+}
+
+.input {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 400;
+  /* The kit sets the font shorthand, which resets the line height. */
+  line-height: normal;
+  height: 40px;
+  padding: 0 12px;
+  width: 100%;
+  background: var(--bg-panel);
+  color: var(--fg-1);
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-md);
+  transition: border-color var(--dur-fast);
+}
+
+.input::placeholder {
+  color: var(--fg-muted);
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--ball-500);
+  box-shadow: 0 0 0 3px rgb(from var(--ball-500) r g b / 0.15);
+}
+
+.input:disabled {
+  opacity: 0.5;
+}
+
+/* The error state follows aria-invalid, so it always matches what assistive
+   tech is told. */
+.input[aria-invalid="true"] {
+  border-color: var(--loss);
+}
+
+.field-help {
+  font-size: 12px;
+  color: var(--fg-3);
+  margin-top: 6px;
+}
+
+.field-help--error {
+  color: var(--loss);
 }

@@ -21,6 +21,7 @@ export class ReferenceKitPage {
   readonly formsSectionHeading: Locator
   readonly formsSectionLead: Locator
   readonly buttonCard: Locator
+  readonly inputCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -42,6 +43,13 @@ export class ReferenceKitPage {
     this.buttonCard = this.formsSection.locator('.comp', {
       has: page.getByRole('heading', { level: 3, name: 'Button', exact: true }),
     })
+    this.inputCard = this.formsSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Input · Label · Form Field',
+        exact: true,
+      }),
+    })
   }
 
   async goto(): Promise<void> {
@@ -61,6 +69,15 @@ export class ReferenceKitPage {
       })
     })
     await this.page.goto(kitUrl)
+  }
+
+  // The input card's input in the field labelled `name`. The kit's labels
+  // aren't tied to their inputs, so find the field by its label's text.
+  input(name: string): Locator {
+    return this.inputCard
+      .locator('.form-field')
+      .filter({ has: this.page.locator('label', { hasText: name }) })
+      .locator('input')
   }
 
   // Swaps in other header copy, so the header can be compared pixel for

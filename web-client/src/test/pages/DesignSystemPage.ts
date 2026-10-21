@@ -42,4 +42,20 @@ export class DesignSystemPage {
   button(name: string): HTMLElement {
     return within(this.buttonCard).getByRole('button', { name })
   }
+
+  get inputCard(): HTMLElement {
+    return within(this.formsSection).getByRole('article', {
+      name: 'Input · Label · Form Field',
+    })
+  }
+
+  get inputCardHeading(): HTMLElement {
+    return within(this.inputCard).getByRole('heading', { level: 3 })
+  }
+
+  // The text input labelled `name`, so finding it proves the label is
+  // associated with it.
+  input(name: string): HTMLElement {
+    return within(this.inputCard).getByRole('textbox', { name })
+  }
 }

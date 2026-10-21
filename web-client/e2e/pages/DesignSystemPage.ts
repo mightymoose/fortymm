@@ -11,6 +11,7 @@ export class DesignSystemPage {
   readonly formsSectionHeading: Locator
   readonly formsSectionLead: Locator
   readonly buttonCard: Locator
+  readonly inputCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -25,9 +26,17 @@ export class DesignSystemPage {
     })
     this.formsSectionLead = this.formsSection.getByRole('paragraph')
     this.buttonCard = this.formsSection.getByRole('article', { name: 'Button' })
+    this.inputCard = this.formsSection.getByRole('article', {
+      name: 'Input · Label · Form Field',
+    })
   }
 
   async goto(): Promise<void> {
     await this.page.goto('/design-system')
+  }
+
+  // The input card's text input labelled `name`.
+  input(name: string): Locator {
+    return this.inputCard.getByRole('textbox', { name })
   }
 }

@@ -1,5 +1,7 @@
 import { Button } from '../components/Button'
 import { ComponentCard } from '../components/ComponentCard'
+import { Field, FieldHelp, Label } from '../components/Field'
+import { Input } from '../components/Input'
 import { PageHeader } from '../components/PageHeader'
 import { PageIntro } from '../components/PageIntro'
 import { Section } from '../components/Section'
@@ -43,6 +45,28 @@ export function DesignSystem() {
                 +
               </Button>
             </div>
+          </div>
+        </ComponentCard>
+        <ComponentCard title="Input · Label · Form Field" tag="composite">
+          <div className="grid-2">
+            <Field>
+              <Label>Player tag</Label>
+              <Input placeholder="@yourname" defaultValue="@nguyen.t" />
+              <FieldHelp>Visible to opponents in match invites.</FieldHelp>
+            </Field>
+            <Field required invalid>
+              <Label>Email</Label>
+              <Input defaultValue="not-an-email" />
+              <FieldHelp>Enter a valid email address.</FieldHelp>
+            </Field>
+            <Field disabled>
+              <Label>Disabled</Label>
+              <Input defaultValue="Locked field" />
+            </Field>
+            <Field>
+              <Label>Search</Label>
+              <Input placeholder="Search clubs, players, tournaments…" />
+            </Field>
           </div>
         </ComponentCard>
       </Section>
