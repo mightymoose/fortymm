@@ -58,6 +58,13 @@ runs after `web-client:ci`.
 the web-client on pushes to `main` (see Deploy below), then uploads the Playwright traces and HTML report as the `playwright-traces`
 artifact and posts (or updates) a comment linking it on the commit's open PR.
 
+## References
+
+`references/` holds reference material that isn't built or deployed (see
+`references/README.md`). `references/fortymm-design-system/` is the FortyMM
+design system: read its `README.md` and `colors_and_type.css` before designing
+or styling UI.
+
 ## web-client
 
 `web-client/` is a Vite + React + TypeScript app, tested with Vitest and React
