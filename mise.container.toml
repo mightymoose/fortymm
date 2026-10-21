@@ -1,0 +1,3 @@
+# Loaded only inside the dev container (MISE_ENV=container).
+[tools]
+node = "26.12.0"

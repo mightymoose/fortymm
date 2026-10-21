@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Install the tools pinned in mise.container.toml (cached in the mise volume),
+# then run the requested command with them on PATH.
+set -euo pipefail
+
+/app/bin/mise install --quiet
+exec /app/bin/mise exec -- "$@"
