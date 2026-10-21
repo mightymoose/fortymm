@@ -1,6 +1,16 @@
 services:
   dev:
     build: .
+    # Keep the container running under `docker compose up` (as `mise run ci` does);
+    # `docker compose run` replaces this with its own command.
+    command: ["sleep", "infinity"]
+    init: true
+    # Healthy once the entrypoint has installed the tools, so `up --wait` blocks
+    # until commands can be exec'd into the container.
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/tools-installed"]
+      start_period: 10m
+      start_interval: 1s
     ports:
       # No host port: Docker picks a free one. `mise run web-client:dev` prints it.
       - "5173"

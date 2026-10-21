@@ -5,6 +5,19 @@
 description = "Start the local dev stack (currently just the web-client dev server)"
 depends = ["web-client:dev"]
 
+[tasks.ci]
+description = "Bring up the stack in the background, run every CI check inside it, then tear it down"
+run = """
+docker compose up -d --build --wait
+trap 'docker compose rm --force --stop >/dev/null 2>&1' EXIT INT TERM
+./bin/mise run web-client:ci
+"""
+
+[tasks."web-client:ci"]
+description = "Install, lint, build and test the web-client inside the running dev container (start it with `mise run ci`)"
+# exec bypasses the image entrypoint, so call it to get the container's tools on PATH.
+run = "docker compose exec -T -w /app/web-client dev /app/bin/docker-entrypoint sh -c 'npm ci && npm run lint && npm run build && npm test'"
+
 [tasks."web-client:test"]
 description = "Run the web-client unit tests inside the dev container"
 run = "docker compose run --rm -w /app/web-client dev sh -c 'npm install && npm test'"
