@@ -1,9 +1,15 @@
 services:
   dev:
     build: .
+    ports:
+      # No host port: Docker picks a free one. `mise run web-client:dev` prints it.
+      - "5173"
     volumes:
       - .:/app
       - mise:/mise
+      # Keep node_modules in the container so native deps match its platform.
+      - web-client-node-modules:/app/web-client/node_modules
 
 volumes:
   mise:
+  web-client-node-modules:
