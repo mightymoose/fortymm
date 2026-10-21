@@ -20,6 +20,40 @@ services:
       # Keep node_modules in the container so native deps match its platform.
       - web-client-node-modules:/app/web-client/node_modules
 
+  # The FastAPI app in api/. No published port: the web-client dev server
+  # proxies /api/* to it (see web-client/vite.config.ts), so it's reached at
+  # http://localhost:<web-client port>/api/v1/ping.
+  api:
+    build: .
+    init: true
+    working_dir: /app/api
+    # --root-path makes the docs at /api/docs load the schema through the proxy.
+    command:
+      - uv
+      - run
+      - --locked
+      - uvicorn
+      - fortymm_api.main:app
+      - --host=0.0.0.0
+      - --port=8000
+      - --root-path=/api
+      - --reload
+    # dev installs the tools into the shared mise volume first, so the two
+    # containers don't install them at the same time.
+    depends_on:
+      dev:
+        condition: service_healthy
+    # Healthy once /v1/ping answers, so `up --wait` blocks until the API serves.
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/v1/ping"]
+      start_period: 10m
+      start_interval: 1s
+    volumes:
+      - .:/app
+      - mise:/mise
+      # Keep the virtualenv in the container so native deps match its platform.
+      - api-venv:/app/api/.venv
+
   # Runs the web-client's Playwright suite (`mise run web-client:e2e`). The
   # image ships the browsers and their system libraries; keep its tag in sync
   # with @playwright/test in web-client/package.json.
@@ -44,3 +78,4 @@ services:
 volumes:
   mise:
   web-client-node-modules:
+  api-venv:

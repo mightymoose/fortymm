@@ -5,9 +5,10 @@ bootstrap wrapper `./bin/mise` (it downloads the pinned mise on first use); a
 global `mise` install isn't required.
 
 - `mise.toml`: host-side tasks, which drive the Docker Compose stack.
-- `mise.container.toml`: tool versions (e.g. Node) installed inside the dev
-  container.
-- `compose.yaml` / `Dockerfile`: the `dev` service that every task runs in.
+- `mise.container.toml`: tool versions (Node, Python, uv) installed inside the
+  dev container.
+- `compose.yaml` / `Dockerfile`: the `dev` service that every task runs in,
+  and the `api` service, built from the same image.
 
 ## Dev stack
 
@@ -16,8 +17,9 @@ global `mise` install isn't required.
 ./bin/mise run list-ports   # print the host ports of everything running
 ```
 
-For now `up` only starts the web-client dev server. To add a service, add its
-task to `depends` on `[tasks.up]` in `mise.toml` (mise runs those in parallel).
+`up` starts the API (`api:dev`) and the web-client dev server, which proxies
+`/api/*` to it. To add a service, add its task to `depends` on `[tasks.up]` in
+`mise.toml` (mise runs those in parallel).
 
 Publish ports without a host side (e.g. `ports: ["5173"]` in `compose.yaml`)
 so Docker picks a free one and several checkouts can run at once.
@@ -44,9 +46,15 @@ working-directory label.
 then removes the stack's containers. The `dev` service stays up by running
 `sleep infinity`, and its healthcheck passes once the entrypoint has installed
 the container's tools, so `--wait` returns only when commands can be exec'd.
-To add a project's checks, call its `<project>:ci` task from `[tasks.ci]`.
+The `api` service's healthcheck is a request to `/v1/ping`, so `--wait` also
+blocks until the API answers. To add a project's checks, call its
+`<project>:ci` task from `[tasks.ci]`.
 
-`web-client:ci` runs `npm ci`, lint, build and tests in the running `dev`
+`api:ci` runs `uv sync --locked`, ruff (lint and format), mypy and pytest in
+the running `api` container.
+
+`web-client:ci` runs `npm ci`, checks the generated API types are up to date,
+then lint, build and tests in the running `dev`
 container, so it needs the stack up (run it via `ci`).
 
 `web-client:e2e` then starts the Vite dev server in the `dev` container
@@ -65,6 +73,39 @@ artifact and posts (or updates) a comment linking it on the commit's open PR.
 design system: read its `README.md` and `colors_and_type.css` before designing
 or styling UI.
 
+## api
+
+`api/` is a FastAPI app (Python, pinned in `mise.container.toml`) managed with
+uv: `pyproject.toml` and `uv.lock`, code in `src/fortymm_api/`, tests in
+`tests/` (pytest, through FastAPI's `TestClient`).
+
+- `main.py`: `create_app()`, the app factory. Operation IDs are the route
+  functions' names, so generated clients get names like `ping`.
+- `v1/`: the `/v1` routes, one module per resource, each with its own
+  `APIRouter` and Pydantic request/response models; `v1/__init__.py` mounts
+  them. Annotate route return types with the response model.
+
+It runs in the `api` Compose service (uvicorn with `--reload` on port 8000)
+with no published port: the web-client dev server proxies `/api/*` to it with
+the prefix stripped, so `/v1/ping` is at
+`http://localhost:<web-client port>/api/v1/ping` and the interactive docs at
+`/api/docs`. Its virtualenv lives in the `api-venv` volume.
+
+```sh
+./bin/mise run api:dev       # start the API and stream its logs
+./bin/mise run api:test      # run the API's tests
+./bin/mise run api:openapi   # regenerate the OpenAPI schema and client types
+```
+
+### OpenAPI schema and clients
+
+`api/openapi.json` is the committed OpenAPI schema, written from the app by
+`python -m fortymm_api.openapi`. Clients generate their types from it; the
+web-client's are in `web-client/src/api/schema.d.ts` (`npm run
+generate:api`, openapi-typescript). After changing a route or model, run
+`api:openapi` and commit both files; CI fails if either is stale (a pytest in
+the API, `generate:api -- --check` in the web-client).
+
 ## web-client
 
 `web-client/` is a Vite + React + TypeScript app, tested with Vitest and React
@@ -82,6 +123,14 @@ container, then runs.
 Routes are defined in code with TanStack Router in `web-client/src/router.tsx`
 (`createAppRouter()`); each page's component lives in `web-client/src/routes/`.
 To add a page, add its route to the route tree there.
+
+### API client
+
+`src/api/client.ts` exports `api`, an openapi-fetch client typed by the
+generated schema, with base URL `/api`: `const { data, error } = await
+api.GET('/v1/ping')`. `createApiClient()` builds one with other options (e.g.
+a stub `fetch` in tests). The dev server's proxy target defaults to
+`http://api:8000` and can be overridden with `API_PROXY_TARGET`.
 
 ### Tests
 
