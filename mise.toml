@@ -1,6 +1,38 @@
 # Host config: tasks that drive the Docker Compose stack.
 # Tool versions used inside the dev container live in mise.container.toml.
 
-[tasks.hello]
-description = "Print Hello World using Node inside the dev container"
-run = "docker compose run --rm dev node -e 'console.log(\"Hello World\")'"
+[tasks.up]
+description = "Start the local dev stack (currently just the web-client dev server)"
+depends = ["web-client:dev"]
+
+[tasks."web-client:test"]
+description = "Run the web-client unit tests inside the dev container"
+run = "docker compose run --rm -w /app/web-client dev sh -c 'npm install && npm test'"
+
+[tasks."web-client:dev"]
+description = "Start the web-client Vite dev server inside the dev container on a free host port"
+run = """
+name="fortymm-web-client-dev-$$"
+docker compose run -d --rm --service-ports --name "$name" -l fortymm.task=web-client-dev \
+  -w /app/web-client dev \
+  sh -c 'npm install && npm run dev' >/dev/null
+trap 'docker stop "$name" >/dev/null 2>&1' EXIT INT TERM
+port=$(docker port "$name" 5173/tcp | head -n 1)
+echo "web-client dev server: http://localhost:${port##*:}"
+docker logs -f "$name"
+"""
+
+[tasks.list-ports]
+description = "Print the published host ports of everything running from this checkout"
+# {% raw %} keeps mise's Tera templating away from docker's Go template.
+run = """
+docker ps \
+  --filter "label=com.docker.compose.project.working_dir=$PWD" \
+  --format '{% raw %}{{if .Label "fortymm.task"}}{{.Label "fortymm.task"}}{{else}}{{.Label "com.docker.compose.service"}}{{end}} {{.ID}}{% endraw %}' |
+while read -r name id; do
+  # Each mapping looks like "5173/tcp -> 0.0.0.0:32768" (repeated for IPv6).
+  docker port "$id" | while read -r mapping; do
+    printf '%-20s %-10s localhost:%s\n' "$name" "${mapping%% *}" "${mapping##*:}"
+  done | sort -u
+done
+"""
