@@ -107,7 +107,9 @@ free host port. `web-client:dev`:
 The web-client is served by Cloudflare Workers static assets, configured in
 `web-client/wrangler.jsonc`. `not_found_handling: "single-page-application"`
 serves `index.html` for any path with no matching file in `dist/`, so
-client-side routes load directly.
+client-side routes load directly. Production is served on `fortymm.com` and
+`www.fortymm.com` (Custom Domains in `routes`, whose DNS records and
+certificates Cloudflare manages) and on `fortymm.mightymoose.workers.dev`.
 
 ```sh
 ./bin/mise run web-client:deploy    # wrangler deploy of web-client/dist

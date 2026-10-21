@@ -10,6 +10,12 @@
     // (TanStack Router) routes work on a direct load or refresh.
     "not_found_handling": "single-page-application"
   },
+  // Custom Domains: deploys create their DNS records and certificates in the
+  // fortymm.com zone, which must have no other A/AAAA/CNAME for these names.
+  "routes": [
+    { "pattern": "fortymm.com", "custom_domain": true },
+    { "pattern": "www.fortymm.com", "custom_domain": true }
+  ],
   // Required by `wrangler preview` (the Preview deploys CI makes for
   // branches); empty because Previews use the settings above.
   "previews": {}
