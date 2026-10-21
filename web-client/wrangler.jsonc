@@ -16,6 +16,9 @@
     { "pattern": "fortymm.com", "custom_domain": true },
     { "pattern": "www.fortymm.com", "custom_domain": true }
   ],
+  // Give each Preview a <preview-name>-fortymm.mightymoose.workers.dev URL.
+  // Without it, `wrangler preview` reports the Preview has no active URLs.
+  "preview_urls": true,
   // Required by `wrangler preview` (the Preview deploys CI makes for
   // branches); empty because Previews use the settings above.
   "previews": {}
