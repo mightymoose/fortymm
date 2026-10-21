@@ -49,7 +49,14 @@ To add a project's checks, call its `<project>:ci` task from `[tasks.ci]`.
 `web-client:ci` runs `npm ci`, lint, build and tests in the running `dev`
 container, so it needs the stack up (run it via `ci`).
 
-`.github/workflows/ci.yml` runs `./bin/mise run ci` on every push.
+`web-client:e2e` then starts the Vite dev server in the `dev` container
+(`docker compose exec -d`), waits for it, and runs Playwright in the
+`playwright` container. It also needs the stack up and `npm ci` done, so it
+runs after `web-client:ci`.
+
+`.github/workflows/ci.yml` runs `./bin/mise run ci` on every push, then
+uploads the Playwright traces and HTML report as the `playwright-traces`
+artifact and posts (or updates) a comment linking it on the commit's open PR.
 
 ## web-client
 
@@ -69,6 +76,19 @@ Vitest is configured in the `test` block of `web-client/vite.config.ts` (jsdom
 environment). `web-client/src/setupTests.ts` loads the jest-dom matchers and
 cleans up rendered components after each test. Tests live next to the code as
 `*.test.tsx`.
+
+### End-to-end tests
+
+The Playwright suite lives in `web-client/e2e/` (`*.spec.ts`, excluded from
+Vitest) and is configured in `web-client/playwright.config.ts`. It runs in the
+`playwright` Compose service: the official Playwright image, which ships the
+browsers, sharing the `dev` service's network so the dev server is on
+`localhost:5173`. Keep the image tag in `compose.yaml` in sync with
+`@playwright/test` in `package.json` (pinned exactly).
+
+Every run records a trace: `web-client/test-results/<test>/trace.zip` (open
+with `npx playwright show-trace` or https://trace.playwright.dev) and an HTML
+report in `web-client/playwright-report/`.
 
 ### Dev server
 
