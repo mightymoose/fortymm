@@ -19,6 +19,7 @@ export class DesignSystemPage {
   readonly otpCard: Locator
   readonly otpInput: Locator
   readonly activeOtpCell: Locator
+  readonly checkboxCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -52,6 +53,9 @@ export class DesignSystemPage {
     // The cells are hidden from assistive tech, so find the active one by its
     // class.
     this.activeOtpCell = this.otpCard.locator('.otp-cell--active')
+    this.checkboxCard = this.formsSection.getByRole('article', {
+      name: 'Checkbox',
+    })
   }
 
   // A component card's title, in its header.
@@ -80,6 +84,32 @@ export class DesignSystemPage {
         y: cell.y - input.y + cell.height / 2,
       },
     })
+  }
+
+  // The Checkbox card's checkbox labelled `name`.
+  checkbox(name: string): Locator {
+    return this.checkboxCard.getByRole('checkbox', { name })
+  }
+
+  // The box that draws the checkbox labelled `name`.
+  checkboxBox(name: string): Locator {
+    return this.checkboxLabel(name).locator('.checkbox-box')
+  }
+
+  // The <label> holding the checkbox labelled `name` and its text.
+  checkboxLabel(name: string): Locator {
+    return this.checkboxCard.locator('label', { hasText: name })
+  }
+
+  // Clicks the checkbox labelled `name` the way a user does: on its label's
+  // text (the input itself is visually hidden). It's a plain mouse click, so
+  // it goes through on a disabled checkbox too, which Playwright's own
+  // click() would wait on until it's enabled.
+  async clickCheckboxLabel(name: string): Promise<void> {
+    const text = this.checkboxCard.getByText(name, { exact: true })
+    await text.scrollIntoViewIfNeeded()
+    const box = (await text.boundingBox())!
+    await this.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
   }
 
   async goto(): Promise<void> {

@@ -158,4 +158,30 @@ describe('DesignSystem', () => {
     expect(input).not.toHaveAccessibleDescription()
     expect(designSystemPage.otpLabel).toHaveClass('visually-hidden')
   })
+
+  it('shows the Checkbox card after the Input OTP card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.checkboxCardHeading).toHaveTextContent('Checkbox')
+    expect(designSystemPage.checkboxCard).toHaveTextContent('3 states')
+    expect(
+      designSystemPage.otpCard.compareDocumentPosition(
+        designSystemPage.checkboxCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('shows a checked, an unchecked and a disabled checkbox', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const agree = designSystemPage.checkbox('I agree to the rules of fair play')
+    expect(agree).toBeChecked()
+    expect(agree).toBeEnabled()
+    const invites = designSystemPage.checkbox('Email me match invites')
+    expect(invites).not.toBeChecked()
+    expect(invites).toBeEnabled()
+    const disabled = designSystemPage.checkbox('Disabled option')
+    expect(disabled).not.toBeChecked()
+    expect(disabled).toBeDisabled()
+  })
 })

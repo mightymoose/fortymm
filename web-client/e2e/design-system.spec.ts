@@ -148,6 +148,90 @@ test.describe('Input OTP card', () => {
   })
 })
 
+// Nothing is hovered, focused or clicked first, so these show the boxes'
+// resting styles, with no focus ring.
+test.describe('Checkbox card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.checkboxCard).toHaveScreenshot(
+      'checkbox-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.checkboxCard).toHaveScreenshot(
+      'checkbox-card.png',
+    )
+  })
+})
+
+// The kit's checkboxes are static, with no focus style, so the tests below
+// are the app's alone.
+test.describe('Checkbox', () => {
+  test('clicking a label toggles its box', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+    const agree = designSystemPage.checkbox('I agree to the rules of fair play')
+    const invites = designSystemPage.checkbox('Email me match invites')
+    await expect(agree).toBeChecked()
+    await expect(invites).not.toBeChecked()
+
+    await designSystemPage.clickCheckboxLabel('I agree to the rules of fair play')
+    await designSystemPage.clickCheckboxLabel('Email me match invites')
+
+    await expect(agree).not.toBeChecked()
+    await expect(invites).toBeChecked()
+  })
+
+  test("the disabled one doesn't toggle", async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+    const disabled = designSystemPage.checkbox('Disabled option')
+    await expect(disabled).toBeDisabled()
+
+    await designSystemPage.clickCheckboxLabel('Disabled option')
+
+    await expect(disabled).not.toBeChecked()
+  })
+
+  // Tabbing to a box shows the text controls' focus ring on it, and Space
+  // toggles it.
+  test('keyboard focus shows the focus ring', async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const invites = designSystemPage.checkbox('Email me match invites')
+    const box = designSystemPage.checkboxBox('Email me match invites')
+    await designSystemPage.checkbox('I agree to the rules of fair play').focus()
+
+    await page.keyboard.press('Tab')
+
+    await expect(invites).toBeFocused()
+    await expect(box).toHaveCSS('border-color', 'rgb(255, 122, 26)')
+    await expect(box).toHaveCSS(
+      'box-shadow',
+      'color(srgb 1 0.478431 0.101961 / 0.15) 0px 0px 0px 3px',
+    )
+    await page.keyboard.press('Space')
+    await expect(invites).toBeChecked()
+  })
+
+  // A mouse click focuses the input too, but only keyboard focus shows the
+  // ring.
+  test('a click shows no focus ring', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+    const invites = designSystemPage.checkbox('Email me match invites')
+    const box = designSystemPage.checkboxBox('Email me match invites')
+
+    await designSystemPage.clickCheckboxLabel('Email me match invites')
+
+    await expect(invites).toBeFocused()
+    await expect(box).toHaveCSS('box-shadow', 'none')
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
