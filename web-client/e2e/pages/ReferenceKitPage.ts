@@ -24,6 +24,7 @@ export class ReferenceKitPage {
   readonly inputCard: Locator
   readonly textareaCard: Locator
   readonly textarea: Locator
+  readonly otpCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -62,6 +63,13 @@ export class ReferenceKitPage {
     // The kit's label isn't tied to its textarea, so take the card's only
     // textarea.
     this.textarea = this.textareaCard.locator('textarea')
+    this.otpCard = this.formsSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Input OTP',
+        exact: true,
+      }),
+    })
   }
 
   async goto(): Promise<void> {

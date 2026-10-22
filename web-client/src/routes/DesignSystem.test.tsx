@@ -137,4 +137,25 @@ describe('DesignSystem', () => {
     )
     expect(textarea).not.toHaveAccessibleDescription()
   })
+  it('shows the Input OTP card after the Textarea card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.otpCardHeading).toHaveTextContent('Input OTP')
+    expect(designSystemPage.otpCard).toHaveTextContent('6-digit')
+    expect(
+      designSystemPage.textareaCard.compareDocumentPosition(
+        designSystemPage.otpCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('shows a one-time code input with a hidden label', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const input = designSystemPage.otpInput
+    expect(input).toHaveValue('40MM')
+    expect(input).toHaveAttribute('autocomplete', 'one-time-code')
+    expect(input).not.toHaveAccessibleDescription()
+    expect(designSystemPage.otpLabel).toHaveClass('visually-hidden')
+  })
 })

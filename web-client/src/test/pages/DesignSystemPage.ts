@@ -74,4 +74,24 @@ export class DesignSystemPage {
       name: 'Match notes',
     })
   }
+
+  get otpCard(): HTMLElement {
+    return within(this.formsSection).getByRole('article', { name: 'Input OTP' })
+  }
+
+  get otpCardHeading(): HTMLElement {
+    return within(this.otpCard).getByRole('heading', { level: 3 })
+  }
+
+  // The one-time code input, found by its hidden label, so finding it proves
+  // the label is associated with it.
+  get otpInput(): HTMLElement {
+    return within(this.otpCard).getByRole('textbox', {
+      name: 'Verification code',
+    })
+  }
+
+  get otpLabel(): HTMLElement {
+    return within(this.otpCard).getByText('Verification code')
+  }
 }

@@ -131,6 +131,109 @@ test.describe('Textarea card', () => {
   })
 })
 
+// Nothing is focused or typed into first. The app's fourth cell is shown
+// active by the demo's `activeIndex` until the input is focused, as the
+// kit's is by its static `.on` cell.
+test.describe('Input OTP card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.otpCard).toHaveScreenshot('otp-card.png')
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.otpCard).toHaveScreenshot('otp-card.png')
+  })
+})
+
+// The kit's cells are static, so this is the app's alone: focusing the input
+// moves the active cell to the next empty one, where the next character goes.
+test('focusing the Input OTP activates the next empty cell', async ({
+  designSystemPage,
+}) => {
+  await designSystemPage.goto()
+  await expect(designSystemPage.activeOtpCell).toHaveCount(1)
+  await expect(designSystemPage.otpCell(3)).toHaveClass(/otp-cell--active/)
+
+  await designSystemPage.otpInput.focus()
+
+  await expect(designSystemPage.activeOtpCell).toHaveCount(1)
+  await expect(designSystemPage.otpCell(4)).toHaveClass(/otp-cell--active/)
+
+  await designSystemPage.otpInput.press('1')
+  await expect(designSystemPage.otpInput).toHaveValue('40MM1')
+  await expect(designSystemPage.otpCell(4)).toHaveText('1')
+  await expect(designSystemPage.otpCell(5)).toHaveClass(/otp-cell--active/)
+})
+
+// The usual one-time code behaviour, in a real browser: a click goes to the
+// cell under it, a filled cell's character is replaced, the arrow keys step
+// between cells, Backspace clears, and a code arriving all at once (pasted or
+// autofilled) fills the cells.
+test('the Input OTP takes clicks, typing, arrows and Backspace', async ({
+  designSystemPage,
+  page,
+}) => {
+  await designSystemPage.goto()
+  const input = designSystemPage.otpInput
+
+  await designSystemPage.clickOtpCell(1)
+  await expect(designSystemPage.otpCell(1)).toHaveClass(/otp-cell--active/)
+  await page.keyboard.type('X')
+  await expect(input).toHaveValue('4XMM')
+  await expect(designSystemPage.otpCell(2)).toHaveClass(/otp-cell--active/)
+
+  await page.keyboard.press('ArrowLeft')
+  await expect(designSystemPage.otpCell(1)).toHaveClass(/otp-cell--active/)
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('ArrowRight')
+  await expect(designSystemPage.otpCell(4)).toHaveClass(/otp-cell--active/)
+
+  await page.keyboard.press('Backspace')
+  await expect(input).toHaveValue('4XM')
+  await expect(designSystemPage.otpCell(3)).toHaveText('')
+
+  await page.keyboard.press('ControlOrMeta+a')
+  await page.keyboard.insertText('12-34-56-78')
+  await expect(input).toHaveValue('123456')
+  await expect(designSystemPage.otpCell(5)).toHaveText('6')
+})
+
+// On a phone the page is far narrower than the reference kit, which is only
+// laid out for desktop. The cards' headers and demos still have to fit.
+test.describe('on a phone', () => {
+  test.use({ viewport: { width: 390, height: 844 } })
+
+  // Each card's tag keeps clear of its title: beside it with room between,
+  // or on a line of its own below it.
+  test('card titles and tags stay apart', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    for (const card of await designSystemPage.cards.all()) {
+      const title = (await designSystemPage.cardTitle(card).boundingBox())!
+      const tag = (await designSystemPage.cardTag(card).boundingBox())!
+      const apart =
+        tag.x >= title.x + title.width + 12 ||
+        tag.y >= title.y + title.height
+      expect(apart, (await card.getAttribute('aria-label')) ?? '').toBe(true)
+    }
+  })
+
+  test('the Input OTP fits in its card', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+    const card = (await designSystemPage.otpCard.boundingBox())!
+    const lastCell = (await designSystemPage.otpCell(5).boundingBox())!
+
+    // The card's 32px padding stays clear on the right.
+    expect(lastCell.x + lastCell.width).toBeLessThanOrEqual(
+      card.x + card.width - 32,
+    )
+  })
+})
+
 // Focuses a text control and returns the area to screenshot: the control plus
 // its 3px focus ring, which an element screenshot of it would cut off.
 async function focusWithRing(control: Locator) {
