@@ -32,15 +32,15 @@
     "schemas": {
       "PingResponse": {
         "properties": {
-          "message": {
+          "data": {
             "type": "string",
             "const": "pong",
-            "title": "Message"
+            "title": "Data"
           }
         },
         "type": "object",
         "required": [
-          "message"
+          "data"
         ],
         "title": "PingResponse"
       }

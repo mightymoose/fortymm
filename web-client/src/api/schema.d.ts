@@ -31,10 +31,10 @@ export interface components {
         /** PingResponse */
         PingResponse: {
             /**
-             * Message
+             * Data
              * @constant
              */
-            message: "pong";
+            data: "pong";
         };
     };
     responses: never;

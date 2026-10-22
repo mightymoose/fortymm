@@ -86,6 +86,9 @@ through FastAPI's `TestClient`).
 - `v1/`: the `/v1` routes, one module per resource, each with its own
   `APIRouter` and Pydantic request/response models; `v1/__init__.py` mounts
   them. Annotate route return types with the response model.
+- Response bodies follow JSON:API's top-level shape: the payload goes under
+  `data` (e.g. `/v1/ping` returns `{"data": "pong"}`), so each response model
+  has a `data` field rather than naming the payload itself.
 
 It runs in the `api` Compose service (uvicorn with `--reload` on port 8000)
 with no published port: the web-client dev server proxies `/api/*` to it with
