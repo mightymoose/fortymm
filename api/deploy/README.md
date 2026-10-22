@@ -34,8 +34,10 @@ It's idempotent, so re-running it is safe. It:
    applies `cleanup-policy.json` to the repository (see Image cleanup);
 3. creates two service accounts:
    - `github-deployer`, which CI deploys as, with `roles/run.admin` and
-     `roles/artifactregistry.writer` on the project and
-     `roles/iam.serviceAccountUser` on `api-runtime`;
+     `roles/artifactregistry.writer` on the project,
+     `roles/artifactregistry.repoAdmin` on the `fortymm` repository (moving
+     the `production` tag needs it) and `roles/iam.serviceAccountUser` on
+     `api-runtime`;
    - `api-runtime`, which the API runs as, with no roles;
 4. creates the Workload Identity pool `github` and its OIDC provider `github`,
    which accepts GitHub Actions tokens from `mightymoose/fortymm` only, and

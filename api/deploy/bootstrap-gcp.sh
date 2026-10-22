@@ -75,6 +75,10 @@ for role in roles/run.admin roles/artifactregistry.writer; do
   gc projects add-iam-policy-binding "$project" \
     --member "serviceAccount:$deployer_sa" --role "$role" --condition None >/dev/null
 done
+# Moving the `production` tag to a new image deletes it from the old one,
+# which roles/artifactregistry.writer can't do.
+gc artifacts repositories add-iam-policy-binding "$registry_repo" --location "$region" \
+  --member "serviceAccount:$deployer_sa" --role roles/artifactregistry.repoAdmin >/dev/null
 # Deploying a service that runs as $runtime_sa means acting as it.
 gc iam service-accounts add-iam-policy-binding "$runtime_sa" \
   --member "serviceAccount:$deployer_sa" --role roles/iam.serviceAccountUser >/dev/null
