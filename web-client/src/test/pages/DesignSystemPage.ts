@@ -58,4 +58,20 @@ export class DesignSystemPage {
   input(name: string): HTMLElement {
     return within(this.inputCard).getByRole('textbox', { name })
   }
+
+  get textareaCard(): HTMLElement {
+    return within(this.formsSection).getByRole('article', { name: 'Textarea' })
+  }
+
+  get textareaCardHeading(): HTMLElement {
+    return within(this.textareaCard).getByRole('heading', { level: 3 })
+  }
+
+  // The Match notes textarea, found by its label, so finding it proves the
+  // label is associated with it.
+  get textarea(): HTMLElement {
+    return within(this.textareaCard).getByRole('textbox', {
+      name: 'Match notes',
+    })
+  }
 }

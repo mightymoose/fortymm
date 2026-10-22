@@ -12,6 +12,8 @@ export class DesignSystemPage {
   readonly formsSectionLead: Locator
   readonly buttonCard: Locator
   readonly inputCard: Locator
+  readonly textareaCard: Locator
+  readonly textarea: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -28,6 +30,12 @@ export class DesignSystemPage {
     this.buttonCard = this.formsSection.getByRole('article', { name: 'Button' })
     this.inputCard = this.formsSection.getByRole('article', {
       name: 'Input · Label · Form Field',
+    })
+    this.textareaCard = this.formsSection.getByRole('article', {
+      name: 'Textarea',
+    })
+    this.textarea = this.textareaCard.getByRole('textbox', {
+      name: 'Match notes',
     })
   }
 
