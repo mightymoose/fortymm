@@ -1,5 +1,6 @@
 import { Button } from '../components/Button'
 import { Checkbox } from '../components/Checkbox'
+import { Combobox, type ComboboxOption } from '../components/Combobox'
 import { ComponentCard } from '../components/ComponentCard'
 import { Field, FieldHelp, Label } from '../components/Field'
 import { Input } from '../components/Input'
@@ -12,6 +13,17 @@ import { Select } from '../components/Select'
 import { Slider } from '../components/Slider'
 import { Switch } from '../components/Switch'
 import { Textarea } from '../components/Textarea'
+
+// The Combobox card's players. The reference shows the three that "ngu"
+// matches; the rest are there for it to filter out.
+const players: ComboboxOption[] = [
+  { id: 'tien-nguyen', label: 'Nguyen, Tien', hint: '1620' },
+  { id: 'mai-nguyen', label: 'Nguyen, Mai', hint: '1455' },
+  { id: 'phuc-nguyen', label: 'Nguyen, Phuc', hint: '1380' },
+  { id: 'ana-silva', label: 'Silva, Ana', hint: '1710' },
+  { id: 'kenji-tanaka', label: 'Tanaka, Kenji', hint: '1540' },
+  { id: 'lena-weber', label: 'Weber, Lena', hint: '1295' },
+]
 
 export function DesignSystem() {
   return (
@@ -144,6 +156,18 @@ export function DesignSystem() {
               <option>Best of 5 games</option>
             </Select>
           </div>
+        </ComponentCard>
+        <ComponentCard title="Combobox" tag="searchable select · open">
+          {/* The reference shows no label, so an aria-label names the
+              combobox. It opens on "ngu", as the reference draws it. */}
+          <Combobox
+            aria-label="Find a player"
+            placeholder="Find a player…"
+            options={players}
+            defaultQuery="ngu"
+            defaultOpen
+            className="combobox-demo"
+          />
         </ComponentCard>
       </Section>
     </>

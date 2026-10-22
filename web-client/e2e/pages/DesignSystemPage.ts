@@ -25,6 +25,12 @@ export class DesignSystemPage {
   readonly switchCard: Locator
   readonly sliderCard: Locator
   readonly selectCard: Locator
+  readonly comboboxCard: Locator
+  readonly combobox: Locator
+  readonly comboboxBox: Locator
+  readonly comboboxInputRow: Locator
+  readonly comboboxIcon: Locator
+  readonly comboboxOptions: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -70,6 +76,18 @@ export class DesignSystemPage {
     this.switchCard = this.formsSection.getByRole('article', { name: 'Switch' })
     this.sliderCard = this.formsSection.getByRole('article', { name: 'Slider' })
     this.selectCard = this.formsSection.getByRole('article', { name: 'Select' })
+    this.comboboxCard = this.formsSection.getByRole('article', {
+      name: 'Combobox',
+    })
+    this.combobox = this.comboboxCard.getByRole('combobox', {
+      name: 'Find a player',
+    })
+    // The .cmd box around the input and its list, which draws the border.
+    this.comboboxBox = this.comboboxCard.locator('.cmd')
+    // The box's top row: the search icon and the input.
+    this.comboboxInputRow = this.comboboxBox.locator('.cmd-input')
+    this.comboboxIcon = this.comboboxInputRow.locator('svg')
+    this.comboboxOptions = this.comboboxCard.getByRole('option')
   }
 
   // A component card's title, in its header.

@@ -182,4 +182,23 @@ export class DesignSystemPage {
   select(name: string): HTMLElement {
     return within(this.selectCard).getByRole('combobox', { name })
   }
+
+  get comboboxCard(): HTMLElement {
+    return within(this.formsSection).getByRole('article', { name: 'Combobox' })
+  }
+
+  get comboboxCardHeading(): HTMLElement {
+    return within(this.comboboxCard).getByRole('heading', { level: 3 })
+  }
+
+  get combobox(): HTMLElement {
+    return within(this.comboboxCard).getByRole('combobox', {
+      name: 'Find a player',
+    })
+  }
+
+  // The combobox's shown options, in order.
+  get comboboxOptions(): HTMLElement[] {
+    return within(this.comboboxCard).getAllByRole('option')
+  }
 }

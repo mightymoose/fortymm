@@ -819,6 +819,237 @@ test.describe('Select', () => {
   })
 })
 
+// The card opens on the reference's query, with its first match active, but
+// nothing is hovered or focused, so there's no focus ring.
+test.describe('Combobox card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.comboboxCard).toHaveScreenshot(
+      'combobox-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.comboboxCard).toHaveScreenshot(
+      'combobox-card.png',
+    )
+  })
+})
+
+// The kit's combobox is static, with no focus style, so the tests below are
+// the app's alone.
+test.describe('Combobox', () => {
+  const ring = 'color(srgb 1 0.478431 0.101961 / 0.15) 0px 0px 0px 3px'
+
+  test('typing filters the options', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+    const combobox = designSystemPage.combobox
+
+    await combobox.clear()
+    await combobox.pressSequentially('an')
+
+    await expect(designSystemPage.comboboxOptions).toHaveText([
+      'Silva, Ana 1710',
+      'Tanaka, Kenji 1540',
+    ])
+    await expect(combobox).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  test('the arrow keys move the active option, and Enter chooses it', async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const combobox = designSystemPage.combobox
+    const options = designSystemPage.comboboxOptions
+    await combobox.focus()
+
+    await page.keyboard.press('ArrowDown')
+    const mai = options.nth(1)
+    await expect(combobox).toHaveAttribute(
+      'aria-activedescendant',
+      (await mai.getAttribute('id'))!,
+    )
+    await expect(mai).toHaveAttribute('aria-selected', 'true')
+    await expect(options.nth(0)).toHaveAttribute('aria-selected', 'false')
+
+    // Up from the first option wraps to the last.
+    await page.keyboard.press('ArrowUp')
+    await page.keyboard.press('ArrowUp')
+    const phuc = options.nth(2)
+    await expect(combobox).toHaveAttribute(
+      'aria-activedescendant',
+      (await phuc.getAttribute('id'))!,
+    )
+    await expect(phuc).toHaveAttribute('aria-selected', 'true')
+
+    await page.keyboard.press('Enter')
+    await expect(combobox).toHaveValue('Nguyen, Phuc')
+    await expect(combobox).toHaveAttribute('aria-expanded', 'false')
+    await expect(options).toHaveCount(0)
+  })
+
+  // The input is borderless, so the ring goes on the box around it.
+  test('keyboard focus shows the focus ring on the box', async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    await designSystemPage.select('Match length').focus()
+
+    await page.keyboard.press('Tab')
+
+    await expect(designSystemPage.combobox).toBeFocused()
+    await expect(designSystemPage.comboboxBox).toHaveCSS('box-shadow', ring)
+    await expect(designSystemPage.comboboxBox).toHaveCSS(
+      'border-color',
+      'rgb(255, 122, 26)',
+    )
+    await expect(designSystemPage.combobox).toHaveCSS('outline-style', 'none')
+  })
+
+  // The screenshot can't see the highlight: --bg-hover is white at 4%,
+  // under the screenshot's color threshold.
+  test('the active option is highlighted, and follows the pointer', async ({
+    designSystemPage,
+  }) => {
+    await designSystemPage.goto()
+    const options = designSystemPage.comboboxOptions
+    const highlight = 'rgba(255, 255, 255, 0.04)'
+    const none = 'rgba(0, 0, 0, 0)'
+    await expect(options.nth(0)).toHaveCSS('background-color', highlight)
+    await expect(options.nth(1)).toHaveCSS('background-color', none)
+
+    await options.nth(2).hover()
+
+    await expect(designSystemPage.combobox).toHaveAttribute(
+      'aria-activedescendant',
+      (await options.nth(2).getAttribute('id'))!,
+    )
+    await expect(options.nth(2)).toHaveCSS('background-color', highlight)
+    await expect(options.nth(0)).toHaveCSS('background-color', none)
+  })
+
+  // The closed box is just its input row, inside the box's own border.
+  test('Escape closes the list', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+    await designSystemPage.combobox.focus()
+
+    await page.keyboard.press('Escape')
+
+    await expect(designSystemPage.combobox).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+    await expect(designSystemPage.combobox).toHaveValue('ngu')
+    await expect(designSystemPage.comboboxOptions).toHaveCount(0)
+    await expect(designSystemPage.comboboxInputRow).toHaveCSS(
+      'border-bottom-width',
+      '0px',
+    )
+  })
+
+  test('a click shows the focus ring, as on a text input', async ({
+    designSystemPage,
+  }) => {
+    await designSystemPage.goto()
+
+    await designSystemPage.combobox.click()
+
+    await expect(designSystemPage.combobox).toBeFocused()
+    await expect(designSystemPage.comboboxBox).toHaveCSS('box-shadow', ring)
+  })
+
+  // The demo's combobox isn't disabled, so this test disables it in place.
+  test("a disabled one fades and doesn't take typing", async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const combobox = designSystemPage.combobox
+    await combobox.evaluate((input) => input.setAttribute('disabled', ''))
+    await combobox.scrollIntoViewIfNeeded()
+    const box = (await combobox.boundingBox())!
+
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+    await page.keyboard.type('x')
+
+    await expect(combobox).toHaveValue('ngu')
+    await expect(combobox).not.toBeFocused()
+    await expect(designSystemPage.comboboxBox).toHaveCSS('opacity', '0.5')
+  })
+
+  // The demo's combobox isn't invalid, so these tests mark it in place.
+  test('an invalid one shows the error border', async ({
+    designSystemPage,
+  }) => {
+    await designSystemPage.goto()
+
+    await designSystemPage.combobox.evaluate((input) =>
+      input.setAttribute('aria-invalid', 'true'),
+    )
+
+    // --loss, #FF4D6D.
+    await expect(designSystemPage.comboboxBox).toHaveCSS(
+      'border-color',
+      'rgb(255, 77, 109)',
+    )
+  })
+
+  // The error border outranks the focus border, as on a text input. The
+  // border fades between them, so it starts on the focus color: a check
+  // made as the focus border faded in would still see the error color.
+  test('the error border outranks the focus border', async ({
+    designSystemPage,
+  }) => {
+    await designSystemPage.goto()
+    const combobox = designSystemPage.combobox
+    await combobox.focus()
+    await expect(designSystemPage.comboboxBox).toHaveCSS(
+      'border-color',
+      'rgb(255, 122, 26)',
+    )
+
+    await combobox.evaluate((input) =>
+      input.setAttribute('aria-invalid', 'true'),
+    )
+
+    await expect(designSystemPage.comboboxBox).toHaveCSS('box-shadow', ring)
+    await expect(designSystemPage.comboboxBox).toHaveCSS(
+      'border-color',
+      'rgb(255, 77, 109)',
+    )
+  })
+
+  // The border fades to the focus color, as on a text input.
+  test('the border color transitions', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.comboboxBox).toHaveCSS(
+      'transition-duration',
+      '0.12s',
+    )
+  })
+
+  test.describe('with reduced motion', () => {
+    test.use({ reducedMotion: 'reduce' })
+
+    test('the border color changes without a transition', async ({
+      designSystemPage,
+    }) => {
+      await designSystemPage.goto()
+
+      await expect(designSystemPage.comboboxBox).toHaveCSS(
+        'transition-duration',
+        '0s',
+      )
+    })
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -966,6 +1197,30 @@ test.describe('on a phone', () => {
         card.x + card.width - 33,
       )
     }
+  })
+
+  // The box narrows from the kit's 340px to the card's content, and its
+  // input narrows with it. An input that kept its default width would
+  // squeeze the icon here, and overflow the box on a narrower phone.
+  test('the combobox card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.comboboxCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.comboboxCard.boundingBox())!
+    const box = (await designSystemPage.comboboxBox.boundingBox())!
+    const input = (await designSystemPage.combobox.boundingBox())!
+    // Inside the card's 1px border and 32px padding on the right.
+    expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width - 33)
+    // The box clips what overflows it, so check the input stays inside too.
+    expect(input.x + input.width).toBeLessThanOrEqual(box.x + box.width)
+    expect((await designSystemPage.comboboxIcon.boundingBox())!.width).toBe(14)
   })
 
   // Two columns would leave each input too narrow for its placeholder, so
