@@ -169,4 +169,17 @@ export class DesignSystemPage {
   get sliderValues(): HTMLElement[] {
     return within(this.sliderCard).getAllByRole('status')
   }
+
+  get selectCard(): HTMLElement {
+    return within(this.formsSection).getByRole('article', { name: 'Select' })
+  }
+
+  get selectCardHeading(): HTMLElement {
+    return within(this.selectCard).getByRole('heading', { level: 3 })
+  }
+
+  // The select named `name`.
+  select(name: string): HTMLElement {
+    return within(this.selectCard).getByRole('combobox', { name })
+  }
 }

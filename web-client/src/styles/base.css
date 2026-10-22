@@ -448,7 +448,9 @@ h4, .h4 {
 /* The text controls, .input and .textarea, share their look and states, and
    .otp's cells, .checkbox's box and .radio's dot (below) share the states.
    .switch's track (below) shares the focus ring and the disabled opacity,
-   as do .slider's thumbs (below). */
+   as do .slider's thumbs (below). .select (after the text controls) shares
+   the focus ring, the disabled opacity and the error border, but not their
+   look. */
 .input, .textarea {
   font-family: var(--font-ui);
   font-size: 14px;
@@ -478,7 +480,50 @@ h4, .h4 {
   color: var(--fg-muted);
 }
 
-.input:focus, .textarea:focus, .otp-cell.otp-cell--active,
+/* The reference kit's .select: a native <select> with its own chevron. Not
+   in the .input, .textarea rule: those fill their row, and a select sizes to
+   its widest option. */
+.select {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 400;
+  /* The kit sets the font shorthand, which resets the line height. */
+  line-height: normal;
+  height: 40px;
+  padding: 0 36px 0 12px;
+  /* Not the background shorthand, which would reset the chevron below. */
+  background-color: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-md);
+  color: var(--fg-1);
+  cursor: pointer;
+  appearance: none;
+  /* The chevron: two half-filled squares, side by side. */
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--fg-3) 50%),
+    linear-gradient(135deg, var(--fg-3) 50%, transparent 50%);
+  background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  transition: border-color var(--dur-fast);
+}
+
+.select:disabled {
+  cursor: not-allowed;
+}
+
+/* The Select card's second select, with the kit's inline min-width. */
+.select-wide {
+  min-width: 200px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .select {
+    transition: none;
+  }
+}
+
+.input:focus, .textarea:focus, .select:focus, .otp-cell.otp-cell--active,
 .checkbox-input:focus-visible + .checkbox-box,
 .radio-input:focus-visible + .radio-dot,
 .switch-input:focus-visible + .switch-track,
@@ -488,7 +533,8 @@ h4, .h4 {
   box-shadow: 0 0 0 3px rgb(from var(--ball-500) r g b / 0.15);
 }
 
-.input:disabled, .textarea:disabled, .otp-input:disabled ~ .otp-cell,
+.input:disabled, .textarea:disabled, .select:disabled,
+.otp-input:disabled ~ .otp-cell,
 .checkbox:has(> .checkbox-input:disabled),
 .radio:has(> .radio-input:disabled),
 .switch:has(> .switch-input:disabled),
@@ -499,6 +545,7 @@ h4, .h4 {
 /* The error state follows aria-invalid, so it always matches what assistive
    tech is told. */
 .input[aria-invalid="true"], .textarea[aria-invalid="true"],
+.select[aria-invalid="true"],
 .otp-input[aria-invalid="true"] ~ .otp-cell,
 .checkbox-input[aria-invalid="true"] + .checkbox-box,
 .radio-input[aria-invalid="true"] + .radio-dot {

@@ -1,3 +1,4 @@
+import { within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { DesignSystemPage } from '../test/pages/DesignSystemPage'
 
@@ -261,5 +262,33 @@ describe('DesignSystem', () => {
     expect(
       designSystemPage.sliderValues.map((readout) => readout.textContent),
     ).toEqual(['1620', '1400 – 1800'])
+  })
+
+  it('shows the Select card after the Slider card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.selectCardHeading).toHaveTextContent('Select')
+    expect(designSystemPage.selectCard).toHaveTextContent('native')
+    expect(
+      designSystemPage.sliderCard.compareDocumentPosition(
+        designSystemPage.selectCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows two selects with the reference's options", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const type = designSystemPage.select('Match type')
+    expect(type).toHaveValue('Singles')
+    expect(
+      within(type)
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['Singles', 'Doubles'])
+    expect(type).toBeEnabled()
+    const length = designSystemPage.select('Match length')
+    expect(length).toHaveValue('Best of 5 games')
+    expect(length).toBeEnabled()
   })
 })

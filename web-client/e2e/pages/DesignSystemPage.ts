@@ -24,6 +24,7 @@ export class DesignSystemPage {
   readonly radioGroup: Locator
   readonly switchCard: Locator
   readonly sliderCard: Locator
+  readonly selectCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -68,6 +69,7 @@ export class DesignSystemPage {
     })
     this.switchCard = this.formsSection.getByRole('article', { name: 'Switch' })
     this.sliderCard = this.formsSection.getByRole('article', { name: 'Slider' })
+    this.selectCard = this.formsSection.getByRole('article', { name: 'Select' })
   }
 
   // A component card's title, in its header.
@@ -209,6 +211,11 @@ export class DesignSystemPage {
       steps: 5,
     })
     await this.page.mouse.up()
+  }
+
+  // The Select card's select named `name`.
+  select(name: string): Locator {
+    return this.selectCard.getByRole('combobox', { name, exact: true })
   }
 
   // Clicks the middle of the text `name` in `card` with a plain mouse click.
