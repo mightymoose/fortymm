@@ -31,15 +31,62 @@ deployer_sa="$deployer@$project.iam.gserviceaccount.com"
 runtime_sa="$runtime@$project.iam.gserviceaccount.com"
 gc() { gcloud --project "$project" --quiet "$@"; }
 
-echo "Enabling APIs in $project..."
-gc services enable \
-  run.googleapis.com \
-  artifactregistry.googleapis.com \
-  iam.googleapis.com \
-  iamcredentials.googleapis.com \
-  sts.googleapis.com \
-  secretmanager.googleapis.com \
+apis=(
+  run.googleapis.com
+  artifactregistry.googleapis.com
+  iam.googleapis.com
+  iamcredentials.googleapis.com
+  sts.googleapis.com
+  secretmanager.googleapis.com
   billingbudgets.googleapis.com
+)
+echo "Enabling APIs in $project..."
+gc services enable "${apis[@]}"
+
+# `services enable` can return before an API answers requests, so poll a
+# read-only call for each one the steps below use. An API added to $apis
+# without a case here stops the script.
+api_ready() {
+  case $1 in
+    run.googleapis.com) gc run services list --region "$region" ;;
+    artifactregistry.googleapis.com) gc artifacts repositories list --location "$region" ;;
+    iam.googleapis.com)
+      gc iam service-accounts list && gc iam workload-identity-pools list --location global ;;
+    secretmanager.googleapis.com) gc secrets list ;;
+    billingbudgets.googleapis.com)
+      # Without a billing account there's nothing to poll. The budget step
+      # reports it.
+      local account
+      account=$(gcloud billing projects describe "$project" --format='value(billingAccountName)')
+      [ -z "$account" ] || gcloud billing budgets list --billing-account "${account#billingAccounts/}" \
+        --billing-project "$project" --quiet ;;
+    # Only CI's Workload Identity login uses these.
+    iamcredentials.googleapis.com | sts.googleapis.com) ;;
+    *) echo "No readiness check for $1."; return 2 ;;
+  esac
+}
+retries=0   # every 5 seconds, about 2 minutes in all
+for service in "${apis[@]}"; do
+  while :; do
+    status=0
+    out=$(api_ready "$service" 2>&1) || status=$?
+    [ "$status" -ne 0 ] || break
+    # 2 is also gcloud's exit status for a bad command line. Waiting can't fix
+    # either.
+    if [ "$status" -eq 2 ]; then
+      echo "$out" >&2
+      exit 1
+    fi
+    if [ "$retries" -ge 24 ]; then
+      printf '%s\n%s is still not usable after about 2 minutes. Re-running this script is safe.\n' \
+        "$out" "$service" >&2
+      exit 1
+    fi
+    [ "$retries" -gt 0 ] || echo "Waiting for the APIs to be ready..."
+    retries=$((retries + 1))
+    sleep 5
+  done
+done
 
 project_number=$(gcloud projects describe "$project" --format='value(projectNumber)')
 
