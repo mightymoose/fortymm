@@ -150,4 +150,23 @@ export class DesignSystemPage {
   switch(name: string): HTMLElement {
     return within(this.switchCard).getByRole('switch', { name })
   }
+
+  get sliderCard(): HTMLElement {
+    return within(this.formsSection).getByRole('article', { name: 'Slider' })
+  }
+
+  get sliderCardHeading(): HTMLElement {
+    return within(this.sliderCard).getByRole('heading', { level: 3 })
+  }
+
+  // The slider (one input) named `name`, so finding it proves its label
+  // names it.
+  slider(name: string): HTMLElement {
+    return within(this.sliderCard).getByRole('slider', { name })
+  }
+
+  // The value readouts, in order.
+  get sliderValues(): HTMLElement[] {
+    return within(this.sliderCard).getAllByRole('status')
+  }
 }

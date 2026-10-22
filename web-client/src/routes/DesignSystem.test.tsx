@@ -239,4 +239,27 @@ describe('DesignSystem', () => {
     expect(nearby).not.toBeChecked()
     expect(nearby).toBeEnabled()
   })
+
+  it('shows the Slider card after the Switch card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.sliderCardHeading).toHaveTextContent('Slider')
+    expect(designSystemPage.sliderCard).toHaveTextContent('single + range')
+    expect(
+      designSystemPage.switchCard.compareDocumentPosition(
+        designSystemPage.sliderCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('shows a single slider and a range slider with their values', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.slider('Skill level')).toHaveValue('1620')
+    expect(designSystemPage.slider('Rating range minimum')).toHaveValue('1400')
+    expect(designSystemPage.slider('Rating range maximum')).toHaveValue('1800')
+    expect(
+      designSystemPage.sliderValues.map((readout) => readout.textContent),
+    ).toEqual(['1620', '1400 – 1800'])
+  })
 })
