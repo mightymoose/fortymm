@@ -276,6 +276,8 @@ Run, so the app's `/api` client is same-origin, as in dev, with no CORS.
 ./bin/mise run api:url              # print the production API's URL
 ./bin/mise run web-client:deploy    # wrangler deploy of web-client/dist and the Worker
 ./bin/mise run web-client:preview   # a Cloudflare Preview named after the git branch
+./bin/mise run api:preview-delete <branch>         # remove that branch's API Preview tag
+./bin/mise run web-client:preview-delete <branch>  # delete that branch's Cloudflare Preview
 ```
 
 CI deploys on every push after `ci` passes, the API first, so the Worker
@@ -302,6 +304,16 @@ End-to-end tests) against what it just deployed:
 Both are skipped while the API deploys are (see below), since `/api/*`
 answers 503 then.
 
+When a branch other than `main` is deleted,
+`.github/workflows/preview-cleanup.yml` removes its Previews.
+GitHub runs the workflow from `main`, so the deleted branch's name comes from
+the `delete` event. The workflow runs `api:preview-delete` and then
+`web-client:preview-delete` with that name. Each task succeeds if its Preview
+isn't there. The workflow skips the API step while the API deploys are
+skipped. It uses the CI concurrency group of the deleted branch. So it waits
+for that branch's running CI deploy, and a CI deploy can't recreate the
+Previews after the cleanup.
+
 ### web-client (Cloudflare Workers)
 
 `web-client/wrangler.jsonc` configures it. `worker/index.ts` is the Worker
@@ -327,12 +339,19 @@ Previews (`wrangler preview`, open beta) are served on
 `wrangler.jsonc`; changes to that setting only take effect after a production
 deploy. `bin/preview-name` makes the name from the branch (`claude/foo_bar` ->
 `claude-foo-bar`, at most 30 characters, starting with a letter); the API's
-Preview revision uses the same name as its tag.
+Preview revision uses the same name as its tag. `bin/preview-name` takes an
+optional branch name and defaults to the current branch, so it can also name
+a deleted branch.
 
 The tasks deploy whatever is in `web-client/dist`, so build first (CI deploys
 the build `ci` just tested). They need `CLOUDFLARE_API_TOKEN` and
 `CLOUDFLARE_ACCOUNT_ID` in the environment; CI reads them from the repo's
 Actions secrets of the same names.
+
+`web-client:preview-delete` runs `npm ci` and then `wrangler preview delete
+--name <name> -y`. wrangler can't check whether a Preview exists first. So
+the task reads wrangler's error when the delete fails, and treats a "not
+found" error as success.
 
 ### api (Cloud Run)
 
@@ -354,6 +373,12 @@ and Docker.
   `https://<preview-name>---<api-preview's host>`. Each push moves the tag to
   the new revision. Keeping Previews on their own service means a branch
   deploy can never change production's traffic or settings.
+- `api:preview-delete <branch>` removes the branch's tag from `api-preview`
+  (`gcloud run services update-traffic --remove-tags`). It first checks that
+  the service and the tag exist, and does nothing if either is missing. The
+  revision stays, untagged and with no traffic. Cloud Run keeps a limited
+  number of revisions per service, and an idle revision costs nothing, so
+  nothing deletes revisions.
 
 The `*.run.app` URLs are publicly reachable too, not only through the Worker.
 Restricting them to the Worker (ingress settings or authenticated invocation)

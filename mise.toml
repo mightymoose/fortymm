@@ -96,6 +96,28 @@ description = "Like api:deploy, but to a revision of the `api-preview` service t
 depends = ["api:build"]
 run = 'api/deploy/cloud-run-deploy --tag "$(bin/preview-name)"'
 
+[tasks."api:preview-delete"]
+description = "Remove a branch's Preview tag from the `api-preview` Cloud Run service (needs gcloud, authenticated); succeeds if the tag or the service isn't there"
+usage = 'arg "<branch>" help="The git branch whose Preview to remove"'
+# The revision itself stays, untagged and without traffic: Cloud Run keeps a
+# limited number of revisions per service and an idle one costs nothing.
+run = """
+name=$(bin/preview-name "$usage_branch")
+# list (unlike describe) succeeds with no output when the service is missing,
+# so an auth or API error still fails the task.
+service=$(gcloud run services list --project "$GCP_PROJECT" --region "$GCP_REGION" --filter=metadata.name=api-preview --format='value(metadata.name)')
+if [ -z "$service" ]; then
+  echo "api-preview doesn't exist, so there's no $name tag to remove"
+  exit 0
+fi
+tags=$(gcloud run services describe api-preview --project "$GCP_PROJECT" --region "$GCP_REGION" --format='value(spec.traffic[].tag)')
+if ! printf '%s\n' "$tags" | tr ';' '\n' | grep -qx "$name"; then
+  echo "api-preview has no $name tag to remove"
+  exit 0
+fi
+gcloud run services update-traffic api-preview --project "$GCP_PROJECT" --region "$GCP_REGION" --remove-tags "$name" --quiet
+"""
+
 [tasks."api:url"]
 description = "Print the production API's Cloud Run URL (pass it to web-client:deploy as API_ORIGIN)"
 quiet = true
@@ -152,6 +174,31 @@ run = """
 [ -n "${API_ORIGIN:-}" ] || echo "warning: API_ORIGIN is empty, so the Worker will answer /api/* with a 503" >&2
 docker compose run --rm -T -e CLOUDFLARE_API_TOKEN -e CLOUDFLARE_ACCOUNT_ID -w /app/web-client dev \
   npx wrangler preview --name "$(bin/preview-name)" --var "API_ORIGIN:${API_ORIGIN:-}"
+"""
+
+[tasks."web-client:preview-delete"]
+description = "Delete a branch's Cloudflare Workers Preview (needs CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID); succeeds if there's no such Preview"
+usage = 'arg "<branch>" help="The git branch whose Preview to delete"'
+# npm ci first, so npx runs the locked wrangler even when the node_modules
+# volume is empty (as in the preview-cleanup workflow).
+run = """
+name=$(bin/preview-name "$usage_branch")
+docker compose run --rm -T -w /app/web-client dev npm ci
+log=$(mktemp)
+trap 'rm -f "$log"' EXIT
+status=0
+docker compose run --rm -T -e CLOUDFLARE_API_TOKEN -e CLOUDFLARE_ACCOUNT_ID -w /app/web-client dev \
+  npx wrangler preview delete --name "$name" -y >"$log" 2>&1 || status=$?
+cat "$log"
+# wrangler has no way to check for a Preview first, and fails when it's
+# missing, so read its error instead.
+if [ "$status" -ne 0 ]; then
+  if grep -Eqi 'not found|does not exist|could not be found' "$log"; then
+    echo "There's no Preview named $name to delete"
+    exit 0
+  fi
+  exit "$status"
+fi
 """
 
 [tasks."web-client:test"]

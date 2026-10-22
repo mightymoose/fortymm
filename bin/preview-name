@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Print the Preview name for the current git branch: the name of its Cloudflare
-# Preview and the tag of its Cloud Run revision (claude/foo_bar -> claude-foo-bar).
+# Print the Preview name for a git branch: the name of its Cloudflare Preview
+# and the tag of its Cloud Run revision (claude/foo_bar -> claude-foo-bar).
+# Pass the branch name to name a branch that isn't checked out (such as a
+# deleted one); with no argument it names the current branch.
 # Both become part of a hostname, so it's lowercase letters, digits and dashes,
 # starts with a letter (Cloud Run requires it) and is at most 30 characters, so
 # <name>---api-preview-<project number>.<region>.run.app fits a DNS label.
 set -euo pipefail
 
-name=$(git rev-parse --abbrev-ref HEAD | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^[^a-z]+//' | cut -c1-30 | sed -E 's/-+$//')
+branch=${1:-$(git rev-parse --abbrev-ref HEAD)}
+name=$(printf '%s\n' "$branch" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^[^a-z]+//' | cut -c1-30 | sed -E 's/-+$//')
 echo "${name:-preview}"
