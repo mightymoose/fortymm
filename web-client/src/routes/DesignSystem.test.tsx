@@ -291,4 +291,36 @@ describe('DesignSystem', () => {
     expect(length).toHaveValue('Best of 5 games')
     expect(length).toBeEnabled()
   })
+
+  it('shows the Combobox card after the Select card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.comboboxCardHeading).toHaveTextContent('Combobox')
+    expect(designSystemPage.comboboxCard).toHaveTextContent(
+      'searchable select · open',
+    )
+    expect(
+      designSystemPage.selectCard.compareDocumentPosition(
+        designSystemPage.comboboxCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's query and its three matches, the first active", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const combobox = designSystemPage.combobox
+    expect(combobox).toHaveValue('ngu')
+    expect(combobox).toHaveAttribute('aria-expanded', 'true')
+    const options = designSystemPage.comboboxOptions
+    expect(options.map((option) => option.textContent)).toEqual([
+      'Nguyen, Tien 1620',
+      'Nguyen, Mai 1455',
+      'Nguyen, Phuc 1380',
+    ])
+    expect(combobox).toHaveAttribute('aria-activedescendant', options[0].id)
+    expect(
+      options.map((option) => option.getAttribute('aria-selected')),
+    ).toEqual(['true', 'false', 'false'])
+  })
 })

@@ -450,7 +450,7 @@ h4, .h4 {
    .switch's track (below) shares the focus ring and the disabled opacity,
    as do .slider's thumbs (below). .select (after the text controls) shares
    the focus ring, the disabled opacity and the error border, but not their
-   look. */
+   look, and so does .cmd's box (after .select), for its input. */
 .input, .textarea {
   font-family: var(--font-ui);
   font-size: 14px;
@@ -523,11 +523,103 @@ h4, .h4 {
   }
 }
 
+/* The reference kit's Command (.cmd, .cmd-input and .cmd-list) holding its
+   dropdown menu's .menu-item rows, for the Combobox. The box takes the
+   shared focus ring, disabled opacity and error border (below) for its
+   borderless input. While focused, the ring's box-shadow replaces the box's
+   shadow. */
+.cmd {
+  background: var(--ink-800);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  width: 480px;
+  /* Where the card is narrower (e.g. on a phone), the box narrows to fit. */
+  max-width: 100%;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  transition: border-color var(--dur-fast);
+}
+
+.cmd-input {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* With the list hidden, the box's own border is the row's bottom edge. */
+.cmd-input:has(+ .cmd-list[hidden]) {
+  border-bottom: 0;
+}
+
+.cmd-input input {
+  background: transparent;
+  border: 0;
+  outline: none;
+  flex: 1;
+  /* Lets the input shrink below its default width in a narrow box. */
+  min-width: 0;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 400;
+  /* The kit sets the font shorthand, which resets the line height. */
+  line-height: normal;
+  color: var(--fg-1);
+}
+
+.cmd-input input:disabled {
+  cursor: not-allowed;
+}
+
+.cmd-list {
+  padding: 6px;
+}
+
+/* No :hover style, unlike the kit's: the active option follows the pointer,
+   so only one row is ever highlighted. */
+.menu-item {
+  padding: 8px 10px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 400;
+  /* The kit sets the font shorthand, which resets the line height. */
+  line-height: normal;
+  color: var(--fg-1);
+  border-radius: var(--r-sm);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+}
+
+.menu-item[aria-selected="true"] {
+  background: var(--bg-hover);
+}
+
+/* The kit's inline style on its options' ratings. */
+.menu-item-hint {
+  font-family: var(--font-mono);
+  color: var(--fg-3);
+}
+
+/* The Combobox card's box, with the kit's inline width. */
+.combobox-demo {
+  width: 340px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cmd {
+    transition: none;
+  }
+}
+
 .input:focus, .textarea:focus, .select:focus, .otp-cell.otp-cell--active,
 .checkbox-input:focus-visible + .checkbox-box,
 .radio-input:focus-visible + .radio-dot,
 .switch-input:focus-visible + .switch-track,
-.slider-input:focus-visible + .slider-thumb {
+.slider-input:focus-visible + .slider-thumb,
+.cmd:has(> .cmd-input > input:focus) {
   outline: none;
   border-color: var(--ball-500);
   box-shadow: 0 0 0 3px rgb(from var(--ball-500) r g b / 0.15);
@@ -538,7 +630,8 @@ h4, .h4 {
 .checkbox:has(> .checkbox-input:disabled),
 .radio:has(> .radio-input:disabled),
 .switch:has(> .switch-input:disabled),
-.slider-field:has(.slider-input:disabled) {
+.slider-field:has(.slider-input:disabled),
+.cmd:has(> .cmd-input > input:disabled) {
   opacity: 0.5;
 }
 
@@ -548,7 +641,8 @@ h4, .h4 {
 .select[aria-invalid="true"],
 .otp-input[aria-invalid="true"] ~ .otp-cell,
 .checkbox-input[aria-invalid="true"] + .checkbox-box,
-.radio-input[aria-invalid="true"] + .radio-dot {
+.radio-input[aria-invalid="true"] + .radio-dot,
+.cmd:has(> .cmd-input > input[aria-invalid="true"]) {
   border-color: var(--loss);
 }
 
