@@ -1,4 +1,5 @@
 import type { Locator, Page } from '@playwright/test'
+import { waitForLoadingScreen } from './loadingScreen.ts'
 
 // Page object for the design system page in the Playwright suite.
 export class DesignSystemPage {
@@ -284,6 +285,7 @@ export class DesignSystemPage {
 
   async goto(): Promise<void> {
     await this.page.goto('/design-system')
+    await waitForLoadingScreen(this.page)
   }
 
   // The input card's text input labelled `name`.
