@@ -12,7 +12,23 @@ docker compose up -d --build --wait
 trap 'docker compose rm --force --stop >/dev/null 2>&1' EXIT INT TERM
 ./bin/mise run api:ci
 ./bin/mise run web-client:ci
+./bin/mise run openapi:check
 ./bin/mise run web-client:e2e
+"""
+
+[tasks."openapi:check"]
+description = "Regenerate the OpenAPI schema and the web-client's types in the running stack and fail if they differ from what's committed (start it with `mise run ci`)"
+# Expects node_modules installed (web-client:ci runs `npm ci` first).
+run = """
+files="api/openapi.json web-client/src/api/schema.d.ts"
+docker compose exec -T api /app/bin/docker-entrypoint uv run --locked python -m fortymm_api.openapi
+docker compose exec -T -w /app/web-client dev /app/bin/docker-entrypoint npm run generate:api
+# --porcelain also lists the files if they're new or deleted, not just changed.
+if [ -n "$(git status --porcelain -- $files)" ]; then
+  git --no-pager diff -- $files
+  echo "The generated OpenAPI files are out of date: run ./bin/mise run api:openapi and commit the result." >&2
+  exit 1
+fi
 """
 
 [tasks."api:ci"]
@@ -38,7 +54,7 @@ docker compose run --rm -T -w /app/web-client dev sh -c 'npm install && npm run 
 [tasks."web-client:ci"]
 description = "Install, lint, build and test the web-client inside the running dev container (start it with `mise run ci`)"
 # exec bypasses the image entrypoint, so call it to get the container's tools on PATH.
-run = "docker compose exec -T -w /app/web-client dev /app/bin/docker-entrypoint sh -c 'npm ci && npm run generate:api -- --check && npm run lint && npm run build && npm test'"
+run = "docker compose exec -T -w /app/web-client dev /app/bin/docker-entrypoint sh -c 'npm ci && npm run lint && npm run build && npm test'"
 
 [tasks."web-client:e2e"]
 description = "Start the dev server in the running dev container and run the Playwright suite against it (start the stack with `mise run ci`)"

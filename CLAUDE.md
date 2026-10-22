@@ -53,9 +53,12 @@ blocks until the API answers. To add a project's checks, call its
 `api:ci` runs `uv sync --locked`, ruff (lint and format), mypy and pytest in
 the running `api` container.
 
-`web-client:ci` runs `npm ci`, checks the generated API types are up to date,
-then lint, build and tests in the running `dev`
+`web-client:ci` runs `npm ci`, lint, build and tests in the running `dev`
 container, so it needs the stack up (run it via `ci`).
+
+`openapi:check` then regenerates `api/openapi.json` and the web-client's
+types from it in the running containers, and fails if git shows them changed,
+so a route or model change without `api:openapi` breaks CI.
 
 `web-client:e2e` then starts the Vite dev server in the `dev` container
 (`docker compose exec -d`), waits for it, and runs Playwright in the
@@ -108,8 +111,8 @@ the prefix stripped, so `/v1/ping` is at
 `python -m fortymm_api.openapi`. Clients generate their types from it; the
 web-client's are in `web-client/src/api/schema.d.ts` (`npm run
 generate:api`, openapi-typescript). After changing a route or model, run
-`api:openapi` and commit both files; CI fails if either is stale (a pytest in
-the API, `generate:api -- --check` in the web-client).
+`api:openapi` and commit both files; CI's `openapi:check` fails if either is
+stale.
 
 ## web-client
 
