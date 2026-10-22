@@ -10,9 +10,20 @@ export interface Env {
   // https://fortymm-api-123456789012.us-central1.run.app. Passed with
   // `wrangler deploy --var`/`wrangler preview --var` (see mise.toml).
   API_ORIGIN?: string
+  // Sent to the API as X-FortyMM-Worker-Secret, which it requires on Cloud
+  // Run. Passed with `--secrets-file` (see mise.toml).
+  WORKER_SECRET?: string
+  // Per-client-IP limit on /api/* (the `ratelimits` binding in wrangler.jsonc).
+  API_RATE_LIMIT: RateLimit
+}
+
+// The Workers rate limiting binding.
+interface RateLimit {
+  limit(options: { key: string }): Promise<{ success: boolean }>
 }
 
 const API_PREFIX = '/api'
+const WORKER_SECRET_HEADER = 'X-FortyMM-Worker-Secret'
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -32,6 +43,16 @@ async function proxyToApi(request: Request, url: URL, env: Env): Promise<Respons
     )
   }
 
+  const clientIp = request.headers.get('CF-Connecting-IP')
+  // Cloudflare always sets CF-Connecting-IP. Without it, the requests share one key.
+  const { success } = await env.API_RATE_LIMIT.limit({ key: clientIp ?? 'unknown' })
+  if (!success) {
+    return Response.json(
+      { errors: [{ status: '429', title: 'Too many requests' }] },
+      { status: 429, headers: { 'Retry-After': '60' } },
+    )
+  }
+
   const target = new URL(env.API_ORIGIN)
   target.pathname = url.pathname.slice(API_PREFIX.length)
   target.search = url.search
@@ -41,9 +62,14 @@ async function proxyToApi(request: Request, url: URL, env: Env): Promise<Respons
   headers.delete('Host')
   headers.set('X-Forwarded-Host', url.host)
   headers.set('X-Forwarded-Proto', url.protocol.replace(/:$/, ''))
-  const clientIp = request.headers.get('CF-Connecting-IP')
   if (clientIp) {
     headers.set('X-Forwarded-For', clientIp)
+  }
+  // Never forward a client's own copy of the header.
+  if (env.WORKER_SECRET) {
+    headers.set(WORKER_SECRET_HEADER, env.WORKER_SECRET)
+  } else {
+    headers.delete(WORKER_SECRET_HEADER)
   }
 
   // The body is buffered (API requests are small); GET and HEAD can't have

@@ -25,8 +25,16 @@ docker tag fortymm-api-production "$image" >&2
 docker push --quiet "$image" >&2
 
 gcloud_args=(--project "$GCP_PROJECT" --region "$GCP_REGION")
-# Scale to zero, keep the max small, smallest sensible size; public, since
-# the Cloudflare Worker forwards browsers' requests to it.
+# A version number, never `latest`: instances scale to zero and would read
+# `latest` again on each cold start, so a rotation would reach the API before
+# the Worker. CI pins WORKER_SECRET_VERSION so both deploys use one version.
+version=${WORKER_SECRET_VERSION:-$(gcloud secrets versions list api-worker-secret \
+  --project "$GCP_PROJECT" --filter=state=ENABLED --sort-by=~createTime --limit=1 \
+  --format='value(name.basename())')}
+: "${version:?api-worker-secret has no enabled version (see api/deploy/README.md)}"
+# Scale to zero, keep the max small, smallest sensible size. Unauthenticated
+# at the Cloud Run level: the API itself rejects requests without the Worker
+# secret, which only the Cloudflare Worker sends.
 deploy_args=(
   --image "$image"
   --service-account "api-runtime@$GCP_PROJECT.iam.gserviceaccount.com"
@@ -35,6 +43,7 @@ deploy_args=(
   --memory 256Mi
   --min-instances 0
   --allow-unauthenticated
+  --set-secrets "WORKER_SECRET=api-worker-secret:$version"
   --quiet
 )
 

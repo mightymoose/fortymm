@@ -159,21 +159,38 @@ docker compose exec -T -e PLAYWRIGHT_BASE_URL="$DEPLOY_URL" playwright \
 """
 
 [tasks."web-client:deploy"]
-description = "Deploy web-client/dist and its Worker to Cloudflare Workers (needs a build, e.g. from `mise run ci`, CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID, and API_ORIGIN, the API's URL from `mise run api:url`)"
+description = "Deploy web-client/dist and its Worker to Cloudflare Workers (needs a build, e.g. from `mise run ci`, CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID, API_ORIGIN, the API's URL from `mise run api:url`, and WORKER_SECRET, the Worker secret)"
 # Uses the node_modules volume `npm ci` filled; `run` works after `ci` has
 # removed the stack's containers. The Worker forwards /api/* to API_ORIGIN.
 run = """
 [ -n "${API_ORIGIN:-}" ] || echo "warning: API_ORIGIN is empty, so the Worker will answer /api/* with a 503" >&2
-docker compose run --rm -T -e CLOUDFLARE_API_TOKEN -e CLOUDFLARE_ACCOUNT_ID -w /app/web-client dev \
-  npx wrangler deploy --var "API_ORIGIN:${API_ORIGIN:-}"
+[ -n "${WORKER_SECRET:-}" ] || echo "warning: WORKER_SECRET is empty, so the API will answer the Worker with a 403" >&2
+docker compose run --rm -T -e CLOUDFLARE_API_TOKEN -e CLOUDFLARE_ACCOUNT_ID -e WORKER_SECRET -w /app/web-client dev \
+  sh -c '
+    # wrangler reads the Worker secret from a file, which has to be inside the
+    # container. The container is removed afterwards, and the file with it.
+    if [ -n "${WORKER_SECRET:-}" ]; then
+      file=$(mktemp)
+      echo "WORKER_SECRET=$WORKER_SECRET" >"$file"
+      set -- "$@" --secrets-file "$file"
+    fi
+    exec "$@"' sh npx wrangler deploy --var "API_ORIGIN:${API_ORIGIN:-}"
 """
 
 [tasks."web-client:preview"]
 description = "Upload web-client/dist and its Worker as a Cloudflare Workers Preview named after the current git branch (same needs as web-client:deploy, with API_ORIGIN the URL `mise run api:preview` printed)"
 run = """
 [ -n "${API_ORIGIN:-}" ] || echo "warning: API_ORIGIN is empty, so the Worker will answer /api/* with a 503" >&2
-docker compose run --rm -T -e CLOUDFLARE_API_TOKEN -e CLOUDFLARE_ACCOUNT_ID -w /app/web-client dev \
-  npx wrangler preview --name "$(bin/preview-name)" --var "API_ORIGIN:${API_ORIGIN:-}"
+[ -n "${WORKER_SECRET:-}" ] || echo "warning: WORKER_SECRET is empty, so the API will answer the Worker with a 403" >&2
+docker compose run --rm -T -e CLOUDFLARE_API_TOKEN -e CLOUDFLARE_ACCOUNT_ID -e WORKER_SECRET -w /app/web-client dev \
+  sh -c '
+    # As in web-client:deploy.
+    if [ -n "${WORKER_SECRET:-}" ]; then
+      file=$(mktemp)
+      echo "WORKER_SECRET=$WORKER_SECRET" >"$file"
+      set -- "$@" --secrets-file "$file"
+    fi
+    exec "$@"' sh npx wrangler preview --name "$(bin/preview-name)" --var "API_ORIGIN:${API_ORIGIN:-}"
 """
 
 [tasks."web-client:preview-delete"]

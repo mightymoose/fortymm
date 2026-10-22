@@ -3,8 +3,9 @@
 The API runs on Google Cloud Run in project `fortymm`, region `us-central1`
 (the defaults of `GCP_PROJECT` and `GCP_REGION` in the repo's `mise.toml`),
 behind the Cloudflare Worker that serves the web-client: the Worker forwards
-`https://fortymm.com/api/*` to it with the `/api` prefix stripped. CLAUDE.md's
-Deploy section describes how it all fits together.
+`https://fortymm.com/api/*` to it with the `/api` prefix stripped. The API
+answers 403 to any request without the Worker secret, which only the Worker
+sends. CLAUDE.md's Deploy section describes how it all fits together.
 
 - `../Dockerfile`: the production image (`./bin/mise run api:build`).
 - `cloud-run-deploy`: pushes the image and deploys it, to the `api` service
@@ -26,23 +27,32 @@ api/deploy/bootstrap-gcp.sh fortymm us-central1
 
 It's idempotent, so re-running it is safe. It:
 
-1. enables the Cloud Run, Artifact Registry, IAM, IAM Credentials and
-   Security Token Service APIs;
+1. enables the Cloud Run, Artifact Registry, IAM, IAM Credentials, Security
+   Token Service, Secret Manager and Cloud Billing Budget APIs.
 2. creates the `fortymm` Docker repository in Artifact Registry
    (`us-central1-docker.pkg.dev/fortymm/fortymm/api` is the image), tags the
    image the `api` service serves (if it exists yet) as `production`, and
-   applies `cleanup-policy.json` to the repository (see Image cleanup);
+   applies `cleanup-policy.json` to the repository (see Image cleanup).
 3. creates two service accounts:
    - `github-deployer`, which CI deploys as, with `roles/run.admin` and
      `roles/artifactregistry.writer` on the project,
      `roles/artifactregistry.repoAdmin` on the `fortymm` repository (moving
      the `production` tag needs it) and `roles/iam.serviceAccountUser` on
-     `api-runtime`;
-   - `api-runtime`, which the API runs as, with no roles;
-4. creates the Workload Identity pool `github` and its OIDC provider `github`,
+     `api-runtime`.
+   - `api-runtime`, which the API runs as, with no project roles.
+4. creates the Worker secret, the Secret Manager secret `api-worker-secret`,
+   with a random 64-character hex value, if it doesn't exist. It never prints
+   the value. `api-runtime` and `github-deployer` get
+   `roles/secretmanager.secretAccessor` on it, and `github-deployer` also gets
+   `roles/secretmanager.viewer`, so CI can list its versions.
+5. creates the Workload Identity pool `github` and its OIDC provider `github`,
    which accepts GitHub Actions tokens from `mightymoose/fortymm` only, and
    lets that repository's workflows impersonate `github-deployer`, so CI needs
    no service-account key.
+6. creates the budget `FortyMM (<project>)` on the project's billing account,
+   if it doesn't exist: $25 a month for this project, with alerts at 40% ($10)
+   and 100% ($25). It sets no recipients, so Google Cloud emails the billing
+   account's admins and users.
 
 It ends by printing the two GitHub Actions **variables** to add (Settings >
 Secrets and variables > Actions > Variables; neither is a secret):
@@ -56,7 +66,8 @@ Until both are set, CI skips the API deploys (with a warning) and deploys the
 Worker with no `API_ORIGIN`, so `/api/*` answers 503.
 
 The services allow unauthenticated requests (`allUsers` gets
-`roles/run.invoker`). If the project is in an organization whose policy
+`roles/run.invoker`). The Worker secret, not Cloud Run, restricts them to the
+Worker. If the project is in an organization whose policy
 restricts IAM members to its domain (`iam.allowedPolicyMemberDomains`), the
 first deploy fails until that policy allows `allUsers` for this project.
 
@@ -110,5 +121,29 @@ owner works) and Docker running:
 
 ```sh
 ./bin/mise run api:deploy                       # build, push, deploy; prints the URL
-API_ORIGIN=$(./bin/mise run api:url) ./bin/mise run web-client:deploy
+WORKER_SECRET=$(gcloud secrets versions access latest --secret api-worker-secret --project fortymm) \
+  API_ORIGIN=$(./bin/mise run api:url) ./bin/mise run web-client:deploy
 ```
+
+`api:deploy` uses the newest enabled version of the Worker secret. `latest` is
+the newest version, so the two match unless that version is disabled.
+
+## Rotating the Worker secret
+
+Add a version, then push `main`:
+
+```sh
+openssl rand -hex 32 | tr -d '\n' |
+  gcloud secrets versions add api-worker-secret --project fortymm --data-file=-
+```
+
+CI deploys the API and then the Worker with the new version. Production
+answers 403 for about a minute between the two deploys. Each Preview picks up
+the new version on its next push. Then disable the old version to retire it:
+
+```sh
+gcloud secrets versions disable <old version> --secret api-worker-secret --project fortymm
+```
+
+A Preview revision still pinned to a disabled version can't start, so push
+its branch again before you disable the version.

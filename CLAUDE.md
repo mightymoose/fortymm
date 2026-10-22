@@ -99,7 +99,10 @@ and `uv.lock`). Code is in `src/fortymm_api/`, tests in `tests/` (pytest,
 through FastAPI's `TestClient`).
 
 - `main.py`: `create_app()`, the app factory. Operation IDs are the route
-  functions' names, so generated clients get names like `ping`.
+  functions' names, so generated clients get names like `ping`. If
+  `WORKER_SECRET` is set, the app answers 403 to every request without a
+  matching `X-FortyMM-Worker-Secret` header (see Deploy). Local dev, the
+  tests and `api:smoke` don't set it, so they need no secret.
 - `v1/`: the `/v1` routes, one module per resource, each with its own
   `APIRouter` and Pydantic request/response models; `v1/__init__.py` mounts
   them. Annotate route return types with the response model.
@@ -270,6 +273,12 @@ Production is `https://fortymm.com` (and `www.fortymm.com`): a Cloudflare
 Worker serves the web-client and forwards `/api/*` to the API on Google Cloud
 Run, so the app's `/api` client is same-origin, as in dev, with no CORS.
 
+The API's `*.run.app` URLs are public, so the Worker proves each request came
+through it. It sends the Worker secret in the `X-FortyMM-Worker-Secret`
+header, and the API answers 403 to any request without it. The Worker also
+limits each client IP to 100 `/api/*` requests a minute and answers 429 above
+that. The Worker secret section below describes where the value lives.
+
 ```sh
 ./bin/mise run api:deploy           # build, push and deploy the API; prints its URL last
 ./bin/mise run api:preview          # the same, as this branch's Preview revision
@@ -289,6 +298,10 @@ never points at a route that isn't there yet:
   `API_ORIGIN` set to that revision's URL, so each Cloudflare Preview talks to
   the API built from the same commit. Both Preview URLs are in the deploy
   steps' logs.
+
+Before the deploys, CI pins one version of the Worker secret, and both
+deploys use it. After the API deploy, CI requests `$API_ORIGIN/v1/ping`
+without the header and fails unless the API answers 403.
 
 Then CI runs the post-deploy suite (`web-client:e2e-deployed`, see
 End-to-end tests) against what it just deployed:
@@ -320,8 +333,15 @@ Previews after the cleanup.
 (unit-tested in `worker/index.test.ts`): requests to `/api/*` go to
 `API_ORIGIN` with the `/api` prefix stripped, keeping the method, headers,
 query and body and setting `X-Forwarded-Host`, `X-Forwarded-Proto` and
-`X-Forwarded-For`; with no `API_ORIGIN` they get a 503. Everything else goes
-to the static assets in `dist/` (the `ASSETS` binding).
+`X-Forwarded-For`; with no `API_ORIGIN` they get a 503. The Worker sets
+`X-FortyMM-Worker-Secret` from `WORKER_SECRET`, and removes a client's own
+copy when `WORKER_SECRET` is empty. Before it forwards a request, the
+`API_RATE_LIMIT` binding (`ratelimits` in `wrangler.jsonc`) counts it against
+the client's `CF-Connecting-IP`. Above 100 requests a minute, the Worker
+answers 429 with `Retry-After: 60`. Cloudflare counts each location
+separately, so the limit is approximate. Previews get only the bindings under
+`previews` in `wrangler.jsonc`, so that block repeats the rate limit.
+Everything else goes to the static assets in `dist/` (the `ASSETS` binding).
 `assets.run_worker_first: ["/api/*"]` runs the Worker before the assets for
 those paths, and `not_found_handling: "single-page-application"` serves
 `index.html` for any other path with no matching file, so client-side routes
@@ -329,9 +349,13 @@ load directly.
 
 `API_ORIGIN` isn't in `wrangler.jsonc`: `web-client:deploy` and
 `web-client:preview` pass it with `--var` from the environment (CI sets it
-from the API deploy), and warn if it's empty. Production is served on
-`fortymm.com` and `www.fortymm.com` (Custom Domains in `routes`, whose DNS
-records and certificates Cloudflare manages) and on
+from the API deploy), and warn if it's empty. They also pass `WORKER_SECRET`
+from the environment, with `--secrets-file`. wrangler runs in the `dev`
+container, so the tasks write the file there. If `WORKER_SECRET` is empty,
+they warn that the API will answer the Worker with a 403.
+
+Production is served on `fortymm.com` and `www.fortymm.com` (Custom Domains
+in `routes`, whose DNS records and certificates Cloudflare manages) and on
 `fortymm.mightymoose.workers.dev`.
 
 Previews (`wrangler preview`, open beta) are served on
@@ -363,8 +387,8 @@ image, push it to Artifact Registry as
 `gcloud run deploy` through `api/deploy/cloud-run-deploy`, which holds the
 service settings: min instances 0 (scale to zero), max 3 (1 for Previews),
 1 CPU, 256 MiB, unauthenticated access, running as the `api-runtime`
-service account. They need `gcloud` logged in as an account that can deploy,
-and Docker.
+service account, with the Worker secret as `WORKER_SECRET`. They need
+`gcloud` logged in as an account that can deploy, and Docker.
 
 - `api:deploy` deploys the `api` service, and the new revision takes all its
   traffic.
@@ -380,9 +404,37 @@ and Docker.
   number of revisions per service, and an idle revision costs nothing, so
   nothing deletes revisions.
 
-The `*.run.app` URLs are publicly reachable too, not only through the Worker.
-Restricting them to the Worker (ingress settings or authenticated invocation)
-is a possible follow-up.
+#### The Worker secret
+
+The Worker secret is a 64-character hex value in Secret Manager, as the
+secret `api-worker-secret`. Cloud Run allows unauthenticated requests, so the
+Worker secret is the only thing that keeps clients from going around the
+Worker.
+
+- `cloud-run-deploy` mounts it as `WORKER_SECRET` at a pinned version number:
+  `WORKER_SECRET_VERSION` if set, otherwise the newest enabled version. It
+  never uses `latest`. Instances scale to zero and read `latest` again on each
+  cold start, so a new version would reach the API before the Worker.
+- CI sets `WORKER_SECRET_VERSION` once per run. The Cloudflare deploy steps
+  read that version with `gcloud secrets versions access`, mask it in the
+  log, and pass it to `web-client:deploy` or `web-client:preview` as
+  `WORKER_SECRET`. The value stays in those steps.
+- Cloud Run sets `K_SERVICE`. If `K_SERVICE` is set and `WORKER_SECRET` is
+  not, `create_app()` raises, so the revision fails to start instead of
+  serving the API to anyone.
+
+To rotate the Worker secret, add a version, then push `main`:
+
+```sh
+openssl rand -hex 32 | tr -d '\n' |
+  gcloud secrets versions add api-worker-secret --project fortymm --data-file=-
+```
+
+Production answers 403 for about a minute, between the API deploy and the
+Worker deploy. Each Preview picks up the new version on its next push. After
+that, disable the old version (`gcloud secrets versions disable <n> --secret
+api-worker-secret --project fortymm`) to retire it. A Preview revision still
+pinned to a disabled version can't start, so push its branch again first.
 
 CI authenticates to Google Cloud with Workload Identity Federation
 (`google-github-actions/auth`; no service-account key), as the
@@ -398,6 +450,10 @@ images older than 30 days except the 10 newest and the one tagged
 
 The one-time GCP setup (enabling the APIs, the Artifact Registry repository,
 the service accounts and their roles, the Workload Identity pool and provider
-for `mightymoose/fortymm`) is `api/deploy/bootstrap-gcp.sh`, run once by a
-project owner; it prints the variables to set. `api/deploy/README.md`
-describes it step by step.
+for `mightymoose/fortymm`, the Worker secret, the budget) is
+`api/deploy/bootstrap-gcp.sh`, run once by a project owner; it prints the
+variables to set. `api/deploy/README.md` describes it step by step.
+
+The budget `FortyMM (fortymm)` covers the project's monthly spend. Google
+Cloud emails the billing account's admins and users when the spend passes
+$10 and $25.

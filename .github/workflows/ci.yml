@@ -68,6 +68,19 @@ jobs:
         if: ${{ env.GCP_CONFIGURED == 'true' }}
         uses: google-github-actions/setup-gcloud@v3
 
+      # The API and Worker deploys below both use this version of the Worker
+      # secret, so a version added mid-run can't make them disagree.
+      - name: Pin the Worker secret version
+        if: ${{ env.GCP_CONFIGURED == 'true' }}
+        run: |
+          version=$(gcloud secrets versions list api-worker-secret --project "${GCP_PROJECT:-fortymm}" \
+            --filter=state=ENABLED --sort-by=~createTime --limit=1 --format='value(name.basename())')
+          if [ -z "$version" ]; then
+            echo "::error::api-worker-secret has no enabled version. See api/deploy/README.md."
+            exit 1
+          fi
+          echo "WORKER_SECRET_VERSION=$version" >> "$GITHUB_ENV"
+
       - name: Skip the API deploy
         if: ${{ env.GCP_CONFIGURED != 'true' }}
         run: echo "::warning::GCP_WORKLOAD_IDENTITY_PROVIDER and GCP_SERVICE_ACCOUNT aren't set, so the API isn't deployed and the Worker answers /api/* with a 503. See api/deploy/README.md."
@@ -92,10 +105,29 @@ jobs:
           echo "API_ORIGIN=$url" >> "$GITHUB_ENV"
           echo "API: $url"
 
-      # Ships the web-client/dist that `ci` just built and tested.
+      # The *.run.app URL is public, so only the Worker secret keeps clients
+      # from going around the Worker. --max-time allows for a cold start.
+      - name: Check the API rejects direct requests
+        if: ${{ env.GCP_CONFIGURED == 'true' }}
+        run: |
+          status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "$API_ORIGIN/v1/ping" || true)
+          if [ "$status" != 403 ]; then
+            echo "::error::$API_ORIGIN/v1/ping answered $status without the Worker secret, not 403."
+            exit 1
+          fi
+
+      # Ships the web-client/dist that `ci` just built and tested. The Worker
+      # secret stays in this step's shell, not in GITHUB_ENV.
       - name: Deploy to Cloudflare
         if: ${{ github.ref == 'refs/heads/main' }}
-        run: ./bin/mise run web-client:deploy
+        run: |
+          if [ "$GCP_CONFIGURED" = true ]; then
+            WORKER_SECRET=$(gcloud secrets versions access "$WORKER_SECRET_VERSION" \
+              --secret api-worker-secret --project "${GCP_PROJECT:-fortymm}")
+            echo "::add-mask::$WORKER_SECRET"
+            export WORKER_SECRET
+          fi
+          ./bin/mise run web-client:deploy
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -114,6 +146,12 @@ jobs:
         id: preview
         if: ${{ github.ref != 'refs/heads/main' }}
         run: |
+          if [ "$GCP_CONFIGURED" = true ]; then
+            WORKER_SECRET=$(gcloud secrets versions access "$WORKER_SECRET_VERSION" \
+              --secret api-worker-secret --project "${GCP_PROJECT:-fortymm}")
+            echo "::add-mask::$WORKER_SECRET"
+            export WORKER_SECRET
+          fi
           set -o pipefail
           ./bin/mise run web-client:preview | tee "$RUNNER_TEMP/preview.log"
           url=$(sed -nE 's/^Preview URL: (https:[^[:space:]]+).*/\1/p' "$RUNNER_TEMP/preview.log" | tail -n 1)
