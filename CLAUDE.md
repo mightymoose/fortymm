@@ -75,9 +75,11 @@ or styling UI.
 
 ## api
 
-`api/` is a FastAPI app (Python, pinned in `mise.container.toml`) managed with
-uv: `pyproject.toml` and `uv.lock`, code in `src/fortymm_api/`, tests in
-`tests/` (pytest, through FastAPI's `TestClient`).
+`api/` is a FastAPI app managed with uv. mise installs its Python (pinned in
+`mise.container.toml`; there's no `.python-version`) and the Dockerfile tells
+uv to use only that interpreter. uv manages the dependencies (`pyproject.toml`
+and `uv.lock`). Code is in `src/fortymm_api/`, tests in `tests/` (pytest,
+through FastAPI's `TestClient`).
 
 - `main.py`: `create_app()`, the app factory. Operation IDs are the route
   functions' names, so generated clients get names like `ping`.
