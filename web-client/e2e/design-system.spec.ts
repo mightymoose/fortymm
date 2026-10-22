@@ -666,6 +666,159 @@ test.describe('Slider', () => {
   })
 })
 
+// Nothing is hovered, focused or opened first, so these show the selects'
+// resting styles, with no focus ring.
+test.describe('Select card', () => {
+  // The chevron's 45° hard edges sit half a pixel off the grid, so Chromium
+  // rounds a few edge pixels differently on the app's page than on the kit's,
+  // with the same styles and rects: 4 to 12 of them, depending on where the
+  // card sits. The smallest real change, the chevron moved 1px, is 19.
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.selectCard).toHaveScreenshot(
+      'select-card.png',
+      { maxDiffPixels: 15 },
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.selectCard).toHaveScreenshot(
+      'select-card.png',
+    )
+  })
+})
+
+// The kit's selects are static, with no focus style, so the tests below are
+// the app's alone.
+test.describe('Select', () => {
+  const ring = 'color(srgb 1 0.478431 0.101961 / 0.15) 0px 0px 0px 3px'
+
+  test('choosing an option sets its value', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+    const type = designSystemPage.select('Match type')
+
+    await type.selectOption('Doubles')
+
+    await expect(type).toHaveValue('Doubles')
+  })
+
+  test('the arrow keys change the value', async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const type = designSystemPage.select('Match type')
+    await type.focus()
+
+    await page.keyboard.press('ArrowDown')
+    await expect(type).toHaveValue('Doubles')
+    await page.keyboard.press('ArrowUp')
+    await expect(type).toHaveValue('Singles')
+  })
+
+  // Tabbing to a select shows the text controls' focus ring on it alone.
+  test('keyboard focus shows the focus ring', async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const length = designSystemPage.select('Match length')
+    await designSystemPage.select('Match type').focus()
+
+    await page.keyboard.press('Tab')
+
+    await expect(length).toBeFocused()
+    await expect(length).toHaveCSS('box-shadow', ring)
+    await expect(length).toHaveCSS('border-color', 'rgb(255, 122, 26)')
+    await expect(designSystemPage.select('Match type')).toHaveCSS(
+      'box-shadow',
+      'none',
+    )
+  })
+
+  // Chromium matches :focus-visible on a click for a select as it does for
+  // a text input, so the select keeps .input's :focus rule and a click
+  // shows the ring too.
+  test('a click shows the focus ring, as on a text input', async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const type = designSystemPage.select('Match type')
+    await type.scrollIntoViewIfNeeded()
+    const box = (await type.boundingBox())!
+
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+    // Closes the picker the click opened.
+    await page.keyboard.press('Escape')
+
+    await expect(type).toBeFocused()
+    await expect(type).toHaveCSS('box-shadow', ring)
+  })
+
+  // The demo has no disabled select, so this test disables one in place.
+  test("a disabled one fades and doesn't open", async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const type = designSystemPage.select('Match type')
+    await type.evaluate((select) => select.setAttribute('disabled', ''))
+    await type.scrollIntoViewIfNeeded()
+    const box = (await type.boundingBox())!
+
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+    await page.keyboard.press('ArrowDown')
+
+    await expect(type).toHaveValue('Singles')
+    await expect(type).not.toBeFocused()
+    await expect(type).toHaveCSS('opacity', '0.5')
+  })
+
+  // The demo has no invalid select, so this test marks one in place.
+  test('an invalid one shows the error border', async ({
+    designSystemPage,
+  }) => {
+    await designSystemPage.goto()
+    const type = designSystemPage.select('Match type')
+
+    await type.evaluate((select) =>
+      select.setAttribute('aria-invalid', 'true'),
+    )
+
+    // --loss, #FF4D6D.
+    await expect(type).toHaveCSS('border-color', 'rgb(255, 77, 109)')
+  })
+
+  // The border fades to the focus color, as on a text input.
+  test('the border color transitions', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.select('Match type')).toHaveCSS(
+      'transition-duration',
+      '0.12s',
+    )
+  })
+
+  test.describe('with reduced motion', () => {
+    test.use({ reducedMotion: 'reduce' })
+
+    test('the border color changes without a transition', async ({
+      designSystemPage,
+    }) => {
+      await designSystemPage.goto()
+
+      await expect(designSystemPage.select('Match type')).toHaveCSS(
+        'transition-duration',
+        '0s',
+      )
+    })
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -791,6 +944,26 @@ test.describe('on a phone', () => {
       expect(thumb.x + thumb.width / 2).toBeCloseTo(
         track.x + track.width * fraction,
         0,
+      )
+    }
+  })
+
+  // The selects size to their options, and the row wraps them to fit the
+  // card.
+  test('the select card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [designSystemPage.selectCard, page.locator('html')]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.selectCard.boundingBox())!
+    for (const name of ['Match type', 'Match length']) {
+      const select = (await designSystemPage.select(name).boundingBox())!
+      // Inside the card's 1px border and 32px padding on the right.
+      expect(select.x + select.width).toBeLessThanOrEqual(
+        card.x + card.width - 33,
       )
     }
   })

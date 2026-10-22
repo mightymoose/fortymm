@@ -8,6 +8,7 @@ import { PageHeader } from '../components/PageHeader'
 import { PageIntro } from '../components/PageIntro'
 import { Radio, RadioGroup } from '../components/RadioGroup'
 import { Section } from '../components/Section'
+import { Select } from '../components/Select'
 import { Slider } from '../components/Slider'
 import { Switch } from '../components/Switch'
 import { Textarea } from '../components/Textarea'
@@ -128,6 +129,20 @@ export function DesignSystem() {
             <Slider min={1100} max={2100} step={10} defaultValue={[1400, 1800]}>
               Rating range
             </Slider>
+          </div>
+        </ComponentCard>
+        <ComponentCard title="Select" tag="native">
+          {/* The reference shows no labels, so an aria-label names each
+              select. A Field's hidden Label would wrap each in a
+              .form-field, which would be the row's item instead. */}
+          <div className="row">
+            <Select aria-label="Match type">
+              <option>Singles</option>
+              <option>Doubles</option>
+            </Select>
+            <Select aria-label="Match length" className="select-wide">
+              <option>Best of 5 games</option>
+            </Select>
           </div>
         </ComponentCard>
       </Section>
