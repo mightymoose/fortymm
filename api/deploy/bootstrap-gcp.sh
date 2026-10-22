@@ -4,11 +4,19 @@
 # in (`gcloud auth login`); it's safe to re-run. It prints the GitHub Actions
 # variables to set at the end.
 #
-#   api/deploy/bootstrap-gcp.sh [PROJECT_ID] [REGION]
+#   api/deploy/bootstrap-gcp.sh [--cleanup-dry-run] [PROJECT_ID] [REGION]
 #
-# Defaults match mise.toml's GCP_PROJECT and GCP_REGION.
+# Defaults match mise.toml's GCP_PROJECT and GCP_REGION. --cleanup-dry-run
+# applies the image cleanup policy in Artifact Registry's dry-run mode (it
+# logs what it would delete, and deletes nothing); without it the policy is
+# enforced.
 set -euo pipefail
 
+cleanup_mode=--no-dry-run
+if [ "${1:-}" = --cleanup-dry-run ]; then
+  cleanup_mode=--dry-run
+  shift
+fi
 project=${1:-fortymm}
 region=${2:-us-central1}
 github_repo=mightymoose/fortymm
@@ -36,6 +44,24 @@ echo "Creating the Artifact Registry repository $registry_repo in $region..."
 gc artifacts repositories describe "$registry_repo" --location "$region" >/dev/null 2>&1 ||
   gc artifacts repositories create "$registry_repo" --location "$region" \
     --repository-format docker --description "FortyMM container images"
+
+# cloud-run-deploy moves the `production` tag to each image it deploys to the
+# `api` service, and the cleanup policy keeps whatever it points at. Point it
+# at the image production serves now (which may predate the tag, or be a
+# rollback), so applying the policy can't delete it.
+serving=$(gc run services describe api --region "$region" \
+  --flatten status.traffic --format 'value(status.traffic.percent,status.traffic.revisionName)' \
+  2>/dev/null | sort -rn | head -n 1 | cut -f 2 || true)
+if [ -n "$serving" ]; then
+  serving_image=$(gc run revisions describe "$serving" --region "$region" \
+    --format 'value(status.imageDigest)')
+  echo "Tagging $serving_image (revision $serving) as production..."
+  gc artifacts docker tags add "$serving_image" "${serving_image%@*}:production"
+fi
+
+echo "Applying the cleanup policy to $registry_repo ($cleanup_mode)..."
+gc artifacts repositories set-cleanup-policies "$registry_repo" --location "$region" \
+  --policy "$(dirname "$0")/cleanup-policy.json" "$cleanup_mode" >/dev/null
 
 echo "Creating the service accounts..."
 gc iam service-accounts describe "$deployer_sa" >/dev/null 2>&1 ||
