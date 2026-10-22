@@ -191,9 +191,11 @@ docker compose run --rm -T -e CLOUDFLARE_API_TOKEN -e CLOUDFLARE_ACCOUNT_ID -w /
   npx wrangler preview delete --name "$name" -y >"$log" 2>&1 || status=$?
 cat "$log"
 # wrangler has no way to check for a Preview first, and fails when it's
-# missing, so read its error instead.
+# missing, so read its error instead: only the Preview API request failing
+# with "not found" counts, not a config or auth error.
 if [ "$status" -ne 0 ]; then
-  if grep -Eqi 'not found|does not exist|could not be found' "$log"; then
+  if grep -q 'Cloudflare API (.*/previews/.*) failed' "$log" &&
+    grep -Eqi 'not found|does not exist|could not be found' "$log"; then
     echo "There's no Preview named $name to delete"
     exit 0
   fi

@@ -350,8 +350,8 @@ Actions secrets of the same names.
 
 `web-client:preview-delete` runs `npm ci` and then `wrangler preview delete
 --name <name> -y`. wrangler can't check whether a Preview exists first. So
-the task reads wrangler's error when the delete fails, and treats a "not
-found" error as success.
+the task reads wrangler's error when the delete fails. If the request to the
+Preview API failed with a "not found" error, the task succeeds.
 
 ### api (Cloud Run)
 
