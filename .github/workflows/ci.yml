@@ -5,6 +5,8 @@ on: push
 permissions:
   contents: read
   pull-requests: write
+  # Lets the deploy steps record GitHub deployments.
+  deployments: write
   # Lets google-github-actions/auth exchange the job's OIDC token for Google
   # credentials (Workload Identity Federation).
   id-token: write
@@ -25,6 +27,35 @@ jobs:
       - run: ./bin/mise run ci
         env:
           CI: "true"
+
+      # Records the deploys below as a GitHub deployment, so they show in the
+      # repo's and the PR's Deployments panel with a link to the site: main
+      # deploys to the production environment, other branches to a transient
+      # "Preview (<branch>)" environment each.
+      - name: Start the GitHub deployment
+        id: start-deployment
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const production = context.ref === 'refs/heads/main'
+            const branch = context.ref.replace(/^refs\/heads\//, '')
+            const { data: deployment } = await github.rest.repos.createDeployment({
+              ...context.repo,
+              ref: context.sha,
+              environment: production ? 'production' : `Preview (${branch})`,
+              production_environment: production,
+              transient_environment: !production,
+              auto_merge: false,
+              // This run is the check that matters; don't wait on the commit's statuses.
+              required_contexts: [],
+            })
+            await github.rest.repos.createDeploymentStatus({
+              ...context.repo,
+              deployment_id: deployment.id,
+              state: 'in_progress',
+              log_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+            })
+            core.setOutput('id', deployment.id)
 
       - name: Authenticate to Google Cloud
         if: ${{ env.GCP_CONFIGURED == 'true' }}
@@ -102,6 +133,30 @@ jobs:
         run: ./bin/mise run web-client:e2e-deployed
         env:
           DEPLOY_URL: ${{ steps.preview.outputs.url }}
+
+      # Marks the deployment succeeded (with its URL) or failed, counting the
+      # post-deploy checks above. Runs whenever the deployment was started, so
+      # a failed or cancelled deploy doesn't stay "in progress".
+      - name: Finish the GitHub deployment
+        if: ${{ always() && steps.start-deployment.outputs.id }}
+        uses: actions/github-script@v8
+        env:
+          DEPLOYMENT_ID: ${{ steps.start-deployment.outputs.id }}
+          DEPLOYMENT_URL: ${{ github.ref == 'refs/heads/main' && 'https://fortymm.com' || steps.preview.outputs.url }}
+          JOB_STATUS: ${{ job.status }}
+        with:
+          script: |
+            const success = process.env.JOB_STATUS === 'success'
+            await github.rest.repos.createDeploymentStatus({
+              ...context.repo,
+              deployment_id: Number(process.env.DEPLOYMENT_ID),
+              state: success ? 'success' : process.env.JOB_STATUS === 'cancelled' ? 'inactive' : 'failure',
+              environment_url: success ? process.env.DEPLOYMENT_URL : '',
+              log_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              description: process.env.API_ORIGIN ? `API: ${process.env.API_ORIGIN}`.slice(0, 140) : 'API not deployed',
+              // A new deployment to the same environment supersedes this one.
+              auto_inactive: true,
+            })
 
       # Playwright writes its traces and HTML report into the bind-mounted
       # checkout, so they're here once the stack is gone.
