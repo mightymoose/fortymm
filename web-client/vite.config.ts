@@ -12,8 +12,8 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     // The API has no published port: requests to /api/* are forwarded to the
-    // `api` Compose service with the /api prefix stripped, so /api/v1/ping
-    // reaches its /v1/ping.
+    // `api` Compose service with the /api prefix stripped, so /api/v1/health
+    // reaches its /v1/health.
     proxy: {
       '/api/': {
         target: process.env.API_PROXY_TARGET ?? 'http://api:8000',

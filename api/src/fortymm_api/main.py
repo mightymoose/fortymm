@@ -14,9 +14,9 @@ WORKER_SECRET_HEADER = "X-FortyMM-Worker-Secret"
 
 
 def operation_id(route: APIRoute) -> str:
-    """Name each OpenAPI operation after its route function (e.g. `ping`).
+    """Name each OpenAPI operation after its route function (e.g. `health`).
 
-    FastAPI's default IDs embed the path and method (`ping_v1_ping_get`), which
+    FastAPI's default IDs embed the path and method (`health_v1_health_get`), which
     leak into the clients generated from the schema.
     """
     return route.name
@@ -56,8 +56,8 @@ def create_app() -> FastAPI:
     # secret from starting, rather than serving the API to anyone.
     if os.environ.get("K_SERVICE") and not secret:
         raise RuntimeError("WORKER_SECRET must be set when running on Cloud Run")
-    # Off Cloud Run the database is optional, so the smoke test and the
-    # OpenAPI export run without one.
+    # Off Cloud Run the database is optional, so the OpenAPI export runs
+    # without one.
     if os.environ.get("K_SERVICE") and not database_url:
         raise RuntimeError("DATABASE_URL must be set when running on Cloud Run")
 

@@ -110,9 +110,9 @@ jobs:
       - name: Check the API rejects direct requests
         if: ${{ env.GCP_CONFIGURED == 'true' }}
         run: |
-          status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "$API_ORIGIN/v1/ping" || true)
+          status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "$API_ORIGIN/v1/health" || true)
           if [ "$status" != 403 ]; then
-            echo "::error::$API_ORIGIN/v1/ping answered $status without the Worker secret, not 403."
+            echo "::error::$API_ORIGIN/v1/health answered $status without the Worker secret, not 403."
             exit 1
           fi
 

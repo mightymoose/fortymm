@@ -28,10 +28,10 @@ export default defineConfig({
   },
   projects: [
     // Waits for the deployment to answer before the other specs run.
-    { name: 'ready', testMatch: 'ping.spec.ts' },
+    { name: 'ready', testMatch: 'ready.spec.ts' },
     {
       name: 'chromium',
-      testIgnore: 'ping.spec.ts',
+      testIgnore: 'ready.spec.ts',
       dependencies: ['ready'],
       use: { ...devices['Desktop Chrome'] },
     },

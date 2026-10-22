@@ -1,3 +1,5 @@
+from collections.abc import Iterator
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -10,20 +12,21 @@ FORBIDDEN = {
 
 
 @pytest.fixture
-def client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     monkeypatch.setenv("WORKER_SECRET", SECRET)
-    return TestClient(create_app())
+    with TestClient(create_app()) as client:
+        yield client
 
 
 def test_rejects_a_request_without_the_worker_secret(client: TestClient) -> None:
-    response = client.get("/v1/ping")
+    response = client.get("/v1/health")
 
     assert response.status_code == 403
     assert response.json() == FORBIDDEN
 
 
 def test_rejects_a_request_with_the_wrong_worker_secret(client: TestClient) -> None:
-    response = client.get("/v1/ping", headers={"X-FortyMM-Worker-Secret": "wrong"})
+    response = client.get("/v1/health", headers={"X-FortyMM-Worker-Secret": "wrong"})
 
     assert response.status_code == 403
     assert response.json() == FORBIDDEN
@@ -35,10 +38,10 @@ def test_rejects_the_docs_without_the_worker_secret(client: TestClient) -> None:
 
 
 def test_accepts_a_request_with_the_worker_secret(client: TestClient) -> None:
-    response = client.get("/v1/ping", headers={"X-FortyMM-Worker-Secret": SECRET})
+    response = client.get("/v1/health", headers={"X-FortyMM-Worker-Secret": SECRET})
 
     assert response.status_code == 200
-    assert response.json() == {"data": "pong"}
+    assert response.json() == {"data": {"database": "ok"}}
 
 
 def test_refuses_to_start_on_cloud_run_without_the_worker_secret(
