@@ -31,7 +31,13 @@
   // Give each Preview a <preview-name>-fortymm.mightymoose.workers.dev URL.
   // Without it, `wrangler preview` reports the Preview has no active URLs.
   "preview_urls": true,
-  // Required by `wrangler preview` (the Preview deploys CI makes for
-  // branches); empty because Previews use the settings above.
-  "previews": {}
+  // Settings for `wrangler preview` (the Preview deploys CI makes for
+  // branches). Previews get only the bindings listed here, so they repeat the
+  // rate limit, with their own namespace so they don't share production's
+  // counts.
+  "previews": {
+    "ratelimits": [
+      { "name": "API_RATE_LIMIT", "namespace_id": "1002", "simple": { "limit": 100, "period": 60 } }
+    ]
+  }
 }

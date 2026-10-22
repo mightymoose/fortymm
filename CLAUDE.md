@@ -339,8 +339,9 @@ copy when `WORKER_SECRET` is empty. Before it forwards a request, the
 `API_RATE_LIMIT` binding (`ratelimits` in `wrangler.jsonc`) counts it against
 the client's `CF-Connecting-IP`. Above 100 requests a minute, the Worker
 answers 429 with `Retry-After: 60`. Cloudflare counts each location
-separately, so the limit is approximate. Everything else goes to the static
-assets in `dist/` (the `ASSETS` binding).
+separately, so the limit is approximate. Previews get only the bindings under
+`previews` in `wrangler.jsonc`, so that block repeats the rate limit.
+Everything else goes to the static assets in `dist/` (the `ASSETS` binding).
 `assets.run_worker_first: ["/api/*"]` runs the Worker before the assets for
 those paths, and `not_found_handling: "single-page-application"` serves
 `index.html` for any other path with no matching file, so client-side routes
@@ -432,8 +433,8 @@ openssl rand -hex 32 | tr -d '\n' |
 Production answers 403 for about a minute, between the API deploy and the
 Worker deploy. Each Preview picks up the new version on its next push. After
 that, disable the old version (`gcloud secrets versions disable <n> --secret
-api-worker-secret`) to retire it. A Preview revision still pinned to a
-disabled version can't start, so push its branch again first.
+api-worker-secret --project fortymm`) to retire it. A Preview revision still
+pinned to a disabled version can't start, so push its branch again first.
 
 CI authenticates to Google Cloud with Workload Identity Federation
 (`google-github-actions/auth`; no service-account key), as the
