@@ -2,6 +2,7 @@ import { Button } from '../components/Button'
 import { ComponentCard } from '../components/ComponentCard'
 import { Field, FieldHelp, Label } from '../components/Field'
 import { Input } from '../components/Input'
+import { OtpInput } from '../components/OtpInput'
 import { PageHeader } from '../components/PageHeader'
 import { PageIntro } from '../components/PageIntro'
 import { Section } from '../components/Section'
@@ -77,6 +78,15 @@ export function DesignSystem() {
               placeholder="Add context — venue, conditions, anything memorable."
               defaultValue="Played in the back hall. Andrew's forehand was on fire today — three straight games to 11."
             />
+          </Field>
+        </ComponentCard>
+        <ComponentCard title="Input OTP" tag="6-digit">
+          {/* The reference shows no label, so this one is only for screen
+              readers. The fourth cell is shown active, as in the reference,
+              until the input is focused. */}
+          <Field>
+            <Label className="visually-hidden">Verification code</Label>
+            <OtpInput defaultValue="40MM" activeIndex={3} />
           </Field>
         </ComponentCard>
       </Section>

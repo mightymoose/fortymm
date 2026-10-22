@@ -248,6 +248,11 @@ h4, .h4 {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
+  /* Where the title and tag don't fit side by side (e.g. on a phone), the
+     tag wraps below the title rather than running into it. On wider pages,
+     like the kit's, neither the gap nor the wrapping changes anything. */
+  flex-wrap: wrap;
+  gap: 4px 16px;
   margin-bottom: 24px;
 }
 
@@ -432,7 +437,8 @@ h4, .h4 {
   margin-left: 4px;
 }
 
-/* The text controls, .input and .textarea, share their look and states. */
+/* The text controls, .input and .textarea, share their look and states, and
+   .otp's cells (below) share the states. */
 .input, .textarea {
   font-family: var(--font-ui);
   font-size: 14px;
@@ -462,19 +468,20 @@ h4, .h4 {
   color: var(--fg-muted);
 }
 
-.input:focus, .textarea:focus {
+.input:focus, .textarea:focus, .otp-cell.otp-cell--active {
   outline: none;
   border-color: var(--ball-500);
   box-shadow: 0 0 0 3px rgb(from var(--ball-500) r g b / 0.15);
 }
 
-.input:disabled, .textarea:disabled {
+.input:disabled, .textarea:disabled, .otp-input:disabled ~ .otp-cell {
   opacity: 0.5;
 }
 
 /* The error state follows aria-invalid, so it always matches what assistive
    tech is told. */
-.input[aria-invalid="true"], .textarea[aria-invalid="true"] {
+.input[aria-invalid="true"], .textarea[aria-invalid="true"],
+.otp-input[aria-invalid="true"] ~ .otp-cell {
   border-color: var(--loss);
 }
 
@@ -486,4 +493,79 @@ h4, .h4 {
 
 .field-help--error {
   color: var(--loss);
+}
+
+/* =========================================================================
+   One-time code (the reference kit's .otp, .cell and .cell.on): a row of
+   .otp-cell spans showing the code, with the real .otp-input laid over them.
+   The active cell gets the text controls' focus style, and the cells take
+   the input's disabled and aria-invalid states (all above; the active rule
+   names .otp-cell twice to outrank .otp-cell's border below).
+   ========================================================================= */
+.otp {
+  display: inline-flex;
+  gap: 8px;
+  position: relative;
+  /* Where the row doesn't fit (e.g. on a phone), the cells narrow to fit. */
+  max-width: 100%;
+}
+
+.otp-cell {
+  width: 40px;
+  height: 48px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--r-md);
+  background: var(--bg-panel);
+  color: var(--fg-1);
+  font-family: var(--font-mono);
+  font-size: 18px;
+  font-weight: 600;
+  /* The kit sets the font shorthand, which resets the line height. */
+  line-height: normal;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* The input covers the row, so it takes the clicks, typing and focus, but
+   shows nothing itself: no text, caret, selection, border or background. */
+.otp-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: transparent;
+  caret-color: transparent;
+  font: inherit;
+  appearance: none;
+  cursor: text;
+}
+
+.otp-input::selection {
+  background: transparent;
+}
+
+.otp-input:disabled {
+  cursor: not-allowed;
+}
+
+/* =========================================================================
+   Utility: hidden on screen, still read by assistive tech (e.g. a label the
+   design shows no room for).
+   ========================================================================= */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
