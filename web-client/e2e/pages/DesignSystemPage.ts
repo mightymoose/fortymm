@@ -1,5 +1,4 @@
 import type { Locator, Page } from '@playwright/test'
-import { waitForLoadingScreen } from './loadingScreen.ts'
 
 // Page object for the design system page in the Playwright suite.
 export class DesignSystemPage {
@@ -339,9 +338,13 @@ export class DesignSystemPage {
     await this.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
   }
 
+  // Opens the page and waits for the loading screen over it to go.
   async goto(): Promise<void> {
     await this.page.goto('/design-system')
-    await waitForLoadingScreen(this.page)
+    await this.title.waitFor()
+    await this.page
+      .getByRole('status', { name: 'Loading FortyMM' })
+      .waitFor({ state: 'hidden' })
   }
 
   // The input card's text input labelled `name`.
