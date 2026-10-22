@@ -759,7 +759,8 @@ h4, .h4 {
 .radio:has(> .radio-input:disabled),
 .switch:has(> .switch-input:disabled),
 .slider-field:has(.slider-input:disabled),
-.cmd:has(> .cmd-input > input:disabled) {
+.cmd:has(> .cmd-input > input:disabled),
+.toggle:disabled {
   opacity: 0.5;
 }
 
@@ -1356,6 +1357,82 @@ h4, .h4 {
   .loading-screen-contact {
     animation: none;
   }
+}
+
+/* =========================================================================
+   Toggle and Toggle Group (the reference kit's .toggle, .toggle.on and
+   .toggle-group): a .toggle is a button, pressed when aria-pressed (a
+   Toggle) or aria-checked (a ToggleGroup's item) is true. It takes the
+   disabled opacity (above), and the .button focus outline, keyboard focus
+   only. The kit gives it none.
+   ========================================================================= */
+.toggle {
+  font: 500 13px var(--font-ui);
+  height: 36px;
+  padding: 0 14px;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--fg-2);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast);
+}
+
+.toggle:hover {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+
+/* After :hover on purpose, as the kit orders .on, so a pressed toggle keeps
+   its background under the pointer. */
+.toggle[aria-pressed="true"], .toggle[aria-checked="true"] {
+  background: var(--ink-700);
+  color: var(--fg-1);
+}
+
+.toggle:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+.toggle:disabled {
+  cursor: not-allowed;
+}
+
+.toggle-group {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--ink-900);
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-subtle);
+}
+
+.toggle-group .toggle {
+  border-radius: var(--r-sm);
+}
+
+/* The kit is only laid out for desktop. On a phone, its group is wider than
+   the card, so its items take less padding. */
+@media (max-width: 640px) {
+  .toggle-group .toggle {
+    padding: 0 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toggle {
+    transition: none;
+  }
+}
+
+/* A vertical rule between items in a row (the kit's .sep-v). */
+.sep-v {
+  width: 1px;
+  background: var(--border-subtle);
+  align-self: stretch;
 }
 
 /* =========================================================================

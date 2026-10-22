@@ -41,6 +41,10 @@ export class DesignSystemPage {
   readonly datePickerGrid: Locator
   readonly previousMonth: Locator
   readonly nextMonth: Locator
+  readonly toggleCard: Locator
+  readonly toggleRow: Locator
+  readonly toggleSeparator: Locator
+  readonly toggleGroup: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -121,6 +125,15 @@ export class DesignSystemPage {
     })
     this.nextMonth = this.datePickerDialog.getByRole('button', {
       name: 'Next month',
+    })
+    this.toggleCard = this.formsSection.getByRole('article', {
+      name: 'Toggle · Toggle Group',
+    })
+    // The kit's .row that lays out the toggles, the separator and the group.
+    this.toggleRow = this.toggleCard.locator('.row')
+    this.toggleSeparator = this.toggleCard.getByRole('separator')
+    this.toggleGroup = this.toggleCard.getByRole('radiogroup', {
+      name: 'Match type',
     })
   }
 
@@ -273,6 +286,16 @@ export class DesignSystemPage {
   // The calendar's day named `name`, e.g. "April 12, 2026".
   datePickerDay(name: string): Locator {
     return this.datePickerGrid.getByRole('gridcell', { name, exact: true })
+  }
+
+  // The standalone toggle named `name`, e.g. "Bold".
+  toggle(name: string): Locator {
+    return this.toggleCard.getByRole('button', { name, exact: true })
+  }
+
+  // The group's item named `name`, e.g. "Singles".
+  toggleGroupItem(name: string): Locator {
+    return this.toggleGroup.getByRole('radio', { name, exact: true })
   }
 
   // Clicks the middle of the text `name` in `card` with a plain mouse click.

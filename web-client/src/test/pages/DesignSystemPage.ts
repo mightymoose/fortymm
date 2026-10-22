@@ -232,4 +232,34 @@ export class DesignSystemPage {
   datePickerDay(name: string): HTMLElement {
     return within(this.datePickerGrid).getByRole('gridcell', { name })
   }
+
+  get toggleCard(): HTMLElement {
+    return within(this.formsSection).getByRole('article', {
+      name: 'Toggle · Toggle Group',
+    })
+  }
+
+  get toggleCardHeading(): HTMLElement {
+    return within(this.toggleCard).getByRole('heading', { level: 3 })
+  }
+
+  // The standalone toggle named `name`, e.g. "Bold".
+  toggle(name: string): HTMLElement {
+    return within(this.toggleCard).getByRole('button', { name })
+  }
+
+  get toggleSeparator(): HTMLElement {
+    return within(this.toggleCard).getByRole('separator')
+  }
+
+  get toggleGroup(): HTMLElement {
+    return within(this.toggleCard).getByRole('radiogroup', {
+      name: 'Match type',
+    })
+  }
+
+  // The group's items, in order.
+  get toggleGroupItems(): HTMLElement[] {
+    return within(this.toggleGroup).getAllByRole('radio')
+  }
 }
