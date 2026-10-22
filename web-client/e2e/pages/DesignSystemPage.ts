@@ -13,6 +13,7 @@ export class DesignSystemPage {
   readonly cards: Locator
   readonly buttonCard: Locator
   readonly inputCard: Locator
+  readonly inputCardFields: Locator
   readonly textareaCard: Locator
   readonly textarea: Locator
   readonly otpCard: Locator
@@ -36,6 +37,8 @@ export class DesignSystemPage {
     this.inputCard = this.formsSection.getByRole('article', {
       name: 'Input · Label · Form Field',
     })
+    // The card's fields, each a label, its input and any help text.
+    this.inputCardFields = this.inputCard.locator('.form-field')
     this.textareaCard = this.formsSection.getByRole('article', {
       name: 'Textarea',
     })

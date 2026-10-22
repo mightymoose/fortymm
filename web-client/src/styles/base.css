@@ -295,6 +295,14 @@ h4, .h4 {
   gap: 16px;
 }
 
+/* The kit is only laid out for desktop. On a phone, two columns leave each
+   item too narrow (an input's placeholder gets cut off), so they stack. */
+@media (max-width: 640px) {
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* =========================================================================
    Button (the reference kit's .btn): one variant class and at most one
    size class on top of .button.
