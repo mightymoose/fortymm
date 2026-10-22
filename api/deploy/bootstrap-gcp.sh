@@ -57,7 +57,8 @@ api_ready() {
       # Without a billing account there's nothing to poll. The budget step
       # reports it.
       local account
-      account=$(gcloud billing projects describe "$project" --format='value(billingAccountName)')
+      account=$(gcloud billing projects describe "$project" --format='value(billingAccountName)') ||
+        return
       [ -z "$account" ] || gcloud billing budgets list --billing-account "${account#billingAccounts/}" \
         --billing-project "$project" --quiet ;;
     # Only CI's Workload Identity login uses these.
@@ -65,28 +66,39 @@ api_ready() {
     *) echo "No readiness check for $1."; return 2 ;;
   esac
 }
-retries=0   # every 5 seconds, about 2 minutes in all
-for service in "${apis[@]}"; do
+wait_for() {
+  local retries=0 status out   # every 5 seconds, about 2 minutes in all
   while :; do
     status=0
-    out=$(api_ready "$service" 2>&1) || status=$?
-    [ "$status" -ne 0 ] || break
+    out=$(api_ready "$1" 2>&1) || status=$?
+    [ "$status" -ne 0 ] || return 0
     # 2 is also gcloud's exit status for a bad command line. Waiting can't fix
     # either.
     if [ "$status" -eq 2 ]; then
       echo "$out" >&2
-      exit 1
+      return 1
     fi
     if [ "$retries" -ge 24 ]; then
       printf '%s\n%s is still not usable after about 2 minutes. Re-running this script is safe.\n' \
-        "$out" "$service" >&2
-      exit 1
+        "$out" "$1" >&2
+      return 1
     fi
-    [ "$retries" -gt 0 ] || echo "Waiting for the APIs to be ready..."
+    [ "$retries" -gt 0 ] || echo "Waiting for $1..."
     retries=$((retries + 1))
     sleep 5
   done
+}
+# In parallel, so a re-run, where every API is ready, waits for one call.
+pids=()
+for service in "${apis[@]}"; do
+  wait_for "$service" &
+  pids+=($!)
 done
+not_ready=0
+for pid in "${pids[@]}"; do
+  wait "$pid" || not_ready=1
+done
+[ "$not_ready" -eq 0 ] || exit 1
 
 project_number=$(gcloud projects describe "$project" --format='value(projectNumber)')
 

@@ -28,10 +28,8 @@ api/deploy/bootstrap-gcp.sh fortymm us-central1
 It's idempotent, so re-running it is safe. It:
 
 1. enables the Cloud Run, Artifact Registry, IAM, IAM Credentials, Security
-   Token Service, Secret Manager and Cloud Billing Budget APIs. An API can
-   reject requests for a short time after it's enabled, so the script then
-   waits, up to about 2 minutes in all, until each API the later steps call
-   answers.
+   Token Service, Secret Manager and Cloud Billing Budget APIs. The script then waits, up to
+   about 2 minutes, until each API that a later step calls answers.
 2. creates the `fortymm` Docker repository in Artifact Registry
    (`us-central1-docker.pkg.dev/fortymm/fortymm/api` is the image), tags the
    image the `api` service serves (if it exists yet) as `production`, and
