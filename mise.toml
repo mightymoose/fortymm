@@ -45,7 +45,12 @@ run = "docker compose exec -T api /app/bin/docker-entrypoint sh -c 'uv sync --lo
 
 [tasks."api:test"]
 description = "Run the API's tests inside the api container"
-run = "docker compose run --rm --no-deps -T api uv run --locked pytest"
+run = """
+# --no-deps keeps run from starting dev. The tests need only the database, so
+# start it first.
+docker compose up -d --wait postgres
+docker compose run --rm --no-deps -T api uv run --locked pytest
+"""
 
 [tasks."api:dev"]
 description = "Start the API with auto-reload and stream its logs; reach it through the web-client dev server at /api"

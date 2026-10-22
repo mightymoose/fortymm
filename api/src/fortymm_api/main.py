@@ -1,10 +1,12 @@
 import hmac
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
+from psycopg_pool import ConnectionPool
 
 from fortymm_api import v1
 
@@ -49,16 +51,44 @@ def require_worker_secret(app: FastAPI, secret: str) -> None:
 
 def create_app() -> FastAPI:
     secret = os.environ.get("WORKER_SECRET", "")
+    database_url = os.environ.get("DATABASE_URL", "")
     # Cloud Run sets K_SERVICE. Failing there stops a revision without the
     # secret from starting, rather than serving the API to anyone.
     if os.environ.get("K_SERVICE") and not secret:
         raise RuntimeError("WORKER_SECRET must be set when running on Cloud Run")
+    # Off Cloud Run the database is optional, so the smoke test and the
+    # OpenAPI export run without one.
+    if os.environ.get("K_SERVICE") and not database_url:
+        raise RuntimeError("DATABASE_URL must be set when running on Cloud Run")
+
+    # db-f1-micro allows 25 connections, shared by up to 3 production
+    # instances and the Preview revisions.
+    pool = (
+        ConnectionPool(database_url, min_size=1, max_size=4, open=False)
+        if database_url
+        else None
+    )
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if pool is None:
+            yield
+            return
+        # Opens without waiting for a connection, so a slow database doesn't
+        # stop the API from starting.
+        pool.open()
+        try:
+            yield
+        finally:
+            pool.close()
 
     app = FastAPI(
         title="FortyMM API",
         version="0.1.0",
         generate_unique_id_function=operation_id,
+        lifespan=lifespan,
     )
+    app.state.pool = pool
     app.include_router(v1.router)
     if secret:
         require_worker_secret(app, secret)

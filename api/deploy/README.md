@@ -28,29 +28,50 @@ api/deploy/bootstrap-gcp.sh fortymm us-central1
 It's idempotent, so re-running it is safe. It:
 
 1. enables the Cloud Run, Artifact Registry, IAM, IAM Credentials, Security
-   Token Service, Secret Manager and Cloud Billing Budget APIs. The script then waits, up to
-   about 2 minutes, until each API that a later step calls answers.
+   Token Service, Secret Manager, Cloud Billing Budget, Cloud SQL Admin and
+   Cloud SQL APIs. The script then waits, up to about 2 minutes, until each API that a
+   later step calls answers.
 2. creates the `fortymm` Docker repository in Artifact Registry
    (`us-central1-docker.pkg.dev/fortymm/fortymm/api` is the image), tags the
    image the `api` service serves (if it exists yet) as `production`, and
    applies `cleanup-policy.json` to the repository (see Image cleanup).
-3. creates two service accounts:
+3. creates three service accounts:
    - `github-deployer`, which CI deploys as, with `roles/run.admin` and
      `roles/artifactregistry.writer` on the project,
      `roles/artifactregistry.repoAdmin` on the `fortymm` repository (moving
      the `production` tag needs it) and `roles/iam.serviceAccountUser` on
-     `api-runtime`.
-   - `api-runtime`, which the API runs as, with no project roles.
+     `api-runtime` and `api-preview-runtime`.
+   - `api-runtime`, which production (the `api` service) runs as, with
+     `roles/cloudsql.client` on the project.
+   - `api-preview-runtime`, which the Previews (the `api-preview` service)
+     run as, with `roles/cloudsql.client` on the project. Branch code runs
+     as this account, so it can't read production's database password.
 4. creates the Worker secret, the Secret Manager secret `api-worker-secret`,
    with a random 64-character hex value, if it doesn't exist. It never prints
-   the value. `api-runtime` and `github-deployer` get
+   the value. `api-runtime`, `api-preview-runtime` and `github-deployer` get
    `roles/secretmanager.secretAccessor` on it, and `github-deployer` also gets
    `roles/secretmanager.viewer`, so CI can list its versions.
-5. creates the Workload Identity pool `github` and its OIDC provider `github`,
+5. creates the Cloud SQL instance `fortymm` if it doesn't exist: Postgres 18,
+   Enterprise edition, `db-f1-micro`, 10 GB of SSD, in the region. The create
+   takes about 15 minutes. The script prints the instance's state every 30
+   seconds until it's `RUNNABLE`, and a re-run waits the same way. Postgres 16 and later default to the Enterprise
+   Plus edition, which costs far more and has no shared-core tiers. Then it
+   creates each database and its user:
+
+   | Database | User | Password secret | Readable by |
+   | --- | --- | --- | --- |
+   | `fortymm` | `api` | `api-database-password` | `api-runtime` |
+   | `fortymm_preview` | `api_preview` | `api-preview-database-password` | `api-preview-runtime` |
+
+   If a password secret doesn't exist, the script creates it with a random
+   64-character hex value. It never replaces an existing one, and it never
+   prints the value. It then sets the user's password to the secret's latest
+   value, so a re-run converges the two.
+6. creates the Workload Identity pool `github` and its OIDC provider `github`,
    which accepts GitHub Actions tokens from `mightymoose/fortymm` only, and
    lets that repository's workflows impersonate `github-deployer`, so CI needs
    no service-account key.
-6. creates the budget `FortyMM (<project>)` on the project's billing account,
+7. creates the budget `FortyMM (<project>)` on the project's billing account,
    if it doesn't exist: $25 a month for this project, with alerts at 40% ($10)
    and 100% ($25). It sets no recipients, so Google Cloud emails the billing
    account's admins and users.
@@ -63,6 +84,10 @@ Secrets and variables > Actions > Variables; neither is a secret):
 | `GCP_WORKLOAD_IDENTITY_PROVIDER` | `projects/<project number>/locations/global/workloadIdentityPools/github/providers/github` |
 | `GCP_SERVICE_ACCOUNT` | `github-deployer@fortymm.iam.gserviceaccount.com` |
 
+The Cloud SQL instance runs all the time. `db-f1-micro` with 10 GB of SSD
+costs about $9-10 a month, so the budget's $10 alert will likely fire most
+months.
+
 Until both are set, CI skips the API deploys (with a warning) and deploys the
 Worker with no `API_ORIGIN`, so `/api/*` answers 503.
 
@@ -71,6 +96,29 @@ The services allow unauthenticated requests (`allUsers` gets
 Worker. If the project is in an organization whose policy
 restricts IAM members to its domain (`iam.allowedPolicyMemberDomains`), the
 first deploy fails until that policy allows `allUsers` for this project.
+
+## The database
+
+`cloud-run-deploy` mounts the instance with `--add-cloudsql-instances` and
+sets `DATABASE_URL` to a Unix-socket URL with no password, such as
+`postgresql://api@/fortymm?host=/cloudsql/fortymm:us-central1:fortymm`.
+libpq reads the password from `PGPASSWORD`, which Cloud Run sets from the
+target's password secret at `latest`. The password only changes together
+with the database user, so a cold start reads the newest one. The Worker
+secret is pinned to a version for a different reason (see Rotating the
+Worker secret).
+
+Production and the Previews share one instance. The split is per user and
+per database, not hard isolation. Postgres lets any user connect to any
+database by default, and Cloud SQL makes every user that gcloud creates a
+member of `cloudsqlsuperuser`. So the database roles alone don't keep
+`api_preview` out of `fortymm`. What keeps branch code out is that it runs
+as `api-preview-runtime`, which can't read `api-database-password`.
+
+To change a database password, add a version to its secret, then re-run
+`bootstrap-gcp.sh`, which sets the user's password from it. Running
+instances keep the old password in `PGPASSWORD`, so their new connections
+fail until they restart. Redeploy the service right after.
 
 ## Image cleanup
 

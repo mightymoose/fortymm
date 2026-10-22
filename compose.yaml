@@ -28,6 +28,8 @@ services:
     init: true
     working_dir: /app/api
     # --root-path makes the docs at /api/docs load the schema through the proxy.
+    environment:
+      DATABASE_URL: postgresql://fortymm:fortymm@postgres:5432/fortymm
     command:
       - uv
       - run
@@ -43,6 +45,8 @@ services:
     depends_on:
       dev:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     # Healthy once /v1/ping answers, so `up --wait` blocks until the API serves.
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/v1/ping"]
@@ -53,6 +57,25 @@ services:
       - mise:/mise
       # Keep the virtualenv in the container so native deps match its platform.
       - api-venv:/app/api/.venv
+
+  # The API's database. Its major version matches the Cloud SQL instance's
+  # (see api/deploy/bootstrap-gcp.sh).
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: fortymm
+      POSTGRES_PASSWORD: fortymm
+      POSTGRES_DB: fortymm
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "fortymm", "-d", "fortymm"]
+      start_period: 1m
+      start_interval: 1s
+    ports:
+      # No host port: Docker picks a free one. `mise run list-ports` prints it.
+      - "5432"
+    volumes:
+      # postgres:18 keeps its data in a version-specific directory under this.
+      - postgres-data:/var/lib/postgresql
 
   # Runs the web-client's Playwright suite (`mise run web-client:e2e`). The
   # image ships the browsers and their system libraries; keep its tag in sync
@@ -79,3 +102,4 @@ volumes:
   mise:
   web-client-node-modules:
   api-venv:
+  postgres-data:
