@@ -2,6 +2,7 @@ import { Button } from '../components/Button'
 import { Checkbox } from '../components/Checkbox'
 import { Combobox, type ComboboxOption } from '../components/Combobox'
 import { ComponentCard } from '../components/ComponentCard'
+import { DatePicker } from '../components/DatePicker'
 import { Field, FieldHelp, Label } from '../components/Field'
 import { Input } from '../components/Input'
 import { OtpInput } from '../components/OtpInput'
@@ -13,6 +14,7 @@ import { Select } from '../components/Select'
 import { Slider } from '../components/Slider'
 import { Switch } from '../components/Switch'
 import { Textarea } from '../components/Textarea'
+import { plainDate } from '../components/plainDate'
 
 // The Combobox card's players. The reference shows the three that "ngu"
 // matches; the rest are there for it to filter out.
@@ -168,6 +170,19 @@ export function DesignSystem() {
             defaultOpen
             className="combobox-demo"
           />
+        </ComponentCard>
+        <ComponentCard title="Date Picker" tag="calendar in popover">
+          {/* Open on the reference's chosen day, with the calendar beside
+              the button rather than over the page, as the reference draws
+              it. Today comes from the clock. */}
+          <Field>
+            <DatePicker
+              label={<Label>Match date</Label>}
+              defaultValue={plainDate(2026, 4, 12)}
+              defaultOpen
+              className="date-picker-demo"
+            />
+          </Field>
         </ComponentCard>
       </Section>
     </>

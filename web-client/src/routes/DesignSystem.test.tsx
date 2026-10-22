@@ -1,5 +1,5 @@
 import { within } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DesignSystemPage } from '../test/pages/DesignSystemPage'
 
 describe('DesignSystem', () => {
@@ -322,5 +322,50 @@ describe('DesignSystem', () => {
     expect(
       options.map((option) => option.getAttribute('aria-selected')),
     ).toEqual(['true', 'false', 'false'])
+  })
+
+  it('shows the Date Picker card after the Combobox card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.datePickerCardHeading).toHaveTextContent(
+      'Date Picker',
+    )
+    expect(designSystemPage.datePickerCard).toHaveTextContent(
+      'calendar in popover',
+    )
+    expect(
+      designSystemPage.comboboxCard.compareDocumentPosition(
+        designSystemPage.datePickerCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  describe('on April 14, 2026', () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it("shows the reference's April 2026, open, the 12th chosen and the 14th today", async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.setSystemTime(new Date(2026, 3, 14, 12))
+      const designSystemPage = await DesignSystemPage.render()
+
+      const trigger = designSystemPage.datePickerTrigger
+      expect(trigger).toHaveAccessibleName('Match date April 12, 2026')
+      expect(trigger).toHaveAttribute('aria-expanded', 'true')
+      expect(designSystemPage.datePickerDialog).toHaveAccessibleName(
+        'Match date',
+      )
+      expect(designSystemPage.datePickerGrid).toHaveAccessibleName(
+        'April 2026',
+      )
+      expect(
+        designSystemPage.datePickerDay('April 12, 2026'),
+      ).toHaveAttribute('aria-selected', 'true')
+      expect(
+        designSystemPage.datePickerDay('April 14, 2026'),
+      ).toHaveAttribute('aria-current', 'date')
+      expect(document.body).toHaveFocus()
+    })
   })
 })
