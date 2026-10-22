@@ -391,6 +391,11 @@ CI authenticates to Google Cloud with Workload Identity Federation
 set, CI skips the API deploys with a warning, and the Worker answers `/api/*`
 with a 503.
 
+The Artifact Registry repository has a cleanup policy
+(`api/deploy/cleanup-policy.json`, applied by `bootstrap-gcp.sh`): it deletes
+images older than 30 days except the 10 newest and the one tagged
+`production`, which `cloud-run-deploy` moves to each production deploy.
+
 The one-time GCP setup (enabling the APIs, the Artifact Registry repository,
 the service accounts and their roles, the Workload Identity pool and provider
 for `mightymoose/fortymm`) is `api/deploy/bootstrap-gcp.sh`, run once by a

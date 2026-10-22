@@ -41,6 +41,11 @@ deploy_args=(
 if [ -z "$tag" ]; then
   service=api
   gcloud run deploy "$service" "${gcloud_args[@]}" "${deploy_args[@]}" --max-instances 3 >&2
+  # Move the `production` tag to the image now serving, once the deploy has
+  # succeeded: the repository's cleanup policy (cleanup-policy.json) never
+  # deletes it, however old it gets.
+  gcloud artifacts docker tags add "$image" "${image%:*}:production" \
+    --project "$GCP_PROJECT" --quiet >&2
 else
   # Previews get their own service, so they can never move production's
   # traffic. --no-traffic only works on a service that exists already.
