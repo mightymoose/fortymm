@@ -25,6 +25,7 @@ deployer=github-deployer
 runtime=api-runtime
 pool=github
 provider=github
+worker_secret=api-worker-secret
 
 deployer_sa="$deployer@$project.iam.gserviceaccount.com"
 runtime_sa="$runtime@$project.iam.gserviceaccount.com"
@@ -36,7 +37,9 @@ gc services enable \
   artifactregistry.googleapis.com \
   iam.googleapis.com \
   iamcredentials.googleapis.com \
-  sts.googleapis.com
+  sts.googleapis.com \
+  secretmanager.googleapis.com \
+  billingbudgets.googleapis.com
 
 project_number=$(gcloud projects describe "$project" --format='value(projectNumber)')
 
@@ -66,7 +69,7 @@ gc artifacts repositories set-cleanup-policies "$registry_repo" --location "$reg
 echo "Creating the service accounts..."
 gc iam service-accounts describe "$deployer_sa" >/dev/null 2>&1 ||
   gc iam service-accounts create "$deployer" --display-name "GitHub Actions deployer ($github_repo)"
-# The API runs as this account, which has no roles: it needs no Google APIs yet.
+# The API runs as this account. Its only grant is reading the Worker secret.
 gc iam service-accounts describe "$runtime_sa" >/dev/null 2>&1 ||
   gc iam service-accounts create "$runtime" --display-name "FortyMM API (Cloud Run)"
 
@@ -82,6 +85,22 @@ gc artifacts repositories add-iam-policy-binding "$registry_repo" --location "$r
 # Deploying a service that runs as $runtime_sa means acting as it.
 gc iam service-accounts add-iam-policy-binding "$runtime_sa" \
   --member "serviceAccount:$deployer_sa" --role roles/iam.serviceAccountUser >/dev/null
+
+echo "Creating the Worker secret $worker_secret..."
+# The API requires it in the X-FortyMM-Worker-Secret header, which only the
+# Cloudflare Worker sends. tr drops openssl's newline, which Cloud Run would
+# keep in the API's WORKER_SECRET.
+gc secrets describe "$worker_secret" >/dev/null 2>&1 ||
+  openssl rand -hex 32 | tr -d '\n' |
+  gc secrets create "$worker_secret" --replication-policy automatic --data-file=- >/dev/null
+# The API reads it at start, and CI reads it to deploy the Worker.
+for sa in "$runtime_sa" "$deployer_sa"; do
+  gc secrets add-iam-policy-binding "$worker_secret" \
+    --member "serviceAccount:$sa" --role roles/secretmanager.secretAccessor >/dev/null
+done
+# Lets CI list the versions, to pin the newest one for both deploys.
+gc secrets add-iam-policy-binding "$worker_secret" \
+  --member "serviceAccount:$deployer_sa" --role roles/secretmanager.viewer >/dev/null
 
 echo "Creating the Workload Identity pool and provider for $github_repo..."
 gc iam workload-identity-pools describe "$pool" --location global >/dev/null 2>&1 ||
@@ -101,6 +120,23 @@ gc iam service-accounts add-iam-policy-binding "$deployer_sa" \
   --member "principalSet://iam.googleapis.com/projects/$project_number/locations/global/workloadIdentityPools/$pool/attribute.repository/$github_repo" \
   >/dev/null
 
+echo "Creating the monthly budget..."
+billing_account=$(gcloud billing projects describe "$project" --format='value(billingAccountName)')
+: "${billing_account:?$project has no billing account}"
+budget_name="FortyMM ($project)"
+# The Budget API needs a quota project when gcloud runs as a user.
+budgets() {
+  gcloud billing budgets "$@" --billing-account "${billing_account#billingAccounts/}" \
+    --billing-project "$project" --quiet
+}
+if [ -z "$(budgets list --filter "displayName=\"$budget_name\"" --format='value(name)')" ]; then
+  # No recipients are set, so the billing account's admins and users get the
+  # emails, at $10 (40%) and $25 of the month's spend.
+  budgets create --display-name "$budget_name" --budget-amount 25USD \
+    --filter-projects "projects/$project" --calendar-period month \
+    --threshold-rule percent=0.4 --threshold-rule percent=1.0 >/dev/null
+fi
+
 cat <<DONE
 
 Done. Add these GitHub Actions variables to $github_repo (Settings > Secrets
@@ -113,4 +149,10 @@ and variables > Actions > Variables), or run:
 The next CI run deploys the API: production from main, a tagged revision of
 api-preview from any other branch. The production URL will be
 https://api-$project_number.$region.run.app.
+
+The Worker secret is in Secret Manager as $worker_secret. CI gives it to the
+API and the Worker, so it never needs to be copied by hand.
+
+The budget "$budget_name" emails the billing account's admins and users when
+the month's spend passes \$10 and \$25.
 DONE
