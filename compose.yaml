@@ -22,7 +22,7 @@ services:
 
   # The FastAPI app in api/. No published port: the web-client dev server
   # proxies /api/* to it (see web-client/vite.config.ts), so it's reached at
-  # http://localhost:<web-client port>/api/v1/ping.
+  # http://localhost:<web-client port>/api/v1/health.
   api:
     build: .
     init: true
@@ -47,9 +47,10 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-    # Healthy once /v1/ping answers, so `up --wait` blocks until the API serves.
+    # Healthy once /v1/health answers, so `up --wait` blocks until the API serves
+    # and reaches the database.
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/v1/ping"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/v1/health"]
       start_period: 10m
       start_interval: 1s
     volumes:

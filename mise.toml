@@ -73,22 +73,27 @@ docker build -t fortymm-api-production \
 '''
 
 [tasks."api:smoke"]
-description = "Build the API's production image, run it with PORT set, and check that it answers /v1/ping"
+description = "Build the API's production image, run it with PORT set against the Compose database, and check that /v1/health reaches it"
 depends = ["api:build"]
+# {% raw %} keeps mise's Tera templating away from docker's Go template.
 run = '''
-id=$(docker run -d --rm -e PORT=8080 -p 8080 fortymm-api-production)
+docker compose up -d --wait postgres
+network=$(docker inspect "$(docker compose ps -q postgres)" \
+  -f '{% raw %}{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}{% endraw %}')
+id=$(docker run -d --rm -e PORT=8080 -p 8080 --network "$network" \
+  -e DATABASE_URL=postgresql://fortymm:fortymm@postgres:5432/fortymm fortymm-api-production)
 trap 'docker stop "$id" >/dev/null' EXIT INT TERM
 port=$(docker port "$id" 8080/tcp | head -n 1)
 for i in $(seq 30); do
-  body=$(curl -sf "http://localhost:${port##*:}/v1/ping") && break
+  body=$(curl -sf "http://localhost:${port##*:}/v1/health") && break
   sleep 1
 done
-if [ "${body:-}" != '{"data":"pong"}' ]; then
-  echo "the production image didn't answer /v1/ping with {\"data\":\"pong\"} (got: ${body:-nothing})" >&2
+if [ "${body:-}" != '{"data":{"database":"ok"}}' ]; then
+  echo "the production image didn't answer /v1/health with {\"data\":{\"database\":\"ok\"}} (got: ${body:-nothing})" >&2
   docker logs "$id" >&2
   exit 1
 fi
-echo "the production image answers /v1/ping: $body"
+echo "the production image answers /v1/health: $body"
 '''
 
 [tasks."api:deploy"]

@@ -17,7 +17,7 @@ function makeEnv(overrides: Partial<Env> = {}, { allowed = true } = {}) {
 
 function stubUpstream() {
   const upstream = vi.fn(
-    async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({ data: 'pong' }),
+    async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({ data: { database: 'ok' } }),
   )
   vi.stubGlobal('fetch', upstream)
   return upstream
@@ -39,16 +39,16 @@ describe('worker', () => {
     const { env, assets } = makeEnv()
 
     const response = await worker.fetch(
-      new Request('https://fortymm.com/api/v1/ping?x=1', {
+      new Request('https://fortymm.com/api/v1/health?x=1', {
         headers: { 'CF-Connecting-IP': '203.0.113.7' },
       }),
       env,
     )
 
-    expect(await response.json()).toEqual({ data: 'pong' })
+    expect(await response.json()).toEqual({ data: { database: 'ok' } })
     expect(assets).not.toHaveBeenCalled()
     const request = forwarded(upstream)
-    expect(request.url).toBe(`${API_ORIGIN}/v1/ping?x=1`)
+    expect(request.url).toBe(`${API_ORIGIN}/v1/health?x=1`)
     expect(request.method).toBe('GET')
     expect(request.redirect).toBe('manual')
     expect(request.headers.get('X-Forwarded-Host')).toBe('fortymm.com')
@@ -91,7 +91,7 @@ describe('worker', () => {
     const upstream = stubUpstream()
     const { env } = makeEnv({ API_ORIGIN: undefined })
 
-    const response = await worker.fetch(new Request('https://fortymm.com/api/v1/ping'), env)
+    const response = await worker.fetch(new Request('https://fortymm.com/api/v1/health'), env)
 
     expect(response.status).toBe(503)
     expect(upstream).not.toHaveBeenCalled()
@@ -101,7 +101,7 @@ describe('worker', () => {
     const upstream = stubUpstream()
     const { env } = makeEnv({ WORKER_SECRET: 's3cret' })
 
-    await worker.fetch(new Request('https://fortymm.com/api/v1/ping'), env)
+    await worker.fetch(new Request('https://fortymm.com/api/v1/health'), env)
 
     expect(forwarded(upstream).headers.get('X-FortyMM-Worker-Secret')).toBe('s3cret')
   })
@@ -111,7 +111,7 @@ describe('worker', () => {
     const { env } = makeEnv({ WORKER_SECRET: 's3cret' })
 
     await worker.fetch(
-      new Request('https://fortymm.com/api/v1/ping', {
+      new Request('https://fortymm.com/api/v1/health', {
         headers: { 'X-FortyMM-Worker-Secret': 'guess' },
       }),
       env,
@@ -125,7 +125,7 @@ describe('worker', () => {
     const { env } = makeEnv()
 
     await worker.fetch(
-      new Request('https://fortymm.com/api/v1/ping', {
+      new Request('https://fortymm.com/api/v1/health', {
         headers: { 'X-FortyMM-Worker-Secret': 'guess' },
       }),
       env,
@@ -139,7 +139,7 @@ describe('worker', () => {
     const { env, limit } = makeEnv()
 
     await worker.fetch(
-      new Request('https://fortymm.com/api/v1/ping', {
+      new Request('https://fortymm.com/api/v1/health', {
         headers: { 'CF-Connecting-IP': '203.0.113.7' },
       }),
       env,
@@ -152,7 +152,7 @@ describe('worker', () => {
     const upstream = stubUpstream()
     const { env } = makeEnv({}, { allowed: false })
 
-    const response = await worker.fetch(new Request('https://fortymm.com/api/v1/ping'), env)
+    const response = await worker.fetch(new Request('https://fortymm.com/api/v1/health'), env)
 
     expect(response.status).toBe(429)
     expect(response.headers.get('Retry-After')).toBe('60')

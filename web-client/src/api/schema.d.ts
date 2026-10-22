@@ -4,26 +4,6 @@
  */
 
 export interface paths {
-    "/v1/ping": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Ping
-         * @description Check that the API is up.
-         */
-        get: operations["ping"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/health": {
         parameters: {
             query?: never;
@@ -60,14 +40,6 @@ export interface components {
              */
             database: "ok";
         };
-        /** PingResponse */
-        PingResponse: {
-            /**
-             * Data
-             * @constant
-             */
-            data: "pong";
-        };
     };
     responses: never;
     parameters: never;
@@ -77,26 +49,6 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    ping: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PingResponse"];
-                };
-            };
-        };
-    };
     health: {
         parameters: {
             query?: never;

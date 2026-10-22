@@ -46,15 +46,15 @@ working-directory label.
 then removes the stack's containers. The `dev` service stays up by running
 `sleep infinity`, and its healthcheck passes once the entrypoint has installed
 the container's tools, so `--wait` returns only when commands can be exec'd.
-The `api` service's healthcheck is a request to `/v1/ping`, so `--wait` also
-blocks until the API answers. The `api` service starts after the `postgres`
-service is healthy (`pg_isready`). To add a project's checks, call its
+The `api` service's healthcheck is a request to `/v1/health`, so `--wait`
+also blocks until the API answers and reaches the database. The `api` service
+starts after the `postgres` service is healthy (`pg_isready`). To add a project's checks, call its
 `<project>:ci` task from `[tasks.ci]`.
 
 `api:ci` runs `uv sync --locked`, ruff (lint and format), mypy and pytest in
 the running `api` container. `api:smoke` then builds the API's production
-image (`api:build`), runs it with `PORT` set, and checks that it answers
-`/v1/ping`.
+image (`api:build`), runs it with `PORT` set on the `postgres` service's
+network, and checks that `/v1/health` reaches the database.
 
 `web-client:ci` runs `npm ci`, lint, build and tests in the running `dev`
 container, so it needs the stack up (run it via `ci`).
@@ -100,7 +100,7 @@ and `uv.lock`). Code is in `src/fortymm_api/`, tests in `tests/` (pytest,
 through FastAPI's `TestClient`).
 
 - `main.py`: `create_app()`, the app factory. Operation IDs are the route
-  functions' names, so generated clients get names like `ping`. If
+  functions' names, so generated clients get names like `health`. If
   `WORKER_SECRET` is set, the app answers 403 to every request without a
   matching `X-FortyMM-Worker-Secret` header (see Deploy). Local dev, the
   tests and `api:smoke` don't set it, so they need no secret.
@@ -110,20 +110,19 @@ through FastAPI's `TestClient`).
 - `database.py`: the Postgres connections. If `DATABASE_URL` is set,
   `create_app()` makes a psycopg `ConnectionPool` and opens it in the app's
   lifespan. A route takes a connection from it with a `DatabaseConnection`
-  parameter. `DATABASE_URL` is optional off Cloud Run, so `api:smoke` and the
-  OpenAPI export run with no database. On Cloud Run, `create_app()` raises
-  without it.
+  parameter. `DATABASE_URL` is optional off Cloud Run, so the OpenAPI export
+  runs with no database. On Cloud Run, `create_app()` raises without it.
 - `/v1/health` runs `SELECT 1` and returns `{"data": {"database": "ok"}}`.
-  `/v1/ping` doesn't touch the database, so the healthchecks and the 403
-  check use it.
+  The healthchecks, `api:smoke`, the 403 check and the post-deploy suite use
+  it.
 - Response bodies follow JSON:API's top-level shape: the payload goes under
-  `data` (e.g. `/v1/ping` returns `{"data": "pong"}`), so each response model
-  has a `data` field rather than naming the payload itself.
+  `data` (e.g. `/v1/health` returns `{"data": {"database": "ok"}}`), so each
+  response model has a `data` field rather than naming the payload itself.
 
 It runs in the `api` Compose service (uvicorn with `--reload` on port 8000)
 with no published port: the web-client dev server proxies `/api/*` to it with
-the prefix stripped, so `/v1/ping` is at
-`http://localhost:<web-client port>/api/v1/ping` and the interactive docs at
+the prefix stripped, so `/v1/health` is at
+`http://localhost:<web-client port>/api/v1/health` and the interactive docs at
 `/api/docs`. Its virtualenv lives in the `api-venv` volume.
 
 The database is the `postgres` Compose service (`postgres:18`, the same major
@@ -177,7 +176,7 @@ To add a page, add its route to the route tree there.
 
 `src/api/client.ts` exports `api`, an openapi-fetch client typed by the
 generated schema, with base URL `/api`: `const { data, error } = await
-api.GET('/v1/ping')`. `createApiClient()` builds one with other options (e.g.
+api.GET('/v1/health')`. `createApiClient()` builds one with other options (e.g.
 a stub `fetch` in tests). In production the Cloudflare Worker forwards `/api/*`
 the same way (see Deploy). The dev server's proxy target defaults to
 `http://api:8000` and can be overridden with `API_PROXY_TARGET`.
@@ -227,15 +226,16 @@ report in `web-client/playwright-report/`.
 
 `web-client/e2e/deployed/` is a separate suite, run against a deployment
 rather than the dev server, that checks the Worker, the assets and the API
-are wired together: `/api/v1/ping`, `/api/openapi.json` and `/api/docs` come
-from the API, `/api/v1/health` reaches the database, an unknown `/api/*` path
+are wired together: `/api/v1/health` reaches the database through the API,
+`/api/openapi.json` and `/api/docs` come from the API, an unknown `/api/*` path
 gets the API's JSON 404 rather than the SPA's `index.html` (so
 `run_worker_first` works), and `/` and `/design-system` load the app (so the
 assets and the SPA fallback work). The
 main config ignores it; `web-client/playwright.deployed.config.ts` runs it,
 with `baseURL` from `PLAYWRIGHT_BASE_URL` (it fails fast without one) and no
-screenshot tests. Its `ready` project retries the ping for up to a minute
-(Cloud Run cold starts, Preview propagation) before the other specs run.
+screenshot tests. Its `ready` project retries `/api/v1/health` for up to a
+minute (Cloud Run cold starts, Preview propagation) before the other specs
+run.
 
 ```sh
 DEPLOY_URL=https://fortymm.com ./bin/mise run web-client:e2e-deployed
@@ -318,7 +318,7 @@ never points at a route that isn't there yet:
   steps' logs.
 
 Before the deploys, CI pins one version of the Worker secret, and both
-deploys use it. After the API deploy, CI requests `$API_ORIGIN/v1/ping`
+deploys use it. After the API deploy, CI requests `$API_ORIGIN/v1/health`
 without the header and fails unless the API answers 403.
 
 Then CI runs the post-deploy suite (`web-client:e2e-deployed`, see
