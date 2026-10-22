@@ -31,6 +31,15 @@ export class DesignSystemPage {
   readonly comboboxInputRow: Locator
   readonly comboboxIcon: Locator
   readonly comboboxOptions: Locator
+  readonly datePickerCard: Locator
+  readonly datePicker: Locator
+  readonly datePickerLabel: Locator
+  readonly datePickerTrigger: Locator
+  readonly datePickerIcon: Locator
+  readonly datePickerDialog: Locator
+  readonly datePickerGrid: Locator
+  readonly previousMonth: Locator
+  readonly nextMonth: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -88,6 +97,30 @@ export class DesignSystemPage {
     this.comboboxInputRow = this.comboboxBox.locator('.cmd-input')
     this.comboboxIcon = this.comboboxInputRow.locator('svg')
     this.comboboxOptions = this.comboboxCard.getByRole('option')
+    this.datePickerCard = this.formsSection.getByRole('article', {
+      name: 'Date Picker',
+    })
+    // The picker's root, which the card lays out as the kit's row.
+    this.datePicker = this.datePickerCard.locator('.date-picker')
+    this.datePickerLabel = this.datePickerCard.getByText('Match date', {
+      exact: true,
+    })
+    // Its name starts with the label, then the chosen date.
+    this.datePickerTrigger = this.datePickerCard.getByRole('button', {
+      name: /^Match date/,
+    })
+    this.datePickerIcon = this.datePickerTrigger.locator('svg')
+    this.datePickerDialog = this.datePickerCard.getByRole('dialog', {
+      name: 'Match date',
+    })
+    // Named by the month it shows.
+    this.datePickerGrid = this.datePickerDialog.getByRole('grid')
+    this.previousMonth = this.datePickerDialog.getByRole('button', {
+      name: 'Previous month',
+    })
+    this.nextMonth = this.datePickerDialog.getByRole('button', {
+      name: 'Next month',
+    })
   }
 
   // A component card's title, in its header.
@@ -234,6 +267,11 @@ export class DesignSystemPage {
   // The Select card's select named `name`.
   select(name: string): Locator {
     return this.selectCard.getByRole('combobox', { name, exact: true })
+  }
+
+  // The calendar's day named `name`, e.g. "April 12, 2026".
+  datePickerDay(name: string): Locator {
+    return this.datePickerGrid.getByRole('gridcell', { name, exact: true })
   }
 
   // Clicks the middle of the text `name` in `card` with a plain mouse click.

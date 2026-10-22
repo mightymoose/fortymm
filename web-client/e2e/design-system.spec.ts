@@ -1050,6 +1050,347 @@ test.describe('Combobox', () => {
   })
 })
 
+// The card's today is the 14th, as the reference draws it, so the app's
+// tests fix the page's clock there. The reference has no clock to fix.
+const april14 = new Date(2026, 3, 14, 12)
+
+// The card opens on the reference's April 2026, with the 12th chosen, but
+// nothing is hovered or focused, so there's no focus ring.
+test.describe('Date Picker card', () => {
+  test('matches the screenshot', async ({ designSystemPage, page }) => {
+    await page.clock.setFixedTime(april14)
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.datePickerCard).toHaveScreenshot(
+      'date-picker-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.datePickerCard).toHaveScreenshot(
+      'date-picker-card.png',
+    )
+  })
+})
+
+// The kit's calendar is static, with no focus or hover style, so the tests
+// below are the app's alone.
+test.describe('Date Picker', () => {
+  const ring = 'color(srgb 1 0.478431 0.101961 / 0.15) 0px 0px 0px 3px'
+  const orange = 'rgb(255, 122, 26)'
+  const none = 'rgba(0, 0, 0, 0)'
+
+  test.beforeEach(async ({ designSystemPage, page }) => {
+    await page.clock.setFixedTime(april14)
+    await designSystemPage.goto()
+  })
+
+  test('the button closes and opens the calendar', async ({
+    designSystemPage,
+  }) => {
+    const trigger = designSystemPage.datePickerTrigger
+    await expect(trigger).toHaveAttribute('aria-expanded', 'true')
+
+    await trigger.click()
+    await expect(designSystemPage.datePickerDialog).toHaveCount(0)
+    await expect(trigger).toHaveAttribute('aria-expanded', 'false')
+
+    await trigger.click()
+    await expect(designSystemPage.datePickerDialog).toBeVisible()
+    await expect(designSystemPage.datePickerDay('April 12, 2026')).toBeFocused()
+  })
+
+  test('the arrow and Page keys move the focused day and change the month', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const grid = designSystemPage.datePickerGrid
+    await designSystemPage.datePickerDay('April 12, 2026').focus()
+
+    await page.keyboard.press('ArrowRight')
+    await expect(designSystemPage.datePickerDay('April 13, 2026')).toBeFocused()
+    await page.keyboard.press('ArrowDown')
+    await expect(designSystemPage.datePickerDay('April 20, 2026')).toBeFocused()
+    await page.keyboard.press('End')
+    await expect(designSystemPage.datePickerDay('April 25, 2026')).toBeFocused()
+
+    await page.keyboard.press('PageDown')
+    await expect(grid).toHaveAccessibleName('May 2026')
+    await expect(designSystemPage.datePickerDay('May 25, 2026')).toBeFocused()
+
+    await page.keyboard.press('PageUp')
+    await page.keyboard.press('PageUp')
+    await expect(grid).toHaveAccessibleName('March 2026')
+    await expect(designSystemPage.datePickerDay('March 25, 2026')).toBeFocused()
+
+    await page.keyboard.press('ArrowUp')
+    await page.keyboard.press('ArrowUp')
+    await page.keyboard.press('ArrowUp')
+    await page.keyboard.press('ArrowUp')
+    await expect(grid).toHaveAccessibleName('February 2026')
+    await expect(
+      designSystemPage.datePickerDay('February 25, 2026'),
+    ).toBeFocused()
+  })
+
+  test("Enter chooses a day and updates the button's text", async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.datePickerDay('April 12, 2026').focus()
+
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.press('Enter')
+
+    const trigger = designSystemPage.datePickerTrigger
+    await expect(designSystemPage.datePickerDialog).toHaveCount(0)
+    await expect(trigger).toHaveText('April 11, 2026')
+    await expect(trigger).toHaveAccessibleName('Match date April 11, 2026')
+    await expect(trigger).toBeFocused()
+  })
+
+  test('Escape closes the calendar and gives the focus back to the button', async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.nextMonth.focus()
+
+    await page.keyboard.press('Escape')
+
+    await expect(designSystemPage.datePickerDialog).toHaveCount(0)
+    await expect(designSystemPage.datePickerTrigger).toBeFocused()
+  })
+
+  test('the month buttons change the month', async ({ designSystemPage }) => {
+    await designSystemPage.nextMonth.click()
+    await expect(designSystemPage.datePickerGrid).toHaveAccessibleName(
+      'May 2026',
+    )
+
+    await designSystemPage.previousMonth.click()
+    await designSystemPage.previousMonth.click()
+    await expect(designSystemPage.datePickerGrid).toHaveAccessibleName(
+      'March 2026',
+    )
+    await expect(designSystemPage.previousMonth).toBeFocused()
+  })
+
+  // The button is a .button, so it takes their outline, on keyboard focus
+  // only. The day takes the text controls' ring.
+  test('keyboard focus shows the focus rings', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const trigger = designSystemPage.datePickerTrigger
+    await designSystemPage.combobox.focus()
+
+    await page.keyboard.press('Tab')
+    await expect(trigger).toBeFocused()
+    await expect(trigger).toHaveCSS('outline', `${orange} solid 2px`)
+
+    // The card starts open, so Enter closes the calendar, then opens it
+    // with the focus on the chosen day.
+    await page.keyboard.press('Enter')
+    await expect(designSystemPage.datePickerDialog).toHaveCount(0)
+    await page.keyboard.press('Enter')
+    const chosen = designSystemPage.datePickerDay('April 12, 2026')
+    await expect(chosen).toBeFocused()
+    await expect(chosen).toHaveCSS('box-shadow', ring)
+    await expect(chosen).toHaveCSS('outline-style', 'none')
+
+    await page.keyboard.press('ArrowRight')
+    await expect(designSystemPage.datePickerDay('April 13, 2026')).toHaveCSS(
+      'box-shadow',
+      ring,
+    )
+    await expect(chosen).toHaveCSS('box-shadow', 'none')
+  })
+
+  test('a click shows no focus ring, on the button or the day', async ({
+    designSystemPage,
+  }) => {
+    const trigger = designSystemPage.datePickerTrigger
+
+    await trigger.click()
+    await expect(trigger).toBeFocused()
+    await expect(trigger).toHaveCSS('outline-style', 'none')
+
+    await trigger.click()
+    const chosen = designSystemPage.datePickerDay('April 12, 2026')
+    await expect(chosen).toBeFocused()
+    await expect(chosen).toHaveCSS('box-shadow', 'none')
+
+    await designSystemPage.datePickerDay('April 20, 2026').click()
+    await expect(trigger).toBeFocused()
+    await expect(trigger).toHaveText('April 20, 2026')
+    await expect(trigger).toHaveCSS('outline-style', 'none')
+  })
+
+  // The screenshot can't see the hover: --bg-hover is white at 4%, under
+  // its color threshold.
+  test('the chosen day, today and the hovered day have their own looks', async ({
+    designSystemPage,
+  }) => {
+    const chosen = designSystemPage.datePickerDay('April 12, 2026')
+    const today = designSystemPage.datePickerDay('April 14, 2026')
+    const other = designSystemPage.datePickerDay('April 15, 2026')
+    const muted = designSystemPage.datePickerDay('March 31, 2026')
+    // --ink-950.
+    await expect(chosen).toHaveCSS('background-color', orange)
+    await expect(chosen).toHaveCSS('color', 'rgb(11, 13, 18)')
+    await expect(chosen).toHaveCSS('font-weight', '600')
+    await expect(today).toHaveCSS('background-color', none)
+    await expect(today).toHaveCSS('color', orange)
+    await expect(today).toHaveCSS('font-weight', '600')
+    // --fg-2 and --ink-500.
+    await expect(other).toHaveCSS('color', 'rgb(228, 231, 239)')
+    await expect(muted).toHaveCSS('color', 'rgb(58, 65, 82)')
+    await expect(other).toHaveCSS('background-color', none)
+
+    await other.hover()
+    await expect(other).toHaveCSS('background-color', 'rgba(255, 255, 255, 0.04)')
+
+    await chosen.hover()
+    await expect(other).toHaveCSS('background-color', none)
+    await expect(chosen).toHaveCSS('background-color', orange)
+  })
+
+  // A day that's both chosen and today reads as chosen: the kit's rule
+  // order would draw it orange on orange.
+  test("a chosen today reads as chosen", async ({ designSystemPage }) => {
+    await designSystemPage.datePickerDay('April 14, 2026').click()
+    await designSystemPage.datePickerTrigger.click()
+
+    const today = designSystemPage.datePickerDay('April 14, 2026')
+    await expect(today).toHaveAttribute('aria-current', 'date')
+    await expect(today).toHaveAttribute('aria-selected', 'true')
+    await expect(today).toHaveCSS('background-color', orange)
+    await expect(today).toHaveCSS('color', 'rgb(11, 13, 18)')
+  })
+
+  // Natively the arrows, Home, End and the Page keys scroll the page. The
+  // days they move to here stay in the window, so the focus doesn't scroll
+  // it either.
+  test("the grid's keys don't scroll the page", async ({
+    designSystemPage,
+    page,
+  }) => {
+    const chosen = designSystemPage.datePickerDay('April 12, 2026')
+    await chosen.evaluate((day) => day.scrollIntoView({ block: 'center' }))
+    await chosen.focus()
+    const top = await page.locator('html').evaluate((html) => html.scrollTop)
+    expect(top).toBeGreaterThan(0)
+
+    for (const [key, name] of [
+      ['ArrowDown', 'April 19, 2026'],
+      ['End', 'April 25, 2026'],
+      ['PageDown', 'May 25, 2026'],
+      ['PageUp', 'April 25, 2026'],
+      ['Home', 'April 19, 2026'],
+    ]) {
+      await page.keyboard.press(key)
+      await expect(designSystemPage.datePickerDay(name)).toBeFocused()
+      expect(await page.locator('html').evaluate((html) => html.scrollTop), key).toBe(top)
+    }
+  })
+
+  // The demo's picker always has a day chosen, so this test shows the
+  // placeholder's class in place.
+  test('the placeholder is muted', async ({ designSystemPage }) => {
+    const text = designSystemPage.datePickerTrigger.locator('span')
+    // --fg-1.
+    await expect(text).toHaveCSS('color', 'rgb(247, 248, 251)')
+
+    await text.evaluate((span) => span.classList.add('date-picker-placeholder'))
+
+    // --fg-muted.
+    await expect(text).toHaveCSS('color', 'rgb(107, 114, 131)')
+  })
+
+  // The demo's picker isn't disabled, so this test disables its button in
+  // place, after closing the calendar. That checks the looks: the unit tests
+  // check that a disabled picker doesn't open.
+  test("a disabled one fades and doesn't open", async ({
+    designSystemPage,
+    page,
+  }) => {
+    const trigger = designSystemPage.datePickerTrigger
+    await trigger.click()
+    await expect(designSystemPage.datePickerDialog).toHaveCount(0)
+    await trigger.evaluate((button) => button.setAttribute('disabled', ''))
+    const box = (await trigger.boundingBox())!
+
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+
+    await expect(designSystemPage.datePickerDialog).toHaveCount(0)
+    await expect(trigger).toHaveCSS('opacity', '0.5')
+    await expect(trigger).toHaveCSS('cursor', 'not-allowed')
+  })
+
+  // The demo's picker isn't invalid, so this test marks its button in
+  // place. The border fades, so it checks the resting border first: a
+  // check made as it faded would still see that color.
+  test('an invalid one shows the error border', async ({
+    designSystemPage,
+  }) => {
+    const trigger = designSystemPage.datePickerTrigger
+    // --border-default.
+    await expect(trigger).toHaveCSS('border-color', 'rgb(58, 65, 82)')
+
+    await trigger.evaluate((button) => button.setAttribute('data-invalid', ''))
+
+    // --loss, #FF4D6D.
+    await expect(trigger).toHaveCSS('border-color', 'rgb(255, 77, 109)')
+  })
+
+  // The card shows the calendar in the page's flow, as the kit draws it.
+  // Without the card's class, it floats under the button, over the page.
+  test('the calendar floats under the button without the card class', async ({
+    designSystemPage,
+  }) => {
+    const card = designSystemPage.datePickerCard
+    const open = (await card.boundingBox())!
+
+    await designSystemPage.datePicker.evaluate((picker) =>
+      picker.classList.remove('date-picker-demo'),
+    )
+
+    const dialog = designSystemPage.datePickerDialog
+    await expect(dialog).toHaveCSS('position', 'absolute')
+    await expect(dialog).toHaveCSS('box-shadow', 'rgba(0, 0, 0, 0.55) 0px 12px 32px 0px')
+    const trigger = (await designSystemPage.datePickerTrigger.boundingBox())!
+    const calendar = (await dialog.boundingBox())!
+    const floating = (await card.boundingBox())!
+    expect(calendar.x).toBe(trigger.x)
+    expect(calendar.y).toBe(trigger.y + trigger.height + 4)
+    expect(calendar.width).toBe(280)
+    expect(floating.height).toBeLessThan(open.height)
+    expect(calendar.y + calendar.height).toBeGreaterThan(
+      floating.y + floating.height,
+    )
+  })
+
+  test('the day backgrounds fade', async ({ designSystemPage }) => {
+    await expect(
+      designSystemPage.datePickerDay('April 15, 2026'),
+    ).toHaveCSS('transition-duration', '0.12s, 0.12s')
+  })
+
+  test.describe('with reduced motion', () => {
+    test.use({ reducedMotion: 'reduce' })
+
+    test('the day backgrounds change without a transition', async ({
+      designSystemPage,
+    }) => {
+      await expect(
+        designSystemPage.datePickerDay('April 15, 2026'),
+      ).toHaveCSS('transition-duration', '0s')
+    })
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -1221,6 +1562,43 @@ test.describe('on a phone', () => {
     // The box clips what overflows it, so check the input stays inside too.
     expect(input.x + input.width).toBeLessThanOrEqual(box.x + box.width)
     expect((await designSystemPage.comboboxIcon.boundingBox())!.width).toBe(14)
+  })
+
+  // The row wraps the calendar under the button, as the kit's does. The
+  // card's content is 228px wide here, and the calendar, a flex item,
+  // shrinks from its 280px to fit.
+  test('the date picker card fits', async ({ designSystemPage, page }) => {
+    await page.clock.setFixedTime(new Date(2026, 3, 14, 12))
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.datePickerCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.datePickerCard.boundingBox())!
+    const label = (await designSystemPage.datePickerLabel.boundingBox())!
+    const trigger = (await designSystemPage.datePickerTrigger.boundingBox())!
+    const calendar = (await designSystemPage.datePickerDialog.boundingBox())!
+    // Inside the card's 1px border and 32px padding on the right.
+    const right = card.x + card.width - 33
+    expect(trigger.width).toBe(200)
+    expect(trigger.x + trigger.width).toBeLessThanOrEqual(right)
+    expect(calendar.width).toBeLessThan(280)
+    expect(calendar.x).toBe(label.x)
+    expect(calendar.x + calendar.width).toBe(right)
+    // The row's 24px gap, under the button.
+    expect(calendar.y).toBe(trigger.y + trigger.height + 24)
+    for (const name of ['March 29, 2026', 'May 2, 2026']) {
+      const day = (await designSystemPage.datePickerDay(name).boundingBox())!
+      expect(day.x).toBeGreaterThanOrEqual(calendar.x)
+      expect(day.x + day.width).toBeLessThanOrEqual(
+        calendar.x + calendar.width,
+      )
+    }
   })
 
   // Two columns would leave each input too narrow for its placeholder, so

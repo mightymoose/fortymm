@@ -201,4 +201,35 @@ export class DesignSystemPage {
   get comboboxOptions(): HTMLElement[] {
     return within(this.comboboxCard).getAllByRole('option')
   }
+
+  get datePickerCard(): HTMLElement {
+    return within(this.formsSection).getByRole('article', {
+      name: 'Date Picker',
+    })
+  }
+
+  get datePickerCardHeading(): HTMLElement {
+    return within(this.datePickerCard).getByRole('heading', { level: 3 })
+  }
+
+  // The button that opens the calendar. Its name starts with its label, so
+  // finding it proves the label names it.
+  get datePickerTrigger(): HTMLElement {
+    return within(this.datePickerCard).getByRole('button', {
+      name: /^Match date/,
+    })
+  }
+
+  get datePickerDialog(): HTMLElement {
+    return within(this.datePickerCard).getByRole('dialog')
+  }
+
+  get datePickerGrid(): HTMLElement {
+    return within(this.datePickerDialog).getByRole('grid')
+  }
+
+  // The calendar's day named `name`, e.g. "April 12, 2026".
+  datePickerDay(name: string): HTMLElement {
+    return within(this.datePickerGrid).getByRole('gridcell', { name })
+  }
 }

@@ -614,12 +614,140 @@ h4, .h4 {
   }
 }
 
+/* The Date Picker: an outline .button that opens the reference kit's
+   Calendar (.cal, .cal-h, .cal-grid and its .dow and .day cells) under it,
+   over the page. The focused day takes the shared focus ring (below), and
+   the button its own, as every .button does. The button also takes the
+   shared error border. */
+.date-picker {
+  position: relative;
+  width: fit-content;
+}
+
+/* The kit's inline style on its button. */
+.date-picker-trigger {
+  min-width: 200px;
+  justify-content: flex-start;
+}
+
+.date-picker-placeholder {
+  color: var(--fg-muted);
+}
+
+.cal {
+  background: var(--ink-800);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  padding: 16px;
+  width: 280px;
+}
+
+.date-picker > .cal {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 10;
+  box-shadow: var(--shadow-lg);
+}
+
+/* The Date Picker card, open as the kit draws it: the button and the
+   calendar side by side, in the flow of the kit's inline-styled .row. */
+.date-picker-demo {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+  flex-wrap: wrap;
+  width: auto;
+}
+
+.date-picker-demo > .cal {
+  position: static;
+  box-shadow: none;
+}
+
+.cal-h {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  /* The kit sets the font shorthand, which resets the line height. */
+  line-height: normal;
+}
+
+/* The kit's grid is one 7-column grid. Here each week is a row of its own,
+   for assistive tech, so each .cal-week is a grid with the kit's columns and
+   gap, and .cal-grid stacks them with the kit's gap between. */
+.cal-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-align: center;
+}
+
+.cal-week {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.cal-grid .dow {
+  color: var(--fg-3);
+  padding: 6px 0;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* The background fades, as on a .button. */
+.cal-grid .day {
+  padding: 6px 0;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  color: var(--fg-2);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast);
+}
+
+.cal-grid .day:hover {
+  background: var(--bg-hover);
+}
+
+.cal-grid .day--muted {
+  color: var(--ink-500);
+}
+
+.cal-grid .day[aria-current="date"] {
+  color: var(--ball-500);
+  font-weight: 600;
+}
+
+/* After today and :hover, so a chosen day keeps its look when it's today
+   too (the kit's order would draw orange on orange) or under the pointer. */
+.cal-grid .day[aria-selected="true"] {
+  background: var(--ball-500);
+  color: var(--ink-950);
+  font-weight: 600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cal-grid .day {
+    transition: none;
+  }
+}
+
 .input:focus, .textarea:focus, .select:focus, .otp-cell.otp-cell--active,
 .checkbox-input:focus-visible + .checkbox-box,
 .radio-input:focus-visible + .radio-dot,
 .switch-input:focus-visible + .switch-track,
 .slider-input:focus-visible + .slider-thumb,
-.cmd:has(> .cmd-input > input:focus) {
+.cmd:has(> .cmd-input > input:focus),
+.cal-grid .day:focus-visible {
   outline: none;
   border-color: var(--ball-500);
   box-shadow: 0 0 0 3px rgb(from var(--ball-500) r g b / 0.15);
@@ -636,13 +764,15 @@ h4, .h4 {
 }
 
 /* The error state follows aria-invalid, so it always matches what assistive
-   tech is told. */
+   tech is told. A button can't be aria-invalid, so the Date Picker's marks
+   itself with data-invalid, and its help text tells assistive tech. */
 .input[aria-invalid="true"], .textarea[aria-invalid="true"],
 .select[aria-invalid="true"],
 .otp-input[aria-invalid="true"] ~ .otp-cell,
 .checkbox-input[aria-invalid="true"] + .checkbox-box,
 .radio-input[aria-invalid="true"] + .radio-dot,
-.cmd:has(> .cmd-input > input[aria-invalid="true"]) {
+.cmd:has(> .cmd-input > input[aria-invalid="true"]),
+.date-picker-trigger[data-invalid] {
   border-color: var(--loss);
 }
 
