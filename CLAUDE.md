@@ -51,7 +51,9 @@ blocks until the API answers. To add a project's checks, call its
 `<project>:ci` task from `[tasks.ci]`.
 
 `api:ci` runs `uv sync --locked`, ruff (lint and format), mypy and pytest in
-the running `api` container.
+the running `api` container. `api:smoke` then builds the API's production
+image (`api:build`), runs it with `PORT` set, and checks that it answers
+`/v1/ping`.
 
 `web-client:ci` runs `npm ci`, lint, build and tests in the running `dev`
 container, so it needs the stack up (run it via `ci`).
@@ -65,9 +67,12 @@ so a route or model change without `api:openapi` breaks CI.
 `playwright` container. It also needs the stack up and `npm ci` done, so it
 runs after `web-client:ci`.
 
-`.github/workflows/ci.yml` runs `./bin/mise run ci` on every push, deploys
-the web-client on pushes to `main` (see Deploy below), then uploads the Playwright traces and HTML report as the `playwright-traces`
-artifact and posts (or updates) a comment linking it on the commit's open PR.
+`.github/workflows/ci.yml` runs `./bin/mise run ci` on every push, deploys the
+API and then the web-client (production from `main`, a Preview from any other
+branch; see Deploy below), then uploads the Playwright traces and HTML report
+as the `playwright-traces` artifact and posts (or updates) a comment linking
+it on the commit's open PR. It runs one at a time per branch, so deploys land
+in push order.
 
 ## References
 
@@ -103,7 +108,14 @@ the prefix stripped, so `/v1/ping` is at
 ./bin/mise run api:dev       # start the API and stream its logs
 ./bin/mise run api:test      # run the API's tests
 ./bin/mise run api:openapi   # regenerate the OpenAPI schema and client types
+./bin/mise run api:build     # build the production image as fortymm-api-production
 ```
+
+`api/Dockerfile` is its production image, separate from the dev image: a
+multi-stage uv build (`uv sync --locked --no-dev`) that runs uvicorn as a
+non-root user on `$PORT` with `--root-path /api` and the proxy headers
+trusted, without `--reload`. `api:build` passes it the Python and uv versions
+from `mise.container.toml`, so it runs the same ones as the dev container.
 
 ### OpenAPI schema and clients
 
@@ -137,7 +149,8 @@ To add a page, add its route to the route tree there.
 `src/api/client.ts` exports `api`, an openapi-fetch client typed by the
 generated schema, with base URL `/api`: `const { data, error } = await
 api.GET('/v1/ping')`. `createApiClient()` builds one with other options (e.g.
-a stub `fetch` in tests). The dev server's proxy target defaults to
+a stub `fetch` in tests). In production the Cloudflare Worker forwards `/api/*`
+the same way (see Deploy). The dev server's proxy target defaults to
 `http://api:8000` and can be overridden with `API_PROXY_TARGET`.
 
 ### Tests
@@ -211,35 +224,103 @@ free host port. `web-client:dev`:
 
 `./bin/mise run list-ports` shows the port again later.
 
-### Deploy
-
-The web-client is served by Cloudflare Workers static assets, configured in
-`web-client/wrangler.jsonc`. `not_found_handling: "single-page-application"`
-serves `index.html` for any path with no matching file in `dist/`, so
-client-side routes load directly. Production is served on `fortymm.com` and
-`www.fortymm.com` (Custom Domains in `routes`, whose DNS records and
-certificates Cloudflare manages) and on `fortymm.mightymoose.workers.dev`.
-
-```sh
-./bin/mise run web-client:deploy    # wrangler deploy of web-client/dist
-./bin/mise run web-client:preview   # a Preview named after the git branch
-```
-
-CI deploys `main` to production and every other branch as a Preview (`wrangler
-preview`, open beta), whose URL is printed in the "Deploy a Cloudflare
-Preview" step's log. Previews are served on
-`<preview-name>-fortymm.mightymoose.workers.dev` because `preview_urls` is on in
-`wrangler.jsonc`; changes to that setting only take effect after a production
-deploy.
-
-It deploys whatever is in `web-client/dist`, so build first (CI deploys the
-build `ci` just tested). It needs `CLOUDFLARE_API_TOKEN` and
-`CLOUDFLARE_ACCOUNT_ID` in the environment; CI reads them from the repo's
-Actions secrets of the same names.
-
 ### Dependencies
 
 `node_modules` lives in a Docker volume, not on the host, so native packages
 match the container's platform. Install or run npm commands through the
 container, e.g.
 `docker compose run --rm -w /app/web-client dev npm install <pkg>`.
+
+## Deploy
+
+Production is `https://fortymm.com` (and `www.fortymm.com`): a Cloudflare
+Worker serves the web-client and forwards `/api/*` to the API on Google Cloud
+Run, so the app's `/api` client is same-origin, as in dev, with no CORS.
+
+```sh
+./bin/mise run api:deploy           # build, push and deploy the API; prints its URL last
+./bin/mise run api:preview          # the same, as this branch's Preview revision
+./bin/mise run api:url              # print the production API's URL
+./bin/mise run web-client:deploy    # wrangler deploy of web-client/dist and the Worker
+./bin/mise run web-client:preview   # a Cloudflare Preview named after the git branch
+```
+
+CI deploys on every push after `ci` passes, the API first, so the Worker
+never points at a route that isn't there yet:
+
+- `main`: `api:deploy`, then `web-client:deploy` with `API_ORIGIN` set to the
+  URL it printed.
+- Any other branch: `api:preview`, then `web-client:preview` with
+  `API_ORIGIN` set to that revision's URL, so each Cloudflare Preview talks to
+  the API built from the same commit. Both Preview URLs are in the deploy
+  steps' logs.
+
+### web-client (Cloudflare Workers)
+
+`web-client/wrangler.jsonc` configures it. `worker/index.ts` is the Worker
+(unit-tested in `worker/index.test.ts`): requests to `/api/*` go to
+`API_ORIGIN` with the `/api` prefix stripped, keeping the method, headers,
+query and body and setting `X-Forwarded-Host`, `X-Forwarded-Proto` and
+`X-Forwarded-For`; with no `API_ORIGIN` they get a 503. Everything else goes
+to the static assets in `dist/` (the `ASSETS` binding).
+`assets.run_worker_first: ["/api/*"]` runs the Worker before the assets for
+those paths, and `not_found_handling: "single-page-application"` serves
+`index.html` for any other path with no matching file, so client-side routes
+load directly.
+
+`API_ORIGIN` isn't in `wrangler.jsonc`: `web-client:deploy` and
+`web-client:preview` pass it with `--var` from the environment (CI sets it
+from the API deploy), and warn if it's empty. Production is served on
+`fortymm.com` and `www.fortymm.com` (Custom Domains in `routes`, whose DNS
+records and certificates Cloudflare manages) and on
+`fortymm.mightymoose.workers.dev`.
+
+Previews (`wrangler preview`, open beta) are served on
+`<preview-name>-fortymm.mightymoose.workers.dev` because `preview_urls` is on in
+`wrangler.jsonc`; changes to that setting only take effect after a production
+deploy. `bin/preview-name` makes the name from the branch (`claude/foo_bar` ->
+`claude-foo-bar`, at most 30 characters, starting with a letter); the API's
+Preview revision uses the same name as its tag.
+
+The tasks deploy whatever is in `web-client/dist`, so build first (CI deploys
+the build `ci` just tested). They need `CLOUDFLARE_API_TOKEN` and
+`CLOUDFLARE_ACCOUNT_ID` in the environment; CI reads them from the repo's
+Actions secrets of the same names.
+
+### api (Cloud Run)
+
+The API runs on Cloud Run in GCP project `fortymm`, region `us-central1`
+(`GCP_PROJECT` and `GCP_REGION` in `mise.toml`'s `[env]`; set either in the
+environment to override). `api:deploy` and `api:preview` build the production
+image, push it to Artifact Registry as
+`us-central1-docker.pkg.dev/fortymm/fortymm/api:<commit>`, and run
+`gcloud run deploy` through `api/deploy/cloud-run-deploy`, which holds the
+service settings: min instances 0 (scale to zero), max 3 (1 for Previews),
+1 CPU, 256 MiB, unauthenticated access, running as the `api-runtime`
+service account. They need `gcloud` logged in as an account that can deploy,
+and Docker.
+
+- `api:deploy` deploys the `api` service, and the new revision takes all its
+  traffic.
+- `api:preview` deploys a revision of a separate `api-preview` service tagged
+  with the branch's Preview name and no traffic, served on
+  `https://<preview-name>---<api-preview's host>`. Each push moves the tag to
+  the new revision. Keeping Previews on their own service means a branch
+  deploy can never change production's traffic or settings.
+
+The `*.run.app` URLs are publicly reachable too, not only through the Worker.
+Restricting them to the Worker (ingress settings or authenticated invocation)
+is a possible follow-up.
+
+CI authenticates to Google Cloud with Workload Identity Federation
+(`google-github-actions/auth`; no service-account key), as the
+`github-deployer` service account, from two Actions **variables**:
+`GCP_WORKLOAD_IDENTITY_PROVIDER` and `GCP_SERVICE_ACCOUNT`. Until both are
+set, CI skips the API deploys with a warning, and the Worker answers `/api/*`
+with a 503.
+
+The one-time GCP setup (enabling the APIs, the Artifact Registry repository,
+the service accounts and their roles, the Workload Identity pool and provider
+for `mightymoose/fortymm`) is `api/deploy/bootstrap-gcp.sh`, run once by a
+project owner; it prints the variables to set. `api/deploy/README.md`
+describes it step by step.

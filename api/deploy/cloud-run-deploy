@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Push the fortymm-api-production image (built by `mise run api:build`) to
+# Artifact Registry and deploy it to Cloud Run. Run through `mise run api:deploy` or
+# `mise run api:preview`, which set GCP_PROJECT and GCP_REGION; needs gcloud,
+# authenticated as an account that can deploy (see api/deploy/README.md).
+#
+#   cloud-run-deploy             production: the `api` service, all traffic
+#   cloud-run-deploy --tag NAME  a Preview: a revision of `api-preview` tagged
+#                                NAME, with no traffic
+#
+# Everything but the URL the deploy is served on goes to stderr, so the last
+# line of stdout is that URL (the service's, or the tagged revision's).
+set -euo pipefail
+
+: "${GCP_PROJECT:?}" "${GCP_REGION:?}"
+tag=
+if [ "${1:-}" = --tag ]; then
+  tag=${2:?usage: cloud-run-deploy [--tag NAME]}
+fi
+
+registry="$GCP_REGION-docker.pkg.dev"
+image="$registry/$GCP_PROJECT/fortymm/api:$(git rev-parse HEAD)"
+gcloud auth configure-docker "$registry" --quiet >&2
+docker tag fortymm-api-production "$image" >&2
+docker push --quiet "$image" >&2
+
+gcloud_args=(--project "$GCP_PROJECT" --region "$GCP_REGION")
+# Scale to zero, keep the max small, smallest sensible size; public, since
+# the Cloudflare Worker forwards browsers' requests to it.
+deploy_args=(
+  --image "$image"
+  --service-account "api-runtime@$GCP_PROJECT.iam.gserviceaccount.com"
+  --port 8080
+  --cpu 1
+  --memory 256Mi
+  --min-instances 0
+  --allow-unauthenticated
+  --quiet
+)
+
+if [ -z "$tag" ]; then
+  service=api
+  gcloud run deploy "$service" "${gcloud_args[@]}" "${deploy_args[@]}" --max-instances 3 >&2
+else
+  # Previews get their own service, so they can never move production's
+  # traffic. --no-traffic only works on a service that exists already.
+  service=api-preview
+  no_traffic=--no-traffic
+  gcloud run services describe "$service" "${gcloud_args[@]}" >/dev/null 2>&1 || no_traffic=
+  gcloud run deploy "$service" "${gcloud_args[@]}" "${deploy_args[@]}" --max-instances 1 \
+    --tag "$tag" $no_traffic >&2
+fi
+
+url=$(gcloud run services describe "$service" "${gcloud_args[@]}" --format='value(status.url)')
+if [ -n "$tag" ]; then
+  # A tagged revision is served on the service's host with "<tag>---" in front.
+  url="https://$tag---${url#https://}"
+fi
+echo "$url"
