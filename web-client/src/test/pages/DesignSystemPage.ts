@@ -108,4 +108,32 @@ export class DesignSystemPage {
   checkbox(name: string): HTMLElement {
     return within(this.checkboxCard).getByRole('checkbox', { name })
   }
+
+  get radioCard(): HTMLElement {
+    return within(this.formsSection).getByRole('article', {
+      name: 'Radio Group',
+    })
+  }
+
+  get radioCardHeading(): HTMLElement {
+    return within(this.radioCard).getByRole('heading', { level: 3 })
+  }
+
+  // The Match format group, found by its hidden label, so finding it proves
+  // the label names it.
+  get radioGroup(): HTMLElement {
+    return within(this.radioCard).getByRole('radiogroup', {
+      name: 'Match format',
+    })
+  }
+
+  get radioGroupLabel(): HTMLElement {
+    return within(this.radioCard).getByText('Match format')
+  }
+
+  // The group's radio labelled `name`, so finding it proves the label is
+  // associated with it.
+  radio(name: string): HTMLElement {
+    return within(this.radioGroup).getByRole('radio', { name })
+  }
 }

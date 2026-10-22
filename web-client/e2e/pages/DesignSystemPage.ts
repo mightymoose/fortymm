@@ -20,6 +20,8 @@ export class DesignSystemPage {
   readonly otpInput: Locator
   readonly activeOtpCell: Locator
   readonly checkboxCard: Locator
+  readonly radioCard: Locator
+  readonly radioGroup: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -55,6 +57,12 @@ export class DesignSystemPage {
     this.activeOtpCell = this.otpCard.locator('.otp-cell--active')
     this.checkboxCard = this.formsSection.getByRole('article', {
       name: 'Checkbox',
+    })
+    this.radioCard = this.formsSection.getByRole('article', {
+      name: 'Radio Group',
+    })
+    this.radioGroup = this.radioCard.getByRole('radiogroup', {
+      name: 'Match format',
     })
   }
 
@@ -107,6 +115,28 @@ export class DesignSystemPage {
   // click() would wait on until it's enabled.
   async clickCheckboxLabel(name: string): Promise<void> {
     const text = this.checkboxCard.getByText(name, { exact: true })
+    await text.scrollIntoViewIfNeeded()
+    const box = (await text.boundingBox())!
+    await this.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+  }
+
+  // The Radio Group card's radio labelled `name`.
+  radio(name: string): Locator {
+    return this.radioGroup.getByRole('radio', { name })
+  }
+
+  // The dot that draws the radio labelled `name`.
+  radioDot(name: string): Locator {
+    return this.radioCard
+      .locator('label', { hasText: name })
+      .locator('.radio-dot')
+  }
+
+  // Clicks the radio labelled `name` the way a user does: on its label's
+  // text (the input itself is visually hidden), with a plain mouse click, as
+  // clickCheckboxLabel() does.
+  async clickRadioLabel(name: string): Promise<void> {
+    const text = this.radioCard.getByText(name, { exact: true })
     await text.scrollIntoViewIfNeeded()
     const box = (await text.boundingBox())!
     await this.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)

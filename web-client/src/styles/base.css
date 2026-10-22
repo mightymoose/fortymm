@@ -446,7 +446,7 @@ h4, .h4 {
 }
 
 /* The text controls, .input and .textarea, share their look and states, and
-   .otp's cells and .checkbox's box (below) share the states. */
+   .otp's cells, .checkbox's box and .radio's dot (below) share the states. */
 .input, .textarea {
   font-family: var(--font-ui);
   font-size: 14px;
@@ -477,14 +477,16 @@ h4, .h4 {
 }
 
 .input:focus, .textarea:focus, .otp-cell.otp-cell--active,
-.checkbox-input:focus-visible + .checkbox-box {
+.checkbox-input:focus-visible + .checkbox-box,
+.radio-input:focus-visible + .radio-dot {
   outline: none;
   border-color: var(--ball-500);
   box-shadow: 0 0 0 3px rgb(from var(--ball-500) r g b / 0.15);
 }
 
 .input:disabled, .textarea:disabled, .otp-input:disabled ~ .otp-cell,
-.checkbox:has(> .checkbox-input:disabled) {
+.checkbox:has(> .checkbox-input:disabled),
+.radio:has(> .radio-input:disabled) {
   opacity: 0.5;
 }
 
@@ -492,7 +494,8 @@ h4, .h4 {
    tech is told. */
 .input[aria-invalid="true"], .textarea[aria-invalid="true"],
 .otp-input[aria-invalid="true"] ~ .otp-cell,
-.checkbox-input[aria-invalid="true"] + .checkbox-box {
+.checkbox-input[aria-invalid="true"] + .checkbox-box,
+.radio-input[aria-invalid="true"] + .radio-dot {
   border-color: var(--loss);
 }
 
@@ -621,6 +624,66 @@ h4, .h4 {
 .checkbox-input:checked:not(:indeterminate) + .checkbox-box .checkbox-check,
 .checkbox-input:indeterminate + .checkbox-box .checkbox-dash {
   display: block;
+}
+
+/* =========================================================================
+   Radio group (the reference kit's .radio-group, .radio, .dot and .radio.on):
+   a column of <label>s, each holding a visually hidden .radio-input, the
+   .radio-dot that draws it, and the label text. The dot takes the text
+   controls' focus ring (keyboard focus only), aria-invalid border and
+   disabled opacity (all above; the disabled one fades the whole label, text
+   included).
+   ========================================================================= */
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  /* Holds the absolutely positioned input. */
+  position: relative;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  /* The kit's label inherits the body's line height and color. */
+  line-height: var(--lh-normal);
+  color: var(--fg-1);
+}
+
+.radio:has(> .radio-input:disabled) {
+  cursor: not-allowed;
+}
+
+.radio-dot {
+  /* Keeps its size beside label text that wraps. */
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid var(--border-default);
+  background: var(--ink-900);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Selected. :where() keeps this below the shared focus and aria-invalid
+   rules above, so an invalid dot keeps its error border. */
+.radio-input:where(:checked) + .radio-dot {
+  border-color: var(--ball-500);
+}
+
+/* The selected mark, centred by the dot's flex centring. */
+.radio-input:checked + .radio-dot::after {
+  content: '';
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--ball-500);
 }
 
 /* =========================================================================

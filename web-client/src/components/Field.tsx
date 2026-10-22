@@ -27,6 +27,7 @@ export function Field({
   const field = useMemo(
     () => ({
       controlId: `${id}-control`,
+      labelId: `${id}-label`,
       helpId: `${id}-help`,
       hasHelp,
       setHasHelp,
@@ -49,6 +50,7 @@ export function Label({ className, children, ...props }: ComponentProps<'label'>
   const field = useField()
   return (
     <label
+      id={field?.labelId}
       htmlFor={field?.controlId}
       className={className ? `field-label ${className}` : 'field-label'}
       {...props}

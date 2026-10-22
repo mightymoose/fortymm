@@ -26,6 +26,7 @@ export class ReferenceKitPage {
   readonly textarea: Locator
   readonly otpCard: Locator
   readonly checkboxCard: Locator
+  readonly radioCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -75,6 +76,13 @@ export class ReferenceKitPage {
       has: page.getByRole('heading', {
         level: 3,
         name: 'Checkbox',
+        exact: true,
+      }),
+    })
+    this.radioCard = this.formsSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Radio Group',
         exact: true,
       }),
     })

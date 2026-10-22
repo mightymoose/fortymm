@@ -4,6 +4,9 @@ import { createContext, useContext } from 'react'
 // help text together, and the field's state.
 export type FieldContextValue = {
   controlId: string
+  // The Label's id, for a control that can't be named by `<label for>`
+  // (e.g. a RadioGroup, named with aria-labelledby).
+  labelId: string
   helpId: string
   // Whether a FieldHelp is rendered, so the control is only described by
   // help text that exists.

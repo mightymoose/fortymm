@@ -184,4 +184,36 @@ describe('DesignSystem', () => {
     expect(disabled).not.toBeChecked()
     expect(disabled).toBeDisabled()
   })
+
+  it('shows the Radio Group card after the Checkbox card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.radioCardHeading).toHaveTextContent('Radio Group')
+    expect(designSystemPage.radioCard).toHaveTextContent('single-select')
+    expect(
+      designSystemPage.checkboxCard.compareDocumentPosition(
+        designSystemPage.radioCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('shows a match format group with the first option selected', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.radioGroupLabel).toHaveClass('visually-hidden')
+    const options = [
+      'Singles · best of 5',
+      'Singles · best of 7',
+      'Doubles · best of 5',
+    ].map((name) => designSystemPage.radio(name))
+    expect(options[0]).toBeChecked()
+    expect(options[1]).not.toBeChecked()
+    expect(options[2]).not.toBeChecked()
+    const name = options[0].getAttribute('name')
+    expect(name).toBeTruthy()
+    for (const option of options) {
+      expect(option).toBeEnabled()
+      expect(option).toHaveAttribute('name', name)
+    }
+  })
 })
