@@ -1,0 +1,56 @@
+name: Preview cleanup
+
+# GitHub runs delete-event workflows from the default branch, so this checks
+# out main, not the deleted branch.
+on: delete
+
+permissions:
+  contents: read
+  # Lets google-github-actions/auth exchange the job's OIDC token for Google
+  # credentials (Workload Identity Federation).
+  id-token: write
+
+# ci.yml's group for the deleted branch, so this waits for a CI run that's
+# still deploying (and cancels one that's pending) rather than letting it
+# recreate the Previews afterwards.
+concurrency:
+  group: ci-refs/heads/${{ github.event.ref }}
+
+jobs:
+  cleanup:
+    # For delete events github.event.ref is the short branch (or tag) name.
+    if: ${{ github.event.ref_type == 'branch' && github.event.ref != 'main' }}
+    runs-on: ubuntu-24.04
+    env:
+      GCP_CONFIGURED: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && vars.GCP_SERVICE_ACCOUNT != '' }}
+      BRANCH: ${{ github.event.ref }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Authenticate to Google Cloud
+        if: ${{ env.GCP_CONFIGURED == 'true' }}
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        if: ${{ env.GCP_CONFIGURED == 'true' }}
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Skip the API Preview cleanup
+        if: ${{ env.GCP_CONFIGURED != 'true' }}
+        run: echo "::warning::GCP_WORKLOAD_IDENTITY_PROVIDER and GCP_SERVICE_ACCOUNT aren't set, so the API Preview tag isn't removed. See api/deploy/README.md."
+
+      - name: Remove the Cloud Run Preview tag
+        if: ${{ env.GCP_CONFIGURED == 'true' }}
+        run: ./bin/mise run api:preview-delete "$BRANCH"
+
+      # Runs even if the API step failed, so one Preview's failure doesn't
+      # leave the other behind.
+      - name: Delete the Cloudflare Preview
+        if: ${{ !cancelled() }}
+        run: ./bin/mise run web-client:preview-delete "$BRANCH"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
