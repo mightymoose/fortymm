@@ -340,6 +340,50 @@ describe('DesignSystem', () => {
     ).toBeTruthy()
   })
 
+  it('shows the Toggle card after the Date Picker card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.toggleCardHeading).toHaveTextContent(
+      'Toggle · Toggle Group',
+    )
+    expect(designSystemPage.toggleCard).toHaveTextContent('single + multi')
+    expect(
+      designSystemPage.datePickerCard.compareDocumentPosition(
+        designSystemPage.toggleCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's toggles: Bold pressed, Italic not, then a separator and the group with Singles chosen", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.toggle('Bold')).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(designSystemPage.toggle('Bold')).toHaveTextContent('B')
+    expect(designSystemPage.toggle('Italic')).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+    expect(designSystemPage.toggle('Italic')).toHaveTextContent('I')
+    expect(designSystemPage.toggleSeparator).toHaveAttribute(
+      'aria-orientation',
+      'vertical',
+    )
+    const items = designSystemPage.toggleGroupItems
+    expect(items.map((item) => item.textContent)).toEqual([
+      'Singles',
+      'Doubles',
+      'Mixed',
+    ])
+    expect(items.map((item) => item.getAttribute('aria-checked'))).toEqual([
+      'true',
+      'false',
+      'false',
+    ])
+  })
+
   describe('on April 14, 2026', () => {
     afterEach(() => {
       vi.useRealTimers()

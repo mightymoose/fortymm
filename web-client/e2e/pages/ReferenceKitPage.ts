@@ -32,6 +32,7 @@ export class ReferenceKitPage {
   readonly selectCard: Locator
   readonly comboboxCard: Locator
   readonly datePickerCard: Locator
+  readonly toggleCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -111,6 +112,13 @@ export class ReferenceKitPage {
       has: page.getByRole('heading', {
         level: 3,
         name: 'Date Picker',
+        exact: true,
+      }),
+    })
+    this.toggleCard = this.formsSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Toggle · Toggle Group',
         exact: true,
       }),
     })

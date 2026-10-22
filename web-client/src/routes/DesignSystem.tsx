@@ -14,6 +14,8 @@ import { Select } from '../components/Select'
 import { Slider } from '../components/Slider'
 import { Switch } from '../components/Switch'
 import { Textarea } from '../components/Textarea'
+import { Toggle } from '../components/Toggle'
+import { ToggleGroup, ToggleGroupItem } from '../components/ToggleGroup'
 import { plainDate } from '../components/plainDate'
 
 // The Combobox card's players. The reference shows the three that "ngu"
@@ -183,6 +185,23 @@ export function DesignSystem() {
               className="date-picker-demo"
             />
           </Field>
+        </ComponentCard>
+        <ComponentCard title="Toggle · Toggle Group" tag="single + multi">
+          {/* The reference shows no labels. B and I are symbols, so an
+              aria-label names each toggle by what it does, and one names
+              the group. */}
+          <div className="row">
+            <Toggle aria-label="Bold" defaultPressed>
+              B
+            </Toggle>
+            <Toggle aria-label="Italic">I</Toggle>
+            <span className="sep-v" role="separator" aria-orientation="vertical" />
+            <ToggleGroup aria-label="Match type" defaultValue="singles">
+              <ToggleGroupItem value="singles">Singles</ToggleGroupItem>
+              <ToggleGroupItem value="doubles">Doubles</ToggleGroupItem>
+              <ToggleGroupItem value="mixed">Mixed</ToggleGroupItem>
+            </ToggleGroup>
+          </div>
         </ComponentCard>
       </Section>
     </>
