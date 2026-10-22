@@ -5,6 +5,13 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>FortyMM</title>
+    <!-- The app's background (--ink-950) before its CSS loads, so the first
+         paint isn't white. -->
+    <style>
+      html {
+        background: #0b0d12;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

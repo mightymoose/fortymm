@@ -187,20 +187,22 @@ options, one function per request, each taking the typed client, e.g.
 throws when the response has no data. `createAppRouter()` puts the client in
 the router context as `api` and wraps the router in a `QueryClientProvider`.
 On a full page load, the root layout
-(`src/routes/Root.tsx`) suspends until `/v1/health` answers. Root shows the
-loading screen over it until then. Then the page renders under the loading
-screen, which fades out (`.loading-screen-leaving`) and removes itself when
-the fade ends. jsdom runs no CSS animations, so `renderRoute` and the
-`HomePage` page object end the fade themselves. Root stays mounted on
-client-side navigation, so it doesn't show the loading screen again. If health
+(`src/routes/Root.tsx`) suspends until `/v1/health` answers.
+`LoadingScreen` covers it if that takes more than `SHOW_AFTER_MS` (300ms), so
+a fast load shows the page with no loading screen. Once shown, the loading
+screen stays up for at least `MIN_SHOWN_MS` (900ms, one bounce). Then the page
+renders under it, and it fades out (`.loading-screen-leaving`) and removes
+itself when the fade ends. jsdom runs no CSS animations, so the `HomePage`
+page object ends the fade itself. Root stays mounted on client-side
+navigation, so it doesn't show the loading screen again. If health
 fails after the default retries, the router's default error component shows.
 
 ### Tests
 
 Vitest is configured in the `test` block of `web-client/vite.config.ts` (jsdom
-environment). `web-client/src/setupTests.ts` loads the jest-dom matchers, starts
-the mock API, and cleans up rendered components after each test. Tests live next to the code as
-`*.test.tsx`.
+environment). `web-client/src/setupTests.ts` loads the jest-dom matchers,
+starts the mock API, and cleans up rendered components after each test. Tests
+live next to the code as `*.test.tsx`.
 
 Tests go through page objects in `web-client/src/test/pages/`. A static async
 `render()` renders the app's router at the page's path (via

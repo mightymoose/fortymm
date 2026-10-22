@@ -9,11 +9,48 @@ const STATUS_STEPS = [
 
 const STATUS_STEP_MS = 1800
 
-// The full-screen FortyMM loading screen: a ball bouncing on a table surface,
-// the wordmark and a status line that moves through STATUS_STEPS. Styled by
-// `.loading-screen` in styles/base.css. Once `leaving`, it fades out and then
-// calls `onLeft`.
-export function LoadingScreen({
+// A page that's ready this soon after the app starts shows without the
+// loading screen, so a fast load doesn't flash it.
+export const SHOW_AFTER_MS = 300
+
+// Once shown, the loading screen stays up for at least one bounce of the ball
+// (`--loading-screen-bounce-duration` in styles/base.css).
+export const MIN_SHOWN_MS = 900
+
+// How far the timers have got. waiting: not shown yet, and never shown if
+// the page is ready first. shown: up for less than MIN_SHOWN_MS. held: up for
+// MIN_SHOWN_MS, so it fades out as soon as the page is ready.
+type Stage = 'waiting' | 'shown' | 'held'
+
+// The full-screen FortyMM loading screen, shown over the page until it's
+// `ready`: a ball bouncing on a table surface, the wordmark and a status line
+// that moves through STATUS_STEPS. Styled by `.loading-screen` in
+// styles/base.css.
+export function LoadingScreen({ ready }: { ready: boolean }) {
+  const [stage, setStage] = useState<Stage>('waiting')
+  const [faded, setFaded] = useState(false)
+
+  useEffect(() => {
+    if (stage === 'waiting' && !ready) {
+      const id = setTimeout(() => setStage('shown'), SHOW_AFTER_MS)
+      return () => clearTimeout(id)
+    }
+    if (stage === 'shown') {
+      const id = setTimeout(() => setStage('held'), MIN_SHOWN_MS)
+      return () => clearTimeout(id)
+    }
+  }, [stage, ready])
+
+  if (stage === 'waiting' || faded) return null
+  return (
+    <LoadingScreenView
+      leaving={stage === 'held' && ready}
+      onLeft={() => setFaded(true)}
+    />
+  )
+}
+
+function LoadingScreenView({
   leaving,
   onLeft,
 }: {
