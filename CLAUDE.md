@@ -75,6 +75,14 @@ as the `playwright-traces` artifact and posts (or updates) a comment linking
 it on the commit's open PR. It runs one at a time per branch, so deploys land
 in push order.
 
+The deploys are recorded as GitHub deployments (`actions/github-script`, no
+job-level `environment:`), so they show in the repo's and the PR's
+Deployments panel: `main` in the `production` environment linking to
+`https://fortymm.com`, any other branch in a transient `Preview (<branch>)`
+environment linking to its Cloudflare Preview URL. A deployment whose deploy
+or post-deploy check fails is marked failed, and its description carries the
+API's URL.
+
 ## References
 
 `references/` holds reference material that isn't built or deployed (see
