@@ -232,6 +232,25 @@ test.describe('on a phone', () => {
       card.x + card.width - 32,
     )
   })
+
+  // Two columns would leave each input too narrow for its placeholder, so
+  // the fields stack, each as wide as the card's content.
+  test("the input card's fields stack", async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+    const card = (await designSystemPage.inputCard.boundingBox())!
+    const fields = await designSystemPage.inputCardFields.all()
+    expect(fields).toHaveLength(4)
+
+    let previousBottom = -Infinity
+    for (const field of fields) {
+      const box = (await field.boundingBox())!
+      // Inside the card's 1px border and 32px padding on each side.
+      expect(box.x).toBeCloseTo(card.x + 33, 0)
+      expect(box.width).toBeCloseTo(card.width - 66, 0)
+      expect(box.y).toBeGreaterThanOrEqual(previousBottom)
+      previousBottom = box.y + box.height
+    }
+  })
 })
 
 // Focuses a text control and returns the area to screenshot: the control plus
