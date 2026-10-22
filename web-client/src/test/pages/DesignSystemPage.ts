@@ -94,4 +94,18 @@ export class DesignSystemPage {
   get otpLabel(): HTMLElement {
     return within(this.otpCard).getByText('Verification code')
   }
+
+  get checkboxCard(): HTMLElement {
+    return within(this.formsSection).getByRole('article', { name: 'Checkbox' })
+  }
+
+  get checkboxCardHeading(): HTMLElement {
+    return within(this.checkboxCard).getByRole('heading', { level: 3 })
+  }
+
+  // The checkbox labelled `name`, so finding it proves the label is
+  // associated with it.
+  checkbox(name: string): HTMLElement {
+    return within(this.checkboxCard).getByRole('checkbox', { name })
+  }
 }

@@ -1,4 +1,5 @@
 import { Button } from '../components/Button'
+import { Checkbox } from '../components/Checkbox'
 import { ComponentCard } from '../components/ComponentCard'
 import { Field, FieldHelp, Label } from '../components/Field'
 import { Input } from '../components/Input'
@@ -88,6 +89,13 @@ export function DesignSystem() {
             <Label className="visually-hidden">Verification code</Label>
             <OtpInput defaultValue="40MM" activeIndex={3} />
           </Field>
+        </ComponentCard>
+        <ComponentCard title="Checkbox" tag="3 states">
+          <div className="col">
+            <Checkbox defaultChecked>I agree to the rules of fair play</Checkbox>
+            <Checkbox>Email me match invites</Checkbox>
+            <Checkbox disabled>Disabled option</Checkbox>
+          </div>
         </ComponentCard>
       </Section>
     </>
