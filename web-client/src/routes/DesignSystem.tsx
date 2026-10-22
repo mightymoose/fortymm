@@ -6,6 +6,7 @@ import { Input } from '../components/Input'
 import { OtpInput } from '../components/OtpInput'
 import { PageHeader } from '../components/PageHeader'
 import { PageIntro } from '../components/PageIntro'
+import { Radio, RadioGroup } from '../components/RadioGroup'
 import { Section } from '../components/Section'
 import { Textarea } from '../components/Textarea'
 
@@ -96,6 +97,18 @@ export function DesignSystem() {
             <Checkbox>Email me match invites</Checkbox>
             <Checkbox disabled>Disabled option</Checkbox>
           </div>
+        </ComponentCard>
+        <ComponentCard title="Radio Group" tag="single-select">
+          {/* The reference shows no group label, so this one is only for
+              screen readers. */}
+          <Field>
+            <Label className="visually-hidden">Match format</Label>
+            <RadioGroup defaultValue="singles-5">
+              <Radio value="singles-5">Singles · best of 5</Radio>
+              <Radio value="singles-7">Singles · best of 7</Radio>
+              <Radio value="doubles-5">Doubles · best of 5</Radio>
+            </RadioGroup>
+          </Field>
         </ComponentCard>
       </Section>
     </>

@@ -232,6 +232,115 @@ test.describe('Checkbox', () => {
   })
 })
 
+// Nothing is hovered, focused or clicked first, so these show the dots'
+// resting styles, with no focus ring.
+test.describe('Radio Group card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.radioCard).toHaveScreenshot(
+      'radio-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.radioCard).toHaveScreenshot(
+      'radio-card.png',
+    )
+  })
+})
+
+// The kit's radios are static, with no focus style, so the tests below are
+// the app's alone.
+test.describe('Radio Group', () => {
+  test('clicking a label selects its option', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+    const best5 = designSystemPage.radio('Singles · best of 5')
+    const doubles = designSystemPage.radio('Doubles · best of 5')
+    await expect(best5).toBeChecked()
+    await expect(doubles).not.toBeChecked()
+
+    await designSystemPage.clickRadioLabel('Doubles · best of 5')
+
+    await expect(doubles).toBeChecked()
+    await expect(best5).not.toBeChecked()
+  })
+
+  // Tab goes to the selected option and shows the text controls' focus ring
+  // on its dot; the group is one Tab stop.
+  test('keyboard focus shows the focus ring', async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const best5 = designSystemPage.radio('Singles · best of 5')
+    const dot = designSystemPage.radioDot('Singles · best of 5')
+    await designSystemPage.checkbox('Email me match invites').focus()
+
+    await page.keyboard.press('Tab')
+
+    await expect(best5).toBeFocused()
+    await expect(dot).toHaveCSS('border-color', 'rgb(255, 122, 26)')
+    await expect(dot).toHaveCSS(
+      'box-shadow',
+      'color(srgb 1 0.478431 0.101961 / 0.15) 0px 0px 0px 3px',
+    )
+    await expect(designSystemPage.radioDot('Singles · best of 7')).toHaveCSS(
+      'box-shadow',
+      'none',
+    )
+
+    // The next Tab leaves the group rather than going to its next option.
+    await page.keyboard.press('Tab')
+    await expect(designSystemPage.radioGroup.locator(':focus')).toHaveCount(0)
+  })
+
+  test('the arrow keys move the selection and the focus', async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const best5 = designSystemPage.radio('Singles · best of 5')
+    const best7 = designSystemPage.radio('Singles · best of 7')
+    const doubles = designSystemPage.radio('Doubles · best of 5')
+    await best5.focus()
+
+    await page.keyboard.press('ArrowDown')
+    await expect(best7).toBeChecked()
+    await expect(best7).toBeFocused()
+    await expect(best5).not.toBeChecked()
+    await expect(designSystemPage.radioDot('Singles · best of 7')).toHaveCSS(
+      'box-shadow',
+      'color(srgb 1 0.478431 0.101961 / 0.15) 0px 0px 0px 3px',
+    )
+
+    await page.keyboard.press('ArrowDown')
+    await expect(doubles).toBeChecked()
+    await expect(doubles).toBeFocused()
+
+    await page.keyboard.press('ArrowUp')
+    await expect(best7).toBeChecked()
+    await expect(best7).toBeFocused()
+  })
+
+  // A mouse click focuses the input too, but only keyboard focus shows the
+  // ring.
+  test('a click shows no focus ring', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+    const best7 = designSystemPage.radio('Singles · best of 7')
+
+    await designSystemPage.clickRadioLabel('Singles · best of 7')
+
+    await expect(best7).toBeFocused()
+    await expect(designSystemPage.radioDot('Singles · best of 7')).toHaveCSS(
+      'box-shadow',
+      'none',
+    )
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
