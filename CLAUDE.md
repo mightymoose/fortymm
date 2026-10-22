@@ -17,9 +17,9 @@ global `mise` install isn't required.
 ./bin/mise run list-ports   # print the host ports of everything running
 ```
 
-`up` starts the API (`api:dev`) and the web-client dev server, which proxies
-`/api/*` to it. To add a service, add its task to `depends` on `[tasks.up]` in
-`mise.toml` (mise runs those in parallel).
+`up` starts the API (`api:dev`), its Postgres database and the web-client dev
+server, which proxies `/api/*` to the API. To add a service, add its task to
+`depends` on `[tasks.up]` in `mise.toml` (mise runs those in parallel).
 
 Publish ports without a host side (e.g. `ports: ["5173"]` in `compose.yaml`)
 so Docker picks a free one and several checkouts can run at once.
@@ -47,7 +47,8 @@ then removes the stack's containers. The `dev` service stays up by running
 `sleep infinity`, and its healthcheck passes once the entrypoint has installed
 the container's tools, so `--wait` returns only when commands can be exec'd.
 The `api` service's healthcheck is a request to `/v1/ping`, so `--wait` also
-blocks until the API answers. To add a project's checks, call its
+blocks until the API answers. The `api` service starts after the `postgres`
+service is healthy (`pg_isready`). To add a project's checks, call its
 `<project>:ci` task from `[tasks.ci]`.
 
 `api:ci` runs `uv sync --locked`, ruff (lint and format), mypy and pytest in
@@ -106,6 +107,15 @@ through FastAPI's `TestClient`).
 - `v1/`: the `/v1` routes, one module per resource, each with its own
   `APIRouter` and Pydantic request/response models; `v1/__init__.py` mounts
   them. Annotate route return types with the response model.
+- `database.py`: the Postgres connections. If `DATABASE_URL` is set,
+  `create_app()` makes a psycopg `ConnectionPool` and opens it in the app's
+  lifespan. A route takes a connection from it with a `DatabaseConnection`
+  parameter. `DATABASE_URL` is optional off Cloud Run, so `api:smoke` and the
+  OpenAPI export run with no database. On Cloud Run, `create_app()` raises
+  without it.
+- `/v1/health` runs `SELECT 1` and returns `{"data": {"database": "ok"}}`.
+  `/v1/ping` doesn't touch the database, so the healthchecks and the 403
+  check use it.
 - Response bodies follow JSON:API's top-level shape: the payload goes under
   `data` (e.g. `/v1/ping` returns `{"data": "pong"}`), so each response model
   has a `data` field rather than naming the payload itself.
@@ -115,6 +125,13 @@ with no published port: the web-client dev server proxies `/api/*` to it with
 the prefix stripped, so `/v1/ping` is at
 `http://localhost:<web-client port>/api/v1/ping` and the interactive docs at
 `/api/docs`. Its virtualenv lives in the `api-venv` volume.
+
+The database is the `postgres` Compose service (`postgres:18`, the same major
+version as Cloud SQL), with user, password and database all `fortymm`. Its
+data lives in the `postgres-data` volume. The `api` service gets
+`DATABASE_URL` pointing at it. Port 5432 is published on a free host port,
+which `list-ports` prints. `api:test` starts `postgres` first, and the tests
+use the real database.
 
 ```sh
 ./bin/mise run api:dev       # start the API and stream its logs
@@ -211,9 +228,10 @@ report in `web-client/playwright-report/`.
 `web-client/e2e/deployed/` is a separate suite, run against a deployment
 rather than the dev server, that checks the Worker, the assets and the API
 are wired together: `/api/v1/ping`, `/api/openapi.json` and `/api/docs` come
-from the API, an unknown `/api/*` path gets the API's JSON 404 rather than
-the SPA's `index.html` (so `run_worker_first` works), and `/` and
-`/design-system` load the app (so the assets and the SPA fallback work). The
+from the API, `/api/v1/health` reaches the database, an unknown `/api/*` path
+gets the API's JSON 404 rather than the SPA's `index.html` (so
+`run_worker_first` works), and `/` and `/design-system` load the app (so the
+assets and the SPA fallback work). The
 main config ignores it; `web-client/playwright.deployed.config.ts` runs it,
 with `baseURL` from `PLAYWRIGHT_BASE_URL` (it fails fast without one) and no
 screenshot tests. Its `ready` project retries the ping for up to a minute
@@ -386,9 +404,10 @@ image, push it to Artifact Registry as
 `us-central1-docker.pkg.dev/fortymm/fortymm/api:<commit>`, and run
 `gcloud run deploy` through `api/deploy/cloud-run-deploy`, which holds the
 service settings: min instances 0 (scale to zero), max 3 (1 for Previews),
-1 CPU, 256 MiB, unauthenticated access, running as the `api-runtime`
-service account, with the Worker secret as `WORKER_SECRET`. They need
-`gcloud` logged in as an account that can deploy, and Docker.
+1 CPU, 256 MiB, unauthenticated access, with the Worker secret as
+`WORKER_SECRET` and the Cloud SQL database (see below). Production runs as
+the `api-runtime` service account, and Previews as `api-preview-runtime`.
+They need `gcloud` logged in as an account that can deploy, and Docker.
 
 - `api:deploy` deploys the `api` service, and the new revision takes all its
   traffic.
@@ -403,6 +422,23 @@ service account, with the Worker secret as `WORKER_SECRET`. They need
   revision stays, untagged and with no traffic. Cloud Run keeps a limited
   number of revisions per service, and an idle revision costs nothing, so
   nothing deletes revisions.
+
+#### The database
+
+The API's database is the Cloud SQL instance `fortymm` (Postgres 18,
+Enterprise edition, `db-f1-micro`, 10 GB SSD) in the same region.
+`cloud-run-deploy` mounts it with `--add-cloudsql-instances` and sets
+`DATABASE_URL` to its Unix socket. libpq reads the password from
+`PGPASSWORD`, which Cloud Run sets from a secret at `latest`:
+
+| Target | Database | User | Password secret | Runs as |
+| --- | --- | --- | --- | --- |
+| `api` | `fortymm` | `api` | `api-database-password` | `api-runtime` |
+| `api-preview` | `fortymm_preview` | `api_preview` | `api-preview-database-password` | `api-preview-runtime` |
+
+Every Preview shares `fortymm_preview`. Only the matching runtime service
+account can read each password secret, so branch code can't read
+production's password. The instance costs about $9-10 a month and never scales to zero.
 
 #### The Worker secret
 
@@ -449,11 +485,13 @@ images older than 30 days except the 10 newest and the one tagged
 `production`, which `cloud-run-deploy` moves to each production deploy.
 
 The one-time GCP setup (enabling the APIs, the Artifact Registry repository,
-the service accounts and their roles, the Workload Identity pool and provider
-for `mightymoose/fortymm`, the Worker secret, the budget) is
+the service accounts and their roles, the Worker secret, the Cloud SQL
+instance with its databases, users and password secrets, the Workload
+Identity pool and provider for `mightymoose/fortymm`, the budget) is
 `api/deploy/bootstrap-gcp.sh`, run once by a project owner; it prints the
 variables to set. `api/deploy/README.md` describes it step by step.
 
 The budget `FortyMM (fortymm)` covers the project's monthly spend. Google
 Cloud emails the billing account's admins and users when the spend passes
-$10 and $25.
+$10 and $25. The Cloud SQL instance alone costs about $9-10 a month, so the
+$10 alert will likely fire most months.

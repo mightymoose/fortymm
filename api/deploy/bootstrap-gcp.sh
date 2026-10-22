@@ -23,12 +23,15 @@ github_repo=mightymoose/fortymm
 registry_repo=fortymm   # Artifact Registry repository; the image is <repo>/api
 deployer=github-deployer
 runtime=api-runtime
+preview_runtime=api-preview-runtime
 pool=github
 provider=github
 worker_secret=api-worker-secret
+sql_instance=fortymm
 
 deployer_sa="$deployer@$project.iam.gserviceaccount.com"
 runtime_sa="$runtime@$project.iam.gserviceaccount.com"
+preview_runtime_sa="$preview_runtime@$project.iam.gserviceaccount.com"
 gc() { gcloud --project "$project" --quiet "$@"; }
 
 apis=(
@@ -39,6 +42,8 @@ apis=(
   sts.googleapis.com
   secretmanager.googleapis.com
   billingbudgets.googleapis.com
+  sqladmin.googleapis.com
+  sql-component.googleapis.com
 )
 echo "Enabling APIs in $project..."
 gc services enable "${apis[@]}"
@@ -53,6 +58,7 @@ api_ready() {
     iam.googleapis.com)
       gc iam service-accounts list && gc iam workload-identity-pools list --location global ;;
     secretmanager.googleapis.com) gc secrets list ;;
+    sqladmin.googleapis.com) gc sql instances list ;;
     billingbudgets.googleapis.com)
       # Without a billing account there's nothing to poll. The budget step
       # reports it.
@@ -63,6 +69,8 @@ api_ready() {
         --billing-project "$project" --quiet ;;
     # Only CI's Workload Identity login uses these.
     iamcredentials.googleapis.com | sts.googleapis.com) ;;
+    # Only `gcloud run deploy --add-cloudsql-instances` checks that it's on.
+    sql-component.googleapis.com) ;;
     *) echo "No readiness check for $1."; return 2 ;;
   esac
 }
@@ -128,9 +136,17 @@ gc artifacts repositories set-cleanup-policies "$registry_repo" --location "$reg
 echo "Creating the service accounts..."
 gc iam service-accounts describe "$deployer_sa" >/dev/null 2>&1 ||
   gc iam service-accounts create "$deployer" --display-name "GitHub Actions deployer ($github_repo)"
-# The API runs as this account. Its only grant is reading the Worker secret.
+# Production runs as $runtime_sa and the Previews as $preview_runtime_sa, so
+# branch code can't read production's database password. Each can connect to
+# Cloud SQL and read the Worker secret and its own password.
 gc iam service-accounts describe "$runtime_sa" >/dev/null 2>&1 ||
   gc iam service-accounts create "$runtime" --display-name "FortyMM API (Cloud Run)"
+gc iam service-accounts describe "$preview_runtime_sa" >/dev/null 2>&1 ||
+  gc iam service-accounts create "$preview_runtime" --display-name "FortyMM API Previews (Cloud Run)"
+for sa in "$runtime_sa" "$preview_runtime_sa"; do
+  gc projects add-iam-policy-binding "$project" \
+    --member "serviceAccount:$sa" --role roles/cloudsql.client --condition None >/dev/null
+done
 
 echo "Granting the deployer its roles..."
 for role in roles/run.admin roles/artifactregistry.writer; do
@@ -141,9 +157,11 @@ done
 # which roles/artifactregistry.writer can't do.
 gc artifacts repositories add-iam-policy-binding "$registry_repo" --location "$region" \
   --member "serviceAccount:$deployer_sa" --role roles/artifactregistry.repoAdmin >/dev/null
-# Deploying a service that runs as $runtime_sa means acting as it.
-gc iam service-accounts add-iam-policy-binding "$runtime_sa" \
-  --member "serviceAccount:$deployer_sa" --role roles/iam.serviceAccountUser >/dev/null
+# Deploying a service that runs as a runtime account means acting as it.
+for sa in "$runtime_sa" "$preview_runtime_sa"; do
+  gc iam service-accounts add-iam-policy-binding "$sa" \
+    --member "serviceAccount:$deployer_sa" --role roles/iam.serviceAccountUser >/dev/null
+done
 
 echo "Creating the Worker secret $worker_secret..."
 # The API requires it in the X-FortyMM-Worker-Secret header, which only the
@@ -153,13 +171,61 @@ gc secrets describe "$worker_secret" >/dev/null 2>&1 ||
   openssl rand -hex 32 | tr -d '\n' |
   gc secrets create "$worker_secret" --replication-policy automatic --data-file=- >/dev/null
 # The API reads it at start, and CI reads it to deploy the Worker.
-for sa in "$runtime_sa" "$deployer_sa"; do
+for sa in "$runtime_sa" "$preview_runtime_sa" "$deployer_sa"; do
   gc secrets add-iam-policy-binding "$worker_secret" \
     --member "serviceAccount:$sa" --role roles/secretmanager.secretAccessor >/dev/null
 done
 # Lets CI list the versions, to pin the newest one for both deploys.
 gc secrets add-iam-policy-binding "$worker_secret" \
   --member "serviceAccount:$deployer_sa" --role roles/secretmanager.viewer >/dev/null
+
+echo "Creating the Cloud SQL instance $sql_instance..."
+# Postgres 16 and later default to the Enterprise Plus edition, which costs
+# far more and has no shared-core tiers such as db-f1-micro.
+gc sql instances describe "$sql_instance" >/dev/null 2>&1 ||
+  gc sql instances create "$sql_instance" --database-version POSTGRES_18 \
+    --edition ENTERPRISE --tier db-f1-micro --region "$region" --storage-size 10 --async >/dev/null
+# Creating it takes about 15 minutes. Wait here, so a re-run after an
+# interrupted create also waits, instead of failing on the databases below.
+while :; do
+  state=$(gc sql instances describe "$sql_instance" --format 'value(state)')
+  [ "$state" != RUNNABLE ] || break
+  if [ "$state" != PENDING_CREATE ]; then
+    echo "$sql_instance is $state, not RUNNABLE. See the Cloud SQL console." >&2
+    exit 1
+  fi
+  echo "  $sql_instance is $state ($(date +%H:%M:%S)), checking again in 30 seconds..."
+  sleep 30
+done
+
+echo "Creating the databases and their users..."
+# Production and the Previews share the instance, each with its own
+# database, user and password secret, read only by its runtime account.
+for db in "fortymm api api-database-password $runtime_sa" \
+  "fortymm_preview api_preview api-preview-database-password $preview_runtime_sa"; do
+  read -r db_name db_user db_secret db_sa <<<"$db"
+  gc sql databases describe "$db_name" --instance "$sql_instance" >/dev/null 2>&1 ||
+    gc sql databases create "$db_name" --instance "$sql_instance" >/dev/null
+  # Never regenerate an existing password: the running API reads it. tr drops
+  # openssl's newline, which Cloud Run would keep in PGPASSWORD.
+  gc secrets describe "$db_secret" >/dev/null 2>&1 ||
+    openssl rand -hex 32 | tr -d '\n' |
+    gc secrets create "$db_secret" --replication-policy automatic --data-file=- >/dev/null
+  # Set the user's password from the secret, so the two converge even if
+  # either was changed by hand.
+  password=$(gc secrets versions access latest --secret "$db_secret")
+  # Listed first, not piped, so a failed list stops the script instead of
+  # reading as a missing user.
+  users=$(gc sql users list --instance "$sql_instance" --format 'value(name)')
+  if grep -qx "$db_user" <<<"$users"; then
+    gc sql users set-password "$db_user" --instance "$sql_instance" --password "$password" >/dev/null
+  else
+    gc sql users create "$db_user" --instance "$sql_instance" --password "$password" >/dev/null
+  fi
+  gc secrets add-iam-policy-binding "$db_secret" \
+    --member "serviceAccount:$db_sa" --role roles/secretmanager.secretAccessor >/dev/null
+done
+unset password
 
 echo "Creating the Workload Identity pool and provider for $github_repo..."
 gc iam workload-identity-pools describe "$pool" --location global >/dev/null 2>&1 ||
@@ -211,6 +277,13 @@ https://api-$project_number.$region.run.app.
 
 The Worker secret is in Secret Manager as $worker_secret. CI gives it to the
 API and the Worker, so it never needs to be copied by hand.
+
+The Cloud SQL instance $sql_instance holds the databases fortymm (production,
+user api) and fortymm_preview (every Preview, user api_preview). Their
+passwords are in Secret Manager as api-database-password and
+api-preview-database-password. A db-f1-micro instance with 10 GB of SSD costs
+about \$9-10 a month and never scales to zero, so expect the \$10 budget
+alert most months.
 
 The budget "$budget_name" emails the billing account's admins and users when
 the month's spend passes \$10 and \$25.

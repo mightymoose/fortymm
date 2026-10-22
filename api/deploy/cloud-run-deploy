@@ -32,24 +32,53 @@ version=${WORKER_SECRET_VERSION:-$(gcloud secrets versions list api-worker-secre
   --project "$GCP_PROJECT" --filter=state=ENABLED --sort-by=~createTime --limit=1 \
   --format='value(name.basename())')}
 : "${version:?api-worker-secret has no enabled version (see api/deploy/README.md)}"
+
+# Production and the Previews share the Cloud SQL instance, but each has its
+# own database, user and password secret, and runs as its own service
+# account, so a Preview can't read production's password.
+if [ -z "$tag" ]; then
+  service=api
+  runtime=api-runtime
+  db_user=api
+  db_name=fortymm
+  db_password=api-database-password
+  max_instances=3
+else
+  service=api-preview
+  runtime=api-preview-runtime
+  db_user=api_preview
+  db_name=fortymm_preview
+  db_password=api-preview-database-password
+  max_instances=1
+fi
+instance="$GCP_PROJECT:$GCP_REGION:fortymm"
+
 # Scale to zero, keep the max small, smallest sensible size. Unauthenticated
 # at the Cloud Run level: the API itself rejects requests without the Worker
 # secret, which only the Cloudflare Worker sends.
+#
+# The API reaches the database over the Cloud SQL socket that
+# --add-cloudsql-instances mounts, and libpq reads the password from
+# PGPASSWORD. The password secret uses `latest`, unlike the Worker secret: it
+# only changes together with the database user, so a cold start should read
+# the newest one. --set-secrets replaces every secret, so both go in one flag.
 deploy_args=(
   --image "$image"
-  --service-account "api-runtime@$GCP_PROJECT.iam.gserviceaccount.com"
+  --service-account "$runtime@$GCP_PROJECT.iam.gserviceaccount.com"
   --port 8080
   --cpu 1
   --memory 256Mi
   --min-instances 0
+  --max-instances "$max_instances"
   --allow-unauthenticated
-  --set-secrets "WORKER_SECRET=api-worker-secret:$version"
+  --add-cloudsql-instances "$instance"
+  --set-env-vars "DATABASE_URL=postgresql://$db_user@/$db_name?host=/cloudsql/$instance"
+  --set-secrets "WORKER_SECRET=api-worker-secret:$version,PGPASSWORD=$db_password:latest"
   --quiet
 )
 
 if [ -z "$tag" ]; then
-  service=api
-  gcloud run deploy "$service" "${gcloud_args[@]}" "${deploy_args[@]}" --max-instances 3 >&2
+  gcloud run deploy "$service" "${gcloud_args[@]}" "${deploy_args[@]}" >&2
   # Move the `production` tag to the image now serving, once the deploy has
   # succeeded: the repository's cleanup policy (cleanup-policy.json) never
   # deletes it, however old it gets.
@@ -58,10 +87,9 @@ if [ -z "$tag" ]; then
 else
   # Previews get their own service, so they can never move production's
   # traffic. --no-traffic only works on a service that exists already.
-  service=api-preview
   no_traffic=--no-traffic
   gcloud run services describe "$service" "${gcloud_args[@]}" >/dev/null 2>&1 || no_traffic=
-  gcloud run deploy "$service" "${gcloud_args[@]}" "${deploy_args[@]}" --max-instances 1 \
+  gcloud run deploy "$service" "${gcloud_args[@]}" "${deploy_args[@]}" \
     --tag "$tag" $no_traffic >&2
 fi
 
