@@ -69,13 +69,39 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      # Every other branch gets a Preview; its URL is in this step's log.
+      # Checks production once it's live. It can't stop a broken deploy, only
+      # flag it. Without the API deploy /api/* answers 503, so it's skipped.
+      - name: Check production
+        if: ${{ env.GCP_CONFIGURED == 'true' && github.ref == 'refs/heads/main' }}
+        run: ./bin/mise run web-client:e2e-deployed
+        env:
+          DEPLOY_URL: https://fortymm.com
+
+      # Every other branch gets a Preview. Its URL, from wrangler's
+      # "Preview URL: https://..." line, is the step's `url` output.
       - name: Deploy a Cloudflare Preview
+        id: preview
         if: ${{ github.ref != 'refs/heads/main' }}
-        run: ./bin/mise run web-client:preview
+        run: |
+          set -o pipefail
+          ./bin/mise run web-client:preview | tee "$RUNNER_TEMP/preview.log"
+          url=$(sed -nE 's/^Preview URL: (https:[^[:space:]]+).*/\1/p' "$RUNNER_TEMP/preview.log" | tail -n 1)
+          if [ -z "$url" ]; then
+            echo "::error::Couldn't find the Preview URL in wrangler preview's output."
+            exit 1
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # Checks the branch's whole stack (Worker, assets and its API revision)
+      # before it's merged.
+      - name: Check the Cloudflare Preview
+        if: ${{ env.GCP_CONFIGURED == 'true' && github.ref != 'refs/heads/main' }}
+        run: ./bin/mise run web-client:e2e-deployed
+        env:
+          DEPLOY_URL: ${{ steps.preview.outputs.url }}
 
       # Playwright writes its traces and HTML report into the bind-mounted
       # checkout, so they're here once the stack is gone.

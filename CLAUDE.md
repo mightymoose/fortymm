@@ -69,7 +69,8 @@ runs after `web-client:ci`.
 
 `.github/workflows/ci.yml` runs `./bin/mise run ci` on every push, deploys the
 API and then the web-client (production from `main`, a Preview from any other
-branch; see Deploy below), then uploads the Playwright traces and HTML report
+branch; see Deploy below), runs the post-deploy suite against that
+deployment, then uploads the Playwright traces and HTML report
 as the `playwright-traces` artifact and posts (or updates) a comment linking
 it on the commit's open PR. It runs one at a time per branch, so deploys land
 in push order.
@@ -194,6 +195,30 @@ Every run records a trace: `web-client/test-results/<test>/trace.zip` (open
 with `npx playwright show-trace` or https://trace.playwright.dev) and an HTML
 report in `web-client/playwright-report/`.
 
+#### Post-deploy suite
+
+`web-client/e2e/deployed/` is a separate suite, run against a deployment
+rather than the dev server, that checks the Worker, the assets and the API
+are wired together: `/api/v1/ping`, `/api/openapi.json` and `/api/docs` come
+from the API, an unknown `/api/*` path gets the API's JSON 404 rather than
+the SPA's `index.html` (so `run_worker_first` works), and `/` and
+`/design-system` load the app (so the assets and the SPA fallback work). The
+main config ignores it; `web-client/playwright.deployed.config.ts` runs it,
+with `baseURL` from `PLAYWRIGHT_BASE_URL` (it fails fast without one) and no
+screenshot tests. Its `ready` project retries the ping for up to a minute
+(Cloud Run cold starts, Preview propagation) before the other specs run.
+
+```sh
+DEPLOY_URL=https://fortymm.com ./bin/mise run web-client:e2e-deployed
+```
+
+`web-client:e2e-deployed` starts just the `playwright` container (and `dev`,
+whose network it shares), runs the suite there against `DEPLOY_URL`, then
+removes the containers. It needs `npm ci` done (as `ci` does). Its traces and
+report go to `web-client/test-results/deployed/` and
+`web-client/playwright-report/deployed/`, so they don't replace the main
+run's, and CI uploads them in the same `playwright-traces` artifact.
+
 ### Styles
 
 The design system's styles apply to the whole app; `main.tsx` imports them:
@@ -254,6 +279,20 @@ never points at a route that isn't there yet:
   `API_ORIGIN` set to that revision's URL, so each Cloudflare Preview talks to
   the API built from the same commit. Both Preview URLs are in the deploy
   steps' logs.
+
+Then CI runs the post-deploy suite (`web-client:e2e-deployed`, see
+End-to-end tests) against what it just deployed:
+
+- Any other branch: against the Cloudflare Preview, whose URL the deploy step
+  takes from wrangler's `Preview URL:` line (failing if it's missing). This
+  checks the branch's full stack, Worker, assets and API revision, before
+  it's merged.
+- `main`: against `https://fortymm.com` after `web-client:deploy`. Production
+  has already changed by then, so this detects a broken deploy rather than
+  preventing one.
+
+Both are skipped while the API deploys are (see below), since `/api/*`
+answers 503 then.
 
 ### web-client (Cloudflare Workers)
 

@@ -5,6 +5,8 @@ import { defineConfig, devices } from '@playwright/test'
 // https://playwright.dev/docs/test-configuration
 export default defineConfig({
   testDir: './e2e',
+  // The post-deploy suite, run by playwright.deployed.config.ts.
+  testIgnore: '**/deployed/**',
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: [['list'], ['html', { open: 'never' }]],

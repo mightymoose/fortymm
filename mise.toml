@@ -119,6 +119,23 @@ docker compose exec -T playwright sh -c '
 docker compose exec -T playwright npx playwright test
 """
 
+[tasks."web-client:e2e-deployed"]
+description = "Run the post-deploy Playwright suite (web-client/e2e/deployed) against DEPLOY_URL, e.g. a Cloudflare Preview or https://fortymm.com"
+# Expects node_modules installed (web-client:ci runs `npm ci` first). Starts
+# only the playwright container (and dev, whose network it shares). Traces and
+# the HTML report land in web-client/test-results/deployed and
+# web-client/playwright-report/deployed on the host.
+run = """
+if [ -z "${DEPLOY_URL:-}" ]; then
+  echo "DEPLOY_URL is not set: point it at the deployment to check, e.g. DEPLOY_URL=https://fortymm.com" >&2
+  exit 1
+fi
+docker compose up -d --wait playwright
+trap 'docker compose rm --force --stop >/dev/null 2>&1' EXIT INT TERM
+docker compose exec -T -e PLAYWRIGHT_BASE_URL="$DEPLOY_URL" playwright \
+  npx playwright test -c playwright.deployed.config.ts
+"""
+
 [tasks."web-client:deploy"]
 description = "Deploy web-client/dist and its Worker to Cloudflare Workers (needs a build, e.g. from `mise run ci`, CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID, and API_ORIGIN, the API's URL from `mise run api:url`)"
 # Uses the node_modules volume `npm ci` filled; `run` works after `ci` has
