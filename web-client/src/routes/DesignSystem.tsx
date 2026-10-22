@@ -8,6 +8,7 @@ import { PageHeader } from '../components/PageHeader'
 import { PageIntro } from '../components/PageIntro'
 import { Radio, RadioGroup } from '../components/RadioGroup'
 import { Section } from '../components/Section'
+import { Slider } from '../components/Slider'
 import { Switch } from '../components/Switch'
 import { Textarea } from '../components/Textarea'
 
@@ -115,6 +116,18 @@ export function DesignSystem() {
           <div className="col">
             <Switch defaultChecked>Public profile</Switch>
             <Switch>Notify me of nearby matches</Switch>
+          </div>
+        </ComponentCard>
+        <ComponentCard title="Slider" tag="single + range">
+          {/* The reference's two sliders don't share a scale, so each has
+              one that puts its thumbs where the reference draws them. */}
+          <div className="col slider-demo">
+            <Slider min={1070} max={2070} step={10} defaultValue={1620}>
+              Skill level
+            </Slider>
+            <Slider min={1100} max={2100} step={10} defaultValue={[1400, 1800]}>
+              Rating range
+            </Slider>
           </div>
         </ComponentCard>
       </Section>

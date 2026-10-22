@@ -447,7 +447,8 @@ h4, .h4 {
 
 /* The text controls, .input and .textarea, share their look and states, and
    .otp's cells, .checkbox's box and .radio's dot (below) share the states.
-   .switch's track (below) shares the focus ring and the disabled opacity. */
+   .switch's track (below) shares the focus ring and the disabled opacity,
+   as do .slider's thumbs (below). */
 .input, .textarea {
   font-family: var(--font-ui);
   font-size: 14px;
@@ -480,7 +481,8 @@ h4, .h4 {
 .input:focus, .textarea:focus, .otp-cell.otp-cell--active,
 .checkbox-input:focus-visible + .checkbox-box,
 .radio-input:focus-visible + .radio-dot,
-.switch-input:focus-visible + .switch-track {
+.switch-input:focus-visible + .switch-track,
+.slider-input:focus-visible + .slider-thumb {
   outline: none;
   border-color: var(--ball-500);
   box-shadow: 0 0 0 3px rgb(from var(--ball-500) r g b / 0.15);
@@ -489,7 +491,8 @@ h4, .h4 {
 .input:disabled, .textarea:disabled, .otp-input:disabled ~ .otp-cell,
 .checkbox:has(> .checkbox-input:disabled),
 .radio:has(> .radio-input:disabled),
-.switch:has(> .switch-input:disabled) {
+.switch:has(> .switch-input:disabled),
+.slider-field:has(.slider-input:disabled) {
   opacity: 0.5;
 }
 
@@ -756,6 +759,137 @@ h4, .h4 {
 
 @media (prefers-reduced-motion: reduce) {
   .switch-track, .switch-track::after {
+    transition: none;
+  }
+}
+
+/* =========================================================================
+   Slider (the reference kit's .slider, .track, .fill and .thumb): a
+   .slider-field holding a .slider-header (the .slider-label and the
+   .slider-value readout) and the .slider, where .slider-track, .slider-fill
+   and each .slider-thumb draw the value, at the percentages the component
+   sets. An invisible .slider-input lies over each drawn thumb and takes the
+   pointer and the keyboard. Each thumb takes the text controls' focus ring
+   (keyboard focus only) and the field takes the disabled opacity (both
+   above; the disabled one fades the label and readout too).
+   ========================================================================= */
+/* The Slider card's .col, with the kit's inline width and spacing. */
+.slider-demo {
+  max-width: 480px;
+  gap: 24px;
+}
+
+.slider-header {
+  /* The kit's .row, with its inline spacing. */
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.slider-label {
+  font-size: 13px;
+  color: var(--fg-3);
+}
+
+.slider-value {
+  font-family: var(--font-mono);
+  color: var(--ball-500);
+}
+
+.slider {
+  --slider-thumb-size: 16px;
+  position: relative;
+  height: 22px;
+  display: flex;
+  align-items: center;
+}
+
+.slider-track {
+  width: 100%;
+  height: 4px;
+  background: var(--ink-600);
+  border-radius: 999px;
+  position: relative;
+}
+
+.slider-fill {
+  position: absolute;
+  top: 0;
+  left: var(--slider-low);
+  width: calc(var(--slider-high) - var(--slider-low));
+  height: 100%;
+  background: var(--ball-500);
+  border-radius: 999px;
+}
+
+.slider-thumb {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: var(--slider-thumb-size);
+  height: var(--slider-thumb-size);
+  border-radius: 50%;
+  background: var(--ball-500);
+  border: 3px solid var(--ink-950);
+  box-shadow: 0 0 0 1px var(--ball-500);
+  pointer-events: none;
+  /* The focus ring fades in, as on the text controls. */
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+
+/* A native range keeps its thumb's centre half a thumb in from each end, so
+   the input is a thumb wider than the track, centred on it: its thumb's
+   centre then lands exactly on the drawn thumb's. */
+.slider-input {
+  position: absolute;
+  top: 0;
+  left: calc(var(--slider-thumb-size) / -2);
+  width: calc(100% + var(--slider-thumb-size));
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.slider-input:disabled {
+  cursor: not-allowed;
+}
+
+/* A range's inputs overlap, so only their thumbs take the pointer, letting
+   a press through to the other input's thumb. */
+.slider--range .slider-input {
+  pointer-events: none;
+}
+
+.slider-input--top {
+  z-index: 1;
+}
+
+/* Each in its own rule: a browser drops a whole rule over a pseudo-element
+   it doesn't know. */
+.slider-input::-webkit-slider-thumb {
+  appearance: none;
+  width: var(--slider-thumb-size);
+  height: 22px;
+  pointer-events: auto;
+}
+
+.slider-input::-moz-range-thumb {
+  width: var(--slider-thumb-size);
+  height: 22px;
+  border: 0;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .slider-thumb {
     transition: none;
   }
 }

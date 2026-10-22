@@ -477,6 +477,195 @@ test.describe('Switch', () => {
   })
 })
 
+// Nothing is hovered, focused or dragged first, so these show the thumbs'
+// resting styles, with no focus ring.
+test.describe('Slider card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.sliderCard).toHaveScreenshot(
+      'slider-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.sliderCard).toHaveScreenshot(
+      'slider-card.png',
+    )
+  })
+})
+
+// The kit's sliders are static, with no focus style, so the tests below are
+// the app's alone.
+test.describe('Slider', () => {
+  const ring = 'color(srgb 1 0.478431 0.101961 / 0.15) 0px 0px 0px 3px'
+  const resting = 'rgb(255, 122, 26) 0px 0px 0px 1px'
+
+  test('dragging a thumb sets the value under the pointer', async ({
+    designSystemPage,
+  }) => {
+    await designSystemPage.goto()
+
+    await designSystemPage.dragSlider('Skill level', 0.75)
+
+    await expect(designSystemPage.slider('Skill level')).toHaveValue('1820')
+    await expect(designSystemPage.sliderValue('Skill level')).toHaveText(
+      '1820',
+    )
+  })
+
+  test('dragging a range thumb moves only that end', async ({
+    designSystemPage,
+  }) => {
+    await designSystemPage.goto()
+
+    await designSystemPage.dragSlider('Rating range maximum', 0.9)
+    await designSystemPage.dragSlider('Rating range minimum', 0.1)
+
+    await expect(designSystemPage.sliderValue('Rating range')).toHaveText(
+      '1200 – 2000',
+    )
+  })
+
+  test('the arrow keys, Home and End move a thumb by its step', async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const skill = designSystemPage.slider('Skill level')
+    const readout = designSystemPage.sliderValue('Skill level')
+    await skill.focus()
+
+    await page.keyboard.press('ArrowRight')
+    await expect(readout).toHaveText('1630')
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.press('ArrowLeft')
+    await expect(readout).toHaveText('1610')
+    await page.keyboard.press('End')
+    await expect(readout).toHaveText('2070')
+    await page.keyboard.press('Home')
+    await expect(readout).toHaveText('1070')
+    await expect(skill).toHaveValue('1070')
+  })
+
+  // Tabbing to a thumb shows the text controls' focus ring on it alone.
+  test('keyboard focus shows the focus ring', async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const low = designSystemPage.sliderThumb('Rating range minimum')
+    const high = designSystemPage.sliderThumb('Rating range maximum')
+    await designSystemPage.slider('Skill level').focus()
+
+    await page.keyboard.press('Tab')
+
+    await expect(designSystemPage.slider('Rating range minimum')).toBeFocused()
+    await expect(low).toHaveCSS('box-shadow', ring)
+    await expect(low).toHaveCSS('border-color', 'rgb(255, 122, 26)')
+    await expect(high).toHaveCSS('box-shadow', resting)
+    await expect(
+      designSystemPage.sliderThumb('Skill level'),
+    ).toHaveCSS('box-shadow', resting)
+  })
+
+  // A mouse press focuses the input too, but only keyboard focus shows the
+  // ring.
+  test('a click shows no focus ring', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+    const thumb = designSystemPage.sliderThumb('Skill level')
+    await thumb.scrollIntoViewIfNeeded()
+    const box = (await thumb.boundingBox())!
+
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+
+    await expect(designSystemPage.slider('Skill level')).toBeFocused()
+    await expect(designSystemPage.slider('Skill level')).toHaveValue('1620')
+    await expect(thumb).toHaveCSS('box-shadow', resting)
+  })
+
+  // The demo has no disabled slider, so this test disables one in place.
+  test("a disabled one fades and doesn't move", async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const skill = designSystemPage.slider('Skill level')
+    await skill.evaluate((input) => input.setAttribute('disabled', ''))
+
+    await designSystemPage.dragSlider('Skill level', 0.75)
+    await skill.focus()
+    await page.keyboard.press('ArrowRight')
+
+    await expect(skill).toHaveValue('1620')
+    await expect(designSystemPage.sliderValue('Skill level')).toHaveText(
+      '1620',
+    )
+    await expect(designSystemPage.sliderField('Skill level')).toHaveCSS(
+      'opacity',
+      '0.5',
+    )
+  })
+
+  test("a range's thumbs don't cross", async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await designSystemPage.dragSlider('Rating range minimum', 0.9)
+
+    await expect(designSystemPage.sliderValue('Rating range')).toHaveText(
+      '1800 – 1800',
+    )
+    const low = (await designSystemPage
+      .sliderThumb('Rating range minimum')
+      .boundingBox())!
+    const high = (await designSystemPage
+      .sliderThumb('Rating range maximum')
+      .boundingBox())!
+    expect(low.x).toBeCloseTo(high.x, 0)
+  })
+
+  // Thumbs that meet take one spot, so a drag there has to pick the thumb
+  // that can move away from the end.
+  test('thumbs that meet at an end can be dragged apart', async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const readout = designSystemPage.sliderValue('Rating range')
+
+    await designSystemPage.slider('Rating range minimum').focus()
+    await page.keyboard.press('Home')
+    await designSystemPage.slider('Rating range maximum').focus()
+    await page.keyboard.press('Home')
+    await expect(readout).toHaveText('1100 – 1100')
+    await designSystemPage.dragSlider('Rating range maximum', 0.5)
+    await expect(readout).toHaveText('1100 – 1600')
+
+    await page.keyboard.press('End')
+    await designSystemPage.slider('Rating range minimum').focus()
+    await page.keyboard.press('End')
+    await expect(readout).toHaveText('2100 – 2100')
+    await designSystemPage.dragSlider('Rating range minimum', 0.5)
+    await expect(readout).toHaveText('1600 – 2100')
+  })
+
+  test.describe('with reduced motion', () => {
+    test.use({ reducedMotion: 'reduce' })
+
+    test('the focus ring shows without a transition', async ({
+      designSystemPage,
+    }) => {
+      await designSystemPage.goto()
+
+      await expect(
+        designSystemPage.sliderThumb('Skill level'),
+      ).toHaveCSS('transition-duration', '0s')
+    })
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -580,6 +769,30 @@ test.describe('on a phone', () => {
     expect(track.x).toBeGreaterThanOrEqual(text.x + text.width + 12)
     expect(track.x + track.width).toBeCloseTo(row.x + row.width, 0)
     expect(track.y + track.height / 2).toBeCloseTo(row.y + row.height / 2, 0)
+  })
+
+  // The track narrows to fit, and the thumbs keep their places along it.
+  test('the slider card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [designSystemPage.sliderCard, page.locator('html')]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    for (const [label, name, fraction] of [
+      ['Skill level', 'Skill level', 0.55],
+      ['Rating range', 'Rating range minimum', 0.3],
+      ['Rating range', 'Rating range maximum', 0.7],
+    ] as const) {
+      const track = (await designSystemPage.sliderTrack(label).boundingBox())!
+      const thumb = (await designSystemPage.sliderThumb(name).boundingBox())!
+      expect(track.width).toBeLessThan(480)
+      expect(thumb.x + thumb.width / 2).toBeCloseTo(
+        track.x + track.width * fraction,
+        0,
+      )
+    }
   })
 
   // Two columns would leave each input too narrow for its placeholder, so

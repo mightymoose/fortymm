@@ -23,6 +23,7 @@ export class DesignSystemPage {
   readonly radioCard: Locator
   readonly radioGroup: Locator
   readonly switchCard: Locator
+  readonly sliderCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -66,6 +67,7 @@ export class DesignSystemPage {
       name: 'Match format',
     })
     this.switchCard = this.formsSection.getByRole('article', { name: 'Switch' })
+    this.sliderCard = this.formsSection.getByRole('article', { name: 'Slider' })
   }
 
   // A component card's title, in its header.
@@ -163,6 +165,50 @@ export class DesignSystemPage {
   // clickCheckboxLabel() does.
   async clickSwitchLabel(name: string): Promise<void> {
     await this.clickText(this.switchCard, name)
+  }
+
+  // The Slider card's slider (one input) named `name`.
+  slider(name: string): Locator {
+    return this.sliderCard.getByRole('slider', { name, exact: true })
+  }
+
+  // The .slider-field labelled `label`: its header, track and thumbs.
+  sliderField(label: string): Locator {
+    return this.sliderCard.locator('.slider-field', { hasText: label })
+  }
+
+  // The readout of the value of the slider labelled `label`.
+  sliderValue(label: string): Locator {
+    return this.sliderField(label).locator('output')
+  }
+
+  // The track of the slider labelled `label`.
+  sliderTrack(label: string): Locator {
+    return this.sliderField(label).locator('.slider-track')
+  }
+
+  // The thumb drawn for the slider named `name`, right after its input.
+  sliderThumb(name: string): Locator {
+    return this.slider(name).locator('xpath=following-sibling::*[1]')
+  }
+
+  // Drags the thumb drawn for the slider named `name` the way a user does:
+  // presses its centre and moves the mouse to `fraction` of the track's
+  // width, with plain mouse events, so it goes through on a disabled slider
+  // too.
+  async dragSlider(name: string, fraction: number): Promise<void> {
+    const thumb = this.sliderThumb(name)
+    await thumb.scrollIntoViewIfNeeded()
+    const from = (await thumb.boundingBox())!
+    // The .slider holding the input, as wide as its track.
+    const track = (await this.slider(name).locator('xpath=..').boundingBox())!
+    const y = from.y + from.height / 2
+    await this.page.mouse.move(from.x + from.width / 2, y)
+    await this.page.mouse.down()
+    await this.page.mouse.move(track.x + track.width * fraction, y, {
+      steps: 5,
+    })
+    await this.page.mouse.up()
   }
 
   // Clicks the middle of the text `name` in `card` with a plain mouse click.
