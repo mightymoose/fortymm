@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react'
+import { fireEvent, screen } from '@testing-library/react'
 import { renderRoute } from '../renderRoute'
 
 // Page object for the home page in unit tests. Elements are looked up through
@@ -15,6 +15,11 @@ export class HomePage {
     return screen.getByRole('heading', { level: 1 })
   }
 
+  // Waits for the page's title, e.g. once the loading screen has gone.
+  findTitle(): Promise<HTMLElement> {
+    return screen.findByRole('heading', { level: 1 })
+  }
+
   // The page's title, or null while the loading screen shows instead.
   get queryTitle(): HTMLElement | null {
     return screen.queryByRole('heading', { level: 1 })
@@ -24,6 +29,18 @@ export class HomePage {
   // null once it's gone.
   get loadingScreen(): HTMLElement | null {
     return screen.queryByRole('status', { name: 'Loading FortyMM' })
+  }
+
+  // The router's default error message, shown in place of the page when it
+  // fails to load, or null.
+  get errorMessage(): HTMLElement | null {
+    return screen.queryByText('Something went wrong!')
+  }
+
+  // jsdom runs no CSS animations, so tests end the loading screen's fade-out
+  // themselves.
+  endLoadingScreenFade(): void {
+    fireEvent.animationEnd(this.loadingScreen!)
   }
 
   get designSystemLink(): HTMLElement {

@@ -1,19 +1,17 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   createRootRouteWithContext,
   createRoute,
   createRouter,
   type RouterHistory,
 } from '@tanstack/react-router'
+import { api as defaultApi, type ApiClient } from './api/client'
 import { DesignSystem } from './routes/DesignSystem'
 import { Home } from './routes/Home'
 import { Root } from './routes/Root'
 
-export const LOADING_SCREEN_MS = 3000
-
 export type RouterContext = {
-  // Resolves once the loading screen has shown for long enough. The layout
-  // suspends on it, so Root's Suspense boundary shows the loading screen.
-  loadingScreenDelay: Promise<void>
+  api: ApiClient
 }
 
 const rootRoute = createRootRouteWithContext<RouterContext>()({
@@ -34,21 +32,23 @@ const designSystemRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([homeRoute, designSystemRoute])
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
 // Builds the app's router. Tests pass a memory history to start on a given
-// path, and a shorter loading screen; the app uses the default browser
-// history and LOADING_SCREEN_MS. The delay starts here, once per page load.
+// path, a QueryClient that doesn't retry, and an API client with a stub
+// fetch. The app uses the browser history and the defaults.
 export function createAppRouter(
   history?: RouterHistory,
-  { loadingScreenMs = LOADING_SCREEN_MS }: { loadingScreenMs?: number } = {},
+  {
+    queryClient = new QueryClient(),
+    api = defaultApi,
+  }: { queryClient?: QueryClient; api?: ApiClient } = {},
 ) {
   return createRouter({
     routeTree,
     history,
-    context: { loadingScreenDelay: delay(loadingScreenMs) },
+    context: { api },
+    Wrap: ({ children }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
   })
 }
 
