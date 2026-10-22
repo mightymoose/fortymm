@@ -25,8 +25,8 @@ export class HomePage {
     return screen.queryByRole('heading', { level: 1 })
   }
 
-  // The loading screen shown in place of the page on a full page load, or
-  // null once it's gone.
+  // The loading screen shown over the page on a slow page load, or null
+  // while it isn't.
   get loadingScreen(): HTMLElement | null {
     return screen.queryByRole('status', { name: 'Loading FortyMM' })
   }
@@ -35,6 +35,12 @@ export class HomePage {
   // fails to load, or null.
   get errorMessage(): HTMLElement | null {
     return screen.queryByText('Something went wrong!')
+  }
+
+  // Whether the loading screen has started to fade out. jsdom runs no CSS
+  // animations, so the class is what tests can see.
+  get loadingScreenFading(): boolean {
+    return !!this.loadingScreen?.classList.contains('loading-screen-leaving')
   }
 
   // jsdom runs no CSS animations, so tests end the loading screen's fade-out

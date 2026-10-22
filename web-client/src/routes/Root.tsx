@@ -1,29 +1,23 @@
 import { useQuery, useSuspenseQuery } from '@tanstack/react-query'
 import { Link, Outlet, useRouteContext } from '@tanstack/react-router'
-import { Suspense, useState } from 'react'
+import { Suspense } from 'react'
 import { healthQuery } from '../api/queries'
 import { LoadingScreen } from '../components/LoadingScreen'
 
 // Shows the loading screen over the page until the page's layout stops
-// suspending, then fades it out. The page renders under it as the fade
-// starts. Root stays mounted across client-side navigation, so the loading
-// screen doesn't come back.
+// suspending. The page renders under it before it fades out. Root stays
+// mounted across client-side navigation, so the loading screen doesn't come
+// back.
 export function Root() {
   const { api } = useRouteContext({ from: '__root__' })
   const { isSuccess: ready } = useQuery(healthQuery(api))
-  const [loadingScreenGone, setLoadingScreenGone] = useState(false)
 
   return (
     <>
       <Suspense fallback={null}>
         <Layout />
       </Suspense>
-      {!loadingScreenGone && (
-        <LoadingScreen
-          leaving={ready}
-          onLeft={() => setLoadingScreenGone(true)}
-        />
-      )}
+      <LoadingScreen ready={ready} />
     </>
   )
 }

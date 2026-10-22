@@ -1187,8 +1187,8 @@ h4, .h4 {
   overflow: hidden;
 }
 
-/* Fades out over the page once it's ready (routes/Root.tsx), which then
-   removes the loading screen. Clicks reach the page during the fade. */
+/* Fades out over the page once it's ready, then LoadingScreen.tsx removes
+   it. Clicks reach the page during the fade. */
 .loading-screen-leaving {
   animation: loading-screen-out 240ms var(--ease-out) forwards;
   pointer-events: none;
