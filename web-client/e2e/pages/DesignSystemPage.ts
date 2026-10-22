@@ -22,6 +22,7 @@ export class DesignSystemPage {
   readonly checkboxCard: Locator
   readonly radioCard: Locator
   readonly radioGroup: Locator
+  readonly switchCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -64,6 +65,7 @@ export class DesignSystemPage {
     this.radioGroup = this.radioCard.getByRole('radiogroup', {
       name: 'Match format',
     })
+    this.switchCard = this.formsSection.getByRole('article', { name: 'Switch' })
   }
 
   // A component card's title, in its header.
@@ -114,10 +116,7 @@ export class DesignSystemPage {
   // it goes through on a disabled checkbox too, which Playwright's own
   // click() would wait on until it's enabled.
   async clickCheckboxLabel(name: string): Promise<void> {
-    const text = this.checkboxCard.getByText(name, { exact: true })
-    await text.scrollIntoViewIfNeeded()
-    const box = (await text.boundingBox())!
-    await this.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+    await this.clickText(this.checkboxCard, name)
   }
 
   // The Radio Group card's radio labelled `name`.
@@ -136,7 +135,39 @@ export class DesignSystemPage {
   // text (the input itself is visually hidden), with a plain mouse click, as
   // clickCheckboxLabel() does.
   async clickRadioLabel(name: string): Promise<void> {
-    const text = this.radioCard.getByText(name, { exact: true })
+    await this.clickText(this.radioCard, name)
+  }
+
+  // The Switch card's switch labelled `name`.
+  switch(name: string): Locator {
+    return this.switchCard.getByRole('switch', { name })
+  }
+
+  // The <label> row holding the switch labelled `name`, its text and track.
+  switchLabel(name: string): Locator {
+    return this.switchCard.locator('label', { hasText: name })
+  }
+
+  // The label text of the switch labelled `name`.
+  switchText(name: string): Locator {
+    return this.switchCard.getByText(name, { exact: true })
+  }
+
+  // The track that draws the switch labelled `name`.
+  switchTrack(name: string): Locator {
+    return this.switchLabel(name).locator('.switch-track')
+  }
+
+  // Clicks the switch labelled `name` the way a user does: on its label's
+  // text (the input itself is visually hidden), with a plain mouse click, as
+  // clickCheckboxLabel() does.
+  async clickSwitchLabel(name: string): Promise<void> {
+    await this.clickText(this.switchCard, name)
+  }
+
+  // Clicks the middle of the text `name` in `card` with a plain mouse click.
+  private async clickText(card: Locator, name: string): Promise<void> {
+    const text = card.getByText(name, { exact: true })
     await text.scrollIntoViewIfNeeded()
     const box = (await text.boundingBox())!
     await this.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)

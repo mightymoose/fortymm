@@ -8,6 +8,7 @@ import { PageHeader } from '../components/PageHeader'
 import { PageIntro } from '../components/PageIntro'
 import { Radio, RadioGroup } from '../components/RadioGroup'
 import { Section } from '../components/Section'
+import { Switch } from '../components/Switch'
 import { Textarea } from '../components/Textarea'
 
 export function DesignSystem() {
@@ -109,6 +110,12 @@ export function DesignSystem() {
               <Radio value="doubles-5">Doubles · best of 5</Radio>
             </RadioGroup>
           </Field>
+        </ComponentCard>
+        <ComponentCard title="Switch" tag="on/off">
+          <div className="col">
+            <Switch defaultChecked>Public profile</Switch>
+            <Switch>Notify me of nearby matches</Switch>
+          </div>
         </ComponentCard>
       </Section>
     </>

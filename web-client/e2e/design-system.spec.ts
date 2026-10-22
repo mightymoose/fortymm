@@ -341,6 +341,142 @@ test.describe('Radio Group', () => {
   })
 })
 
+// Nothing is hovered, focused or clicked first, so these show the tracks'
+// resting styles, with no focus ring.
+test.describe('Switch card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.switchCard).toHaveScreenshot(
+      'switch-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.switchCard).toHaveScreenshot(
+      'switch-card.png',
+    )
+  })
+})
+
+// The thumb's computed transform: off at the left, on moved right by 18px.
+// It transitions, so read it with expect.poll for its end state.
+function thumbTransform(track: Locator) {
+  return () =>
+    track.evaluate(
+      (element) =>
+        element.ownerDocument.defaultView!.getComputedStyle(element, '::after')
+          .transform,
+    )
+}
+
+const thumbOn = 'matrix(1, 0, 0, 1, 18, 0)'
+
+// The kit's switches are static, with no focus style, so the tests below are
+// the app's alone.
+test.describe('Switch', () => {
+  test('clicking a label toggles it and moves its thumb', async ({
+    designSystemPage,
+  }) => {
+    await designSystemPage.goto()
+    const profile = designSystemPage.switch('Public profile')
+    const nearby = designSystemPage.switch('Notify me of nearby matches')
+    await expect(profile).toBeChecked()
+    await expect(nearby).not.toBeChecked()
+
+    await designSystemPage.clickSwitchLabel('Public profile')
+    await designSystemPage.clickSwitchLabel('Notify me of nearby matches')
+
+    await expect(profile).not.toBeChecked()
+    await expect(nearby).toBeChecked()
+    await expect
+      .poll(thumbTransform(designSystemPage.switchTrack('Public profile')))
+      .toBe('none')
+    await expect
+      .poll(
+        thumbTransform(
+          designSystemPage.switchTrack('Notify me of nearby matches'),
+        ),
+      )
+      .toBe(thumbOn)
+  })
+
+  // Tabbing to a switch shows the text controls' focus ring on its track,
+  // and Space toggles it.
+  test('keyboard focus shows the focus ring', async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const nearby = designSystemPage.switch('Notify me of nearby matches')
+    const track = designSystemPage.switchTrack('Notify me of nearby matches')
+    await designSystemPage.switch('Public profile').focus()
+
+    await page.keyboard.press('Tab')
+
+    await expect(nearby).toBeFocused()
+    await expect(track).toHaveCSS(
+      'box-shadow',
+      'color(srgb 1 0.478431 0.101961 / 0.15) 0px 0px 0px 3px',
+    )
+    await expect(
+      designSystemPage.switchTrack('Public profile'),
+    ).toHaveCSS('box-shadow', 'none')
+    await page.keyboard.press('Space')
+    await expect(nearby).toBeChecked()
+    await expect.poll(thumbTransform(track)).toBe(thumbOn)
+  })
+
+  // A mouse click focuses the input too, but only keyboard focus shows the
+  // ring.
+  test('a click shows no focus ring', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+    const nearby = designSystemPage.switch('Notify me of nearby matches')
+
+    await designSystemPage.clickSwitchLabel('Notify me of nearby matches')
+
+    await expect(nearby).toBeFocused()
+    await expect(
+      designSystemPage.switchTrack('Notify me of nearby matches'),
+    ).toHaveCSS('box-shadow', 'none')
+  })
+
+  // The demo has no disabled switch, so this test disables one in place.
+  test("a disabled one fades and doesn't toggle", async ({
+    designSystemPage,
+  }) => {
+    await designSystemPage.goto()
+    const profile = designSystemPage.switch('Public profile')
+    await profile.evaluate((input) => input.setAttribute('disabled', ''))
+
+    await designSystemPage.clickSwitchLabel('Public profile')
+
+    await expect(profile).toBeChecked()
+    await expect(designSystemPage.switchLabel('Public profile')).toHaveCSS(
+      'opacity',
+      '0.5',
+    )
+  })
+
+  test.describe('with reduced motion', () => {
+    test.use({ reducedMotion: 'reduce' })
+
+    test('the thumb moves without a transition', async ({
+      designSystemPage,
+    }) => {
+      await designSystemPage.goto()
+      const track = designSystemPage.switchTrack('Notify me of nearby matches')
+
+      await designSystemPage.clickSwitchLabel('Notify me of nearby matches')
+
+      expect(await thumbTransform(track)()).toBe(thumbOn)
+      await expect(track).toHaveCSS('transition-duration', '0s')
+    })
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -424,6 +560,26 @@ test.describe('on a phone', () => {
     expect(lastCell.x + lastCell.width).toBeLessThanOrEqual(
       card.x + card.width - 32,
     )
+  })
+
+  // A label too long for its row wraps beside the track, which stays on the
+  // right, vertically centred, rather than wrapping under the text.
+  test('a long switch label wraps beside its track', async ({
+    designSystemPage,
+  }) => {
+    await designSystemPage.goto()
+    const name = 'Notify me of nearby matches'
+    const card = (await designSystemPage.switchCard.boundingBox())!
+    const row = (await designSystemPage.switchLabel(name).boundingBox())!
+    const text = (await designSystemPage.switchText(name).boundingBox())!
+    const track = (await designSystemPage.switchTrack(name).boundingBox())!
+
+    // Inside the card's 1px border and 32px padding on the right.
+    expect(row.x + row.width).toBeLessThanOrEqual(card.x + card.width - 33)
+    expect(text.height).toBeGreaterThan(21)
+    expect(track.x).toBeGreaterThanOrEqual(text.x + text.width + 12)
+    expect(track.x + track.width).toBeCloseTo(row.x + row.width, 0)
+    expect(track.y + track.height / 2).toBeCloseTo(row.y + row.height / 2, 0)
   })
 
   // Two columns would leave each input too narrow for its placeholder, so

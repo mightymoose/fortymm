@@ -136,4 +136,18 @@ export class DesignSystemPage {
   radio(name: string): HTMLElement {
     return within(this.radioGroup).getByRole('radio', { name })
   }
+
+  get switchCard(): HTMLElement {
+    return within(this.formsSection).getByRole('article', { name: 'Switch' })
+  }
+
+  get switchCardHeading(): HTMLElement {
+    return within(this.switchCard).getByRole('heading', { level: 3 })
+  }
+
+  // The switch labelled `name`, so finding it proves the label is associated
+  // with it.
+  switch(name: string): HTMLElement {
+    return within(this.switchCard).getByRole('switch', { name })
+  }
 }

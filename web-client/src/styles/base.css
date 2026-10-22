@@ -446,7 +446,8 @@ h4, .h4 {
 }
 
 /* The text controls, .input and .textarea, share their look and states, and
-   .otp's cells, .checkbox's box and .radio's dot (below) share the states. */
+   .otp's cells, .checkbox's box and .radio's dot (below) share the states.
+   .switch's track (below) shares the focus ring and the disabled opacity. */
 .input, .textarea {
   font-family: var(--font-ui);
   font-size: 14px;
@@ -478,7 +479,8 @@ h4, .h4 {
 
 .input:focus, .textarea:focus, .otp-cell.otp-cell--active,
 .checkbox-input:focus-visible + .checkbox-box,
-.radio-input:focus-visible + .radio-dot {
+.radio-input:focus-visible + .radio-dot,
+.switch-input:focus-visible + .switch-track {
   outline: none;
   border-color: var(--ball-500);
   box-shadow: 0 0 0 3px rgb(from var(--ball-500) r g b / 0.15);
@@ -486,7 +488,8 @@ h4, .h4 {
 
 .input:disabled, .textarea:disabled, .otp-input:disabled ~ .otp-cell,
 .checkbox:has(> .checkbox-input:disabled),
-.radio:has(> .radio-input:disabled) {
+.radio:has(> .radio-input:disabled),
+.switch:has(> .switch-input:disabled) {
   opacity: 0.5;
 }
 
@@ -684,6 +687,77 @@ h4, .h4 {
   height: 9px;
   border-radius: 50%;
   background: var(--ball-500);
+}
+
+/* =========================================================================
+   Switch (the reference kit's .switch, .switch.on and their ::after): a
+   <label> row holding the .switch-text, a visually hidden .switch-input and
+   the .switch-track that draws it, its thumb drawn by ::after. The track
+   takes the text controls' focus ring (keyboard focus only) and disabled
+   opacity (both above; the disabled one fades the whole label, text
+   included). It has no border, so the focus rule's border-color does
+   nothing to it.
+   ========================================================================= */
+.switch {
+  /* The kit's .row, with its inline spacing and width. */
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  max-width: 320px;
+  /* Unlike the kit's .row, the track never wraps under the text: where the
+     row is too narrow (e.g. on a phone), the text wraps beside it. */
+  flex-wrap: nowrap;
+  /* Holds the absolutely positioned input. */
+  position: relative;
+  cursor: pointer;
+  font-family: var(--font-ui);
+  font-size: 14px;
+  /* The kit's label inherits the body's line height and color. */
+  line-height: var(--lh-normal);
+  color: var(--fg-1);
+}
+
+.switch:has(> .switch-input:disabled) {
+  cursor: not-allowed;
+}
+
+.switch-track {
+  flex-shrink: 0;
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--ink-600);
+  /* The thumb's containing block. */
+  position: relative;
+  transition: background var(--dur-fast);
+}
+
+.switch-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: white;
+  transition: transform var(--dur-fast);
+}
+
+.switch-input:checked + .switch-track {
+  background: var(--ball-500);
+}
+
+.switch-input:checked + .switch-track::after {
+  transform: translateX(18px);
+  background: var(--ink-950);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switch-track, .switch-track::after {
+    transition: none;
+  }
 }
 
 /* =========================================================================

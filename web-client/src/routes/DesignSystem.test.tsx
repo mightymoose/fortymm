@@ -216,4 +216,27 @@ describe('DesignSystem', () => {
       expect(option).toHaveAttribute('name', name)
     }
   })
+
+  it('shows the Switch card after the Radio Group card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.switchCardHeading).toHaveTextContent('Switch')
+    expect(designSystemPage.switchCard).toHaveTextContent('on/off')
+    expect(
+      designSystemPage.radioCard.compareDocumentPosition(
+        designSystemPage.switchCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('shows an on and an off switch', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const profile = designSystemPage.switch('Public profile')
+    expect(profile).toBeChecked()
+    expect(profile).toBeEnabled()
+    const nearby = designSystemPage.switch('Notify me of nearby matches')
+    expect(nearby).not.toBeChecked()
+    expect(nearby).toBeEnabled()
+  })
 })
