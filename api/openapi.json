@@ -1,0 +1,49 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "FortyMM API",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/v1/ping": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "Ping",
+        "description": "Check that the API is up.",
+        "operationId": "ping",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PingResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "PingResponse": {
+        "properties": {
+          "data": {
+            "type": "string",
+            "const": "pong",
+            "title": "Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "PingResponse"
+      }
+    }
+  }
+}

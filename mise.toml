@@ -2,16 +2,53 @@
 # Tool versions used inside the dev container live in mise.container.toml.
 
 [tasks.up]
-description = "Start the local dev stack (currently just the web-client dev server)"
-depends = ["web-client:dev"]
+description = "Start the local dev stack: the API and the web-client dev server, which proxies /api to it"
+depends = ["api:dev", "web-client:dev"]
 
 [tasks.ci]
 description = "Bring up the stack in the background, run every CI check inside it, then tear it down"
 run = """
 docker compose up -d --build --wait
 trap 'docker compose rm --force --stop >/dev/null 2>&1' EXIT INT TERM
+./bin/mise run api:ci
 ./bin/mise run web-client:ci
+./bin/mise run openapi:check
 ./bin/mise run web-client:e2e
+"""
+
+[tasks."openapi:check"]
+description = "Regenerate the OpenAPI schema and the web-client's types in the running stack and fail if they differ from what's committed (start it with `mise run ci`)"
+# Expects node_modules installed (web-client:ci runs `npm ci` first).
+run = """
+files="api/openapi.json web-client/src/api/schema.d.ts"
+docker compose exec -T api /app/bin/docker-entrypoint uv run --locked python -m fortymm_api.openapi
+docker compose exec -T -w /app/web-client dev /app/bin/docker-entrypoint npm run generate:api
+# --porcelain also lists the files if they're new or deleted, not just changed.
+if [ -n "$(git status --porcelain -- $files)" ]; then
+  git --no-pager diff -- $files
+  echo "The generated OpenAPI files are out of date: run ./bin/mise run api:openapi and commit the result." >&2
+  exit 1
+fi
+"""
+
+[tasks."api:ci"]
+description = "Lint, typecheck and test the API inside the running api container (start it with `mise run ci`)"
+# exec bypasses the image entrypoint, so call it to get the container's tools on PATH.
+run = "docker compose exec -T api /app/bin/docker-entrypoint sh -c 'uv sync --locked && uv run ruff check && uv run ruff format --check && uv run mypy src tests && uv run pytest'"
+
+[tasks."api:test"]
+description = "Run the API's tests inside the api container"
+run = "docker compose run --rm --no-deps -T api uv run --locked pytest"
+
+[tasks."api:dev"]
+description = "Start the API with auto-reload and stream its logs; reach it through the web-client dev server at /api"
+run = "docker compose up --build api"
+
+[tasks."api:openapi"]
+description = "Regenerate api/openapi.json from the app, then the web-client's types from it"
+run = """
+docker compose run --rm -T api uv run --locked python -m fortymm_api.openapi
+docker compose run --rm -T -w /app/web-client dev sh -c 'npm install && npm run generate:api'
 """
 
 [tasks."web-client:ci"]
