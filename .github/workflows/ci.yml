@@ -5,15 +5,61 @@ on: push
 permissions:
   contents: read
   pull-requests: write
+  # Lets google-github-actions/auth exchange the job's OIDC token for Google
+  # credentials (Workload Identity Federation).
+  id-token: write
+
+# One run at a time per branch, so deploys land in push order.
+concurrency:
+  group: ci-${{ github.ref }}
 
 jobs:
   ci:
     runs-on: ubuntu-latest
+    env:
+      # Set by api/deploy/bootstrap-gcp.sh's instructions; until then the API
+      # isn't deployed.
+      GCP_CONFIGURED: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && vars.GCP_SERVICE_ACCOUNT != '' }}
     steps:
       - uses: actions/checkout@v5
       - run: ./bin/mise run ci
         env:
           CI: "true"
+
+      - name: Authenticate to Google Cloud
+        if: ${{ env.GCP_CONFIGURED == 'true' }}
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        if: ${{ env.GCP_CONFIGURED == 'true' }}
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Skip the API deploy
+        if: ${{ env.GCP_CONFIGURED != 'true' }}
+        run: echo "::warning::GCP_WORKLOAD_IDENTITY_PROVIDER and GCP_SERVICE_ACCOUNT aren't set, so the API isn't deployed and the Worker answers /api/* with a 503. See api/deploy/README.md."
+
+      # The API goes first, so the Worker never points at a missing route. Its
+      # URL, the deploy's last line of output, becomes the Worker's API_ORIGIN.
+      - name: Deploy the API to Cloud Run
+        if: ${{ env.GCP_CONFIGURED == 'true' && github.ref == 'refs/heads/main' }}
+        run: |
+          set -o pipefail
+          url=$(./bin/mise run api:deploy | tail -n 1)
+          echo "API_ORIGIN=$url" >> "$GITHUB_ENV"
+          echo "API: $url"
+
+      # Every other branch gets a tagged Cloud Run revision with no traffic,
+      # which its Cloudflare Preview below points at.
+      - name: Deploy a Cloud Run Preview revision
+        if: ${{ env.GCP_CONFIGURED == 'true' && github.ref != 'refs/heads/main' }}
+        run: |
+          set -o pipefail
+          url=$(./bin/mise run api:preview | tail -n 1)
+          echo "API_ORIGIN=$url" >> "$GITHUB_ENV"
+          echo "API: $url"
 
       # Ships the web-client/dist that `ci` just built and tested.
       - name: Deploy to Cloudflare
