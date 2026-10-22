@@ -3,10 +3,16 @@ import worker, { type Env } from './index'
 
 const API_ORIGIN = 'https://fortymm-api-123.us-central1.run.app'
 
-function makeEnv(overrides: Partial<Env> = {}) {
+function makeEnv(overrides: Partial<Env> = {}, { allowed = true } = {}) {
   const assets = vi.fn(async (_request: Request) => new Response('<!doctype html>'))
-  const env: Env = { ASSETS: { fetch: assets }, API_ORIGIN, ...overrides }
-  return { env, assets }
+  const limit = vi.fn(async (_options: { key: string }) => ({ success: allowed }))
+  const env: Env = {
+    ASSETS: { fetch: assets },
+    API_ORIGIN,
+    API_RATE_LIMIT: { limit },
+    ...overrides,
+  }
+  return { env, assets, limit }
 }
 
 function stubUpstream() {
@@ -88,6 +94,71 @@ describe('worker', () => {
     const response = await worker.fetch(new Request('https://fortymm.com/api/v1/ping'), env)
 
     expect(response.status).toBe(503)
+    expect(upstream).not.toHaveBeenCalled()
+  })
+
+  it('sends the Worker secret to the API', async () => {
+    const upstream = stubUpstream()
+    const { env } = makeEnv({ WORKER_SECRET: 's3cret' })
+
+    await worker.fetch(new Request('https://fortymm.com/api/v1/ping'), env)
+
+    expect(forwarded(upstream).headers.get('X-FortyMM-Worker-Secret')).toBe('s3cret')
+  })
+
+  it("replaces a client's own Worker secret header", async () => {
+    const upstream = stubUpstream()
+    const { env } = makeEnv({ WORKER_SECRET: 's3cret' })
+
+    await worker.fetch(
+      new Request('https://fortymm.com/api/v1/ping', {
+        headers: { 'X-FortyMM-Worker-Secret': 'guess' },
+      }),
+      env,
+    )
+
+    expect(forwarded(upstream).headers.get('X-FortyMM-Worker-Secret')).toBe('s3cret')
+  })
+
+  it("removes a client's own Worker secret header when WORKER_SECRET is not set", async () => {
+    const upstream = stubUpstream()
+    const { env } = makeEnv()
+
+    await worker.fetch(
+      new Request('https://fortymm.com/api/v1/ping', {
+        headers: { 'X-FortyMM-Worker-Secret': 'guess' },
+      }),
+      env,
+    )
+
+    expect(forwarded(upstream).headers.has('X-FortyMM-Worker-Secret')).toBe(false)
+  })
+
+  it('rate limits by the client IP', async () => {
+    stubUpstream()
+    const { env, limit } = makeEnv()
+
+    await worker.fetch(
+      new Request('https://fortymm.com/api/v1/ping', {
+        headers: { 'CF-Connecting-IP': '203.0.113.7' },
+      }),
+      env,
+    )
+
+    expect(limit).toHaveBeenCalledWith({ key: '203.0.113.7' })
+  })
+
+  it('answers 429 without calling the API when the client is over the limit', async () => {
+    const upstream = stubUpstream()
+    const { env } = makeEnv({}, { allowed: false })
+
+    const response = await worker.fetch(new Request('https://fortymm.com/api/v1/ping'), env)
+
+    expect(response.status).toBe(429)
+    expect(response.headers.get('Retry-After')).toBe('60')
+    expect(await response.json()).toEqual({
+      errors: [{ status: '429', title: 'Too many requests' }],
+    })
     expect(upstream).not.toHaveBeenCalled()
   })
 })
