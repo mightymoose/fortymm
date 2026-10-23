@@ -62,6 +62,9 @@ export class DesignSystemPage {
   readonly navSection: Locator
   readonly navSectionHeading: Locator
   readonly navSectionLead: Locator
+  readonly tabsCard: Locator
+  readonly tabList: Locator
+  readonly tabPanel: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -204,6 +207,13 @@ export class DesignSystemPage {
     this.navSectionHeading = this.navSection.getByRole('heading', { level: 2 })
     // The first paragraph: the cards in the section have paragraphs too.
     this.navSectionLead = this.navSection.getByRole('paragraph').first()
+    this.tabsCard = this.navSection.getByRole('article', {
+      name: 'Tabs',
+      exact: true,
+    })
+    this.tabList = this.tabsCard.getByRole('tablist', { name: 'Tournament' })
+    // The chosen tab's panel: the others are hidden.
+    this.tabPanel = this.tabsCard.getByRole('tabpanel')
   }
 
   // A component card's title, in its header.
@@ -365,6 +375,11 @@ export class DesignSystemPage {
   // The group's item named `name`, e.g. "Singles".
   toggleGroupItem(name: string): Locator {
     return this.toggleGroup.getByRole('radio', { name, exact: true })
+  }
+
+  // The Tabs card's tab named `name`, e.g. "Overview".
+  tab(name: string): Locator {
+    return this.tabList.getByRole('tab', { name, exact: true })
   }
 
   // Clicks the middle of the text `name` in `card` with a plain mouse click.

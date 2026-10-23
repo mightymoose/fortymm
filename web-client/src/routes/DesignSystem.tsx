@@ -22,6 +22,7 @@ import { Skeleton } from '../components/Skeleton'
 import { Slider } from '../components/Slider'
 import { Switch } from '../components/Switch'
 import { type Column, Table } from '../components/Table'
+import { type Tab, Tabs } from '../components/Tabs'
 import { Textarea } from '../components/Textarea'
 import { Toggle } from '../components/Toggle'
 import { ToggleGroup, ToggleGroupItem } from '../components/ToggleGroup'
@@ -36,6 +37,31 @@ const players: ComboboxOption[] = [
   { id: 'ana-silva', label: 'Silva, Ana', hint: '1710' },
   { id: 'kenji-tanaka', label: 'Tanaka, Kenji', hint: '1540' },
   { id: 'lena-weber', label: 'Weber, Lena', hint: '1295' },
+]
+
+// The Tabs card's tabs. The reference shows only the overview's panel.
+const tournamentTabs: Tab[] = [
+  {
+    value: 'overview',
+    label: 'Overview',
+    panel:
+      'Tournament overview — 32 players, 4 courts, finals projected for 6:45pm.',
+  },
+  {
+    value: 'schedule',
+    label: 'Schedule',
+    panel: 'Round 3 starts at 2:00pm — 16 matches across 4 courts.',
+  },
+  {
+    value: 'standings',
+    label: 'Standings',
+    panel: 'Group A after round 2 — Nguyen and Okafor lead on 2 wins each.',
+  },
+  {
+    value: 'players',
+    label: 'Players',
+    panel: '32 players from 9 clubs, rated 1180 to 1720.',
+  },
 ]
 
 type Standing = {
@@ -385,7 +411,12 @@ export function DesignSystem() {
         id="nav"
         title="Navigation"
         lead="Tabs, breadcrumbs, pagination, menus. Wayfinding inside the app."
-      />
+      >
+        {/* The kit's tag names an underlined style it doesn't show. */}
+        <ComponentCard title="Tabs" tag="underlined or boxed">
+          <Tabs label="Tournament" tabs={tournamentTabs} />
+        </ComponentCard>
+      </Section>
     </>
   )
 }

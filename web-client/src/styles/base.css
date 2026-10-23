@@ -1768,6 +1768,57 @@ h4, .h4 {
 }
 
 /* =========================================================================
+   Tabs (the reference kit's .tabs-list, .tab, .tab.on and .tab-content): a
+   .tab is a button, chosen when aria-selected is true. It takes the .button
+   focus outline, keyboard focus only. The kit gives it none. The kit's tag
+   names an underlined style it doesn't show, so only its boxed one is here.
+   ========================================================================= */
+.tabs-list {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--ink-900);
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-subtle);
+}
+
+.tab {
+  font: 500 13px var(--font-ui);
+  margin: 0;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  cursor: pointer;
+  color: var(--fg-3);
+}
+
+.tab[aria-selected="true"] {
+  background: var(--ink-700);
+  color: var(--fg-1);
+}
+
+.tab:focus-visible, .tab-content:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+.tab-content {
+  padding: 20px 4px;
+  font-size: 14px;
+  color: var(--fg-2);
+  line-height: 1.5;
+}
+
+/* The kit is only laid out for desktop. On a phone, its row of tabs is
+   wider than the card, so the tabs wrap onto more lines. */
+@media (max-width: 640px) {
+  .tabs-list {
+    flex-wrap: wrap;
+  }
+}
+
+/* =========================================================================
    Utility: hidden on screen, still read by assistive tech (e.g. a label the
    design shows no room for).
    ========================================================================= */

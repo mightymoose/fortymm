@@ -407,4 +407,22 @@ export class DesignSystemPage {
   get navSectionLead(): HTMLElement {
     return within(this.navSection).getAllByRole('paragraph')[0]
   }
+
+  get tabsCard(): HTMLElement {
+    return within(this.navSection).getByRole('article', { name: 'Tabs' })
+  }
+
+  get tabsCardHeading(): HTMLElement {
+    return within(this.tabsCard).getByRole('heading', { level: 3 })
+  }
+
+  // The Tabs card's tabs, in order.
+  get tabs(): HTMLElement[] {
+    return within(this.tabsCard).getAllByRole('tab')
+  }
+
+  // The chosen tab's panel: the others are hidden.
+  get tabPanel(): HTMLElement {
+    return within(this.tabsCard).getByRole('tabpanel')
+  }
 }

@@ -605,6 +605,14 @@ describe('DesignSystem', () => {
     ).toBeTruthy()
   })
 
+  it("shows the reference's two boxes, 16 : 9 and 1 : 1", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(
+      designSystemPage.aspectRatioBoxes.map((box) => box.textContent),
+    ).toEqual(['16 : 9', '1 : 1'])
+  })
+
   it('has a Navigation section after Data Display, with a lead line', async () => {
     const designSystemPage = await DesignSystemPage.render()
 
@@ -619,12 +627,33 @@ describe('DesignSystem', () => {
     ).toBeTruthy()
   })
 
-  it("shows the reference's two boxes, 16 : 9 and 1 : 1", async () => {
+  it('has a Tabs card first in the Navigation section', async () => {
     const designSystemPage = await DesignSystemPage.render()
 
+    expect(designSystemPage.tabsCardHeading).toHaveTextContent('Tabs')
+    expect(designSystemPage.tabsCard).toHaveTextContent('underlined or boxed')
     expect(
-      designSystemPage.aspectRatioBoxes.map((box) => box.textContent),
-    ).toEqual(['16 : 9', '1 : 1'])
+      designSystemPage.navSectionLead.compareDocumentPosition(
+        designSystemPage.tabsCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's four tabs, Overview chosen with its panel", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.tabs.map((tab) => tab.textContent)).toEqual([
+      'Overview',
+      'Schedule',
+      'Standings',
+      'Players',
+    ])
+    expect(
+      designSystemPage.tabs.map((tab) => tab.getAttribute('aria-selected')),
+    ).toEqual(['true', 'false', 'false', 'false'])
+    expect(designSystemPage.tabPanel).toHaveTextContent(
+      'Tournament overview — 32 players, 4 courts, finals projected for 6:45pm.',
+    )
   })
 
   it.each([

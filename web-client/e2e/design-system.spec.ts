@@ -1916,6 +1916,106 @@ test.describe('Navigation section', () => {
   })
 })
 
+// Nothing is focused first, so the tabs show their resting styles.
+test.describe('Tabs card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.tabsCard).toHaveScreenshot('tabs-card.png')
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.tabsCard).toHaveScreenshot('tabs-card.png')
+  })
+})
+
+// The kit's tabs are static, with no focus style, so the tests below are
+// the app's alone.
+test.describe('Tabs', () => {
+  const orange = 'rgb(255, 122, 26)'
+
+  test.beforeEach(async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+  })
+
+  test('a click chooses a tab and shows its panel', async ({
+    designSystemPage,
+  }) => {
+    const schedule = designSystemPage.tab('Schedule')
+
+    await schedule.click()
+
+    await expect(schedule).toHaveAttribute('aria-selected', 'true')
+    await expect(designSystemPage.tab('Overview')).toHaveAttribute(
+      'aria-selected',
+      'false',
+    )
+    await expect(designSystemPage.tabPanel).toHaveText(
+      'Round 3 starts at 2:00pm — 16 matches across 4 courts.',
+    )
+  })
+
+  // Natively the arrows, Home and End scroll the page.
+  test("the arrow keys, Home and End move the choice, and don't scroll the page", async ({
+    designSystemPage,
+    page,
+  }) => {
+    const overview = designSystemPage.tab('Overview')
+    await overview.evaluate((tab) => tab.scrollIntoView({ block: 'center' }))
+    await overview.focus()
+    const top = await page.locator('html').evaluate((html) => html.scrollTop)
+    expect(top).toBeGreaterThan(0)
+
+    for (const [key, name] of [
+      ['ArrowRight', 'Schedule'],
+      ['End', 'Players'],
+      ['ArrowRight', 'Overview'],
+      ['ArrowLeft', 'Players'],
+      ['Home', 'Overview'],
+    ]) {
+      await page.keyboard.press(key)
+      const tab = designSystemPage.tab(name)
+      await expect(tab, key).toBeFocused()
+      await expect(tab, key).toHaveAttribute('aria-selected', 'true')
+      expect(
+        await page.locator('html').evaluate((html) => html.scrollTop),
+        key,
+      ).toBe(top)
+    }
+  })
+
+  test('keyboard focus shows the outline', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const overview = designSystemPage.tab('Overview')
+    const schedule = designSystemPage.tab('Schedule')
+    await overview.focus()
+    await page.keyboard.press('Shift+Tab')
+    await page.keyboard.press('Tab')
+
+    await expect(overview).toBeFocused()
+    await expect(overview).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(overview).toHaveCSS('outline-offset', '2px')
+
+    await page.keyboard.press('ArrowRight')
+    await expect(schedule).toBeFocused()
+    await expect(schedule).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(overview).toHaveCSS('outline-style', 'none')
+  })
+
+  test('a click shows no outline', async ({ designSystemPage }) => {
+    const schedule = designSystemPage.tab('Schedule')
+
+    await schedule.click()
+
+    await expect(schedule).toBeFocused()
+    await expect(schedule).toHaveCSS('outline-style', 'none')
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -2164,6 +2264,26 @@ test.describe('on a phone', () => {
         group.x + group.width,
       )
     }
+  })
+
+  // The row of tabs is wider than the card's content, so the tabs wrap
+  // onto more lines, inside the card.
+  test('the tabs card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [designSystemPage.tabsCard, page.locator('html')]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.tabsCard.boundingBox())!
+    const list = (await designSystemPage.tabList.boundingBox())!
+    const first = (await designSystemPage.tab('Overview').boundingBox())!
+    const last = (await designSystemPage.tab('Players').boundingBox())!
+    // Inside the card's 1px border and 32px padding on the right.
+    expect(list.x + list.width).toBeLessThanOrEqual(card.x + card.width - 33)
+    expect(last.y).toBeGreaterThan(first.y)
+    expect(last.x + last.width).toBeLessThanOrEqual(list.x + list.width)
   })
 
   // The cards share the .grid-2 layout with the input card's fields, so
