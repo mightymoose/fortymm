@@ -9,18 +9,20 @@ export type AccordionItem = {
 // A stack of collapsible items, each a heading over its content, as in the
 // WAI-ARIA accordion pattern. Styled by `.accordion-item` in
 // styles/base.css. Each heading holds a button that shows or hides the
-// item's content, and the items open and close independently.
+// item's content. At most one item is open: opening one closes the open
+// one, and clicking the open one closes it.
 //
-// It's uncontrolled: `defaultOpen` lists the items open at first.
+// It's uncontrolled: `defaultOpen` is the item open at first, none unless
+// given.
 // `headingLevel` has no default: the headings' level depends on where the
 // accordion sits in the page's outline, so each caller picks it.
 export function Accordion({
   items,
-  defaultOpen = [],
+  defaultOpen,
   headingLevel,
 }: {
   items: AccordionItem[]
-  defaultOpen?: string[]
+  defaultOpen?: string
   headingLevel: 2 | 3 | 4 | 5 | 6
 }) {
   const id = useId()
@@ -28,17 +30,13 @@ export function Accordion({
   const Heading = `h${headingLevel}` as const
 
   function toggle(value: string) {
-    setOpen((current) =>
-      current.includes(value)
-        ? current.filter((other) => other !== value)
-        : [...current, value],
-    )
+    setOpen((current) => (current === value ? undefined : value))
   }
 
   return (
     <div className="accordion">
       {items.map((item) => {
-        const expanded = open.includes(item.value)
+        const expanded = item.value === open
         const triggerId = `${id}-trigger-${item.value}`
         const contentId = `${id}-content-${item.value}`
         return (

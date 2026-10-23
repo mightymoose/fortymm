@@ -476,7 +476,7 @@ export function DesignSystem() {
           <div className="accordion-demo">
             <Accordion
               items={faq}
-              defaultOpen={[faq[0].value]}
+              defaultOpen={faq[0].value}
               headingLevel={4}
             />
           </div>

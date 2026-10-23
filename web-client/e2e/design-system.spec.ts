@@ -2049,7 +2049,7 @@ test.describe('Accordion', () => {
     await designSystemPage.goto()
   })
 
-  test('a click opens and closes each question on its own', async ({
+  test('opening a question closes the open one', async ({
     designSystemPage,
   }) => {
     const first = designSystemPage.accordionTrigger(scheduler)
@@ -2060,12 +2060,12 @@ test.describe('Accordion', () => {
     await second.click()
     await expect(second).toHaveAttribute('aria-expanded', 'true')
     await expect(designSystemPage.accordionContent(free)).toBeVisible()
-    await expect(first).toHaveAttribute('aria-expanded', 'true')
-
-    await first.click()
     await expect(first).toHaveAttribute('aria-expanded', 'false')
     await expect(designSystemPage.accordionContent(scheduler)).toHaveCount(0)
-    await expect(designSystemPage.accordionContent(free)).toBeVisible()
+
+    await second.click()
+    await expect(second).toHaveAttribute('aria-expanded', 'false')
+    await expect(designSystemPage.accordionContent(free)).toHaveCount(0)
   })
 
   test('Enter and Space open and close a question', async ({

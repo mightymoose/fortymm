@@ -43,9 +43,9 @@ describe('Accordion', () => {
     expect(trigger('Scheduler')).toHaveAccessibleName('Scheduler')
   })
 
-  it('opens only the items it is told to', () => {
+  it('opens only the item it is told to', () => {
     render(
-      <Accordion items={items} defaultOpen={['scheduler']} headingLevel={4} />,
+      <Accordion items={items} defaultOpen="scheduler" headingLevel={4} />,
     )
 
     expect(expanded()).toEqual(['true', 'false', 'false'])
@@ -63,19 +63,27 @@ describe('Accordion', () => {
     expect(screen.queryByRole('region')).not.toBeInTheDocument()
   })
 
-  it('opens and closes each item on its own', async () => {
+  it('opening an item closes the open one', async () => {
     const user = userEvent.setup()
     render(
-      <Accordion items={items} defaultOpen={['scheduler']} headingLevel={4} />,
+      <Accordion items={items} defaultOpen="scheduler" headingLevel={4} />,
     )
 
     await user.click(trigger('Ratings'))
-    expect(expanded()).toEqual(['true', 'false', 'true'])
+    expect(expanded()).toEqual(['false', 'false', 'true'])
     expect(screen.getByText('How ratings move.')).toBeVisible()
+    expect(screen.getByText('How it schedules.')).not.toBeVisible()
+  })
+
+  it('closes the open item when it is clicked', async () => {
+    const user = userEvent.setup()
+    render(
+      <Accordion items={items} defaultOpen="scheduler" headingLevel={4} />,
+    )
 
     await user.click(trigger('Scheduler'))
-    expect(expanded()).toEqual(['false', 'false', 'true'])
-    expect(screen.getByText('How it schedules.')).not.toBeVisible()
+    expect(expanded()).toEqual(['false', 'false', 'false'])
+    expect(screen.queryByRole('region')).not.toBeInTheDocument()
   })
 
   it('toggles an item with Enter and Space', async () => {
