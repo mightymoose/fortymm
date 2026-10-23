@@ -2138,6 +2138,62 @@ test.describe('Accordion', () => {
   })
 })
 
+// Nothing is hovered or focused first, so the links show their resting
+// styles.
+test.describe('Breadcrumb card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.breadcrumbCard).toHaveScreenshot(
+      'breadcrumb-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.breadcrumbCard).toHaveScreenshot(
+      'breadcrumb-card.png',
+    )
+  })
+})
+
+test.describe('Breadcrumb', () => {
+  const orange = 'rgb(255, 122, 26)'
+  // --fg-3 and --fg-1.
+  const fg3 = 'rgb(169, 176, 194)'
+  const fg1 = 'rgb(247, 248, 251)'
+
+  test.beforeEach(async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+  })
+
+  test('hovering a link lightens it', async ({ designSystemPage }) => {
+    const link = designSystemPage.breadcrumbLink('Tournaments')
+    await expect(link).toHaveCSS('color', fg3)
+
+    await link.hover()
+
+    await expect(link).toHaveCSS('color', fg1)
+  })
+
+  // The kit's links have no focus style, so this is the app's alone.
+  test('keyboard focus shows the outline', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const first = designSystemPage.breadcrumbLink('Tournaments')
+    const second = designSystemPage.breadcrumbLink('April Spring Open')
+    await first.focus()
+
+    await page.keyboard.press('Tab')
+
+    await expect(second).toBeFocused()
+    await expect(second).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(second).toHaveCSS('outline-offset', '2px')
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -2406,6 +2462,29 @@ test.describe('on a phone', () => {
     expect(list.x + list.width).toBeLessThanOrEqual(card.x + card.width - 33)
     expect(last.y).toBeGreaterThan(first.y)
     expect(last.x + last.width).toBeLessThanOrEqual(list.x + list.width)
+  })
+
+  // The trail is wider than the card's content, so its items wrap onto
+  // more lines, inside the card.
+  test('the breadcrumb card fits', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    expect(
+      await designSystemPage.breadcrumbCard.evaluate(
+        (e) => e.scrollWidth - e.clientWidth,
+      ),
+    ).toBe(0)
+    const card = (await designSystemPage.breadcrumbCard.boundingBox())!
+    const trail = (await designSystemPage.breadcrumb.boundingBox())!
+    const first = (await designSystemPage
+      .breadcrumbLink('Tournaments')
+      .boundingBox())!
+    const current = (await designSystemPage.breadcrumb
+      .getByText('Round 3')
+      .boundingBox())!
+    // Inside the card's 1px border and 32px padding on the right.
+    expect(trail.x + trail.width).toBeLessThanOrEqual(card.x + card.width - 33)
+    expect(current.y).toBeGreaterThan(first.y)
   })
 
   // The cards share the .grid-2 layout with the input card's fields, so

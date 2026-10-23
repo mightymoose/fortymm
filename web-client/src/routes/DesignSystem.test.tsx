@@ -694,6 +694,35 @@ describe('DesignSystem', () => {
     ])
   })
 
+  it('has a Breadcrumb card after the Accordion card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.breadcrumbCardHeading).toHaveTextContent(
+      'Breadcrumb',
+    )
+    expect(designSystemPage.breadcrumbCard).toHaveTextContent('trail')
+    expect(
+      designSystemPage.accordionCard.compareDocumentPosition(
+        designSystemPage.breadcrumbCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's trail, Round 3 the current page", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const breadcrumb = designSystemPage.breadcrumb
+    expect(
+      within(breadcrumb)
+        .getAllByRole('link')
+        .map((link) => link.textContent),
+    ).toEqual(['Tournaments', 'April Spring Open'])
+    expect(within(breadcrumb).getByText('Round 3')).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+  })
+
   it.each([
     {
       title: 'April Spring Open',

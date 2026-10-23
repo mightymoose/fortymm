@@ -3,6 +3,7 @@ import { AspectRatio } from '../components/AspectRatio'
 import { Avatar, type AvatarTone } from '../components/Avatar'
 import { AvatarGroup } from '../components/AvatarGroup'
 import { Badge } from '../components/Badge'
+import { Breadcrumb } from '../components/Breadcrumb'
 import { Button } from '../components/Button'
 import { Card } from '../components/Card'
 import { Checkbox } from '../components/Checkbox'
@@ -448,6 +449,16 @@ export function DesignSystem() {
               headingLevel={4}
             />
           </div>
+        </ComponentCard>
+        {/* There are no such pages yet, so the links go back to this section. */}
+        <ComponentCard title="Breadcrumb" tag="trail">
+          <Breadcrumb
+            items={[
+              { label: 'Tournaments', href: '#nav' },
+              { label: 'April Spring Open', href: '#nav' },
+              { label: 'Round 3' },
+            ]}
+          />
         </ComponentCard>
       </Section>
     </>

@@ -66,6 +66,8 @@ export class DesignSystemPage {
   readonly tabList: Locator
   readonly tabPanel: Locator
   readonly accordionCard: Locator
+  readonly breadcrumbCard: Locator
+  readonly breadcrumb: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -218,6 +220,13 @@ export class DesignSystemPage {
     this.accordionCard = this.navSection.getByRole('article', {
       name: 'Accordion',
       exact: true,
+    })
+    this.breadcrumbCard = this.navSection.getByRole('article', {
+      name: 'Breadcrumb',
+      exact: true,
+    })
+    this.breadcrumb = this.breadcrumbCard.getByRole('navigation', {
+      name: 'Breadcrumb',
     })
   }
 
@@ -401,6 +410,11 @@ export class DesignSystemPage {
   // tech, so it has no role to find it by.
   accordionChevron(name: string): Locator {
     return this.accordionTrigger(name).locator('.accordion-chevron')
+  }
+
+  // The breadcrumb's link named `name`, e.g. "Tournaments".
+  breadcrumbLink(name: string): Locator {
+    return this.breadcrumb.getByRole('link', { name, exact: true })
   }
 
   // Clicks the middle of the text `name` in `card` with a plain mouse click.

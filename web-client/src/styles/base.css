@@ -1880,6 +1880,61 @@ h4, .h4 {
 }
 
 /* =========================================================================
+   Breadcrumb (the reference kit's .crumb, .sl and .cur): the kit lays its
+   links, slashes and current page side by side in the nav, 8px apart. Here
+   they're in a list, each item holding its link and the slash after it,
+   with the same 8px gaps between and within the items. The links take the
+   .button focus outline, keyboard focus only. The kit gives them none.
+   ========================================================================= */
+.breadcrumb {
+  display: inline-flex;
+  font: 400 13px var(--font-ui);
+  color: var(--fg-3);
+}
+
+.breadcrumb ol, .breadcrumb li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.breadcrumb ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.breadcrumb a {
+  color: var(--fg-3);
+  text-decoration: none;
+}
+
+.breadcrumb a:hover {
+  color: var(--fg-1);
+}
+
+.breadcrumb a:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+.breadcrumb-current {
+  color: var(--fg-1);
+}
+
+.breadcrumb-separator {
+  color: var(--ink-500);
+}
+
+/* The kit is only laid out for desktop. On a phone, its trail is wider
+   than the card, so the items wrap onto more lines. */
+@media (max-width: 640px) {
+  .breadcrumb ol {
+    flex-wrap: wrap;
+  }
+}
+
+/* =========================================================================
    Utility: hidden on screen, still read by assistive tech (e.g. a label the
    design shows no room for).
    ========================================================================= */

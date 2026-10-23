@@ -443,4 +443,18 @@ export class DesignSystemPage {
   get accordionContents(): HTMLElement[] {
     return within(this.accordionCard).queryAllByRole('region')
   }
+
+  get breadcrumbCard(): HTMLElement {
+    return within(this.navSection).getByRole('article', { name: 'Breadcrumb' })
+  }
+
+  get breadcrumbCardHeading(): HTMLElement {
+    return within(this.breadcrumbCard).getByRole('heading', { level: 3 })
+  }
+
+  get breadcrumb(): HTMLElement {
+    return within(this.breadcrumbCard).getByRole('navigation', {
+      name: 'Breadcrumb',
+    })
+  }
 }
