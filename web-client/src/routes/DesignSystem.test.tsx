@@ -568,6 +568,27 @@ describe('DesignSystem', () => {
     expect(designSystemPage.progressCard).toHaveTextContent('25%')
   })
 
+  it('has a Skeleton card after the Progress card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.skeletonCardHeading).toHaveTextContent('Skeleton')
+    expect(designSystemPage.skeletonCard).toHaveTextContent('loading state')
+    expect(
+      designSystemPage.progressCard.compareDocumentPosition(
+        designSystemPage.skeletonCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("hides the Skeleton card's three placeholders from assistive tech", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.skeletons).toHaveLength(3)
+    for (const skeleton of designSystemPage.skeletons) {
+      expect(skeleton).toHaveAttribute('aria-hidden', 'true')
+    }
+  })
+
   it.each([
     {
       title: 'April Spring Open',

@@ -17,6 +17,7 @@ import { Radio, RadioGroup } from '../components/RadioGroup'
 import { RatingDelta } from '../components/RatingDelta'
 import { Section } from '../components/Section'
 import { Select } from '../components/Select'
+import { Skeleton } from '../components/Skeleton'
 import { Slider } from '../components/Slider'
 import { Switch } from '../components/Switch'
 import { type Column, Table } from '../components/Table'
@@ -360,6 +361,15 @@ export function DesignSystem() {
               format="fraction"
             />
             <Progress label="Group B" value={25} max={100} format="percent" />
+          </div>
+        </ComponentCard>
+        <ComponentCard title="Skeleton" tag="loading state">
+          <div className="row skeleton-demo">
+            <Skeleton shape="circle" width={48} height={48} />
+            <div className="col skeleton-lines">
+              <Skeleton width="60%" height={14} />
+              <Skeleton width="40%" height={12} />
+            </div>
           </div>
         </ComponentCard>
       </Section>

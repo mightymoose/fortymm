@@ -359,4 +359,22 @@ export class DesignSystemPage {
   get progressBars(): HTMLElement[] {
     return within(this.progressCard).getAllByRole('progressbar')
   }
+
+  get skeletonCard(): HTMLElement {
+    return within(this.displaySection).getByRole('article', {
+      name: 'Skeleton',
+    })
+  }
+
+  get skeletonCardHeading(): HTMLElement {
+    return within(this.skeletonCard).getByRole('heading', { level: 3 })
+  }
+
+  // The placeholders are hidden from assistive tech, so they have no role to
+  // find them by.
+  get skeletons(): HTMLElement[] {
+    return Array.from(
+      this.skeletonCard.querySelectorAll<HTMLElement>('.skeleton'),
+    )
+  }
 }

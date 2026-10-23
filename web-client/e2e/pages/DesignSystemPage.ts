@@ -56,6 +56,8 @@ export class DesignSystemPage {
   readonly tableCard: Locator
   readonly standingsTable: Locator
   readonly progressCard: Locator
+  readonly skeletonCard: Locator
+  readonly skeleton: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -183,6 +185,13 @@ export class DesignSystemPage {
       name: 'Progress',
       exact: true,
     })
+    this.skeletonCard = this.displaySection.getByRole('article', {
+      name: 'Skeleton',
+      exact: true,
+    })
+    // The placeholders are hidden from assistive tech, so they have no role
+    // to find them by.
+    this.skeleton = this.skeletonCard.locator('.skeleton').first()
   }
 
   // A component card's title, in its header.

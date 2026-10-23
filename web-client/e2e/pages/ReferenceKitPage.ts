@@ -40,6 +40,7 @@ export class ReferenceKitPage {
   readonly avatarCard: Locator
   readonly tableCard: Locator
   readonly progressCard: Locator
+  readonly skeletonCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -154,6 +155,13 @@ export class ReferenceKitPage {
       has: page.getByRole('heading', {
         level: 3,
         name: 'Progress',
+        exact: true,
+      }),
+    })
+    this.skeletonCard = displaySection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Skeleton',
         exact: true,
       }),
     })

@@ -1707,6 +1707,44 @@ h4, .h4 {
 }
 
 /* =========================================================================
+   Skeleton (the reference kit's .skel and its skel keyframes). The kit
+   sets each placeholder's size and the circle's radius inline. Here the
+   size is set by the component and the circle is a modifier. The kit's
+   shimmer runs even with reduced motion. Here it stops.
+   ========================================================================= */
+.skeleton {
+  background: linear-gradient(90deg, var(--ink-700) 25%, var(--ink-600) 50%, var(--ink-700) 75%);
+  background-size: 200% 100%;
+  animation: skel 1.4s linear infinite;
+  border-radius: var(--r-sm);
+}
+
+.skeleton--circle {
+  border-radius: 50%;
+}
+
+@keyframes skel {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}
+
+/* The kit's Skeleton card sets these gaps inline on its .row and .col. */
+.skeleton-demo {
+  gap: 16px;
+}
+
+.skeleton-lines {
+  flex: 1;
+  gap: 8px;
+}
+
+/* =========================================================================
    Utility: hidden on screen, still read by assistive tech (e.g. a label the
    design shows no room for).
    ========================================================================= */

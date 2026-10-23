@@ -1815,6 +1815,44 @@ test.describe('Progress card', () => {
   })
 })
 
+// Both screenshots stop the shimmer at its first frame, so they match
+// whenever they're taken.
+test.describe('Skeleton card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.skeletonCard).toHaveScreenshot(
+      'skeleton-card.png',
+      { animations: 'disabled' },
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.skeletonCard).toHaveScreenshot(
+      'skeleton-card.png',
+      { animations: 'disabled' },
+    )
+  })
+
+  test('the placeholders shimmer', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.skeleton).toHaveCSS('animation-name', 'skel')
+  })
+
+  test.describe('with reduced motion', () => {
+    test.use({ reducedMotion: 'reduce' })
+
+    test('the placeholders hold still', async ({ designSystemPage }) => {
+      await designSystemPage.goto()
+
+      await expect(designSystemPage.skeleton).toHaveCSS('animation-name', 'none')
+    })
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
