@@ -49,6 +49,8 @@ export class ReferenceKitPage {
   readonly paginationCard: Locator
   readonly navMenuCard: Locator
   readonly menubarCard: Locator
+  readonly overlaysSectionHeading: Locator
+  readonly overlaysSectionLead: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -214,6 +216,11 @@ export class ReferenceKitPage {
         exact: true,
       }),
     })
+    const overlaysSection = page.locator('#overlays')
+    this.overlaysSectionHeading = overlaysSection.getByRole('heading', {
+      level: 2,
+    })
+    this.overlaysSectionLead = overlaysSection.getByRole('paragraph').first()
   }
 
   async goto(): Promise<void> {

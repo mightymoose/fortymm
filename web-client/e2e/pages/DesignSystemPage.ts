@@ -74,6 +74,9 @@ export class DesignSystemPage {
   readonly navMenuPanel: Locator
   readonly menubarCard: Locator
   readonly menubar: Locator
+  readonly overlaysSection: Locator
+  readonly overlaysSectionHeading: Locator
+  readonly overlaysSectionLead: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -251,6 +254,14 @@ export class DesignSystemPage {
       exact: true,
     })
     this.menubar = this.menubarCard.getByRole('menubar', { name: 'App' })
+    this.overlaysSection = page.getByRole('region', { name: 'Overlays' })
+    this.overlaysSectionHeading = this.overlaysSection.getByRole('heading', {
+      level: 2,
+    })
+    // The first paragraph: the cards in the section have paragraphs too.
+    this.overlaysSectionLead = this.overlaysSection
+      .getByRole('paragraph')
+      .first()
   }
 
   // A component card's title, in its header.

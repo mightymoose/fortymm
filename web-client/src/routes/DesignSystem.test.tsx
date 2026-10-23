@@ -805,6 +805,22 @@ describe('DesignSystem', () => {
     ).toEqual([items[0]])
   })
 
+  it('has an Overlays section after Navigation, with a lead line', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.overlaysSectionHeading).toHaveTextContent(
+      'Overlays',
+    )
+    expect(designSystemPage.overlaysSectionLead).toHaveTextContent(
+      'Dialogs, sheets, popovers, menus. Content that floats above the canvas. All shown in their open state.',
+    )
+    expect(
+      designSystemPage.navSection.compareDocumentPosition(
+        designSystemPage.overlaysSection,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
   it.each([
     {
       title: 'April Spring Open',

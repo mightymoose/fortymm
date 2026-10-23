@@ -498,4 +498,17 @@ export class DesignSystemPage {
   get menubarItems(): HTMLElement[] {
     return within(this.menubarCard).getAllByRole('menuitem')
   }
+
+  get overlaysSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Overlays' })
+  }
+
+  get overlaysSectionHeading(): HTMLElement {
+    return within(this.overlaysSection).getByRole('heading', { level: 2 })
+  }
+
+  // The first paragraph: the cards in the section have paragraphs too.
+  get overlaysSectionLead(): HTMLElement {
+    return within(this.overlaysSection).getAllByRole('paragraph')[0]
+  }
 }

@@ -52,10 +52,11 @@ test.describe('header', () => {
   })
 })
 
-// The intro, the Forms & Input, Data Display and Navigation sections and
-// their component cards use the reference kit's own copy, so they're compared
-// with the kit as is. The kit's sections go on to more cards than the app has
-// yet, so each section's heading, lead and cards are compared one by one.
+// The intro, the Forms & Input, Data Display, Navigation and Overlays
+// sections and their component cards use the reference kit's own copy, so
+// they're compared with the kit as is. The kit's sections go on to more
+// cards than the app has yet, so each section's heading, lead and cards are
+// compared one by one.
 test.describe('intro', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
@@ -2466,6 +2467,30 @@ test.describe('Menubar', () => {
     await view.click()
     await expect(view).toBeFocused()
     await expect(view).toHaveCSS('outline-style', 'none')
+  })
+})
+
+test.describe('Overlays section', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.overlaysSectionHeading).toHaveScreenshot(
+      'overlays-heading.png',
+    )
+    await expect(designSystemPage.overlaysSectionLead).toHaveScreenshot(
+      'overlays-lead.png',
+    )
+  })
+
+  test('matches the reference kit section', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.overlaysSectionHeading).toHaveScreenshot(
+      'overlays-heading.png',
+    )
+    await expect(referenceKitPage.overlaysSectionLead).toHaveScreenshot(
+      'overlays-lead.png',
+    )
   })
 })
 

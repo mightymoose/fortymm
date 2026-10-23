@@ -511,6 +511,11 @@ export function DesignSystem() {
           />
         </ComponentCard>
       </Section>
+      <Section
+        id="overlays"
+        title="Overlays"
+        lead="Dialogs, sheets, popovers, menus. Content that floats above the canvas. All shown in their open state."
+      />
     </>
   )
 }
