@@ -1705,6 +1705,47 @@ test.describe('Card card', () => {
   })
 })
 
+// Both screenshots stop the live dot's pulse at its first frame, so they
+// match whenever they're taken.
+test.describe('Badge card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.badgeCard).toHaveScreenshot(
+      'badge-card.png',
+      { animations: 'disabled' },
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.badgeCard).toHaveScreenshot(
+      'badge-card.png',
+      { animations: 'disabled' },
+    )
+  })
+
+  test("the live badge's dot pulses", async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.liveDot).toHaveCSS(
+      'animation-name',
+      'ball-pulse',
+    )
+  })
+
+  test.describe('with reduced motion', () => {
+    test.use({ reducedMotion: 'reduce' })
+
+    test("the live badge's dot holds still", async ({ designSystemPage }) => {
+      await designSystemPage.goto()
+
+      await expect(designSystemPage.liveDot).toHaveCSS('animation-name', 'none')
+    })
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -1969,6 +2010,25 @@ test.describe('on a phone', () => {
     expect(second.x).toBe(first.x)
     expect(second.width).toBe(first.width)
     expect(second.y).toBeGreaterThanOrEqual(first.y + first.height)
+    expect(
+      await page
+        .locator('html')
+        .evaluate((html) => html.scrollWidth - html.clientWidth),
+    ).toBeLessThanOrEqual(0)
+  })
+
+  // Five badges are wider than the card's content on a phone, so the row
+  // wraps them onto more lines rather than scrolling the page sideways.
+  test("the badge card's badges wrap", async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+    const card = (await designSystemPage.badgeCard.boundingBox())!
+    const first = (await designSystemPage.badge('Seed 1').boundingBox())!
+    const last = (await designSystemPage
+      .badge('Live · Court 3')
+      .boundingBox())!
+
+    expect(last.y).toBeGreaterThan(first.y)
+    expect(last.x + last.width).toBeLessThanOrEqual(card.x + card.width - 32)
     expect(
       await page
         .locator('html')

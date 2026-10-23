@@ -288,4 +288,18 @@ export class DesignSystemPage {
   demoCard(name: string): HTMLElement {
     return within(this.cardCard).getByRole('article', { name })
   }
+
+  get badgeCard(): HTMLElement {
+    return within(this.displaySection).getByRole('article', { name: 'Badge' })
+  }
+
+  get badgeCardHeading(): HTMLElement {
+    return within(this.badgeCard).getByRole('heading', { level: 3 })
+  }
+
+  // A badge is a styled span with no role of its own, so the badges are
+  // found by their class.
+  get badges(): HTMLElement[] {
+    return Array.from(this.badgeCard.querySelectorAll<HTMLElement>('.badge'))
+  }
 }
