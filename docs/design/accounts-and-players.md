@@ -14,15 +14,15 @@ Every visitor gets an account the first time the app loads. They can play games 
 - **Session.** An opaque token in a cookie that points at one account.
 - **Entry.** One player's place in one tournament event. This doc says "enter" and "entry", not "register", so it never confuses a tournament entry with creating an account.
 - **Adopt.** A verified account takes over a guest account's players and sessions. The API then marks the guest account as adopted, and nobody can sign in to it again.
-- **Player merge.** Two players turn out to be one person, and one player absorbs the other.
+- **Player merge.** Two players turn out to be one person. One player stops taking part, and the other carries on. Both keep their games and ratings.
 
 ## Three premises
 
 The design rests on three rules. Most edge cases below resolve because of them.
 
-1. **History belongs to players.** Games, ratings and entries reference `players.id`. No account change ever rewrites them.
+1. **History belongs to players.** Games, ratings and entries reference `players.id`. Nothing rewrites them, not an account change and not a player merge.
 2. **Adoption moves control, not history.** Adopting a guest changes `player_managers` rows. No game or entry row changes, so a match in progress or an open entry stays valid during adoption.
-3. **Players outlive accounts.** A player with no manager is legal. A walk-in that a tournament director adds has no manager. So does the player of a deleted guest account. Deleting an account never deletes a player who has history.
+3. **Players outlive accounts.** A player with no manager is legal. A walk-in that a tournament director adds has no manager. So does the player of a deleted guest account. Nothing ever deletes a player. A player's games are also their opponents' games, and every rating came from them.
 
 ## Keep Auth0 out of guest creation
 
@@ -65,8 +65,15 @@ create table players (
   created_at timestamptz not null default now()
 );
 
+create function refuse_player_delete() returns trigger language plpgsql as $$
+begin
+  raise exception 'players are never deleted';
+end $$;
+create trigger players_are_permanent before delete on players
+  for each row execute function refuse_player_delete();
+
 create table player_managers (
-  player_id uuid not null references players (id) on delete cascade,
+  player_id uuid not null references players (id),
   account_id uuid not null references accounts (id) on delete cascade,
   relationship text not null check (relationship in ('self', 'managed')),
   adopted_from uuid,                     -- the guest account it came from, until the "is this you?" prompt is answered
@@ -95,7 +102,7 @@ create table login_attempts (
 );
 ```
 
-Deleting an account cascades to its sessions, identities, emails and `player_managers` rows. It never cascades to `players`.
+Deleting an account cascades to its sessions, identities, emails and `player_managers` rows. It never cascades to `players`. The `players_are_permanent` trigger makes any `DELETE` on `players` fail, so a bug or a manual query cannot remove one either.
 
 `player_managers` is a join table from the start, even though the first UI allows one manager per player. Two parents who each create the same child would otherwise make two players and two entries. A later change from one manager to many would rewrite every query that reads the manager.
 
@@ -128,13 +135,13 @@ Adoption and player merge must know about every table that references `players` 
 ```python
 OWNERSHIP_RULES: dict[tuple[str, str], OwnershipRule] = {
     ("player_managers", "account_id"): OwnershipRule.MOVES_ON_ADOPT,
-    ("player_managers", "player_id"): OwnershipRule.REMOVED_ON_PLAYER_MERGE,
+    ("player_managers", "player_id"): OwnershipRule.KEPT_ON_PLAYER_MERGE,
     ("sessions", "account_id"): OwnershipRule.MOVES_ON_ADOPT,
     ("identities", "account_id"): OwnershipRule.GUEST_HAS_NONE,
     ("account_emails", "account_id"): OwnershipRule.GUEST_HAS_NONE,
     ("players", "merged_into"): OwnershipRule.SET_BY_PLAYER_MERGE,
     ("accounts", "adopted_into"): OwnershipRule.SET_BY_ADOPT,
-    # Later: ("games", "player_id"): REWRITTEN_ON_PLAYER_MERGE,
+    # Later: ("games", "player_id"): KEPT_ON_PLAYER_MERGE,
     # ("payments", "payer_account_id"): KEPT_AS_EVIDENCE,
 }
 ```
@@ -281,20 +288,21 @@ Adoption itself is never optional at sign-in. The person cannot sign in on this 
 
 ## Merge two players who are one person
 
-Player merge rewrites history, so it is a separate operation with its own refusals. Adoption never runs it automatically.
+Player merge changes no game and no rating. Each game stays recorded with the two players who played it. Each opponent's rating came from those games, so rewriting them would change other people's history. Adoption never runs a merge automatically.
 
-The person who asks must manage both players. A merge of `source` into `target`:
+The person who asks must manage both players, and picks which one carries on. A merge of `source` into `target`:
 
-1. Refuses if any game has `source` on one side and `target` on the other. Nobody can play themselves.
+1. Refuses if `source` and `target` ever played each other. After a merge, that game would show one person playing themselves, and its rating change would come from a game against oneself. Both players stay separate, and the duplicate flag still catches a double entry.
 2. For each event where both players have an entry:
-   - If the draw is not made, the merge keeps one entry and withdraws the other. It keeps the paid entry if only one is paid, or else the older entry.
+   - If the draw is not made, the merge keeps one entry and withdraws the other. The withdrawn entry stays as a row with a withdrawn status. It keeps the paid entry if only one is paid, or else the older entry.
    - If the draw is made, the merge refuses. The tournament director withdraws one entry first.
    - If both entries are paid, the merge keeps one admission and lists the second payment for manual reconciliation. It never refunds automatically. This follows [mightymoose/fortymm-real#1779](https://github.com/mightymoose/fortymm-real/issues/1779).
-3. Rewrites every reference whose rule is `REWRITTEN_ON_PLAYER_MERGE` from `source` to `target`.
-4. Recomputes the ratings of `target` from the merged game history.
-5. Sets `source.merged_into = target` and removes `source`'s `player_managers` rows. Old links to `source` redirect to `target`.
+3. Sets `source.merged_into = target`. From then on, `source` cannot start a game or create an entry. Its open entries in other events stay on `source` until those events end.
+4. Keeps `source`'s `player_managers` rows, so the same accounts can still see its history and manage its open entries.
 
-Player merge lands with the first table that references `players`, such as games. Until then there is nothing to rewrite.
+`source` keeps its games and its last rating. `target` keeps its own rating and plays on from it. The profile of `target` lists the games of both players, and marks the ones played as `source`. A link to `source` opens the profile of `target`.
+
+Player merge lands with games, the first table that references `players`.
 
 ## Guest accounts can enter tournaments
 
@@ -322,7 +330,7 @@ Events and entries must keep these invariants when they arrive:
 - Same account, same name and date of birth: the API refuses and names the existing entry. Twins with the same name do not happen often enough to design for.
 - Different accounts: the API accepts the entry and flags both for the tournament director. It does not show the other account to the entrant.
 
-The director sees flagged pairs before making the draw and can withdraw one entry. Only a manager of both players can run a player merge.
+The director must resolve every flagged pair before making the draw, by withdrawing one entry or marking the pair as two different people. Otherwise the draw could put one person against themselves. Only a manager of both players can run a player merge.
 
 ## Edge cases
 
@@ -334,7 +342,8 @@ Steps: a guest plays games as Guest 4821. The guest enters tournament T, and the
 | --- | --- |
 | Sign in on the same browser with a new email | `VerifyInPlace`. The account and Guest 4821 keep their ids. One entry. |
 | Sign in on the same browser to an existing account with no self player | `AdoptGuest`. The app asks "Is Guest 4821 you?" A yes makes Guest 4821 the self player. One entry. |
-| Sign in on the same browser to an existing account whose self player is Ryan | `AdoptGuest`. Guest 4821 becomes managed. The app asks "Is Guest 4821 you?" A yes merges the players. If Ryan also has an entry in T, the merge withdraws one before the draw and refuses after it. |
+| Sign in on the same browser to an existing account whose self player is Ryan | `AdoptGuest`. Guest 4821 becomes managed. The app asks "Is Guest 4821 you?" A yes starts a player merge. If Ryan also has an entry in T, the merge withdraws one before the draw and refuses after it. |
+| Same as above, but Guest 4821 played Ryan before signing in | The merge refuses, because the two players played each other. Both stay players on the account, and both keep their games. |
 | Sign in on another device as Ryan and enter T again | The guest account stays alive on the first device. T has two entries for one person. Both entry forms asked for a name and date of birth, so the duplicate flag shows both to the director. When the first device signs in, adoption and the merge prompt remove the duplicate. |
 | Clear cookies before signing in | The guest account is unreachable. Guest 4821 keeps the entry, with no manager. The director sees it and can withdraw it. |
 
@@ -352,14 +361,14 @@ Steps: a guest plays games as Guest 4821. The guest enters tournament T, and the
 | A verified account signs in with a new email on purpose | `CreateAccount`. The person gets a second, empty account. "Add another login" is the way to attach an email to an account. |
 | Two tabs: one creates a player while the other finishes adoption | The row locks serialize them. The new player ends up on the target account. |
 | The callback is replayed, or the API crashes mid-adoption | The transaction either completed or did nothing. A replay finds no `login_attempts` row and changes nothing. |
-| A guest account stays idle for 90 days | If its players have no open entry and no payment names it, the cleanup deletes the account and its sessions. Its players with games or past entries stay, with no manager. Players with no history are deleted. |
+| A guest account stays idle for 90 days | If its players have no open entry and no payment names it, the cleanup deletes the account and its sessions. Its players stay, with no manager. |
 | A guest enters and pays, then signs in to an existing account | Adoption moves the player and keeps the guest account row. The payment still names the guest account as payer, and the existing account can see it. |
 
 ## Guard the endpoints
 
 - **CSRF.** `SameSite=Lax` stops cross-site `POST` requests from carrying the cookie. The API also rejects a `POST`, `PUT`, `PATCH` or `DELETE` without `Content-Type: application/json`. A plain HTML form cannot send that type.
 - **Guest floods.** The Worker's limit of 100 `/api/*` requests a minute per IP allows about 144,000 new guest accounts a day from one IP. The Worker gets a second `ratelimits` binding of 30 a minute per IP on every `POST /api/v1/session`. A person sends one per page load, so only a script reaches it. The limit cannot depend on the cookie, because a script can send a fake one.
-- **Stale guest accounts.** Each `POST /v1/session` that creates a guest account also deletes up to 100 stale guest accounts. A stale guest account has a `last_seen_at` more than 90 days old, no player with an open entry and no payment that names it. Adopted accounts follow the same rule. The cleanup keeps players who have history. Cloud Run has no cron, and this needs no Cloud Scheduler job.
+- **Stale guest accounts.** Each `POST /v1/session` that creates a guest account also deletes up to 100 stale guest accounts. A stale guest account has a `last_seen_at` more than 90 days old, no player with an open entry and no payment that names it. Adopted accounts follow the same rule. The cleanup never touches players. Cloud Run has no cron, and this needs no Cloud Scheduler job.
 - **Post-deploy suite.** Every push to `main` loads `/` against production and creates one guest account. The cleanup removes them.
 
 ## Configuration and secrets
@@ -390,7 +399,7 @@ Each phase is one PR that ends in a check.
 3. **Sign-in and adoption.** Add `identities`, `login_attempts`, the `oidc` Compose service, the login, callback and logout routes, `resolve_login` and adoption. Check every row of the outcome table in e2e against the mock.
 4. **Auth0.** Add a step-by-step setup script for the two Auth0 applications, which a person runs in the Auth0 dashboard. Add the two Secret Manager secrets to `api/deploy/bootstrap-gcp.sh` and wire them into `cloud-run-deploy`. Check the post-deploy `/authorize` redirect on a Preview.
 5. **Abuse limits.** Add the session rate limit and the stale-account cleanup. Check both with unit tests.
-6. **Player merge.** Build it with the first table that references `players`. Check each refusal in tests.
+6. **Player merge.** Build it with games. Add `CHECK (player_a_id <> player_b_id)` to games, so no game has the same player on both sides. Check each refusal in tests, and check that a merge changes no game or rating row.
 
 ## Open decisions
 
@@ -402,4 +411,6 @@ Each decision below has a default that the design already uses.
 - **Guest lifetime.** Default: 90 days idle. A shorter time loses accounts of people who play rarely.
 - **Lost guest accounts.** A guest who clears cookies or changes browsers without signing in loses the account. Default: accept this, and show "Sign in to keep your games" after the first game.
 - **Verified account merge.** Default: not supported. A person with two verified accounts keeps both.
+- **Games against your own second player.** One account can manage two players and start a game between them, such as a parent and a child. If both players are the same person, the game is a rating game against oneself. Default: allow it, because the app cannot tell the two cases apart, and the merge refusal keeps the history visible. The other choice makes games between two players of one account unrated.
+- **Rating after a merge.** Default: the player who carries on keeps their own rating. The person picks that player, so they can keep the rating they trust.
 - **Previews share one database.** Every Preview uses `fortymm_preview`. A branch that adds a migration applies it to the database that all Previews use. Phase 1 needs a rule for this, for example that migrations only add tables and columns.
