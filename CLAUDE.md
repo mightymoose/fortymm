@@ -172,6 +172,12 @@ Routes are defined in code with TanStack Router in `web-client/src/router.tsx`
 (`createAppRouter()`); each page's component lives in `web-client/src/routes/`.
 To add a page, add its route to the route tree there.
 
+Pages that will need a signed-in user (such as `/`) go under
+`authenticatedRoute`, a pathless layout route (`routes/AuthenticatedLayout.tsx`).
+On a full page load it shows the loading screen until the router's
+`loadingScreenDelay` resolves, 3 seconds after the router starts. Public pages
+(such as `/design-system`) go directly under the root route and show at once.
+
 ### API client
 
 `src/api/client.ts` exports `api`, an openapi-fetch client typed by the

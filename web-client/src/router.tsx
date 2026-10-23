@@ -4,6 +4,7 @@ import {
   createRouter,
   type RouterHistory,
 } from '@tanstack/react-router'
+import { AuthenticatedLayout } from './routes/AuthenticatedLayout'
 import { DesignSystem } from './routes/DesignSystem'
 import { Home } from './routes/Home'
 import { Root } from './routes/Root'
@@ -11,8 +12,9 @@ import { Root } from './routes/Root'
 export const LOADING_SCREEN_MS = 3000
 
 export type RouterContext = {
-  // Resolves once the loading screen has shown for long enough. The layout
-  // suspends on it, so Root's Suspense boundary shows the loading screen.
+  // Resolves once the loading screen has shown for long enough.
+  // AuthenticatedLayout suspends on it, so its pages show the loading screen
+  // first. Pages outside it, like the design system, show at once.
   loadingScreenDelay: Promise<void>
 }
 
@@ -20,8 +22,15 @@ const rootRoute = createRootRouteWithContext<RouterContext>()({
   component: Root,
 })
 
-const homeRoute = createRoute({
+// A pathless layout route: it adds no path segment to the pages under it.
+const authenticatedRoute = createRoute({
   getParentRoute: () => rootRoute,
+  id: 'authenticated',
+  component: AuthenticatedLayout,
+})
+
+const homeRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
   path: '/',
   component: Home,
 })
@@ -32,7 +41,10 @@ const designSystemRoute = createRoute({
   component: DesignSystem,
 })
 
-const routeTree = rootRoute.addChildren([homeRoute, designSystemRoute])
+const routeTree = rootRoute.addChildren([
+  authenticatedRoute.addChildren([homeRoute]),
+  designSystemRoute,
+])
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))

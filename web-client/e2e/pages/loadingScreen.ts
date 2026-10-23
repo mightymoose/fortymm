@@ -1,6 +1,7 @@
 import { expect, type Locator, type Page } from '@playwright/test'
 
-// The loading screen the app shows over every page on a full page load.
+// The loading screen the app shows over an authenticated page on a full page
+// load.
 export function loadingScreen(page: Page): Locator {
   return page.getByRole('status', { name: 'Loading FortyMM' })
 }

@@ -5,9 +5,16 @@ import { renderRoute } from '../renderRoute'
 // up through `screen` on every access, so they always reflect the current
 // render.
 export class DesignSystemPage {
-  static async render(): Promise<DesignSystemPage> {
-    await renderRoute('/design-system')
+  static async render(
+    options?: Parameters<typeof renderRoute>[1],
+  ): Promise<DesignSystemPage> {
+    await renderRoute('/design-system', options)
     return new DesignSystemPage()
+  }
+
+  // The loading screen, or null when it isn't shown.
+  get loadingScreen(): HTMLElement | null {
+    return screen.queryByRole('status', { name: 'Loading FortyMM' })
   }
 
   get title(): HTMLElement {

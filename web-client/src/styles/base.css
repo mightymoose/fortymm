@@ -1172,8 +1172,8 @@ h4, .h4 {
 }
 
 /* =========================================================================
-   Loading screen (src/components/LoadingScreen.tsx), shown in place of the
-   page on a full page load
+   Loading screen (src/components/LoadingScreen.tsx), shown in place of an
+   authenticated page on a full page load
    ========================================================================= */
 .loading-screen {
   --loading-screen-bounce: 120px;
