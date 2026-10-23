@@ -7,6 +7,25 @@ test('shows the Design System title', async ({ designSystemPage }) => {
   await expect(designSystemPage.title).toHaveText('Design System')
 })
 
+test('shows no loading screen and checks no health', async ({
+  designSystemPage,
+  page,
+}) => {
+  const healthRequests: string[] = []
+  page.on('request', (request) => {
+    if (request.url().includes('/api/v1/health')) {
+      healthRequests.push(request.url())
+    }
+  })
+
+  await designSystemPage.goto()
+  await expect(designSystemPage.title).toBeVisible()
+  await page.waitForLoadState('networkidle')
+
+  await expect(designSystemPage.loadingScreen).toHaveCount(0)
+  expect(healthRequests).toEqual([])
+})
+
 // Both tests below compare against the same screenshot, so the app's header
 // has to render exactly like the reference kit's header with the app's copy
 // swapped in. Update the screenshot with `npx playwright test

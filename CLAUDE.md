@@ -172,6 +172,13 @@ Routes are defined in code with TanStack Router in `web-client/src/router.tsx`
 (`createAppRouter()`); each page's component lives in `web-client/src/routes/`.
 To add a page, add its route to the route tree there.
 
+Pages that will need a signed-in user (such as `/`) go under
+`authenticatedRoute`, a pathless layout route with no path segment
+(`routes/AuthenticatedLayout.tsx`). It checks the API's health and shows the
+loading screen (see API client). Public pages (such as `/design-system`) go
+directly under the root route. They make no request and never show the
+loading screen.
+
 ### API client
 
 `src/api/client.ts` exports `api`, an openapi-fetch client typed by the
@@ -186,16 +193,17 @@ options, one function per request, each taking the typed client, e.g.
 `useSuspenseQuery(healthQuery(api))`. Each `queryFn` calls the client and
 throws when the response has no data. `createAppRouter()` puts the client in
 the router context as `api` and wraps the router in a `QueryClientProvider`.
-On a full page load, the root layout
-(`src/routes/Root.tsx`) suspends until `/v1/health` answers.
+On a full page load, `AuthenticatedLayout`
+(`src/routes/AuthenticatedLayout.tsx`) suspends until `/v1/health` answers.
 `LoadingScreen` covers it if that takes more than `SHOW_AFTER_MS` (300ms), so
 a fast load shows the page with no loading screen. Once shown, the loading
 screen stays up for at least `MIN_SHOWN_MS` (900ms, one bounce). Then the page
 renders under it, and it fades out (`.loading-screen-leaving`) and removes
 itself when the fade ends. jsdom runs no CSS animations, so the `HomePage`
-page object ends the fade itself. Root stays mounted on client-side
-navigation, so it doesn't show the loading screen again. If health
-fails after the default retries, the router's default error component shows.
+page object ends the fade itself. `healthQuery` never goes stale, so health
+is checked once per page load, and coming back to an authenticated page
+doesn't show the loading screen again. If health fails after the default
+retries, the router's default error component shows.
 
 ### Tests
 
@@ -221,8 +229,9 @@ e.g. `components['schemas']['HealthResponse']`.
 API client with base URL `API_BASE_URL` (`http://localhost/api`), because
 Node's `Request` rejects a relative URL. It waits for the health check, so the
 page is on screen when `render()` resolves. To test the loading screen, hold
-the health response in a handler and pass `render({ waitForHealth: false })`
-(see `src/routes/Root.test.tsx`).
+the health response with `holdHealth()` from `src/test/server.ts` (see
+`src/routes/AuthenticatedLayout.test.tsx`). `DesignSystemPage.render()` never
+waits for health, because the page doesn't check it.
 
 ### End-to-end tests
 

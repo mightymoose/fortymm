@@ -1,3 +1,4 @@
+import { act } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { setupServer } from 'msw/node'
 import type { components } from '../api/schema'
@@ -17,3 +18,21 @@ export const server = setupServer(
     HttpResponse.json(healthyResponse),
   ),
 )
+
+// Holds the mock API's health responses until the test sends them.
+export function holdHealth() {
+  const requests: Request[] = []
+  const pending: ((response: Response) => void)[] = []
+  server.use(
+    http.get(`${API_BASE_URL}/v1/health`, ({ request }) => {
+      requests.push(request)
+      return new Promise<Response>((resolve) => pending.push(resolve))
+    }),
+  )
+  return {
+    requests,
+    async respond(response: Response): Promise<void> {
+      await act(async () => pending.shift()!(response))
+    },
+  }
+}
