@@ -605,6 +605,20 @@ describe('DesignSystem', () => {
     ).toBeTruthy()
   })
 
+  it('has a Navigation section after Data Display, with a lead line', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.navSectionHeading).toHaveTextContent('Navigation')
+    expect(designSystemPage.navSectionLead).toHaveTextContent(
+      'Tabs, breadcrumbs, pagination, menus. Wayfinding inside the app.',
+    )
+    expect(
+      designSystemPage.displaySection.compareDocumentPosition(
+        designSystemPage.navSection,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
   it("shows the reference's two boxes, 16 : 9 and 1 : 1", async () => {
     const designSystemPage = await DesignSystemPage.render()
 

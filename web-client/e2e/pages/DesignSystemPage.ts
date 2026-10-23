@@ -59,6 +59,9 @@ export class DesignSystemPage {
   readonly skeletonCard: Locator
   readonly skeleton: Locator
   readonly aspectRatioCard: Locator
+  readonly navSection: Locator
+  readonly navSectionHeading: Locator
+  readonly navSectionLead: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -197,6 +200,10 @@ export class DesignSystemPage {
       name: 'Aspect Ratio',
       exact: true,
     })
+    this.navSection = page.getByRole('region', { name: 'Navigation' })
+    this.navSectionHeading = this.navSection.getByRole('heading', { level: 2 })
+    // The first paragraph: the cards in the section have paragraphs too.
+    this.navSectionLead = this.navSection.getByRole('paragraph').first()
   }
 
   // A component card's title, in its header.

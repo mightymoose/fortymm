@@ -41,6 +41,8 @@ export class ReferenceKitPage {
   readonly tableCard: Locator
   readonly progressCard: Locator
   readonly skeletonCard: Locator
+  readonly navSectionHeading: Locator
+  readonly navSectionLead: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -165,6 +167,9 @@ export class ReferenceKitPage {
         exact: true,
       }),
     })
+    const navSection = page.locator('#nav')
+    this.navSectionHeading = navSection.getByRole('heading', { level: 2 })
+    this.navSectionLead = navSection.getByRole('paragraph').first()
   }
 
   async goto(): Promise<void> {

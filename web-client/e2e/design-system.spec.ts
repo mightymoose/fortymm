@@ -52,9 +52,9 @@ test.describe('header', () => {
   })
 })
 
-// The intro, the Forms & Input and Data Display sections and their
-// component cards use the reference kit's own copy, so they're compared with
-// the kit as is. The kit's sections go on to more cards than the app has
+// The intro, the Forms & Input, Data Display and Navigation sections and
+// their component cards use the reference kit's own copy, so they're compared
+// with the kit as is. The kit's sections go on to more cards than the app has
 // yet, so each section's heading, lead and cards are compared one by one.
 test.describe('intro', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
@@ -1889,6 +1889,30 @@ test.describe('Aspect Ratio card', () => {
         .locator('html')
         .evaluate((html) => html.scrollWidth - html.clientWidth),
     ).toBeLessThanOrEqual(0)
+  })
+})
+
+test.describe('Navigation section', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.navSectionHeading).toHaveScreenshot(
+      'nav-heading.png',
+    )
+    await expect(designSystemPage.navSectionLead).toHaveScreenshot(
+      'nav-lead.png',
+    )
+  })
+
+  test('matches the reference kit section', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.navSectionHeading).toHaveScreenshot(
+      'nav-heading.png',
+    )
+    await expect(referenceKitPage.navSectionLead).toHaveScreenshot(
+      'nav-lead.png',
+    )
   })
 })
 

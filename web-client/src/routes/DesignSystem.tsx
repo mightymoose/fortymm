@@ -381,6 +381,11 @@ export function DesignSystem() {
           </div>
         </ComponentCard>
       </Section>
+      <Section
+        id="nav"
+        title="Navigation"
+        lead="Tabs, breadcrumbs, pagination, menus. Wayfinding inside the app."
+      />
     </>
   )
 }

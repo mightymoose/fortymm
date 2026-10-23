@@ -394,4 +394,17 @@ export class DesignSystemPage {
       this.aspectRatioCard.querySelectorAll<HTMLElement>('.aspect-ratio'),
     )
   }
+
+  get navSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Navigation' })
+  }
+
+  get navSectionHeading(): HTMLElement {
+    return within(this.navSection).getByRole('heading', { level: 2 })
+  }
+
+  // The first paragraph: the cards in the section have paragraphs too.
+  get navSectionLead(): HTMLElement {
+    return within(this.navSection).getAllByRole('paragraph')[0]
+  }
 }
