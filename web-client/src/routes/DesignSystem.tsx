@@ -1,3 +1,4 @@
+import { AspectRatio } from '../components/AspectRatio'
 import { Avatar, type AvatarTone } from '../components/Avatar'
 import { AvatarGroup } from '../components/AvatarGroup'
 import { Badge } from '../components/Badge'
@@ -370,6 +371,13 @@ export function DesignSystem() {
               <Skeleton width="60%" height={14} />
               <Skeleton width="40%" height={12} />
             </div>
+          </div>
+        </ComponentCard>
+        {/* The kit's tag names a 4:3 box it doesn't show. */}
+        <ComponentCard title="Aspect Ratio" tag="16:9 · 4:3 · 1:1">
+          <div className="grid-2">
+            <AspectRatio ratio={16 / 9}>16 : 9</AspectRatio>
+            <AspectRatio ratio={1}>1 : 1</AspectRatio>
           </div>
         </ComponentCard>
       </Section>

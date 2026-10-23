@@ -1853,6 +1853,24 @@ test.describe('Skeleton card', () => {
   })
 })
 
+test.describe('Aspect Ratio card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.aspectRatioCard).toHaveScreenshot(
+      'aspect-ratio-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.aspectRatioCard).toHaveScreenshot(
+      'aspect-ratio-card.png',
+    )
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({

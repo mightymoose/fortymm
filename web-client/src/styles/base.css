@@ -1745,6 +1745,22 @@ h4, .h4 {
 }
 
 /* =========================================================================
+   Aspect Ratio (the reference kit's .ar). The kit's .ar is 16:9 unless
+   set inline. Here the component always sets the ratio.
+   ========================================================================= */
+.aspect-ratio {
+  width: 100%;
+  background: linear-gradient(135deg, var(--ink-700), var(--ink-800));
+  border-radius: var(--r-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-3);
+  font: 500 12px var(--font-mono);
+  letter-spacing: 0.1em;
+}
+
+/* =========================================================================
    Utility: hidden on screen, still read by assistive tech (e.g. a label the
    design shows no room for).
    ========================================================================= */

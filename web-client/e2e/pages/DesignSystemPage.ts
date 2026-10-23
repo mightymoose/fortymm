@@ -58,6 +58,7 @@ export class DesignSystemPage {
   readonly progressCard: Locator
   readonly skeletonCard: Locator
   readonly skeleton: Locator
+  readonly aspectRatioCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -192,6 +193,10 @@ export class DesignSystemPage {
     // The placeholders are hidden from assistive tech, so they have no role
     // to find them by.
     this.skeleton = this.skeletonCard.locator('.skeleton').first()
+    this.aspectRatioCard = this.displaySection.getByRole('article', {
+      name: 'Aspect Ratio',
+      exact: true,
+    })
   }
 
   // A component card's title, in its header.

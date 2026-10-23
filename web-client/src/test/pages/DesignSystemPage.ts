@@ -377,4 +377,21 @@ export class DesignSystemPage {
       this.skeletonCard.querySelectorAll<HTMLElement>('.skeleton'),
     )
   }
+
+  get aspectRatioCard(): HTMLElement {
+    return within(this.displaySection).getByRole('article', {
+      name: 'Aspect Ratio',
+    })
+  }
+
+  get aspectRatioCardHeading(): HTMLElement {
+    return within(this.aspectRatioCard).getByRole('heading', { level: 3 })
+  }
+
+  // The Aspect Ratio card's boxes, in order.
+  get aspectRatioBoxes(): HTMLElement[] {
+    return Array.from(
+      this.aspectRatioCard.querySelectorAll<HTMLElement>('.aspect-ratio'),
+    )
+  }
 }

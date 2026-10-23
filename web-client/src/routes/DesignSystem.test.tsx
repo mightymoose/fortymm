@@ -589,6 +589,30 @@ describe('DesignSystem', () => {
     }
   })
 
+  it('has an Aspect Ratio card after the Skeleton card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.aspectRatioCardHeading).toHaveTextContent(
+      'Aspect Ratio',
+    )
+    expect(designSystemPage.aspectRatioCard).toHaveTextContent(
+      '16:9 · 4:3 · 1:1',
+    )
+    expect(
+      designSystemPage.skeletonCard.compareDocumentPosition(
+        designSystemPage.aspectRatioCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's two boxes, 16 : 9 and 1 : 1", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(
+      designSystemPage.aspectRatioBoxes.map((box) => box.textContent),
+    ).toEqual(['16 : 9', '1 : 1'])
+  })
+
   it.each([
     {
       title: 'April Spring Open',

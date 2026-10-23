@@ -41,6 +41,7 @@ export class ReferenceKitPage {
   readonly tableCard: Locator
   readonly progressCard: Locator
   readonly skeletonCard: Locator
+  readonly aspectRatioCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -162,6 +163,13 @@ export class ReferenceKitPage {
       has: page.getByRole('heading', {
         level: 3,
         name: 'Skeleton',
+        exact: true,
+      }),
+    })
+    this.aspectRatioCard = displaySection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Aspect Ratio',
         exact: true,
       }),
     })
