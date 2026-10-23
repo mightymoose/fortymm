@@ -2220,7 +2220,7 @@ h4, .h4 {
   box-shadow: var(--shadow-lg);
 }
 
-.sheet .dialog-title {
+.sheet .dialog-title, .drawer .dialog-title {
   margin: 0 0 6px;
   font: 600 16px var(--font-ui);
 }
@@ -2245,6 +2245,47 @@ h4, .h4 {
   .mock-bg--sheet {
     padding-top: 40px;
   }
+}
+
+/* =========================================================================
+   Drawer (the reference kit's .drawer-mock and .grabber): a Dialog's .drawer
+   variant, the panel along the bottom edge of the frame. The kit's grabber
+   is an empty div. Here it's the drawer's ::before, as it only decorates.
+   Its title takes the .sheet's styles (above). The kit sets its title's and
+   description's styles inline.
+   ========================================================================= */
+.drawer {
+  width: 320px;
+  /* Where the frame is narrower (e.g. on a phone), the drawer narrows to
+     fit. */
+  max-width: 100%;
+  background: var(--ink-800);
+  border-top: 1px solid var(--border-subtle);
+  padding: 24px;
+  border-radius: 16px 16px 0 0;
+}
+
+.drawer::before {
+  content: '';
+  display: block;
+  width: 40px;
+  height: 4px;
+  background: var(--ink-500);
+  border-radius: 999px;
+  margin: 0 auto 16px;
+}
+
+.drawer .dialog-description {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--fg-3);
+}
+
+/* The kit's frame for its drawer, set inline: the drawer stands on the
+   frame's bottom edge. */
+.mock-bg--drawer {
+  align-items: flex-end;
+  padding: 0;
 }
 
 /* A .slider-field whose header is only its label, styled as a

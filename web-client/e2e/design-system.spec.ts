@@ -2562,6 +2562,26 @@ test.describe('Sheet card', () => {
   })
 })
 
+// Nothing is hovered or focused first, so the button shows its resting
+// style.
+test.describe('Drawer card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.drawerCard).toHaveScreenshot(
+      'drawer-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.drawerCard).toHaveScreenshot(
+      'drawer-card.png',
+    )
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -3103,6 +3123,33 @@ test.describe('on a phone', () => {
       .getByText('Sheet (right)')
       .boundingBox())!
     expect(sheet.y).toBeGreaterThan(label.y + label.height)
+  })
+
+  // The drawer is wider than the card's content, so it narrows to fit inside
+  // its frame, still on the frame's bottom edge.
+  test('the drawer card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.drawerCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.drawerCard.boundingBox())!
+    const drawer = (await designSystemPage.drawer.boundingBox())!
+    // Inside the card's 1px border and 32px padding on each side, and on the
+    // frame's bottom edge, above the card's 32px padding.
+    expect(drawer.x).toBeGreaterThanOrEqual(card.x + 33)
+    expect(drawer.x + drawer.width).toBeLessThanOrEqual(
+      card.x + card.width - 33,
+    )
+    expect(drawer.y + drawer.height).toBeCloseTo(
+      card.y + card.height - 33 - 1,
+      0,
+    )
   })
 })
 

@@ -901,6 +901,32 @@ describe('DesignSystem', () => {
     ).toBeInTheDocument()
   })
 
+  it('has a Drawer card after the Sheet card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.drawerCardHeading).toHaveTextContent('Drawer')
+    expect(designSystemPage.drawerCard).toHaveTextContent('mobile bottom sheet')
+    expect(
+      designSystemPage.sheetCard.compareDocumentPosition(
+        designSystemPage.drawerCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's Quick log drawer, open", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const drawer = designSystemPage.drawer
+    expect(designSystemPage.drawerCard).toHaveTextContent('Drawer (bottom)')
+    expect(drawer).toHaveAccessibleName('Quick log')
+    expect(drawer).toHaveAccessibleDescription(
+      'Tap to record a finished match.',
+    )
+    expect(
+      within(drawer).getByRole('button', { name: 'Pick opponent' }),
+    ).toBeInTheDocument()
+  })
+
   it.each([
     {
       title: 'April Spring Open',

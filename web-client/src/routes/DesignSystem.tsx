@@ -598,6 +598,18 @@ export function DesignSystem() {
             </Dialog>
           </div>
         </ComponentCard>
+        <ComponentCard title="Drawer" tag="mobile bottom sheet">
+          <div className="mock-bg mock-bg--dialog mock-bg--drawer">
+            <span className="mock-label">Drawer (bottom)</span>
+            <Dialog
+              variant="drawer"
+              title="Quick log"
+              description="Tap to record a finished match."
+            >
+              <Button className="button-wide">Pick opponent</Button>
+            </Dialog>
+          </div>
+        </ComponentCard>
       </Section>
     </>
   )

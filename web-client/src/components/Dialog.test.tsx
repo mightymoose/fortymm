@@ -44,6 +44,19 @@ describe('Dialog', () => {
     ).toHaveClass('sheet')
   })
 
+  it('is a dialog styled as a drawer as the drawer variant', () => {
+    render(
+      <Dialog variant="drawer" title="Quick log" description="Tap to log." />,
+    )
+
+    expect(
+      screen.getByRole('dialog', {
+        name: 'Quick log',
+        description: 'Tap to log.',
+      }),
+    ).toHaveClass('drawer')
+  })
+
   it('shows the body, then the actions in their row', () => {
     render(
       <Dialog

@@ -541,4 +541,16 @@ export class DesignSystemPage {
   get sheet(): HTMLElement {
     return within(this.sheetCard).getByRole('dialog')
   }
+
+  get drawerCard(): HTMLElement {
+    return within(this.overlaysSection).getByRole('article', { name: 'Drawer' })
+  }
+
+  get drawerCardHeading(): HTMLElement {
+    return within(this.drawerCard).getByRole('heading', { level: 3 })
+  }
+
+  get drawer(): HTMLElement {
+    return within(this.drawerCard).getByRole('dialog')
+  }
 }
