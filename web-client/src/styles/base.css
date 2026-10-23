@@ -2386,6 +2386,61 @@ h4, .h4 {
   }
 }
 
+/* =========================================================================
+   Hover card (the reference kit's .hover-card): a player preview. The kit
+   sets the styles of its rows, name, club line and stats inline. Here
+   they're .hover-card-header, .hover-card-name, .hover-card-meta and
+   .hover-card-stats. The kit's stats are spans. Here they're a <dl>, each
+   term and value inline, reset to match.
+   ========================================================================= */
+.hover-card {
+  background: var(--ink-800);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  padding: 16px;
+  width: 280px;
+  /* Where the frame is narrower (e.g. on a phone), the card narrows to
+     fit. */
+  max-width: 100%;
+  box-shadow: var(--shadow-lg);
+}
+
+.hover-card-header {
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.hover-card-name {
+  margin: 0 0 2px;
+  font: 600 14px var(--font-ui);
+}
+
+.hover-card-meta {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+.hover-card-stats {
+  margin: 0;
+  gap: 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.hover-card-stats dt, .hover-card-stats dd {
+  display: inline;
+  margin: 0;
+}
+
+.hover-card-stats dt {
+  color: var(--fg-3);
+}
+
+.hover-card-rating {
+  color: var(--ball-500);
+}
+
 /* A .slider-field whose header is only its label, styled as a
    .field-label, as the kit draws a bare .label over its Sheet's slider.
    The readout is still there for assistive tech, hidden (below). */

@@ -577,4 +577,18 @@ export class DesignSystemPage {
   get tooltipCardHeading(): HTMLElement {
     return within(this.tooltipCard).getByRole('heading', { level: 3 })
   }
+
+  get hoverCardCard(): HTMLElement {
+    return within(this.overlaysSection).getByRole('article', {
+      name: 'Hover Card',
+    })
+  }
+
+  get hoverCardCardHeading(): HTMLElement {
+    return within(this.hoverCardCard).getByRole('heading', { level: 3 })
+  }
+
+  get hoverCard(): HTMLElement {
+    return within(this.hoverCardCard).getByRole('group')
+  }
 }

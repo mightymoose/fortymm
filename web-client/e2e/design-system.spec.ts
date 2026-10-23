@@ -2646,6 +2646,24 @@ test('each tooltip sits above its trigger, inside the frame', async ({
   }
 })
 
+test.describe('Hover Card card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.hoverCardCard).toHaveScreenshot(
+      'hover-card-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.hoverCardCard).toHaveScreenshot(
+      'hover-card-card.png',
+    )
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -3275,6 +3293,27 @@ test.describe('on a phone', () => {
       .boundingBox())!
     expect(refresh.y).toBeGreaterThan(label.y + label.height)
     expect(seed.y).toBeGreaterThan(button.y + button.height)
+  })
+
+  // The hover card is wider than its frame's content, so it narrows to fit.
+  test('the hover card card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.hoverCardCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.hoverCardCard.boundingBox())!
+    const hoverCard = (await designSystemPage.hoverCard.boundingBox())!
+    // Inside the card's 1px border and 32px padding on each side.
+    expect(hoverCard.x).toBeGreaterThanOrEqual(card.x + 33)
+    expect(hoverCard.x + hoverCard.width).toBeLessThanOrEqual(
+      card.x + card.width - 33,
+    )
   })
 })
 

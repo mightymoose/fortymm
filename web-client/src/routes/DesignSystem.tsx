@@ -21,6 +21,7 @@ import {
 import { OtpInput } from '../components/OtpInput'
 import { PageHeader } from '../components/PageHeader'
 import { PageIntro } from '../components/PageIntro'
+import { PlayerHoverCard } from '../components/PlayerHoverCard'
 import { Pagination } from '../components/Pagination'
 import { Progress } from '../components/Progress'
 import { Radio, RadioGroup } from '../components/RadioGroup'
@@ -645,6 +646,22 @@ export function DesignSystem() {
                 )}
               </Tooltip>
             </div>
+          </div>
+        </ComponentCard>
+        <ComponentCard title="Hover Card" tag="player preview">
+          <div className="mock-bg mock-bg--popover">
+            <span className="mock-label">Hover Card</span>
+            <PlayerHoverCard
+              player={{
+                name: 'Tien Nguyen',
+                club: 'Brooklyn TT',
+                joinedYear: 2024,
+                rating: 1620,
+                wins: 14,
+                losses: 3,
+              }}
+              tone="blue"
+            />
           </div>
         </ComponentCard>
       </Section>

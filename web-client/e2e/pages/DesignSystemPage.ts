@@ -91,6 +91,8 @@ export class DesignSystemPage {
   readonly tooltipFrame: Locator
   readonly refreshButton: Locator
   readonly seedBadge: Locator
+  readonly hoverCardCard: Locator
+  readonly hoverCard: Locator
   constructor(page: Page) {
     this.page = page
     this.loadingScreen = page.getByRole('status', { name: 'Loading FortyMM' })
@@ -311,6 +313,13 @@ export class DesignSystemPage {
       name: 'Refresh',
     })
     this.seedBadge = this.tooltipCard.getByText('Seed 1', { exact: true })
+    this.hoverCardCard = this.overlaysSection.getByRole('article', {
+      name: 'Hover Card',
+      exact: true,
+    })
+    this.hoverCard = this.hoverCardCard.getByRole('group', {
+      name: 'Tien Nguyen',
+    })
   }
 
   // A component card's title, in its header.

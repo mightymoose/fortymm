@@ -978,6 +978,33 @@ describe('DesignSystem', () => {
     )
   })
 
+  it('has a Hover Card card after the Tooltip card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.hoverCardCardHeading).toHaveTextContent(
+      'Hover Card',
+    )
+    expect(designSystemPage.hoverCardCard).toHaveTextContent('player preview')
+    expect(
+      designSystemPage.tooltipCard.compareDocumentPosition(
+        designSystemPage.hoverCardCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's preview of Tien Nguyen, open", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const card = designSystemPage.hoverCard
+    expect(card).toHaveAccessibleName('Tien Nguyen')
+    expect(card).toHaveTextContent(
+      'Tien NguyenBrooklyn TT · Joined 2024Rating 1620W-L 14–3',
+    )
+    expect(within(card).getByRole('img', { name: 'Tien Nguyen' })).toHaveClass(
+      'avatar--blue',
+    )
+  })
+
   it.each([
     {
       title: 'April Spring Open',
