@@ -302,4 +302,22 @@ export class DesignSystemPage {
   get badges(): HTMLElement[] {
     return Array.from(this.badgeCard.querySelectorAll<HTMLElement>('.badge'))
   }
+
+  get avatarCard(): HTMLElement {
+    return within(this.displaySection).getByRole('article', { name: 'Avatar' })
+  }
+
+  get avatarCardHeading(): HTMLElement {
+    return within(this.avatarCard).getByRole('heading', { level: 3 })
+  }
+
+  // Every avatar in the Avatar card, the group's overflow circle included,
+  // in order.
+  get avatars(): HTMLElement[] {
+    return within(this.avatarCard).getAllByRole('img')
+  }
+
+  get avatarGroup(): HTMLElement {
+    return within(this.avatarCard).getByRole('group', { name: 'Players' })
+  }
 }

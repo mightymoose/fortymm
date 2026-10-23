@@ -1535,6 +1535,80 @@ h4, .h4 {
 }
 
 /* =========================================================================
+   Avatar (the reference kit's .avatar, its .sm and .lg sizes, and
+   .avatar-group). The kit sets each avatar's color inline. Here the tones
+   are modifiers. The size modifiers come after .avatar, so their font size
+   wins over its font shorthand.
+   ========================================================================= */
+.avatar {
+  border-radius: 50%;
+  color: var(--fg-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 600 13px var(--font-ui);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.avatar--sm {
+  width: 28px;
+  height: 28px;
+  font-size: 11px;
+}
+
+.avatar--md {
+  width: 40px;
+  height: 40px;
+  font-size: 13px;
+}
+
+.avatar--lg {
+  width: 56px;
+  height: 56px;
+  font-size: 17px;
+}
+
+.avatar--neutral {
+  background: var(--ink-700);
+}
+
+.avatar--brand {
+  background: var(--ball-500);
+  color: var(--ink-950);
+}
+
+.avatar--blue {
+  background: #3a4a6e;
+}
+
+.avatar--red {
+  background: #6e3a4a;
+}
+
+.avatar--green {
+  background: #4a6e3a;
+}
+
+.avatar-group {
+  display: inline-flex;
+}
+
+.avatar-group .avatar {
+  border: 2px solid var(--bg-card);
+  margin-left: -8px;
+}
+
+.avatar-group .avatar:first-child {
+  margin-left: 0;
+}
+
+/* The kit's Avatar card sets this gap inline on its outer .row. */
+.avatar-demo {
+  gap: 24px;
+}
+
+/* =========================================================================
    Utility: hidden on screen, still read by assistive tech (e.g. a label the
    design shows no room for).
    ========================================================================= */

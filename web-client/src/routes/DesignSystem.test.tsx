@@ -433,6 +433,46 @@ describe('DesignSystem', () => {
     ])
   })
 
+  it('has an Avatar card after the Badge card in the Data Display section', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.avatarCardHeading).toHaveTextContent('Avatar')
+    expect(designSystemPage.avatarCard).toHaveTextContent(
+      'image · initials · stack',
+    )
+    expect(
+      designSystemPage.badgeCard.compareDocumentPosition(
+        designSystemPage.avatarCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's avatars in order, then the group's overflow", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(
+      designSystemPage.avatars.map((avatar) => avatar.getAttribute('aria-label')),
+    ).toEqual([
+      'Tien Nguyen',
+      'Daniel Okafor',
+      'Marta Kowalski',
+      'Tien Nguyen',
+      'Daniel Okafor',
+      'Marta Kowalski',
+      '12 more',
+    ])
+  })
+
+  it('stacks the last three avatars and the overflow in a group', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(
+      within(designSystemPage.avatarGroup)
+        .getAllByRole('img')
+        .map((avatar) => avatar.getAttribute('aria-label')),
+    ).toEqual(['Tien Nguyen', 'Daniel Okafor', 'Marta Kowalski', '12 more'])
+  })
+
   it.each([
     {
       title: 'April Spring Open',
