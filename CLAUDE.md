@@ -330,6 +330,13 @@ The design system's styles apply to the whole app; `main.tsx` imports them:
   (`src/components/PageHeader.tsx`, the title and subtitle every page starts
   with).
 
+`index.html` preloads the fonts every first paint uses (Space Grotesk's
+latin file, Bebas Neue and JetBrains Mono). Without the preloads, the browser
+finds the fonts only after `main.tsx` renders, so the page and the loading
+screen show fallback text first. Vite rewrites the preload `href`s to the
+same hashed files the CSS uses. If you rename or add a font that the first
+paint uses, update the preloads too.
+
 Use these classes and CSS variables rather than raw values or page-specific
 styles. `/design-system` is where the app's styles are checked against the
 reference (see the screenshot tests above).
