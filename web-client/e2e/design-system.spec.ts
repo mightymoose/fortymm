@@ -1746,6 +1746,24 @@ test.describe('Badge card', () => {
   })
 })
 
+test.describe('Avatar card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.avatarCard).toHaveScreenshot(
+      'avatar-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.avatarCard).toHaveScreenshot(
+      'avatar-card.png',
+    )
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -2034,6 +2052,38 @@ test.describe('on a phone', () => {
         .locator('html')
         .evaluate((html) => html.scrollWidth - html.clientWidth),
     ).toBeLessThanOrEqual(0)
+  })
+
+  test("the avatar card's avatars stay in the card, the group stacked", async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const card = (await designSystemPage.avatarCard.boundingBox())!
+    // The row's avatar comes first, before the group's of the same name.
+    const rowLast = (await designSystemPage
+      .avatars('Marta Kowalski')
+      .first()
+      .boundingBox())!
+    const group = (await designSystemPage.avatarGroup.boundingBox())!
+
+    expect(rowLast.x + rowLast.width).toBeLessThanOrEqual(
+      card.x + card.width - 32,
+    )
+    expect(group.x + group.width).toBeLessThanOrEqual(card.x + card.width - 32)
+    expect(
+      await page
+        .locator('html')
+        .evaluate((html) => html.scrollWidth - html.clientWidth),
+    ).toBeLessThanOrEqual(0)
+
+    const stacked = await designSystemPage.avatarGroup.getByRole('img').all()
+    expect(stacked).toHaveLength(4)
+    for (let i = 1; i < stacked.length; i++) {
+      const previous = (await stacked[i - 1].boundingBox())!
+      const current = (await stacked[i].boundingBox())!
+      expect(current.x).toBeLessThan(previous.x + previous.width)
+    }
   })
 
   // Two columns would leave each input too narrow for its placeholder, so

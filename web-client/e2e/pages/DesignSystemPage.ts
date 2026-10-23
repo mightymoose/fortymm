@@ -51,6 +51,8 @@ export class DesignSystemPage {
   readonly cardCard: Locator
   readonly badgeCard: Locator
   readonly liveDot: Locator
+  readonly avatarCard: Locator
+  readonly avatarGroup: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -161,6 +163,11 @@ export class DesignSystemPage {
     })
     // The dot is hidden from assistive tech, so it has no role to find it by.
     this.liveDot = this.badgeCard.locator('.ball-dot')
+    this.avatarCard = this.displaySection.getByRole('article', {
+      name: 'Avatar',
+      exact: true,
+    })
+    this.avatarGroup = this.avatarCard.getByRole('group', { name: 'Players' })
   }
 
   // A component card's title, in its header.
@@ -350,5 +357,11 @@ export class DesignSystemPage {
   // The Badge card's badge reading `text`, e.g. "Seed 1".
   badge(text: string): Locator {
     return this.badgeCard.getByText(text, { exact: true })
+  }
+
+  // The Avatar card's avatars named `name`, e.g. "Tien Nguyen". Each name is
+  // in both the row and the group.
+  avatars(name: string): Locator {
+    return this.avatarCard.getByRole('img', { name, exact: true })
   }
 }

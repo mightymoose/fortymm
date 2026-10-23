@@ -1,3 +1,5 @@
+import { Avatar } from '../components/Avatar'
+import { AvatarGroup } from '../components/AvatarGroup'
 import { Badge } from '../components/Badge'
 import { Button } from '../components/Button'
 import { Card } from '../components/Card'
@@ -252,6 +254,20 @@ export function DesignSystem() {
             <Badge variant="outline">Pending</Badge>
             <Badge variant="destructive">Disqualified</Badge>
             <Badge variant="live">Live · Court 3</Badge>
+          </div>
+        </ComponentCard>
+        <ComponentCard title="Avatar" tag="image · initials · stack">
+          <div className="row avatar-demo">
+            <div className="row">
+              <Avatar name="Tien Nguyen" size="sm" />
+              <Avatar name="Daniel Okafor" />
+              <Avatar name="Marta Kowalski" size="lg" tone="brand" />
+            </div>
+            <AvatarGroup label="Players" overflow={12}>
+              <Avatar name="Tien Nguyen" tone="blue" />
+              <Avatar name="Daniel Okafor" tone="red" />
+              <Avatar name="Marta Kowalski" tone="green" />
+            </AvatarGroup>
           </div>
         </ComponentCard>
       </Section>
