@@ -375,7 +375,7 @@ export function DesignSystem() {
         </ComponentCard>
         {/* The kit's tag names a 4:3 box it doesn't show. */}
         <ComponentCard title="Aspect Ratio" tag="16:9 · 4:3 · 1:1">
-          <div className="grid-2">
+          <div className="grid-2 aspect-ratio-demo">
             <AspectRatio ratio={16 / 9}>16 : 9</AspectRatio>
             <AspectRatio ratio={1}>1 : 1</AspectRatio>
           </div>

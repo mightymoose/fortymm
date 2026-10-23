@@ -1760,6 +1760,13 @@ h4, .h4 {
   letter-spacing: 0.1em;
 }
 
+/* The kit's grid stretches each box to the row's height. The 1:1 box then
+   takes the 16:9 box's height as its width, overflows the card and scrolls
+   the page sideways. Here each box keeps its own height. */
+.aspect-ratio-demo {
+  align-items: start;
+}
+
 /* =========================================================================
    Utility: hidden on screen, still read by assistive tech (e.g. a label the
    design shows no room for).

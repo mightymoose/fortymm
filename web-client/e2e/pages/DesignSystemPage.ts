@@ -394,4 +394,9 @@ export class DesignSystemPage {
   avatars(name: string): Locator {
     return this.avatarCard.getByRole('img', { name, exact: true })
   }
+
+  // The Aspect Ratio card's box that reads `text`, e.g. "16 : 9".
+  aspectRatioBox(text: string): Locator {
+    return this.aspectRatioCard.getByText(text, { exact: true })
+  }
 }

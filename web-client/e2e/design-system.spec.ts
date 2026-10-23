@@ -1853,6 +1853,10 @@ test.describe('Skeleton card', () => {
   })
 })
 
+// The kit's card overflows: its grid stretches the 1:1 box to the 16:9
+// box's height (511px at 1280px wide), so the square is 511px wide too and
+// the page scrolls sideways by 276px. The app keeps each box's own height,
+// so its screenshot is its own, not the kit's.
 test.describe('Aspect Ratio card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
@@ -1862,12 +1866,29 @@ test.describe('Aspect Ratio card', () => {
     )
   })
 
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
+  test('its boxes keep their ratios inside the card', async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const card = (await designSystemPage.aspectRatioCard.boundingBox())!
+    const wide = (await designSystemPage.aspectRatioBox('16 : 9').boundingBox())!
+    const square = (await designSystemPage
+      .aspectRatioBox('1 : 1')
+      .boundingBox())!
 
-    await expect(referenceKitPage.aspectRatioCard).toHaveScreenshot(
-      'aspect-ratio-card.png',
+    expect(wide.width / wide.height).toBeCloseTo(16 / 9, 2)
+    expect(square.width).toBeCloseTo(square.height, 0)
+    expect(square.width).toBeCloseTo(wide.width, 0)
+    // Inside the card's 1px border and 32px padding on the right.
+    expect(square.x + square.width).toBeLessThanOrEqual(
+      card.x + card.width - 33,
     )
+    expect(
+      await page
+        .locator('html')
+        .evaluate((html) => html.scrollWidth - html.clientWidth),
+    ).toBeLessThanOrEqual(0)
   })
 })
 
