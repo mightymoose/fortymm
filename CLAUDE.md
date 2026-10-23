@@ -177,16 +177,32 @@ To add a page, add its route to the route tree there.
 `src/api/client.ts` exports `api`, an openapi-fetch client typed by the
 generated schema, with base URL `/api`: `const { data, error } = await
 api.GET('/v1/health')`. `createApiClient()` builds one with other options (e.g.
-a stub `fetch` in tests). In production the Cloudflare Worker forwards `/api/*`
+an absolute base URL in tests). In production the Cloudflare Worker forwards `/api/*`
 the same way (see Deploy). The dev server's proxy target defaults to
 `http://api:8000` and can be overridden with `API_PROXY_TARGET`.
+
+Components fetch through TanStack Query. `src/api/queries.ts` holds the query
+options, one function per request, each taking the typed client, e.g.
+`useSuspenseQuery(healthQuery(api))`. Each `queryFn` calls the client and
+throws when the response has no data. `createAppRouter()` puts the client in
+the router context as `api` and wraps the router in a `QueryClientProvider`.
+On a full page load, the root layout
+(`src/routes/Root.tsx`) suspends until `/v1/health` answers.
+`LoadingScreen` covers it if that takes more than `SHOW_AFTER_MS` (300ms), so
+a fast load shows the page with no loading screen. Once shown, the loading
+screen stays up for at least `MIN_SHOWN_MS` (900ms, one bounce). Then the page
+renders under it, and it fades out (`.loading-screen-leaving`) and removes
+itself when the fade ends. jsdom runs no CSS animations, so the `HomePage`
+page object ends the fade itself. Root stays mounted on client-side
+navigation, so it doesn't show the loading screen again. If health
+fails after the default retries, the router's default error component shows.
 
 ### Tests
 
 Vitest is configured in the `test` block of `web-client/vite.config.ts` (jsdom
-environment). `web-client/src/setupTests.ts` loads the jest-dom matchers and
-cleans up rendered components after each test. Tests live next to the code as
-`*.test.tsx`.
+environment). `web-client/src/setupTests.ts` loads the jest-dom matchers,
+starts the mock API, and cleans up rendered components after each test. Tests
+live next to the code as `*.test.tsx`.
 
 Tests go through page objects in `web-client/src/test/pages/`. A static async
 `render()` renders the app's router at the page's path (via
@@ -194,6 +210,19 @@ Tests go through page objects in `web-client/src/test/pages/`. A static async
 whose getters query `screen` on each access (e.g.
 `(await HomePage.render()).title`). Page objects expose elements located by
 accessible role; assertions stay in the tests.
+
+Unit tests mock the API with MSW. `src/test/server.ts` holds the mock server
+and its default handlers, and `setupTests.ts` starts it. An unhandled request
+fails the test. A test overrides a handler with `server.use()`, and the
+override resets after the test. Type each mock body with the schema's type,
+e.g. `components['schemas']['HealthResponse']`.
+
+`renderRoute` gives each render its own `QueryClient` with retries off and an
+API client with base URL `API_BASE_URL` (`http://localhost/api`), because
+Node's `Request` rejects a relative URL. It waits for the health check, so the
+page is on screen when `render()` resolves. To test the loading screen, hold
+the health response in a handler and pass `render({ waitForHealth: false })`
+(see `src/routes/Root.test.tsx`).
 
 ### End-to-end tests
 

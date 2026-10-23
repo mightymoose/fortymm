@@ -6,11 +6,34 @@ test('shows the FortyMM title', async ({ homePage }) => {
   await expect(homePage.title).toHaveText('FortyMM')
 })
 
-test('shows the loading screen, then the page', async ({ homePage }) => {
+test('shows the loading screen until health answers, then fades it out over the page', async ({
+  homePage,
+  page,
+}) => {
+  let releaseHealth!: () => void
+  const healthHeld = new Promise<void>((resolve) => {
+    releaseHealth = resolve
+  })
+  await page.route('**/api/v1/health', async (route) => {
+    await healthHeld
+    await route.continue()
+  })
+
   await homePage.open()
 
   await expect(homePage.loadingScreen).toBeVisible()
   await expect(homePage.loadingScreen).toContainText('FortyMM')
-  await expect(homePage.loadingScreen).toBeHidden({ timeout: 10_000 })
+  await expect(homePage.title).toBeHidden()
+
+  // A string, because the e2e tsconfig has no DOM types.
+  const fadeEnded = page.evaluate(`new Promise((resolve) => {
+    document.addEventListener('animationend', (event) => {
+      if (event.animationName === 'loading-screen-out') resolve()
+    })
+  })`)
+  releaseHealth()
+
   await expect(homePage.title).toHaveText('FortyMM')
+  await fadeEnded
+  await expect(homePage.loadingScreen).toBeHidden()
 })

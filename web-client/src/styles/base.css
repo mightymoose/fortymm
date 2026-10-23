@@ -1191,8 +1191,13 @@ h4, .h4 {
   color: var(--fg-1);
   font-family: var(--font-ui);
   overflow: hidden;
-  /* Fades out over the last 240ms of router.tsx's LOADING_SCREEN_MS (3000ms). */
-  animation: loading-screen-out 240ms var(--ease-out) 2760ms forwards;
+}
+
+/* Fades out over the page once it's ready, then LoadingScreen.tsx removes
+   it. Clicks reach the page during the fade. */
+.loading-screen-leaving {
+  animation: loading-screen-out 240ms var(--ease-out) forwards;
+  pointer-events: none;
 }
 
 .loading-screen-body {
