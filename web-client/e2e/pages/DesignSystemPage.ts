@@ -65,6 +65,7 @@ export class DesignSystemPage {
   readonly tabsCard: Locator
   readonly tabList: Locator
   readonly tabPanel: Locator
+  readonly accordionCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -214,6 +215,10 @@ export class DesignSystemPage {
     this.tabList = this.tabsCard.getByRole('tablist', { name: 'Tournament' })
     // The chosen tab's panel: the others are hidden.
     this.tabPanel = this.tabsCard.getByRole('tabpanel')
+    this.accordionCard = this.navSection.getByRole('article', {
+      name: 'Accordion',
+      exact: true,
+    })
   }
 
   // A component card's title, in its header.
@@ -380,6 +385,22 @@ export class DesignSystemPage {
   // The Tabs card's tab named `name`, e.g. "Overview".
   tab(name: string): Locator {
     return this.tabList.getByRole('tab', { name, exact: true })
+  }
+
+  // The Accordion card's button that opens the question `name`.
+  accordionTrigger(name: string): Locator {
+    return this.accordionCard.getByRole('button', { name, exact: true })
+  }
+
+  // The Accordion card's answer to the question `name`, once it's open.
+  accordionContent(name: string): Locator {
+    return this.accordionCard.getByRole('region', { name, exact: true })
+  }
+
+  // The chevron beside the question `name`. It's hidden from assistive
+  // tech, so it has no role to find it by.
+  accordionChevron(name: string): Locator {
+    return this.accordionTrigger(name).locator('.accordion-chevron')
   }
 
   // Clicks the middle of the text `name` in `card` with a plain mouse click.

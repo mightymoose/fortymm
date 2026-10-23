@@ -1,3 +1,4 @@
+import { Accordion, type AccordionItem } from '../components/Accordion'
 import { AspectRatio } from '../components/AspectRatio'
 import { Avatar, type AvatarTone } from '../components/Avatar'
 import { AvatarGroup } from '../components/AvatarGroup'
@@ -61,6 +62,29 @@ const tournamentTabs: Tab[] = [
     value: 'players',
     label: 'Players',
     panel: '32 players from 9 clubs, rated 1180 to 1720.',
+  },
+]
+
+// The Accordion card's questions. The reference shows only the first's
+// answer.
+const faq: AccordionItem[] = [
+  {
+    value: 'scheduler',
+    title: 'How does the SMT scheduler work?',
+    content:
+      'It treats every match as a constraint and solves for an assignment that minimizes back-to-backs, balances court usage, and respects player breaks.',
+  },
+  {
+    value: 'free',
+    title: 'Is FortyMM really free?',
+    content:
+      'Yes. Running a tournament, scoring it live and sharing its brackets cost nothing.',
+  },
+  {
+    value: 'ratings',
+    title: 'How do ratings update?',
+    content:
+      'After every rated match. An upset moves both ratings further than an expected result.',
   },
 ]
 
@@ -415,6 +439,15 @@ export function DesignSystem() {
         {/* The kit's tag names an underlined style it doesn't show. */}
         <ComponentCard title="Tabs" tag="underlined or boxed">
           <Tabs label="Tournament" tabs={tournamentTabs} />
+        </ComponentCard>
+        <ComponentCard title="Accordion" tag="collapsible FAQ">
+          <div className="accordion-demo">
+            <Accordion
+              items={faq}
+              defaultOpen={[faq[0].value]}
+              headingLevel={4}
+            />
+          </div>
         </ComponentCard>
       </Section>
     </>

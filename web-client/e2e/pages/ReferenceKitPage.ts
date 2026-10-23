@@ -44,6 +44,7 @@ export class ReferenceKitPage {
   readonly navSectionHeading: Locator
   readonly navSectionLead: Locator
   readonly tabsCard: Locator
+  readonly accordionCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -173,6 +174,13 @@ export class ReferenceKitPage {
     this.navSectionLead = navSection.getByRole('paragraph').first()
     this.tabsCard = navSection.locator('.comp', {
       has: page.getByRole('heading', { level: 3, name: 'Tabs', exact: true }),
+    })
+    this.accordionCard = navSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Accordion',
+        exact: true,
+      }),
     })
   }
 

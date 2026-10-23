@@ -425,4 +425,22 @@ export class DesignSystemPage {
   get tabPanel(): HTMLElement {
     return within(this.tabsCard).getByRole('tabpanel')
   }
+
+  get accordionCard(): HTMLElement {
+    return within(this.navSection).getByRole('article', { name: 'Accordion' })
+  }
+
+  get accordionCardHeading(): HTMLElement {
+    return within(this.accordionCard).getByRole('heading', { level: 3 })
+  }
+
+  // The Accordion card's buttons that open its questions, in order.
+  get accordionTriggers(): HTMLElement[] {
+    return within(this.accordionCard).getAllByRole('button')
+  }
+
+  // The answers that are open, in order.
+  get accordionContents(): HTMLElement[] {
+    return within(this.accordionCard).queryAllByRole('region')
+  }
 }

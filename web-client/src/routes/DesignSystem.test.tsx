@@ -656,6 +656,44 @@ describe('DesignSystem', () => {
     )
   })
 
+  it('has an Accordion card after the Tabs card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.accordionCardHeading).toHaveTextContent(
+      'Accordion',
+    )
+    expect(designSystemPage.accordionCard).toHaveTextContent('collapsible FAQ')
+    expect(
+      designSystemPage.tabsCard.compareDocumentPosition(
+        designSystemPage.accordionCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's three questions, only the first open", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const triggers = designSystemPage.accordionTriggers
+    expect(
+      triggers.map((trigger) => [
+        trigger.textContent,
+        trigger.getAttribute('aria-expanded'),
+      ]),
+    ).toEqual([
+      ['How does the SMT scheduler work?⌄', 'true'],
+      ['Is FortyMM really free?⌄', 'false'],
+      ['How do ratings update?⌄', 'false'],
+    ])
+    for (const trigger of triggers) {
+      expect(trigger.parentElement?.tagName).toBe('H4')
+    }
+    expect(
+      designSystemPage.accordionContents.map((content) => content.textContent),
+    ).toEqual([
+      'It treats every match as a constraint and solves for an assignment that minimizes back-to-backs, balances court usage, and respects player breaks.',
+    ])
+  })
+
   it.each([
     {
       title: 'April Spring Open',

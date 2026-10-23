@@ -2016,6 +2016,128 @@ test.describe('Tabs', () => {
   })
 })
 
+// Both screenshots finish the chevron's turn, so they match whenever
+// they're taken.
+test.describe('Accordion card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.accordionCard).toHaveScreenshot(
+      'accordion-card.png',
+      { animations: 'disabled' },
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.accordionCard).toHaveScreenshot(
+      'accordion-card.png',
+      { animations: 'disabled' },
+    )
+  })
+})
+
+// The kit's accordion is static, with no focus style, so the tests below
+// are the app's alone.
+test.describe('Accordion', () => {
+  const orange = 'rgb(255, 122, 26)'
+  const scheduler = 'How does the SMT scheduler work?'
+  const free = 'Is FortyMM really free?'
+
+  test.beforeEach(async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+  })
+
+  test('a click opens and closes each question on its own', async ({
+    designSystemPage,
+  }) => {
+    const first = designSystemPage.accordionTrigger(scheduler)
+    const second = designSystemPage.accordionTrigger(free)
+    await expect(designSystemPage.accordionContent(scheduler)).toBeVisible()
+    await expect(designSystemPage.accordionContent(free)).toHaveCount(0)
+
+    await second.click()
+    await expect(second).toHaveAttribute('aria-expanded', 'true')
+    await expect(designSystemPage.accordionContent(free)).toBeVisible()
+    await expect(first).toHaveAttribute('aria-expanded', 'true')
+
+    await first.click()
+    await expect(first).toHaveAttribute('aria-expanded', 'false')
+    await expect(designSystemPage.accordionContent(scheduler)).toHaveCount(0)
+    await expect(designSystemPage.accordionContent(free)).toBeVisible()
+  })
+
+  test('Enter and Space open and close a question', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const second = designSystemPage.accordionTrigger(free)
+    await second.focus()
+
+    await page.keyboard.press('Enter')
+    await expect(second).toHaveAttribute('aria-expanded', 'true')
+    await page.keyboard.press('Space')
+    await expect(second).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  test("an open question's chevron points up", async ({
+    designSystemPage,
+  }) => {
+    const chevron = designSystemPage.accordionChevron(free)
+    await expect(chevron).toHaveCSS('transform', 'none')
+
+    await designSystemPage.accordionTrigger(free).click()
+
+    // rotate(180deg).
+    await expect(chevron).toHaveCSS('transform', 'matrix(-1, 0, 0, -1, 0, 0)')
+  })
+
+  test('the chevron turns', async ({ designSystemPage }) => {
+    await expect(designSystemPage.accordionChevron(free)).toHaveCSS(
+      'transition-duration',
+      '0.12s',
+    )
+  })
+
+  test('keyboard focus shows the outline', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const first = designSystemPage.accordionTrigger(scheduler)
+    const second = designSystemPage.accordionTrigger(free)
+    await first.focus()
+
+    await page.keyboard.press('Tab')
+    await expect(second).toBeFocused()
+    await expect(second).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(second).toHaveCSS('outline-offset', '2px')
+    await expect(first).toHaveCSS('outline-style', 'none')
+  })
+
+  test('a click shows no outline', async ({ designSystemPage }) => {
+    const second = designSystemPage.accordionTrigger(free)
+
+    await second.click()
+
+    await expect(second).toBeFocused()
+    await expect(second).toHaveCSS('outline-style', 'none')
+  })
+
+  test.describe('with reduced motion', () => {
+    test.use({ reducedMotion: 'reduce' })
+
+    test('the chevron turns without a transition', async ({
+      designSystemPage,
+    }) => {
+      await expect(designSystemPage.accordionChevron(free)).toHaveCSS(
+        'transition-duration',
+        '0s',
+      )
+    })
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({

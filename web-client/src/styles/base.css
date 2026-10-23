@@ -1819,6 +1819,67 @@ h4, .h4 {
 }
 
 /* =========================================================================
+   Accordion (the reference kit's .accord, .accord-h, .chev and .accord-c):
+   each item's header is a button in a heading, open when aria-expanded is
+   true. The kit's header is a div, so the heading and the button are reset
+   to match it. The button takes the .button focus outline, keyboard focus
+   only. The kit gives it none. The kit's chevron turns even with reduced
+   motion. Here it turns at once.
+   ========================================================================= */
+.accordion-item {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.accordion-heading {
+  margin: 0;
+}
+
+.accordion-trigger {
+  font: 500 14px var(--font-ui);
+  width: 100%;
+  margin: 0;
+  padding: 16px 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-1);
+  text-align: left;
+  display: flex;
+  justify-content: space-between;
+  cursor: pointer;
+}
+
+.accordion-trigger:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+.accordion-chevron {
+  transition: transform var(--dur-fast);
+}
+
+.accordion-trigger[aria-expanded="true"] .accordion-chevron {
+  transform: rotate(180deg);
+}
+
+.accordion-content {
+  padding: 0 0 16px;
+  font-size: 13px;
+  color: var(--fg-3);
+  line-height: 1.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .accordion-chevron {
+    transition: none;
+  }
+}
+
+/* The kit's Accordion card sets this width inline. */
+.accordion-demo {
+  max-width: 600px;
+}
+
+/* =========================================================================
    Utility: hidden on screen, still read by assistive tech (e.g. a label the
    design shows no room for).
    ========================================================================= */
