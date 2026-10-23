@@ -6,6 +6,7 @@ import {
   type RouterHistory,
 } from '@tanstack/react-router'
 import { api as defaultApi, type ApiClient } from './api/client'
+import { AuthenticatedLayout } from './routes/AuthenticatedLayout'
 import { DesignSystem } from './routes/DesignSystem'
 import { Home } from './routes/Home'
 import { Root } from './routes/Root'
@@ -18,8 +19,16 @@ const rootRoute = createRootRouteWithContext<RouterContext>()({
   component: Root,
 })
 
-const homeRoute = createRoute({
+// A pathless layout route for the pages that will need a signed-in user. It
+// adds no path segment. Public pages go directly under rootRoute.
+const authenticatedRoute = createRoute({
   getParentRoute: () => rootRoute,
+  id: 'authenticated',
+  component: AuthenticatedLayout,
+})
+
+const homeRoute = createRoute({
+  getParentRoute: () => authenticatedRoute,
   path: '/',
   component: Home,
 })
@@ -30,7 +39,10 @@ const designSystemRoute = createRoute({
   component: DesignSystem,
 })
 
-const routeTree = rootRoute.addChildren([homeRoute, designSystemRoute])
+const routeTree = rootRoute.addChildren([
+  authenticatedRoute.addChildren([homeRoute]),
+  designSystemRoute,
+])
 
 // Builds the app's router. Tests pass a memory history to start on a given
 // path, a QueryClient that doesn't retry, and an API client with a stub

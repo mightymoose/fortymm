@@ -3,6 +3,7 @@ import type { Locator, Page } from '@playwright/test'
 // Page object for the design system page in the Playwright suite.
 export class DesignSystemPage {
   readonly page: Page
+  readonly loadingScreen: Locator
   readonly header: Locator
   readonly title: Locator
   readonly subtitle: Locator
@@ -55,6 +56,7 @@ export class DesignSystemPage {
 
   constructor(page: Page) {
     this.page = page
+    this.loadingScreen = page.getByRole('status', { name: 'Loading FortyMM' })
     this.header = page.getByRole('banner')
     this.title = this.header.getByRole('heading', { level: 1 })
     this.subtitle = this.header.locator('.sub')
@@ -338,13 +340,10 @@ export class DesignSystemPage {
     await this.page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
   }
 
-  // Opens the page and waits for the loading screen over it to go.
+  // Opens the page. It shows no loading screen, so there's nothing to wait
+  // out.
   async goto(): Promise<void> {
     await this.page.goto('/design-system')
-    await this.title.waitFor()
-    await this.page
-      .getByRole('status', { name: 'Loading FortyMM' })
-      .waitFor({ state: 'hidden' })
   }
 
   // The input card's text input labelled `name`.
