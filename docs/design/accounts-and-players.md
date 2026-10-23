@@ -335,7 +335,29 @@ These checks remain:
 
 One case has no automatic check. A person enters on device 1 as a guest, then enters again on device 2 from another account, before device 1 signs in. The event then has two entries under two names. When device 1 signs in, adoption and the "Is this you?" question remove the extra entry, if it is before the draw. After the draw, the director withdraws one entry. Only a manager of both players can run a player merge.
 
-We accept this gap for now. The first goal is that a person can start a quick tournament with friends, and an extra field on every entry slows that down. A check needs a second attribute to compare, such as date of birth. If age-group events add date of birth later, a check that flags matching entries can come with them.
+A tournament with no extra checks leaves this gap open. The first goal is that a person can start a quick tournament with friends, and an extra field on every entry slows that down. A tournament that needs more turns on the checks in the next section.
+
+### Tournaments can turn on extra entry checks
+
+Each event has a set of entry requirements. A new event has none, so a quick tournament asks for nothing beyond a player. A director turns requirements on for a larger tournament.
+
+```python
+class EntryRequirement(StrEnum):
+    VERIFIED_ACCOUNT = "verified_account"  # the entrant's account has an identity
+    DATE_OF_BIRTH = "date_of_birth"        # the player has a date of birth
+    DUPLICATE_CHECK = "duplicate_check"    # flag entries with the same date of birth and a similar name
+
+REQUIRES: dict[EntryRequirement, frozenset[EntryRequirement]] = {
+    EntryRequirement.DUPLICATE_CHECK: frozenset({EntryRequirement.DATE_OF_BIRTH}),
+}
+```
+
+- The event stores its requirements as a set of `EntryRequirement` values. The API refuses a set that breaks `REQUIRES`, so a duplicate check never runs without the date of birth it compares.
+- At entry time, the API checks each requirement in the set. A missing one makes the entry form ask for it. For `VERIFIED_ACCOUNT`, that means the sign-in flow, which comes back to the form.
+- `DUPLICATE_CHECK` flags a pair of entries in the event for the director. The director withdraws one entry or marks the pair as two different people. The draw cannot start while a flag is open.
+- If a director turns a requirement on after entries exist, the earlier entries stay. The director's entry list marks each entry that does not meet the new requirement.
+
+A new check is a new `EntryRequirement` value with one check function. Code that creates entries does not branch on the type of tournament.
 
 ## Edge cases
 
