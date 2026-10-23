@@ -68,6 +68,8 @@ export class DesignSystemPage {
   readonly accordionCard: Locator
   readonly breadcrumbCard: Locator
   readonly breadcrumb: Locator
+  readonly paginationCard: Locator
+  readonly pagination: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -227,6 +229,13 @@ export class DesignSystemPage {
     })
     this.breadcrumb = this.breadcrumbCard.getByRole('navigation', {
       name: 'Breadcrumb',
+    })
+    this.paginationCard = this.navSection.getByRole('article', {
+      name: 'Pagination',
+      exact: true,
+    })
+    this.pagination = this.paginationCard.getByRole('navigation', {
+      name: 'Pagination',
     })
   }
 
@@ -415,6 +424,11 @@ export class DesignSystemPage {
   // The breadcrumb's link named `name`, e.g. "Tournaments".
   breadcrumbLink(name: string): Locator {
     return this.breadcrumb.getByRole('link', { name, exact: true })
+  }
+
+  // The pagination's button named `name`, e.g. "Page 2" or "Next page".
+  paginationButton(name: string): Locator {
+    return this.pagination.getByRole('button', { name, exact: true })
   }
 
   // Clicks the middle of the text `name` in `card` with a plain mouse click.

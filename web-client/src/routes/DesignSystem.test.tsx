@@ -723,6 +723,30 @@ describe('DesignSystem', () => {
     )
   })
 
+  it('has a Pagination card after the Breadcrumb card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.paginationCardHeading).toHaveTextContent(
+      'Pagination',
+    )
+    expect(designSystemPage.paginationCard).toHaveTextContent('paged tables')
+    expect(
+      designSystemPage.breadcrumbCard.compareDocumentPosition(
+        designSystemPage.paginationCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's row, page 1 of 12", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const pagination = designSystemPage.pagination
+    expect(pagination).toHaveTextContent('‹123…12›')
+    expect(
+      within(pagination).getByRole('button', { name: 'Page 1' }),
+    ).toHaveAttribute('aria-current', 'page')
+  })
+
   it.each([
     {
       title: 'April Spring Open',

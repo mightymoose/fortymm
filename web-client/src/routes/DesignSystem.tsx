@@ -15,6 +15,7 @@ import { Input } from '../components/Input'
 import { OtpInput } from '../components/OtpInput'
 import { PageHeader } from '../components/PageHeader'
 import { PageIntro } from '../components/PageIntro'
+import { Pagination } from '../components/Pagination'
 import { Progress } from '../components/Progress'
 import { Radio, RadioGroup } from '../components/RadioGroup'
 import { RatingDelta } from '../components/RatingDelta'
@@ -459,6 +460,9 @@ export function DesignSystem() {
               { label: 'Round 3' },
             ]}
           />
+        </ComponentCard>
+        <ComponentCard title="Pagination" tag="paged tables">
+          <Pagination pageCount={12} />
         </ComponentCard>
       </Section>
     </>

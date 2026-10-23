@@ -2194,6 +2194,112 @@ test.describe('Breadcrumb', () => {
   })
 })
 
+// Nothing is hovered or focused first, so the items show their resting
+// styles.
+test.describe('Pagination card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.paginationCard).toHaveScreenshot(
+      'pagination-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.paginationCard).toHaveScreenshot(
+      'pagination-card.png',
+    )
+  })
+})
+
+test.describe('Pagination', () => {
+  const orange = 'rgb(255, 122, 26)'
+  // --fg-2.
+  const fg2 = 'rgb(228, 231, 239)'
+
+  test.beforeEach(async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+  })
+
+  test('a click goes to a page, and the arrows step a page at a time', async ({
+    designSystemPage,
+  }) => {
+    const pagination = designSystemPage.pagination
+
+    await designSystemPage.paginationButton('Page 3').click()
+    await expect(pagination).toHaveText('‹1234…12›')
+    await expect(designSystemPage.paginationButton('Page 3')).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+
+    await designSystemPage.paginationButton('Next page').click()
+    await expect(pagination).toHaveText('‹12345…12›')
+    await designSystemPage.paginationButton('Page 12').click()
+    await expect(pagination).toHaveText('‹1…101112›')
+    await designSystemPage.paginationButton('Previous page').click()
+    await expect(pagination).toHaveText('‹1…101112›')
+    await expect(designSystemPage.paginationButton('Page 11')).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+  })
+
+  // The screenshot can't tell the disabled color from a close one, so this
+  // checks it.
+  test('the disabled arrow keeps the color of the others', async ({
+    designSystemPage,
+  }) => {
+    const previous = designSystemPage.paginationButton('Previous page')
+    await expect(previous).toBeDisabled()
+    await expect(previous).toHaveCSS('color', fg2)
+    await expect(designSystemPage.paginationButton('Next page')).toHaveCSS(
+      'color',
+      fg2,
+    )
+  })
+
+  test('the disabled arrow does nothing and keeps the focus', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const next = designSystemPage.paginationButton('Next page')
+    await designSystemPage.paginationButton('Page 12').click()
+    await next.focus()
+
+    await page.keyboard.press('Enter')
+
+    await expect(next).toBeDisabled()
+    await expect(next).toBeFocused()
+    await expect(designSystemPage.paginationButton('Page 12')).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+  })
+
+  // The kit's items have no focus style, so this is the app's alone.
+  test('keyboard focus shows the outline, a click none', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const previous = designSystemPage.paginationButton('Previous page')
+    const first = designSystemPage.paginationButton('Page 1')
+    const second = designSystemPage.paginationButton('Page 2')
+    await previous.focus()
+
+    await page.keyboard.press('Tab')
+    await expect(first).toBeFocused()
+    await expect(first).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(first).toHaveCSS('outline-offset', '2px')
+
+    await second.click()
+    await expect(second).toBeFocused()
+    await expect(second).toHaveCSS('outline-style', 'none')
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -2485,6 +2591,29 @@ test.describe('on a phone', () => {
     // Inside the card's 1px border and 32px padding on the right.
     expect(trail.x + trail.width).toBeLessThanOrEqual(card.x + card.width - 33)
     expect(current.y).toBeGreaterThan(first.y)
+  })
+
+  // The row is wider than the card's content, so its items wrap onto more
+  // lines, inside the card.
+  test('the pagination card fits', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    expect(
+      await designSystemPage.paginationCard.evaluate(
+        (e) => e.scrollWidth - e.clientWidth,
+      ),
+    ).toBe(0)
+    const card = (await designSystemPage.paginationCard.boundingBox())!
+    const row = (await designSystemPage.pagination.boundingBox())!
+    const previous = (await designSystemPage
+      .paginationButton('Previous page')
+      .boundingBox())!
+    const next = (await designSystemPage
+      .paginationButton('Next page')
+      .boundingBox())!
+    // Inside the card's 1px border and 32px padding on the right.
+    expect(row.x + row.width).toBeLessThanOrEqual(card.x + card.width - 33)
+    expect(next.y).toBeGreaterThan(previous.y)
   })
 
   // The cards share the .grid-2 layout with the input card's fields, so

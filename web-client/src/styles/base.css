@@ -1935,6 +1935,66 @@ h4, .h4 {
 }
 
 /* =========================================================================
+   Pagination (the reference kit's .pag, .pi and .pi.on): the kit's items
+   are spans. Here the arrows and pages are buttons, reset to match, the
+   current page's marked by aria-current. The disabled arrow keeps the
+   kit's color: the kit draws ‹ on the first page like any other item. The
+   buttons take the .button focus outline, keyboard focus only. The kit
+   gives them none.
+   ========================================================================= */
+.pagination {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.pagination-item {
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  padding: 0;
+  border-radius: var(--r-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 500 13px var(--font-mono);
+  cursor: pointer;
+  background: transparent;
+  color: var(--fg-2);
+  border: 1px solid transparent;
+}
+
+.pagination-item:hover {
+  background: var(--bg-hover);
+}
+
+.pagination-item[aria-current="page"] {
+  background: var(--ink-700);
+  color: var(--fg-1);
+  border-color: var(--border-subtle);
+}
+
+/* The kit's gap and its arrow on the first page take the pointer and the
+   hover like the pages. Here they don't, as neither does anything. */
+.pagination-item[aria-disabled="true"], .pagination-item.pagination-gap {
+  cursor: default;
+  background: transparent;
+}
+
+.pagination-item:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+/* The kit is only laid out for desktop. On a phone, its row is wider than
+   the card, so the items wrap onto more lines. */
+@media (max-width: 640px) {
+  .pagination {
+    flex-wrap: wrap;
+  }
+}
+
+/* =========================================================================
    Utility: hidden on screen, still read by assistive tech (e.g. a label the
    design shows no room for).
    ========================================================================= */

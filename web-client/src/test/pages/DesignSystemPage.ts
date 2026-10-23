@@ -457,4 +457,18 @@ export class DesignSystemPage {
       name: 'Breadcrumb',
     })
   }
+
+  get paginationCard(): HTMLElement {
+    return within(this.navSection).getByRole('article', { name: 'Pagination' })
+  }
+
+  get paginationCardHeading(): HTMLElement {
+    return within(this.paginationCard).getByRole('heading', { level: 3 })
+  }
+
+  get pagination(): HTMLElement {
+    return within(this.paginationCard).getByRole('navigation', {
+      name: 'Pagination',
+    })
+  }
 }
