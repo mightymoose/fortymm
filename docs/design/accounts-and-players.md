@@ -14,13 +14,13 @@ Every visitor gets an account the first time the app loads. They can play games 
 - **Session.** An opaque token in a cookie that points at one account.
 - **Entry.** One player's place in one tournament event. This doc says "enter" and "entry", not "register", so it never confuses a tournament entry with creating an account.
 - **Adopt.** A verified account takes over a guest account's players and sessions. The API then marks the guest account as adopted, and nobody can sign in to it again.
-- **Player merge.** Two players turn out to be one person. One player stops taking part, and the other carries on. Both keep their games and ratings.
+- **Player merge.** Two players turn out to be one person. Their games move to the player who carries on, and the other player stops taking part.
 
 ## Three premises
 
 The design rests on three rules. Most edge cases below resolve because of them.
 
-1. **History belongs to players.** Games, ratings and entries reference `players.id`. Nothing rewrites them, not an account change and not a player merge.
+1. **History belongs to players.** Games, ratings and entries reference `players.id`. No account change rewrites them. Only a player merge moves them, and only between two players who are the same person.
 2. **Adoption moves control, not history.** Adopting a guest changes `player_managers` rows. No game or entry row changes, so a match in progress or an open entry stays valid during adoption.
 3. **Players outlive accounts.** A player with no manager is legal. A walk-in that a tournament director adds has no manager. So does the player of a deleted guest account. Nothing ever deletes a player. A player's games are also their opponents' games, and every rating came from them.
 
@@ -135,13 +135,13 @@ Adoption and player merge must know about every table that references `players` 
 ```python
 OWNERSHIP_RULES: dict[tuple[str, str], OwnershipRule] = {
     ("player_managers", "account_id"): OwnershipRule.MOVES_ON_ADOPT,
-    ("player_managers", "player_id"): OwnershipRule.KEPT_ON_PLAYER_MERGE,
+    ("player_managers", "player_id"): OwnershipRule.STAYS_ON_PLAYER_MERGE,
     ("sessions", "account_id"): OwnershipRule.MOVES_ON_ADOPT,
     ("identities", "account_id"): OwnershipRule.GUEST_HAS_NONE,
     ("account_emails", "account_id"): OwnershipRule.GUEST_HAS_NONE,
     ("players", "merged_into"): OwnershipRule.SET_BY_PLAYER_MERGE,
     ("accounts", "adopted_into"): OwnershipRule.SET_BY_ADOPT,
-    # Later: ("games", "player_id"): KEPT_ON_PLAYER_MERGE,
+    # Later: ("games", "player_a_id"): MOVES_ON_PLAYER_MERGE,
     # ("payments", "payer_account_id"): KEPT_AS_EVIDENCE,
 }
 ```
@@ -274,7 +274,7 @@ After adoption, the web-client shows what moved, such as "We added 12 games play
 For each moved player with `adopted_from` set, the web-client asks "Is Guest 4821 you?":
 
 - **Yes, and the account has no self player.** Guest 4821 becomes the self player.
-- **Yes, and the account has a self player.** The app starts a player merge of Guest 4821 into the self player.
+- **Yes, and the account has a self player.** The app starts a player merge of Guest 4821 into the self player, and Guest 4821's games move to it.
 - **No, it is someone else.** Guest 4821 stays a managed player, for example a child who played on the parent's computer.
 - **Not mine.** This handles a shared computer, such as a library. The API removes the `player_managers` row, so the player has no manager. It refuses if the player has an entry or a payment, and tells the person to contact the tournament director.
 
@@ -288,19 +288,33 @@ Adoption itself is never optional at sign-in. The person cannot sign in on this 
 
 ## Merge two players who are one person
 
-Player merge changes no game and no rating. Each game stays recorded with the two players who played it. Each opponent's rating came from those games, so rewriting them would change other people's history. Adoption never runs a merge automatically.
+A person who played as a guest can move those games to the player they already have. For example, Ryan signs out, plays a game as Guest 4821 and then signs in as Ryan. The app asks "Is Guest 4821 you?" A yes moves the game to Ryan. Adoption never runs a merge on its own.
 
-The person who asks must manage both players, and picks which one carries on. A merge of `source` into `target`:
+The person who asks must manage both players. They pick the player who carries on, called `target`. The other player is `source`. One rule covers every case. The merge moves each row from `source` to `target`. A row stays on `source` if moving it would put `target` on both sides of a game, or in one event twice. That is why `source` is kept and never deleted.
 
-1. Refuses if `source` and `target` ever played each other. After a merge, that game would show one person playing themselves, and its rating change would come from a game against oneself. Both players stay separate, and each keeps its own entries.
-2. For each event where both players have an entry:
-   - If the draw is not made, the merge keeps one entry and withdraws the other. The withdrawn entry stays as a row with a withdrawn status. It keeps the paid entry if only one is paid, or else the older entry.
-   - If the draw is made, the merge refuses. The tournament director withdraws one entry first.
+A merge runs in one transaction:
+
+1. Lock both player rows with `SELECT … FOR UPDATE`, lower id first. Code that starts a game or creates an entry takes `FOR SHARE` on its player rows, so it waits for the merge.
+2. If `source.merged_into` is already set, stop. A repeated merge changes nothing.
+3. Move every game from `source` to `target`, except games between `source` and `target`. Those stay as they were, between two different players, so `CHECK (player_a_id <> player_b_id)` holds.
+4. Handle entries event by event:
+   - If only `source` has an entry, the entry moves to `target`.
+   - If both have an entry and the draw is not made, the merge keeps one entry and withdraws the other. It keeps the paid entry if only one is paid, or else the older entry. The withdrawn entry stays on `source` with a withdrawn status.
+   - If both have an entry and the event has a draw but has not finished, the merge refuses. The tournament director withdraws one entry first.
+   - If both have an entry and the event has finished, both entries stay as they are. `source`'s entry stays on `source`.
    - If both entries are paid, the merge keeps one admission and lists the second payment for manual reconciliation. It never refunds automatically. This follows [mightymoose/fortymm-real#1779](https://github.com/mightymoose/fortymm-real/issues/1779).
-3. Sets `source.merged_into = target`. From then on, `source` cannot start a game or create an entry. Its open entries in other events stay on `source` until those events end.
-4. Keeps `source`'s `player_managers` rows, so the same accounts can still see its history and manage its open entries.
+5. Replay the rating of `target` (next section).
+6. Set `source.merged_into = target`. From then on, `source` cannot start a game or create an entry. A link to `source` opens the profile of `target`.
 
-`source` keeps its games and its last rating. `target` keeps its own rating and plays on from it. The profile of `target` lists the games of both players, and marks the ones played as `source`. A link to `source` opens the profile of `target`.
+`source` keeps its `player_managers` rows, so the same accounts can still see the games that stayed on it.
+
+### Replay only the rating of the player who carries on
+
+Each game stores, for each side, the player's rating before the game and the change the game made. A player's current rating is the last value in that sequence.
+
+After the move, the merge replays `target`'s games in time order, the moved games and its own together. For each game it computes a new change for `target` from `target`'s replayed rating and the opponent's recorded rating before that game. It writes the new values on `target`'s side only.
+
+The opponent's side of every game stays as recorded. Their ratings came from playing someone with `source`'s rating at the time, and that really happened. So a merge never changes another person's rating. The cost is that the two sides of a moved game may no longer add up to zero. That is a deliberate tradeoff, and the profile does not show it.
 
 Player merge lands with games, the first table that references `players`.
 
@@ -370,7 +384,8 @@ Steps: a guest plays games as Guest 4821. The guest enters tournament T as Guest
 | Sign in on the same browser with a new email | `VerifyInPlace`. The account and Guest 4821 keep their ids. One entry. |
 | Sign in on the same browser to an existing account with no self player | `AdoptGuest`. The app asks "Is Guest 4821 you?" A yes makes Guest 4821 the self player. One entry. |
 | Sign in on the same browser to an existing account whose self player is Ryan | `AdoptGuest`. Guest 4821 becomes managed. The app asks "Is Guest 4821 you?" A yes starts a player merge. If Ryan also has an entry in T, the merge withdraws one before the draw and refuses after it. |
-| Same as above, but Guest 4821 played Ryan before signing in | The merge refuses, because the two players played each other. Both stay players on the account, and both keep their games. |
+| Same as above, but Guest 4821 played Ryan before signing in | The merge moves every other game to Ryan. The game between Guest 4821 and Ryan stays on Guest 4821, so no game has Ryan on both sides. |
+| A verified account signs out, plays a game as a guest, then signs back in | Adoption moves the guest's player to the account. A yes to "Is Guest 4821 you?" moves the game to the account's self player and replays that player's rating. |
 | Sign in on another device as Ryan and enter T again | The guest account stays alive on the first device. T has two entries for one person, under two names. No check catches this. When the first device signs in, adoption and the "Is this you?" question remove the extra entry before the draw. After the draw, the director withdraws one. |
 | Clear cookies before signing in | The guest account is unreachable. Guest 4821 keeps the entry, with no manager. The director sees it and can withdraw it. |
 
@@ -426,7 +441,7 @@ Each phase is one PR that ends in a check.
 3. **Sign-in and adoption.** Add `identities`, `login_attempts`, the `oidc` Compose service, the login, callback and logout routes, `resolve_login` and adoption. Check every row of the outcome table in e2e against the mock.
 4. **Auth0.** Add a step-by-step setup script for the two Auth0 applications, which a person runs in the Auth0 dashboard. Add the two Secret Manager secrets to `api/deploy/bootstrap-gcp.sh` and wire them into `cloud-run-deploy`. Check the post-deploy `/authorize` redirect on a Preview.
 5. **Abuse limits.** Add the session rate limit and the stale-account cleanup. Check both with unit tests.
-6. **Player merge.** Build it with games. Add `CHECK (player_a_id <> player_b_id)` to games, so no game has the same player on both sides. Check each refusal in tests, and check that a merge changes no game or rating row.
+6. **Player merge.** Build it with games. Add `CHECK (player_a_id <> player_b_id)` to games, so no game has the same player on both sides. Check each entry rule in tests. Check that a merge never changes an opponent's side of a game, and that a second run of a merge changes nothing.
 
 ## Open decisions
 
@@ -437,6 +452,6 @@ Each decision below has a default that the design already uses.
 - **Guest lifetime.** Default: 90 days idle. A shorter time loses accounts of people who play rarely.
 - **Lost guest accounts.** A guest who clears cookies or changes browsers without signing in loses the account. Default: accept this, and show "Sign in to keep your games" after the first game.
 - **Verified account merge.** Default: not supported. A person with two verified accounts keeps both.
-- **Games against your own second player.** One account can manage two players and start a game between them, such as a parent and a child. If both players are the same person, the game is a rating game against oneself. Default: allow it, because the app cannot tell the two cases apart, and the merge refusal keeps the history visible. The other choice makes games between two players of one account unrated.
-- **Rating after a merge.** Default: the player who carries on keeps their own rating. The person picks that player, so they can keep the rating they trust.
+- **Games against your own second player.** One account can manage two players and start a game between them, such as a parent and a child. If both players are the same person, the game is a rating game against oneself. Default: allow it, because the app cannot tell the two cases apart. A later merge leaves those games on `source`, so the history stays visible. The other choice makes games between two players of one account unrated.
+- **Rating after a merge.** Default: replay the rating of the player who carries on over both players' games, and leave every opponent's rating alone. The other choice keeps that player's rating as it was and moves the games only for display.
 - **Previews share one database.** Every Preview uses `fortymm_preview`. A branch that adds a migration applies it to the database that all Previews use. Phase 1 needs a rule for this, for example that migrations only add tables and columns.
