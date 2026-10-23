@@ -747,6 +747,36 @@ describe('DesignSystem', () => {
     ).toHaveAttribute('aria-current', 'page')
   })
 
+  it('has a Navigation Menu card after the Pagination card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.navMenuCardHeading).toHaveTextContent(
+      'Navigation Menu',
+    )
+    expect(designSystemPage.navMenuCard).toHaveTextContent('mega-dropdown')
+    expect(
+      designSystemPage.paginationCard.compareDocumentPosition(
+        designSystemPage.navMenuCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's Product panel, labelled as hovered", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.navMenuCard).toHaveTextContent('Hovered: Product')
+    expect(
+      within(designSystemPage.navMenuPanel)
+        .getAllByRole('link')
+        .map((link) => link.textContent),
+    ).toEqual([
+      'Match recorderTrack scores in real time, no internet needed.',
+      'Tournament adminSMT-solved draws and live scoring.',
+      'Spectator bracketsShareable, public, branded.',
+      'Club toolsMember rosters, ladder leagues.',
+    ])
+  })
+
   it.each([
     {
       title: 'April Spring Open',

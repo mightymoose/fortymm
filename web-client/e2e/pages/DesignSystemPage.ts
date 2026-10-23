@@ -70,6 +70,8 @@ export class DesignSystemPage {
   readonly breadcrumb: Locator
   readonly paginationCard: Locator
   readonly pagination: Locator
+  readonly navMenuCard: Locator
+  readonly navMenuPanel: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -237,6 +239,11 @@ export class DesignSystemPage {
     this.pagination = this.paginationCard.getByRole('navigation', {
       name: 'Pagination',
     })
+    this.navMenuCard = this.navSection.getByRole('article', {
+      name: 'Navigation Menu',
+      exact: true,
+    })
+    this.navMenuPanel = this.navMenuCard.getByRole('list', { name: 'Product' })
   }
 
   // A component card's title, in its header.
@@ -429,6 +436,11 @@ export class DesignSystemPage {
   // The pagination's button named `name`, e.g. "Page 2" or "Next page".
   paginationButton(name: string): Locator {
     return this.pagination.getByRole('button', { name, exact: true })
+  }
+
+  // The navigation menu panel's link titled `title`, e.g. "Club tools".
+  navMenuLink(title: string): Locator {
+    return this.navMenuPanel.getByRole('link').filter({ hasText: title })
   }
 
   // Clicks the middle of the text `name` in `card` with a plain mouse click.

@@ -471,4 +471,18 @@ export class DesignSystemPage {
       name: 'Pagination',
     })
   }
+
+  get navMenuCard(): HTMLElement {
+    return within(this.navSection).getByRole('article', {
+      name: 'Navigation Menu',
+    })
+  }
+
+  get navMenuCardHeading(): HTMLElement {
+    return within(this.navMenuCard).getByRole('heading', { level: 3 })
+  }
+
+  get navMenuPanel(): HTMLElement {
+    return within(this.navMenuCard).getByRole('list', { name: 'Product' })
+  }
 }

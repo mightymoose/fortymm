@@ -2300,6 +2300,64 @@ test.describe('Pagination', () => {
   })
 })
 
+// Nothing is hovered or focused first, so the links show their resting
+// styles.
+test.describe('Navigation Menu card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.navMenuCard).toHaveScreenshot(
+      'nav-menu-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.navMenuCard).toHaveScreenshot(
+      'nav-menu-card.png',
+    )
+  })
+})
+
+test.describe('Navigation Menu', () => {
+  const orange = 'rgb(255, 122, 26)'
+
+  test.beforeEach(async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+  })
+
+  // The screenshot can't see the hover: --bg-hover is white at 4%, under
+  // its color threshold.
+  test('hovering a link lightens it', async ({ designSystemPage }) => {
+    const link = designSystemPage.navMenuLink('Club tools')
+    await expect(link).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+
+    await link.hover()
+
+    await expect(link).toHaveCSS(
+      'background-color',
+      'rgba(255, 255, 255, 0.04)',
+    )
+  })
+
+  // The kit's links have no focus style, so this is the app's alone.
+  test('keyboard focus shows the outline', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const first = designSystemPage.navMenuLink('Match recorder')
+    const second = designSystemPage.navMenuLink('Tournament admin')
+    await first.focus()
+
+    await page.keyboard.press('Tab')
+
+    await expect(second).toBeFocused()
+    await expect(second).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(second).toHaveCSS('outline-offset', '2px')
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -2614,6 +2672,33 @@ test.describe('on a phone', () => {
     // Inside the card's 1px border and 32px padding on the right.
     expect(row.x + row.width).toBeLessThanOrEqual(card.x + card.width - 33)
     expect(next.y).toBeGreaterThan(previous.y)
+  })
+
+  // The panel is wider than the card's content, so its links stack in one
+  // column as wide as the frame, inside the card.
+  test('the navigation menu card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.navMenuCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.navMenuCard.boundingBox())!
+    const panel = (await designSystemPage.navMenuPanel.boundingBox())!
+    const first = (await designSystemPage
+      .navMenuLink('Match recorder')
+      .boundingBox())!
+    const second = (await designSystemPage
+      .navMenuLink('Tournament admin')
+      .boundingBox())!
+    // Inside the card's 1px border and 32px padding on the right.
+    expect(panel.x + panel.width).toBeLessThanOrEqual(card.x + card.width - 33)
+    expect(second.x).toBe(first.x)
+    expect(second.y).toBeGreaterThan(first.y)
   })
 
   // The cards share the .grid-2 layout with the input card's fields, so

@@ -1995,6 +1995,103 @@ h4, .h4 {
 }
 
 /* =========================================================================
+   Navigation menu panel (the reference kit's .nav-menu, .nl, .t and .d):
+   the kit's panel is a div of divs. Here it's a list, each item a link
+   holding the title and the description, reset to match. The links take
+   the .button focus outline, keyboard focus only. The kit gives them none.
+   ========================================================================= */
+.nav-menu {
+  background: var(--ink-800);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  margin: 0;
+  padding: 16px;
+  list-style: none;
+  width: 480px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  box-shadow: var(--shadow-lg);
+}
+
+.nav-menu-link {
+  display: block;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  text-decoration: none;
+}
+
+.nav-menu-link:hover {
+  background: var(--bg-hover);
+}
+
+.nav-menu-link:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+.nav-menu-title {
+  font: 500 13px var(--font-ui);
+  color: var(--fg-1);
+  margin: 0 0 2px;
+}
+
+.nav-menu-description {
+  font-size: 12px;
+  color: var(--fg-3);
+  margin: 0;
+}
+
+/* =========================================================================
+   Mock frame (the reference kit's .mock-bg and .mock-label): a dashed box
+   that shows a component as it looks in place (e.g. an open menu), with a
+   mono label in its top left corner saying what state it's shown in.
+   .mock-bg--fit drops the frame's minimum height, as the kit does inline
+   where the component is short.
+   ========================================================================= */
+.mock-bg {
+  background: var(--ink-950);
+  padding: 40px;
+  border-radius: var(--r-md);
+  border: 1px dashed var(--border-subtle);
+  position: relative;
+  min-height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.mock-bg--fit {
+  min-height: auto;
+}
+
+.mock-label {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  font: 500 10px var(--font-mono);
+  color: var(--fg-3);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* The kit is only laid out for desktop. On a phone, the frame keeps less
+   room around what it shows, and the menu panel is one column as wide as
+   the frame. */
+@media (max-width: 640px) {
+  .mock-bg {
+    padding: 40px 16px 16px;
+  }
+
+  .nav-menu {
+    width: 100%;
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =========================================================================
    Utility: hidden on screen, still read by assistive tech (e.g. a label the
    design shows no room for).
    ========================================================================= */

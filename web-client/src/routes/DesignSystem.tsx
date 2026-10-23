@@ -12,6 +12,10 @@ import { ComponentCard } from '../components/ComponentCard'
 import { DatePicker } from '../components/DatePicker'
 import { Field, FieldHelp, Label } from '../components/Field'
 import { Input } from '../components/Input'
+import {
+  type NavigationMenuLink,
+  NavigationMenuPanel,
+} from '../components/NavigationMenuPanel'
 import { OtpInput } from '../components/OtpInput'
 import { PageHeader } from '../components/PageHeader'
 import { PageIntro } from '../components/PageIntro'
@@ -87,6 +91,31 @@ const faq: AccordionItem[] = [
     title: 'How do ratings update?',
     content:
       'After every rated match. An upset moves both ratings further than an expected result.',
+  },
+]
+
+// The Navigation Menu card's links. There are no such pages yet, so they go
+// back to the Navigation section.
+const productLinks: NavigationMenuLink[] = [
+  {
+    title: 'Match recorder',
+    description: 'Track scores in real time, no internet needed.',
+    href: '#nav',
+  },
+  {
+    title: 'Tournament admin',
+    description: 'SMT-solved draws and live scoring.',
+    href: '#nav',
+  },
+  {
+    title: 'Spectator brackets',
+    description: 'Shareable, public, branded.',
+    href: '#nav',
+  },
+  {
+    title: 'Club tools',
+    description: 'Member rosters, ladder leagues.',
+    href: '#nav',
   },
 ]
 
@@ -463,6 +492,14 @@ export function DesignSystem() {
         </ComponentCard>
         <ComponentCard title="Pagination" tag="paged tables">
           <Pagination pageCount={12} />
+        </ComponentCard>
+        {/* As the kit does, this shows only the panel that hovering Product
+            opens. */}
+        <ComponentCard title="Navigation Menu" tag="mega-dropdown">
+          <div className="mock-bg mock-bg--fit">
+            <span className="mock-label">Hovered: Product</span>
+            <NavigationMenuPanel label="Product" items={productLinks} />
+          </div>
         </ComponentCard>
       </Section>
     </>
