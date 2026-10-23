@@ -1614,6 +1614,67 @@ h4, .h4 {
 }
 
 /* =========================================================================
+   Table (the reference kit's table.tbl and its .num cells). .table-num
+   outranks the th rule, so a numeric header is mono and right-aligned too.
+   On a phone the table is wider than the card. It scrolls inside the card,
+   and no cell wraps, so each row stays on one line.
+   ========================================================================= */
+.table-scroll {
+  overflow-x: auto;
+}
+
+.table th,
+.table td {
+  white-space: nowrap;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 400 13px var(--font-ui);
+}
+
+.table th {
+  text-align: left;
+  font: 500 11px var(--font-ui);
+  color: var(--fg-3);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--fg-1);
+}
+
+.table tr:last-child td {
+  border-bottom: 0;
+}
+
+.table .table-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.rating-delta--gain {
+  color: var(--serve-500);
+}
+
+.rating-delta--loss {
+  color: var(--loss);
+}
+
+/* The kit's table sets this gap inline on each player cell's .row. */
+.player-cell {
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+
+/* =========================================================================
    Utility: hidden on screen, still read by assistive tech (e.g. a label the
    design shows no room for).
    ========================================================================= */

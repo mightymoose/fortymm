@@ -38,6 +38,7 @@ export class ReferenceKitPage {
   readonly cardCard: Locator
   readonly badgeCard: Locator
   readonly avatarCard: Locator
+  readonly tableCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -140,6 +141,13 @@ export class ReferenceKitPage {
     })
     this.avatarCard = displaySection.locator('.comp', {
       has: page.getByRole('heading', { level: 3, name: 'Avatar', exact: true }),
+    })
+    this.tableCard = displaySection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Table · Data Table',
+        exact: true,
+      }),
     })
   }
 

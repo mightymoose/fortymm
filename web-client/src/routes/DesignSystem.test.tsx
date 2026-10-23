@@ -473,6 +473,68 @@ describe('DesignSystem', () => {
     ).toEqual(['Tien Nguyen', 'Daniel Okafor', 'Marta Kowalski', '12 more'])
   })
 
+  it('has a Table · Data Table card after the Avatar card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.tableCardHeading).toHaveTextContent(
+      'Table · Data Table',
+    )
+    expect(designSystemPage.tableCard).toHaveTextContent('sortable rows')
+    expect(
+      designSystemPage.avatarCard.compareDocumentPosition(
+        designSystemPage.tableCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("heads the standings table with the reference's columns", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(
+      within(designSystemPage.standingsTable)
+        .getAllByRole('columnheader')
+        .map((header) => header.textContent),
+    ).toEqual(['Player', 'Club', 'Rating', 'W-L', 'Δ'])
+  })
+
+  it("shows the reference's standings, a signed rating change last", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const [, ...rows] = within(designSystemPage.standingsTable).getAllByRole(
+      'row',
+    )
+
+    expect(
+      rows.map((row) =>
+        within(row)
+          .getAllByRole('cell')
+          .slice(1)
+          .map((cell) => cell.textContent),
+      ),
+    ).toEqual([
+      ['Brooklyn TT', '1620', '14\u20133', '+18'],
+      ['NYC Open Hall', '1582', '11\u20134', '+12'],
+      ['Brooklyn TT', '1505', '8\u20136', '\u22124'],
+    ])
+  })
+
+  it.each([
+    [0, 'Tien Nguyen', 'Nguyen, Tien'],
+    [1, 'Daniel Okafor', 'Okafor, Daniel'],
+    [2, 'Marta Kowalski', 'Kowalski, Marta'],
+  ])(
+    "shows row %i's player as an avatar of %s beside %j",
+    async (index, name, shown) => {
+      const designSystemPage = await DesignSystemPage.render()
+      const [, ...rows] = within(designSystemPage.standingsTable).getAllByRole(
+        'row',
+      )
+      const player = within(rows[index]).getAllByRole('cell')[0]
+
+      expect(within(player).getByRole('img')).toHaveAccessibleName(name)
+      expect(within(player).getByText(shown)).toBeVisible()
+    },
+  )
+
   it.each([
     {
       title: 'April Spring Open',

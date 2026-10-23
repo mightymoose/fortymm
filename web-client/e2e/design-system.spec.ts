@@ -1783,6 +1783,20 @@ test.describe('Avatar card', () => {
   })
 })
 
+test.describe('Table · Data Table card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.tableCard).toHaveScreenshot('table-card.png')
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.tableCard).toHaveScreenshot('table-card.png')
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -2102,6 +2116,36 @@ test.describe('on a phone', () => {
       const previous = (await stacked[i - 1].boundingBox())!
       const current = (await stacked[i].boundingBox())!
       expect(current.x).toBeLessThan(previous.x + previous.width)
+    }
+  })
+
+  // The table is wider than a phone, so it scrolls sideways inside the card
+  // rather than widening the page, and each row stays on one line.
+  test('the standings table scrolls in its card, a row per line', async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const scroller = designSystemPage.standingsTable.locator('xpath=..')
+
+    expect(
+      await scroller.evaluate((e) => e.scrollWidth - e.clientWidth),
+    ).toBeGreaterThan(0)
+    expect(
+      await page
+        .locator('html')
+        .evaluate((html) => html.scrollWidth - html.clientWidth),
+    ).toBeLessThanOrEqual(0)
+
+    // A row on one line is as tall as its avatar and the cells' 14px padding
+    // above and below it. A wrapped name or club makes it taller.
+    for (const row of await designSystemPage.standingsTable
+      .getByRole('row')
+      .all()
+      .then((rows) => rows.slice(1))) {
+      const avatar = (await row.getByRole('img').boundingBox())!
+      const box = (await row.boundingBox())!
+      expect(box.height).toBeLessThanOrEqual(avatar.height + 2 * 14 + 1)
     }
   })
 

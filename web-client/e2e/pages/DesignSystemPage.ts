@@ -53,6 +53,8 @@ export class DesignSystemPage {
   readonly liveDot: Locator
   readonly avatarCard: Locator
   readonly avatarGroup: Locator
+  readonly tableCard: Locator
+  readonly standingsTable: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -169,6 +171,13 @@ export class DesignSystemPage {
       exact: true,
     })
     this.avatarGroup = this.avatarCard.getByRole('group', { name: 'Players' })
+    this.tableCard = this.displaySection.getByRole('article', {
+      name: 'Table · Data Table',
+      exact: true,
+    })
+    this.standingsTable = this.tableCard.getByRole('table', {
+      name: 'Standings',
+    })
   }
 
   // A component card's title, in its header.

@@ -1,4 +1,4 @@
-import { Avatar } from '../components/Avatar'
+import { Avatar, type AvatarTone } from '../components/Avatar'
 import { AvatarGroup } from '../components/AvatarGroup'
 import { Badge } from '../components/Badge'
 import { Button } from '../components/Button'
@@ -13,10 +13,12 @@ import { OtpInput } from '../components/OtpInput'
 import { PageHeader } from '../components/PageHeader'
 import { PageIntro } from '../components/PageIntro'
 import { Radio, RadioGroup } from '../components/RadioGroup'
+import { RatingDelta } from '../components/RatingDelta'
 import { Section } from '../components/Section'
 import { Select } from '../components/Select'
 import { Slider } from '../components/Slider'
 import { Switch } from '../components/Switch'
+import { type Column, Table } from '../components/Table'
 import { Textarea } from '../components/Textarea'
 import { Toggle } from '../components/Toggle'
 import { ToggleGroup, ToggleGroupItem } from '../components/ToggleGroup'
@@ -31,6 +33,76 @@ const players: ComboboxOption[] = [
   { id: 'ana-silva', label: 'Silva, Ana', hint: '1710' },
   { id: 'kenji-tanaka', label: 'Tanaka, Kenji', hint: '1540' },
   { id: 'lena-weber', label: 'Weber, Lena', hint: '1295' },
+]
+
+type Standing = {
+  // First name first, as Avatar takes it. The table shows it last name first.
+  name: string
+  tone: AvatarTone
+  club: string
+  rating: number
+  wins: number
+  losses: number
+  delta: number
+}
+
+const standings: Standing[] = [
+  {
+    name: 'Tien Nguyen',
+    tone: 'neutral',
+    club: 'Brooklyn TT',
+    rating: 1620,
+    wins: 14,
+    losses: 3,
+    delta: 18,
+  },
+  {
+    name: 'Daniel Okafor',
+    tone: 'red',
+    club: 'NYC Open Hall',
+    rating: 1582,
+    wins: 11,
+    losses: 4,
+    delta: 12,
+  },
+  {
+    name: 'Marta Kowalski',
+    tone: 'green',
+    club: 'Brooklyn TT',
+    rating: 1505,
+    wins: 8,
+    losses: 6,
+    delta: -4,
+  },
+]
+
+function lastNameFirst(name: string): string {
+  const [first, ...rest] = name.split(' ')
+  return `${rest.join(' ')}, ${first}`
+}
+
+const standingColumns: Column<Standing>[] = [
+  {
+    header: 'Player',
+    cell: (standing) => (
+      <span className="row player-cell">
+        <Avatar name={standing.name} size="sm" tone={standing.tone} />
+        {lastNameFirst(standing.name)}
+      </span>
+    ),
+  },
+  { header: 'Club', cell: (standing) => standing.club },
+  { header: 'Rating', numeric: true, cell: (standing) => standing.rating },
+  {
+    header: 'W-L',
+    numeric: true,
+    cell: (standing) => `${standing.wins}–${standing.losses}`,
+  },
+  {
+    header: 'Δ',
+    numeric: true,
+    cell: (standing) => <RatingDelta value={standing.delta} />,
+  },
 ]
 
 export function DesignSystem() {
@@ -269,6 +341,14 @@ export function DesignSystem() {
               <Avatar name="Marta Kowalski" tone="green" />
             </AvatarGroup>
           </div>
+        </ComponentCard>
+        <ComponentCard title="Table · Data Table" tag="sortable rows">
+          <Table
+            label="Standings"
+            columns={standingColumns}
+            rows={standings}
+            rowKey={(standing) => standing.name}
+          />
         </ComponentCard>
       </Section>
     </>

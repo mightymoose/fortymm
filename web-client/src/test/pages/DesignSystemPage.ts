@@ -330,4 +330,18 @@ export class DesignSystemPage {
   get avatarGroup(): HTMLElement {
     return within(this.avatarCard).getByRole('group', { name: 'Players' })
   }
+
+  get tableCard(): HTMLElement {
+    return within(this.displaySection).getByRole('article', {
+      name: 'Table · Data Table',
+    })
+  }
+
+  get tableCardHeading(): HTMLElement {
+    return within(this.tableCard).getByRole('heading', { level: 3 })
+  }
+
+  get standingsTable(): HTMLElement {
+    return within(this.tableCard).getByRole('table', { name: 'Standings' })
+  }
 }
