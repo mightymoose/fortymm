@@ -81,6 +81,8 @@ export class DesignSystemPage {
   readonly dialogCard: Locator
   readonly dialog: Locator
   readonly alertDialog: Locator
+  readonly sheetCard: Locator
+  readonly sheet: Locator
   constructor(page: Page) {
     this.page = page
     this.loadingScreen = page.getByRole('status', { name: 'Loading FortyMM' })
@@ -275,6 +277,11 @@ export class DesignSystemPage {
     this.alertDialog = this.dialogCard.getByRole('alertdialog', {
       name: 'Delete account',
     })
+    this.sheetCard = this.overlaysSection.getByRole('article', {
+      name: 'Sheet',
+      exact: true,
+    })
+    this.sheet = this.sheetCard.getByRole('dialog', { name: 'Filters' })
   }
 
   // A component card's title, in its header.

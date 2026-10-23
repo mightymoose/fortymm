@@ -868,6 +868,39 @@ describe('DesignSystem', () => {
     ).toEqual(['Dialog', 'Alert Dialog'])
   })
 
+  it('has a Sheet card after the Dialog · Alert Dialog card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.sheetCardHeading).toHaveTextContent('Sheet')
+    expect(designSystemPage.sheetCard).toHaveTextContent('side panel')
+    expect(
+      designSystemPage.dialogCard.compareDocumentPosition(
+        designSystemPage.sheetCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's Filters sheet, open", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const sheet = designSystemPage.sheet
+    expect(designSystemPage.sheetCard).toHaveTextContent('Sheet (right)')
+    expect(sheet).toHaveAccessibleName('Filters')
+    expect(sheet).toHaveAccessibleDescription('Narrow the player list.')
+    expect(within(sheet).getByRole('combobox', { name: 'Club' })).toHaveValue(
+      'Brooklyn TT',
+    )
+    expect(
+      within(sheet).getByRole('slider', { name: 'Rating range minimum' }),
+    ).toHaveValue('1300')
+    expect(
+      within(sheet).getByRole('slider', { name: 'Rating range maximum' }),
+    ).toHaveValue('2200')
+    expect(
+      within(sheet).getByRole('button', { name: 'Apply filters' }),
+    ).toBeInTheDocument()
+  })
+
   it.each([
     {
       title: 'April Spring Open',

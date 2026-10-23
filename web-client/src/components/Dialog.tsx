@@ -1,24 +1,25 @@
 import { useId, type ReactNode } from 'react'
 
-export type DialogVariant = 'dialog' | 'alert'
+export type DialogVariant = 'dialog' | 'alert' | 'sheet'
 
 // Each variant's role and the classes that style it. An alert dialog asks
 // to confirm something that can't be undone, so assistive tech announces it
-// as urgent.
+// as urgent. A sheet is a dialog that slides in from the side of the screen.
 const variants: Record<
   DialogVariant,
   { role: 'dialog' | 'alertdialog'; className: string }
 > = {
   dialog: { role: 'dialog', className: 'dialog' },
   alert: { role: 'alertdialog', className: 'dialog dialog--alert' },
+  sheet: { role: 'dialog', className: 'sheet' },
 }
 
 // The surface of an open dialog, as in the WAI-ARIA dialog pattern: a `.dialog`
-// named by its `.dialog-title` and described by its `.dialog-description`
-// (styles/base.css), then the body (`children`) and a row of `actions`, e.g.
-// buttons, at the bottom right. The title is an h4, as the dialog sits in a
-// component card. It's shown in place, open. It doesn't open, close or trap the
-// focus, so it takes no aria-modal.
+// (or `.sheet`) named by its `.dialog-title` and described by its
+// `.dialog-description` (styles/base.css), then the body (`children`) and a row
+// of `actions`, e.g. buttons, at the bottom right. The title is an h4, as the
+// dialog sits in a component card. It's shown in place, open. It doesn't open,
+// close or trap the focus, so it takes no aria-modal.
 export function Dialog({
   variant = 'dialog',
   title,

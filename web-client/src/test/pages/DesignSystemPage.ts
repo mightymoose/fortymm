@@ -529,4 +529,16 @@ export class DesignSystemPage {
   get alertDialog(): HTMLElement {
     return within(this.dialogCard).getByRole('alertdialog')
   }
+
+  get sheetCard(): HTMLElement {
+    return within(this.overlaysSection).getByRole('article', { name: 'Sheet' })
+  }
+
+  get sheetCardHeading(): HTMLElement {
+    return within(this.sheetCard).getByRole('heading', { level: 3 })
+  }
+
+  get sheet(): HTMLElement {
+    return within(this.sheetCard).getByRole('dialog')
+  }
 }

@@ -53,6 +53,7 @@ export class ReferenceKitPage {
   readonly overlaysSectionLead: Locator
 
   readonly dialogCard: Locator
+  readonly sheetCard: Locator
   constructor(page: Page) {
     this.page = page
     this.header = page.getByRole('banner')
@@ -228,6 +229,9 @@ export class ReferenceKitPage {
         name: 'Dialog · Alert Dialog',
         exact: true,
       }),
+    })
+    this.sheetCard = overlaysSection.locator('.comp', {
+      has: page.getByRole('heading', { level: 3, name: 'Sheet', exact: true }),
     })
   }
 

@@ -568,6 +568,36 @@ export function DesignSystem() {
             </div>
           </div>
         </ComponentCard>
+        {/* The kit draws a bare label over the slider, with no readout. Its
+            thumbs sit at 20% and 80% of the track. */}
+        <ComponentCard title="Sheet" tag="side panel">
+          <div className="mock-bg mock-bg--dialog mock-bg--sheet">
+            <span className="mock-label">Sheet (right)</span>
+            <Dialog
+              variant="sheet"
+              title="Filters"
+              description="Narrow the player list."
+            >
+              <Field>
+                <Label>Club</Label>
+                <Select>
+                  <option>Brooklyn TT</option>
+                </Select>
+              </Field>
+              <Field>
+                <Slider
+                  min={1000}
+                  max={2500}
+                  defaultValue={[1300, 2200] as const}
+                  className="slider-field--plain"
+                >
+                  Rating range
+                </Slider>
+              </Field>
+              <Button className="button-wide">Apply filters</Button>
+            </Dialog>
+          </div>
+        </ComponentCard>
       </Section>
     </>
   )

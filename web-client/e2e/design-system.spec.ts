@@ -2538,6 +2538,30 @@ test('Tab goes through each dialog in order, showing the outline', async ({
   }
 })
 
+// Nothing is hovered or focused first, so the controls show their resting
+// styles.
+test.describe('Sheet card', () => {
+  // The select's chevron rounds a few edge pixels differently on the two
+  // pages, as on the Select card (see there): 2 of them here, both on the
+  // chevron. The smallest real change, the chevron moved 1px, is 19.
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.sheetCard).toHaveScreenshot(
+      'sheet-card.png',
+      { maxDiffPixels: 15 },
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.sheetCard).toHaveScreenshot(
+      'sheet-card.png',
+    )
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -3055,6 +3079,30 @@ test.describe('on a phone', () => {
       }
     }
     expect(alert.y).toBeGreaterThan(dialog.y + dialog.height)
+  })
+
+  // The sheet is wider than the card's content, so it narrows to fit inside
+  // its frame, below the frame's label.
+  test('the sheet card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.sheetCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.sheetCard.boundingBox())!
+    const sheet = (await designSystemPage.sheet.boundingBox())!
+    // Inside the card's 1px border and 32px padding on each side.
+    expect(sheet.x).toBeGreaterThanOrEqual(card.x + 33)
+    expect(sheet.x + sheet.width).toBeLessThanOrEqual(card.x + card.width - 33)
+    const label = (await designSystemPage.sheetCard
+      .getByText('Sheet (right)')
+      .boundingBox())!
+    expect(sheet.y).toBeGreaterThan(label.y + label.height)
   })
 })
 

@@ -31,6 +31,19 @@ describe('Dialog', () => {
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 
+  it('is a dialog styled as a sheet as the sheet variant', () => {
+    render(
+      <Dialog variant="sheet" title="Filters" description="Narrow it." />,
+    )
+
+    expect(
+      screen.getByRole('dialog', {
+        name: 'Filters',
+        description: 'Narrow it.',
+      }),
+    ).toHaveClass('sheet')
+  })
+
   it('shows the body, then the actions in their row', () => {
     render(
       <Dialog
