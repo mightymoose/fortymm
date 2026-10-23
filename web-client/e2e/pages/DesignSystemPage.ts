@@ -59,6 +59,21 @@ export class DesignSystemPage {
   readonly skeletonCard: Locator
   readonly skeleton: Locator
   readonly aspectRatioCard: Locator
+  readonly navSection: Locator
+  readonly navSectionHeading: Locator
+  readonly navSectionLead: Locator
+  readonly tabsCard: Locator
+  readonly tabList: Locator
+  readonly tabPanel: Locator
+  readonly accordionCard: Locator
+  readonly breadcrumbCard: Locator
+  readonly breadcrumb: Locator
+  readonly paginationCard: Locator
+  readonly pagination: Locator
+  readonly navMenuCard: Locator
+  readonly navMenuPanel: Locator
+  readonly menubarCard: Locator
+  readonly menubar: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -197,6 +212,45 @@ export class DesignSystemPage {
       name: 'Aspect Ratio',
       exact: true,
     })
+    this.navSection = page.getByRole('region', { name: 'Navigation' })
+    this.navSectionHeading = this.navSection.getByRole('heading', { level: 2 })
+    // The first paragraph: the cards in the section have paragraphs too.
+    this.navSectionLead = this.navSection.getByRole('paragraph').first()
+    this.tabsCard = this.navSection.getByRole('article', {
+      name: 'Tabs',
+      exact: true,
+    })
+    this.tabList = this.tabsCard.getByRole('tablist', { name: 'Tournament' })
+    // The chosen tab's panel: the others are hidden.
+    this.tabPanel = this.tabsCard.getByRole('tabpanel')
+    this.accordionCard = this.navSection.getByRole('article', {
+      name: 'Accordion',
+      exact: true,
+    })
+    this.breadcrumbCard = this.navSection.getByRole('article', {
+      name: 'Breadcrumb',
+      exact: true,
+    })
+    this.breadcrumb = this.breadcrumbCard.getByRole('navigation', {
+      name: 'Breadcrumb',
+    })
+    this.paginationCard = this.navSection.getByRole('article', {
+      name: 'Pagination',
+      exact: true,
+    })
+    this.pagination = this.paginationCard.getByRole('navigation', {
+      name: 'Pagination',
+    })
+    this.navMenuCard = this.navSection.getByRole('article', {
+      name: 'Navigation Menu',
+      exact: true,
+    })
+    this.navMenuPanel = this.navMenuCard.getByRole('list', { name: 'Product' })
+    this.menubarCard = this.navSection.getByRole('article', {
+      name: 'Menubar',
+      exact: true,
+    })
+    this.menubar = this.menubarCard.getByRole('menubar', { name: 'App' })
   }
 
   // A component card's title, in its header.
@@ -358,6 +412,47 @@ export class DesignSystemPage {
   // The group's item named `name`, e.g. "Singles".
   toggleGroupItem(name: string): Locator {
     return this.toggleGroup.getByRole('radio', { name, exact: true })
+  }
+
+  // The Tabs card's tab named `name`, e.g. "Overview".
+  tab(name: string): Locator {
+    return this.tabList.getByRole('tab', { name, exact: true })
+  }
+
+  // The Accordion card's button that opens the question `name`.
+  accordionTrigger(name: string): Locator {
+    return this.accordionCard.getByRole('button', { name, exact: true })
+  }
+
+  // The Accordion card's answer to the question `name`, once it's open.
+  accordionContent(name: string): Locator {
+    return this.accordionCard.getByRole('region', { name, exact: true })
+  }
+
+  // The chevron beside the question `name`. It's hidden from assistive
+  // tech, so it has no role to find it by.
+  accordionChevron(name: string): Locator {
+    return this.accordionTrigger(name).locator('.accordion-chevron')
+  }
+
+  // The breadcrumb's link named `name`, e.g. "Tournaments".
+  breadcrumbLink(name: string): Locator {
+    return this.breadcrumb.getByRole('link', { name, exact: true })
+  }
+
+  // The pagination's button named `name`, e.g. "Page 2" or "Next page".
+  paginationButton(name: string): Locator {
+    return this.pagination.getByRole('button', { name, exact: true })
+  }
+
+  // The navigation menu panel's link titled `title`, e.g. "Club tools".
+  navMenuLink(title: string): Locator {
+    return this.navMenuPanel.getByRole('link').filter({ hasText: title })
+  }
+
+  // The menubar's item named `name`, e.g. "File".
+  menubarItem(name: string): Locator {
+    return this.menubar.getByRole('menuitem', { name, exact: true })
   }
 
   // Clicks the middle of the text `name` in `card` with a plain mouse click.

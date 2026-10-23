@@ -394,4 +394,108 @@ export class DesignSystemPage {
       this.aspectRatioCard.querySelectorAll<HTMLElement>('.aspect-ratio'),
     )
   }
+
+  get navSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Navigation' })
+  }
+
+  get navSectionHeading(): HTMLElement {
+    return within(this.navSection).getByRole('heading', { level: 2 })
+  }
+
+  // The first paragraph: the cards in the section have paragraphs too.
+  get navSectionLead(): HTMLElement {
+    return within(this.navSection).getAllByRole('paragraph')[0]
+  }
+
+  get tabsCard(): HTMLElement {
+    return within(this.navSection).getByRole('article', { name: 'Tabs' })
+  }
+
+  get tabsCardHeading(): HTMLElement {
+    return within(this.tabsCard).getByRole('heading', { level: 3 })
+  }
+
+  // The Tabs card's tabs, in order.
+  get tabs(): HTMLElement[] {
+    return within(this.tabsCard).getAllByRole('tab')
+  }
+
+  // The chosen tab's panel: the others are hidden.
+  get tabPanel(): HTMLElement {
+    return within(this.tabsCard).getByRole('tabpanel')
+  }
+
+  get accordionCard(): HTMLElement {
+    return within(this.navSection).getByRole('article', { name: 'Accordion' })
+  }
+
+  get accordionCardHeading(): HTMLElement {
+    return within(this.accordionCard).getByRole('heading', { level: 3 })
+  }
+
+  // The Accordion card's buttons that open its questions, in order.
+  get accordionTriggers(): HTMLElement[] {
+    return within(this.accordionCard).getAllByRole('button')
+  }
+
+  // The answers that are open, in order.
+  get accordionContents(): HTMLElement[] {
+    return within(this.accordionCard).queryAllByRole('region')
+  }
+
+  get breadcrumbCard(): HTMLElement {
+    return within(this.navSection).getByRole('article', { name: 'Breadcrumb' })
+  }
+
+  get breadcrumbCardHeading(): HTMLElement {
+    return within(this.breadcrumbCard).getByRole('heading', { level: 3 })
+  }
+
+  get breadcrumb(): HTMLElement {
+    return within(this.breadcrumbCard).getByRole('navigation', {
+      name: 'Breadcrumb',
+    })
+  }
+
+  get paginationCard(): HTMLElement {
+    return within(this.navSection).getByRole('article', { name: 'Pagination' })
+  }
+
+  get paginationCardHeading(): HTMLElement {
+    return within(this.paginationCard).getByRole('heading', { level: 3 })
+  }
+
+  get pagination(): HTMLElement {
+    return within(this.paginationCard).getByRole('navigation', {
+      name: 'Pagination',
+    })
+  }
+
+  get navMenuCard(): HTMLElement {
+    return within(this.navSection).getByRole('article', {
+      name: 'Navigation Menu',
+    })
+  }
+
+  get navMenuCardHeading(): HTMLElement {
+    return within(this.navMenuCard).getByRole('heading', { level: 3 })
+  }
+
+  get navMenuPanel(): HTMLElement {
+    return within(this.navMenuCard).getByRole('list', { name: 'Product' })
+  }
+
+  get menubarCard(): HTMLElement {
+    return within(this.navSection).getByRole('article', { name: 'Menubar' })
+  }
+
+  get menubarCardHeading(): HTMLElement {
+    return within(this.menubarCard).getByRole('heading', { level: 3 })
+  }
+
+  // The menubar's items, in order.
+  get menubarItems(): HTMLElement[] {
+    return within(this.menubarCard).getAllByRole('menuitem')
+  }
 }

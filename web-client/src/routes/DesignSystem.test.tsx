@@ -613,6 +613,198 @@ describe('DesignSystem', () => {
     ).toEqual(['16 : 9', '1 : 1'])
   })
 
+  it('has a Navigation section after Data Display, with a lead line', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.navSectionHeading).toHaveTextContent('Navigation')
+    expect(designSystemPage.navSectionLead).toHaveTextContent(
+      'Tabs, breadcrumbs, pagination, menus. Wayfinding inside the app.',
+    )
+    expect(
+      designSystemPage.displaySection.compareDocumentPosition(
+        designSystemPage.navSection,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('has a Tabs card first in the Navigation section', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.tabsCardHeading).toHaveTextContent('Tabs')
+    expect(designSystemPage.tabsCard).toHaveTextContent('underlined or boxed')
+    expect(
+      designSystemPage.navSectionLead.compareDocumentPosition(
+        designSystemPage.tabsCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's four tabs, Overview chosen with its panel", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.tabs.map((tab) => tab.textContent)).toEqual([
+      'Overview',
+      'Schedule',
+      'Standings',
+      'Players',
+    ])
+    expect(
+      designSystemPage.tabs.map((tab) => tab.getAttribute('aria-selected')),
+    ).toEqual(['true', 'false', 'false', 'false'])
+    expect(designSystemPage.tabPanel).toHaveTextContent(
+      'Tournament overview — 32 players, 4 courts, finals projected for 6:45pm.',
+    )
+  })
+
+  it('has an Accordion card after the Tabs card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.accordionCardHeading).toHaveTextContent(
+      'Accordion',
+    )
+    expect(designSystemPage.accordionCard).toHaveTextContent('collapsible FAQ')
+    expect(
+      designSystemPage.tabsCard.compareDocumentPosition(
+        designSystemPage.accordionCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's three questions, only the first open", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const triggers = designSystemPage.accordionTriggers
+    expect(
+      triggers.map((trigger) => [
+        trigger.textContent,
+        trigger.getAttribute('aria-expanded'),
+      ]),
+    ).toEqual([
+      ['How does the SMT scheduler work?⌄', 'true'],
+      ['Is FortyMM really free?⌄', 'false'],
+      ['How do ratings update?⌄', 'false'],
+    ])
+    for (const trigger of triggers) {
+      expect(trigger.parentElement?.tagName).toBe('H4')
+    }
+    expect(
+      designSystemPage.accordionContents.map((content) => content.textContent),
+    ).toEqual([
+      'It treats every match as a constraint and solves for an assignment that minimizes back-to-backs, balances court usage, and respects player breaks.',
+    ])
+  })
+
+  it('has a Breadcrumb card after the Accordion card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.breadcrumbCardHeading).toHaveTextContent(
+      'Breadcrumb',
+    )
+    expect(designSystemPage.breadcrumbCard).toHaveTextContent('trail')
+    expect(
+      designSystemPage.accordionCard.compareDocumentPosition(
+        designSystemPage.breadcrumbCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's trail, Round 3 the current page", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const breadcrumb = designSystemPage.breadcrumb
+    expect(
+      within(breadcrumb)
+        .getAllByRole('link')
+        .map((link) => link.textContent),
+    ).toEqual(['Tournaments', 'April Spring Open'])
+    expect(within(breadcrumb).getByText('Round 3')).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+  })
+
+  it('has a Pagination card after the Breadcrumb card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.paginationCardHeading).toHaveTextContent(
+      'Pagination',
+    )
+    expect(designSystemPage.paginationCard).toHaveTextContent('paged tables')
+    expect(
+      designSystemPage.breadcrumbCard.compareDocumentPosition(
+        designSystemPage.paginationCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's row, page 1 of 12", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const pagination = designSystemPage.pagination
+    expect(pagination).toHaveTextContent('‹123…12›')
+    expect(
+      within(pagination).getByRole('button', { name: 'Page 1' }),
+    ).toHaveAttribute('aria-current', 'page')
+  })
+
+  it('has a Navigation Menu card after the Pagination card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.navMenuCardHeading).toHaveTextContent(
+      'Navigation Menu',
+    )
+    expect(designSystemPage.navMenuCard).toHaveTextContent('mega-dropdown')
+    expect(
+      designSystemPage.paginationCard.compareDocumentPosition(
+        designSystemPage.navMenuCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's Product panel, labelled as hovered", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.navMenuCard).toHaveTextContent('Hovered: Product')
+    expect(
+      within(designSystemPage.navMenuPanel)
+        .getAllByRole('link')
+        .map((link) => link.textContent),
+    ).toEqual([
+      'Match recorderTrack scores in real time, no internet needed.',
+      'Tournament adminSMT-solved draws and live scoring.',
+      'Spectator bracketsShareable, public, branded.',
+      'Club toolsMember rosters, ladder leagues.',
+    ])
+  })
+
+  it('has a Menubar card after the Navigation Menu card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.menubarCardHeading).toHaveTextContent('Menubar')
+    expect(designSystemPage.menubarCard).toHaveTextContent('desktop app')
+    expect(
+      designSystemPage.navMenuCard.compareDocumentPosition(
+        designSystemPage.menubarCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's five menus, File active", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const items = designSystemPage.menubarItems
+    expect(items.map((item) => item.textContent)).toEqual([
+      'File',
+      'Edit',
+      'View',
+      'Tournament',
+      'Help',
+    ])
+    expect(
+      items.filter((item) => item.classList.contains('menubar-item--active')),
+    ).toEqual([items[0]])
+  })
+
   it.each([
     {
       title: 'April Spring Open',

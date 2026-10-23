@@ -41,6 +41,14 @@ export class ReferenceKitPage {
   readonly tableCard: Locator
   readonly progressCard: Locator
   readonly skeletonCard: Locator
+  readonly navSectionHeading: Locator
+  readonly navSectionLead: Locator
+  readonly tabsCard: Locator
+  readonly accordionCard: Locator
+  readonly breadcrumbCard: Locator
+  readonly paginationCard: Locator
+  readonly navMenuCard: Locator
+  readonly menubarCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -162,6 +170,47 @@ export class ReferenceKitPage {
       has: page.getByRole('heading', {
         level: 3,
         name: 'Skeleton',
+        exact: true,
+      }),
+    })
+    const navSection = page.locator('#nav')
+    this.navSectionHeading = navSection.getByRole('heading', { level: 2 })
+    this.navSectionLead = navSection.getByRole('paragraph').first()
+    this.tabsCard = navSection.locator('.comp', {
+      has: page.getByRole('heading', { level: 3, name: 'Tabs', exact: true }),
+    })
+    this.accordionCard = navSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Accordion',
+        exact: true,
+      }),
+    })
+    this.breadcrumbCard = navSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Breadcrumb',
+        exact: true,
+      }),
+    })
+    this.paginationCard = navSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Pagination',
+        exact: true,
+      }),
+    })
+    this.navMenuCard = navSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Navigation Menu',
+        exact: true,
+      }),
+    })
+    this.menubarCard = navSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Menubar',
         exact: true,
       }),
     })

@@ -52,9 +52,9 @@ test.describe('header', () => {
   })
 })
 
-// The intro, the Forms & Input and Data Display sections and their
-// component cards use the reference kit's own copy, so they're compared with
-// the kit as is. The kit's sections go on to more cards than the app has
+// The intro, the Forms & Input, Data Display and Navigation sections and
+// their component cards use the reference kit's own copy, so they're compared
+// with the kit as is. The kit's sections go on to more cards than the app has
 // yet, so each section's heading, lead and cards are compared one by one.
 test.describe('intro', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
@@ -1892,6 +1892,583 @@ test.describe('Aspect Ratio card', () => {
   })
 })
 
+test.describe('Navigation section', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.navSectionHeading).toHaveScreenshot(
+      'nav-heading.png',
+    )
+    await expect(designSystemPage.navSectionLead).toHaveScreenshot(
+      'nav-lead.png',
+    )
+  })
+
+  test('matches the reference kit section', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.navSectionHeading).toHaveScreenshot(
+      'nav-heading.png',
+    )
+    await expect(referenceKitPage.navSectionLead).toHaveScreenshot(
+      'nav-lead.png',
+    )
+  })
+})
+
+// Nothing is focused first, so the tabs show their resting styles.
+test.describe('Tabs card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.tabsCard).toHaveScreenshot('tabs-card.png')
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.tabsCard).toHaveScreenshot('tabs-card.png')
+  })
+})
+
+// The kit's tabs are static, with no focus style, so the tests below are
+// the app's alone.
+test.describe('Tabs', () => {
+  const orange = 'rgb(255, 122, 26)'
+
+  test.beforeEach(async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+  })
+
+  test('a click chooses a tab and shows its panel', async ({
+    designSystemPage,
+  }) => {
+    const schedule = designSystemPage.tab('Schedule')
+
+    await schedule.click()
+
+    await expect(schedule).toHaveAttribute('aria-selected', 'true')
+    await expect(designSystemPage.tab('Overview')).toHaveAttribute(
+      'aria-selected',
+      'false',
+    )
+    await expect(designSystemPage.tabPanel).toHaveText(
+      'Round 3 starts at 2:00pm — 16 matches across 4 courts.',
+    )
+  })
+
+  // Natively the arrows, Home and End scroll the page.
+  test("the arrow keys, Home and End move the choice, and don't scroll the page", async ({
+    designSystemPage,
+    page,
+  }) => {
+    const overview = designSystemPage.tab('Overview')
+    await overview.evaluate((tab) => tab.scrollIntoView({ block: 'center' }))
+    await overview.focus()
+    const top = await page.locator('html').evaluate((html) => html.scrollTop)
+    expect(top).toBeGreaterThan(0)
+
+    for (const [key, name] of [
+      ['ArrowRight', 'Schedule'],
+      ['End', 'Players'],
+      ['ArrowRight', 'Overview'],
+      ['ArrowLeft', 'Players'],
+      ['Home', 'Overview'],
+    ]) {
+      await page.keyboard.press(key)
+      const tab = designSystemPage.tab(name)
+      await expect(tab, key).toBeFocused()
+      await expect(tab, key).toHaveAttribute('aria-selected', 'true')
+      expect(
+        await page.locator('html').evaluate((html) => html.scrollTop),
+        key,
+      ).toBe(top)
+    }
+  })
+
+  test('keyboard focus shows the outline', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const overview = designSystemPage.tab('Overview')
+    const schedule = designSystemPage.tab('Schedule')
+    await overview.focus()
+    await page.keyboard.press('Shift+Tab')
+    await page.keyboard.press('Tab')
+
+    await expect(overview).toBeFocused()
+    await expect(overview).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(overview).toHaveCSS('outline-offset', '2px')
+
+    await page.keyboard.press('ArrowRight')
+    await expect(schedule).toBeFocused()
+    await expect(schedule).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(overview).toHaveCSS('outline-style', 'none')
+  })
+
+  test('a click shows no outline', async ({ designSystemPage }) => {
+    const schedule = designSystemPage.tab('Schedule')
+
+    await schedule.click()
+
+    await expect(schedule).toBeFocused()
+    await expect(schedule).toHaveCSS('outline-style', 'none')
+  })
+})
+
+// Both screenshots finish the chevron's turn, so they match whenever
+// they're taken.
+test.describe('Accordion card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.accordionCard).toHaveScreenshot(
+      'accordion-card.png',
+      { animations: 'disabled' },
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.accordionCard).toHaveScreenshot(
+      'accordion-card.png',
+      { animations: 'disabled' },
+    )
+  })
+})
+
+// The kit's accordion is static, with no focus style, so the tests below
+// are the app's alone.
+test.describe('Accordion', () => {
+  const orange = 'rgb(255, 122, 26)'
+  const scheduler = 'How does the SMT scheduler work?'
+  const free = 'Is FortyMM really free?'
+
+  test.beforeEach(async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+  })
+
+  test('opening a question closes the open one', async ({
+    designSystemPage,
+  }) => {
+    const first = designSystemPage.accordionTrigger(scheduler)
+    const second = designSystemPage.accordionTrigger(free)
+    await expect(designSystemPage.accordionContent(scheduler)).toBeVisible()
+    await expect(designSystemPage.accordionContent(free)).toHaveCount(0)
+
+    await second.click()
+    await expect(second).toHaveAttribute('aria-expanded', 'true')
+    await expect(designSystemPage.accordionContent(free)).toBeVisible()
+    await expect(first).toHaveAttribute('aria-expanded', 'false')
+    await expect(designSystemPage.accordionContent(scheduler)).toHaveCount(0)
+
+    await second.click()
+    await expect(second).toHaveAttribute('aria-expanded', 'false')
+    await expect(designSystemPage.accordionContent(free)).toHaveCount(0)
+  })
+
+  test('Enter and Space open and close a question', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const second = designSystemPage.accordionTrigger(free)
+    await second.focus()
+
+    await page.keyboard.press('Enter')
+    await expect(second).toHaveAttribute('aria-expanded', 'true')
+    await page.keyboard.press('Space')
+    await expect(second).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  test("an open question's chevron points up", async ({
+    designSystemPage,
+  }) => {
+    const chevron = designSystemPage.accordionChevron(free)
+    await expect(chevron).toHaveCSS('transform', 'none')
+
+    await designSystemPage.accordionTrigger(free).click()
+
+    // rotate(180deg).
+    await expect(chevron).toHaveCSS('transform', 'matrix(-1, 0, 0, -1, 0, 0)')
+  })
+
+  test('the chevron turns', async ({ designSystemPage }) => {
+    await expect(designSystemPage.accordionChevron(free)).toHaveCSS(
+      'transition-duration',
+      '0.12s',
+    )
+  })
+
+  test('keyboard focus shows the outline', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const first = designSystemPage.accordionTrigger(scheduler)
+    const second = designSystemPage.accordionTrigger(free)
+    await first.focus()
+
+    await page.keyboard.press('Tab')
+    await expect(second).toBeFocused()
+    await expect(second).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(second).toHaveCSS('outline-offset', '2px')
+    await expect(first).toHaveCSS('outline-style', 'none')
+  })
+
+  test('a click shows no outline', async ({ designSystemPage }) => {
+    const second = designSystemPage.accordionTrigger(free)
+
+    await second.click()
+
+    await expect(second).toBeFocused()
+    await expect(second).toHaveCSS('outline-style', 'none')
+  })
+
+  test.describe('with reduced motion', () => {
+    test.use({ reducedMotion: 'reduce' })
+
+    test('the chevron turns without a transition', async ({
+      designSystemPage,
+    }) => {
+      await expect(designSystemPage.accordionChevron(free)).toHaveCSS(
+        'transition-duration',
+        '0s',
+      )
+    })
+  })
+})
+
+// Nothing is hovered or focused first, so the links show their resting
+// styles.
+test.describe('Breadcrumb card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.breadcrumbCard).toHaveScreenshot(
+      'breadcrumb-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.breadcrumbCard).toHaveScreenshot(
+      'breadcrumb-card.png',
+    )
+  })
+})
+
+test.describe('Breadcrumb', () => {
+  const orange = 'rgb(255, 122, 26)'
+  // --fg-3 and --fg-1.
+  const fg3 = 'rgb(169, 176, 194)'
+  const fg1 = 'rgb(247, 248, 251)'
+
+  test.beforeEach(async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+  })
+
+  test('hovering a link lightens it', async ({ designSystemPage }) => {
+    const link = designSystemPage.breadcrumbLink('Tournaments')
+    await expect(link).toHaveCSS('color', fg3)
+
+    await link.hover()
+
+    await expect(link).toHaveCSS('color', fg1)
+  })
+
+  // The kit's links have no focus style, so this is the app's alone.
+  test('keyboard focus shows the outline', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const first = designSystemPage.breadcrumbLink('Tournaments')
+    const second = designSystemPage.breadcrumbLink('April Spring Open')
+    await first.focus()
+
+    await page.keyboard.press('Tab')
+
+    await expect(second).toBeFocused()
+    await expect(second).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(second).toHaveCSS('outline-offset', '2px')
+  })
+})
+
+// Nothing is hovered or focused first, so the items show their resting
+// styles.
+test.describe('Pagination card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.paginationCard).toHaveScreenshot(
+      'pagination-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.paginationCard).toHaveScreenshot(
+      'pagination-card.png',
+    )
+  })
+})
+
+test.describe('Pagination', () => {
+  const orange = 'rgb(255, 122, 26)'
+  // --fg-2.
+  const fg2 = 'rgb(228, 231, 239)'
+
+  test.beforeEach(async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+  })
+
+  test('a click goes to a page, and the arrows step a page at a time', async ({
+    designSystemPage,
+  }) => {
+    const pagination = designSystemPage.pagination
+
+    await designSystemPage.paginationButton('Page 3').click()
+    await expect(pagination).toHaveText('‹1234…12›')
+    await expect(designSystemPage.paginationButton('Page 3')).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+
+    await designSystemPage.paginationButton('Next page').click()
+    await expect(pagination).toHaveText('‹12345…12›')
+    await designSystemPage.paginationButton('Page 12').click()
+    await expect(pagination).toHaveText('‹1…101112›')
+    await designSystemPage.paginationButton('Previous page').click()
+    await expect(pagination).toHaveText('‹1…101112›')
+    await expect(designSystemPage.paginationButton('Page 11')).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+  })
+
+  // The screenshot can't tell the disabled color from a close one, so this
+  // checks it.
+  test('the disabled arrow keeps the color of the others', async ({
+    designSystemPage,
+  }) => {
+    const previous = designSystemPage.paginationButton('Previous page')
+    await expect(previous).toBeDisabled()
+    await expect(previous).toHaveCSS('color', fg2)
+    await expect(designSystemPage.paginationButton('Next page')).toHaveCSS(
+      'color',
+      fg2,
+    )
+  })
+
+  test('the disabled arrow does nothing and keeps the focus', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const next = designSystemPage.paginationButton('Next page')
+    await designSystemPage.paginationButton('Page 12').click()
+    await next.focus()
+
+    await page.keyboard.press('Enter')
+
+    await expect(next).toBeDisabled()
+    await expect(next).toBeFocused()
+    await expect(designSystemPage.paginationButton('Page 12')).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+  })
+
+  // The kit's items have no focus style, so this is the app's alone.
+  test('keyboard focus shows the outline, a click none', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const previous = designSystemPage.paginationButton('Previous page')
+    const first = designSystemPage.paginationButton('Page 1')
+    const second = designSystemPage.paginationButton('Page 2')
+    await previous.focus()
+
+    await page.keyboard.press('Tab')
+    await expect(first).toBeFocused()
+    await expect(first).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(first).toHaveCSS('outline-offset', '2px')
+
+    await second.click()
+    await expect(second).toBeFocused()
+    await expect(second).toHaveCSS('outline-style', 'none')
+  })
+})
+
+// Nothing is hovered or focused first, so the links show their resting
+// styles.
+test.describe('Navigation Menu card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.navMenuCard).toHaveScreenshot(
+      'nav-menu-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.navMenuCard).toHaveScreenshot(
+      'nav-menu-card.png',
+    )
+  })
+})
+
+test.describe('Navigation Menu', () => {
+  const orange = 'rgb(255, 122, 26)'
+
+  test.beforeEach(async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+  })
+
+  // The screenshot can't see the hover: --bg-hover is white at 4%, under
+  // its color threshold.
+  test('hovering a link lightens it', async ({ designSystemPage }) => {
+    const link = designSystemPage.navMenuLink('Club tools')
+    await expect(link).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+
+    await link.hover()
+
+    await expect(link).toHaveCSS(
+      'background-color',
+      'rgba(255, 255, 255, 0.04)',
+    )
+  })
+
+  // The kit's links have no focus style, so this is the app's alone.
+  test('keyboard focus shows the outline', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const first = designSystemPage.navMenuLink('Match recorder')
+    const second = designSystemPage.navMenuLink('Tournament admin')
+    await first.focus()
+
+    await page.keyboard.press('Tab')
+
+    await expect(second).toBeFocused()
+    await expect(second).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(second).toHaveCSS('outline-offset', '2px')
+  })
+})
+
+// Nothing is hovered or focused first, so File shows active, as in the kit.
+test.describe('Menubar card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.menubarCard).toHaveScreenshot(
+      'menubar-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.menubarCard).toHaveScreenshot(
+      'menubar-card.png',
+    )
+  })
+})
+
+// The kit's menubar is static, with no focus style, so the tests below are
+// the app's alone.
+test.describe('Menubar', () => {
+  const orange = 'rgb(255, 122, 26)'
+  const none = 'rgba(0, 0, 0, 0)'
+  const hover = 'rgba(255, 255, 255, 0.04)'
+  // --fg-1 and --fg-2.
+  const fg1 = 'rgb(247, 248, 251)'
+  const fg2 = 'rgb(228, 231, 239)'
+
+  test.beforeEach(async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+  })
+
+  // The screenshot can't see the active look: --bg-hover is white at 4%,
+  // under its color threshold.
+  test('File shows active until the bar takes the focus', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const file = designSystemPage.menubarItem('File')
+    const edit = designSystemPage.menubarItem('Edit')
+    await expect(file).toHaveCSS('background-color', hover)
+    await expect(file).toHaveCSS('color', fg1)
+    await expect(edit).toHaveCSS('background-color', none)
+    await expect(edit).toHaveCSS('color', fg2)
+
+    await file.focus()
+    await page.keyboard.press('Shift+Tab')
+    await page.keyboard.press('Tab')
+
+    await expect(file).toBeFocused()
+    await expect(file).toHaveCSS('background-color', none)
+    await expect(file).toHaveCSS('color', fg2)
+  })
+
+  test('hovering an item lightens it', async ({ designSystemPage }) => {
+    const edit = designSystemPage.menubarItem('Edit')
+
+    await edit.hover()
+
+    await expect(edit).toHaveCSS('background-color', hover)
+    await expect(edit).toHaveCSS('color', fg1)
+  })
+
+  // Natively the arrows, Home and End scroll the page.
+  test("the arrow keys, Home and End move the focus, and don't scroll the page", async ({
+    designSystemPage,
+    page,
+  }) => {
+    const file = designSystemPage.menubarItem('File')
+    await file.evaluate((item) => item.scrollIntoView({ block: 'center' }))
+    await file.focus()
+    const top = await page.locator('html').evaluate((html) => html.scrollTop)
+    expect(top).toBeGreaterThan(0)
+
+    for (const [key, name] of [
+      ['ArrowRight', 'Edit'],
+      ['End', 'Help'],
+      ['ArrowRight', 'File'],
+      ['ArrowLeft', 'Help'],
+      ['Home', 'File'],
+    ]) {
+      await page.keyboard.press(key)
+      await expect(designSystemPage.menubarItem(name), key).toBeFocused()
+      expect(
+        await page.locator('html').evaluate((html) => html.scrollTop),
+        key,
+      ).toBe(top)
+    }
+  })
+
+  test('keyboard focus shows the outline, a click none', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const file = designSystemPage.menubarItem('File')
+    const edit = designSystemPage.menubarItem('Edit')
+    const view = designSystemPage.menubarItem('View')
+    await file.focus()
+
+    await page.keyboard.press('ArrowRight')
+    await expect(edit).toBeFocused()
+    await expect(edit).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(edit).toHaveCSS('outline-offset', '2px')
+
+    await view.click()
+    await expect(view).toBeFocused()
+    await expect(view).toHaveCSS('outline-style', 'none')
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -2140,6 +2717,121 @@ test.describe('on a phone', () => {
         group.x + group.width,
       )
     }
+  })
+
+  // The row of tabs is wider than the card's content, so the tabs wrap
+  // onto more lines, inside the card.
+  test('the tabs card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [designSystemPage.tabsCard, page.locator('html')]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.tabsCard.boundingBox())!
+    const list = (await designSystemPage.tabList.boundingBox())!
+    const first = (await designSystemPage.tab('Overview').boundingBox())!
+    const last = (await designSystemPage.tab('Players').boundingBox())!
+    // Inside the card's 1px border and 32px padding on the right.
+    expect(list.x + list.width).toBeLessThanOrEqual(card.x + card.width - 33)
+    expect(last.y).toBeGreaterThan(first.y)
+    expect(last.x + last.width).toBeLessThanOrEqual(list.x + list.width)
+  })
+
+  // The trail is wider than the card's content, so its items wrap onto
+  // more lines, inside the card.
+  test('the breadcrumb card fits', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    expect(
+      await designSystemPage.breadcrumbCard.evaluate(
+        (e) => e.scrollWidth - e.clientWidth,
+      ),
+    ).toBe(0)
+    const card = (await designSystemPage.breadcrumbCard.boundingBox())!
+    const trail = (await designSystemPage.breadcrumb.boundingBox())!
+    const first = (await designSystemPage
+      .breadcrumbLink('Tournaments')
+      .boundingBox())!
+    const current = (await designSystemPage.breadcrumb
+      .getByText('Round 3')
+      .boundingBox())!
+    // Inside the card's 1px border and 32px padding on the right.
+    expect(trail.x + trail.width).toBeLessThanOrEqual(card.x + card.width - 33)
+    expect(current.y).toBeGreaterThan(first.y)
+  })
+
+  // The row is wider than the card's content, so its items wrap onto more
+  // lines, inside the card.
+  test('the pagination card fits', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    expect(
+      await designSystemPage.paginationCard.evaluate(
+        (e) => e.scrollWidth - e.clientWidth,
+      ),
+    ).toBe(0)
+    const card = (await designSystemPage.paginationCard.boundingBox())!
+    const row = (await designSystemPage.pagination.boundingBox())!
+    const previous = (await designSystemPage
+      .paginationButton('Previous page')
+      .boundingBox())!
+    const next = (await designSystemPage
+      .paginationButton('Next page')
+      .boundingBox())!
+    // Inside the card's 1px border and 32px padding on the right.
+    expect(row.x + row.width).toBeLessThanOrEqual(card.x + card.width - 33)
+    expect(next.y).toBeGreaterThan(previous.y)
+  })
+
+  // The panel is wider than the card's content, so its links stack in one
+  // column as wide as the frame, inside the card.
+  test('the navigation menu card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.navMenuCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.navMenuCard.boundingBox())!
+    const panel = (await designSystemPage.navMenuPanel.boundingBox())!
+    const first = (await designSystemPage
+      .navMenuLink('Match recorder')
+      .boundingBox())!
+    const second = (await designSystemPage
+      .navMenuLink('Tournament admin')
+      .boundingBox())!
+    // Inside the card's 1px border and 32px padding on the right.
+    expect(panel.x + panel.width).toBeLessThanOrEqual(card.x + card.width - 33)
+    expect(second.x).toBe(first.x)
+    expect(second.y).toBeGreaterThan(first.y)
+  })
+
+  // The bar is wider than the card's content, so its items wrap onto more
+  // lines, inside the card.
+  test('the menubar card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.menubarCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.menubarCard.boundingBox())!
+    const bar = (await designSystemPage.menubar.boundingBox())!
+    const first = (await designSystemPage.menubarItem('File').boundingBox())!
+    const last = (await designSystemPage.menubarItem('Help').boundingBox())!
+    // Inside the card's 1px border and 32px padding on the right.
+    expect(bar.x + bar.width).toBeLessThanOrEqual(card.x + card.width - 33)
+    expect(last.y).toBeGreaterThan(first.y)
   })
 
   // The cards share the .grid-2 layout with the input card's fields, so

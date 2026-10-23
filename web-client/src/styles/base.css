@@ -1768,6 +1768,374 @@ h4, .h4 {
 }
 
 /* =========================================================================
+   Tabs (the reference kit's .tabs-list, .tab, .tab.on and .tab-content): a
+   .tab is a button, chosen when aria-selected is true. It takes the .button
+   focus outline, keyboard focus only. The kit gives it none. The kit's tag
+   names an underlined style it doesn't show, so only its boxed one is here.
+   ========================================================================= */
+.tabs-list {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--ink-900);
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-subtle);
+}
+
+.tab {
+  font: 500 13px var(--font-ui);
+  margin: 0;
+  padding: 6px 14px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  cursor: pointer;
+  color: var(--fg-3);
+}
+
+.tab[aria-selected="true"] {
+  background: var(--ink-700);
+  color: var(--fg-1);
+}
+
+.tab:focus-visible, .tab-content:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+.tab-content {
+  padding: 20px 4px;
+  font-size: 14px;
+  color: var(--fg-2);
+  line-height: 1.5;
+}
+
+/* The kit is only laid out for desktop. On a phone, its row of tabs is
+   wider than the card, so the tabs wrap onto more lines. */
+@media (max-width: 640px) {
+  .tabs-list {
+    flex-wrap: wrap;
+  }
+}
+
+/* =========================================================================
+   Accordion (the reference kit's .accord, .accord-h, .chev and .accord-c):
+   each item's header is a button in a heading, open when aria-expanded is
+   true. The kit's header is a div, so the heading and the button are reset
+   to match it. The button takes the .button focus outline, keyboard focus
+   only. The kit gives it none. The kit's chevron turns even with reduced
+   motion. Here it turns at once.
+   ========================================================================= */
+.accordion-item {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.accordion-heading {
+  margin: 0;
+}
+
+.accordion-trigger {
+  font: 500 14px var(--font-ui);
+  width: 100%;
+  margin: 0;
+  padding: 16px 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg-1);
+  text-align: left;
+  display: flex;
+  justify-content: space-between;
+  cursor: pointer;
+}
+
+.accordion-trigger:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+.accordion-chevron {
+  transition: transform var(--dur-fast);
+}
+
+.accordion-trigger[aria-expanded="true"] .accordion-chevron {
+  transform: rotate(180deg);
+}
+
+.accordion-content {
+  padding: 0 0 16px;
+  font-size: 13px;
+  color: var(--fg-3);
+  line-height: 1.5;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .accordion-chevron {
+    transition: none;
+  }
+}
+
+/* The kit's Accordion card sets this width inline. */
+.accordion-demo {
+  max-width: 600px;
+}
+
+/* =========================================================================
+   Breadcrumb (the reference kit's .crumb, .sl and .cur): the kit lays its
+   links, slashes and current page side by side in the nav, 8px apart. Here
+   they're in a list, each item holding its link and the slash after it,
+   with the same 8px gaps between and within the items. The links take the
+   .button focus outline, keyboard focus only. The kit gives them none.
+   ========================================================================= */
+.breadcrumb {
+  display: inline-flex;
+  font: 400 13px var(--font-ui);
+  color: var(--fg-3);
+}
+
+.breadcrumb ol, .breadcrumb li {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.breadcrumb ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.breadcrumb a {
+  color: var(--fg-3);
+  text-decoration: none;
+}
+
+.breadcrumb a:hover {
+  color: var(--fg-1);
+}
+
+.breadcrumb a:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+.breadcrumb-current {
+  color: var(--fg-1);
+}
+
+.breadcrumb-separator {
+  color: var(--ink-500);
+}
+
+/* The kit is only laid out for desktop. On a phone, its trail is wider
+   than the card, so the items wrap onto more lines. */
+@media (max-width: 640px) {
+  .breadcrumb ol {
+    flex-wrap: wrap;
+  }
+}
+
+/* =========================================================================
+   Pagination (the reference kit's .pag, .pi and .pi.on): the kit's items
+   are spans. Here the arrows and pages are buttons, reset to match, the
+   current page's marked by aria-current. The disabled arrow keeps the
+   kit's color: the kit draws ‹ on the first page like any other item. The
+   buttons take the .button focus outline, keyboard focus only. The kit
+   gives them none.
+   ========================================================================= */
+.pagination {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.pagination-item {
+  width: 36px;
+  height: 36px;
+  margin: 0;
+  padding: 0;
+  border-radius: var(--r-sm);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 500 13px var(--font-mono);
+  cursor: pointer;
+  background: transparent;
+  color: var(--fg-2);
+  border: 1px solid transparent;
+}
+
+.pagination-item:hover {
+  background: var(--bg-hover);
+}
+
+.pagination-item[aria-current="page"] {
+  background: var(--ink-700);
+  color: var(--fg-1);
+  border-color: var(--border-subtle);
+}
+
+/* The kit's gap and its arrow on the first page take the pointer and the
+   hover like the pages. Here they don't, as neither does anything. */
+.pagination-item[aria-disabled="true"], .pagination-item.pagination-gap {
+  cursor: default;
+  background: transparent;
+}
+
+.pagination-item:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+/* The kit is only laid out for desktop. On a phone, its row is wider than
+   the card, so the items wrap onto more lines. */
+@media (max-width: 640px) {
+  .pagination {
+    flex-wrap: wrap;
+  }
+}
+
+/* =========================================================================
+   Navigation menu panel (the reference kit's .nav-menu, .nl, .t and .d):
+   the kit's panel is a div of divs. Here it's a list, each item a link
+   holding the title and the description, reset to match. The links take
+   the .button focus outline, keyboard focus only. The kit gives them none.
+   ========================================================================= */
+.nav-menu {
+  background: var(--ink-800);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  margin: 0;
+  padding: 16px;
+  list-style: none;
+  width: 480px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  box-shadow: var(--shadow-lg);
+}
+
+.nav-menu-link {
+  display: block;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  text-decoration: none;
+}
+
+.nav-menu-link:hover {
+  background: var(--bg-hover);
+}
+
+.nav-menu-link:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+.nav-menu-title {
+  font: 500 13px var(--font-ui);
+  color: var(--fg-1);
+  margin: 0 0 2px;
+}
+
+.nav-menu-description {
+  font-size: 12px;
+  color: var(--fg-3);
+  margin: 0;
+}
+
+/* =========================================================================
+   Mock frame (the reference kit's .mock-bg and .mock-label): a dashed box
+   that shows a component as it looks in place (e.g. an open menu), with a
+   mono label in its top left corner saying what state it's shown in.
+   .mock-bg--fit drops the frame's minimum height, as the kit does inline
+   where the component is short.
+   ========================================================================= */
+.mock-bg {
+  background: var(--ink-950);
+  padding: 40px;
+  border-radius: var(--r-md);
+  border: 1px dashed var(--border-subtle);
+  position: relative;
+  min-height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.mock-bg--fit {
+  min-height: auto;
+}
+
+.mock-label {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  font: 500 10px var(--font-mono);
+  color: var(--fg-3);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* The kit is only laid out for desktop. On a phone, the frame keeps less
+   room around what it shows, and the menu panel is one column as wide as
+   the frame. */
+@media (max-width: 640px) {
+  .mock-bg {
+    padding: 40px 16px 16px;
+  }
+
+  .nav-menu {
+    width: 100%;
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =========================================================================
+   Menubar (the reference kit's .menubar, .mi and .mi.on): the kit's items
+   are spans. Here they're buttons, reset to match. .menubar-item--active
+   is the kit's .on, the look of an item under the pointer. The items take
+   the .button focus outline, keyboard focus only. The kit gives them none.
+   ========================================================================= */
+.menubar {
+  display: inline-flex;
+  background: var(--ink-900);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  padding: 4px;
+  gap: 2px;
+}
+
+.menubar-item {
+  font: 500 13px var(--font-ui);
+  margin: 0;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  cursor: pointer;
+  color: var(--fg-2);
+}
+
+.menubar-item:hover, .menubar-item--active {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+
+.menubar-item:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+/* The kit is only laid out for desktop. On a phone, its bar is wider than
+   the card, so the items wrap onto more lines. */
+@media (max-width: 640px) {
+  .menubar {
+    flex-wrap: wrap;
+  }
+}
+
+/* =========================================================================
    Utility: hidden on screen, still read by assistive tech (e.g. a label the
    design shows no room for).
    ========================================================================= */
