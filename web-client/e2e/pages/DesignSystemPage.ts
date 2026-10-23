@@ -41,6 +41,18 @@ export class DesignSystemPage {
   readonly datePickerGrid: Locator
   readonly previousMonth: Locator
   readonly nextMonth: Locator
+  readonly toggleCard: Locator
+  readonly toggleRow: Locator
+  readonly toggleSeparator: Locator
+  readonly toggleGroup: Locator
+  readonly displaySection: Locator
+  readonly displaySectionHeading: Locator
+  readonly displaySectionLead: Locator
+  readonly cardCard: Locator
+  readonly badgeCard: Locator
+  readonly liveDot: Locator
+  readonly avatarCard: Locator
+  readonly avatarGroup: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -55,7 +67,11 @@ export class DesignSystemPage {
       level: 2,
     })
     this.formsSectionLead = this.formsSection.getByRole('paragraph')
-    this.cards = this.formsSection.getByRole('article')
+    // Every section's component cards, whose titles are h3s. The demo cards
+    // inside the Card card are articles too, with h4 titles.
+    this.cards = page
+      .getByRole('article')
+      .filter({ has: page.getByRole('heading', { level: 3 }) })
     this.buttonCard = this.formsSection.getByRole('article', { name: 'Button' })
     this.inputCard = this.formsSection.getByRole('article', {
       name: 'Input · Label · Form Field',
@@ -123,6 +139,36 @@ export class DesignSystemPage {
     this.nextMonth = this.datePickerDialog.getByRole('button', {
       name: 'Next month',
     })
+    this.toggleCard = this.formsSection.getByRole('article', {
+      name: 'Toggle · Toggle Group',
+    })
+    // The kit's .row that lays out the toggles, the separator and the group.
+    this.toggleRow = this.toggleCard.locator('.row')
+    this.toggleSeparator = this.toggleCard.getByRole('separator')
+    this.toggleGroup = this.toggleCard.getByRole('radiogroup', {
+      name: 'Match type',
+    })
+    this.displaySection = page.getByRole('region', { name: 'Data Display' })
+    this.displaySectionHeading = this.displaySection.getByRole('heading', {
+      level: 2,
+    })
+    // The first paragraph: the cards in the section have paragraphs too.
+    this.displaySectionLead = this.displaySection.getByRole('paragraph').first()
+    this.cardCard = this.displaySection.getByRole('article', {
+      name: 'Card',
+      exact: true,
+    })
+    this.badgeCard = this.displaySection.getByRole('article', {
+      name: 'Badge',
+      exact: true,
+    })
+    // The dot is hidden from assistive tech, so it has no role to find it by.
+    this.liveDot = this.badgeCard.locator('.ball-dot')
+    this.avatarCard = this.displaySection.getByRole('article', {
+      name: 'Avatar',
+      exact: true,
+    })
+    this.avatarGroup = this.avatarCard.getByRole('group', { name: 'Players' })
   }
 
   // A component card's title, in its header.
@@ -276,6 +322,16 @@ export class DesignSystemPage {
     return this.datePickerGrid.getByRole('gridcell', { name, exact: true })
   }
 
+  // The standalone toggle named `name`, e.g. "Bold".
+  toggle(name: string): Locator {
+    return this.toggleCard.getByRole('button', { name, exact: true })
+  }
+
+  // The group's item named `name`, e.g. "Singles".
+  toggleGroupItem(name: string): Locator {
+    return this.toggleGroup.getByRole('radio', { name, exact: true })
+  }
+
   // Clicks the middle of the text `name` in `card` with a plain mouse click.
   private async clickText(card: Locator, name: string): Promise<void> {
     const text = card.getByText(name, { exact: true })
@@ -293,5 +349,21 @@ export class DesignSystemPage {
   // The input card's text input labelled `name`.
   input(name: string): Locator {
     return this.inputCard.getByRole('textbox', { name })
+  }
+
+  // The Card card's demo card titled `name`, e.g. "April Spring Open".
+  demoCard(name: string): Locator {
+    return this.cardCard.getByRole('article', { name, exact: true })
+  }
+
+  // The Badge card's badge reading `text`, e.g. "Seed 1".
+  badge(text: string): Locator {
+    return this.badgeCard.getByText(text, { exact: true })
+  }
+
+  // The Avatar card's avatars named `name`, e.g. "Tien Nguyen". Each name is
+  // in both the row and the group.
+  avatars(name: string): Locator {
+    return this.avatarCard.getByRole('img', { name, exact: true })
   }
 }

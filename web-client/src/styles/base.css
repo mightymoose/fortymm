@@ -131,6 +131,11 @@ h4, .h4 {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.6; transform: scale(0.88); }
 }
+@media (prefers-reduced-motion: reduce) {
+  .ball-dot--live {
+    animation: none;
+  }
+}
 
 /* Dotted-40mm grid texture, used as hero background */
 .fortymm-grid-bg {
@@ -759,7 +764,8 @@ h4, .h4 {
 .radio:has(> .radio-input:disabled),
 .switch:has(> .switch-input:disabled),
 .slider-field:has(.slider-input:disabled),
-.cmd:has(> .cmd-input > input:disabled) {
+.cmd:has(> .cmd-input > input:disabled),
+.toggle:disabled {
   opacity: 0.5;
 }
 
@@ -1361,6 +1367,250 @@ h4, .h4 {
   .loading-screen-contact {
     animation: none;
   }
+}
+
+/* =========================================================================
+   Toggle and Toggle Group (the reference kit's .toggle, .toggle.on and
+   .toggle-group): a .toggle is a button, pressed when aria-pressed (a
+   Toggle) or aria-checked (a ToggleGroup's item) is true. It takes the
+   disabled opacity (above), and the .button focus outline, keyboard focus
+   only. The kit gives it none.
+   ========================================================================= */
+.toggle {
+  font: 500 13px var(--font-ui);
+  height: 36px;
+  padding: 0 14px;
+  border-radius: var(--r-md);
+  background: transparent;
+  color: var(--fg-2);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast);
+}
+
+.toggle:hover {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+
+/* After :hover on purpose, as the kit orders .on, so a pressed toggle keeps
+   its background under the pointer. */
+.toggle[aria-pressed="true"], .toggle[aria-checked="true"] {
+  background: var(--ink-700);
+  color: var(--fg-1);
+}
+
+.toggle:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+.toggle:disabled {
+  cursor: not-allowed;
+}
+
+.toggle-group {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--ink-900);
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-subtle);
+}
+
+.toggle-group .toggle {
+  border-radius: var(--r-sm);
+}
+
+/* The kit is only laid out for desktop. On a phone, its group is wider than
+   the card, so its items take less padding. */
+@media (max-width: 640px) {
+  .toggle-group .toggle {
+    padding: 0 10px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toggle {
+    transition: none;
+  }
+}
+
+/* A vertical rule between items in a row (the kit's .sep-v). */
+.sep-v {
+  width: 1px;
+  background: var(--border-subtle);
+  align-self: stretch;
+}
+
+/* =========================================================================
+   Card (the reference kit's .sh-card, .ch, .ct, .cd, .cb and .cf): a
+   header with a title and a description, the body, then a footer of
+   buttons. .card--featured is the kit's inline styled featured card.
+   ========================================================================= */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  padding: 24px;
+}
+
+.card-header {
+  margin-bottom: 12px;
+}
+
+/* The title can be any heading level, so this overrides the h2-h4 type
+   styles above. The font shorthand resets the line height, as the kit's
+   does. */
+.card-title {
+  font: 600 18px var(--font-ui);
+  letter-spacing: normal;
+  margin: 0 0 4px;
+}
+
+.card-description {
+  font: 400 13px var(--font-ui);
+  color: var(--fg-3);
+  margin: 0;
+}
+
+.card-body {
+  font-size: 14px;
+  color: var(--fg-2);
+  line-height: 1.5;
+}
+
+.card-footer {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.card--featured {
+  border-color: var(--ball-500);
+  box-shadow: var(--shadow-glow);
+}
+
+.card--featured .card-title {
+  color: var(--ball-500);
+}
+
+/* =========================================================================
+   Badge (the reference kit's .badge and its .badge-default,
+   .badge-secondary, .badge-outline, .badge-destructive and .badge-live
+   variants). The font shorthand resets the line height, as the kit's does.
+   ========================================================================= */
+.badge {
+  font: 500 11px var(--font-ui);
+  padding: 3px 9px;
+  border-radius: var(--r-pill);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  letter-spacing: 0.02em;
+}
+
+.badge--default {
+  background: var(--ball-500);
+  color: var(--ink-950);
+}
+
+.badge--secondary {
+  background: var(--ink-700);
+  color: var(--fg-1);
+}
+
+.badge--outline {
+  background: transparent;
+  border: 1px solid var(--border-default);
+  color: var(--fg-2);
+}
+
+.badge--destructive {
+  background: var(--loss);
+  color: white;
+}
+
+.badge--live {
+  background: var(--bg-live-soft);
+  color: var(--serve-500);
+  border: 1px solid var(--serve-500);
+}
+
+/* =========================================================================
+   Avatar (the reference kit's .avatar, its .sm and .lg sizes, and
+   .avatar-group). The kit sets each avatar's color inline. Here the tones
+   are modifiers. The size modifiers come after .avatar, so their font size
+   wins over its font shorthand.
+   ========================================================================= */
+.avatar {
+  border-radius: 50%;
+  color: var(--fg-1);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font: 600 13px var(--font-ui);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.avatar--sm {
+  width: 28px;
+  height: 28px;
+  font-size: 11px;
+}
+
+.avatar--md {
+  width: 40px;
+  height: 40px;
+  font-size: 13px;
+}
+
+.avatar--lg {
+  width: 56px;
+  height: 56px;
+  font-size: 17px;
+}
+
+.avatar--neutral {
+  background: var(--ink-700);
+}
+
+.avatar--brand {
+  background: var(--ball-500);
+  color: var(--ink-950);
+}
+
+.avatar--blue {
+  background: #3a4a6e;
+}
+
+.avatar--red {
+  background: #6e3a4a;
+}
+
+.avatar--green {
+  background: #4a6e3a;
+}
+
+.avatar-group {
+  display: inline-flex;
+}
+
+.avatar-group .avatar {
+  border: 2px solid var(--bg-card);
+  margin-left: -8px;
+}
+
+.avatar-group .avatar:first-child {
+  margin-left: 0;
+}
+
+/* The kit's Avatar card sets this gap inline on its outer .row. */
+.avatar-demo {
+  gap: 24px;
 }
 
 /* =========================================================================

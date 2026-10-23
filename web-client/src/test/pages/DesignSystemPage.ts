@@ -242,4 +242,92 @@ export class DesignSystemPage {
   datePickerDay(name: string): HTMLElement {
     return within(this.datePickerGrid).getByRole('gridcell', { name })
   }
+
+  get toggleCard(): HTMLElement {
+    return within(this.formsSection).getByRole('article', {
+      name: 'Toggle · Toggle Group',
+    })
+  }
+
+  get toggleCardHeading(): HTMLElement {
+    return within(this.toggleCard).getByRole('heading', { level: 3 })
+  }
+
+  // The standalone toggle named `name`, e.g. "Bold".
+  toggle(name: string): HTMLElement {
+    return within(this.toggleCard).getByRole('button', { name })
+  }
+
+  get toggleSeparator(): HTMLElement {
+    return within(this.toggleCard).getByRole('separator')
+  }
+
+  get toggleGroup(): HTMLElement {
+    return within(this.toggleCard).getByRole('radiogroup', {
+      name: 'Match type',
+    })
+  }
+
+  // The group's items, in order.
+  get toggleGroupItems(): HTMLElement[] {
+    return within(this.toggleGroup).getAllByRole('radio')
+  }
+
+  get displaySection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Data Display' })
+  }
+
+  get displaySectionHeading(): HTMLElement {
+    return within(this.displaySection).getByRole('heading', { level: 2 })
+  }
+
+  // The first paragraph: the cards in the section have paragraphs too.
+  get displaySectionLead(): HTMLElement {
+    return within(this.displaySection).getAllByRole('paragraph')[0]
+  }
+
+  get cardCard(): HTMLElement {
+    return within(this.displaySection).getByRole('article', { name: 'Card' })
+  }
+
+  get cardCardHeading(): HTMLElement {
+    return within(this.cardCard).getByRole('heading', { level: 3 })
+  }
+
+  // The demo card titled `name`, e.g. "April Spring Open".
+  demoCard(name: string): HTMLElement {
+    return within(this.cardCard).getByRole('article', { name })
+  }
+
+  get badgeCard(): HTMLElement {
+    return within(this.displaySection).getByRole('article', { name: 'Badge' })
+  }
+
+  get badgeCardHeading(): HTMLElement {
+    return within(this.badgeCard).getByRole('heading', { level: 3 })
+  }
+
+  // A badge is a styled span with no role of its own, so the badges are
+  // found by their class.
+  get badges(): HTMLElement[] {
+    return Array.from(this.badgeCard.querySelectorAll<HTMLElement>('.badge'))
+  }
+
+  get avatarCard(): HTMLElement {
+    return within(this.displaySection).getByRole('article', { name: 'Avatar' })
+  }
+
+  get avatarCardHeading(): HTMLElement {
+    return within(this.avatarCard).getByRole('heading', { level: 3 })
+  }
+
+  // Every avatar in the Avatar card, the group's overflow circle included,
+  // in order.
+  get avatars(): HTMLElement[] {
+    return within(this.avatarCard).getAllByRole('img')
+  }
+
+  get avatarGroup(): HTMLElement {
+    return within(this.avatarCard).getByRole('group', { name: 'Players' })
+  }
 }

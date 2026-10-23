@@ -52,10 +52,10 @@ test.describe('header', () => {
   })
 })
 
-// The intro, the Forms & Input section and its component cards use the
-// reference kit's own copy, so they're compared with the kit as is. The kit's
-// section goes on to more cards than the app has yet, so the section's
-// heading, lead and cards are compared one by one.
+// The intro, the Forms & Input and Data Display sections and their
+// component cards use the reference kit's own copy, so they're compared with
+// the kit as is. The kit's sections go on to more cards than the app has
+// yet, so each section's heading, lead and cards are compared one by one.
 test.describe('intro', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
@@ -1410,6 +1410,379 @@ test.describe('Date Picker', () => {
   })
 })
 
+// Nothing is hovered or focused, so the card shows Bold and Singles pressed,
+// with no focus ring.
+test.describe('Toggle · Toggle Group card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.toggleCard).toHaveScreenshot(
+      'toggle-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.toggleCard).toHaveScreenshot(
+      'toggle-card.png',
+    )
+  })
+})
+
+// The kit's toggles are static, with no focus style, so the tests below are
+// the app's alone.
+test.describe('Toggle', () => {
+  const orange = 'rgb(255, 122, 26)'
+  const none = 'rgba(0, 0, 0, 0)'
+  const hover = 'rgba(255, 255, 255, 0.04)'
+  // --ink-700, --fg-1 and --fg-2.
+  const pressed = 'rgb(31, 36, 48)'
+  const fg1 = 'rgb(247, 248, 251)'
+  const fg2 = 'rgb(228, 231, 239)'
+
+  test.beforeEach(async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+  })
+
+  test('a click, Space and Enter flip a toggle', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const bold = designSystemPage.toggle('Bold')
+    const italic = designSystemPage.toggle('Italic')
+    await expect(bold).toHaveAttribute('aria-pressed', 'true')
+    await expect(italic).toHaveAttribute('aria-pressed', 'false')
+
+    await italic.click()
+    await expect(italic).toHaveAttribute('aria-pressed', 'true')
+
+    await bold.focus()
+    await page.keyboard.press('Space')
+    await expect(bold).toHaveAttribute('aria-pressed', 'false')
+    await page.keyboard.press('Enter')
+    await expect(bold).toHaveAttribute('aria-pressed', 'true')
+  })
+
+  test("a click or an arrow key moves the group's choice", async ({
+    designSystemPage,
+    page,
+  }) => {
+    const singles = designSystemPage.toggleGroupItem('Singles')
+    const doubles = designSystemPage.toggleGroupItem('Doubles')
+    const mixed = designSystemPage.toggleGroupItem('Mixed')
+    await expect(singles).toHaveAttribute('aria-checked', 'true')
+
+    await doubles.click()
+    await expect(doubles).toHaveAttribute('aria-checked', 'true')
+    await expect(singles).toHaveAttribute('aria-checked', 'false')
+
+    await page.keyboard.press('ArrowRight')
+    await expect(mixed).toBeFocused()
+    await expect(mixed).toHaveAttribute('aria-checked', 'true')
+    await page.keyboard.press('ArrowRight')
+    await expect(singles).toBeFocused()
+    await expect(singles).toHaveAttribute('aria-checked', 'true')
+    await page.keyboard.press('ArrowLeft')
+    await expect(mixed).toBeFocused()
+    await expect(mixed).toHaveAttribute('aria-checked', 'true')
+    await expect(doubles).toHaveAttribute('aria-checked', 'false')
+  })
+
+  // Natively the arrows scroll the page.
+  test("the group's arrow keys don't scroll the page", async ({
+    designSystemPage,
+    page,
+  }) => {
+    const singles = designSystemPage.toggleGroupItem('Singles')
+    await singles.evaluate((item) => item.scrollIntoView({ block: 'center' }))
+    await singles.focus()
+    const top = await page.locator('html').evaluate((html) => html.scrollTop)
+    expect(top).toBeGreaterThan(0)
+
+    for (const [key, name] of [
+      ['ArrowDown', 'Doubles'],
+      ['ArrowRight', 'Mixed'],
+      ['ArrowUp', 'Doubles'],
+      ['ArrowLeft', 'Singles'],
+    ]) {
+      await page.keyboard.press(key)
+      await expect(designSystemPage.toggleGroupItem(name)).toBeFocused()
+      expect(
+        await page.locator('html').evaluate((html) => html.scrollTop),
+        key,
+      ).toBe(top)
+    }
+  })
+
+  // A toggle is a button, so it takes the .button outline, on keyboard
+  // focus only. The group is one Tab stop, on its chosen item.
+  test('keyboard focus shows the outline', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const bold = designSystemPage.toggle('Bold')
+    const italic = designSystemPage.toggle('Italic')
+    const singles = designSystemPage.toggleGroupItem('Singles')
+    const doubles = designSystemPage.toggleGroupItem('Doubles')
+    await bold.focus()
+
+    await page.keyboard.press('Tab')
+    await expect(italic).toBeFocused()
+    await expect(italic).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(italic).toHaveCSS('outline-offset', '2px')
+    await expect(bold).toHaveCSS('outline-style', 'none')
+
+    await page.keyboard.press('Tab')
+    await expect(singles).toBeFocused()
+    await expect(singles).toHaveCSS('outline', `${orange} solid 2px`)
+
+    await page.keyboard.press('ArrowRight')
+    await expect(doubles).toBeFocused()
+    await expect(doubles).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(singles).toHaveCSS('outline-style', 'none')
+  })
+
+  test('a click shows no outline, on a toggle or a group item', async ({
+    designSystemPage,
+  }) => {
+    const italic = designSystemPage.toggle('Italic')
+    const doubles = designSystemPage.toggleGroupItem('Doubles')
+
+    await italic.click()
+    await expect(italic).toBeFocused()
+    await expect(italic).toHaveCSS('outline-style', 'none')
+
+    await doubles.click()
+    await expect(doubles).toBeFocused()
+    await expect(doubles).toHaveCSS('outline-style', 'none')
+  })
+
+  // The screenshot can't see the hover: --bg-hover is white at 4%, under
+  // its color threshold. The backgrounds fade, so each test checks the
+  // starting look before it changes anything.
+  test('hovering an unpressed toggle lightens it', async ({
+    designSystemPage,
+  }) => {
+    const italic = designSystemPage.toggle('Italic')
+    await expect(italic).toHaveCSS('background-color', none)
+    await expect(italic).toHaveCSS('color', fg2)
+
+    await italic.hover()
+
+    await expect(italic).toHaveCSS('background-color', hover)
+    await expect(italic).toHaveCSS('color', fg1)
+  })
+
+  test('pressing a hovered toggle darkens it', async ({
+    designSystemPage,
+  }) => {
+    const italic = designSystemPage.toggle('Italic')
+    await italic.hover()
+    await expect(italic).toHaveCSS('background-color', hover)
+
+    await italic.click()
+
+    await expect(italic).toHaveAttribute('aria-pressed', 'true')
+    await expect(italic).toHaveCSS('background-color', pressed)
+    await expect(italic).toHaveCSS('color', fg1)
+  })
+
+  // A look that stays the same would pass a check made before the
+  // transition starts, so this one runs without transitions.
+  test.describe('without transitions', () => {
+    test.use({ reducedMotion: 'reduce' })
+
+    test('a pressed toggle and the chosen item keep their look under the pointer', async ({
+      designSystemPage,
+    }) => {
+      const bold = designSystemPage.toggle('Bold')
+      const singles = designSystemPage.toggleGroupItem('Singles')
+      for (const toggle of [bold, singles]) {
+        await expect(toggle).toHaveCSS('background-color', pressed)
+        await expect(toggle).toHaveCSS('color', fg1)
+
+        await toggle.hover()
+
+        await expect(toggle).toHaveCSS('background-color', pressed)
+        await expect(toggle).toHaveCSS('color', fg1)
+      }
+    })
+  })
+
+  test("the group's items look like toggles in a panel", async ({
+    designSystemPage,
+  }) => {
+    const group = designSystemPage.toggleGroup
+    // --ink-900 and --border-subtle.
+    await expect(group).toHaveCSS('background-color', 'rgb(17, 20, 27)')
+    await expect(group).toHaveCSS('border-color', 'rgb(42, 48, 64)')
+    await expect(group).toHaveCSS('border-radius', '10px')
+    const doubles = designSystemPage.toggleGroupItem('Doubles')
+    await expect(doubles).toHaveCSS('background-color', none)
+    await expect(doubles).toHaveCSS('color', fg2)
+    await expect(doubles).toHaveCSS('border-radius', '6px')
+  })
+
+  test('the separator is a 1px line as tall as the row', async ({
+    designSystemPage,
+  }) => {
+    const separator = designSystemPage.toggleSeparator
+    await expect(separator).toHaveAttribute('aria-orientation', 'vertical')
+    // --border-subtle.
+    await expect(separator).toHaveCSS('background-color', 'rgb(42, 48, 64)')
+    const line = (await separator.boundingBox())!
+    const row = (await designSystemPage.toggleRow.boundingBox())!
+    expect(line.width).toBe(1)
+    expect(row.height).toBe(46)
+    expect(line.height).toBe(row.height)
+    expect(line.y).toBe(row.y)
+  })
+
+  // The demo has no disabled toggles, so this test disables a toggle and an
+  // item in place. That checks the looks: the unit tests check the rest.
+  test("a disabled toggle or item fades and doesn't change", async ({
+    designSystemPage,
+    page,
+  }) => {
+    const italic = designSystemPage.toggle('Italic')
+    const doubles = designSystemPage.toggleGroupItem('Doubles')
+    for (const toggle of [italic, doubles]) {
+      await expect(toggle).toHaveCSS('opacity', '1')
+      await toggle.evaluate((button) => button.setAttribute('disabled', ''))
+      const box = (await toggle.boundingBox())!
+
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
+
+      await expect(toggle).toHaveCSS('opacity', '0.5')
+      await expect(toggle).toHaveCSS('cursor', 'not-allowed')
+    }
+    await expect(italic).toHaveAttribute('aria-pressed', 'false')
+    await expect(doubles).toHaveAttribute('aria-checked', 'false')
+    await expect(
+      designSystemPage.toggleGroupItem('Singles'),
+    ).toHaveAttribute('aria-checked', 'true')
+  })
+
+  test('the background and text color fade', async ({ designSystemPage }) => {
+    await expect(designSystemPage.toggle('Italic')).toHaveCSS(
+      'transition-duration',
+      '0.12s, 0.12s',
+    )
+  })
+
+  test.describe('with reduced motion', () => {
+    test.use({ reducedMotion: 'reduce' })
+
+    test('the background and text color change without a transition', async ({
+      designSystemPage,
+    }) => {
+      await expect(designSystemPage.toggle('Italic')).toHaveCSS(
+        'transition-duration',
+        '0s',
+      )
+    })
+  })
+})
+
+test.describe('Data Display section', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.displaySectionHeading).toHaveScreenshot(
+      'display-heading.png',
+    )
+    await expect(designSystemPage.displaySectionLead).toHaveScreenshot(
+      'display-lead.png',
+    )
+  })
+
+  test('matches the reference kit section', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.displaySectionHeading).toHaveScreenshot(
+      'display-heading.png',
+    )
+    await expect(referenceKitPage.displaySectionLead).toHaveScreenshot(
+      'display-lead.png',
+    )
+  })
+})
+
+// Nothing is hovered or focused, so the buttons show their resting styles.
+test.describe('Card card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.cardCard).toHaveScreenshot('card-card.png')
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.cardCard).toHaveScreenshot('card-card.png')
+  })
+})
+
+// Both screenshots stop the live dot's pulse at its first frame, so they
+// match whenever they're taken.
+test.describe('Badge card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.badgeCard).toHaveScreenshot(
+      'badge-card.png',
+      { animations: 'disabled' },
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.badgeCard).toHaveScreenshot(
+      'badge-card.png',
+      { animations: 'disabled' },
+    )
+  })
+
+  test("the live badge's dot pulses", async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.liveDot).toHaveCSS(
+      'animation-name',
+      'ball-pulse',
+    )
+  })
+
+  test.describe('with reduced motion', () => {
+    test.use({ reducedMotion: 'reduce' })
+
+    test("the live badge's dot holds still", async ({ designSystemPage }) => {
+      await designSystemPage.goto()
+
+      await expect(designSystemPage.liveDot).toHaveCSS('animation-name', 'none')
+    })
+  })
+})
+
+test.describe('Avatar card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.avatarCard).toHaveScreenshot(
+      'avatar-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.avatarCard).toHaveScreenshot(
+      'avatar-card.png',
+    )
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -1617,6 +1990,118 @@ test.describe('on a phone', () => {
       expect(day.x + day.width).toBeLessThanOrEqual(
         calendar.x + calendar.width,
       )
+    }
+  })
+
+  // The row wraps the group under B, I and the separator, as the kit's
+  // does. The card's content is 228px wide here, narrower than the kit's
+  // 242px group, so the group's items take less padding to fit.
+  test('the toggle card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.toggleCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.toggleCard.boundingBox())!
+    const bold = (await designSystemPage.toggle('Bold').boundingBox())!
+    const italic = (await designSystemPage.toggle('Italic').boundingBox())!
+    const separator = (await designSystemPage.toggleSeparator.boundingBox())!
+    const group = (await designSystemPage.toggleGroup.boundingBox())!
+    // Inside the card's 1px border and 32px padding on each side.
+    const left = card.x + 33
+    const right = card.x + card.width - 33
+    expect(bold.x).toBe(left)
+    expect(italic.y).toBe(bold.y)
+    expect(separator.x).toBeGreaterThan(italic.x + italic.width)
+    expect(separator.height).toBe(bold.height)
+    expect(group.x).toBe(left)
+    // The row's 12px gap, under the first line.
+    expect(group.y).toBe(bold.y + bold.height + 12)
+    expect(group.x + group.width).toBeLessThanOrEqual(right)
+    for (const name of ['Singles', 'Doubles', 'Mixed']) {
+      const item = (await designSystemPage
+        .toggleGroupItem(name)
+        .boundingBox())!
+      expect(item.x + item.width, name).toBeLessThanOrEqual(
+        group.x + group.width,
+      )
+    }
+  })
+
+  // The cards share the .grid-2 layout with the input card's fields, so
+  // they stack too.
+  test("the card card's cards stack", async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+    const first = (await designSystemPage
+      .demoCard('April Spring Open')
+      .boundingBox())!
+    const second = (await designSystemPage
+      .demoCard('★ Featured')
+      .boundingBox())!
+
+    expect(second.x).toBe(first.x)
+    expect(second.width).toBe(first.width)
+    expect(second.y).toBeGreaterThanOrEqual(first.y + first.height)
+    expect(
+      await page
+        .locator('html')
+        .evaluate((html) => html.scrollWidth - html.clientWidth),
+    ).toBeLessThanOrEqual(0)
+  })
+
+  // Five badges are wider than the card's content on a phone, so the row
+  // wraps them onto more lines rather than scrolling the page sideways.
+  test("the badge card's badges wrap", async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+    const card = (await designSystemPage.badgeCard.boundingBox())!
+    const first = (await designSystemPage.badge('Seed 1').boundingBox())!
+    const last = (await designSystemPage
+      .badge('Live · Court 3')
+      .boundingBox())!
+
+    expect(last.y).toBeGreaterThan(first.y)
+    expect(last.x + last.width).toBeLessThanOrEqual(card.x + card.width - 32)
+    expect(
+      await page
+        .locator('html')
+        .evaluate((html) => html.scrollWidth - html.clientWidth),
+    ).toBeLessThanOrEqual(0)
+  })
+
+  test("the avatar card's avatars stay in the card, the group stacked", async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const card = (await designSystemPage.avatarCard.boundingBox())!
+    // The row's avatar comes first, before the group's of the same name.
+    const rowLast = (await designSystemPage
+      .avatars('Marta Kowalski')
+      .first()
+      .boundingBox())!
+    const group = (await designSystemPage.avatarGroup.boundingBox())!
+
+    expect(rowLast.x + rowLast.width).toBeLessThanOrEqual(
+      card.x + card.width - 32,
+    )
+    expect(group.x + group.width).toBeLessThanOrEqual(card.x + card.width - 32)
+    expect(
+      await page
+        .locator('html')
+        .evaluate((html) => html.scrollWidth - html.clientWidth),
+    ).toBeLessThanOrEqual(0)
+
+    const stacked = await designSystemPage.avatarGroup.getByRole('img').all()
+    expect(stacked).toHaveLength(4)
+    for (let i = 1; i < stacked.length; i++) {
+      const previous = (await stacked[i - 1].boundingBox())!
+      const current = (await stacked[i].boundingBox())!
+      expect(current.x).toBeLessThan(previous.x + previous.width)
     }
   })
 

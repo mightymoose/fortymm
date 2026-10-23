@@ -32,6 +32,12 @@ export class ReferenceKitPage {
   readonly selectCard: Locator
   readonly comboboxCard: Locator
   readonly datePickerCard: Locator
+  readonly toggleCard: Locator
+  readonly displaySectionHeading: Locator
+  readonly displaySectionLead: Locator
+  readonly cardCard: Locator
+  readonly badgeCard: Locator
+  readonly avatarCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -113,6 +119,27 @@ export class ReferenceKitPage {
         name: 'Date Picker',
         exact: true,
       }),
+    })
+    this.toggleCard = this.formsSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Toggle · Toggle Group',
+        exact: true,
+      }),
+    })
+    const displaySection = page.locator('#display')
+    this.displaySectionHeading = displaySection.getByRole('heading', {
+      level: 2,
+    })
+    this.displaySectionLead = displaySection.getByRole('paragraph').first()
+    this.cardCard = displaySection.locator('.comp', {
+      has: page.getByRole('heading', { level: 3, name: 'Card', exact: true }),
+    })
+    this.badgeCard = displaySection.locator('.comp', {
+      has: page.getByRole('heading', { level: 3, name: 'Badge', exact: true }),
+    })
+    this.avatarCard = displaySection.locator('.comp', {
+      has: page.getByRole('heading', { level: 3, name: 'Avatar', exact: true }),
     })
   }
 
