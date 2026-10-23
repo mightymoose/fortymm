@@ -335,6 +335,8 @@ These checks remain:
 
 One case has no automatic check. A person enters on device 1 as a guest, then enters again on device 2 from another account, before device 1 signs in. The event then has two entries under two names. When device 1 signs in, adoption and the "Is this you?" question remove the extra entry, if it is before the draw. After the draw, the director withdraws one entry. Only a manager of both players can run a player merge.
 
+We accept this gap for now. The first goal is that a person can start a quick tournament with friends, and an extra field on every entry slows that down. A check needs a second attribute to compare, such as date of birth. If age-group events add date of birth later, a check that flags matching entries can come with them.
+
 ## Edge cases
 
 ### Your scenario: a guest plays, enters a tournament and signs in
@@ -410,7 +412,6 @@ Each decision below has a default that the design already uses.
 
 - **Contacting guest entrants.** A guest entry has no email, so a director cannot send it a schedule change. Default: the director sees which entries are on guest accounts, and the entrant sees changes on the event page. The other choice asks for a contact email on the entry form. That email would not verify the account.
 - **The adopted player's role.** Default: an adopted player always arrives as managed, and the app asks "Is this you?" The other choice makes it the self player or merges it at once. That skips a question, but it is wrong for a child who played on a parent's computer.
-- **One person entered from two accounts.** Default: no automatic check, because unique display names cannot match. The other choice adds a second attribute, such as date of birth, and flags entries in one event that share it. Age-group events would need the date of birth anyway.
 - **Guest lifetime.** Default: 90 days idle. A shorter time loses accounts of people who play rarely.
 - **Lost guest accounts.** A guest who clears cookies or changes browsers without signing in loses the account. Default: accept this, and show "Sign in to keep your games" after the first game.
 - **Verified account merge.** Default: not supported. A person with two verified accounts keeps both.
