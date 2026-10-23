@@ -1614,6 +1614,160 @@ h4, .h4 {
 }
 
 /* =========================================================================
+   Table (the reference kit's table.tbl and its .num cells). .table-num
+   outranks the th rule, so a numeric header is mono and right-aligned too.
+   On a phone the table is wider than the card. It scrolls inside the card,
+   and no cell wraps, so each row stays on one line.
+   ========================================================================= */
+.table-scroll {
+  overflow-x: auto;
+}
+
+.table th,
+.table td {
+  white-space: nowrap;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 400 13px var(--font-ui);
+}
+
+.table th {
+  text-align: left;
+  font: 500 11px var(--font-ui);
+  color: var(--fg-3);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-default);
+}
+
+.table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--fg-1);
+}
+
+.table tr:last-child td {
+  border-bottom: 0;
+}
+
+.table .table-num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.rating-delta--gain {
+  color: var(--serve-500);
+}
+
+.rating-delta--loss {
+  color: var(--loss);
+}
+
+/* The kit's table sets this gap inline on each player cell's .row. */
+.player-cell {
+  gap: 10px;
+  flex-wrap: nowrap;
+}
+
+/* =========================================================================
+   Progress (the reference kit's .progress and its .bar). The kit sets the
+   label row's and the column's styles inline. Here they are classes.
+   ========================================================================= */
+.progress {
+  height: 8px;
+  background: var(--ink-700);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  background: var(--ball-500);
+  border-radius: 999px;
+}
+
+.progress-header {
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.progress-value {
+  font-family: var(--font-mono);
+  color: var(--fg-3);
+}
+
+.progress-demo {
+  max-width: 420px;
+}
+
+/* =========================================================================
+   Skeleton (the reference kit's .skel and its skel keyframes). The kit
+   sets each placeholder's size and the circle's radius inline. Here the
+   size is set by the component and the circle is a modifier. The kit's
+   shimmer runs even with reduced motion. Here it stops.
+   ========================================================================= */
+.skeleton {
+  background: linear-gradient(90deg, var(--ink-700) 25%, var(--ink-600) 50%, var(--ink-700) 75%);
+  background-size: 200% 100%;
+  animation: skel 1.4s linear infinite;
+  border-radius: var(--r-sm);
+}
+
+.skeleton--circle {
+  border-radius: 50%;
+}
+
+@keyframes skel {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}
+
+/* The kit's Skeleton card sets these gaps inline on its .row and .col. */
+.skeleton-demo {
+  gap: 16px;
+}
+
+.skeleton-lines {
+  flex: 1;
+  gap: 8px;
+}
+
+/* =========================================================================
+   Aspect Ratio (the reference kit's .ar). The kit's .ar is 16:9 unless
+   set inline. Here the component always sets the ratio.
+   ========================================================================= */
+.aspect-ratio {
+  width: 100%;
+  background: linear-gradient(135deg, var(--ink-700), var(--ink-800));
+  border-radius: var(--r-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-3);
+  font: 500 12px var(--font-mono);
+  letter-spacing: 0.1em;
+}
+
+/* The kit's grid stretches each box to the row's height. The 1:1 box then
+   takes the 16:9 box's height as its width, overflows the card and scrolls
+   the page sideways. Here each box keeps its own height. */
+.aspect-ratio-demo {
+  align-items: start;
+}
+
+/* =========================================================================
    Utility: hidden on screen, still read by assistive tech (e.g. a label the
    design shows no room for).
    ========================================================================= */

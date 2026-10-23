@@ -53,6 +53,12 @@ export class DesignSystemPage {
   readonly liveDot: Locator
   readonly avatarCard: Locator
   readonly avatarGroup: Locator
+  readonly tableCard: Locator
+  readonly standingsTable: Locator
+  readonly progressCard: Locator
+  readonly skeletonCard: Locator
+  readonly skeleton: Locator
+  readonly aspectRatioCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -169,6 +175,28 @@ export class DesignSystemPage {
       exact: true,
     })
     this.avatarGroup = this.avatarCard.getByRole('group', { name: 'Players' })
+    this.tableCard = this.displaySection.getByRole('article', {
+      name: 'Table · Data Table',
+      exact: true,
+    })
+    this.standingsTable = this.tableCard.getByRole('table', {
+      name: 'Standings',
+    })
+    this.progressCard = this.displaySection.getByRole('article', {
+      name: 'Progress',
+      exact: true,
+    })
+    this.skeletonCard = this.displaySection.getByRole('article', {
+      name: 'Skeleton',
+      exact: true,
+    })
+    // The placeholders are hidden from assistive tech, so they have no role
+    // to find them by.
+    this.skeleton = this.skeletonCard.locator('.skeleton').first()
+    this.aspectRatioCard = this.displaySection.getByRole('article', {
+      name: 'Aspect Ratio',
+      exact: true,
+    })
   }
 
   // A component card's title, in its header.
@@ -365,5 +393,10 @@ export class DesignSystemPage {
   // in both the row and the group.
   avatars(name: string): Locator {
     return this.avatarCard.getByRole('img', { name, exact: true })
+  }
+
+  // The Aspect Ratio card's box that reads `text`, e.g. "16 : 9".
+  aspectRatioBox(text: string): Locator {
+    return this.aspectRatioCard.getByText(text, { exact: true })
   }
 }

@@ -1783,6 +1783,115 @@ test.describe('Avatar card', () => {
   })
 })
 
+test.describe('Table · Data Table card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.tableCard).toHaveScreenshot('table-card.png')
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.tableCard).toHaveScreenshot('table-card.png')
+  })
+})
+
+test.describe('Progress card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.progressCard).toHaveScreenshot(
+      'progress-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.progressCard).toHaveScreenshot(
+      'progress-card.png',
+    )
+  })
+})
+
+// Both screenshots stop the shimmer at its first frame, so they match
+// whenever they're taken.
+test.describe('Skeleton card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.skeletonCard).toHaveScreenshot(
+      'skeleton-card.png',
+      { animations: 'disabled' },
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.skeletonCard).toHaveScreenshot(
+      'skeleton-card.png',
+      { animations: 'disabled' },
+    )
+  })
+
+  test('the placeholders shimmer', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.skeleton).toHaveCSS('animation-name', 'skel')
+  })
+
+  test.describe('with reduced motion', () => {
+    test.use({ reducedMotion: 'reduce' })
+
+    test('the placeholders hold still', async ({ designSystemPage }) => {
+      await designSystemPage.goto()
+
+      await expect(designSystemPage.skeleton).toHaveCSS('animation-name', 'none')
+    })
+  })
+})
+
+// The kit's card overflows: its grid stretches the 1:1 box to the 16:9
+// box's height (511px at 1280px wide), so the square is 511px wide too and
+// the page scrolls sideways by 276px. The app keeps each box's own height,
+// so its screenshot is its own, not the kit's.
+test.describe('Aspect Ratio card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.aspectRatioCard).toHaveScreenshot(
+      'aspect-ratio-card.png',
+    )
+  })
+
+  test('its boxes keep their ratios inside the card', async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const card = (await designSystemPage.aspectRatioCard.boundingBox())!
+    const wide = (await designSystemPage.aspectRatioBox('16 : 9').boundingBox())!
+    const square = (await designSystemPage
+      .aspectRatioBox('1 : 1')
+      .boundingBox())!
+
+    expect(wide.width / wide.height).toBeCloseTo(16 / 9, 2)
+    expect(square.width).toBeCloseTo(square.height, 0)
+    expect(square.width).toBeCloseTo(wide.width, 0)
+    // Inside the card's 1px border and 32px padding on the right.
+    expect(square.x + square.width).toBeLessThanOrEqual(
+      card.x + card.width - 33,
+    )
+    expect(
+      await page
+        .locator('html')
+        .evaluate((html) => html.scrollWidth - html.clientWidth),
+    ).toBeLessThanOrEqual(0)
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -2102,6 +2211,36 @@ test.describe('on a phone', () => {
       const previous = (await stacked[i - 1].boundingBox())!
       const current = (await stacked[i].boundingBox())!
       expect(current.x).toBeLessThan(previous.x + previous.width)
+    }
+  })
+
+  // The table is wider than a phone, so it scrolls sideways inside the card
+  // rather than widening the page, and each row stays on one line.
+  test('the standings table scrolls in its card, a row per line', async ({
+    designSystemPage,
+    page,
+  }) => {
+    await designSystemPage.goto()
+    const scroller = designSystemPage.standingsTable.locator('xpath=..')
+
+    expect(
+      await scroller.evaluate((e) => e.scrollWidth - e.clientWidth),
+    ).toBeGreaterThan(0)
+    expect(
+      await page
+        .locator('html')
+        .evaluate((html) => html.scrollWidth - html.clientWidth),
+    ).toBeLessThanOrEqual(0)
+
+    // A row on one line is as tall as its avatar and the cells' 14px padding
+    // above and below it. A wrapped name or club makes it taller.
+    for (const row of await designSystemPage.standingsTable
+      .getByRole('row')
+      .all()
+      .then((rows) => rows.slice(1))) {
+      const avatar = (await row.getByRole('img').boundingBox())!
+      const box = (await row.boundingBox())!
+      expect(box.height).toBeLessThanOrEqual(avatar.height + 2 * 14 + 1)
     }
   })
 

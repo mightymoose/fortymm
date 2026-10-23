@@ -330,4 +330,68 @@ export class DesignSystemPage {
   get avatarGroup(): HTMLElement {
     return within(this.avatarCard).getByRole('group', { name: 'Players' })
   }
+
+  get tableCard(): HTMLElement {
+    return within(this.displaySection).getByRole('article', {
+      name: 'Table · Data Table',
+    })
+  }
+
+  get tableCardHeading(): HTMLElement {
+    return within(this.tableCard).getByRole('heading', { level: 3 })
+  }
+
+  get standingsTable(): HTMLElement {
+    return within(this.tableCard).getByRole('table', { name: 'Standings' })
+  }
+
+  get progressCard(): HTMLElement {
+    return within(this.displaySection).getByRole('article', {
+      name: 'Progress',
+    })
+  }
+
+  get progressCardHeading(): HTMLElement {
+    return within(this.progressCard).getByRole('heading', { level: 3 })
+  }
+
+  // The Progress card's bars, in order.
+  get progressBars(): HTMLElement[] {
+    return within(this.progressCard).getAllByRole('progressbar')
+  }
+
+  get skeletonCard(): HTMLElement {
+    return within(this.displaySection).getByRole('article', {
+      name: 'Skeleton',
+    })
+  }
+
+  get skeletonCardHeading(): HTMLElement {
+    return within(this.skeletonCard).getByRole('heading', { level: 3 })
+  }
+
+  // The placeholders are hidden from assistive tech, so they have no role to
+  // find them by.
+  get skeletons(): HTMLElement[] {
+    return Array.from(
+      this.skeletonCard.querySelectorAll<HTMLElement>('.skeleton'),
+    )
+  }
+
+  get aspectRatioCard(): HTMLElement {
+    return within(this.displaySection).getByRole('article', {
+      name: 'Aspect Ratio',
+    })
+  }
+
+  get aspectRatioCardHeading(): HTMLElement {
+    return within(this.aspectRatioCard).getByRole('heading', { level: 3 })
+  }
+
+  // The Aspect Ratio card's boxes, in order.
+  get aspectRatioBoxes(): HTMLElement[] {
+    return Array.from(
+      this.aspectRatioCard.querySelectorAll<HTMLElement>('.aspect-ratio'),
+    )
+  }
 }
