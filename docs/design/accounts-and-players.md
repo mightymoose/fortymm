@@ -16,11 +16,33 @@ Every visitor gets an account the first time the app loads. They can play games 
 - **Adopt.** A verified account takes over a guest account's players and sessions. The API then marks the guest account as adopted, and nobody can sign in to it again.
 - **Player merge.** Two players turn out to be one person. Their games move to the player who carries on, and the other player stops taking part.
 
+## Requirements
+
+These are the product requirements this design meets. Each row links to the section that meets it.
+
+| # | Requirement | Where |
+| --- | --- | --- |
+| 1 | A visitor gets an account the first time they land on the site, with no login. | [Start a guest on the first load](#start-a-guest-on-the-first-load) |
+| 2 | Sign-in uses Auth0. | [Sign in](#sign-in) |
+| 3 | Adding an email to a guest account makes it a verified account. | [Sign in](#sign-in) |
+| 4 | A person who played as a guest and then signs in keeps those games. Their account adopts the guest account. | [Adopt a guest account](#adopt-a-guest-account) |
+| 5 | Accounts and players are separate. One account manages many players. | [Data shape](#data-shape) |
+| 6 | A parent can enter a child in a tournament. The child needs no account and no credit card. | [Data shape](#data-shape) |
+| 7 | A guest account can enter a tournament. | [Guest accounts can enter tournaments](#guest-accounts-can-enter-tournaments) |
+| 8 | A person with two players, such as a guest player and their usual player, can merge them. The guest player's games then count for the usual player. | [Merge two players who are one person](#merge-two-players-who-are-one-person) |
+| 9 | Nothing ever deletes a player, because their games and ratings depend on them. | [Three premises](#three-premises) |
+| 10 | Nobody plays themselves, in a game or in a draw. | [The rating input drops games against oneself](#the-rating-input-drops-games-against-oneself) |
+| 11 | Ratings use Elo or a similar system, and a merge recalculates them. | [Merge two players who are one person](#merge-two-players-who-are-one-person) |
+| 12 | Display names are unique. | [Catch one person entered twice](#catch-one-person-entered-twice) |
+| 13 | A quick tournament with friends asks for nothing beyond a player. By default, an entry needs no date of birth or other extra field. | [Tournaments can turn on extra entry checks](#tournaments-can-turn-on-extra-entry-checks) |
+| 14 | A larger tournament can turn on extra entry checks. | [Tournaments can turn on extra entry checks](#tournaments-can-turn-on-extra-entry-checks) |
+| 15 | The design covers the edge cases. One case gets explicit treatment: a guest enters a tournament, signs in another way and enters again, which leaves two entries for one person. | [Edge cases](#edge-cases) |
+
 ## Three premises
 
 The design rests on three rules. Most edge cases below resolve because of them.
 
-1. **History belongs to players.** Games and entries reference `players.id`. No account change rewrites them. A player merge rewrites no game either. Ratings are derived from games and get recalculated.
+1. **History belongs to players.** Games and entries reference `players.id`. No account change rewrites them. A player merge rewrites no game either. Ratings come from games, and the rating system recalculates them.
 2. **Adoption moves control, not history.** Adopting a guest changes `player_managers` rows. No game or entry row changes, so a match in progress or an open entry stays valid during adoption.
 3. **Players outlive accounts.** A player with no manager is legal. A walk-in that a tournament director adds has no manager. So does the player of a deleted guest account. Nothing ever deletes a player. A player's games are also their opponents' games, and every rating came from them.
 
@@ -388,7 +410,7 @@ A new check is a new `EntryRequirement` value with one check function. Code that
 
 ## Edge cases
 
-### Your scenario: a guest plays, enters a tournament and signs in
+### A guest plays, enters a tournament and signs in
 
 Steps: a guest plays games as Guest 4821. The guest enters tournament T as Guest 4821. Then they notice they are not signed in, and sign in.
 
