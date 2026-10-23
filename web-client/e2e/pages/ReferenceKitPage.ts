@@ -33,6 +33,9 @@ export class ReferenceKitPage {
   readonly comboboxCard: Locator
   readonly datePickerCard: Locator
   readonly toggleCard: Locator
+  readonly displaySectionHeading: Locator
+  readonly displaySectionLead: Locator
+  readonly cardCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -121,6 +124,14 @@ export class ReferenceKitPage {
         name: 'Toggle · Toggle Group',
         exact: true,
       }),
+    })
+    const displaySection = page.locator('#display')
+    this.displaySectionHeading = displaySection.getByRole('heading', {
+      level: 2,
+    })
+    this.displaySectionLead = displaySection.getByRole('paragraph').first()
+    this.cardCard = displaySection.locator('.comp', {
+      has: page.getByRole('heading', { level: 3, name: 'Card', exact: true }),
     })
   }
 

@@ -45,6 +45,10 @@ export class DesignSystemPage {
   readonly toggleRow: Locator
   readonly toggleSeparator: Locator
   readonly toggleGroup: Locator
+  readonly displaySection: Locator
+  readonly displaySectionHeading: Locator
+  readonly displaySectionLead: Locator
+  readonly cardCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -58,7 +62,11 @@ export class DesignSystemPage {
       level: 2,
     })
     this.formsSectionLead = this.formsSection.getByRole('paragraph')
-    this.cards = this.formsSection.getByRole('article')
+    // Every section's component cards, whose titles are h3s. The demo cards
+    // inside the Card card are articles too, with h4 titles.
+    this.cards = page
+      .getByRole('article')
+      .filter({ has: page.getByRole('heading', { level: 3 }) })
     this.buttonCard = this.formsSection.getByRole('article', { name: 'Button' })
     this.inputCard = this.formsSection.getByRole('article', {
       name: 'Input · Label · Form Field',
@@ -134,6 +142,16 @@ export class DesignSystemPage {
     this.toggleSeparator = this.toggleCard.getByRole('separator')
     this.toggleGroup = this.toggleCard.getByRole('radiogroup', {
       name: 'Match type',
+    })
+    this.displaySection = page.getByRole('region', { name: 'Data Display' })
+    this.displaySectionHeading = this.displaySection.getByRole('heading', {
+      level: 2,
+    })
+    // The first paragraph: the cards in the section have paragraphs too.
+    this.displaySectionLead = this.displaySection.getByRole('paragraph').first()
+    this.cardCard = this.displaySection.getByRole('article', {
+      name: 'Card',
+      exact: true,
     })
   }
 
@@ -314,5 +332,10 @@ export class DesignSystemPage {
   // The input card's text input labelled `name`.
   input(name: string): Locator {
     return this.inputCard.getByRole('textbox', { name })
+  }
+
+  // The Card card's demo card titled `name`, e.g. "April Spring Open".
+  demoCard(name: string): Locator {
+    return this.cardCard.getByRole('article', { name, exact: true })
   }
 }

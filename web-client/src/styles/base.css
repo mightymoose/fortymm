@@ -1436,6 +1436,58 @@ h4, .h4 {
 }
 
 /* =========================================================================
+   Card (the reference kit's .sh-card, .ch, .ct, .cd, .cb and .cf): a
+   header with a title and a description, the body, then a footer of
+   buttons. .card--featured is the kit's inline styled featured card.
+   ========================================================================= */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  padding: 24px;
+}
+
+.card-header {
+  margin-bottom: 12px;
+}
+
+/* The title can be any heading level, so this overrides the h2-h4 type
+   styles above. The font shorthand resets the line height, as the kit's
+   does. */
+.card-title {
+  font: 600 18px var(--font-ui);
+  letter-spacing: normal;
+  margin: 0 0 4px;
+}
+
+.card-description {
+  font: 400 13px var(--font-ui);
+  color: var(--fg-3);
+  margin: 0;
+}
+
+.card-body {
+  font-size: 14px;
+  color: var(--fg-2);
+  line-height: 1.5;
+}
+
+.card-footer {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.card--featured {
+  border-color: var(--ball-500);
+  box-shadow: var(--shadow-glow);
+}
+
+.card--featured .card-title {
+  color: var(--ball-500);
+}
+
+/* =========================================================================
    Utility: hidden on screen, still read by assistive tech (e.g. a label the
    design shows no room for).
    ========================================================================= */

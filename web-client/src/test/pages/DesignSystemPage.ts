@@ -262,4 +262,30 @@ export class DesignSystemPage {
   get toggleGroupItems(): HTMLElement[] {
     return within(this.toggleGroup).getAllByRole('radio')
   }
+
+  get displaySection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Data Display' })
+  }
+
+  get displaySectionHeading(): HTMLElement {
+    return within(this.displaySection).getByRole('heading', { level: 2 })
+  }
+
+  // The first paragraph: the cards in the section have paragraphs too.
+  get displaySectionLead(): HTMLElement {
+    return within(this.displaySection).getAllByRole('paragraph')[0]
+  }
+
+  get cardCard(): HTMLElement {
+    return within(this.displaySection).getByRole('article', { name: 'Card' })
+  }
+
+  get cardCardHeading(): HTMLElement {
+    return within(this.cardCard).getByRole('heading', { level: 3 })
+  }
+
+  // The demo card titled `name`, e.g. "April Spring Open".
+  demoCard(name: string): HTMLElement {
+    return within(this.cardCard).getByRole('article', { name })
+  }
 }

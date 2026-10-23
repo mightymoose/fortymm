@@ -33,10 +33,10 @@ test.describe('header', () => {
   })
 })
 
-// The intro, the Forms & Input section and its component cards use the
-// reference kit's own copy, so they're compared with the kit as is. The kit's
-// section goes on to more cards than the app has yet, so the section's
-// heading, lead and cards are compared one by one.
+// The intro, the Forms & Input and Data Display sections and their
+// component cards use the reference kit's own copy, so they're compared with
+// the kit as is. The kit's sections go on to more cards than the app has
+// yet, so each section's heading, lead and cards are compared one by one.
 test.describe('intro', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
@@ -1666,6 +1666,45 @@ test.describe('Toggle', () => {
   })
 })
 
+test.describe('Data Display section', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.displaySectionHeading).toHaveScreenshot(
+      'display-heading.png',
+    )
+    await expect(designSystemPage.displaySectionLead).toHaveScreenshot(
+      'display-lead.png',
+    )
+  })
+
+  test('matches the reference kit section', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.displaySectionHeading).toHaveScreenshot(
+      'display-heading.png',
+    )
+    await expect(referenceKitPage.displaySectionLead).toHaveScreenshot(
+      'display-lead.png',
+    )
+  })
+})
+
+// Nothing is hovered or focused, so the buttons show their resting styles.
+test.describe('Card card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.cardCard).toHaveScreenshot('card-card.png')
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.cardCard).toHaveScreenshot('card-card.png')
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -1914,6 +1953,27 @@ test.describe('on a phone', () => {
         group.x + group.width,
       )
     }
+  })
+
+  // The cards share the .grid-2 layout with the input card's fields, so
+  // they stack too.
+  test("the card card's cards stack", async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+    const first = (await designSystemPage
+      .demoCard('April Spring Open')
+      .boundingBox())!
+    const second = (await designSystemPage
+      .demoCard('★ Featured')
+      .boundingBox())!
+
+    expect(second.x).toBe(first.x)
+    expect(second.width).toBe(first.width)
+    expect(second.y).toBeGreaterThanOrEqual(first.y + first.height)
+    expect(
+      await page
+        .locator('html')
+        .evaluate((html) => html.scrollWidth - html.clientWidth),
+    ).toBeLessThanOrEqual(0)
   })
 
   // Two columns would leave each input too narrow for its placeholder, so
