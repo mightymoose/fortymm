@@ -365,8 +365,16 @@ The design system's styles apply to the whole app; `main.tsx` imports them:
   (`src/components/PageHeader.tsx`, the title and subtitle every page starts
   with).
 
-`index.html` preloads the fonts every first paint uses (Space Grotesk's
-latin file, Bebas Neue and JetBrains Mono). Without the preloads, the browser
+Each font is split into woff2 files by `unicode-range`, so a page downloads
+only the files its text uses. `space-grotesk.css` comes from Fontsource.
+`web-client/scripts/subset-fonts.py` writes `bebas-neue.css`,
+`jetbrains-mono.css` and their files from the reference's TTFs, the same
+files the reference kit embeds. If the reference's fonts change, run it again
+(`docker compose run --rm dev /app/bin/docker-entrypoint uv run --no-project
+web-client/scripts/subset-fonts.py`).
+
+`index.html` preloads the latin file of each font, because every first paint
+uses them. Without the preloads, the browser
 finds the fonts only after `main.tsx` renders, so the page and the loading
 screen show fallback text first. Vite rewrites the preload `href`s to the
 same hashed files the CSS uses. If you rename or add a font that the first
