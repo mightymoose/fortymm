@@ -78,6 +78,9 @@ export class DesignSystemPage {
   readonly overlaysSectionHeading: Locator
   readonly overlaysSectionLead: Locator
 
+  readonly dialogCard: Locator
+  readonly dialog: Locator
+  readonly alertDialog: Locator
   constructor(page: Page) {
     this.page = page
     this.loadingScreen = page.getByRole('status', { name: 'Loading FortyMM' })
@@ -262,6 +265,16 @@ export class DesignSystemPage {
     this.overlaysSectionLead = this.overlaysSection
       .getByRole('paragraph')
       .first()
+    this.dialogCard = this.overlaysSection.getByRole('article', {
+      name: 'Dialog · Alert Dialog',
+      exact: true,
+    })
+    this.dialog = this.dialogCard.getByRole('dialog', {
+      name: 'Forfeit this match?',
+    })
+    this.alertDialog = this.dialogCard.getByRole('alertdialog', {
+      name: 'Delete account',
+    })
   }
 
   // A component card's title, in its header.

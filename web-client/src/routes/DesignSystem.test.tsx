@@ -821,6 +821,53 @@ describe('DesignSystem', () => {
     ).toBeTruthy()
   })
 
+  it('has a Dialog · Alert Dialog card first in the Overlays section', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.dialogCardHeading).toHaveTextContent(
+      'Dialog · Alert Dialog',
+    )
+    expect(designSystemPage.dialogCard).toHaveTextContent('modal')
+    expect(
+      within(designSystemPage.overlaysSection).getAllByRole('article')[0],
+    ).toBe(designSystemPage.dialogCard)
+  })
+
+  it("shows the reference's dialog and alert dialog, open", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const { dialog, alertDialog } = designSystemPage
+    expect(dialog).toHaveAccessibleName('Forfeit this match?')
+    expect(dialog).toHaveAccessibleDescription(
+      "Your opponent will be awarded the win and your rating will be adjusted accordingly. This can't be undone.",
+    )
+    expect(
+      within(dialog).getByRole('checkbox', {
+        name: 'Send a note to my opponent',
+      }),
+    ).not.toBeChecked()
+    expect(
+      within(dialog)
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual(['Cancel', 'Forfeit'])
+    expect(alertDialog).toHaveAccessibleName('Delete account')
+    expect(alertDialog).toHaveAccessibleDescription(
+      'All match history, ratings, and tournament records will be permanently deleted.',
+    )
+    expect(
+      within(alertDialog)
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual(['Keep account', 'Delete'])
+    expect(
+      Array.from(
+        designSystemPage.dialogCard.querySelectorAll('.mock-label'),
+        (label) => label.textContent,
+      ),
+    ).toEqual(['Dialog', 'Alert Dialog'])
+  })
+
   it.each([
     {
       title: 'April Spring Open',

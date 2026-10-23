@@ -511,4 +511,22 @@ export class DesignSystemPage {
   get overlaysSectionLead(): HTMLElement {
     return within(this.overlaysSection).getAllByRole('paragraph')[0]
   }
+
+  get dialogCard(): HTMLElement {
+    return within(this.overlaysSection).getByRole('article', {
+      name: 'Dialog · Alert Dialog',
+    })
+  }
+
+  get dialogCardHeading(): HTMLElement {
+    return within(this.dialogCard).getByRole('heading', { level: 3 })
+  }
+
+  get dialog(): HTMLElement {
+    return within(this.dialogCard).getByRole('dialog')
+  }
+
+  get alertDialog(): HTMLElement {
+    return within(this.dialogCard).getByRole('alertdialog')
+  }
 }

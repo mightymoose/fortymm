@@ -10,6 +10,7 @@ import { Checkbox } from '../components/Checkbox'
 import { Combobox, type ComboboxOption } from '../components/Combobox'
 import { ComponentCard } from '../components/ComponentCard'
 import { DatePicker } from '../components/DatePicker'
+import { Dialog } from '../components/Dialog'
 import { Field, FieldHelp, Label } from '../components/Field'
 import { Input } from '../components/Input'
 import { Menubar } from '../components/Menubar'
@@ -515,7 +516,59 @@ export function DesignSystem() {
         id="overlays"
         title="Overlays"
         lead="Dialogs, sheets, popovers, menus. Content that floats above the canvas. All shown in their open state."
-      />
+      >
+        {/* As the kit does, the overlays show only their open surface, in a
+            frame, with no trigger to open or close them. */}
+        <ComponentCard title="Dialog · Alert Dialog" tag="modal">
+          <div className="grid-2">
+            <div className="mock-bg mock-bg--dialog">
+              <span className="mock-label">Dialog</span>
+              <Dialog
+                title="Forfeit this match?"
+                description="Your opponent will be awarded the win and your rating will be adjusted accordingly. This can't be undone."
+                actions={
+                  <>
+                    <Button variant="outline">Cancel</Button>
+                    <Button variant="destructive">Forfeit</Button>
+                  </>
+                }
+              >
+                <Checkbox>Send a note to my opponent</Checkbox>
+              </Dialog>
+            </div>
+            <div className="mock-bg mock-bg--dialog">
+              <span className="mock-label">Alert Dialog</span>
+              <Dialog
+                variant="alert"
+                title={
+                  <>
+                    <svg
+                      width="20"
+                      height="20"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="var(--warn)"
+                      strokeWidth="2"
+                      aria-hidden="true"
+                    >
+                      <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                      <path d="M12 9v4M12 17h0" />
+                    </svg>
+                    Delete account
+                  </>
+                }
+                description="All match history, ratings, and tournament records will be permanently deleted."
+                actions={
+                  <>
+                    <Button variant="outline">Keep account</Button>
+                    <Button variant="destructive">Delete</Button>
+                  </>
+                }
+              />
+            </div>
+          </div>
+        </ComponentCard>
+      </Section>
     </>
   )
 }

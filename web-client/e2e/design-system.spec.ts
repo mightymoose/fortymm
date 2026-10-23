@@ -2494,6 +2494,50 @@ test.describe('Overlays section', () => {
   })
 })
 
+// Nothing is hovered or focused first, so the buttons and the checkbox show
+// their resting styles.
+test.describe('Dialog · Alert Dialog card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.dialogCard).toHaveScreenshot(
+      'dialog-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.dialogCard).toHaveScreenshot(
+      'dialog-card.png',
+    )
+  })
+})
+
+// The kit's dialogs are static, so this is the app's alone.
+test('Tab goes through each dialog in order, showing the outline', async ({
+  designSystemPage,
+  page,
+}) => {
+  const orange = 'rgb(255, 122, 26)'
+  await designSystemPage.goto()
+  const checkbox = designSystemPage.dialog.getByRole('checkbox')
+  await checkbox.focus()
+
+  for (const [dialog, name] of [
+    [designSystemPage.dialog, 'Cancel'],
+    [designSystemPage.dialog, 'Forfeit'],
+    [designSystemPage.alertDialog, 'Keep account'],
+    [designSystemPage.alertDialog, 'Delete'],
+  ] as const) {
+    await page.keyboard.press('Tab')
+    const button = dialog.getByRole('button', { name, exact: true })
+    await expect(button, name).toBeFocused()
+    await expect(button, name).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(button, name).toHaveCSS('outline-offset', '2px')
+  }
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -2978,6 +3022,39 @@ test.describe('on a phone', () => {
       expect(box.y).toBeGreaterThanOrEqual(previousBottom)
       previousBottom = box.y + box.height
     }
+  })
+
+  // The dialogs are wider than the card's content, so the frames stack, each
+  // dialog narrows to fit inside its frame and its buttons wrap.
+  test('the dialog card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.dialogCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.dialogCard.boundingBox())!
+    const dialog = (await designSystemPage.dialog.boundingBox())!
+    const alert = (await designSystemPage.alertDialog.boundingBox())!
+    for (const [locator, box] of [
+      [designSystemPage.dialog, dialog],
+      [designSystemPage.alertDialog, alert],
+    ] as const) {
+      // Inside the card's 1px border and 32px padding on each side.
+      expect(box.x).toBeGreaterThanOrEqual(card.x + 33)
+      expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width - 33)
+      // The buttons wrap inside the dialog's 24px padding.
+      for (const button of await locator.getByRole('button').all()) {
+        const { x, width } = (await button.boundingBox())!
+        expect(x).toBeGreaterThanOrEqual(box.x + 24)
+        expect(x + width).toBeLessThanOrEqual(box.x + box.width - 24)
+      }
+    }
+    expect(alert.y).toBeGreaterThan(dialog.y + dialog.height)
   })
 })
 

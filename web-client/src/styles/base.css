@@ -2136,6 +2136,74 @@ h4, .h4 {
 }
 
 /* =========================================================================
+   Dialog (the reference kit's .dialog, its h2, .desc and .actions): a
+   .dialog holding a .dialog-title, a .dialog-description, the body and the
+   .dialog-actions row. The kit's title is an h2. Here it's an h4 under the
+   card's h3, so the class sets every font property the h4 rule does.
+   .dialog--alert is the kit's Alert Dialog, with its inline width and its
+   title's inline row of the icon and the text.
+   ========================================================================= */
+.dialog {
+  background: var(--ink-800);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  padding: 24px;
+  box-shadow: var(--shadow-lg);
+  width: 420px;
+  /* Where the frame is narrower (e.g. on a phone), the dialog narrows to
+     fit. */
+  max-width: 100%;
+}
+
+.dialog-title {
+  margin: 0 0 6px;
+  font: 600 18px var(--font-ui);
+}
+
+.dialog-description {
+  margin: 0 0 20px;
+  font-size: 14px;
+  color: var(--fg-3);
+  line-height: 1.5;
+}
+
+.dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 24px;
+}
+
+.dialog--alert {
+  width: 380px;
+}
+
+.dialog--alert .dialog-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* The kit is only laid out for desktop. On a phone, a dialog is narrower
+   than its buttons' row, so the buttons wrap onto more lines. */
+@media (max-width: 640px) {
+  .dialog-actions {
+    flex-wrap: wrap;
+  }
+}
+
+/* In a .grid-2 column, a frame may narrow below its dialog's width, so the
+   dialog narrows to fit (e.g. on a phone). */
+.grid-2 > .mock-bg {
+  min-width: 0;
+}
+
+/* The kit's frames set their minimum height inline, by what they show. */
+.mock-bg--dialog {
+  min-height: 280px;
+}
+
+/* =========================================================================
    Utility: hidden on screen, still read by assistive tech (e.g. a label the
    design shows no room for).
    ========================================================================= */
