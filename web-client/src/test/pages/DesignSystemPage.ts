@@ -567,4 +567,14 @@ export class DesignSystemPage {
   get popover(): HTMLElement {
     return within(this.popoverCard).getByRole('dialog')
   }
+
+  get tooltipCard(): HTMLElement {
+    return within(this.overlaysSection).getByRole('article', {
+      name: 'Tooltip',
+    })
+  }
+
+  get tooltipCardHeading(): HTMLElement {
+    return within(this.tooltipCard).getByRole('heading', { level: 3 })
+  }
 }

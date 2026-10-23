@@ -948,6 +948,36 @@ describe('DesignSystem', () => {
     )
   })
 
+  it('has a Tooltip card after the Popover card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.tooltipCardHeading).toHaveTextContent('Tooltip')
+    expect(designSystemPage.tooltipCard).toHaveTextContent('on hover')
+    expect(
+      designSystemPage.popoverCard.compareDocumentPosition(
+        designSystemPage.tooltipCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's two tooltips, each describing its trigger", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const card = within(designSystemPage.tooltipCard)
+    expect(
+      card.getAllByRole('tooltip').map((tooltip) => tooltip.textContent),
+    ).toEqual(['Refresh standings', 'Highest rated player in this bracket'])
+    expect(
+      card.getByRole('button', {
+        name: 'Refresh',
+        description: 'Refresh standings',
+      }),
+    ).toHaveTextContent('↻')
+    expect(card.getByText('Seed 1')).toHaveAccessibleDescription(
+      'Highest rated player in this bracket',
+    )
+  })
+
   it.each([
     {
       title: 'April Spring Open',

@@ -25,6 +25,15 @@ describe('Badge', () => {
     })
   })
 
+  it('passes other props to its span', () => {
+    render(<Badge aria-describedby="tip">Seed 1</Badge>)
+
+    expect(screen.getByText('Seed 1')).toHaveAttribute(
+      'aria-describedby',
+      'tip',
+    )
+  })
+
   it('is the default variant unless given one', () => {
     render(<Badge>Seed 1</Badge>)
 

@@ -2600,6 +2600,52 @@ test.describe('Popover card', () => {
   })
 })
 
+// Nothing is hovered or focused first, so the triggers show their resting
+// styles.
+test.describe('Tooltip card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.tooltipCard).toHaveScreenshot(
+      'tooltip-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.tooltipCard).toHaveScreenshot(
+      'tooltip-card.png',
+    )
+  })
+})
+
+// Each bubble is out of the layout, so the screenshot only sees it if it
+// stays inside the card. It sits centered above its trigger, inside the
+// frame.
+test('each tooltip sits above its trigger, inside the frame', async ({
+  designSystemPage,
+}) => {
+  await designSystemPage.goto()
+  const frame = (await designSystemPage.tooltipFrame.boundingBox())!
+
+  for (const [trigger, text] of [
+    [designSystemPage.refreshButton, 'Refresh standings'],
+    [designSystemPage.seedBadge, 'Highest rated player in this bracket'],
+  ] as const) {
+    const box = (await trigger.boundingBox())!
+    const bubble = (await designSystemPage.tooltip(text).boundingBox())!
+    expect(bubble.x + bubble.width / 2, text).toBeCloseTo(
+      box.x + box.width / 2,
+      0,
+    )
+    expect(bubble.y + bubble.height, text).toBeLessThanOrEqual(box.y - 8)
+    expect(bubble.y, text).toBeGreaterThan(frame.y)
+    expect(bubble.x, text).toBeGreaterThan(frame.x)
+    expect(bubble.x + bubble.width, text).toBeLessThan(frame.x + frame.width)
+  }
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -3189,6 +3235,46 @@ test.describe('on a phone', () => {
     expect(popover.x + popover.width).toBeLessThanOrEqual(
       card.x + card.width - 33,
     )
+  })
+
+  // The badge's bubble is wider than the frame's room beside the button, so
+  // the triggers stack, each with its bubble above it, inside the card and
+  // below the frame's label.
+  test('the tooltip card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.tooltipCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.tooltipCard.boundingBox())!
+    for (const text of [
+      'Refresh standings',
+      'Highest rated player in this bracket',
+    ]) {
+      const bubble = (await designSystemPage.tooltip(text).boundingBox())!
+      // Inside the card's 1px border and 32px padding on each side.
+      expect(bubble.x, text).toBeGreaterThanOrEqual(card.x + 33)
+      expect(bubble.x + bubble.width, text).toBeLessThanOrEqual(
+        card.x + card.width - 33,
+      )
+    }
+    const label = (await designSystemPage.tooltipFrame
+      .locator('.mock-label')
+      .boundingBox())!
+    const refresh = (await designSystemPage
+      .tooltip('Refresh standings')
+      .boundingBox())!
+    const button = (await designSystemPage.refreshButton.boundingBox())!
+    const seed = (await designSystemPage
+      .tooltip('Highest rated player in this bracket')
+      .boundingBox())!
+    expect(refresh.y).toBeGreaterThan(label.y + label.height)
+    expect(seed.y).toBeGreaterThan(button.y + button.height)
   })
 })
 

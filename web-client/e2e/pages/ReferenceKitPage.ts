@@ -56,6 +56,7 @@ export class ReferenceKitPage {
   readonly sheetCard: Locator
   readonly drawerCard: Locator
   readonly popoverCard: Locator
+  readonly tooltipCard: Locator
   constructor(page: Page) {
     this.page = page
     this.header = page.getByRole('banner')
@@ -242,6 +243,13 @@ export class ReferenceKitPage {
       has: page.getByRole('heading', {
         level: 3,
         name: 'Popover',
+        exact: true,
+      }),
+    })
+    this.tooltipCard = overlaysSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Tooltip',
         exact: true,
       }),
     })

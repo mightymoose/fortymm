@@ -33,6 +33,7 @@ import { Switch } from '../components/Switch'
 import { type Column, Table } from '../components/Table'
 import { type Tab, Tabs } from '../components/Tabs'
 import { Textarea } from '../components/Textarea'
+import { Tooltip } from '../components/Tooltip'
 import { Toggle } from '../components/Toggle'
 import { ToggleGroup, ToggleGroupItem } from '../components/ToggleGroup'
 import { plainDate } from '../components/plainDate'
@@ -618,6 +619,32 @@ export function DesignSystem() {
               title="Skill rating"
               description="Your rating is calculated using a Glicko-2 system with a 0.06 volatility cap. Updates after every match."
             />
+          </div>
+        </ComponentCard>
+        {/* The icon's tooltip explains it, so the button's own name is
+            short. */}
+        <ComponentCard title="Tooltip" tag="on hover">
+          <div className="mock-bg mock-bg--tooltip">
+            <span className="mock-label">Tooltip</span>
+            <div className="row tooltip-demo">
+              <Tooltip text="Refresh standings">
+                {(tooltipId) => (
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    aria-label="Refresh"
+                    aria-describedby={tooltipId}
+                  >
+                    ↻
+                  </Button>
+                )}
+              </Tooltip>
+              <Tooltip text="Highest rated player in this bracket">
+                {(tooltipId) => (
+                  <Badge aria-describedby={tooltipId}>Seed 1</Badge>
+                )}
+              </Tooltip>
+            </div>
           </div>
         </ComponentCard>
       </Section>

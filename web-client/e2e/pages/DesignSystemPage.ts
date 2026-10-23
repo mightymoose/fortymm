@@ -87,6 +87,10 @@ export class DesignSystemPage {
   readonly drawer: Locator
   readonly popoverCard: Locator
   readonly popover: Locator
+  readonly tooltipCard: Locator
+  readonly tooltipFrame: Locator
+  readonly refreshButton: Locator
+  readonly seedBadge: Locator
   constructor(page: Page) {
     this.page = page
     this.loadingScreen = page.getByRole('status', { name: 'Loading FortyMM' })
@@ -298,6 +302,15 @@ export class DesignSystemPage {
     this.popover = this.popoverCard.getByRole('dialog', {
       name: 'Skill rating',
     })
+    this.tooltipCard = this.overlaysSection.getByRole('article', {
+      name: 'Tooltip',
+      exact: true,
+    })
+    this.tooltipFrame = this.tooltipCard.locator('.mock-bg')
+    this.refreshButton = this.tooltipCard.getByRole('button', {
+      name: 'Refresh',
+    })
+    this.seedBadge = this.tooltipCard.getByText('Seed 1', { exact: true })
   }
 
   // A component card's title, in its header.
@@ -500,6 +513,11 @@ export class DesignSystemPage {
   // The menubar's item named `name`, e.g. "File".
   menubarItem(name: string): Locator {
     return this.menubar.getByRole('menuitem', { name, exact: true })
+  }
+
+  // The tooltip card's tooltip reading `text`.
+  tooltip(text: string): Locator {
+    return this.tooltipCard.getByRole('tooltip').filter({ hasText: text })
   }
 
   // Clicks the middle of the text `name` in `card` with a plain mouse click.
