@@ -60,7 +60,6 @@ create table account_emails (
 create table players (
   id uuid primary key default gen_random_uuid(),
   display_name text not null,
-  date_of_birth date,
   merged_into uuid references players (id),
   created_at timestamptz not null default now()
 );
@@ -83,6 +82,7 @@ create unique index one_self_player_per_account
   on player_managers (account_id) where relationship = 'self';
 create unique index one_self_account_per_player
   on player_managers (player_id) where relationship = 'self';
+create unique index unique_display_name on players (lower(display_name));
 
 create table sessions (
   token_hash bytea primary key,          -- sha256 of the cookie value
@@ -292,7 +292,7 @@ Player merge changes no game and no rating. Each game stays recorded with the tw
 
 The person who asks must manage both players, and picks which one carries on. A merge of `source` into `target`:
 
-1. Refuses if `source` and `target` ever played each other. After a merge, that game would show one person playing themselves, and its rating change would come from a game against oneself. Both players stay separate, and the duplicate flag still catches a double entry.
+1. Refuses if `source` and `target` ever played each other. After a merge, that game would show one person playing themselves, and its rating change would come from a game against oneself. Both players stay separate, and each keeps its own entries.
 2. For each event where both players have an entry:
    - If the draw is not made, the merge keeps one entry and withdraws the other. The withdrawn entry stays as a row with a withdrawn status. It keeps the paid entry if only one is paid, or else the older entry.
    - If the draw is made, the merge refuses. The tournament director withdraws one entry first.
@@ -312,7 +312,7 @@ An entry on a guest account is reachable from one browser only. Three rules keep
 
 - The "Not mine" choice after adoption refuses for any player with an entry or a payment.
 - The stale-account cleanup never deletes a guest account whose players have an open entry, or that a payment names as the payer.
-- The duplicate flag (next section) is the guard against one person entering from two devices.
+- The checks in the next section catch one person entered twice where the data allows it.
 
 We considered requiring sign-in before the first entry. That removes guest entries on forgotten accounts at the source. We rejected it because it adds a sign-in step to the first entry.
 
@@ -323,20 +323,23 @@ Events and entries must keep these invariants when they arrive:
 - A payment references the payer `account_id` and the `entry_id`, and its rule is `KEPT_AS_EVIDENCE`.
 - Each new table has an `OWNERSHIP_RULES` entry.
 
-### Flag possible duplicates in an event
+### Catch one person entered twice
 
-`UNIQUE (event_id, player_id)` cannot catch two players who are one person. An entry needs a player with a real `display_name` and a `date_of_birth`, and the entry form asks for both if the player lacks them. A generated name such as "Guest 4821" cannot enter. At entry time, the API compares the new player's normalized `display_name` and `date_of_birth` with the other entries in the event.
+Display names are unique, ignoring case. The API gives each guest player a generated name, such as "Guest 4821", and picks another number if that name is taken. Unique names mean two players never look alike. They also mean a name cannot reveal that two players are one person, because that person's two players have two different names. So `UNIQUE (event_id, player_id)` is the only check the database can make on its own.
 
-- Same account, same name and date of birth: the API refuses and names the existing entry. Twins with the same name do not happen often enough to design for.
-- Different accounts: the API accepts the entry and flags both for the tournament director. It does not show the other account to the entrant.
+These checks remain:
 
-The director must resolve every flagged pair before making the draw, by withdrawing one entry or marking the pair as two different people. Otherwise the draw could put one person against themselves. Only a manager of both players can run a player merge.
+- **An unanswered "Is this you?" question.** Suppose an account has an adopted player with `adopted_from` set, and its self player has an entry in the event. The API then refuses to enter the adopted player, and asks the question first. The same holds the other way round.
+- **A yes before the draw.** The player merge withdraws one of the two entries.
+- **Guest entries are visible to the director.** The director's entry list marks each entry on a guest account. Those are the entries that can turn out to be someone's second player.
+
+One case has no automatic check. A person enters on device 1 as a guest, then enters again on device 2 from another account, before device 1 signs in. The event then has two entries under two names. When device 1 signs in, adoption and the "Is this you?" question remove the extra entry, if it is before the draw. After the draw, the director withdraws one entry. Only a manager of both players can run a player merge.
 
 ## Edge cases
 
 ### Your scenario: a guest plays, enters a tournament and signs in
 
-Steps: a guest plays games as Guest 4821. The guest enters tournament T, and the entry form renames the player to Ryan Morris with a date of birth. Then they notice they are not signed in, and sign in. The table still calls the guest's player Guest 4821, to tell it apart from the existing account's player.
+Steps: a guest plays games as Guest 4821. The guest enters tournament T as Guest 4821. Then they notice they are not signed in, and sign in.
 
 | What they do next | Result |
 | --- | --- |
@@ -344,7 +347,7 @@ Steps: a guest plays games as Guest 4821. The guest enters tournament T, and the
 | Sign in on the same browser to an existing account with no self player | `AdoptGuest`. The app asks "Is Guest 4821 you?" A yes makes Guest 4821 the self player. One entry. |
 | Sign in on the same browser to an existing account whose self player is Ryan | `AdoptGuest`. Guest 4821 becomes managed. The app asks "Is Guest 4821 you?" A yes starts a player merge. If Ryan also has an entry in T, the merge withdraws one before the draw and refuses after it. |
 | Same as above, but Guest 4821 played Ryan before signing in | The merge refuses, because the two players played each other. Both stay players on the account, and both keep their games. |
-| Sign in on another device as Ryan and enter T again | The guest account stays alive on the first device. T has two entries for one person. Both entry forms asked for a name and date of birth, so the duplicate flag shows both to the director. When the first device signs in, adoption and the merge prompt remove the duplicate. |
+| Sign in on another device as Ryan and enter T again | The guest account stays alive on the first device. T has two entries for one person, under two names. No check catches this. When the first device signs in, adoption and the "Is this you?" question remove the extra entry before the draw. After the draw, the director withdraws one. |
 | Clear cookies before signing in | The guest account is unreachable. Guest 4821 keeps the entry, with no manager. The director sees it and can withdraw it. |
 
 ### Other cases
@@ -356,7 +359,7 @@ Steps: a guest plays games as Guest 4821. The guest enters tournament T, and the
 | A person signs in with Google, and later with an email code for the same address | Step 8 links by verified email. Both logins reach one account. |
 | A verified account signs out, a child plays, and the parent signs back in | The child's games are on a new guest account. Adoption moves them to the parent. The parent answers "No, it is someone else", and the child's player stays managed. |
 | Someone signs in on a library computer that another person's guest account used | Adoption moves the other person's player. "Not mine" removes it from the account. |
-| Two parents each create the same child | Two players exist. If both parents enter the child in one event, the duplicate flag shows both to the director. A co-manager invite lets the second parent manage the first parent's player instead. |
+| Two parents each create the same child | Two players exist, with two different names. If both parents enter the child in one event, no check catches it, and the director withdraws one. A co-manager invite lets the second parent manage the first parent's player instead. |
 | A child grows up and wants their own account | The parent invites the child's verified account to become a manager with relationship `self`. The parent can then remove their own `player_managers` row. |
 | A verified account signs in with a new email on purpose | `CreateAccount`. The person gets a second, empty account. "Add another login" is the way to attach an email to an account. |
 | Two tabs: one creates a player while the other finishes adoption | The row locks serialize them. The new player ends up on the target account. |
@@ -407,7 +410,7 @@ Each decision below has a default that the design already uses.
 
 - **Contacting guest entrants.** A guest entry has no email, so a director cannot send it a schedule change. Default: the director sees which entries are on guest accounts, and the entrant sees changes on the event page. The other choice asks for a contact email on the entry form. That email would not verify the account.
 - **The adopted player's role.** Default: an adopted player always arrives as managed, and the app asks "Is this you?" The other choice makes it the self player or merges it at once. That skips a question, but it is wrong for a child who played on a parent's computer.
-- **Duplicate key.** Default: normalized name and date of birth, both required to enter. Age-group events need the date of birth anyway. A typo in either one defeats the check.
+- **One person entered from two accounts.** Default: no automatic check, because unique display names cannot match. The other choice adds a second attribute, such as date of birth, and flags entries in one event that share it. Age-group events would need the date of birth anyway.
 - **Guest lifetime.** Default: 90 days idle. A shorter time loses accounts of people who play rarely.
 - **Lost guest accounts.** A guest who clears cookies or changes browsers without signing in loses the account. Default: accept this, and show "Sign in to keep your games" after the first game.
 - **Verified account merge.** Default: not supported. A person with two verified accounts keeps both.
