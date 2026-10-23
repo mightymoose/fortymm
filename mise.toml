@@ -20,6 +20,7 @@ trap 'docker compose rm --force --stop >/dev/null 2>&1' EXIT INT TERM
 ./bin/mise run api:smoke
 ./bin/mise run web-client:ci
 ./bin/mise run openapi:check
+./bin/mise run openapi:breaking
 ./bin/mise run web-client:e2e
 """
 
@@ -37,6 +38,44 @@ if [ -n "$(git status --porcelain -- $files)" ]; then
   exit 1
 fi
 """
+
+[tasks."openapi:breaking"]
+description = "Fail if api/openapi.json breaks the published API compared with the main it builds on, except for the breaks this change adds to api/openapi-breaking-ignore.txt (start the stack with `mise run ci`)"
+# git runs on the host: in a git worktree, .git points outside the bind mount.
+# OPENAPI_BASE is the commit main pointed at before a push to main (CI sets it).
+run = '''
+ignore=api/openapi-breaking-ignore.txt
+case "${OPENAPI_BASE:-}" in
+  "" | *[!0]*) ;;
+  *) OPENAPI_BASE= ;;
+esac
+base=${OPENAPI_BASE:-$(git merge-base HEAD origin/main)}
+if ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+  echo "The base commit $base isn't in this clone, so the breaking-change check can't run." >&2
+  exit 1
+fi
+if ! git cat-file -e "$base:api/openapi.json" 2>/dev/null; then
+  echo "The base commit $base has no api/openapi.json, so there's nothing to check for breaking changes."
+  exit 0
+fi
+echo "Checking api/openapi.json for breaking changes since $base"
+# Inside the checkout, so the dev container sees it through the bind mount.
+tmp=$(mktemp -d .openapi-breaking.XXXXXX)
+trap 'rm -rf "$tmp"' EXIT INT TERM
+git show "$base:api/openapi.json" >"$tmp/base.json"
+# Only the lines this change adds count, so an override expires once it's on
+# main and can't hide a later break.
+git diff "$base" -- "$ignore" | sed -n 's/^+\([^+#].*\)/\1/p' >"$tmp/ignore.txt"
+if [ -s "$tmp/ignore.txt" ]; then
+  echo "Ignoring the breaks this change adds to $ignore:"
+  cat "$tmp/ignore.txt"
+fi
+docker compose exec -T dev /app/bin/docker-entrypoint oasdiff breaking \
+  "$tmp/base.json" api/openapi.json --fail-on ERR --err-ignore "$tmp/ignore.txt" || {
+  echo "api/openapi.json breaks /v1. Put a deliberate break in a new API version, or, before the first app release, add the error's line (METHOD PATH description) to $ignore." >&2
+  exit 1
+}
+'''
 
 [tasks."api:ci"]
 description = "Lint, typecheck and test the API inside the running api container (start it with `mise run ci`)"

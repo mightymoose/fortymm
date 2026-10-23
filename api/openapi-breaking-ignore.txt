@@ -1,0 +1,4 @@
+# Deliberate breaks to /v1 that openapi:breaking lets through, one per line,
+# as oasdiff prints them: METHOD PATH description. Only the lines a change adds
+# count, so each one covers only the change that adds it. Allowed only until
+# the first app release (see CLAUDE.md).
