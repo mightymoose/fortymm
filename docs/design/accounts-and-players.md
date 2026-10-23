@@ -5,9 +5,9 @@ Every visitor gets an account the first time the app loads. They can play games 
 ## Terms
 
 - **Account.** The thing that signs in, pays and gets email. A row in `accounts`.
-- **Guest account.** An account with no identity. Only the session cookie in one browser reaches it.
-- **Verified account.** An account with one or more identities. Signing in from any browser reaches it.
-- **Identity.** An Auth0 login with a verified email, stored by its `sub` claim. It belongs to exactly one account.
+- **Guest account.** An account with no email. Only the session cookie in one browser reaches it.
+- **Verified account.** An account with an email. Signing in from any browser reaches it.
+- **Identity.** An Auth0 login, stored by its `sub` claim. It belongs to exactly one account, and its verified email is that account's email. One account can have several identities for its one email, such as Google and an email code.
 - **Player.** The person who plays. Games, ratings and tournament entries reference a player, never an account. A row in `players`.
 - **Manager.** An account that controls a player. One player can have more than one manager, such as two parents.
 - **Self player.** The player who is the account holder. An account has at most one self player. A parent who does not play has none.
@@ -63,6 +63,7 @@ No Auth0 token ever reaches browser JavaScript. Guest and verified accounts use 
 ```sql
 create table accounts (
   id uuid primary key default gen_random_uuid(),
+  email text unique check (email = lower(email)),  -- null for a guest account
   adopted_into uuid references accounts (id),
   created_at timestamptz not null default now(),
   last_seen_at timestamptz not null default now()
@@ -72,11 +73,6 @@ create table identities (
   auth0_sub text primary key,
   account_id uuid not null references accounts (id) on delete cascade,
   created_at timestamptz not null default now()
-);
-
-create table account_emails (
-  email text primary key,                -- verified by Auth0, lowercased
-  account_id uuid not null references accounts (id) on delete cascade
 );
 
 create table players (
@@ -116,7 +112,6 @@ create table sessions (
 create table login_attempts (
   state text primary key,
   session_token_hash bytea not null references sessions (token_hash) on delete cascade,
-  intent text not null check (intent in ('sign_in', 'add_login')),
   code_verifier text not null,
   nonce text not null,
   return_to text not null,
@@ -124,11 +119,13 @@ create table login_attempts (
 );
 ```
 
-Deleting an account cascades to its sessions, identities, emails and `player_managers` rows. It never cascades to `players`. The `players_are_permanent` trigger makes any `DELETE` on `players` fail, so a bug or a manual query cannot remove one either.
+Deleting an account cascades to its sessions, identities and `player_managers` rows. It never cascades to `players`. The `players_are_permanent` trigger makes any `DELETE` on `players` fail, so a bug or a manual query cannot remove one either.
 
 `player_managers` is a join table from the start, even though the first UI allows one manager per player. Two parents who each create the same child would otherwise make two players and two entries. A later change from one manager to many would rewrite every query that reads the manager.
 
-The two partial unique indexes make "two self players in one account" impossible in the database. The primary key on `account_emails.email` makes "one email, two accounts" impossible too.
+The two partial unique indexes make "two self players in one account" impossible in the database. The unique constraint on `accounts.email` makes "one email, two accounts" impossible too. Postgres allows many `NULL` values in a unique column, so any number of guest accounts can exist.
+
+The API stores every email in lowercase. It lowercases the address once, where it reads the ID token, and the `email = lower(email)` check rejects any write that skips that step.
 
 In Python, the API brands the ids and reads an account into a discriminated union:
 
@@ -143,7 +140,7 @@ class GuestAccount:
 @dataclass(frozen=True)
 class VerifiedAccount:
     id: AccountId
-    emails: tuple[str, ...]  # never empty
+    email: Email  # lowercase, parsed from the ID token
 
 Account = GuestAccount | VerifiedAccount
 ```
@@ -160,7 +157,6 @@ OWNERSHIP_RULES: dict[tuple[str, str], OwnershipRule] = {
     ("player_managers", "player_id"): OwnershipRule.STAYS_ON_PLAYER_MERGE,
     ("sessions", "account_id"): OwnershipRule.MOVES_ON_ADOPT,
     ("identities", "account_id"): OwnershipRule.GUEST_HAS_NONE,
-    ("account_emails", "account_id"): OwnershipRule.GUEST_HAS_NONE,
     ("players", "merged_into"): OwnershipRule.SET_BY_PLAYER_MERGE,
     ("accounts", "adopted_into"): OwnershipRule.SET_BY_ADOPT,
     # Later: ("games", "player_a_id"): RESOLVED_THROUGH_MERGED_INTO,
@@ -201,15 +197,15 @@ The Worker forwards every request header, `Cookie` included, to the API (`new He
 
 Adding an email and signing in are one flow. The person types an email at Auth0 and proves it with a code, or uses Google. The API then decides what the identity means.
 
-1. The web-client links to `GET /api/v1/auth/login?return_to=/some/path`. The "Add another login" button in settings adds `intent=add_login`.
+1. The web-client links to `GET /api/v1/auth/login?return_to=/some/path`.
 2. If the request has no valid session cookie, the API first creates a guest account and a session, as `POST /v1/session` does. A stale tab or a shared link can start a sign-in with no session.
-3. The API makes a `state`, a `nonce` and a PKCE `code_verifier`. It stores them in `login_attempts` with the intent, tied to the current session, for 10 minutes.
+3. The API makes a `state`, a `nonce` and a PKCE `code_verifier`. It stores them in `login_attempts`, tied to the current session, for 10 minutes.
 4. The API answers 302 to Auth0's `/authorize` with `response_mode=query`. If the current account is verified, it also sends `prompt=login`. Without it, Auth0's own session signs the same person in again with no screen. The `redirect_uri` is `https://<X-Forwarded-Host>/api/v1/auth/callback`.
 5. The person signs in at Auth0. Auth0 redirects to the callback with `code` and `state`. A `SameSite=Lax` cookie rides this cross-site top-level `GET`. It would not ride a cross-site `form_post`, so the flow pins `response_mode=query`.
 6. The API finds the `login_attempts` row by `state` and checks that it belongs to the current session. Then it deletes the row.
 7. The API exchanges the code with its client secret and verifies the ID token against Auth0's JWKS, including the `nonce`. If `email_verified` is not `true`, the API stops and the account stays as it was.
-8. The API finds the identity's owner: the account with that `sub`, or else the account in `account_emails` for the email.
-9. The API resolves the login (next section), applies the outcome and rotates the session token. All of this runs in one transaction. Every outcome that attaches an email inserts into `account_emails`. If two browsers verify the same new email at once, the primary key fails one insert. That transaction rolls back and retries from step 8, where it now finds an owner.
+8. The API lowercases the email and finds the identity's owner: the account with that `sub`, or else the account with that `email`. If it finds the owner by email, the `sub` is new, and the API attaches it to the owner as a second identity.
+9. The API resolves the login (next section), applies the outcome and rotates the session token. All of this runs in one transaction. `VerifyInPlace` and `CreateAccount` write the email to `accounts.email`. If two browsers verify the same new email at once, the unique constraint fails one write. That transaction rolls back and retries from step 8, where it now finds an owner.
 10. The API answers 302 to `return_to`. It accepts `return_to` only if it starts with `/` and its second character is neither `/` nor `\`. Browsers read `//` and `/\` as the start of another host. Any other value becomes `/`.
 
 Auth0 checks the email before the callback runs. The API therefore never holds a pending, unverified email. An unverified email cannot make a guest account look verified, which was the bug in [mightymoose/fortymm-real#1294](https://github.com/mightymoose/fortymm-real/issues/1294). A guest who types an email that another account owns gets a code in that inbox, which only the owner can read. If the guest cannot finish, nothing changes.
@@ -239,41 +235,23 @@ class SwitchAccount:     # verified account, identity belongs to another account
     to: AccountId
 
 @dataclass(frozen=True)
-class CreateAccount:     # verified account, new identity, intent sign_in
+class CreateAccount:     # verified account, new identity
     pass
 
-@dataclass(frozen=True)
-class AddLogin:          # verified account, new identity, intent add_login
-    account: AccountId
+LoginOutcome = VerifyInPlace | AlreadySignedIn | AdoptGuest | SwitchAccount | CreateAccount
 
-@dataclass(frozen=True)
-class EmailTaken:        # verified account, identity belongs to another account, intent add_login
-    pass
-
-LoginOutcome = (
-    VerifyInPlace
-    | AlreadySignedIn
-    | AdoptGuest
-    | SwitchAccount
-    | CreateAccount
-    | AddLogin
-    | EmailTaken
-)
-
-def resolve_login(current: Account, owner: AccountId | None, intent: Intent) -> LoginOutcome: ...
+def resolve_login(current: Account, owner: AccountId | None) -> LoginOutcome: ...
 ```
 
 | Current account | Identity owner | Outcome |
 | --- | --- | --- |
-| Guest | Nobody | `VerifyInPlace`. The API attaches the identity. The account keeps its `id` and its self player. |
+| Guest | Nobody | `VerifyInPlace`. The API sets the account's `email` and attaches the identity. The account keeps its `id` and its self player. |
 | Any | The current account | `AlreadySignedIn`. Nothing changes. |
 | Guest | Another account | `AdoptGuest`. See the next section. |
-| Verified | Another account, intent `sign_in` | `SwitchAccount`. The session points at the other account. Neither account changes. |
-| Verified | Another account, intent `add_login` | `EmailTaken`. Nothing changes. Settings shows "That email belongs to another account." |
-| Verified | Nobody, intent `sign_in` | `CreateAccount`. The API creates a new verified account with the identity and points the session at it. |
-| Verified | Nobody, intent `add_login` | `AddLogin`. The API attaches the identity to the current account. |
+| Verified | Another account | `SwitchAccount`. The session points at the other account. Neither account changes. |
+| Verified | Nobody | `CreateAccount`. The API creates a new verified account with the email and the identity, and points the session at it. |
 
-A verified account never gains an email by accident. Only the explicit "Add another login" button attaches a second identity.
+A verified account's email never changes. A login with a different email always reaches a different account.
 
 Two verified accounts never merge. That needs proof of both inboxes in one flow, and this design does not include it.
 
@@ -392,7 +370,7 @@ Each event has a set of entry requirements. A new event has none, so a quick tou
 
 ```python
 class EntryRequirement(StrEnum):
-    VERIFIED_ACCOUNT = "verified_account"  # the entrant's account has an identity
+    VERIFIED_ACCOUNT = "verified_account"  # the entrant's account has an email
     DATE_OF_BIRTH = "date_of_birth"        # the player has a date of birth
     DUPLICATE_CHECK = "duplicate_check"    # flag entries with the same date of birth and a similar name
 
@@ -435,7 +413,7 @@ Steps: a guest plays games as Guest 4821. The guest enters tournament T as Guest
 | Someone signs in on a library computer that another person's guest account used | Adoption moves the other person's player. "Not mine" removes it from the account. |
 | Two parents each create the same child | Two players exist, with two different names. If both parents enter the child in one event, no check catches it, and the director withdraws one. A co-manager invite lets the second parent manage the first parent's player instead. |
 | A child grows up and wants their own account | The parent invites the child's verified account to become a manager with relationship `self`. The parent can then remove their own `player_managers` row. |
-| A verified account signs in with a new email on purpose | `CreateAccount`. The person gets a second, empty account. "Add another login" is the way to attach an email to an account. |
+| A verified account signs in with a new email on purpose | `CreateAccount`. The person gets a second, empty account. An account has one email, so a new email never joins an existing account. |
 | Two tabs: one creates a player while the other finishes adoption | The row locks serialize them. The new player ends up on the target account. |
 | The callback is replayed, or the API crashes mid-adoption | The transaction either completed or did nothing. A replay finds no `login_attempts` row and changes nothing. |
 | A guest account stays idle for 90 days | If its players have no open entry and no payment names it, the cleanup deletes the account and its sessions. Its players stay, with no manager. |
