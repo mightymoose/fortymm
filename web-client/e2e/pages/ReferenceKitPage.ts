@@ -48,6 +48,7 @@ export class ReferenceKitPage {
   readonly breadcrumbCard: Locator
   readonly paginationCard: Locator
   readonly navMenuCard: Locator
+  readonly menubarCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -203,6 +204,13 @@ export class ReferenceKitPage {
       has: page.getByRole('heading', {
         level: 3,
         name: 'Navigation Menu',
+        exact: true,
+      }),
+    })
+    this.menubarCard = navSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Menubar',
         exact: true,
       }),
     })

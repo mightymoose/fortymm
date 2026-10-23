@@ -2358,6 +2358,117 @@ test.describe('Navigation Menu', () => {
   })
 })
 
+// Nothing is hovered or focused first, so File shows active, as in the kit.
+test.describe('Menubar card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.menubarCard).toHaveScreenshot(
+      'menubar-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.menubarCard).toHaveScreenshot(
+      'menubar-card.png',
+    )
+  })
+})
+
+// The kit's menubar is static, with no focus style, so the tests below are
+// the app's alone.
+test.describe('Menubar', () => {
+  const orange = 'rgb(255, 122, 26)'
+  const none = 'rgba(0, 0, 0, 0)'
+  const hover = 'rgba(255, 255, 255, 0.04)'
+  // --fg-1 and --fg-2.
+  const fg1 = 'rgb(247, 248, 251)'
+  const fg2 = 'rgb(228, 231, 239)'
+
+  test.beforeEach(async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+  })
+
+  // The screenshot can't see the active look: --bg-hover is white at 4%,
+  // under its color threshold.
+  test('File shows active until the bar takes the focus', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const file = designSystemPage.menubarItem('File')
+    const edit = designSystemPage.menubarItem('Edit')
+    await expect(file).toHaveCSS('background-color', hover)
+    await expect(file).toHaveCSS('color', fg1)
+    await expect(edit).toHaveCSS('background-color', none)
+    await expect(edit).toHaveCSS('color', fg2)
+
+    await file.focus()
+    await page.keyboard.press('Shift+Tab')
+    await page.keyboard.press('Tab')
+
+    await expect(file).toBeFocused()
+    await expect(file).toHaveCSS('background-color', none)
+    await expect(file).toHaveCSS('color', fg2)
+  })
+
+  test('hovering an item lightens it', async ({ designSystemPage }) => {
+    const edit = designSystemPage.menubarItem('Edit')
+
+    await edit.hover()
+
+    await expect(edit).toHaveCSS('background-color', hover)
+    await expect(edit).toHaveCSS('color', fg1)
+  })
+
+  // Natively the arrows, Home and End scroll the page.
+  test("the arrow keys, Home and End move the focus, and don't scroll the page", async ({
+    designSystemPage,
+    page,
+  }) => {
+    const file = designSystemPage.menubarItem('File')
+    await file.evaluate((item) => item.scrollIntoView({ block: 'center' }))
+    await file.focus()
+    const top = await page.locator('html').evaluate((html) => html.scrollTop)
+    expect(top).toBeGreaterThan(0)
+
+    for (const [key, name] of [
+      ['ArrowRight', 'Edit'],
+      ['End', 'Help'],
+      ['ArrowRight', 'File'],
+      ['ArrowLeft', 'Help'],
+      ['Home', 'File'],
+    ]) {
+      await page.keyboard.press(key)
+      await expect(designSystemPage.menubarItem(name), key).toBeFocused()
+      expect(
+        await page.locator('html').evaluate((html) => html.scrollTop),
+        key,
+      ).toBe(top)
+    }
+  })
+
+  test('keyboard focus shows the outline, a click none', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const file = designSystemPage.menubarItem('File')
+    const edit = designSystemPage.menubarItem('Edit')
+    const view = designSystemPage.menubarItem('View')
+    await file.focus()
+
+    await page.keyboard.press('ArrowRight')
+    await expect(edit).toBeFocused()
+    await expect(edit).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(edit).toHaveCSS('outline-offset', '2px')
+
+    await view.click()
+    await expect(view).toBeFocused()
+    await expect(view).toHaveCSS('outline-style', 'none')
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -2699,6 +2810,28 @@ test.describe('on a phone', () => {
     expect(panel.x + panel.width).toBeLessThanOrEqual(card.x + card.width - 33)
     expect(second.x).toBe(first.x)
     expect(second.y).toBeGreaterThan(first.y)
+  })
+
+  // The bar is wider than the card's content, so its items wrap onto more
+  // lines, inside the card.
+  test('the menubar card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.menubarCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.menubarCard.boundingBox())!
+    const bar = (await designSystemPage.menubar.boundingBox())!
+    const first = (await designSystemPage.menubarItem('File').boundingBox())!
+    const last = (await designSystemPage.menubarItem('Help').boundingBox())!
+    // Inside the card's 1px border and 32px padding on the right.
+    expect(bar.x + bar.width).toBeLessThanOrEqual(card.x + card.width - 33)
+    expect(last.y).toBeGreaterThan(first.y)
   })
 
   // The cards share the .grid-2 layout with the input card's fields, so

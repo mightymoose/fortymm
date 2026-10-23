@@ -2092,6 +2092,50 @@ h4, .h4 {
 }
 
 /* =========================================================================
+   Menubar (the reference kit's .menubar, .mi and .mi.on): the kit's items
+   are spans. Here they're buttons, reset to match. .menubar-item--active
+   is the kit's .on, the look of an item under the pointer. The items take
+   the .button focus outline, keyboard focus only. The kit gives them none.
+   ========================================================================= */
+.menubar {
+  display: inline-flex;
+  background: var(--ink-900);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  padding: 4px;
+  gap: 2px;
+}
+
+.menubar-item {
+  font: 500 13px var(--font-ui);
+  margin: 0;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  cursor: pointer;
+  color: var(--fg-2);
+}
+
+.menubar-item:hover, .menubar-item--active {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+
+.menubar-item:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+/* The kit is only laid out for desktop. On a phone, its bar is wider than
+   the card, so the items wrap onto more lines. */
+@media (max-width: 640px) {
+  .menubar {
+    flex-wrap: wrap;
+  }
+}
+
+/* =========================================================================
    Utility: hidden on screen, still read by assistive tech (e.g. a label the
    design shows no room for).
    ========================================================================= */

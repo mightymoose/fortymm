@@ -485,4 +485,17 @@ export class DesignSystemPage {
   get navMenuPanel(): HTMLElement {
     return within(this.navMenuCard).getByRole('list', { name: 'Product' })
   }
+
+  get menubarCard(): HTMLElement {
+    return within(this.navSection).getByRole('article', { name: 'Menubar' })
+  }
+
+  get menubarCardHeading(): HTMLElement {
+    return within(this.menubarCard).getByRole('heading', { level: 3 })
+  }
+
+  // The menubar's items, in order.
+  get menubarItems(): HTMLElement[] {
+    return within(this.menubarCard).getAllByRole('menuitem')
+  }
 }

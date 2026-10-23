@@ -72,6 +72,8 @@ export class DesignSystemPage {
   readonly pagination: Locator
   readonly navMenuCard: Locator
   readonly navMenuPanel: Locator
+  readonly menubarCard: Locator
+  readonly menubar: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -244,6 +246,11 @@ export class DesignSystemPage {
       exact: true,
     })
     this.navMenuPanel = this.navMenuCard.getByRole('list', { name: 'Product' })
+    this.menubarCard = this.navSection.getByRole('article', {
+      name: 'Menubar',
+      exact: true,
+    })
+    this.menubar = this.menubarCard.getByRole('menubar', { name: 'App' })
   }
 
   // A component card's title, in its header.
@@ -441,6 +448,11 @@ export class DesignSystemPage {
   // The navigation menu panel's link titled `title`, e.g. "Club tools".
   navMenuLink(title: string): Locator {
     return this.navMenuPanel.getByRole('link').filter({ hasText: title })
+  }
+
+  // The menubar's item named `name`, e.g. "File".
+  menubarItem(name: string): Locator {
+    return this.menubar.getByRole('menuitem', { name, exact: true })
   }
 
   // Clicks the middle of the text `name` in `card` with a plain mouse click.

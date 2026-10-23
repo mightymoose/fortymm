@@ -12,6 +12,7 @@ import { ComponentCard } from '../components/ComponentCard'
 import { DatePicker } from '../components/DatePicker'
 import { Field, FieldHelp, Label } from '../components/Field'
 import { Input } from '../components/Input'
+import { Menubar } from '../components/Menubar'
 import {
   type NavigationMenuLink,
   NavigationMenuPanel,
@@ -500,6 +501,14 @@ export function DesignSystem() {
             <span className="mock-label">Hovered: Product</span>
             <NavigationMenuPanel label="Product" items={productLinks} />
           </div>
+        </ComponentCard>
+        {/* File shows active, as in the reference. Its menu isn't shown. */}
+        <ComponentCard title="Menubar" tag="desktop app">
+          <Menubar
+            label="App"
+            items={['File', 'Edit', 'View', 'Tournament', 'Help']}
+            activeIndex={0}
+          />
         </ComponentCard>
       </Section>
     </>

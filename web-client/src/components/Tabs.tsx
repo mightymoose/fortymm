@@ -1,18 +1,10 @@
 import { useId, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { rowKeys } from './rowKeys'
 
 export type Tab = {
   value: string
   label: string
   panel: ReactNode
-}
-
-// Where each key moves the focus in a row of `count` tabs from `index`,
-// wrapping at the ends.
-const moves: Record<string, (index: number, count: number) => number> = {
-  ArrowLeft: (index, count) => (index - 1 + count) % count,
-  ArrowRight: (index, count) => (index + 1) % count,
-  Home: () => 0,
-  End: (_, count) => count - 1,
 }
 
 // A row of tabs, each showing its own panel below the row, as in the
@@ -39,7 +31,7 @@ export function Tabs({
 
   function onKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
     if (event.altKey || event.ctrlKey || event.metaKey) return
-    const move = moves[event.key]
+    const move = rowKeys[event.key]
     if (!move) return
     event.preventDefault()
     const next = tabs[move(index, tabs.length)]

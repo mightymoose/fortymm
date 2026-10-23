@@ -777,6 +777,34 @@ describe('DesignSystem', () => {
     ])
   })
 
+  it('has a Menubar card after the Navigation Menu card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.menubarCardHeading).toHaveTextContent('Menubar')
+    expect(designSystemPage.menubarCard).toHaveTextContent('desktop app')
+    expect(
+      designSystemPage.navMenuCard.compareDocumentPosition(
+        designSystemPage.menubarCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's five menus, File active", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const items = designSystemPage.menubarItems
+    expect(items.map((item) => item.textContent)).toEqual([
+      'File',
+      'Edit',
+      'View',
+      'Tournament',
+      'Help',
+    ])
+    expect(
+      items.filter((item) => item.classList.contains('menubar-item--active')),
+    ).toEqual([items[0]])
+  })
+
   it.each([
     {
       title: 'April Spring Open',
