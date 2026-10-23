@@ -1,3 +1,4 @@
+import { Badge } from '../components/Badge'
 import { Button } from '../components/Button'
 import { Card } from '../components/Card'
 import { Checkbox } from '../components/Checkbox'
@@ -242,6 +243,15 @@ export function DesignSystem() {
             >
               Top 8 advance to the regional bracket. Limited to USATT members.
             </Card>
+          </div>
+        </ComponentCard>
+        <ComponentCard title="Badge" tag="5 variants">
+          <div className="row">
+            <Badge>Seed 1</Badge>
+            <Badge variant="secondary">Doubles</Badge>
+            <Badge variant="outline">Pending</Badge>
+            <Badge variant="destructive">Disqualified</Badge>
+            <Badge variant="live">Live · Court 3</Badge>
           </div>
         </ComponentCard>
       </Section>

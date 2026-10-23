@@ -131,6 +131,11 @@ h4, .h4 {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.6; transform: scale(0.88); }
 }
+@media (prefers-reduced-motion: reduce) {
+  .ball-dot--live {
+    animation: none;
+  }
+}
 
 /* Dotted-40mm grid texture, used as hero background */
 .fortymm-grid-bg {
@@ -1485,6 +1490,48 @@ h4, .h4 {
 
 .card--featured .card-title {
   color: var(--ball-500);
+}
+
+/* =========================================================================
+   Badge (the reference kit's .badge and its .badge-default,
+   .badge-secondary, .badge-outline, .badge-destructive and .badge-live
+   variants). The font shorthand resets the line height, as the kit's does.
+   ========================================================================= */
+.badge {
+  font: 500 11px var(--font-ui);
+  padding: 3px 9px;
+  border-radius: var(--r-pill);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  letter-spacing: 0.02em;
+}
+
+.badge--default {
+  background: var(--ball-500);
+  color: var(--ink-950);
+}
+
+.badge--secondary {
+  background: var(--ink-700);
+  color: var(--fg-1);
+}
+
+.badge--outline {
+  background: transparent;
+  border: 1px solid var(--border-default);
+  color: var(--fg-2);
+}
+
+.badge--destructive {
+  background: var(--loss);
+  color: white;
+}
+
+.badge--live {
+  background: var(--bg-live-soft);
+  color: var(--serve-500);
+  border: 1px solid var(--serve-500);
 }
 
 /* =========================================================================

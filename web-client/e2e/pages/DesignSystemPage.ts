@@ -49,6 +49,8 @@ export class DesignSystemPage {
   readonly displaySectionHeading: Locator
   readonly displaySectionLead: Locator
   readonly cardCard: Locator
+  readonly badgeCard: Locator
+  readonly liveDot: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -153,6 +155,12 @@ export class DesignSystemPage {
       name: 'Card',
       exact: true,
     })
+    this.badgeCard = this.displaySection.getByRole('article', {
+      name: 'Badge',
+      exact: true,
+    })
+    // The dot is hidden from assistive tech, so it has no role to find it by.
+    this.liveDot = this.badgeCard.locator('.ball-dot')
   }
 
   // A component card's title, in its header.
@@ -337,5 +345,10 @@ export class DesignSystemPage {
   // The Card card's demo card titled `name`, e.g. "April Spring Open".
   demoCard(name: string): Locator {
     return this.cardCard.getByRole('article', { name, exact: true })
+  }
+
+  // The Badge card's badge reading `text`, e.g. "Seed 1".
+  badge(text: string): Locator {
+    return this.badgeCard.getByText(text, { exact: true })
   }
 }

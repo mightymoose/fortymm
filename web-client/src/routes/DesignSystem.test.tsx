@@ -407,6 +407,32 @@ describe('DesignSystem', () => {
     expect(designSystemPage.cardCard).toHaveTextContent('container')
   })
 
+  it('has a Badge card after the Card card in the Data Display section', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.badgeCardHeading).toHaveTextContent('Badge')
+    expect(designSystemPage.badgeCard).toHaveTextContent('5 variants')
+    expect(
+      designSystemPage.cardCard.compareDocumentPosition(
+        designSystemPage.badgeCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's five badges in order", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(
+      designSystemPage.badges.map((badge) => badge.textContent),
+    ).toEqual([
+      'Seed 1',
+      'Doubles',
+      'Pending',
+      'Disqualified',
+      'Live · Court 3',
+    ])
+  })
+
   it.each([
     {
       title: 'April Spring Open',
