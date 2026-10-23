@@ -85,6 +85,8 @@ export class DesignSystemPage {
   readonly sheet: Locator
   readonly drawerCard: Locator
   readonly drawer: Locator
+  readonly popoverCard: Locator
+  readonly popover: Locator
   constructor(page: Page) {
     this.page = page
     this.loadingScreen = page.getByRole('status', { name: 'Loading FortyMM' })
@@ -289,6 +291,13 @@ export class DesignSystemPage {
       exact: true,
     })
     this.drawer = this.drawerCard.getByRole('dialog', { name: 'Quick log' })
+    this.popoverCard = this.overlaysSection.getByRole('article', {
+      name: 'Popover',
+      exact: true,
+    })
+    this.popover = this.popoverCard.getByRole('dialog', {
+      name: 'Skill rating',
+    })
   }
 
   // A component card's title, in its header.

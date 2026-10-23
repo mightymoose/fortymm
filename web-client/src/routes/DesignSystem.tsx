@@ -610,6 +610,16 @@ export function DesignSystem() {
             </Dialog>
           </div>
         </ComponentCard>
+        <ComponentCard title="Popover" tag="contextual content">
+          <div className="mock-bg mock-bg--popover">
+            <span className="mock-label">Popover</span>
+            <Dialog
+              variant="popover"
+              title="Skill rating"
+              description="Your rating is calculated using a Glicko-2 system with a 0.06 volatility cap. Updates after every match."
+            />
+          </div>
+        </ComponentCard>
       </Section>
     </>
   )

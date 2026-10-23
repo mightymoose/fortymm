@@ -927,6 +927,27 @@ describe('DesignSystem', () => {
     ).toBeInTheDocument()
   })
 
+  it('has a Popover card after the Drawer card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.popoverCardHeading).toHaveTextContent('Popover')
+    expect(designSystemPage.popoverCard).toHaveTextContent('contextual content')
+    expect(
+      designSystemPage.drawerCard.compareDocumentPosition(
+        designSystemPage.popoverCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's Skill rating popover, open", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.popover).toHaveAccessibleName('Skill rating')
+    expect(designSystemPage.popover).toHaveAccessibleDescription(
+      'Your rating is calculated using a Glicko-2 system with a 0.06 volatility cap. Updates after every match.',
+    )
+  })
+
   it.each([
     {
       title: 'April Spring Open',

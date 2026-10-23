@@ -2288,6 +2288,38 @@ h4, .h4 {
   padding: 0;
 }
 
+/* =========================================================================
+   Popover (the reference kit's .popover, its h4 and p): a Dialog's .popover
+   variant. The kit's title is an h4 too, but the class sets every font
+   property the h4 rule does, as on the .dialog.
+   ========================================================================= */
+.popover {
+  background: var(--ink-800);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  padding: 16px;
+  box-shadow: var(--shadow-lg);
+  width: 280px;
+  /* Where the frame is narrower (e.g. on a phone), the popover narrows to
+     fit. */
+  max-width: 100%;
+}
+
+.popover .dialog-title {
+  margin: 0 0 4px;
+  font: 600 14px var(--font-ui);
+}
+
+.popover .dialog-description {
+  margin: 0;
+  font-size: 13px;
+}
+
+/* The kit's frame for its popover, with its inline minimum height. */
+.mock-bg--popover {
+  min-height: 240px;
+}
+
 /* A .slider-field whose header is only its label, styled as a
    .field-label, as the kit draws a bare .label over its Sheet's slider.
    The readout is still there for assistive tech, hidden (below). */

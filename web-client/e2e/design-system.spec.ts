@@ -2582,6 +2582,24 @@ test.describe('Drawer card', () => {
   })
 })
 
+test.describe('Popover card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.popoverCard).toHaveScreenshot(
+      'popover-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.popoverCard).toHaveScreenshot(
+      'popover-card.png',
+    )
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -3149,6 +3167,27 @@ test.describe('on a phone', () => {
     expect(drawer.y + drawer.height).toBeCloseTo(
       card.y + card.height - 33 - 1,
       0,
+    )
+  })
+
+  // The popover is wider than its frame's content, so it narrows to fit.
+  test('the popover card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.popoverCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.popoverCard.boundingBox())!
+    const popover = (await designSystemPage.popover.boundingBox())!
+    // Inside the card's 1px border and 32px padding on each side.
+    expect(popover.x).toBeGreaterThanOrEqual(card.x + 33)
+    expect(popover.x + popover.width).toBeLessThanOrEqual(
+      card.x + card.width - 33,
     )
   })
 })

@@ -57,6 +57,19 @@ describe('Dialog', () => {
     ).toHaveClass('drawer')
   })
 
+  it('is a dialog styled as a popover as the popover variant', () => {
+    render(
+      <Dialog variant="popover" title="Skill rating" description="Glicko-2." />,
+    )
+
+    expect(
+      screen.getByRole('dialog', {
+        name: 'Skill rating',
+        description: 'Glicko-2.',
+      }),
+    ).toHaveClass('popover')
+  })
+
   it('shows the body, then the actions in their row', () => {
     render(
       <Dialog

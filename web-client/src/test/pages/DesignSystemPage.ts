@@ -553,4 +553,18 @@ export class DesignSystemPage {
   get drawer(): HTMLElement {
     return within(this.drawerCard).getByRole('dialog')
   }
+
+  get popoverCard(): HTMLElement {
+    return within(this.overlaysSection).getByRole('article', {
+      name: 'Popover',
+    })
+  }
+
+  get popoverCardHeading(): HTMLElement {
+    return within(this.popoverCard).getByRole('heading', { level: 3 })
+  }
+
+  get popover(): HTMLElement {
+    return within(this.popoverCard).getByRole('dialog')
+  }
 }
