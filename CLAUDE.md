@@ -63,6 +63,19 @@ container, so it needs the stack up (run it via `ci`).
 types from it in the running containers, and fails if git shows them changed,
 so a route or model change without `api:openapi` breaks CI.
 
+`openapi:breaking` then runs `oasdiff breaking --fail-on ERR` in the `dev`
+container. It compares the `api/openapi.json` of the main the change builds on
+with the current one, and fails on a change that breaks `/v1` (see OpenAPI
+schema and clients). On a branch, that base is the merge base with
+`origin/main`. On a push to `main`, CI sets `OPENAPI_BASE` to
+`github.event.before`, the commit `main` pointed at before the push. If the
+base has no `api/openapi.json`, the task skips the check and says why. git runs
+on the host, because a worktree's `.git` points outside the bind mount. So CI
+checks out the full history (`fetch-depth: 0`). mise installs oasdiff from its
+GitHub release (`github:oasdiff/oasdiff` in `mise.container.toml`). CI passes
+`GITHUB_TOKEN` to the `dev` service, so the install doesn't hit GitHub's
+anonymous rate limit.
+
 `web-client:e2e` then starts the Vite dev server in the `dev` container
 (`docker compose exec -d`), waits for it, and runs Playwright in the
 `playwright` container. It also needs the stack up and `npm ci` done, so it
@@ -153,6 +166,23 @@ web-client's are in `web-client/src/api/schema.d.ts` (`npm run
 generate:api`, openapi-typescript). After changing a route or model, run
 `api:openapi` and commit both files; CI's `openapi:check` fails if either is
 stale.
+
+A published API version (today `/v1`) never changes in a breaking way. Released
+iOS and Android apps stay installed for months, and they call the API that
+`main` deploys. So the apps' code in the same commit doesn't protect them. A
+deliberate break goes in a new version, and the old version keeps working.
+`openapi:breaking` catches the breaks nobody meant to make. Examples are a
+renamed Pydantic field, a response field that becomes optional or nullable, a
+new required request field, stricter validation and a removed enum value.
+
+Until the first app store release, the only client is the web-client, which
+deploys with the API. Until then, `api/openapi-breaking-ignore.txt` can let a
+deliberate break to `/v1` through. Add the error's line as oasdiff prints it,
+`METHOD PATH description`, e.g. ``GET /v1/health removed the required property
+`data/database` from the response with the `200` status``. The task applies only
+the lines that the change adds to the file, compared with its base. So an entry
+covers only the change that adds it, and it can't hide a later break once it's
+on `main`. Lines that start with `#` are comments.
 
 ## web-client
 

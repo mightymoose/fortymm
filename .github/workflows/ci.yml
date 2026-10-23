@@ -23,10 +23,18 @@ jobs:
       # isn't deployed.
       GCP_CONFIGURED: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && vars.GCP_SERVICE_ACCOUNT != '' }}
     steps:
+      # The full history, so openapi:breaking can read the base commit's schema.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
       - run: ./bin/mise run ci
         env:
           CI: "true"
+          # The commit main pointed at before this push; on a branch,
+          # openapi:breaking uses the merge base with origin/main instead.
+          OPENAPI_BASE: ${{ github.ref == 'refs/heads/main' && github.event.before || '' }}
+          # mise installs oasdiff from its GitHub release, through GitHub's API.
+          GITHUB_TOKEN: ${{ github.token }}
 
       # Records the deploys below as a GitHub deployment, so they show in the
       # repo's and the PR's Deployments panel with a link to the site: main

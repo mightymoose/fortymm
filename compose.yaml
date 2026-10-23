@@ -5,6 +5,9 @@ services:
     # `docker compose run` replaces this with its own command.
     command: ["sleep", "infinity"]
     init: true
+    environment:
+      # Lets mise call GitHub's API without its anonymous rate limit (CI sets it).
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     # Healthy once the entrypoint has installed the tools, so `up --wait` blocks
     # until commands can be exec'd into the container.
     healthcheck:
