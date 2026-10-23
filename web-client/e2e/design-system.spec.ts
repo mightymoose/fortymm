@@ -1797,6 +1797,24 @@ test.describe('Table · Data Table card', () => {
   })
 })
 
+test.describe('Progress card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.progressCard).toHaveScreenshot(
+      'progress-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.progressCard).toHaveScreenshot(
+      'progress-card.png',
+    )
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({

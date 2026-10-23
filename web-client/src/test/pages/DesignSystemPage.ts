@@ -344,4 +344,19 @@ export class DesignSystemPage {
   get standingsTable(): HTMLElement {
     return within(this.tableCard).getByRole('table', { name: 'Standings' })
   }
+
+  get progressCard(): HTMLElement {
+    return within(this.displaySection).getByRole('article', {
+      name: 'Progress',
+    })
+  }
+
+  get progressCardHeading(): HTMLElement {
+    return within(this.progressCard).getByRole('heading', { level: 3 })
+  }
+
+  // The Progress card's bars, in order.
+  get progressBars(): HTMLElement[] {
+    return within(this.progressCard).getAllByRole('progressbar')
+  }
 }

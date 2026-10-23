@@ -535,6 +535,39 @@ describe('DesignSystem', () => {
     },
   )
 
+  it('has a Progress card after the Table · Data Table card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.progressCardHeading).toHaveTextContent('Progress')
+    expect(designSystemPage.progressCard).toHaveTextContent('determinate')
+    expect(
+      designSystemPage.tableCard.compareDocumentPosition(
+        designSystemPage.progressCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's two bars, a round's matches and a group's", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(
+      designSystemPage.progressBars.map((bar) => [
+        bar.getAttribute('aria-valuenow'),
+        bar.getAttribute('aria-valuemax'),
+        bar.getAttribute('aria-valuetext'),
+      ]),
+    ).toEqual([
+      ['12', '16', '12 of 16'],
+      ['25', '100', '25%'],
+    ])
+    expect(designSystemPage.progressBars[0]).toHaveAccessibleName(
+      'Round 1 of 5',
+    )
+    expect(designSystemPage.progressBars[1]).toHaveAccessibleName('Group B')
+    expect(designSystemPage.progressCard).toHaveTextContent('12 / 16')
+    expect(designSystemPage.progressCard).toHaveTextContent('25%')
+  })
+
   it.each([
     {
       title: 'April Spring Open',

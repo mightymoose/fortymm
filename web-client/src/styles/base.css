@@ -1675,6 +1675,38 @@ h4, .h4 {
 }
 
 /* =========================================================================
+   Progress (the reference kit's .progress and its .bar). The kit sets the
+   label row's and the column's styles inline. Here they are classes.
+   ========================================================================= */
+.progress {
+  height: 8px;
+  background: var(--ink-700);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  background: var(--ball-500);
+  border-radius: 999px;
+}
+
+.progress-header {
+  justify-content: space-between;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.progress-value {
+  font-family: var(--font-mono);
+  color: var(--fg-3);
+}
+
+.progress-demo {
+  max-width: 420px;
+}
+
+/* =========================================================================
    Utility: hidden on screen, still read by assistive tech (e.g. a label the
    design shows no room for).
    ========================================================================= */

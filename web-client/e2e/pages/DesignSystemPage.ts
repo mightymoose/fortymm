@@ -55,6 +55,7 @@ export class DesignSystemPage {
   readonly avatarGroup: Locator
   readonly tableCard: Locator
   readonly standingsTable: Locator
+  readonly progressCard: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -177,6 +178,10 @@ export class DesignSystemPage {
     })
     this.standingsTable = this.tableCard.getByRole('table', {
       name: 'Standings',
+    })
+    this.progressCard = this.displaySection.getByRole('article', {
+      name: 'Progress',
+      exact: true,
     })
   }
 

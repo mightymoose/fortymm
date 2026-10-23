@@ -12,6 +12,7 @@ import { Input } from '../components/Input'
 import { OtpInput } from '../components/OtpInput'
 import { PageHeader } from '../components/PageHeader'
 import { PageIntro } from '../components/PageIntro'
+import { Progress } from '../components/Progress'
 import { Radio, RadioGroup } from '../components/RadioGroup'
 import { RatingDelta } from '../components/RatingDelta'
 import { Section } from '../components/Section'
@@ -349,6 +350,17 @@ export function DesignSystem() {
             rows={standings}
             rowKey={(standing) => standing.name}
           />
+        </ComponentCard>
+        <ComponentCard title="Progress" tag="determinate">
+          <div className="col progress-demo">
+            <Progress
+              label="Round 1 of 5"
+              value={12}
+              max={16}
+              format="fraction"
+            />
+            <Progress label="Group B" value={25} max={100} format="percent" />
+          </div>
         </ComponentCard>
       </Section>
     </>
