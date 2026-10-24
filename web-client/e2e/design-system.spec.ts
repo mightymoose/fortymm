@@ -2664,6 +2664,91 @@ test.describe('Hover Card card', () => {
   })
 })
 
+// Nothing is hovered or focused first, so the items show their resting
+// styles.
+test.describe('Dropdown Menu · Context Menu card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.menuCard).toHaveScreenshot('menu-card.png')
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.menuCard).toHaveScreenshot('menu-card.png')
+  })
+})
+
+// The kit's menus are static, with no focus style, so the tests below other
+// than the hover are the app's alone.
+test.describe('Dropdown Menu · Context Menu', () => {
+  const orange = 'rgb(255, 122, 26)'
+
+  test.beforeEach(async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+  })
+
+  // The screenshot can't see the hover: --bg-hover is white at 4%, under
+  // its color threshold.
+  test('hovering an item lightens it', async ({ designSystemPage }) => {
+    const item = designSystemPage.dropdownItem('Edit score')
+    await expect(item).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+
+    await item.hover()
+
+    await expect(item).toHaveCSS(
+      'background-color',
+      'rgba(255, 255, 255, 0.04)',
+    )
+  })
+
+  // Natively the arrows, Home and End scroll the page.
+  test("the arrow keys, Home and End move the focus, and don't scroll the page", async ({
+    designSystemPage,
+    page,
+  }) => {
+    const rematch = designSystemPage.dropdownItem('Rematch')
+    await rematch.evaluate((item) => item.scrollIntoView({ block: 'center' }))
+    await rematch.focus()
+    const top = await page.locator('html').evaluate((html) => html.scrollTop)
+
+    for (const [key, name] of [
+      ['ArrowDown', 'Share match link'],
+      ['End', 'Forfeit'],
+      ['ArrowDown', 'Rematch'],
+      ['ArrowUp', 'Forfeit'],
+      ['Home', 'Rematch'],
+    ]) {
+      await page.keyboard.press(key)
+      await expect(designSystemPage.dropdownItem(name), key).toBeFocused()
+      expect(
+        await page.locator('html').evaluate((html) => html.scrollTop),
+        key,
+      ).toBe(top)
+    }
+  })
+
+  test('keyboard focus shows the outline, a click none', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const rematch = designSystemPage.dropdownItem('Rematch')
+    const share = designSystemPage.dropdownItem('Share match link')
+    await rematch.focus()
+
+    await page.keyboard.press('ArrowDown')
+    await expect(share).toBeFocused()
+    await expect(share).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(share).toHaveCSS('outline-offset', '2px')
+
+    const forfeit = designSystemPage.dropdownItem('Forfeit')
+    await forfeit.click()
+    await expect(forfeit).toBeFocused()
+    await expect(forfeit).toHaveCSS('outline-style', 'none')
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -3314,6 +3399,30 @@ test.describe('on a phone', () => {
     expect(hoverCard.x + hoverCard.width).toBeLessThanOrEqual(
       card.x + card.width - 33,
     )
+  })
+
+  // The menus and their room are wider than the card's content, so the
+  // frames stack and each menu fills its frame's width.
+  test('the menu card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.menuCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.menuCard.boundingBox())!
+    const dropdown = (await designSystemPage.dropdownMenu.boundingBox())!
+    const context = (await designSystemPage.contextMenu.boundingBox())!
+    for (const box of [dropdown, context]) {
+      // Inside the card's 1px border and 32px padding on each side.
+      expect(box.x).toBeGreaterThanOrEqual(card.x + 33)
+      expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width - 33)
+    }
+    expect(context.y).toBeGreaterThan(dropdown.y + dropdown.height)
   })
 })
 

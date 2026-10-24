@@ -2441,6 +2441,87 @@ h4, .h4 {
   color: var(--ball-500);
 }
 
+/* =========================================================================
+   Menu (the reference kit's .menu, .menu-item:hover, .menu-item.dest,
+   .menu-sep, .menu-label and .menu-item .kbd): a .menu of .menu-item rows
+   (above, shared with the Combobox), .menu-label and .menu-sep. The hover
+   is the menu's alone, as the Combobox's options don't take it.
+   .menu-item--destructive is the kit's .dest. .kbd, a shortcut, is the
+   kit's .menu-item .kbd, for any <kbd>. .menu-check leads a checkbox item
+   with the kit's ✓ or two spaces. The items take the .button focus
+   outline, keyboard focus only. The kit gives them none.
+   ========================================================================= */
+.menu {
+  background: var(--ink-800);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  padding: 4px;
+  min-width: 200px;
+  box-shadow: var(--shadow-lg);
+}
+
+.menu .menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.menu .menu-item:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+.menu-item--destructive {
+  color: var(--loss);
+}
+
+.menu-sep {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 4px -4px;
+}
+
+.menu-label {
+  padding: 6px 10px;
+  font: 500 11px var(--font-ui);
+  color: var(--fg-3);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.kbd {
+  font: 500 11px var(--font-mono);
+  color: var(--fg-3);
+  padding: 2px 5px;
+  background: var(--ink-700);
+  border-radius: var(--r-xs);
+}
+
+/* The kit's frame for its menus, set inline: the menu in the frame's top
+   left corner, with room around it. */
+.mock-bg--menu {
+  min-height: 320px;
+  justify-content: flex-start;
+  align-items: flex-start;
+}
+
+.mock-bg--menu > .menu {
+  margin: 32px;
+}
+
+/* The kit is only laid out for desktop. On a phone, the menu and its room
+   are wider than the frame, so the menu fills the frame's width, and the
+   frame is only as tall as the menu. */
+@media (max-width: 640px) {
+  .mock-bg--menu {
+    min-height: auto;
+  }
+
+  .mock-bg--menu > .menu {
+    margin: 0;
+    min-width: 0;
+    width: 100%;
+  }
+}
+
 /* A .slider-field whose header is only its label, styled as a
    .field-label, as the kit draws a bare .label over its Sheet's slider.
    The readout is still there for assistive tech, hidden (below). */

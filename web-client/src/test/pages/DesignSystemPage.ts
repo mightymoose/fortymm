@@ -591,4 +591,19 @@ export class DesignSystemPage {
   get hoverCard(): HTMLElement {
     return within(this.hoverCardCard).getByRole('group')
   }
+
+  get menuCard(): HTMLElement {
+    return within(this.overlaysSection).getByRole('article', {
+      name: 'Dropdown Menu · Context Menu',
+    })
+  }
+
+  get menuCardHeading(): HTMLElement {
+    return within(this.menuCard).getByRole('heading', { level: 3 })
+  }
+
+  // The menu card's menu named `name`, e.g. "Match actions".
+  menu(name: string): HTMLElement {
+    return within(this.menuCard).getByRole('menu', { name })
+  }
 }

@@ -13,6 +13,7 @@ import { DatePicker } from '../components/DatePicker'
 import { Dialog } from '../components/Dialog'
 import { Field, FieldHelp, Label } from '../components/Field'
 import { Input } from '../components/Input'
+import { Menu, type MenuEntry } from '../components/Menu'
 import { Menubar } from '../components/Menubar'
 import {
   type NavigationMenuLink,
@@ -121,6 +122,33 @@ const productLinks: NavigationMenuLink[] = [
     description: 'Member rosters, ladder leagues.',
     href: '#nav',
   },
+]
+
+// The Dropdown Menu · Context Menu card's menus: a match's actions, and the
+// right-click menu of a bracket.
+const matchActions: MenuEntry[] = [
+  { kind: 'label', text: 'Match actions' },
+  {
+    kind: 'item',
+    label: 'Rematch',
+    shortcut: { label: '⌘ R', keys: 'Meta+R' },
+  },
+  {
+    kind: 'item',
+    label: 'Share match link',
+    shortcut: { label: '⌘ ↑ S', keys: 'Meta+Shift+S' },
+  },
+  { kind: 'item', label: 'Edit score' },
+  { kind: 'separator' },
+  { kind: 'item', label: 'Forfeit', destructive: true },
+]
+
+const bracketActions: MenuEntry[] = [
+  { kind: 'checkbox', label: 'Show seeds', checked: true },
+  { kind: 'checkbox', label: 'Show ratings', checked: false },
+  { kind: 'separator' },
+  { kind: 'item', label: 'Reschedule…' },
+  { kind: 'item', label: 'Print bracket' },
 ]
 
 type Standing = {
@@ -662,6 +690,21 @@ export function DesignSystem() {
               }}
               tone="blue"
             />
+          </div>
+        </ComponentCard>
+        <ComponentCard
+          title="Dropdown Menu · Context Menu"
+          tag="right-click + chevron"
+        >
+          <div className="grid-2">
+            <div className="mock-bg mock-bg--menu">
+              <span className="mock-label">Dropdown</span>
+              <Menu label="Match actions" entries={matchActions} />
+            </div>
+            <div className="mock-bg mock-bg--menu">
+              <span className="mock-label">Context (right-click)</span>
+              <Menu label="Bracket" entries={bracketActions} />
+            </div>
           </div>
         </ComponentCard>
       </Section>

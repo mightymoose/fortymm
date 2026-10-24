@@ -93,6 +93,9 @@ export class DesignSystemPage {
   readonly seedBadge: Locator
   readonly hoverCardCard: Locator
   readonly hoverCard: Locator
+  readonly menuCard: Locator
+  readonly dropdownMenu: Locator
+  readonly contextMenu: Locator
   constructor(page: Page) {
     this.page = page
     this.loadingScreen = page.getByRole('status', { name: 'Loading FortyMM' })
@@ -320,6 +323,14 @@ export class DesignSystemPage {
     this.hoverCard = this.hoverCardCard.getByRole('group', {
       name: 'Tien Nguyen',
     })
+    this.menuCard = this.overlaysSection.getByRole('article', {
+      name: 'Dropdown Menu · Context Menu',
+      exact: true,
+    })
+    this.dropdownMenu = this.menuCard.getByRole('menu', {
+      name: 'Match actions',
+    })
+    this.contextMenu = this.menuCard.getByRole('menu', { name: 'Bracket' })
   }
 
   // A component card's title, in its header.
@@ -527,6 +538,11 @@ export class DesignSystemPage {
   // The tooltip card's tooltip reading `text`.
   tooltip(text: string): Locator {
     return this.tooltipCard.getByRole('tooltip').filter({ hasText: text })
+  }
+
+  // The dropdown menu's item named `name`, e.g. "Rematch".
+  dropdownItem(name: string): Locator {
+    return this.dropdownMenu.getByRole('menuitem', { name, exact: true })
   }
 
   // Clicks the middle of the text `name` in `card` with a plain mouse click.

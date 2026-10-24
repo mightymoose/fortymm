@@ -1005,6 +1005,53 @@ describe('DesignSystem', () => {
     )
   })
 
+  it('has a Dropdown Menu · Context Menu card after the Hover Card card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.menuCardHeading).toHaveTextContent(
+      'Dropdown Menu · Context Menu',
+    )
+    expect(designSystemPage.menuCard).toHaveTextContent(
+      'right-click + chevron',
+    )
+    expect(
+      designSystemPage.hoverCardCard.compareDocumentPosition(
+        designSystemPage.menuCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's dropdown and context menus, open", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const dropdown = designSystemPage.menu('Match actions')
+    expect(dropdown).toHaveTextContent(/^Match actions/)
+    expect(
+      within(dropdown)
+        .getAllByRole('menuitem')
+        .map((item) => [item.textContent, item.ariaKeyShortcuts]),
+    ).toEqual([
+      ['Rematch⌘ R', 'Meta+R'],
+      ['Share match link⌘ ↑ S', 'Meta+Shift+S'],
+      ['Edit score', null],
+      ['Forfeit', null],
+    ])
+    const context = designSystemPage.menu('Bracket')
+    expect(
+      within(context)
+        .getAllByRole('menuitemcheckbox')
+        .map((item) => [item.textContent, item.ariaChecked]),
+    ).toEqual([
+      ['✓ Show seeds', 'true'],
+      ['\u00a0\u00a0Show ratings', 'false'],
+    ])
+    expect(
+      within(context)
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent),
+    ).toEqual(['Reschedule…', 'Print bracket'])
+  })
+
   it.each([
     {
       title: 'April Spring Open',
