@@ -79,9 +79,11 @@ docker compose exec -T dev /app/bin/docker-entrypoint oasdiff breaking \
 '''
 
 [tasks."api:ci"]
-description = "Lint, typecheck and test the API inside the running api container (start it with `mise run ci`)"
+description = "Lint, typecheck and test the API, and check its migrations match its models, inside the running api container (start it with `mise run ci`)"
 # exec bypasses the image entrypoint, so call it to get the container's tools on PATH.
-run = "docker compose exec -T api /app/bin/docker-entrypoint sh -c 'uv sync --locked && uv run ruff check && uv run ruff format --check && uv run mypy src tests && uv run pytest'"
+# The running API has migrated its database at startup, so alembic check
+# compares the models with every migration.
+run = "docker compose exec -T api /app/bin/docker-entrypoint sh -c 'uv sync --locked && uv run ruff check && uv run ruff format --check && uv run mypy src tests migrations && uv run pytest && uv run alembic check'"
 
 [tasks."api:test"]
 description = "Run the API's tests inside the api container"
@@ -91,6 +93,16 @@ run = """
 docker compose up -d --wait postgres
 docker compose run --rm --no-deps -T api uv run --locked pytest
 """
+
+[tasks."api:revision"]
+description = "Draft a migration in api/migrations/versions/ from the models' changes (autogenerate); a person reviews every draft before it's committed"
+usage = 'arg "<message>" help="What the migration does, e.g. add accounts"'
+# Upgrades first, because autogenerate compares the models with the database.
+run = '''
+docker compose up -d --wait postgres
+docker compose run --rm --no-deps -T -e MESSAGE="$usage_message" api \
+  sh -c 'uv run --locked alembic upgrade head && uv run --locked alembic revision --autogenerate -m "$MESSAGE"'
+'''
 
 [tasks."api:dev"]
 description = "Start the API with auto-reload and stream its logs; reach it through the web-client dev server at /api"
