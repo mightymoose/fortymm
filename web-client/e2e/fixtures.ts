@@ -1,6 +1,7 @@
 import { test as base } from '@playwright/test'
 import { DesignSystemPage } from './pages/DesignSystemPage.ts'
 import { HomePage } from './pages/HomePage.ts'
+import { OptionsPage } from './pages/OptionsPage.ts'
 import { ReferenceKitPage } from './pages/ReferenceKitPage.ts'
 
 // Specs import `test` and `expect` from here to receive page objects as
@@ -8,6 +9,7 @@ import { ReferenceKitPage } from './pages/ReferenceKitPage.ts'
 export const test = base.extend<{
   designSystemPage: DesignSystemPage
   homePage: HomePage
+  optionsPage: OptionsPage
   referenceKitPage: ReferenceKitPage
 }>({
   // The callbacks are named `provide`, not Playwright's usual `use`, so the
@@ -17,6 +19,9 @@ export const test = base.extend<{
   },
   homePage: async ({ page }, provide) => {
     await provide(new HomePage(page))
+  },
+  optionsPage: async ({ page }, provide) => {
+    await provide(new OptionsPage(page))
   },
   referenceKitPage: async ({ page }, provide) => {
     await provide(new ReferenceKitPage(page))

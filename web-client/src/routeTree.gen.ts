@@ -12,6 +12,8 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as DesignSystemRouteImport } from './routes/design-system'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
+import { Route as OptionsIndexRouteImport } from './routes/options/index'
+import { Route as OptionsOptionRouteImport } from './routes/options/$option'
 
 const AuthenticatedRoute = AuthenticatedRouteImport.update({
   id: '/_authenticated',
@@ -27,32 +29,56 @@ const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const OptionsIndexRoute = OptionsIndexRouteImport.update({
+  id: '/options/',
+  path: '/options/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const OptionsOptionRoute = OptionsOptionRouteImport.update({
+  id: '/options/$option',
+  path: '/options/$option',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedIndexRoute
   '/design-system': typeof DesignSystemRoute
+  '/options/$option': typeof OptionsOptionRoute
+  '/options/': typeof OptionsIndexRoute
 }
 export interface FileRoutesByTo {
   '/design-system': typeof DesignSystemRoute
+  '/options/$option': typeof OptionsOptionRoute
   '/': typeof AuthenticatedIndexRoute
+  '/options': typeof OptionsIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/design-system': typeof DesignSystemRoute
+  '/options/$option': typeof OptionsOptionRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
+  '/options/': typeof OptionsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/design-system'
+  fullPaths: '/' | '/design-system' | '/options/$option' | '/options/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/design-system' | '/'
-  id: '__root__' | '/_authenticated' | '/design-system' | '/_authenticated/'
+  to: '/design-system' | '/options/$option' | '/' | '/options'
+  id:
+    | '__root__'
+    | '/_authenticated'
+    | '/design-system'
+    | '/options/$option'
+    | '/_authenticated/'
+    | '/options/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   DesignSystemRoute: typeof DesignSystemRoute
+  OptionsOptionRoute: typeof OptionsOptionRoute
+  OptionsIndexRoute: typeof OptionsIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -78,6 +104,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/options/': {
+      id: '/options/'
+      path: '/options'
+      fullPath: '/options/'
+      preLoaderRoute: typeof OptionsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/options/$option': {
+      id: '/options/$option'
+      path: '/options/$option'
+      fullPath: '/options/$option'
+      preLoaderRoute: typeof OptionsOptionRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -96,6 +136,8 @@ const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   DesignSystemRoute: DesignSystemRoute,
+  OptionsOptionRoute: OptionsOptionRoute,
+  OptionsIndexRoute: OptionsIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
