@@ -75,10 +75,10 @@ test.describe('Forms & Input section', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.formsSectionHeading).toHaveScreenshot(
+    await expect(designSystemPage.forms.heading).toHaveScreenshot(
       'forms-heading.png',
     )
-    await expect(designSystemPage.formsSectionLead).toHaveScreenshot(
+    await expect(designSystemPage.forms.lead).toHaveScreenshot(
       'forms-lead.png',
     )
   })
@@ -86,10 +86,10 @@ test.describe('Forms & Input section', () => {
   test('matches the reference kit section', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.formsSectionHeading).toHaveScreenshot(
+    await expect(referenceKitPage.forms.heading).toHaveScreenshot(
       'forms-heading.png',
     )
-    await expect(referenceKitPage.formsSectionLead).toHaveScreenshot(
+    await expect(referenceKitPage.forms.lead).toHaveScreenshot(
       'forms-lead.png',
     )
   })
@@ -101,7 +101,7 @@ test.describe('Button card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.buttonCard).toHaveScreenshot(
+    await expect(designSystemPage.forms.buttonCard).toHaveScreenshot(
       'button-card.png',
     )
   })
@@ -109,7 +109,7 @@ test.describe('Button card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.buttonCard).toHaveScreenshot(
+    await expect(referenceKitPage.forms.buttonCard).toHaveScreenshot(
       'button-card.png',
     )
   })
@@ -121,13 +121,13 @@ test.describe('Input · Label · Form Field card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.inputCard).toHaveScreenshot('input-card.png')
+    await expect(designSystemPage.forms.inputCard).toHaveScreenshot('input-card.png')
   })
 
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.inputCard).toHaveScreenshot('input-card.png')
+    await expect(referenceKitPage.forms.inputCard).toHaveScreenshot('input-card.png')
   })
 })
 
@@ -137,7 +137,7 @@ test.describe('Textarea card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.textareaCard).toHaveScreenshot(
+    await expect(designSystemPage.forms.textareaCard).toHaveScreenshot(
       'textarea-card.png',
     )
   })
@@ -145,7 +145,7 @@ test.describe('Textarea card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.textareaCard).toHaveScreenshot(
+    await expect(referenceKitPage.forms.textareaCard).toHaveScreenshot(
       'textarea-card.png',
     )
   })
@@ -158,13 +158,13 @@ test.describe('Input OTP card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.otpCard).toHaveScreenshot('otp-card.png')
+    await expect(designSystemPage.forms.otpCard).toHaveScreenshot('otp-card.png')
   })
 
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.otpCard).toHaveScreenshot('otp-card.png')
+    await expect(referenceKitPage.forms.otpCard).toHaveScreenshot('otp-card.png')
   })
 })
 
@@ -174,7 +174,7 @@ test.describe('Checkbox card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.checkboxCard).toHaveScreenshot(
+    await expect(designSystemPage.forms.checkboxCard).toHaveScreenshot(
       'checkbox-card.png',
     )
   })
@@ -182,7 +182,7 @@ test.describe('Checkbox card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.checkboxCard).toHaveScreenshot(
+    await expect(referenceKitPage.forms.checkboxCard).toHaveScreenshot(
       'checkbox-card.png',
     )
   })
@@ -193,13 +193,13 @@ test.describe('Checkbox card', () => {
 test.describe('Checkbox', () => {
   test('clicking a label toggles its box', async ({ designSystemPage }) => {
     await designSystemPage.goto()
-    const agree = designSystemPage.checkbox('I agree to the rules of fair play')
-    const invites = designSystemPage.checkbox('Email me match invites')
+    const agree = designSystemPage.forms.checkbox('I agree to the rules of fair play')
+    const invites = designSystemPage.forms.checkbox('Email me match invites')
     await expect(agree).toBeChecked()
     await expect(invites).not.toBeChecked()
 
-    await designSystemPage.clickCheckboxLabel('I agree to the rules of fair play')
-    await designSystemPage.clickCheckboxLabel('Email me match invites')
+    await designSystemPage.forms.clickCheckboxLabel('I agree to the rules of fair play')
+    await designSystemPage.forms.clickCheckboxLabel('Email me match invites')
 
     await expect(agree).not.toBeChecked()
     await expect(invites).toBeChecked()
@@ -207,10 +207,10 @@ test.describe('Checkbox', () => {
 
   test("the disabled one doesn't toggle", async ({ designSystemPage }) => {
     await designSystemPage.goto()
-    const disabled = designSystemPage.checkbox('Disabled option')
+    const disabled = designSystemPage.forms.checkbox('Disabled option')
     await expect(disabled).toBeDisabled()
 
-    await designSystemPage.clickCheckboxLabel('Disabled option')
+    await designSystemPage.forms.clickCheckboxLabel('Disabled option')
 
     await expect(disabled).not.toBeChecked()
   })
@@ -222,9 +222,9 @@ test.describe('Checkbox', () => {
     page,
   }) => {
     await designSystemPage.goto()
-    const invites = designSystemPage.checkbox('Email me match invites')
-    const box = designSystemPage.checkboxBox('Email me match invites')
-    await designSystemPage.checkbox('I agree to the rules of fair play').focus()
+    const invites = designSystemPage.forms.checkbox('Email me match invites')
+    const box = designSystemPage.forms.checkboxBox('Email me match invites')
+    await designSystemPage.forms.checkbox('I agree to the rules of fair play').focus()
 
     await page.keyboard.press('Tab')
 
@@ -242,10 +242,10 @@ test.describe('Checkbox', () => {
   // ring.
   test('a click shows no focus ring', async ({ designSystemPage }) => {
     await designSystemPage.goto()
-    const invites = designSystemPage.checkbox('Email me match invites')
-    const box = designSystemPage.checkboxBox('Email me match invites')
+    const invites = designSystemPage.forms.checkbox('Email me match invites')
+    const box = designSystemPage.forms.checkboxBox('Email me match invites')
 
-    await designSystemPage.clickCheckboxLabel('Email me match invites')
+    await designSystemPage.forms.clickCheckboxLabel('Email me match invites')
 
     await expect(invites).toBeFocused()
     await expect(box).toHaveCSS('box-shadow', 'none')
@@ -258,7 +258,7 @@ test.describe('Radio Group card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.radioCard).toHaveScreenshot(
+    await expect(designSystemPage.forms.radioCard).toHaveScreenshot(
       'radio-card.png',
     )
   })
@@ -266,7 +266,7 @@ test.describe('Radio Group card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.radioCard).toHaveScreenshot(
+    await expect(referenceKitPage.forms.radioCard).toHaveScreenshot(
       'radio-card.png',
     )
   })
@@ -277,12 +277,12 @@ test.describe('Radio Group card', () => {
 test.describe('Radio Group', () => {
   test('clicking a label selects its option', async ({ designSystemPage }) => {
     await designSystemPage.goto()
-    const best5 = designSystemPage.radio('Singles · best of 5')
-    const doubles = designSystemPage.radio('Doubles · best of 5')
+    const best5 = designSystemPage.forms.radio('Singles · best of 5')
+    const doubles = designSystemPage.forms.radio('Doubles · best of 5')
     await expect(best5).toBeChecked()
     await expect(doubles).not.toBeChecked()
 
-    await designSystemPage.clickRadioLabel('Doubles · best of 5')
+    await designSystemPage.forms.clickRadioLabel('Doubles · best of 5')
 
     await expect(doubles).toBeChecked()
     await expect(best5).not.toBeChecked()
@@ -295,9 +295,9 @@ test.describe('Radio Group', () => {
     page,
   }) => {
     await designSystemPage.goto()
-    const best5 = designSystemPage.radio('Singles · best of 5')
-    const dot = designSystemPage.radioDot('Singles · best of 5')
-    await designSystemPage.checkbox('Email me match invites').focus()
+    const best5 = designSystemPage.forms.radio('Singles · best of 5')
+    const dot = designSystemPage.forms.radioDot('Singles · best of 5')
+    await designSystemPage.forms.checkbox('Email me match invites').focus()
 
     await page.keyboard.press('Tab')
 
@@ -307,14 +307,14 @@ test.describe('Radio Group', () => {
       'box-shadow',
       'color(srgb 1 0.478431 0.101961 / 0.15) 0px 0px 0px 3px',
     )
-    await expect(designSystemPage.radioDot('Singles · best of 7')).toHaveCSS(
+    await expect(designSystemPage.forms.radioDot('Singles · best of 7')).toHaveCSS(
       'box-shadow',
       'none',
     )
 
     // The next Tab leaves the group rather than going to its next option.
     await page.keyboard.press('Tab')
-    await expect(designSystemPage.radioGroup.locator(':focus')).toHaveCount(0)
+    await expect(designSystemPage.forms.radioGroup.locator(':focus')).toHaveCount(0)
   })
 
   test('the arrow keys move the selection and the focus', async ({
@@ -322,16 +322,16 @@ test.describe('Radio Group', () => {
     page,
   }) => {
     await designSystemPage.goto()
-    const best5 = designSystemPage.radio('Singles · best of 5')
-    const best7 = designSystemPage.radio('Singles · best of 7')
-    const doubles = designSystemPage.radio('Doubles · best of 5')
+    const best5 = designSystemPage.forms.radio('Singles · best of 5')
+    const best7 = designSystemPage.forms.radio('Singles · best of 7')
+    const doubles = designSystemPage.forms.radio('Doubles · best of 5')
     await best5.focus()
 
     await page.keyboard.press('ArrowDown')
     await expect(best7).toBeChecked()
     await expect(best7).toBeFocused()
     await expect(best5).not.toBeChecked()
-    await expect(designSystemPage.radioDot('Singles · best of 7')).toHaveCSS(
+    await expect(designSystemPage.forms.radioDot('Singles · best of 7')).toHaveCSS(
       'box-shadow',
       'color(srgb 1 0.478431 0.101961 / 0.15) 0px 0px 0px 3px',
     )
@@ -349,12 +349,12 @@ test.describe('Radio Group', () => {
   // ring.
   test('a click shows no focus ring', async ({ designSystemPage }) => {
     await designSystemPage.goto()
-    const best7 = designSystemPage.radio('Singles · best of 7')
+    const best7 = designSystemPage.forms.radio('Singles · best of 7')
 
-    await designSystemPage.clickRadioLabel('Singles · best of 7')
+    await designSystemPage.forms.clickRadioLabel('Singles · best of 7')
 
     await expect(best7).toBeFocused()
-    await expect(designSystemPage.radioDot('Singles · best of 7')).toHaveCSS(
+    await expect(designSystemPage.forms.radioDot('Singles · best of 7')).toHaveCSS(
       'box-shadow',
       'none',
     )
@@ -367,7 +367,7 @@ test.describe('Switch card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.switchCard).toHaveScreenshot(
+    await expect(designSystemPage.forms.switchCard).toHaveScreenshot(
       'switch-card.png',
     )
   })
@@ -375,7 +375,7 @@ test.describe('Switch card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.switchCard).toHaveScreenshot(
+    await expect(referenceKitPage.forms.switchCard).toHaveScreenshot(
       'switch-card.png',
     )
   })
@@ -401,23 +401,23 @@ test.describe('Switch', () => {
     designSystemPage,
   }) => {
     await designSystemPage.goto()
-    const profile = designSystemPage.switch('Public profile')
-    const nearby = designSystemPage.switch('Notify me of nearby matches')
+    const profile = designSystemPage.forms.switch('Public profile')
+    const nearby = designSystemPage.forms.switch('Notify me of nearby matches')
     await expect(profile).toBeChecked()
     await expect(nearby).not.toBeChecked()
 
-    await designSystemPage.clickSwitchLabel('Public profile')
-    await designSystemPage.clickSwitchLabel('Notify me of nearby matches')
+    await designSystemPage.forms.clickSwitchLabel('Public profile')
+    await designSystemPage.forms.clickSwitchLabel('Notify me of nearby matches')
 
     await expect(profile).not.toBeChecked()
     await expect(nearby).toBeChecked()
     await expect
-      .poll(thumbTransform(designSystemPage.switchTrack('Public profile')))
+      .poll(thumbTransform(designSystemPage.forms.switchTrack('Public profile')))
       .toBe('none')
     await expect
       .poll(
         thumbTransform(
-          designSystemPage.switchTrack('Notify me of nearby matches'),
+          designSystemPage.forms.switchTrack('Notify me of nearby matches'),
         ),
       )
       .toBe(thumbOn)
@@ -430,9 +430,9 @@ test.describe('Switch', () => {
     page,
   }) => {
     await designSystemPage.goto()
-    const nearby = designSystemPage.switch('Notify me of nearby matches')
-    const track = designSystemPage.switchTrack('Notify me of nearby matches')
-    await designSystemPage.switch('Public profile').focus()
+    const nearby = designSystemPage.forms.switch('Notify me of nearby matches')
+    const track = designSystemPage.forms.switchTrack('Notify me of nearby matches')
+    await designSystemPage.forms.switch('Public profile').focus()
 
     await page.keyboard.press('Tab')
 
@@ -442,7 +442,7 @@ test.describe('Switch', () => {
       'color(srgb 1 0.478431 0.101961 / 0.15) 0px 0px 0px 3px',
     )
     await expect(
-      designSystemPage.switchTrack('Public profile'),
+      designSystemPage.forms.switchTrack('Public profile'),
     ).toHaveCSS('box-shadow', 'none')
     await page.keyboard.press('Space')
     await expect(nearby).toBeChecked()
@@ -453,13 +453,13 @@ test.describe('Switch', () => {
   // ring.
   test('a click shows no focus ring', async ({ designSystemPage }) => {
     await designSystemPage.goto()
-    const nearby = designSystemPage.switch('Notify me of nearby matches')
+    const nearby = designSystemPage.forms.switch('Notify me of nearby matches')
 
-    await designSystemPage.clickSwitchLabel('Notify me of nearby matches')
+    await designSystemPage.forms.clickSwitchLabel('Notify me of nearby matches')
 
     await expect(nearby).toBeFocused()
     await expect(
-      designSystemPage.switchTrack('Notify me of nearby matches'),
+      designSystemPage.forms.switchTrack('Notify me of nearby matches'),
     ).toHaveCSS('box-shadow', 'none')
   })
 
@@ -468,13 +468,13 @@ test.describe('Switch', () => {
     designSystemPage,
   }) => {
     await designSystemPage.goto()
-    const profile = designSystemPage.switch('Public profile')
+    const profile = designSystemPage.forms.switch('Public profile')
     await profile.evaluate((input) => input.setAttribute('disabled', ''))
 
-    await designSystemPage.clickSwitchLabel('Public profile')
+    await designSystemPage.forms.clickSwitchLabel('Public profile')
 
     await expect(profile).toBeChecked()
-    await expect(designSystemPage.switchLabel('Public profile')).toHaveCSS(
+    await expect(designSystemPage.forms.switchLabel('Public profile')).toHaveCSS(
       'opacity',
       '0.5',
     )
@@ -487,9 +487,9 @@ test.describe('Switch', () => {
       designSystemPage,
     }) => {
       await designSystemPage.goto()
-      const track = designSystemPage.switchTrack('Notify me of nearby matches')
+      const track = designSystemPage.forms.switchTrack('Notify me of nearby matches')
 
-      await designSystemPage.clickSwitchLabel('Notify me of nearby matches')
+      await designSystemPage.forms.clickSwitchLabel('Notify me of nearby matches')
 
       expect(await thumbTransform(track)()).toBe(thumbOn)
       await expect(track).toHaveCSS('transition-duration', '0s')
@@ -503,7 +503,7 @@ test.describe('Slider card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.sliderCard).toHaveScreenshot(
+    await expect(designSystemPage.forms.sliderCard).toHaveScreenshot(
       'slider-card.png',
     )
   })
@@ -511,7 +511,7 @@ test.describe('Slider card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.sliderCard).toHaveScreenshot(
+    await expect(referenceKitPage.forms.sliderCard).toHaveScreenshot(
       'slider-card.png',
     )
   })
@@ -528,10 +528,10 @@ test.describe('Slider', () => {
   }) => {
     await designSystemPage.goto()
 
-    await designSystemPage.dragSlider('Skill level', 0.75)
+    await designSystemPage.forms.dragSlider('Skill level', 0.75)
 
-    await expect(designSystemPage.slider('Skill level')).toHaveValue('1820')
-    await expect(designSystemPage.sliderValue('Skill level')).toHaveText(
+    await expect(designSystemPage.forms.slider('Skill level')).toHaveValue('1820')
+    await expect(designSystemPage.forms.sliderValue('Skill level')).toHaveText(
       '1820',
     )
   })
@@ -541,10 +541,10 @@ test.describe('Slider', () => {
   }) => {
     await designSystemPage.goto()
 
-    await designSystemPage.dragSlider('Rating range maximum', 0.9)
-    await designSystemPage.dragSlider('Rating range minimum', 0.1)
+    await designSystemPage.forms.dragSlider('Rating range maximum', 0.9)
+    await designSystemPage.forms.dragSlider('Rating range minimum', 0.1)
 
-    await expect(designSystemPage.sliderValue('Rating range')).toHaveText(
+    await expect(designSystemPage.forms.sliderValue('Rating range')).toHaveText(
       '1200 – 2000',
     )
   })
@@ -554,8 +554,8 @@ test.describe('Slider', () => {
     page,
   }) => {
     await designSystemPage.goto()
-    const skill = designSystemPage.slider('Skill level')
-    const readout = designSystemPage.sliderValue('Skill level')
+    const skill = designSystemPage.forms.slider('Skill level')
+    const readout = designSystemPage.forms.sliderValue('Skill level')
     await skill.focus()
 
     await page.keyboard.press('ArrowRight')
@@ -576,18 +576,18 @@ test.describe('Slider', () => {
     page,
   }) => {
     await designSystemPage.goto()
-    const low = designSystemPage.sliderThumb('Rating range minimum')
-    const high = designSystemPage.sliderThumb('Rating range maximum')
-    await designSystemPage.slider('Skill level').focus()
+    const low = designSystemPage.forms.sliderThumb('Rating range minimum')
+    const high = designSystemPage.forms.sliderThumb('Rating range maximum')
+    await designSystemPage.forms.slider('Skill level').focus()
 
     await page.keyboard.press('Tab')
 
-    await expect(designSystemPage.slider('Rating range minimum')).toBeFocused()
+    await expect(designSystemPage.forms.slider('Rating range minimum')).toBeFocused()
     await expect(low).toHaveCSS('box-shadow', ring)
     await expect(low).toHaveCSS('border-color', 'rgb(255, 122, 26)')
     await expect(high).toHaveCSS('box-shadow', resting)
     await expect(
-      designSystemPage.sliderThumb('Skill level'),
+      designSystemPage.forms.sliderThumb('Skill level'),
     ).toHaveCSS('box-shadow', resting)
   })
 
@@ -595,14 +595,14 @@ test.describe('Slider', () => {
   // ring.
   test('a click shows no focus ring', async ({ designSystemPage, page }) => {
     await designSystemPage.goto()
-    const thumb = designSystemPage.sliderThumb('Skill level')
+    const thumb = designSystemPage.forms.sliderThumb('Skill level')
     await thumb.scrollIntoViewIfNeeded()
     const box = (await thumb.boundingBox())!
 
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
 
-    await expect(designSystemPage.slider('Skill level')).toBeFocused()
-    await expect(designSystemPage.slider('Skill level')).toHaveValue('1620')
+    await expect(designSystemPage.forms.slider('Skill level')).toBeFocused()
+    await expect(designSystemPage.forms.slider('Skill level')).toHaveValue('1620')
     await expect(thumb).toHaveCSS('box-shadow', resting)
   })
 
@@ -612,18 +612,18 @@ test.describe('Slider', () => {
     page,
   }) => {
     await designSystemPage.goto()
-    const skill = designSystemPage.slider('Skill level')
+    const skill = designSystemPage.forms.slider('Skill level')
     await skill.evaluate((input) => input.setAttribute('disabled', ''))
 
-    await designSystemPage.dragSlider('Skill level', 0.75)
+    await designSystemPage.forms.dragSlider('Skill level', 0.75)
     await skill.focus()
     await page.keyboard.press('ArrowRight')
 
     await expect(skill).toHaveValue('1620')
-    await expect(designSystemPage.sliderValue('Skill level')).toHaveText(
+    await expect(designSystemPage.forms.sliderValue('Skill level')).toHaveText(
       '1620',
     )
-    await expect(designSystemPage.sliderField('Skill level')).toHaveCSS(
+    await expect(designSystemPage.forms.sliderField('Skill level')).toHaveCSS(
       'opacity',
       '0.5',
     )
@@ -632,15 +632,15 @@ test.describe('Slider', () => {
   test("a range's thumbs don't cross", async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await designSystemPage.dragSlider('Rating range minimum', 0.9)
+    await designSystemPage.forms.dragSlider('Rating range minimum', 0.9)
 
-    await expect(designSystemPage.sliderValue('Rating range')).toHaveText(
+    await expect(designSystemPage.forms.sliderValue('Rating range')).toHaveText(
       '1800 – 1800',
     )
-    const low = (await designSystemPage
+    const low = (await designSystemPage.forms
       .sliderThumb('Rating range minimum')
       .boundingBox())!
-    const high = (await designSystemPage
+    const high = (await designSystemPage.forms
       .sliderThumb('Rating range maximum')
       .boundingBox())!
     expect(low.x).toBeCloseTo(high.x, 0)
@@ -653,21 +653,21 @@ test.describe('Slider', () => {
     page,
   }) => {
     await designSystemPage.goto()
-    const readout = designSystemPage.sliderValue('Rating range')
+    const readout = designSystemPage.forms.sliderValue('Rating range')
 
-    await designSystemPage.slider('Rating range minimum').focus()
+    await designSystemPage.forms.slider('Rating range minimum').focus()
     await page.keyboard.press('Home')
-    await designSystemPage.slider('Rating range maximum').focus()
+    await designSystemPage.forms.slider('Rating range maximum').focus()
     await page.keyboard.press('Home')
     await expect(readout).toHaveText('1100 – 1100')
-    await designSystemPage.dragSlider('Rating range maximum', 0.5)
+    await designSystemPage.forms.dragSlider('Rating range maximum', 0.5)
     await expect(readout).toHaveText('1100 – 1600')
 
     await page.keyboard.press('End')
-    await designSystemPage.slider('Rating range minimum').focus()
+    await designSystemPage.forms.slider('Rating range minimum').focus()
     await page.keyboard.press('End')
     await expect(readout).toHaveText('2100 – 2100')
-    await designSystemPage.dragSlider('Rating range minimum', 0.5)
+    await designSystemPage.forms.dragSlider('Rating range minimum', 0.5)
     await expect(readout).toHaveText('1600 – 2100')
   })
 
@@ -680,7 +680,7 @@ test.describe('Slider', () => {
       await designSystemPage.goto()
 
       await expect(
-        designSystemPage.sliderThumb('Skill level'),
+        designSystemPage.forms.sliderThumb('Skill level'),
       ).toHaveCSS('transition-duration', '0s')
     })
   })
@@ -696,7 +696,7 @@ test.describe('Select card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.selectCard).toHaveScreenshot(
+    await expect(designSystemPage.forms.selectCard).toHaveScreenshot(
       'select-card.png',
       { maxDiffPixels: 15 },
     )
@@ -705,7 +705,7 @@ test.describe('Select card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.selectCard).toHaveScreenshot(
+    await expect(referenceKitPage.forms.selectCard).toHaveScreenshot(
       'select-card.png',
     )
   })
@@ -718,7 +718,7 @@ test.describe('Select', () => {
 
   test('choosing an option sets its value', async ({ designSystemPage }) => {
     await designSystemPage.goto()
-    const type = designSystemPage.select('Match type')
+    const type = designSystemPage.forms.select('Match type')
 
     await type.selectOption('Doubles')
 
@@ -730,7 +730,7 @@ test.describe('Select', () => {
     page,
   }) => {
     await designSystemPage.goto()
-    const type = designSystemPage.select('Match type')
+    const type = designSystemPage.forms.select('Match type')
     await type.focus()
 
     await page.keyboard.press('ArrowDown')
@@ -745,15 +745,15 @@ test.describe('Select', () => {
     page,
   }) => {
     await designSystemPage.goto()
-    const length = designSystemPage.select('Match length')
-    await designSystemPage.select('Match type').focus()
+    const length = designSystemPage.forms.select('Match length')
+    await designSystemPage.forms.select('Match type').focus()
 
     await page.keyboard.press('Tab')
 
     await expect(length).toBeFocused()
     await expect(length).toHaveCSS('box-shadow', ring)
     await expect(length).toHaveCSS('border-color', 'rgb(255, 122, 26)')
-    await expect(designSystemPage.select('Match type')).toHaveCSS(
+    await expect(designSystemPage.forms.select('Match type')).toHaveCSS(
       'box-shadow',
       'none',
     )
@@ -767,7 +767,7 @@ test.describe('Select', () => {
     page,
   }) => {
     await designSystemPage.goto()
-    const type = designSystemPage.select('Match type')
+    const type = designSystemPage.forms.select('Match type')
     await type.scrollIntoViewIfNeeded()
     const box = (await type.boundingBox())!
 
@@ -785,7 +785,7 @@ test.describe('Select', () => {
     page,
   }) => {
     await designSystemPage.goto()
-    const type = designSystemPage.select('Match type')
+    const type = designSystemPage.forms.select('Match type')
     await type.evaluate((select) => select.setAttribute('disabled', ''))
     await type.scrollIntoViewIfNeeded()
     const box = (await type.boundingBox())!
@@ -803,7 +803,7 @@ test.describe('Select', () => {
     designSystemPage,
   }) => {
     await designSystemPage.goto()
-    const type = designSystemPage.select('Match type')
+    const type = designSystemPage.forms.select('Match type')
 
     await type.evaluate((select) =>
       select.setAttribute('aria-invalid', 'true'),
@@ -817,7 +817,7 @@ test.describe('Select', () => {
   test('the border color transitions', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.select('Match type')).toHaveCSS(
+    await expect(designSystemPage.forms.select('Match type')).toHaveCSS(
       'transition-duration',
       '0.12s',
     )
@@ -831,7 +831,7 @@ test.describe('Select', () => {
     }) => {
       await designSystemPage.goto()
 
-      await expect(designSystemPage.select('Match type')).toHaveCSS(
+      await expect(designSystemPage.forms.select('Match type')).toHaveCSS(
         'transition-duration',
         '0s',
       )
@@ -845,7 +845,7 @@ test.describe('Combobox card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.comboboxCard).toHaveScreenshot(
+    await expect(designSystemPage.forms.comboboxCard).toHaveScreenshot(
       'combobox-card.png',
     )
   })
@@ -853,7 +853,7 @@ test.describe('Combobox card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.comboboxCard).toHaveScreenshot(
+    await expect(referenceKitPage.forms.comboboxCard).toHaveScreenshot(
       'combobox-card.png',
     )
   })
@@ -866,12 +866,12 @@ test.describe('Combobox', () => {
 
   test('typing filters the options', async ({ designSystemPage }) => {
     await designSystemPage.goto()
-    const combobox = designSystemPage.combobox
+    const combobox = designSystemPage.forms.combobox
 
     await combobox.clear()
     await combobox.pressSequentially('an')
 
-    await expect(designSystemPage.comboboxOptions).toHaveText([
+    await expect(designSystemPage.forms.comboboxOptions).toHaveText([
       'Silva, Ana 1710',
       'Tanaka, Kenji 1540',
     ])
@@ -883,8 +883,8 @@ test.describe('Combobox', () => {
     page,
   }) => {
     await designSystemPage.goto()
-    const combobox = designSystemPage.combobox
-    const options = designSystemPage.comboboxOptions
+    const combobox = designSystemPage.forms.combobox
+    const options = designSystemPage.forms.comboboxOptions
     await combobox.focus()
 
     await page.keyboard.press('ArrowDown')
@@ -918,17 +918,17 @@ test.describe('Combobox', () => {
     page,
   }) => {
     await designSystemPage.goto()
-    await designSystemPage.select('Match length').focus()
+    await designSystemPage.forms.select('Match length').focus()
 
     await page.keyboard.press('Tab')
 
-    await expect(designSystemPage.combobox).toBeFocused()
-    await expect(designSystemPage.comboboxBox).toHaveCSS('box-shadow', ring)
-    await expect(designSystemPage.comboboxBox).toHaveCSS(
+    await expect(designSystemPage.forms.combobox).toBeFocused()
+    await expect(designSystemPage.forms.comboboxBox).toHaveCSS('box-shadow', ring)
+    await expect(designSystemPage.forms.comboboxBox).toHaveCSS(
       'border-color',
       'rgb(255, 122, 26)',
     )
-    await expect(designSystemPage.combobox).toHaveCSS('outline-style', 'none')
+    await expect(designSystemPage.forms.combobox).toHaveCSS('outline-style', 'none')
   })
 
   // The screenshot can't see the highlight: --bg-hover is white at 4%,
@@ -937,7 +937,7 @@ test.describe('Combobox', () => {
     designSystemPage,
   }) => {
     await designSystemPage.goto()
-    const options = designSystemPage.comboboxOptions
+    const options = designSystemPage.forms.comboboxOptions
     const highlight = 'rgba(255, 255, 255, 0.04)'
     const none = 'rgba(0, 0, 0, 0)'
     await expect(options.nth(0)).toHaveCSS('background-color', highlight)
@@ -945,7 +945,7 @@ test.describe('Combobox', () => {
 
     await options.nth(2).hover()
 
-    await expect(designSystemPage.combobox).toHaveAttribute(
+    await expect(designSystemPage.forms.combobox).toHaveAttribute(
       'aria-activedescendant',
       (await options.nth(2).getAttribute('id'))!,
     )
@@ -956,17 +956,17 @@ test.describe('Combobox', () => {
   // The closed box is just its input row, inside the box's own border.
   test('Escape closes the list', async ({ designSystemPage, page }) => {
     await designSystemPage.goto()
-    await designSystemPage.combobox.focus()
+    await designSystemPage.forms.combobox.focus()
 
     await page.keyboard.press('Escape')
 
-    await expect(designSystemPage.combobox).toHaveAttribute(
+    await expect(designSystemPage.forms.combobox).toHaveAttribute(
       'aria-expanded',
       'false',
     )
-    await expect(designSystemPage.combobox).toHaveValue('ngu')
-    await expect(designSystemPage.comboboxOptions).toHaveCount(0)
-    await expect(designSystemPage.comboboxInputRow).toHaveCSS(
+    await expect(designSystemPage.forms.combobox).toHaveValue('ngu')
+    await expect(designSystemPage.forms.comboboxOptions).toHaveCount(0)
+    await expect(designSystemPage.forms.comboboxInputRow).toHaveCSS(
       'border-bottom-width',
       '0px',
     )
@@ -977,10 +977,10 @@ test.describe('Combobox', () => {
   }) => {
     await designSystemPage.goto()
 
-    await designSystemPage.combobox.click()
+    await designSystemPage.forms.combobox.click()
 
-    await expect(designSystemPage.combobox).toBeFocused()
-    await expect(designSystemPage.comboboxBox).toHaveCSS('box-shadow', ring)
+    await expect(designSystemPage.forms.combobox).toBeFocused()
+    await expect(designSystemPage.forms.comboboxBox).toHaveCSS('box-shadow', ring)
   })
 
   // The demo's combobox isn't disabled, so this test disables it in place.
@@ -989,7 +989,7 @@ test.describe('Combobox', () => {
     page,
   }) => {
     await designSystemPage.goto()
-    const combobox = designSystemPage.combobox
+    const combobox = designSystemPage.forms.combobox
     await combobox.evaluate((input) => input.setAttribute('disabled', ''))
     await combobox.scrollIntoViewIfNeeded()
     const box = (await combobox.boundingBox())!
@@ -999,7 +999,7 @@ test.describe('Combobox', () => {
 
     await expect(combobox).toHaveValue('ngu')
     await expect(combobox).not.toBeFocused()
-    await expect(designSystemPage.comboboxBox).toHaveCSS('opacity', '0.5')
+    await expect(designSystemPage.forms.comboboxBox).toHaveCSS('opacity', '0.5')
   })
 
   // The demo's combobox isn't invalid, so these tests mark it in place.
@@ -1008,12 +1008,12 @@ test.describe('Combobox', () => {
   }) => {
     await designSystemPage.goto()
 
-    await designSystemPage.combobox.evaluate((input) =>
+    await designSystemPage.forms.combobox.evaluate((input) =>
       input.setAttribute('aria-invalid', 'true'),
     )
 
     // --loss, #FF4D6D.
-    await expect(designSystemPage.comboboxBox).toHaveCSS(
+    await expect(designSystemPage.forms.comboboxBox).toHaveCSS(
       'border-color',
       'rgb(255, 77, 109)',
     )
@@ -1026,9 +1026,9 @@ test.describe('Combobox', () => {
     designSystemPage,
   }) => {
     await designSystemPage.goto()
-    const combobox = designSystemPage.combobox
+    const combobox = designSystemPage.forms.combobox
     await combobox.focus()
-    await expect(designSystemPage.comboboxBox).toHaveCSS(
+    await expect(designSystemPage.forms.comboboxBox).toHaveCSS(
       'border-color',
       'rgb(255, 122, 26)',
     )
@@ -1037,8 +1037,8 @@ test.describe('Combobox', () => {
       input.setAttribute('aria-invalid', 'true'),
     )
 
-    await expect(designSystemPage.comboboxBox).toHaveCSS('box-shadow', ring)
-    await expect(designSystemPage.comboboxBox).toHaveCSS(
+    await expect(designSystemPage.forms.comboboxBox).toHaveCSS('box-shadow', ring)
+    await expect(designSystemPage.forms.comboboxBox).toHaveCSS(
       'border-color',
       'rgb(255, 77, 109)',
     )
@@ -1048,7 +1048,7 @@ test.describe('Combobox', () => {
   test('the border color transitions', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.comboboxBox).toHaveCSS(
+    await expect(designSystemPage.forms.comboboxBox).toHaveCSS(
       'transition-duration',
       '0.12s',
     )
@@ -1062,7 +1062,7 @@ test.describe('Combobox', () => {
     }) => {
       await designSystemPage.goto()
 
-      await expect(designSystemPage.comboboxBox).toHaveCSS(
+      await expect(designSystemPage.forms.comboboxBox).toHaveCSS(
         'transition-duration',
         '0s',
       )
@@ -1081,7 +1081,7 @@ test.describe('Date Picker card', () => {
     await page.clock.setFixedTime(april14)
     await designSystemPage.goto()
 
-    await expect(designSystemPage.datePickerCard).toHaveScreenshot(
+    await expect(designSystemPage.forms.datePickerCard).toHaveScreenshot(
       'date-picker-card.png',
     )
   })
@@ -1089,7 +1089,7 @@ test.describe('Date Picker card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.datePickerCard).toHaveScreenshot(
+    await expect(referenceKitPage.forms.datePickerCard).toHaveScreenshot(
       'date-picker-card.png',
     )
   })
@@ -1110,40 +1110,40 @@ test.describe('Date Picker', () => {
   test('the button closes and opens the calendar', async ({
     designSystemPage,
   }) => {
-    const trigger = designSystemPage.datePickerTrigger
+    const trigger = designSystemPage.forms.datePickerTrigger
     await expect(trigger).toHaveAttribute('aria-expanded', 'true')
 
     await trigger.click()
-    await expect(designSystemPage.datePickerDialog).toHaveCount(0)
+    await expect(designSystemPage.forms.datePickerDialog).toHaveCount(0)
     await expect(trigger).toHaveAttribute('aria-expanded', 'false')
 
     await trigger.click()
-    await expect(designSystemPage.datePickerDialog).toBeVisible()
-    await expect(designSystemPage.datePickerDay('April 12, 2026')).toBeFocused()
+    await expect(designSystemPage.forms.datePickerDialog).toBeVisible()
+    await expect(designSystemPage.forms.datePickerDay('April 12, 2026')).toBeFocused()
   })
 
   test('the arrow and Page keys move the focused day and change the month', async ({
     designSystemPage,
     page,
   }) => {
-    const grid = designSystemPage.datePickerGrid
-    await designSystemPage.datePickerDay('April 12, 2026').focus()
+    const grid = designSystemPage.forms.datePickerGrid
+    await designSystemPage.forms.datePickerDay('April 12, 2026').focus()
 
     await page.keyboard.press('ArrowRight')
-    await expect(designSystemPage.datePickerDay('April 13, 2026')).toBeFocused()
+    await expect(designSystemPage.forms.datePickerDay('April 13, 2026')).toBeFocused()
     await page.keyboard.press('ArrowDown')
-    await expect(designSystemPage.datePickerDay('April 20, 2026')).toBeFocused()
+    await expect(designSystemPage.forms.datePickerDay('April 20, 2026')).toBeFocused()
     await page.keyboard.press('End')
-    await expect(designSystemPage.datePickerDay('April 25, 2026')).toBeFocused()
+    await expect(designSystemPage.forms.datePickerDay('April 25, 2026')).toBeFocused()
 
     await page.keyboard.press('PageDown')
     await expect(grid).toHaveAccessibleName('May 2026')
-    await expect(designSystemPage.datePickerDay('May 25, 2026')).toBeFocused()
+    await expect(designSystemPage.forms.datePickerDay('May 25, 2026')).toBeFocused()
 
     await page.keyboard.press('PageUp')
     await page.keyboard.press('PageUp')
     await expect(grid).toHaveAccessibleName('March 2026')
-    await expect(designSystemPage.datePickerDay('March 25, 2026')).toBeFocused()
+    await expect(designSystemPage.forms.datePickerDay('March 25, 2026')).toBeFocused()
 
     await page.keyboard.press('ArrowUp')
     await page.keyboard.press('ArrowUp')
@@ -1151,7 +1151,7 @@ test.describe('Date Picker', () => {
     await page.keyboard.press('ArrowUp')
     await expect(grid).toHaveAccessibleName('February 2026')
     await expect(
-      designSystemPage.datePickerDay('February 25, 2026'),
+      designSystemPage.forms.datePickerDay('February 25, 2026'),
     ).toBeFocused()
   })
 
@@ -1159,13 +1159,13 @@ test.describe('Date Picker', () => {
     designSystemPage,
     page,
   }) => {
-    await designSystemPage.datePickerDay('April 12, 2026').focus()
+    await designSystemPage.forms.datePickerDay('April 12, 2026').focus()
 
     await page.keyboard.press('ArrowLeft')
     await page.keyboard.press('Enter')
 
-    const trigger = designSystemPage.datePickerTrigger
-    await expect(designSystemPage.datePickerDialog).toHaveCount(0)
+    const trigger = designSystemPage.forms.datePickerTrigger
+    await expect(designSystemPage.forms.datePickerDialog).toHaveCount(0)
     await expect(trigger).toHaveText('April 11, 2026')
     await expect(trigger).toHaveAccessibleName('Match date April 11, 2026')
     await expect(trigger).toBeFocused()
@@ -1175,26 +1175,26 @@ test.describe('Date Picker', () => {
     designSystemPage,
     page,
   }) => {
-    await designSystemPage.nextMonth.focus()
+    await designSystemPage.forms.nextMonth.focus()
 
     await page.keyboard.press('Escape')
 
-    await expect(designSystemPage.datePickerDialog).toHaveCount(0)
-    await expect(designSystemPage.datePickerTrigger).toBeFocused()
+    await expect(designSystemPage.forms.datePickerDialog).toHaveCount(0)
+    await expect(designSystemPage.forms.datePickerTrigger).toBeFocused()
   })
 
   test('the month buttons change the month', async ({ designSystemPage }) => {
-    await designSystemPage.nextMonth.click()
-    await expect(designSystemPage.datePickerGrid).toHaveAccessibleName(
+    await designSystemPage.forms.nextMonth.click()
+    await expect(designSystemPage.forms.datePickerGrid).toHaveAccessibleName(
       'May 2026',
     )
 
-    await designSystemPage.previousMonth.click()
-    await designSystemPage.previousMonth.click()
-    await expect(designSystemPage.datePickerGrid).toHaveAccessibleName(
+    await designSystemPage.forms.previousMonth.click()
+    await designSystemPage.forms.previousMonth.click()
+    await expect(designSystemPage.forms.datePickerGrid).toHaveAccessibleName(
       'March 2026',
     )
-    await expect(designSystemPage.previousMonth).toBeFocused()
+    await expect(designSystemPage.forms.previousMonth).toBeFocused()
   })
 
   // The button is a .button, so it takes their outline, on keyboard focus
@@ -1203,8 +1203,8 @@ test.describe('Date Picker', () => {
     designSystemPage,
     page,
   }) => {
-    const trigger = designSystemPage.datePickerTrigger
-    await designSystemPage.combobox.focus()
+    const trigger = designSystemPage.forms.datePickerTrigger
+    await designSystemPage.forms.combobox.focus()
 
     await page.keyboard.press('Tab')
     await expect(trigger).toBeFocused()
@@ -1213,15 +1213,15 @@ test.describe('Date Picker', () => {
     // The card starts open, so Enter closes the calendar, then opens it
     // with the focus on the chosen day.
     await page.keyboard.press('Enter')
-    await expect(designSystemPage.datePickerDialog).toHaveCount(0)
+    await expect(designSystemPage.forms.datePickerDialog).toHaveCount(0)
     await page.keyboard.press('Enter')
-    const chosen = designSystemPage.datePickerDay('April 12, 2026')
+    const chosen = designSystemPage.forms.datePickerDay('April 12, 2026')
     await expect(chosen).toBeFocused()
     await expect(chosen).toHaveCSS('box-shadow', ring)
     await expect(chosen).toHaveCSS('outline-style', 'none')
 
     await page.keyboard.press('ArrowRight')
-    await expect(designSystemPage.datePickerDay('April 13, 2026')).toHaveCSS(
+    await expect(designSystemPage.forms.datePickerDay('April 13, 2026')).toHaveCSS(
       'box-shadow',
       ring,
     )
@@ -1231,18 +1231,18 @@ test.describe('Date Picker', () => {
   test('a click shows no focus ring, on the button or the day', async ({
     designSystemPage,
   }) => {
-    const trigger = designSystemPage.datePickerTrigger
+    const trigger = designSystemPage.forms.datePickerTrigger
 
     await trigger.click()
     await expect(trigger).toBeFocused()
     await expect(trigger).toHaveCSS('outline-style', 'none')
 
     await trigger.click()
-    const chosen = designSystemPage.datePickerDay('April 12, 2026')
+    const chosen = designSystemPage.forms.datePickerDay('April 12, 2026')
     await expect(chosen).toBeFocused()
     await expect(chosen).toHaveCSS('box-shadow', 'none')
 
-    await designSystemPage.datePickerDay('April 20, 2026').click()
+    await designSystemPage.forms.datePickerDay('April 20, 2026').click()
     await expect(trigger).toBeFocused()
     await expect(trigger).toHaveText('April 20, 2026')
     await expect(trigger).toHaveCSS('outline-style', 'none')
@@ -1253,10 +1253,10 @@ test.describe('Date Picker', () => {
   test('the chosen day, today and the hovered day have their own looks', async ({
     designSystemPage,
   }) => {
-    const chosen = designSystemPage.datePickerDay('April 12, 2026')
-    const today = designSystemPage.datePickerDay('April 14, 2026')
-    const other = designSystemPage.datePickerDay('April 15, 2026')
-    const muted = designSystemPage.datePickerDay('March 31, 2026')
+    const chosen = designSystemPage.forms.datePickerDay('April 12, 2026')
+    const today = designSystemPage.forms.datePickerDay('April 14, 2026')
+    const other = designSystemPage.forms.datePickerDay('April 15, 2026')
+    const muted = designSystemPage.forms.datePickerDay('March 31, 2026')
     // --ink-950.
     await expect(chosen).toHaveCSS('background-color', orange)
     await expect(chosen).toHaveCSS('color', 'rgb(11, 13, 18)')
@@ -1280,10 +1280,10 @@ test.describe('Date Picker', () => {
   // A day that's both chosen and today reads as chosen: the kit's rule
   // order would draw it orange on orange.
   test("a chosen today reads as chosen", async ({ designSystemPage }) => {
-    await designSystemPage.datePickerDay('April 14, 2026').click()
-    await designSystemPage.datePickerTrigger.click()
+    await designSystemPage.forms.datePickerDay('April 14, 2026').click()
+    await designSystemPage.forms.datePickerTrigger.click()
 
-    const today = designSystemPage.datePickerDay('April 14, 2026')
+    const today = designSystemPage.forms.datePickerDay('April 14, 2026')
     await expect(today).toHaveAttribute('aria-current', 'date')
     await expect(today).toHaveAttribute('aria-selected', 'true')
     await expect(today).toHaveCSS('background-color', orange)
@@ -1297,7 +1297,7 @@ test.describe('Date Picker', () => {
     designSystemPage,
     page,
   }) => {
-    const chosen = designSystemPage.datePickerDay('April 12, 2026')
+    const chosen = designSystemPage.forms.datePickerDay('April 12, 2026')
     await chosen.evaluate((day) => day.scrollIntoView({ block: 'center' }))
     await chosen.focus()
     const top = await page.locator('html').evaluate((html) => html.scrollTop)
@@ -1311,7 +1311,7 @@ test.describe('Date Picker', () => {
       ['Home', 'April 19, 2026'],
     ]) {
       await page.keyboard.press(key)
-      await expect(designSystemPage.datePickerDay(name)).toBeFocused()
+      await expect(designSystemPage.forms.datePickerDay(name)).toBeFocused()
       expect(await page.locator('html').evaluate((html) => html.scrollTop), key).toBe(top)
     }
   })
@@ -1319,7 +1319,7 @@ test.describe('Date Picker', () => {
   // The demo's picker always has a day chosen, so this test shows the
   // placeholder's class in place.
   test('the placeholder is muted', async ({ designSystemPage }) => {
-    const text = designSystemPage.datePickerTrigger.locator('span')
+    const text = designSystemPage.forms.datePickerTrigger.locator('span')
     // --fg-1.
     await expect(text).toHaveCSS('color', 'rgb(247, 248, 251)')
 
@@ -1336,15 +1336,15 @@ test.describe('Date Picker', () => {
     designSystemPage,
     page,
   }) => {
-    const trigger = designSystemPage.datePickerTrigger
+    const trigger = designSystemPage.forms.datePickerTrigger
     await trigger.click()
-    await expect(designSystemPage.datePickerDialog).toHaveCount(0)
+    await expect(designSystemPage.forms.datePickerDialog).toHaveCount(0)
     await trigger.evaluate((button) => button.setAttribute('disabled', ''))
     const box = (await trigger.boundingBox())!
 
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
 
-    await expect(designSystemPage.datePickerDialog).toHaveCount(0)
+    await expect(designSystemPage.forms.datePickerDialog).toHaveCount(0)
     await expect(trigger).toHaveCSS('opacity', '0.5')
     await expect(trigger).toHaveCSS('cursor', 'not-allowed')
   })
@@ -1355,7 +1355,7 @@ test.describe('Date Picker', () => {
   test('an invalid one shows the error border', async ({
     designSystemPage,
   }) => {
-    const trigger = designSystemPage.datePickerTrigger
+    const trigger = designSystemPage.forms.datePickerTrigger
     // --border-default.
     await expect(trigger).toHaveCSS('border-color', 'rgb(58, 65, 82)')
 
@@ -1370,17 +1370,17 @@ test.describe('Date Picker', () => {
   test('the calendar floats under the button without the card class', async ({
     designSystemPage,
   }) => {
-    const card = designSystemPage.datePickerCard
+    const card = designSystemPage.forms.datePickerCard
     const open = (await card.boundingBox())!
 
-    await designSystemPage.datePicker.evaluate((picker) =>
+    await designSystemPage.forms.datePicker.evaluate((picker) =>
       picker.classList.remove('date-picker-demo'),
     )
 
-    const dialog = designSystemPage.datePickerDialog
+    const dialog = designSystemPage.forms.datePickerDialog
     await expect(dialog).toHaveCSS('position', 'absolute')
     await expect(dialog).toHaveCSS('box-shadow', 'rgba(0, 0, 0, 0.55) 0px 12px 32px 0px')
-    const trigger = (await designSystemPage.datePickerTrigger.boundingBox())!
+    const trigger = (await designSystemPage.forms.datePickerTrigger.boundingBox())!
     const calendar = (await dialog.boundingBox())!
     const floating = (await card.boundingBox())!
     expect(calendar.x).toBe(trigger.x)
@@ -1394,7 +1394,7 @@ test.describe('Date Picker', () => {
 
   test('the day backgrounds fade', async ({ designSystemPage }) => {
     await expect(
-      designSystemPage.datePickerDay('April 15, 2026'),
+      designSystemPage.forms.datePickerDay('April 15, 2026'),
     ).toHaveCSS('transition-duration', '0.12s, 0.12s')
   })
 
@@ -1405,7 +1405,7 @@ test.describe('Date Picker', () => {
       designSystemPage,
     }) => {
       await expect(
-        designSystemPage.datePickerDay('April 15, 2026'),
+        designSystemPage.forms.datePickerDay('April 15, 2026'),
       ).toHaveCSS('transition-duration', '0s')
     })
   })
@@ -1417,7 +1417,7 @@ test.describe('Toggle · Toggle Group card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.toggleCard).toHaveScreenshot(
+    await expect(designSystemPage.forms.toggleCard).toHaveScreenshot(
       'toggle-card.png',
     )
   })
@@ -1425,7 +1425,7 @@ test.describe('Toggle · Toggle Group card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.toggleCard).toHaveScreenshot(
+    await expect(referenceKitPage.forms.toggleCard).toHaveScreenshot(
       'toggle-card.png',
     )
   })
@@ -1450,8 +1450,8 @@ test.describe('Toggle', () => {
     designSystemPage,
     page,
   }) => {
-    const bold = designSystemPage.toggle('Bold')
-    const italic = designSystemPage.toggle('Italic')
+    const bold = designSystemPage.forms.toggle('Bold')
+    const italic = designSystemPage.forms.toggle('Italic')
     await expect(bold).toHaveAttribute('aria-pressed', 'true')
     await expect(italic).toHaveAttribute('aria-pressed', 'false')
 
@@ -1469,9 +1469,9 @@ test.describe('Toggle', () => {
     designSystemPage,
     page,
   }) => {
-    const singles = designSystemPage.toggleGroupItem('Singles')
-    const doubles = designSystemPage.toggleGroupItem('Doubles')
-    const mixed = designSystemPage.toggleGroupItem('Mixed')
+    const singles = designSystemPage.forms.toggleGroupItem('Singles')
+    const doubles = designSystemPage.forms.toggleGroupItem('Doubles')
+    const mixed = designSystemPage.forms.toggleGroupItem('Mixed')
     await expect(singles).toHaveAttribute('aria-checked', 'true')
 
     await doubles.click()
@@ -1495,7 +1495,7 @@ test.describe('Toggle', () => {
     designSystemPage,
     page,
   }) => {
-    const singles = designSystemPage.toggleGroupItem('Singles')
+    const singles = designSystemPage.forms.toggleGroupItem('Singles')
     await singles.evaluate((item) => item.scrollIntoView({ block: 'center' }))
     await singles.focus()
     const top = await page.locator('html').evaluate((html) => html.scrollTop)
@@ -1508,7 +1508,7 @@ test.describe('Toggle', () => {
       ['ArrowLeft', 'Singles'],
     ]) {
       await page.keyboard.press(key)
-      await expect(designSystemPage.toggleGroupItem(name)).toBeFocused()
+      await expect(designSystemPage.forms.toggleGroupItem(name)).toBeFocused()
       expect(
         await page.locator('html').evaluate((html) => html.scrollTop),
         key,
@@ -1522,10 +1522,10 @@ test.describe('Toggle', () => {
     designSystemPage,
     page,
   }) => {
-    const bold = designSystemPage.toggle('Bold')
-    const italic = designSystemPage.toggle('Italic')
-    const singles = designSystemPage.toggleGroupItem('Singles')
-    const doubles = designSystemPage.toggleGroupItem('Doubles')
+    const bold = designSystemPage.forms.toggle('Bold')
+    const italic = designSystemPage.forms.toggle('Italic')
+    const singles = designSystemPage.forms.toggleGroupItem('Singles')
+    const doubles = designSystemPage.forms.toggleGroupItem('Doubles')
     await bold.focus()
 
     await page.keyboard.press('Tab')
@@ -1547,8 +1547,8 @@ test.describe('Toggle', () => {
   test('a click shows no outline, on a toggle or a group item', async ({
     designSystemPage,
   }) => {
-    const italic = designSystemPage.toggle('Italic')
-    const doubles = designSystemPage.toggleGroupItem('Doubles')
+    const italic = designSystemPage.forms.toggle('Italic')
+    const doubles = designSystemPage.forms.toggleGroupItem('Doubles')
 
     await italic.click()
     await expect(italic).toBeFocused()
@@ -1565,7 +1565,7 @@ test.describe('Toggle', () => {
   test('hovering an unpressed toggle lightens it', async ({
     designSystemPage,
   }) => {
-    const italic = designSystemPage.toggle('Italic')
+    const italic = designSystemPage.forms.toggle('Italic')
     await expect(italic).toHaveCSS('background-color', none)
     await expect(italic).toHaveCSS('color', fg2)
 
@@ -1578,7 +1578,7 @@ test.describe('Toggle', () => {
   test('pressing a hovered toggle darkens it', async ({
     designSystemPage,
   }) => {
-    const italic = designSystemPage.toggle('Italic')
+    const italic = designSystemPage.forms.toggle('Italic')
     await italic.hover()
     await expect(italic).toHaveCSS('background-color', hover)
 
@@ -1597,8 +1597,8 @@ test.describe('Toggle', () => {
     test('a pressed toggle and the chosen item keep their look under the pointer', async ({
       designSystemPage,
     }) => {
-      const bold = designSystemPage.toggle('Bold')
-      const singles = designSystemPage.toggleGroupItem('Singles')
+      const bold = designSystemPage.forms.toggle('Bold')
+      const singles = designSystemPage.forms.toggleGroupItem('Singles')
       for (const toggle of [bold, singles]) {
         await expect(toggle).toHaveCSS('background-color', pressed)
         await expect(toggle).toHaveCSS('color', fg1)
@@ -1614,12 +1614,12 @@ test.describe('Toggle', () => {
   test("the group's items look like toggles in a panel", async ({
     designSystemPage,
   }) => {
-    const group = designSystemPage.toggleGroup
+    const group = designSystemPage.forms.toggleGroup
     // --ink-900 and --border-subtle.
     await expect(group).toHaveCSS('background-color', 'rgb(17, 20, 27)')
     await expect(group).toHaveCSS('border-color', 'rgb(42, 48, 64)')
     await expect(group).toHaveCSS('border-radius', '10px')
-    const doubles = designSystemPage.toggleGroupItem('Doubles')
+    const doubles = designSystemPage.forms.toggleGroupItem('Doubles')
     await expect(doubles).toHaveCSS('background-color', none)
     await expect(doubles).toHaveCSS('color', fg2)
     await expect(doubles).toHaveCSS('border-radius', '6px')
@@ -1628,12 +1628,12 @@ test.describe('Toggle', () => {
   test('the separator is a 1px line as tall as the row', async ({
     designSystemPage,
   }) => {
-    const separator = designSystemPage.toggleSeparator
+    const separator = designSystemPage.forms.toggleSeparator
     await expect(separator).toHaveAttribute('aria-orientation', 'vertical')
     // --border-subtle.
     await expect(separator).toHaveCSS('background-color', 'rgb(42, 48, 64)')
     const line = (await separator.boundingBox())!
-    const row = (await designSystemPage.toggleRow.boundingBox())!
+    const row = (await designSystemPage.forms.toggleRow.boundingBox())!
     expect(line.width).toBe(1)
     expect(row.height).toBe(46)
     expect(line.height).toBe(row.height)
@@ -1646,8 +1646,8 @@ test.describe('Toggle', () => {
     designSystemPage,
     page,
   }) => {
-    const italic = designSystemPage.toggle('Italic')
-    const doubles = designSystemPage.toggleGroupItem('Doubles')
+    const italic = designSystemPage.forms.toggle('Italic')
+    const doubles = designSystemPage.forms.toggleGroupItem('Doubles')
     for (const toggle of [italic, doubles]) {
       await expect(toggle).toHaveCSS('opacity', '1')
       await toggle.evaluate((button) => button.setAttribute('disabled', ''))
@@ -1661,12 +1661,12 @@ test.describe('Toggle', () => {
     await expect(italic).toHaveAttribute('aria-pressed', 'false')
     await expect(doubles).toHaveAttribute('aria-checked', 'false')
     await expect(
-      designSystemPage.toggleGroupItem('Singles'),
+      designSystemPage.forms.toggleGroupItem('Singles'),
     ).toHaveAttribute('aria-checked', 'true')
   })
 
   test('the background and text color fade', async ({ designSystemPage }) => {
-    await expect(designSystemPage.toggle('Italic')).toHaveCSS(
+    await expect(designSystemPage.forms.toggle('Italic')).toHaveCSS(
       'transition-duration',
       '0.12s, 0.12s',
     )
@@ -1678,7 +1678,7 @@ test.describe('Toggle', () => {
     test('the background and text color change without a transition', async ({
       designSystemPage,
     }) => {
-      await expect(designSystemPage.toggle('Italic')).toHaveCSS(
+      await expect(designSystemPage.forms.toggle('Italic')).toHaveCSS(
         'transition-duration',
         '0s',
       )
@@ -1690,10 +1690,10 @@ test.describe('Data Display section', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.displaySectionHeading).toHaveScreenshot(
+    await expect(designSystemPage.display.heading).toHaveScreenshot(
       'display-heading.png',
     )
-    await expect(designSystemPage.displaySectionLead).toHaveScreenshot(
+    await expect(designSystemPage.display.lead).toHaveScreenshot(
       'display-lead.png',
     )
   })
@@ -1701,10 +1701,10 @@ test.describe('Data Display section', () => {
   test('matches the reference kit section', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.displaySectionHeading).toHaveScreenshot(
+    await expect(referenceKitPage.display.heading).toHaveScreenshot(
       'display-heading.png',
     )
-    await expect(referenceKitPage.displaySectionLead).toHaveScreenshot(
+    await expect(referenceKitPage.display.lead).toHaveScreenshot(
       'display-lead.png',
     )
   })
@@ -1715,13 +1715,13 @@ test.describe('Card card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.cardCard).toHaveScreenshot('card-card.png')
+    await expect(designSystemPage.display.cardCard).toHaveScreenshot('card-card.png')
   })
 
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.cardCard).toHaveScreenshot('card-card.png')
+    await expect(referenceKitPage.display.cardCard).toHaveScreenshot('card-card.png')
   })
 })
 
@@ -1731,7 +1731,7 @@ test.describe('Badge card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.badgeCard).toHaveScreenshot(
+    await expect(designSystemPage.display.badgeCard).toHaveScreenshot(
       'badge-card.png',
       { animations: 'disabled' },
     )
@@ -1740,7 +1740,7 @@ test.describe('Badge card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.badgeCard).toHaveScreenshot(
+    await expect(referenceKitPage.display.badgeCard).toHaveScreenshot(
       'badge-card.png',
       { animations: 'disabled' },
     )
@@ -1749,7 +1749,7 @@ test.describe('Badge card', () => {
   test("the live badge's dot pulses", async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.liveDot).toHaveCSS(
+    await expect(designSystemPage.display.liveDot).toHaveCSS(
       'animation-name',
       'ball-pulse',
     )
@@ -1761,7 +1761,7 @@ test.describe('Badge card', () => {
     test("the live badge's dot holds still", async ({ designSystemPage }) => {
       await designSystemPage.goto()
 
-      await expect(designSystemPage.liveDot).toHaveCSS('animation-name', 'none')
+      await expect(designSystemPage.display.liveDot).toHaveCSS('animation-name', 'none')
     })
   })
 })
@@ -1770,7 +1770,7 @@ test.describe('Avatar card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.avatarCard).toHaveScreenshot(
+    await expect(designSystemPage.display.avatarCard).toHaveScreenshot(
       'avatar-card.png',
     )
   })
@@ -1778,7 +1778,7 @@ test.describe('Avatar card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.avatarCard).toHaveScreenshot(
+    await expect(referenceKitPage.display.avatarCard).toHaveScreenshot(
       'avatar-card.png',
     )
   })
@@ -1788,13 +1788,13 @@ test.describe('Table · Data Table card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.tableCard).toHaveScreenshot('table-card.png')
+    await expect(designSystemPage.display.tableCard).toHaveScreenshot('table-card.png')
   })
 
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.tableCard).toHaveScreenshot('table-card.png')
+    await expect(referenceKitPage.display.tableCard).toHaveScreenshot('table-card.png')
   })
 })
 
@@ -1802,7 +1802,7 @@ test.describe('Progress card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.progressCard).toHaveScreenshot(
+    await expect(designSystemPage.display.progressCard).toHaveScreenshot(
       'progress-card.png',
     )
   })
@@ -1810,7 +1810,7 @@ test.describe('Progress card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.progressCard).toHaveScreenshot(
+    await expect(referenceKitPage.display.progressCard).toHaveScreenshot(
       'progress-card.png',
     )
   })
@@ -1822,7 +1822,7 @@ test.describe('Skeleton card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.skeletonCard).toHaveScreenshot(
+    await expect(designSystemPage.display.skeletonCard).toHaveScreenshot(
       'skeleton-card.png',
       { animations: 'disabled' },
     )
@@ -1831,7 +1831,7 @@ test.describe('Skeleton card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.skeletonCard).toHaveScreenshot(
+    await expect(referenceKitPage.display.skeletonCard).toHaveScreenshot(
       'skeleton-card.png',
       { animations: 'disabled' },
     )
@@ -1840,7 +1840,7 @@ test.describe('Skeleton card', () => {
   test('the placeholders shimmer', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.skeleton).toHaveCSS('animation-name', 'skel')
+    await expect(designSystemPage.display.skeleton).toHaveCSS('animation-name', 'skel')
   })
 
   test.describe('with reduced motion', () => {
@@ -1849,7 +1849,7 @@ test.describe('Skeleton card', () => {
     test('the placeholders hold still', async ({ designSystemPage }) => {
       await designSystemPage.goto()
 
-      await expect(designSystemPage.skeleton).toHaveCSS('animation-name', 'none')
+      await expect(designSystemPage.display.skeleton).toHaveCSS('animation-name', 'none')
     })
   })
 })
@@ -1862,7 +1862,7 @@ test.describe('Aspect Ratio card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.aspectRatioCard).toHaveScreenshot(
+    await expect(designSystemPage.display.aspectRatioCard).toHaveScreenshot(
       'aspect-ratio-card.png',
     )
   })
@@ -1872,9 +1872,9 @@ test.describe('Aspect Ratio card', () => {
     page,
   }) => {
     await designSystemPage.goto()
-    const card = (await designSystemPage.aspectRatioCard.boundingBox())!
-    const wide = (await designSystemPage.aspectRatioBox('16 : 9').boundingBox())!
-    const square = (await designSystemPage
+    const card = (await designSystemPage.display.aspectRatioCard.boundingBox())!
+    const wide = (await designSystemPage.display.aspectRatioBox('16 : 9').boundingBox())!
+    const square = (await designSystemPage.display
       .aspectRatioBox('1 : 1')
       .boundingBox())!
 
@@ -1897,10 +1897,10 @@ test.describe('Navigation section', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.navSectionHeading).toHaveScreenshot(
+    await expect(designSystemPage.nav.heading).toHaveScreenshot(
       'nav-heading.png',
     )
-    await expect(designSystemPage.navSectionLead).toHaveScreenshot(
+    await expect(designSystemPage.nav.lead).toHaveScreenshot(
       'nav-lead.png',
     )
   })
@@ -1908,10 +1908,10 @@ test.describe('Navigation section', () => {
   test('matches the reference kit section', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.navSectionHeading).toHaveScreenshot(
+    await expect(referenceKitPage.nav.heading).toHaveScreenshot(
       'nav-heading.png',
     )
-    await expect(referenceKitPage.navSectionLead).toHaveScreenshot(
+    await expect(referenceKitPage.nav.lead).toHaveScreenshot(
       'nav-lead.png',
     )
   })
@@ -1922,13 +1922,13 @@ test.describe('Tabs card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.tabsCard).toHaveScreenshot('tabs-card.png')
+    await expect(designSystemPage.nav.tabsCard).toHaveScreenshot('tabs-card.png')
   })
 
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.tabsCard).toHaveScreenshot('tabs-card.png')
+    await expect(referenceKitPage.nav.tabsCard).toHaveScreenshot('tabs-card.png')
   })
 })
 
@@ -1944,16 +1944,16 @@ test.describe('Tabs', () => {
   test('a click chooses a tab and shows its panel', async ({
     designSystemPage,
   }) => {
-    const schedule = designSystemPage.tab('Schedule')
+    const schedule = designSystemPage.nav.tab('Schedule')
 
     await schedule.click()
 
     await expect(schedule).toHaveAttribute('aria-selected', 'true')
-    await expect(designSystemPage.tab('Overview')).toHaveAttribute(
+    await expect(designSystemPage.nav.tab('Overview')).toHaveAttribute(
       'aria-selected',
       'false',
     )
-    await expect(designSystemPage.tabPanel).toHaveText(
+    await expect(designSystemPage.nav.tabPanel).toHaveText(
       'Round 3 starts at 2:00pm — 16 matches across 4 courts.',
     )
   })
@@ -1963,7 +1963,7 @@ test.describe('Tabs', () => {
     designSystemPage,
     page,
   }) => {
-    const overview = designSystemPage.tab('Overview')
+    const overview = designSystemPage.nav.tab('Overview')
     await overview.evaluate((tab) => tab.scrollIntoView({ block: 'center' }))
     await overview.focus()
     const top = await page.locator('html').evaluate((html) => html.scrollTop)
@@ -1977,7 +1977,7 @@ test.describe('Tabs', () => {
       ['Home', 'Overview'],
     ]) {
       await page.keyboard.press(key)
-      const tab = designSystemPage.tab(name)
+      const tab = designSystemPage.nav.tab(name)
       await expect(tab, key).toBeFocused()
       await expect(tab, key).toHaveAttribute('aria-selected', 'true')
       expect(
@@ -1991,8 +1991,8 @@ test.describe('Tabs', () => {
     designSystemPage,
     page,
   }) => {
-    const overview = designSystemPage.tab('Overview')
-    const schedule = designSystemPage.tab('Schedule')
+    const overview = designSystemPage.nav.tab('Overview')
+    const schedule = designSystemPage.nav.tab('Schedule')
     await overview.focus()
     await page.keyboard.press('Shift+Tab')
     await page.keyboard.press('Tab')
@@ -2008,7 +2008,7 @@ test.describe('Tabs', () => {
   })
 
   test('a click shows no outline', async ({ designSystemPage }) => {
-    const schedule = designSystemPage.tab('Schedule')
+    const schedule = designSystemPage.nav.tab('Schedule')
 
     await schedule.click()
 
@@ -2023,7 +2023,7 @@ test.describe('Accordion card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.accordionCard).toHaveScreenshot(
+    await expect(designSystemPage.nav.accordionCard).toHaveScreenshot(
       'accordion-card.png',
       { animations: 'disabled' },
     )
@@ -2032,7 +2032,7 @@ test.describe('Accordion card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.accordionCard).toHaveScreenshot(
+    await expect(referenceKitPage.nav.accordionCard).toHaveScreenshot(
       'accordion-card.png',
       { animations: 'disabled' },
     )
@@ -2053,27 +2053,27 @@ test.describe('Accordion', () => {
   test('opening a question closes the open one', async ({
     designSystemPage,
   }) => {
-    const first = designSystemPage.accordionTrigger(scheduler)
-    const second = designSystemPage.accordionTrigger(free)
-    await expect(designSystemPage.accordionContent(scheduler)).toBeVisible()
-    await expect(designSystemPage.accordionContent(free)).toHaveCount(0)
+    const first = designSystemPage.nav.accordionTrigger(scheduler)
+    const second = designSystemPage.nav.accordionTrigger(free)
+    await expect(designSystemPage.nav.accordionContent(scheduler)).toBeVisible()
+    await expect(designSystemPage.nav.accordionContent(free)).toHaveCount(0)
 
     await second.click()
     await expect(second).toHaveAttribute('aria-expanded', 'true')
-    await expect(designSystemPage.accordionContent(free)).toBeVisible()
+    await expect(designSystemPage.nav.accordionContent(free)).toBeVisible()
     await expect(first).toHaveAttribute('aria-expanded', 'false')
-    await expect(designSystemPage.accordionContent(scheduler)).toHaveCount(0)
+    await expect(designSystemPage.nav.accordionContent(scheduler)).toHaveCount(0)
 
     await second.click()
     await expect(second).toHaveAttribute('aria-expanded', 'false')
-    await expect(designSystemPage.accordionContent(free)).toHaveCount(0)
+    await expect(designSystemPage.nav.accordionContent(free)).toHaveCount(0)
   })
 
   test('Enter and Space open and close a question', async ({
     designSystemPage,
     page,
   }) => {
-    const second = designSystemPage.accordionTrigger(free)
+    const second = designSystemPage.nav.accordionTrigger(free)
     await second.focus()
 
     await page.keyboard.press('Enter')
@@ -2085,17 +2085,17 @@ test.describe('Accordion', () => {
   test("an open question's chevron points up", async ({
     designSystemPage,
   }) => {
-    const chevron = designSystemPage.accordionChevron(free)
+    const chevron = designSystemPage.nav.accordionChevron(free)
     await expect(chevron).toHaveCSS('transform', 'none')
 
-    await designSystemPage.accordionTrigger(free).click()
+    await designSystemPage.nav.accordionTrigger(free).click()
 
     // rotate(180deg).
     await expect(chevron).toHaveCSS('transform', 'matrix(-1, 0, 0, -1, 0, 0)')
   })
 
   test('the chevron turns', async ({ designSystemPage }) => {
-    await expect(designSystemPage.accordionChevron(free)).toHaveCSS(
+    await expect(designSystemPage.nav.accordionChevron(free)).toHaveCSS(
       'transition-duration',
       '0.12s',
     )
@@ -2105,8 +2105,8 @@ test.describe('Accordion', () => {
     designSystemPage,
     page,
   }) => {
-    const first = designSystemPage.accordionTrigger(scheduler)
-    const second = designSystemPage.accordionTrigger(free)
+    const first = designSystemPage.nav.accordionTrigger(scheduler)
+    const second = designSystemPage.nav.accordionTrigger(free)
     await first.focus()
 
     await page.keyboard.press('Tab')
@@ -2117,7 +2117,7 @@ test.describe('Accordion', () => {
   })
 
   test('a click shows no outline', async ({ designSystemPage }) => {
-    const second = designSystemPage.accordionTrigger(free)
+    const second = designSystemPage.nav.accordionTrigger(free)
 
     await second.click()
 
@@ -2131,7 +2131,7 @@ test.describe('Accordion', () => {
     test('the chevron turns without a transition', async ({
       designSystemPage,
     }) => {
-      await expect(designSystemPage.accordionChevron(free)).toHaveCSS(
+      await expect(designSystemPage.nav.accordionChevron(free)).toHaveCSS(
         'transition-duration',
         '0s',
       )
@@ -2145,7 +2145,7 @@ test.describe('Breadcrumb card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.breadcrumbCard).toHaveScreenshot(
+    await expect(designSystemPage.nav.breadcrumbCard).toHaveScreenshot(
       'breadcrumb-card.png',
     )
   })
@@ -2153,7 +2153,7 @@ test.describe('Breadcrumb card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.breadcrumbCard).toHaveScreenshot(
+    await expect(referenceKitPage.nav.breadcrumbCard).toHaveScreenshot(
       'breadcrumb-card.png',
     )
   })
@@ -2170,7 +2170,7 @@ test.describe('Breadcrumb', () => {
   })
 
   test('hovering a link lightens it', async ({ designSystemPage }) => {
-    const link = designSystemPage.breadcrumbLink('Tournaments')
+    const link = designSystemPage.nav.breadcrumbLink('Tournaments')
     await expect(link).toHaveCSS('color', fg3)
 
     await link.hover()
@@ -2183,8 +2183,8 @@ test.describe('Breadcrumb', () => {
     designSystemPage,
     page,
   }) => {
-    const first = designSystemPage.breadcrumbLink('Tournaments')
-    const second = designSystemPage.breadcrumbLink('April Spring Open')
+    const first = designSystemPage.nav.breadcrumbLink('Tournaments')
+    const second = designSystemPage.nav.breadcrumbLink('April Spring Open')
     await first.focus()
 
     await page.keyboard.press('Tab')
@@ -2201,7 +2201,7 @@ test.describe('Pagination card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.paginationCard).toHaveScreenshot(
+    await expect(designSystemPage.nav.paginationCard).toHaveScreenshot(
       'pagination-card.png',
     )
   })
@@ -2209,7 +2209,7 @@ test.describe('Pagination card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.paginationCard).toHaveScreenshot(
+    await expect(referenceKitPage.nav.paginationCard).toHaveScreenshot(
       'pagination-card.png',
     )
   })
@@ -2227,22 +2227,22 @@ test.describe('Pagination', () => {
   test('a click goes to a page, and the arrows step a page at a time', async ({
     designSystemPage,
   }) => {
-    const pagination = designSystemPage.pagination
+    const pagination = designSystemPage.nav.pagination
 
-    await designSystemPage.paginationButton('Page 3').click()
+    await designSystemPage.nav.paginationButton('Page 3').click()
     await expect(pagination).toHaveText('‹1234…12›')
-    await expect(designSystemPage.paginationButton('Page 3')).toHaveAttribute(
+    await expect(designSystemPage.nav.paginationButton('Page 3')).toHaveAttribute(
       'aria-current',
       'page',
     )
 
-    await designSystemPage.paginationButton('Next page').click()
+    await designSystemPage.nav.paginationButton('Next page').click()
     await expect(pagination).toHaveText('‹12345…12›')
-    await designSystemPage.paginationButton('Page 12').click()
+    await designSystemPage.nav.paginationButton('Page 12').click()
     await expect(pagination).toHaveText('‹1…101112›')
-    await designSystemPage.paginationButton('Previous page').click()
+    await designSystemPage.nav.paginationButton('Previous page').click()
     await expect(pagination).toHaveText('‹1…101112›')
-    await expect(designSystemPage.paginationButton('Page 11')).toHaveAttribute(
+    await expect(designSystemPage.nav.paginationButton('Page 11')).toHaveAttribute(
       'aria-current',
       'page',
     )
@@ -2253,10 +2253,10 @@ test.describe('Pagination', () => {
   test('the disabled arrow keeps the color of the others', async ({
     designSystemPage,
   }) => {
-    const previous = designSystemPage.paginationButton('Previous page')
+    const previous = designSystemPage.nav.paginationButton('Previous page')
     await expect(previous).toBeDisabled()
     await expect(previous).toHaveCSS('color', fg2)
-    await expect(designSystemPage.paginationButton('Next page')).toHaveCSS(
+    await expect(designSystemPage.nav.paginationButton('Next page')).toHaveCSS(
       'color',
       fg2,
     )
@@ -2266,15 +2266,15 @@ test.describe('Pagination', () => {
     designSystemPage,
     page,
   }) => {
-    const next = designSystemPage.paginationButton('Next page')
-    await designSystemPage.paginationButton('Page 12').click()
+    const next = designSystemPage.nav.paginationButton('Next page')
+    await designSystemPage.nav.paginationButton('Page 12').click()
     await next.focus()
 
     await page.keyboard.press('Enter')
 
     await expect(next).toBeDisabled()
     await expect(next).toBeFocused()
-    await expect(designSystemPage.paginationButton('Page 12')).toHaveAttribute(
+    await expect(designSystemPage.nav.paginationButton('Page 12')).toHaveAttribute(
       'aria-current',
       'page',
     )
@@ -2285,9 +2285,9 @@ test.describe('Pagination', () => {
     designSystemPage,
     page,
   }) => {
-    const previous = designSystemPage.paginationButton('Previous page')
-    const first = designSystemPage.paginationButton('Page 1')
-    const second = designSystemPage.paginationButton('Page 2')
+    const previous = designSystemPage.nav.paginationButton('Previous page')
+    const first = designSystemPage.nav.paginationButton('Page 1')
+    const second = designSystemPage.nav.paginationButton('Page 2')
     await previous.focus()
 
     await page.keyboard.press('Tab')
@@ -2307,7 +2307,7 @@ test.describe('Navigation Menu card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.navMenuCard).toHaveScreenshot(
+    await expect(designSystemPage.nav.navMenuCard).toHaveScreenshot(
       'nav-menu-card.png',
     )
   })
@@ -2315,7 +2315,7 @@ test.describe('Navigation Menu card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.navMenuCard).toHaveScreenshot(
+    await expect(referenceKitPage.nav.navMenuCard).toHaveScreenshot(
       'nav-menu-card.png',
     )
   })
@@ -2331,7 +2331,7 @@ test.describe('Navigation Menu', () => {
   // The screenshot can't see the hover: --bg-hover is white at 4%, under
   // its color threshold.
   test('hovering a link lightens it', async ({ designSystemPage }) => {
-    const link = designSystemPage.navMenuLink('Club tools')
+    const link = designSystemPage.nav.navMenuLink('Club tools')
     await expect(link).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
 
     await link.hover()
@@ -2347,8 +2347,8 @@ test.describe('Navigation Menu', () => {
     designSystemPage,
     page,
   }) => {
-    const first = designSystemPage.navMenuLink('Match recorder')
-    const second = designSystemPage.navMenuLink('Tournament admin')
+    const first = designSystemPage.nav.navMenuLink('Match recorder')
+    const second = designSystemPage.nav.navMenuLink('Tournament admin')
     await first.focus()
 
     await page.keyboard.press('Tab')
@@ -2364,7 +2364,7 @@ test.describe('Menubar card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.menubarCard).toHaveScreenshot(
+    await expect(designSystemPage.nav.menubarCard).toHaveScreenshot(
       'menubar-card.png',
     )
   })
@@ -2372,7 +2372,7 @@ test.describe('Menubar card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.menubarCard).toHaveScreenshot(
+    await expect(referenceKitPage.nav.menubarCard).toHaveScreenshot(
       'menubar-card.png',
     )
   })
@@ -2398,8 +2398,8 @@ test.describe('Menubar', () => {
     designSystemPage,
     page,
   }) => {
-    const file = designSystemPage.menubarItem('File')
-    const edit = designSystemPage.menubarItem('Edit')
+    const file = designSystemPage.nav.menubarItem('File')
+    const edit = designSystemPage.nav.menubarItem('Edit')
     await expect(file).toHaveCSS('background-color', hover)
     await expect(file).toHaveCSS('color', fg1)
     await expect(edit).toHaveCSS('background-color', none)
@@ -2415,7 +2415,7 @@ test.describe('Menubar', () => {
   })
 
   test('hovering an item lightens it', async ({ designSystemPage }) => {
-    const edit = designSystemPage.menubarItem('Edit')
+    const edit = designSystemPage.nav.menubarItem('Edit')
 
     await edit.hover()
 
@@ -2428,7 +2428,7 @@ test.describe('Menubar', () => {
     designSystemPage,
     page,
   }) => {
-    const file = designSystemPage.menubarItem('File')
+    const file = designSystemPage.nav.menubarItem('File')
     await file.evaluate((item) => item.scrollIntoView({ block: 'center' }))
     await file.focus()
     const top = await page.locator('html').evaluate((html) => html.scrollTop)
@@ -2442,7 +2442,7 @@ test.describe('Menubar', () => {
       ['Home', 'File'],
     ]) {
       await page.keyboard.press(key)
-      await expect(designSystemPage.menubarItem(name), key).toBeFocused()
+      await expect(designSystemPage.nav.menubarItem(name), key).toBeFocused()
       expect(
         await page.locator('html').evaluate((html) => html.scrollTop),
         key,
@@ -2454,9 +2454,9 @@ test.describe('Menubar', () => {
     designSystemPage,
     page,
   }) => {
-    const file = designSystemPage.menubarItem('File')
-    const edit = designSystemPage.menubarItem('Edit')
-    const view = designSystemPage.menubarItem('View')
+    const file = designSystemPage.nav.menubarItem('File')
+    const edit = designSystemPage.nav.menubarItem('Edit')
+    const view = designSystemPage.nav.menubarItem('View')
     await file.focus()
 
     await page.keyboard.press('ArrowRight')
@@ -2474,10 +2474,10 @@ test.describe('Overlays section', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.overlaysSectionHeading).toHaveScreenshot(
+    await expect(designSystemPage.overlays.heading).toHaveScreenshot(
       'overlays-heading.png',
     )
-    await expect(designSystemPage.overlaysSectionLead).toHaveScreenshot(
+    await expect(designSystemPage.overlays.lead).toHaveScreenshot(
       'overlays-lead.png',
     )
   })
@@ -2485,10 +2485,10 @@ test.describe('Overlays section', () => {
   test('matches the reference kit section', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.overlaysSectionHeading).toHaveScreenshot(
+    await expect(referenceKitPage.overlays.heading).toHaveScreenshot(
       'overlays-heading.png',
     )
-    await expect(referenceKitPage.overlaysSectionLead).toHaveScreenshot(
+    await expect(referenceKitPage.overlays.lead).toHaveScreenshot(
       'overlays-lead.png',
     )
   })
@@ -2500,7 +2500,7 @@ test.describe('Dialog · Alert Dialog card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.dialogCard).toHaveScreenshot(
+    await expect(designSystemPage.overlays.dialogCard).toHaveScreenshot(
       'dialog-card.png',
     )
   })
@@ -2508,7 +2508,7 @@ test.describe('Dialog · Alert Dialog card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.dialogCard).toHaveScreenshot(
+    await expect(referenceKitPage.overlays.dialogCard).toHaveScreenshot(
       'dialog-card.png',
     )
   })
@@ -2521,14 +2521,14 @@ test('Tab goes through each dialog in order, showing the outline', async ({
 }) => {
   const orange = 'rgb(255, 122, 26)'
   await designSystemPage.goto()
-  const checkbox = designSystemPage.dialog.getByRole('checkbox')
+  const checkbox = designSystemPage.overlays.dialog.getByRole('checkbox')
   await checkbox.focus()
 
   for (const [dialog, name] of [
-    [designSystemPage.dialog, 'Cancel'],
-    [designSystemPage.dialog, 'Forfeit'],
-    [designSystemPage.alertDialog, 'Keep account'],
-    [designSystemPage.alertDialog, 'Delete'],
+    [designSystemPage.overlays.dialog, 'Cancel'],
+    [designSystemPage.overlays.dialog, 'Forfeit'],
+    [designSystemPage.overlays.alertDialog, 'Keep account'],
+    [designSystemPage.overlays.alertDialog, 'Delete'],
   ] as const) {
     await page.keyboard.press('Tab')
     const button = dialog.getByRole('button', { name, exact: true })
@@ -2547,7 +2547,7 @@ test.describe('Sheet card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.sheetCard).toHaveScreenshot(
+    await expect(designSystemPage.overlays.sheetCard).toHaveScreenshot(
       'sheet-card.png',
       { maxDiffPixels: 15 },
     )
@@ -2556,7 +2556,7 @@ test.describe('Sheet card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.sheetCard).toHaveScreenshot(
+    await expect(referenceKitPage.overlays.sheetCard).toHaveScreenshot(
       'sheet-card.png',
     )
   })
@@ -2568,7 +2568,7 @@ test.describe('Drawer card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.drawerCard).toHaveScreenshot(
+    await expect(designSystemPage.overlays.drawerCard).toHaveScreenshot(
       'drawer-card.png',
     )
   })
@@ -2576,7 +2576,7 @@ test.describe('Drawer card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.drawerCard).toHaveScreenshot(
+    await expect(referenceKitPage.overlays.drawerCard).toHaveScreenshot(
       'drawer-card.png',
     )
   })
@@ -2586,7 +2586,7 @@ test.describe('Popover card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.popoverCard).toHaveScreenshot(
+    await expect(designSystemPage.overlays.popoverCard).toHaveScreenshot(
       'popover-card.png',
     )
   })
@@ -2594,7 +2594,7 @@ test.describe('Popover card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.popoverCard).toHaveScreenshot(
+    await expect(referenceKitPage.overlays.popoverCard).toHaveScreenshot(
       'popover-card.png',
     )
   })
@@ -2606,7 +2606,7 @@ test.describe('Tooltip card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.tooltipCard).toHaveScreenshot(
+    await expect(designSystemPage.overlays.tooltipCard).toHaveScreenshot(
       'tooltip-card.png',
     )
   })
@@ -2614,7 +2614,7 @@ test.describe('Tooltip card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.tooltipCard).toHaveScreenshot(
+    await expect(referenceKitPage.overlays.tooltipCard).toHaveScreenshot(
       'tooltip-card.png',
     )
   })
@@ -2627,14 +2627,14 @@ test('each tooltip sits above its trigger, inside the frame', async ({
   designSystemPage,
 }) => {
   await designSystemPage.goto()
-  const frame = (await designSystemPage.tooltipFrame.boundingBox())!
+  const frame = (await designSystemPage.overlays.tooltipFrame.boundingBox())!
 
   for (const [trigger, text] of [
-    [designSystemPage.refreshButton, 'Refresh standings'],
-    [designSystemPage.seedBadge, 'Highest rated player in this bracket'],
+    [designSystemPage.overlays.refreshButton, 'Refresh standings'],
+    [designSystemPage.overlays.seedBadge, 'Highest rated player in this bracket'],
   ] as const) {
     const box = (await trigger.boundingBox())!
-    const bubble = (await designSystemPage.tooltip(text).boundingBox())!
+    const bubble = (await designSystemPage.overlays.tooltip(text).boundingBox())!
     expect(bubble.x + bubble.width / 2, text).toBeCloseTo(
       box.x + box.width / 2,
       0,
@@ -2650,7 +2650,7 @@ test.describe('Hover Card card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.hoverCardCard).toHaveScreenshot(
+    await expect(designSystemPage.overlays.hoverCardCard).toHaveScreenshot(
       'hover-card-card.png',
     )
   })
@@ -2658,7 +2658,7 @@ test.describe('Hover Card card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.hoverCardCard).toHaveScreenshot(
+    await expect(referenceKitPage.overlays.hoverCardCard).toHaveScreenshot(
       'hover-card-card.png',
     )
   })
@@ -2670,13 +2670,13 @@ test.describe('Dropdown Menu · Context Menu card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.menuCard).toHaveScreenshot('menu-card.png')
+    await expect(designSystemPage.overlays.menuCard).toHaveScreenshot('menu-card.png')
   })
 
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.menuCard).toHaveScreenshot('menu-card.png')
+    await expect(referenceKitPage.overlays.menuCard).toHaveScreenshot('menu-card.png')
   })
 })
 
@@ -2692,7 +2692,7 @@ test.describe('Dropdown Menu · Context Menu', () => {
   // The screenshot can't see the hover: --bg-hover is white at 4%, under
   // its color threshold.
   test('hovering an item lightens it', async ({ designSystemPage }) => {
-    const item = designSystemPage.dropdownItem('Edit score')
+    const item = designSystemPage.overlays.dropdownItem('Edit score')
     await expect(item).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
 
     await item.hover()
@@ -2708,7 +2708,7 @@ test.describe('Dropdown Menu · Context Menu', () => {
     designSystemPage,
     page,
   }) => {
-    const rematch = designSystemPage.dropdownItem('Rematch')
+    const rematch = designSystemPage.overlays.dropdownItem('Rematch')
     await rematch.evaluate((item) => item.scrollIntoView({ block: 'center' }))
     await rematch.focus()
     const top = await page.locator('html').evaluate((html) => html.scrollTop)
@@ -2721,7 +2721,7 @@ test.describe('Dropdown Menu · Context Menu', () => {
       ['Home', 'Rematch'],
     ]) {
       await page.keyboard.press(key)
-      await expect(designSystemPage.dropdownItem(name), key).toBeFocused()
+      await expect(designSystemPage.overlays.dropdownItem(name), key).toBeFocused()
       expect(
         await page.locator('html').evaluate((html) => html.scrollTop),
         key,
@@ -2733,8 +2733,8 @@ test.describe('Dropdown Menu · Context Menu', () => {
     designSystemPage,
     page,
   }) => {
-    const rematch = designSystemPage.dropdownItem('Rematch')
-    const share = designSystemPage.dropdownItem('Share match link')
+    const rematch = designSystemPage.overlays.dropdownItem('Rematch')
+    const share = designSystemPage.overlays.dropdownItem('Share match link')
     await rematch.focus()
 
     await page.keyboard.press('ArrowDown')
@@ -2742,7 +2742,7 @@ test.describe('Dropdown Menu · Context Menu', () => {
     await expect(share).toHaveCSS('outline', `${orange} solid 2px`)
     await expect(share).toHaveCSS('outline-offset', '2px')
 
-    const forfeit = designSystemPage.dropdownItem('Forfeit')
+    const forfeit = designSystemPage.overlays.dropdownItem('Forfeit')
     await forfeit.click()
     await expect(forfeit).toBeFocused()
     await expect(forfeit).toHaveCSS('outline-style', 'none')
@@ -2755,7 +2755,7 @@ test.describe('Command card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.commandCard).toHaveScreenshot(
+    await expect(designSystemPage.overlays.commandCard).toHaveScreenshot(
       'command-card.png',
     )
   })
@@ -2763,7 +2763,7 @@ test.describe('Command card', () => {
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.commandCard).toHaveScreenshot(
+    await expect(referenceKitPage.overlays.commandCard).toHaveScreenshot(
       'command-card.png',
     )
   })
@@ -2782,13 +2782,13 @@ test.describe('Command', () => {
   // The screenshot can't see the highlight: --bg-hover is white at 4%,
   // under its color threshold.
   test('the first command shows active', async ({ designSystemPage }) => {
-    const log = designSystemPage.commandOption('Log a match')
+    const log = designSystemPage.overlays.commandOption('Log a match')
     await expect(log).toHaveAttribute('aria-selected', 'true')
     await expect(log).toHaveCSS('background-color', hover)
     await expect(
-      designSystemPage.commandOption('Find a player'),
+      designSystemPage.overlays.commandOption('Find a player'),
     ).toHaveCSS('background-color', none)
-    await expect(designSystemPage.commandInput).toHaveAttribute(
+    await expect(designSystemPage.overlays.commandInput).toHaveAttribute(
       'aria-activedescendant',
       (await log.getAttribute('id'))!,
     )
@@ -2799,7 +2799,7 @@ test.describe('Command', () => {
     designSystemPage,
     page,
   }) => {
-    const input = designSystemPage.commandInput
+    const input = designSystemPage.overlays.commandInput
     await input.focus()
 
     for (const [key, name] of [
@@ -2809,7 +2809,7 @@ test.describe('Command', () => {
       ['ArrowDown', 'Log a match'],
     ]) {
       await page.keyboard.press(key)
-      const option = designSystemPage.commandOption(name)
+      const option = designSystemPage.overlays.commandOption(name)
       await expect(option, key).toHaveAttribute('aria-selected', 'true')
       await expect(option, key).toHaveCSS('background-color', hover)
       await expect(input, key).toHaveAttribute(
@@ -2819,20 +2819,20 @@ test.describe('Command', () => {
       await expect(input, key).toBeFocused()
     }
     await expect(
-      designSystemPage.commandList.getByRole('option', { selected: true }),
+      designSystemPage.overlays.commandList.getByRole('option', { selected: true }),
     ).toHaveCount(1)
   })
 
   test('the pointer moves the active command', async ({
     designSystemPage,
   }) => {
-    const find = designSystemPage.commandOption('Find a player')
+    const find = designSystemPage.overlays.commandOption('Find a player')
 
     await find.hover()
 
     await expect(find).toHaveAttribute('aria-selected', 'true')
     await expect(
-      designSystemPage.commandOption('Log a match'),
+      designSystemPage.overlays.commandOption('Log a match'),
     ).toHaveAttribute('aria-selected', 'false')
   })
 })
@@ -2841,10 +2841,10 @@ test.describe('Feedback section', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.feedbackSectionHeading).toHaveScreenshot(
+    await expect(designSystemPage.feedback.heading).toHaveScreenshot(
       'feedback-heading.png',
     )
-    await expect(designSystemPage.feedbackSectionLead).toHaveScreenshot(
+    await expect(designSystemPage.feedback.lead).toHaveScreenshot(
       'feedback-lead.png',
     )
   })
@@ -2852,10 +2852,10 @@ test.describe('Feedback section', () => {
   test('matches the reference kit section', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.feedbackSectionHeading).toHaveScreenshot(
+    await expect(referenceKitPage.feedback.heading).toHaveScreenshot(
       'feedback-heading.png',
     )
-    await expect(referenceKitPage.feedbackSectionLead).toHaveScreenshot(
+    await expect(referenceKitPage.feedback.lead).toHaveScreenshot(
       'feedback-lead.png',
     )
   })
@@ -2865,13 +2865,13 @@ test.describe('Alert card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.alertCard).toHaveScreenshot('alert-card.png')
+    await expect(designSystemPage.feedback.alertCard).toHaveScreenshot('alert-card.png')
   })
 
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.alertCard).toHaveScreenshot('alert-card.png')
+    await expect(referenceKitPage.feedback.alertCard).toHaveScreenshot('alert-card.png')
   })
 })
 
@@ -2881,13 +2881,13 @@ test.describe('Sonner / Toast card', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.toastCard).toHaveScreenshot('toast-card.png')
+    await expect(designSystemPage.feedback.toastCard).toHaveScreenshot('toast-card.png')
   })
 
   test('matches the reference kit card', async ({ referenceKitPage }) => {
     await referenceKitPage.goto()
 
-    await expect(referenceKitPage.toastCard).toHaveScreenshot('toast-card.png')
+    await expect(referenceKitPage.feedback.toastCard).toHaveScreenshot('toast-card.png')
   })
 })
 
@@ -2909,7 +2909,7 @@ test.describe('Sonner / Toast', () => {
   // The screenshot can't see it: --bg-hover is white at 4%, under its
   // color threshold.
   test('hovering a close button lightens it', async ({ designSystemPage }) => {
-    const close = designSystemPage.toastDismissButton('Reminder')
+    const close = designSystemPage.feedback.toastDismissButton('Reminder')
     await expect(close).toHaveCSS('background-color', none)
     await expect(close).toHaveCSS('color', fg3)
 
@@ -2920,7 +2920,7 @@ test.describe('Sonner / Toast', () => {
   })
 
   test('hovering the action dims it', async ({ designSystemPage }) => {
-    const reload = designSystemPage.toastActionButton('Reload')
+    const reload = designSystemPage.feedback.toastActionButton('Reload')
     await expect(reload).toHaveCSS('background-color', fg1)
 
     await reload.hover()
@@ -2934,8 +2934,8 @@ test.describe('Sonner / Toast', () => {
     designSystemPage,
     page,
   }) => {
-    const reload = designSystemPage.toastActionButton('Reload')
-    const close = designSystemPage.toastDismissButton(
+    const reload = designSystemPage.feedback.toastActionButton('Reload')
+    const close = designSystemPage.feedback.toastDismissButton(
       'A new version of FortyMM is ready',
     )
     await reload.focus()
@@ -2948,7 +2948,7 @@ test.describe('Sonner / Toast', () => {
       await expect(button).toHaveCSS('outline-offset', '2px')
     }
 
-    const reminder = designSystemPage.toastDismissButton('Reminder')
+    const reminder = designSystemPage.feedback.toastDismissButton('Reminder')
     await reminder.hover()
     await page.mouse.down()
     await expect(reminder).toBeFocused()
@@ -2957,10 +2957,10 @@ test.describe('Sonner / Toast', () => {
   })
 
   test('dismissing a toast removes it', async ({ designSystemPage }) => {
-    await designSystemPage.toastDismissButton("Couldn't save").click()
+    await designSystemPage.feedback.toastDismissButton("Couldn't save").click()
 
-    await expect(designSystemPage.toast("Couldn't save")).toHaveCount(0)
-    await expect(designSystemPage.toastCard.getByRole('status')).toHaveCount(3)
+    await expect(designSystemPage.feedback.toast("Couldn't save")).toHaveCount(0)
+    await expect(designSystemPage.feedback.toastCard.getByRole('status')).toHaveCount(3)
   })
 
   test("the action removes its toast and doesn't reload the page", async ({
@@ -2970,12 +2970,12 @@ test.describe('Sonner / Toast', () => {
     let loads = 0
     page.on('load', () => loads++)
 
-    await designSystemPage.toastActionButton('Reload').click()
+    await designSystemPage.feedback.toastActionButton('Reload').click()
 
     await expect(
-      designSystemPage.toast('A new version of FortyMM is ready'),
+      designSystemPage.feedback.toast('A new version of FortyMM is ready'),
     ).toHaveCount(0)
-    await expect(designSystemPage.toastCard.getByRole('status')).toHaveCount(3)
+    await expect(designSystemPage.feedback.toastCard.getByRole('status')).toHaveCount(3)
     expect(loads).toBe(0)
   })
 })
@@ -2986,18 +2986,18 @@ test('focusing the Input OTP activates the next empty cell', async ({
   designSystemPage,
 }) => {
   await designSystemPage.goto()
-  await expect(designSystemPage.activeOtpCell).toHaveCount(1)
-  await expect(designSystemPage.otpCell(3)).toHaveClass(/otp-cell--active/)
+  await expect(designSystemPage.forms.activeOtpCell).toHaveCount(1)
+  await expect(designSystemPage.forms.otpCell(3)).toHaveClass(/otp-cell--active/)
 
-  await designSystemPage.otpInput.focus()
+  await designSystemPage.forms.otpInput.focus()
 
-  await expect(designSystemPage.activeOtpCell).toHaveCount(1)
-  await expect(designSystemPage.otpCell(4)).toHaveClass(/otp-cell--active/)
+  await expect(designSystemPage.forms.activeOtpCell).toHaveCount(1)
+  await expect(designSystemPage.forms.otpCell(4)).toHaveClass(/otp-cell--active/)
 
-  await designSystemPage.otpInput.press('1')
-  await expect(designSystemPage.otpInput).toHaveValue('40MM1')
-  await expect(designSystemPage.otpCell(4)).toHaveText('1')
-  await expect(designSystemPage.otpCell(5)).toHaveClass(/otp-cell--active/)
+  await designSystemPage.forms.otpInput.press('1')
+  await expect(designSystemPage.forms.otpInput).toHaveValue('40MM1')
+  await expect(designSystemPage.forms.otpCell(4)).toHaveText('1')
+  await expect(designSystemPage.forms.otpCell(5)).toHaveClass(/otp-cell--active/)
 })
 
 // The usual one-time code behaviour, in a real browser: a click goes to the
@@ -3009,29 +3009,29 @@ test('the Input OTP takes clicks, typing, arrows and Backspace', async ({
   page,
 }) => {
   await designSystemPage.goto()
-  const input = designSystemPage.otpInput
+  const input = designSystemPage.forms.otpInput
 
-  await designSystemPage.clickOtpCell(1)
-  await expect(designSystemPage.otpCell(1)).toHaveClass(/otp-cell--active/)
+  await designSystemPage.forms.clickOtpCell(1)
+  await expect(designSystemPage.forms.otpCell(1)).toHaveClass(/otp-cell--active/)
   await page.keyboard.type('X')
   await expect(input).toHaveValue('4XMM')
-  await expect(designSystemPage.otpCell(2)).toHaveClass(/otp-cell--active/)
+  await expect(designSystemPage.forms.otpCell(2)).toHaveClass(/otp-cell--active/)
 
   await page.keyboard.press('ArrowLeft')
-  await expect(designSystemPage.otpCell(1)).toHaveClass(/otp-cell--active/)
+  await expect(designSystemPage.forms.otpCell(1)).toHaveClass(/otp-cell--active/)
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('ArrowRight')
-  await expect(designSystemPage.otpCell(4)).toHaveClass(/otp-cell--active/)
+  await expect(designSystemPage.forms.otpCell(4)).toHaveClass(/otp-cell--active/)
 
   await page.keyboard.press('Backspace')
   await expect(input).toHaveValue('4XM')
-  await expect(designSystemPage.otpCell(3)).toHaveText('')
+  await expect(designSystemPage.forms.otpCell(3)).toHaveText('')
 
   await page.keyboard.press('ControlOrMeta+a')
   await page.keyboard.insertText('12-34-56-78')
   await expect(input).toHaveValue('123456')
-  await expect(designSystemPage.otpCell(5)).toHaveText('6')
+  await expect(designSystemPage.forms.otpCell(5)).toHaveText('6')
 })
 
 // On a phone the page is far narrower than the reference kit, which is only
@@ -3056,8 +3056,8 @@ test.describe('on a phone', () => {
 
   test('the Input OTP fits in its card', async ({ designSystemPage }) => {
     await designSystemPage.goto()
-    const card = (await designSystemPage.otpCard.boundingBox())!
-    const lastCell = (await designSystemPage.otpCell(5).boundingBox())!
+    const card = (await designSystemPage.forms.otpCard.boundingBox())!
+    const lastCell = (await designSystemPage.forms.otpCell(5).boundingBox())!
 
     // The card's 32px padding stays clear on the right.
     expect(lastCell.x + lastCell.width).toBeLessThanOrEqual(
@@ -3072,10 +3072,10 @@ test.describe('on a phone', () => {
   }) => {
     await designSystemPage.goto()
     const name = 'Notify me of nearby matches'
-    const card = (await designSystemPage.switchCard.boundingBox())!
-    const row = (await designSystemPage.switchLabel(name).boundingBox())!
-    const text = (await designSystemPage.switchText(name).boundingBox())!
-    const track = (await designSystemPage.switchTrack(name).boundingBox())!
+    const card = (await designSystemPage.forms.switchCard.boundingBox())!
+    const row = (await designSystemPage.forms.switchLabel(name).boundingBox())!
+    const text = (await designSystemPage.forms.switchText(name).boundingBox())!
+    const track = (await designSystemPage.forms.switchTrack(name).boundingBox())!
 
     // Inside the card's 1px border and 32px padding on the right.
     expect(row.x + row.width).toBeLessThanOrEqual(card.x + card.width - 33)
@@ -3089,7 +3089,7 @@ test.describe('on a phone', () => {
   test('the slider card fits', async ({ designSystemPage, page }) => {
     await designSystemPage.goto()
 
-    for (const element of [designSystemPage.sliderCard, page.locator('html')]) {
+    for (const element of [designSystemPage.forms.sliderCard, page.locator('html')]) {
       expect(
         await element.evaluate((e) => e.scrollWidth - e.clientWidth),
       ).toBe(0)
@@ -3099,8 +3099,8 @@ test.describe('on a phone', () => {
       ['Rating range', 'Rating range minimum', 0.3],
       ['Rating range', 'Rating range maximum', 0.7],
     ] as const) {
-      const track = (await designSystemPage.sliderTrack(label).boundingBox())!
-      const thumb = (await designSystemPage.sliderThumb(name).boundingBox())!
+      const track = (await designSystemPage.forms.sliderTrack(label).boundingBox())!
+      const thumb = (await designSystemPage.forms.sliderThumb(name).boundingBox())!
       expect(track.width).toBeLessThan(480)
       expect(thumb.x + thumb.width / 2).toBeCloseTo(
         track.x + track.width * fraction,
@@ -3114,14 +3114,14 @@ test.describe('on a phone', () => {
   test('the select card fits', async ({ designSystemPage, page }) => {
     await designSystemPage.goto()
 
-    for (const element of [designSystemPage.selectCard, page.locator('html')]) {
+    for (const element of [designSystemPage.forms.selectCard, page.locator('html')]) {
       expect(
         await element.evaluate((e) => e.scrollWidth - e.clientWidth),
       ).toBe(0)
     }
-    const card = (await designSystemPage.selectCard.boundingBox())!
+    const card = (await designSystemPage.forms.selectCard.boundingBox())!
     for (const name of ['Match type', 'Match length']) {
-      const select = (await designSystemPage.select(name).boundingBox())!
+      const select = (await designSystemPage.forms.select(name).boundingBox())!
       // Inside the card's 1px border and 32px padding on the right.
       expect(select.x + select.width).toBeLessThanOrEqual(
         card.x + card.width - 33,
@@ -3136,21 +3136,21 @@ test.describe('on a phone', () => {
     await designSystemPage.goto()
 
     for (const element of [
-      designSystemPage.comboboxCard,
+      designSystemPage.forms.comboboxCard,
       page.locator('html'),
     ]) {
       expect(
         await element.evaluate((e) => e.scrollWidth - e.clientWidth),
       ).toBe(0)
     }
-    const card = (await designSystemPage.comboboxCard.boundingBox())!
-    const box = (await designSystemPage.comboboxBox.boundingBox())!
-    const input = (await designSystemPage.combobox.boundingBox())!
+    const card = (await designSystemPage.forms.comboboxCard.boundingBox())!
+    const box = (await designSystemPage.forms.comboboxBox.boundingBox())!
+    const input = (await designSystemPage.forms.combobox.boundingBox())!
     // Inside the card's 1px border and 32px padding on the right.
     expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width - 33)
     // The box clips what overflows it, so check the input stays inside too.
     expect(input.x + input.width).toBeLessThanOrEqual(box.x + box.width)
-    expect((await designSystemPage.comboboxIcon.boundingBox())!.width).toBe(14)
+    expect((await designSystemPage.forms.comboboxIcon.boundingBox())!.width).toBe(14)
   })
 
   // The row wraps the calendar under the button, as the kit's does. The
@@ -3161,17 +3161,17 @@ test.describe('on a phone', () => {
     await designSystemPage.goto()
 
     for (const element of [
-      designSystemPage.datePickerCard,
+      designSystemPage.forms.datePickerCard,
       page.locator('html'),
     ]) {
       expect(
         await element.evaluate((e) => e.scrollWidth - e.clientWidth),
       ).toBe(0)
     }
-    const card = (await designSystemPage.datePickerCard.boundingBox())!
-    const label = (await designSystemPage.datePickerLabel.boundingBox())!
-    const trigger = (await designSystemPage.datePickerTrigger.boundingBox())!
-    const calendar = (await designSystemPage.datePickerDialog.boundingBox())!
+    const card = (await designSystemPage.forms.datePickerCard.boundingBox())!
+    const label = (await designSystemPage.forms.datePickerLabel.boundingBox())!
+    const trigger = (await designSystemPage.forms.datePickerTrigger.boundingBox())!
+    const calendar = (await designSystemPage.forms.datePickerDialog.boundingBox())!
     // Inside the card's 1px border and 32px padding on the right.
     const right = card.x + card.width - 33
     expect(trigger.width).toBe(200)
@@ -3182,7 +3182,7 @@ test.describe('on a phone', () => {
     // The row's 24px gap, under the button.
     expect(calendar.y).toBe(trigger.y + trigger.height + 24)
     for (const name of ['March 29, 2026', 'May 2, 2026']) {
-      const day = (await designSystemPage.datePickerDay(name).boundingBox())!
+      const day = (await designSystemPage.forms.datePickerDay(name).boundingBox())!
       expect(day.x).toBeGreaterThanOrEqual(calendar.x)
       expect(day.x + day.width).toBeLessThanOrEqual(
         calendar.x + calendar.width,
@@ -3197,18 +3197,18 @@ test.describe('on a phone', () => {
     await designSystemPage.goto()
 
     for (const element of [
-      designSystemPage.toggleCard,
+      designSystemPage.forms.toggleCard,
       page.locator('html'),
     ]) {
       expect(
         await element.evaluate((e) => e.scrollWidth - e.clientWidth),
       ).toBe(0)
     }
-    const card = (await designSystemPage.toggleCard.boundingBox())!
-    const bold = (await designSystemPage.toggle('Bold').boundingBox())!
-    const italic = (await designSystemPage.toggle('Italic').boundingBox())!
-    const separator = (await designSystemPage.toggleSeparator.boundingBox())!
-    const group = (await designSystemPage.toggleGroup.boundingBox())!
+    const card = (await designSystemPage.forms.toggleCard.boundingBox())!
+    const bold = (await designSystemPage.forms.toggle('Bold').boundingBox())!
+    const italic = (await designSystemPage.forms.toggle('Italic').boundingBox())!
+    const separator = (await designSystemPage.forms.toggleSeparator.boundingBox())!
+    const group = (await designSystemPage.forms.toggleGroup.boundingBox())!
     // Inside the card's 1px border and 32px padding on each side.
     const left = card.x + 33
     const right = card.x + card.width - 33
@@ -3221,7 +3221,7 @@ test.describe('on a phone', () => {
     expect(group.y).toBe(bold.y + bold.height + 12)
     expect(group.x + group.width).toBeLessThanOrEqual(right)
     for (const name of ['Singles', 'Doubles', 'Mixed']) {
-      const item = (await designSystemPage
+      const item = (await designSystemPage.forms
         .toggleGroupItem(name)
         .boundingBox())!
       expect(item.x + item.width, name).toBeLessThanOrEqual(
@@ -3235,15 +3235,15 @@ test.describe('on a phone', () => {
   test('the tabs card fits', async ({ designSystemPage, page }) => {
     await designSystemPage.goto()
 
-    for (const element of [designSystemPage.tabsCard, page.locator('html')]) {
+    for (const element of [designSystemPage.nav.tabsCard, page.locator('html')]) {
       expect(
         await element.evaluate((e) => e.scrollWidth - e.clientWidth),
       ).toBe(0)
     }
-    const card = (await designSystemPage.tabsCard.boundingBox())!
-    const list = (await designSystemPage.tabList.boundingBox())!
-    const first = (await designSystemPage.tab('Overview').boundingBox())!
-    const last = (await designSystemPage.tab('Players').boundingBox())!
+    const card = (await designSystemPage.nav.tabsCard.boundingBox())!
+    const list = (await designSystemPage.nav.tabList.boundingBox())!
+    const first = (await designSystemPage.nav.tab('Overview').boundingBox())!
+    const last = (await designSystemPage.nav.tab('Players').boundingBox())!
     // Inside the card's 1px border and 32px padding on the right.
     expect(list.x + list.width).toBeLessThanOrEqual(card.x + card.width - 33)
     expect(last.y).toBeGreaterThan(first.y)
@@ -3256,16 +3256,16 @@ test.describe('on a phone', () => {
     await designSystemPage.goto()
 
     expect(
-      await designSystemPage.breadcrumbCard.evaluate(
+      await designSystemPage.nav.breadcrumbCard.evaluate(
         (e) => e.scrollWidth - e.clientWidth,
       ),
     ).toBe(0)
-    const card = (await designSystemPage.breadcrumbCard.boundingBox())!
-    const trail = (await designSystemPage.breadcrumb.boundingBox())!
-    const first = (await designSystemPage
+    const card = (await designSystemPage.nav.breadcrumbCard.boundingBox())!
+    const trail = (await designSystemPage.nav.breadcrumb.boundingBox())!
+    const first = (await designSystemPage.nav
       .breadcrumbLink('Tournaments')
       .boundingBox())!
-    const current = (await designSystemPage.breadcrumb
+    const current = (await designSystemPage.nav.breadcrumb
       .getByText('Round 3')
       .boundingBox())!
     // Inside the card's 1px border and 32px padding on the right.
@@ -3279,16 +3279,16 @@ test.describe('on a phone', () => {
     await designSystemPage.goto()
 
     expect(
-      await designSystemPage.paginationCard.evaluate(
+      await designSystemPage.nav.paginationCard.evaluate(
         (e) => e.scrollWidth - e.clientWidth,
       ),
     ).toBe(0)
-    const card = (await designSystemPage.paginationCard.boundingBox())!
-    const row = (await designSystemPage.pagination.boundingBox())!
-    const previous = (await designSystemPage
+    const card = (await designSystemPage.nav.paginationCard.boundingBox())!
+    const row = (await designSystemPage.nav.pagination.boundingBox())!
+    const previous = (await designSystemPage.nav
       .paginationButton('Previous page')
       .boundingBox())!
-    const next = (await designSystemPage
+    const next = (await designSystemPage.nav
       .paginationButton('Next page')
       .boundingBox())!
     // Inside the card's 1px border and 32px padding on the right.
@@ -3302,19 +3302,19 @@ test.describe('on a phone', () => {
     await designSystemPage.goto()
 
     for (const element of [
-      designSystemPage.navMenuCard,
+      designSystemPage.nav.navMenuCard,
       page.locator('html'),
     ]) {
       expect(
         await element.evaluate((e) => e.scrollWidth - e.clientWidth),
       ).toBe(0)
     }
-    const card = (await designSystemPage.navMenuCard.boundingBox())!
-    const panel = (await designSystemPage.navMenuPanel.boundingBox())!
-    const first = (await designSystemPage
+    const card = (await designSystemPage.nav.navMenuCard.boundingBox())!
+    const panel = (await designSystemPage.nav.navMenuPanel.boundingBox())!
+    const first = (await designSystemPage.nav
       .navMenuLink('Match recorder')
       .boundingBox())!
-    const second = (await designSystemPage
+    const second = (await designSystemPage.nav
       .navMenuLink('Tournament admin')
       .boundingBox())!
     // Inside the card's 1px border and 32px padding on the right.
@@ -3329,17 +3329,17 @@ test.describe('on a phone', () => {
     await designSystemPage.goto()
 
     for (const element of [
-      designSystemPage.menubarCard,
+      designSystemPage.nav.menubarCard,
       page.locator('html'),
     ]) {
       expect(
         await element.evaluate((e) => e.scrollWidth - e.clientWidth),
       ).toBe(0)
     }
-    const card = (await designSystemPage.menubarCard.boundingBox())!
-    const bar = (await designSystemPage.menubar.boundingBox())!
-    const first = (await designSystemPage.menubarItem('File').boundingBox())!
-    const last = (await designSystemPage.menubarItem('Help').boundingBox())!
+    const card = (await designSystemPage.nav.menubarCard.boundingBox())!
+    const bar = (await designSystemPage.nav.menubar.boundingBox())!
+    const first = (await designSystemPage.nav.menubarItem('File').boundingBox())!
+    const last = (await designSystemPage.nav.menubarItem('Help').boundingBox())!
     // Inside the card's 1px border and 32px padding on the right.
     expect(bar.x + bar.width).toBeLessThanOrEqual(card.x + card.width - 33)
     expect(last.y).toBeGreaterThan(first.y)
@@ -3349,10 +3349,10 @@ test.describe('on a phone', () => {
   // they stack too.
   test("the card card's cards stack", async ({ designSystemPage, page }) => {
     await designSystemPage.goto()
-    const first = (await designSystemPage
+    const first = (await designSystemPage.display
       .demoCard('April Spring Open')
       .boundingBox())!
-    const second = (await designSystemPage
+    const second = (await designSystemPage.display
       .demoCard('★ Featured')
       .boundingBox())!
 
@@ -3370,9 +3370,9 @@ test.describe('on a phone', () => {
   // wraps them onto more lines rather than scrolling the page sideways.
   test("the badge card's badges wrap", async ({ designSystemPage, page }) => {
     await designSystemPage.goto()
-    const card = (await designSystemPage.badgeCard.boundingBox())!
-    const first = (await designSystemPage.badge('Seed 1').boundingBox())!
-    const last = (await designSystemPage
+    const card = (await designSystemPage.display.badgeCard.boundingBox())!
+    const first = (await designSystemPage.display.badge('Seed 1').boundingBox())!
+    const last = (await designSystemPage.display
       .badge('Live · Court 3')
       .boundingBox())!
 
@@ -3390,13 +3390,13 @@ test.describe('on a phone', () => {
     page,
   }) => {
     await designSystemPage.goto()
-    const card = (await designSystemPage.avatarCard.boundingBox())!
+    const card = (await designSystemPage.display.avatarCard.boundingBox())!
     // The row's avatar comes first, before the group's of the same name.
-    const rowLast = (await designSystemPage
+    const rowLast = (await designSystemPage.display
       .avatars('Marta Kowalski')
       .first()
       .boundingBox())!
-    const group = (await designSystemPage.avatarGroup.boundingBox())!
+    const group = (await designSystemPage.display.avatarGroup.boundingBox())!
 
     expect(rowLast.x + rowLast.width).toBeLessThanOrEqual(
       card.x + card.width - 32,
@@ -3408,7 +3408,7 @@ test.describe('on a phone', () => {
         .evaluate((html) => html.scrollWidth - html.clientWidth),
     ).toBeLessThanOrEqual(0)
 
-    const stacked = await designSystemPage.avatarGroup.getByRole('img').all()
+    const stacked = await designSystemPage.display.avatarGroup.getByRole('img').all()
     expect(stacked).toHaveLength(4)
     for (let i = 1; i < stacked.length; i++) {
       const previous = (await stacked[i - 1].boundingBox())!
@@ -3424,7 +3424,7 @@ test.describe('on a phone', () => {
     page,
   }) => {
     await designSystemPage.goto()
-    const scroller = designSystemPage.standingsTable.locator('xpath=..')
+    const scroller = designSystemPage.display.standingsTable.locator('xpath=..')
 
     expect(
       await scroller.evaluate((e) => e.scrollWidth - e.clientWidth),
@@ -3437,7 +3437,7 @@ test.describe('on a phone', () => {
 
     // A row on one line is as tall as its avatar and the cells' 14px padding
     // above and below it. A wrapped name or club makes it taller.
-    for (const row of await designSystemPage.standingsTable
+    for (const row of await designSystemPage.display.standingsTable
       .getByRole('row')
       .all()
       .then((rows) => rows.slice(1))) {
@@ -3451,8 +3451,8 @@ test.describe('on a phone', () => {
   // the fields stack, each as wide as the card's content.
   test("the input card's fields stack", async ({ designSystemPage }) => {
     await designSystemPage.goto()
-    const card = (await designSystemPage.inputCard.boundingBox())!
-    const fields = await designSystemPage.inputCardFields.all()
+    const card = (await designSystemPage.forms.inputCard.boundingBox())!
+    const fields = await designSystemPage.forms.inputCardFields.all()
     expect(fields).toHaveLength(4)
 
     let previousBottom = -Infinity
@@ -3472,19 +3472,19 @@ test.describe('on a phone', () => {
     await designSystemPage.goto()
 
     for (const element of [
-      designSystemPage.dialogCard,
+      designSystemPage.overlays.dialogCard,
       page.locator('html'),
     ]) {
       expect(
         await element.evaluate((e) => e.scrollWidth - e.clientWidth),
       ).toBe(0)
     }
-    const card = (await designSystemPage.dialogCard.boundingBox())!
-    const dialog = (await designSystemPage.dialog.boundingBox())!
-    const alert = (await designSystemPage.alertDialog.boundingBox())!
+    const card = (await designSystemPage.overlays.dialogCard.boundingBox())!
+    const dialog = (await designSystemPage.overlays.dialog.boundingBox())!
+    const alert = (await designSystemPage.overlays.alertDialog.boundingBox())!
     for (const [locator, box] of [
-      [designSystemPage.dialog, dialog],
-      [designSystemPage.alertDialog, alert],
+      [designSystemPage.overlays.dialog, dialog],
+      [designSystemPage.overlays.alertDialog, alert],
     ] as const) {
       // Inside the card's 1px border and 32px padding on each side.
       expect(box.x).toBeGreaterThanOrEqual(card.x + 33)
@@ -3505,19 +3505,19 @@ test.describe('on a phone', () => {
     await designSystemPage.goto()
 
     for (const element of [
-      designSystemPage.sheetCard,
+      designSystemPage.overlays.sheetCard,
       page.locator('html'),
     ]) {
       expect(
         await element.evaluate((e) => e.scrollWidth - e.clientWidth),
       ).toBe(0)
     }
-    const card = (await designSystemPage.sheetCard.boundingBox())!
-    const sheet = (await designSystemPage.sheet.boundingBox())!
+    const card = (await designSystemPage.overlays.sheetCard.boundingBox())!
+    const sheet = (await designSystemPage.overlays.sheet.boundingBox())!
     // Inside the card's 1px border and 32px padding on each side.
     expect(sheet.x).toBeGreaterThanOrEqual(card.x + 33)
     expect(sheet.x + sheet.width).toBeLessThanOrEqual(card.x + card.width - 33)
-    const label = (await designSystemPage.sheetCard
+    const label = (await designSystemPage.overlays.sheetCard
       .getByText('Sheet (right)')
       .boundingBox())!
     expect(sheet.y).toBeGreaterThan(label.y + label.height)
@@ -3529,15 +3529,15 @@ test.describe('on a phone', () => {
     await designSystemPage.goto()
 
     for (const element of [
-      designSystemPage.drawerCard,
+      designSystemPage.overlays.drawerCard,
       page.locator('html'),
     ]) {
       expect(
         await element.evaluate((e) => e.scrollWidth - e.clientWidth),
       ).toBe(0)
     }
-    const card = (await designSystemPage.drawerCard.boundingBox())!
-    const drawer = (await designSystemPage.drawer.boundingBox())!
+    const card = (await designSystemPage.overlays.drawerCard.boundingBox())!
+    const drawer = (await designSystemPage.overlays.drawer.boundingBox())!
     // Inside the card's 1px border and 32px padding on each side, and on the
     // frame's bottom edge, above the card's 32px padding.
     expect(drawer.x).toBeGreaterThanOrEqual(card.x + 33)
@@ -3555,15 +3555,15 @@ test.describe('on a phone', () => {
     await designSystemPage.goto()
 
     for (const element of [
-      designSystemPage.popoverCard,
+      designSystemPage.overlays.popoverCard,
       page.locator('html'),
     ]) {
       expect(
         await element.evaluate((e) => e.scrollWidth - e.clientWidth),
       ).toBe(0)
     }
-    const card = (await designSystemPage.popoverCard.boundingBox())!
-    const popover = (await designSystemPage.popover.boundingBox())!
+    const card = (await designSystemPage.overlays.popoverCard.boundingBox())!
+    const popover = (await designSystemPage.overlays.popover.boundingBox())!
     // Inside the card's 1px border and 32px padding on each side.
     expect(popover.x).toBeGreaterThanOrEqual(card.x + 33)
     expect(popover.x + popover.width).toBeLessThanOrEqual(
@@ -3578,33 +3578,33 @@ test.describe('on a phone', () => {
     await designSystemPage.goto()
 
     for (const element of [
-      designSystemPage.tooltipCard,
+      designSystemPage.overlays.tooltipCard,
       page.locator('html'),
     ]) {
       expect(
         await element.evaluate((e) => e.scrollWidth - e.clientWidth),
       ).toBe(0)
     }
-    const card = (await designSystemPage.tooltipCard.boundingBox())!
+    const card = (await designSystemPage.overlays.tooltipCard.boundingBox())!
     for (const text of [
       'Refresh standings',
       'Highest rated player in this bracket',
     ]) {
-      const bubble = (await designSystemPage.tooltip(text).boundingBox())!
+      const bubble = (await designSystemPage.overlays.tooltip(text).boundingBox())!
       // Inside the card's 1px border and 32px padding on each side.
       expect(bubble.x, text).toBeGreaterThanOrEqual(card.x + 33)
       expect(bubble.x + bubble.width, text).toBeLessThanOrEqual(
         card.x + card.width - 33,
       )
     }
-    const label = (await designSystemPage.tooltipFrame
+    const label = (await designSystemPage.overlays.tooltipFrame
       .locator('.mock-label')
       .boundingBox())!
-    const refresh = (await designSystemPage
+    const refresh = (await designSystemPage.overlays
       .tooltip('Refresh standings')
       .boundingBox())!
-    const button = (await designSystemPage.refreshButton.boundingBox())!
-    const seed = (await designSystemPage
+    const button = (await designSystemPage.overlays.refreshButton.boundingBox())!
+    const seed = (await designSystemPage.overlays
       .tooltip('Highest rated player in this bracket')
       .boundingBox())!
     expect(refresh.y).toBeGreaterThan(label.y + label.height)
@@ -3616,15 +3616,15 @@ test.describe('on a phone', () => {
     await designSystemPage.goto()
 
     for (const element of [
-      designSystemPage.hoverCardCard,
+      designSystemPage.overlays.hoverCardCard,
       page.locator('html'),
     ]) {
       expect(
         await element.evaluate((e) => e.scrollWidth - e.clientWidth),
       ).toBe(0)
     }
-    const card = (await designSystemPage.hoverCardCard.boundingBox())!
-    const hoverCard = (await designSystemPage.hoverCard.boundingBox())!
+    const card = (await designSystemPage.overlays.hoverCardCard.boundingBox())!
+    const hoverCard = (await designSystemPage.overlays.hoverCard.boundingBox())!
     // Inside the card's 1px border and 32px padding on each side.
     expect(hoverCard.x).toBeGreaterThanOrEqual(card.x + 33)
     expect(hoverCard.x + hoverCard.width).toBeLessThanOrEqual(
@@ -3638,16 +3638,16 @@ test.describe('on a phone', () => {
     await designSystemPage.goto()
 
     for (const element of [
-      designSystemPage.menuCard,
+      designSystemPage.overlays.menuCard,
       page.locator('html'),
     ]) {
       expect(
         await element.evaluate((e) => e.scrollWidth - e.clientWidth),
       ).toBe(0)
     }
-    const card = (await designSystemPage.menuCard.boundingBox())!
-    const dropdown = (await designSystemPage.dropdownMenu.boundingBox())!
-    const context = (await designSystemPage.contextMenu.boundingBox())!
+    const card = (await designSystemPage.overlays.menuCard.boundingBox())!
+    const dropdown = (await designSystemPage.overlays.dropdownMenu.boundingBox())!
+    const context = (await designSystemPage.overlays.contextMenu.boundingBox())!
     for (const box of [dropdown, context]) {
       // Inside the card's 1px border and 32px padding on each side.
       expect(box.x).toBeGreaterThanOrEqual(card.x + 33)
@@ -3661,21 +3661,21 @@ test.describe('on a phone', () => {
     await designSystemPage.goto()
 
     for (const element of [
-      designSystemPage.alertCard,
+      designSystemPage.feedback.alertCard,
       page.locator('html'),
     ]) {
       expect(
         await element.evaluate((e) => e.scrollWidth - e.clientWidth),
       ).toBe(0)
     }
-    const card = (await designSystemPage.alertCard.boundingBox())!
+    const card = (await designSystemPage.feedback.alertCard.boundingBox())!
     for (const name of [
       'Heads up',
       'Late check-in',
       'Match disputed',
       'Match logged',
     ]) {
-      const box = (await designSystemPage.alert(name).boundingBox())!
+      const box = (await designSystemPage.feedback.alert(name).boundingBox())!
       // Inside the card's 1px border and 32px padding on each side.
       expect(box.x, name).toBeGreaterThanOrEqual(card.x + 33)
       expect(box.x + box.width, name).toBeLessThanOrEqual(
@@ -3689,21 +3689,21 @@ test.describe('on a phone', () => {
     await designSystemPage.goto()
 
     for (const element of [
-      designSystemPage.toastCard,
+      designSystemPage.feedback.toastCard,
       page.locator('html'),
     ]) {
       expect(
         await element.evaluate((e) => e.scrollWidth - e.clientWidth),
       ).toBe(0)
     }
-    const card = (await designSystemPage.toastCard.boundingBox())!
+    const card = (await designSystemPage.feedback.toastCard.boundingBox())!
     for (const name of [
       'A new version of FortyMM is ready',
       'Match logged',
       "Couldn't save",
       'Reminder',
     ]) {
-      const box = (await designSystemPage.toast(name).boundingBox())!
+      const box = (await designSystemPage.feedback.toast(name).boundingBox())!
       // Inside the card's 1px border and 32px padding on each side.
       expect(box.x, name).toBeGreaterThanOrEqual(card.x + 33)
       expect(box.x + box.width, name).toBeLessThanOrEqual(
@@ -3718,24 +3718,24 @@ test.describe('on a phone', () => {
     await designSystemPage.goto()
 
     for (const element of [
-      designSystemPage.commandCard,
+      designSystemPage.overlays.commandCard,
       page.locator('html'),
     ]) {
       expect(
         await element.evaluate((e) => e.scrollWidth - e.clientWidth),
       ).toBe(0)
     }
-    const card = (await designSystemPage.commandCard.boundingBox())!
-    const box = (await designSystemPage.commandBox.boundingBox())!
+    const card = (await designSystemPage.overlays.commandCard.boundingBox())!
+    const box = (await designSystemPage.overlays.commandBox.boundingBox())!
     // Inside the card's 1px border and 32px padding on each side.
     expect(box.x).toBeGreaterThanOrEqual(card.x + 33)
     expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width - 33)
     // The labels wrap, but each shortcut stays on one line.
-    const first = (await designSystemPage
+    const first = (await designSystemPage.overlays
       .commandOption('Log a match')
       .locator('kbd')
       .boundingBox())!
-    for (const kbd of await designSystemPage.commandList.locator('kbd').all()) {
+    for (const kbd of await designSystemPage.overlays.commandList.locator('kbd').all()) {
       expect((await kbd.boundingBox())!.height).toBe(first.height)
     }
   })
@@ -3764,7 +3764,7 @@ for (const [name, screenshot] of [
   test.describe(`focused ${name} input`, () => {
     test('matches the screenshot', async ({ designSystemPage, page }) => {
       await designSystemPage.goto()
-      const clip = await focusWithRing(designSystemPage.input(name))
+      const clip = await focusWithRing(designSystemPage.forms.input(name))
 
       await expect(page).toHaveScreenshot(screenshot, { clip })
     })
@@ -3774,7 +3774,7 @@ for (const [name, screenshot] of [
       page,
     }) => {
       await referenceKitPage.goto()
-      const clip = await focusWithRing(referenceKitPage.input(name))
+      const clip = await focusWithRing(referenceKitPage.forms.input(name))
 
       await expect(page).toHaveScreenshot(screenshot, { clip })
     })
@@ -3785,7 +3785,7 @@ for (const [name, screenshot] of [
 test.describe('focused Match notes textarea', () => {
   test('matches the screenshot', async ({ designSystemPage, page }) => {
     await designSystemPage.goto()
-    const clip = await focusWithRing(designSystemPage.textarea)
+    const clip = await focusWithRing(designSystemPage.forms.textarea)
 
     await expect(page).toHaveScreenshot('match-notes-focused.png', { clip })
   })
@@ -3795,7 +3795,7 @@ test.describe('focused Match notes textarea', () => {
     page,
   }) => {
     await referenceKitPage.goto()
-    const clip = await focusWithRing(referenceKitPage.textarea)
+    const clip = await focusWithRing(referenceKitPage.forms.textarea)
 
     await expect(page).toHaveScreenshot('match-notes-focused.png', { clip })
   })
