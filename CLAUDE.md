@@ -392,7 +392,10 @@ main config ignores it; `web-client/playwright.deployed.config.ts` runs it,
 with `baseURL` from `PLAYWRIGHT_BASE_URL` (it fails fast without one) and no
 screenshot tests. Its `ready` project retries `/api/v1/health` for up to a
 minute (Cloud Run cold starts, Preview propagation) before the other specs
-run.
+run. Against production (`fortymm.com`, `www.fortymm.com` or
+`fortymm.mightymoose.workers.dev`), the config runs only the `ready` project.
+The app's pages will make a guest account on load, and production keeps every
+account. So a production run checks only `/api/v1/health`.
 
 ```sh
 DEPLOY_URL=https://fortymm.com ./bin/mise run web-client:e2e-deployed
@@ -502,7 +505,7 @@ End-to-end tests) against what it just deployed:
   it's merged.
 - `main`: against `https://fortymm.com` after `web-client:deploy`. Production
   has already changed by then, so this detects a broken deploy rather than
-  preventing one.
+  preventing one. It runs only the health check, so it makes no account.
 
 Both are skipped while the API deploys are (see below), since `/api/*`
 answers 503 then.
