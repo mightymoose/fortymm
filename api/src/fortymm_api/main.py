@@ -9,10 +9,12 @@ from fastapi.routing import APIRoute
 from sqlalchemy.orm import sessionmaker
 
 from fortymm_api import v1
+from fortymm_api.auth import NoValidSession
 from fortymm_api.database import create_database_engine, migrate
 
 WORKER_SECRET_HEADER = "X-FortyMM-Worker-Secret"
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+NO_SESSION = "The request has no valid session"
 
 
 def error_response(status: int, title: str) -> JSONResponse:
@@ -103,6 +105,9 @@ def create_app() -> FastAPI:
     )
     app.state.sessions = sessionmaker(engine) if engine is not None else None
     app.include_router(v1.router)
+    app.add_exception_handler(
+        NoValidSession, lambda _request, _error: error_response(401, NO_SESSION)
+    )
     require_json(app)
     # Added last so it runs first: a request without the secret learns nothing
     # else about the API.

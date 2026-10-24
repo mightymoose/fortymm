@@ -26,6 +26,33 @@
           }
         }
       }
+    },
+    "/v1/session": {
+      "post": {
+        "tags": [
+          "session"
+        ],
+        "summary": "Start Session",
+        "description": "Resume the visitor's session, or start a guest account and its session.\n\nA valid session gets a later expiry and a fresh cookie. With no cookie, or\na cookie for an expired, unknown or adopted session, the visitor gets a\nnew guest account. The API deletes the session that cookie named.",
+        "operationId": "start_session",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -55,6 +82,60 @@
           "database"
         ],
         "title": "HealthStatus"
+      },
+      "SessionAccount": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "guest",
+              "verified"
+            ],
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind"
+        ],
+        "title": "SessionAccount"
+      },
+      "SessionData": {
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/SessionAccount"
+          }
+        },
+        "type": "object",
+        "required": [
+          "account"
+        ],
+        "title": "SessionData"
+      },
+      "SessionResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/SessionData"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "SessionResponse"
+      }
+    },
+    "securitySchemes": {
+      "session": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-fortymm_session"
       }
     }
   }
