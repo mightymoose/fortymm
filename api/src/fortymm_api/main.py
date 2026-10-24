@@ -6,9 +6,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
-from psycopg_pool import ConnectionPool
+from sqlalchemy.orm import sessionmaker
 
 from fortymm_api import v1
+from fortymm_api.database import create_database_engine
 
 WORKER_SECRET_HEADER = "X-FortyMM-Worker-Secret"
 
@@ -61,26 +62,15 @@ def create_app() -> FastAPI:
     if os.environ.get("K_SERVICE") and not database_url:
         raise RuntimeError("DATABASE_URL must be set when running on Cloud Run")
 
-    # db-f1-micro allows 25 connections, shared by up to 3 production
-    # instances and the Preview revisions.
-    pool = (
-        ConnectionPool(database_url, min_size=1, max_size=4, open=False)
-        if database_url
-        else None
-    )
+    engine = create_database_engine(database_url) if database_url else None
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        if pool is None:
-            yield
-            return
-        # Opens without waiting for a connection, so a slow database doesn't
-        # stop the API from starting.
-        pool.open()
         try:
             yield
         finally:
-            pool.close()
+            if engine is not None:
+                engine.dispose()
 
     app = FastAPI(
         title="FortyMM API",
@@ -88,7 +78,7 @@ def create_app() -> FastAPI:
         generate_unique_id_function=operation_id,
         lifespan=lifespan,
     )
-    app.state.pool = pool
+    app.state.sessions = sessionmaker(engine) if engine is not None else None
     app.include_router(v1.router)
     if secret:
         require_worker_secret(app, secret)
