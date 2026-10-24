@@ -161,4 +161,35 @@ describe('worker', () => {
     })
     expect(upstream).not.toHaveBeenCalled()
   })
+
+  it.each([
+    ['https://www.fortymm.com/', 'https://fortymm.com/'],
+    ['https://www.fortymm.com/x?y=1', 'https://fortymm.com/x?y=1'],
+    ['https://fortymm.mightymoose.workers.dev/x?y=1', 'https://fortymm.com/x?y=1'],
+    ['https://www.fortymm.com/api/v1/health?x=1', 'https://fortymm.com/api/v1/health?x=1'],
+  ])('redirects %s to %s', async (from, to) => {
+    const upstream = stubUpstream()
+    const { env, assets, limit } = makeEnv()
+
+    const response = await worker.fetch(new Request(from), env)
+
+    expect(response.status).toBe(301)
+    expect(response.headers.get('Location')).toBe(to)
+    expect(assets).not.toHaveBeenCalled()
+    expect(limit).not.toHaveBeenCalled()
+    expect(upstream).not.toHaveBeenCalled()
+  })
+
+  it('serves a Preview host without a redirect', async () => {
+    stubUpstream()
+    const { env, assets } = makeEnv()
+
+    const response = await worker.fetch(
+      new Request('https://feat-canonize-urls-fortymm.mightymoose.workers.dev/design-system'),
+      env,
+    )
+
+    expect(response.status).toBe(200)
+    expect(assets).toHaveBeenCalledOnce()
+  })
 })

@@ -479,8 +479,8 @@ main config ignores it; `web-client/playwright.deployed.config.ts` runs it,
 with `baseURL` from `PLAYWRIGHT_BASE_URL` (it fails fast without one) and no
 screenshot tests. Its `ready` project retries `/api/v1/health` for up to a
 minute (Cloud Run cold starts, Preview propagation) before the other specs
-run. Against production (`fortymm.com`, `www.fortymm.com` or
-`fortymm.mightymoose.workers.dev`), the config runs only the `ready` project.
+run. Against production (`fortymm.com` or `www.fortymm.com`), the config runs
+only the `ready` project.
 The app's pages will make a guest account on load, and production keeps every
 account. So a production run checks only `/api/v1/health`.
 
@@ -554,9 +554,8 @@ container, e.g.
 
 ## Deploy
 
-Production is `https://fortymm.com` (and `www.fortymm.com`): a Cloudflare
-Worker serves the web-client and forwards `/api/*` to the API on Google Cloud
-Run, so the app's `/api` client is same-origin, as in dev, with no CORS.
+Production is `https://fortymm.com`: a Cloudflare Worker serves the
+web-client and forwards `/api/*` to the API on Google Cloud Run, so the app's `/api` client is same-origin, as in dev, with no CORS.
 
 The API's `*.run.app` URLs are public, so the Worker proves each request came
 through it. It sends the Worker secret in the `X-FortyMM-Worker-Secret`
@@ -627,10 +626,11 @@ answers 429 with `Retry-After: 60`. Cloudflare counts each location
 separately, so the limit is approximate. Previews get only the bindings under
 `previews` in `wrangler.jsonc`, so that block repeats the rate limit.
 Everything else goes to the static assets in `dist/` (the `ASSETS` binding).
-`assets.run_worker_first: ["/api/*"]` runs the Worker before the assets for
-those paths, and `not_found_handling: "single-page-application"` serves
-`index.html` for any other path with no matching file, so client-side routes
-load directly.
+`assets.run_worker_first: true` runs the Worker before the assets for every
+path, so the host redirect below also covers `/`. When the Worker passes a
+request to `ASSETS`, `not_found_handling: "single-page-application"` serves
+`index.html` for any path with no matching file. So client-side routes load
+directly.
 
 `API_ORIGIN` isn't in `wrangler.jsonc`: `web-client:deploy` and
 `web-client:preview` pass it with `--var` from the environment (CI sets it
@@ -640,8 +640,16 @@ container, so the tasks write the file there. If `WORKER_SECRET` is empty,
 they warn that the API will answer the Worker with a 403.
 
 Production is served on `fortymm.com` and `www.fortymm.com` (Custom Domains
-in `routes`, whose DNS records and certificates Cloudflare manages) and on
-`fortymm.mightymoose.workers.dev`.
+in `routes`, whose DNS records and certificates Cloudflare manages). Each host
+has its own cookie jar. So the Worker answers requests on `www.fortymm.com`
+with a 301 to the same path and query on `fortymm.com`, and a browser keeps one
+cookie jar. This includes `/api/*` paths.
+
+The Worker's own workers.dev URL, `fortymm.mightymoose.workers.dev`, is off.
+Cloudflare answers it with a 404 (error 1042) and never runs the Worker. The
+Worker still lists it with `www.fortymm.com`, so the URL redirects to
+`fortymm.com` if someone turns it on. The Worker names both hosts exactly,
+so Previews get no redirect.
 
 Previews (`wrangler preview`, open beta) are served on
 `<preview-name>-fortymm.mightymoose.workers.dev` because `preview_urls` is on in
