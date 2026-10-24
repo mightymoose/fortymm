@@ -4,9 +4,9 @@ from collections.abc import Iterator
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import make_url, text
+from sqlalchemy import Engine, make_url, text
 
-from fortymm_api.database import create_database_engine
+from fortymm_api.database import create_database_engine, migrate
 from fortymm_api.main import create_app
 
 
@@ -42,3 +42,12 @@ def throwaway_database_url() -> Iterator[str]:
         with admin.connect() as connection:
             connection.execute(text(f"DROP DATABASE {name} WITH (FORCE)"))
         admin.engine.dispose()
+
+
+@pytest.fixture
+def migrated_database(throwaway_database_url: str) -> Iterator[Engine]:
+    """An engine for a throwaway database that the migrations have run on."""
+    engine = create_database_engine(throwaway_database_url)
+    migrate(engine)
+    yield engine
+    engine.dispose()
