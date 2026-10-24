@@ -4,6 +4,8 @@ import { createRoot } from 'react-dom/client'
 import { createAppRouter } from './router.tsx'
 import './styles/tokens.css'
 import './styles/base.css'
+import './styles/kit.css'
+import './styles/page.css'
 
 const router = createAppRouter()
 

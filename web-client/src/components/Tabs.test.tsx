@@ -2,114 +2,95 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { Tabs } from './Tabs'
+import { ToastProvider } from './ToastProvider'
 
-const tabs = [
-  { value: 'overview', label: 'Overview', panel: 'The overview.' },
-  { value: 'schedule', label: 'Schedule', panel: 'The schedule.' },
-  { value: 'standings', label: 'Standings', panel: 'The standings.' },
-]
-
-function selected() {
-  return screen
-    .getAllByRole('tab')
-    .map((tab) => tab.getAttribute('aria-selected'))
+function renderTabs() {
+  render(
+    <ToastProvider>
+      <button type="button">Before</button>
+      <Tabs
+        label="Tournament sections"
+        tabs={[
+          { label: 'Overview', panel: <p>32 players</p> },
+          { label: 'Schedule', panel: <p>14 of 31 matches played.</p> },
+          { label: 'Standings', panel: <p>Groups A–D</p> },
+        ]}
+      />
+      <button type="button">After</button>
+    </ToastProvider>,
+  )
 }
 
-function tabIndexes() {
-  return screen.getAllByRole('tab').map((tab) => tab.tabIndex)
+const tab = (name: string) => screen.getByRole('tab', { name })
+// The one panel that shows.
+const panel = () => screen.getByRole('tabpanel')
+
+// Checks that the tab `name` is the selected one and its panel is the one
+// that shows.
+function expectSelected(name: string) {
+  for (const other of ['Overview', 'Schedule', 'Standings']) {
+    expect(tab(other)).toHaveAttribute('aria-selected', String(other === name))
+  }
+  expect(panel()).toHaveAccessibleName(name)
 }
 
 describe('Tabs', () => {
-  it('renders a named tablist of tab buttons', () => {
-    render(<Tabs label="Tournament" tabs={tabs} />)
+  it('starts on the first tab and shows only its panel', () => {
+    renderTabs()
 
-    expect(screen.getByRole('tablist', { name: 'Tournament' })).toHaveClass(
-      'tabs-list',
-    )
-    const buttons = screen.getAllByRole('tab')
-    expect(buttons.map((tab) => tab.textContent)).toEqual([
-      'Overview',
-      'Schedule',
-      'Standings',
-    ])
-    for (const tab of buttons) {
-      expect(tab.tagName).toBe('BUTTON')
-      expect(tab).toHaveAttribute('type', 'button')
-      expect(tab).toHaveClass('tab')
-    }
+    expect(screen.getByRole('tablist', { name: 'Tournament sections' })).toBeInTheDocument()
+    expectSelected('Overview')
   })
 
-  it('chooses the first tab unless given one', () => {
-    render(<Tabs label="Tournament" tabs={tabs} />)
-
-    expect(selected()).toEqual(['true', 'false', 'false'])
-    expect(tabIndexes()).toEqual([0, -1, -1])
-  })
-
-  it("shows only the chosen tab's panel, labelled by its tab", () => {
-    render(<Tabs label="Tournament" tabs={tabs} defaultValue="schedule" />)
-
-    const panel = screen.getByRole('tabpanel')
-    expect(panel).toHaveTextContent('The schedule.')
-    expect(panel).toHaveAccessibleName('Schedule')
-    expect(panel).toHaveClass('tab-content')
-    expect(screen.getByRole('tab', { name: 'Schedule' })).toHaveAttribute(
-      'aria-controls',
-      panel.id,
-    )
-    expect(screen.queryByText('The overview.')).not.toBeVisible()
-  })
-
-  it('chooses a tab when it is clicked', async () => {
+  it('shows the panel of a clicked tab', async () => {
     const user = userEvent.setup()
-    render(<Tabs label="Tournament" tabs={tabs} />)
+    renderTabs()
 
-    await user.click(screen.getByRole('tab', { name: 'Standings' }))
+    await user.click(tab('Standings'))
 
-    expect(selected()).toEqual(['false', 'false', 'true'])
-    expect(tabIndexes()).toEqual([-1, -1, 0])
-    expect(screen.getByRole('tabpanel')).toHaveTextContent('The standings.')
+    expectSelected('Standings')
+    expect(panel()).toHaveTextContent('Groups A–D')
   })
 
-  it('moves the focus and the choice with the arrow keys, wrapping', async () => {
+  it('is one tab stop, on the selected tab', async () => {
     const user = userEvent.setup()
-    render(<Tabs label="Tournament" tabs={tabs} />)
+    renderTabs()
+    await user.click(tab('Schedule'))
+    screen.getByRole('button', { name: 'Before' }).focus()
+
     await user.tab()
+    expect(tab('Schedule')).toHaveFocus()
+    await user.tab()
+    expect(screen.getByRole('button', { name: 'After' })).toHaveFocus()
+  })
+
+  it('moves the selection and focus with the arrow keys, wrapping at the ends', async () => {
+    const user = userEvent.setup()
+    renderTabs()
+    tab('Overview').focus()
 
     await user.keyboard('{ArrowRight}')
-    expect(screen.getByRole('tab', { name: 'Schedule' })).toHaveFocus()
-    expect(selected()).toEqual(['false', 'true', 'false'])
-
-    await user.keyboard('{ArrowLeft}{ArrowLeft}')
-    expect(screen.getByRole('tab', { name: 'Standings' })).toHaveFocus()
-    expect(selected()).toEqual(['false', 'false', 'true'])
-
-    await user.keyboard('{ArrowRight}')
-    expect(screen.getByRole('tab', { name: 'Overview' })).toHaveFocus()
-    expect(screen.getByRole('tabpanel')).toHaveTextContent('The overview.')
+    expectSelected('Schedule')
+    expect(tab('Schedule')).toHaveFocus()
+    await user.keyboard('{ArrowDown}{ArrowDown}')
+    expectSelected('Overview')
+    await user.keyboard('{ArrowLeft}')
+    expectSelected('Standings')
+    expect(tab('Standings')).toHaveFocus()
+    await user.keyboard('{ArrowUp}')
+    expectSelected('Schedule')
   })
 
-  it('moves to the first and last tab with Home and End', async () => {
+  it('goes to the first and last tab with Home and End', async () => {
     const user = userEvent.setup()
-    render(<Tabs label="Tournament" tabs={tabs} />)
-    await user.tab()
+    renderTabs()
+    tab('Overview').focus()
 
     await user.keyboard('{End}')
-    expect(screen.getByRole('tab', { name: 'Standings' })).toHaveFocus()
-    expect(selected()).toEqual(['false', 'false', 'true'])
-
+    expectSelected('Standings')
+    expect(tab('Standings')).toHaveFocus()
     await user.keyboard('{Home}')
-    expect(screen.getByRole('tab', { name: 'Overview' })).toHaveFocus()
-    expect(selected()).toEqual(['true', 'false', 'false'])
-  })
-
-  it('is one Tab stop, then the panel', async () => {
-    const user = userEvent.setup()
-    render(<Tabs label="Tournament" tabs={tabs} defaultValue="schedule" />)
-
-    await user.tab()
-    expect(screen.getByRole('tab', { name: 'Schedule' })).toHaveFocus()
-    await user.tab()
-    expect(screen.getByRole('tabpanel')).toHaveFocus()
+    expectSelected('Overview')
+    expect(tab('Overview')).toHaveFocus()
   })
 })

@@ -24,657 +24,147 @@ export class DesignSystemPage {
     return screen.getByRole('heading', { level: 1 })
   }
 
-  // The paragraph right after the page's header.
+  // The paragraph right after the page's title.
   get intro(): HTMLElement {
     return screen.getAllByRole('paragraph')[0]
   }
 
-  get formsSection(): HTMLElement {
-    return screen.getByRole('region', { name: 'Forms & Input' })
+  get rolesSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Roles at a glance' })
   }
 
-  get formsSectionHeading(): HTMLElement {
-    return within(this.formsSection).getByRole('heading', { level: 2 })
+  // The Roles at a glance section's button named `name`, e.g. "Retry now".
+  rolesButton(name: string): HTMLElement {
+    return within(this.rolesSection).getByRole('button', { name })
   }
 
-  get formsSectionLead(): HTMLElement {
-    return within(this.formsSection).getByRole('paragraph')
+  get buttonsSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Buttons' })
   }
 
-  get buttonCard(): HTMLElement {
-    return within(this.formsSection).getByRole('article', { name: 'Button' })
-  }
-
-  get buttonCardHeading(): HTMLElement {
-    return within(this.buttonCard).getByRole('heading', { level: 3 })
-  }
-
+  // The Buttons section's button named `name`, e.g. "Save result".
   button(name: string): HTMLElement {
-    return within(this.buttonCard).getByRole('button', { name })
+    return within(this.buttonsSection).getByRole('button', { name })
   }
 
-  get inputCard(): HTMLElement {
-    return within(this.formsSection).getByRole('article', {
-      name: 'Input · Label · Form Field',
-    })
+  get fieldsSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Fields and choices' })
   }
 
-  get inputCardHeading(): HTMLElement {
-    return within(this.inputCard).getByRole('heading', { level: 3 })
+  // The Fields and choices section's example titled `title`, e.g. "Code
+  // input".
+  fieldsExample(title: string): HTMLElement {
+    return within(this.fieldsSection).getByRole('article', { name: title })
   }
 
-  // The text input labelled `name`, so finding it proves the label is
-  // associated with it.
-  input(name: string): HTMLElement {
-    return within(this.inputCard).getByRole('textbox', { name })
+  // The opponent combobox's field.
+  get opponentField(): HTMLElement {
+    return within(this.fieldsSection).getByRole('combobox', { name: 'Opponent' })
   }
 
-  get textareaCard(): HTMLElement {
-    return within(this.formsSection).getByRole('article', { name: 'Textarea' })
+  get selectionSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Selection' })
   }
 
-  get textareaCardHeading(): HTMLElement {
-    return within(this.textareaCard).getByRole('heading', { level: 3 })
+  // The Selection section's tab, radio, switch or chip button named `name`,
+  // e.g. the tab "Schedule".
+  selectionControl(role: 'tab' | 'radio' | 'switch' | 'button', name: string): HTMLElement {
+    return within(this.selectionSection).getByRole(role, { name })
   }
 
-  // The Match notes textarea, found by its label, so finding it proves the
-  // label is associated with it.
-  get textarea(): HTMLElement {
-    return within(this.textareaCard).getByRole('textbox', {
-      name: 'Match notes',
-    })
+  get containersSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Containers' })
   }
 
-  get otpCard(): HTMLElement {
-    return within(this.formsSection).getByRole('article', { name: 'Input OTP' })
+  // The Containers section's button named `name`, e.g. "Check in all".
+  containersButton(name: string | RegExp): HTMLElement {
+    return within(this.containersSection).getByRole('button', { name })
   }
 
-  get otpCardHeading(): HTMLElement {
-    return within(this.otpCard).getByRole('heading', { level: 3 })
-  }
-
-  // The one-time code input, found by its hidden label, so finding it proves
-  // the label is associated with it.
-  get otpInput(): HTMLElement {
-    return within(this.otpCard).getByRole('textbox', {
-      name: 'Verification code',
-    })
-  }
-
-  get otpLabel(): HTMLElement {
-    return within(this.otpCard).getByText('Verification code')
-  }
-
-  get checkboxCard(): HTMLElement {
-    return within(this.formsSection).getByRole('article', { name: 'Checkbox' })
-  }
-
-  get checkboxCardHeading(): HTMLElement {
-    return within(this.checkboxCard).getByRole('heading', { level: 3 })
-  }
-
-  // The checkbox labelled `name`, so finding it proves the label is
-  // associated with it.
-  checkbox(name: string): HTMLElement {
-    return within(this.checkboxCard).getByRole('checkbox', { name })
-  }
-
-  get radioCard(): HTMLElement {
-    return within(this.formsSection).getByRole('article', {
-      name: 'Radio Group',
-    })
-  }
-
-  get radioCardHeading(): HTMLElement {
-    return within(this.radioCard).getByRole('heading', { level: 3 })
-  }
-
-  // The Match format group, found by its hidden label, so finding it proves
-  // the label names it.
-  get radioGroup(): HTMLElement {
-    return within(this.radioCard).getByRole('radiogroup', {
-      name: 'Match format',
-    })
-  }
-
-  get radioGroupLabel(): HTMLElement {
-    return within(this.radioCard).getByText('Match format')
-  }
-
-  // The group's radio labelled `name`, so finding it proves the label is
-  // associated with it.
-  radio(name: string): HTMLElement {
-    return within(this.radioGroup).getByRole('radio', { name })
-  }
-
-  get switchCard(): HTMLElement {
-    return within(this.formsSection).getByRole('article', { name: 'Switch' })
-  }
-
-  get switchCardHeading(): HTMLElement {
-    return within(this.switchCard).getByRole('heading', { level: 3 })
-  }
-
-  // The switch labelled `name`, so finding it proves the label is associated
-  // with it.
-  switch(name: string): HTMLElement {
-    return within(this.switchCard).getByRole('switch', { name })
-  }
-
-  get sliderCard(): HTMLElement {
-    return within(this.formsSection).getByRole('article', { name: 'Slider' })
-  }
-
-  get sliderCardHeading(): HTMLElement {
-    return within(this.sliderCard).getByRole('heading', { level: 3 })
-  }
-
-  // The slider (one input) named `name`, so finding it proves its label
-  // names it.
-  slider(name: string): HTMLElement {
-    return within(this.sliderCard).getByRole('slider', { name })
-  }
-
-  // The value readouts, in order.
-  get sliderValues(): HTMLElement[] {
-    return within(this.sliderCard).getAllByRole('status')
-  }
-
-  get selectCard(): HTMLElement {
-    return within(this.formsSection).getByRole('article', { name: 'Select' })
-  }
-
-  get selectCardHeading(): HTMLElement {
-    return within(this.selectCard).getByRole('heading', { level: 3 })
-  }
-
-  // The select named `name`.
-  select(name: string): HTMLElement {
-    return within(this.selectCard).getByRole('combobox', { name })
-  }
-
-  get comboboxCard(): HTMLElement {
-    return within(this.formsSection).getByRole('article', { name: 'Combobox' })
-  }
-
-  get comboboxCardHeading(): HTMLElement {
-    return within(this.comboboxCard).getByRole('heading', { level: 3 })
-  }
-
-  get combobox(): HTMLElement {
-    return within(this.comboboxCard).getByRole('combobox', {
-      name: 'Find a player',
-    })
-  }
-
-  // The combobox's shown options, in order.
-  get comboboxOptions(): HTMLElement[] {
-    return within(this.comboboxCard).getAllByRole('option')
-  }
-
-  get datePickerCard(): HTMLElement {
-    return within(this.formsSection).getByRole('article', {
-      name: 'Date Picker',
-    })
-  }
-
-  get datePickerCardHeading(): HTMLElement {
-    return within(this.datePickerCard).getByRole('heading', { level: 3 })
-  }
-
-  // The button that opens the calendar. Its name starts with its label, so
-  // finding it proves the label names it.
-  get datePickerTrigger(): HTMLElement {
-    return within(this.datePickerCard).getByRole('button', {
-      name: /^Match date/,
-    })
-  }
-
-  get datePickerDialog(): HTMLElement {
-    return within(this.datePickerCard).getByRole('dialog')
-  }
-
-  get datePickerGrid(): HTMLElement {
-    return within(this.datePickerDialog).getByRole('grid')
-  }
-
-  // The calendar's day named `name`, e.g. "April 12, 2026".
-  datePickerDay(name: string): HTMLElement {
-    return within(this.datePickerGrid).getByRole('gridcell', { name })
-  }
-
-  get toggleCard(): HTMLElement {
-    return within(this.formsSection).getByRole('article', {
-      name: 'Toggle · Toggle Group',
-    })
-  }
-
-  get toggleCardHeading(): HTMLElement {
-    return within(this.toggleCard).getByRole('heading', { level: 3 })
-  }
-
-  // The standalone toggle named `name`, e.g. "Bold".
-  toggle(name: string): HTMLElement {
-    return within(this.toggleCard).getByRole('button', { name })
-  }
-
-  get toggleSeparator(): HTMLElement {
-    return within(this.toggleCard).getByRole('separator')
-  }
-
-  get toggleGroup(): HTMLElement {
-    return within(this.toggleCard).getByRole('radiogroup', {
-      name: 'Match type',
-    })
-  }
-
-  // The group's items, in order.
-  get toggleGroupItems(): HTMLElement[] {
-    return within(this.toggleGroup).getAllByRole('radio')
-  }
-
-  get displaySection(): HTMLElement {
-    return screen.getByRole('region', { name: 'Data Display' })
-  }
-
-  get displaySectionHeading(): HTMLElement {
-    return within(this.displaySection).getByRole('heading', { level: 2 })
-  }
-
-  // The first paragraph: the cards in the section have paragraphs too.
-  get displaySectionLead(): HTMLElement {
-    return within(this.displaySection).getAllByRole('paragraph')[0]
-  }
-
-  get cardCard(): HTMLElement {
-    return within(this.displaySection).getByRole('article', { name: 'Card' })
-  }
-
-  get cardCardHeading(): HTMLElement {
-    return within(this.cardCard).getByRole('heading', { level: 3 })
-  }
-
-  // The demo card titled `name`, e.g. "April Spring Open".
-  demoCard(name: string): HTMLElement {
-    return within(this.cardCard).getByRole('article', { name })
-  }
-
-  get badgeCard(): HTMLElement {
-    return within(this.displaySection).getByRole('article', { name: 'Badge' })
-  }
-
-  get badgeCardHeading(): HTMLElement {
-    return within(this.badgeCard).getByRole('heading', { level: 3 })
-  }
-
-  // A badge is a styled span with no role of its own, so the badges are
-  // found by their class.
-  get badges(): HTMLElement[] {
-    return Array.from(this.badgeCard.querySelectorAll<HTMLElement>('.badge'))
-  }
-
-  get avatarCard(): HTMLElement {
-    return within(this.displaySection).getByRole('article', { name: 'Avatar' })
-  }
-
-  get avatarCardHeading(): HTMLElement {
-    return within(this.avatarCard).getByRole('heading', { level: 3 })
-  }
-
-  // Every avatar in the Avatar card, the group's overflow circle included,
-  // in order.
-  get avatars(): HTMLElement[] {
-    return within(this.avatarCard).getAllByRole('img')
-  }
-
-  get avatarGroup(): HTMLElement {
-    return within(this.avatarCard).getByRole('group', { name: 'Players' })
-  }
-
-  get tableCard(): HTMLElement {
-    return within(this.displaySection).getByRole('article', {
-      name: 'Table · Data Table',
-    })
-  }
-
-  get tableCardHeading(): HTMLElement {
-    return within(this.tableCard).getByRole('heading', { level: 3 })
-  }
-
-  get standingsTable(): HTMLElement {
-    return within(this.tableCard).getByRole('table', { name: 'Standings' })
-  }
-
-  get progressCard(): HTMLElement {
-    return within(this.displaySection).getByRole('article', {
-      name: 'Progress',
-    })
-  }
-
-  get progressCardHeading(): HTMLElement {
-    return within(this.progressCard).getByRole('heading', { level: 3 })
-  }
-
-  // The Progress card's bars, in order.
-  get progressBars(): HTMLElement[] {
-    return within(this.progressCard).getAllByRole('progressbar')
-  }
-
-  get skeletonCard(): HTMLElement {
-    return within(this.displaySection).getByRole('article', {
-      name: 'Skeleton',
-    })
-  }
-
-  get skeletonCardHeading(): HTMLElement {
-    return within(this.skeletonCard).getByRole('heading', { level: 3 })
-  }
-
-  // The placeholders are hidden from assistive tech, so they have no role to
-  // find them by.
-  get skeletons(): HTMLElement[] {
-    return Array.from(
-      this.skeletonCard.querySelectorAll<HTMLElement>('.skeleton'),
-    )
-  }
-
-  get aspectRatioCard(): HTMLElement {
-    return within(this.displaySection).getByRole('article', {
-      name: 'Aspect Ratio',
-    })
-  }
-
-  get aspectRatioCardHeading(): HTMLElement {
-    return within(this.aspectRatioCard).getByRole('heading', { level: 3 })
-  }
-
-  // The Aspect Ratio card's boxes, in order.
-  get aspectRatioBoxes(): HTMLElement[] {
-    return Array.from(
-      this.aspectRatioCard.querySelectorAll<HTMLElement>('.aspect-ratio'),
-    )
-  }
-
-  get navSection(): HTMLElement {
-    return screen.getByRole('region', { name: 'Navigation' })
-  }
-
-  get navSectionHeading(): HTMLElement {
-    return within(this.navSection).getByRole('heading', { level: 2 })
-  }
-
-  // The first paragraph: the cards in the section have paragraphs too.
-  get navSectionLead(): HTMLElement {
-    return within(this.navSection).getAllByRole('paragraph')[0]
-  }
-
-  get tabsCard(): HTMLElement {
-    return within(this.navSection).getByRole('article', { name: 'Tabs' })
-  }
-
-  get tabsCardHeading(): HTMLElement {
-    return within(this.tabsCard).getByRole('heading', { level: 3 })
-  }
-
-  // The Tabs card's tabs, in order.
-  get tabs(): HTMLElement[] {
-    return within(this.tabsCard).getAllByRole('tab')
-  }
-
-  // The chosen tab's panel: the others are hidden.
-  get tabPanel(): HTMLElement {
-    return within(this.tabsCard).getByRole('tabpanel')
-  }
-
-  get accordionCard(): HTMLElement {
-    return within(this.navSection).getByRole('article', { name: 'Accordion' })
-  }
-
-  get accordionCardHeading(): HTMLElement {
-    return within(this.accordionCard).getByRole('heading', { level: 3 })
-  }
-
-  // The Accordion card's buttons that open its questions, in order.
-  get accordionTriggers(): HTMLElement[] {
-    return within(this.accordionCard).getAllByRole('button')
-  }
-
-  // The answers that are open, in order.
-  get accordionContents(): HTMLElement[] {
-    return within(this.accordionCard).queryAllByRole('region')
-  }
-
-  get breadcrumbCard(): HTMLElement {
-    return within(this.navSection).getByRole('article', { name: 'Breadcrumb' })
-  }
-
-  get breadcrumbCardHeading(): HTMLElement {
-    return within(this.breadcrumbCard).getByRole('heading', { level: 3 })
-  }
-
-  get breadcrumb(): HTMLElement {
-    return within(this.breadcrumbCard).getByRole('navigation', {
-      name: 'Breadcrumb',
-    })
-  }
-
-  get paginationCard(): HTMLElement {
-    return within(this.navSection).getByRole('article', { name: 'Pagination' })
-  }
-
-  get paginationCardHeading(): HTMLElement {
-    return within(this.paginationCard).getByRole('heading', { level: 3 })
-  }
-
-  get pagination(): HTMLElement {
-    return within(this.paginationCard).getByRole('navigation', {
-      name: 'Pagination',
-    })
-  }
-
-  get navMenuCard(): HTMLElement {
-    return within(this.navSection).getByRole('article', {
-      name: 'Navigation Menu',
-    })
-  }
-
-  get navMenuCardHeading(): HTMLElement {
-    return within(this.navMenuCard).getByRole('heading', { level: 3 })
-  }
-
-  get navMenuPanel(): HTMLElement {
-    return within(this.navMenuCard).getByRole('list', { name: 'Product' })
-  }
-
-  get menubarCard(): HTMLElement {
-    return within(this.navSection).getByRole('article', { name: 'Menubar' })
-  }
-
-  get menubarCardHeading(): HTMLElement {
-    return within(this.menubarCard).getByRole('heading', { level: 3 })
-  }
-
-  // The menubar's items, in order.
-  get menubarItems(): HTMLElement[] {
-    return within(this.menubarCard).getAllByRole('menuitem')
-  }
-
-  get overlaysSection(): HTMLElement {
-    return screen.getByRole('region', { name: 'Overlays' })
-  }
-
-  get overlaysSectionHeading(): HTMLElement {
-    return within(this.overlaysSection).getByRole('heading', { level: 2 })
-  }
-
-  // The first paragraph: the cards in the section have paragraphs too.
-  get overlaysSectionLead(): HTMLElement {
-    return within(this.overlaysSection).getAllByRole('paragraph')[0]
-  }
-
-  get dialogCard(): HTMLElement {
-    return within(this.overlaysSection).getByRole('article', {
-      name: 'Dialog · Alert Dialog',
-    })
-  }
-
-  get dialogCardHeading(): HTMLElement {
-    return within(this.dialogCard).getByRole('heading', { level: 3 })
-  }
-
-  get dialog(): HTMLElement {
-    return within(this.dialogCard).getByRole('dialog')
-  }
-
-  get alertDialog(): HTMLElement {
-    return within(this.dialogCard).getByRole('alertdialog')
-  }
-
-  get sheetCard(): HTMLElement {
-    return within(this.overlaysSection).getByRole('article', { name: 'Sheet' })
-  }
-
-  get sheetCardHeading(): HTMLElement {
-    return within(this.sheetCard).getByRole('heading', { level: 3 })
-  }
-
-  get sheet(): HTMLElement {
-    return within(this.sheetCard).getByRole('dialog')
-  }
-
-  get drawerCard(): HTMLElement {
-    return within(this.overlaysSection).getByRole('article', { name: 'Drawer' })
-  }
-
-  get drawerCardHeading(): HTMLElement {
-    return within(this.drawerCard).getByRole('heading', { level: 3 })
-  }
-
-  get drawer(): HTMLElement {
-    return within(this.drawerCard).getByRole('dialog')
-  }
-
-  get popoverCard(): HTMLElement {
-    return within(this.overlaysSection).getByRole('article', {
-      name: 'Popover',
-    })
-  }
-
-  get popoverCardHeading(): HTMLElement {
-    return within(this.popoverCard).getByRole('heading', { level: 3 })
-  }
-
-  get popover(): HTMLElement {
-    return within(this.popoverCard).getByRole('dialog')
-  }
-
-  get tooltipCard(): HTMLElement {
-    return within(this.overlaysSection).getByRole('article', {
-      name: 'Tooltip',
-    })
-  }
-
-  get tooltipCardHeading(): HTMLElement {
-    return within(this.tooltipCard).getByRole('heading', { level: 3 })
-  }
-
-  get hoverCardCard(): HTMLElement {
-    return within(this.overlaysSection).getByRole('article', {
-      name: 'Hover Card',
-    })
-  }
-
-  get hoverCardCardHeading(): HTMLElement {
-    return within(this.hoverCardCard).getByRole('heading', { level: 3 })
-  }
-
-  get hoverCard(): HTMLElement {
-    return within(this.hoverCardCard).getByRole('group')
-  }
-
-  get menuCard(): HTMLElement {
-    return within(this.overlaysSection).getByRole('article', {
-      name: 'Dropdown Menu · Context Menu',
-    })
-  }
-
-  get menuCardHeading(): HTMLElement {
-    return within(this.menuCard).getByRole('heading', { level: 3 })
-  }
-
-  // The menu card's menu named `name`, e.g. "Match actions".
-  menu(name: string): HTMLElement {
-    return within(this.menuCard).getByRole('menu', { name })
-  }
-
-  get commandCard(): HTMLElement {
-    return within(this.overlaysSection).getByRole('article', {
-      name: 'Command',
-    })
-  }
-
-  get commandCardHeading(): HTMLElement {
-    return within(this.commandCard).getByRole('heading', { level: 3 })
-  }
-
-  get commandInput(): HTMLElement {
-    return within(this.commandCard).getByRole('combobox', { name: 'Command' })
-  }
-
-  get commandList(): HTMLElement {
-    return within(this.commandCard).getByRole('listbox', { name: 'Command' })
+  // The Containers section's example titled `title`, e.g. "Split view".
+  containersExample(title: string): HTMLElement {
+    return within(this.containersSection).getByRole('article', { name: title })
   }
 
   get feedbackSection(): HTMLElement {
     return screen.getByRole('region', { name: 'Feedback' })
   }
 
-  get feedbackSectionHeading(): HTMLElement {
-    return within(this.feedbackSection).getByRole('heading', { level: 2 })
+  // The Feedback section's button named `name`, e.g. "Mark Table 4 free".
+  feedbackButton(name: string): HTMLElement {
+    return within(this.feedbackSection).getByRole('button', { name })
   }
 
-  // The first paragraph: the cards in the section have paragraphs too.
-  get feedbackSectionLead(): HTMLElement {
-    return within(this.feedbackSection).getAllByRole('paragraph')[0]
+  // The Feedback section's example titled `title`, e.g. "Warning and error".
+  feedbackExample(title: string): HTMLElement {
+    return within(this.feedbackSection).getByRole('article', { name: title })
   }
 
-  get alertCard(): HTMLElement {
-    return within(this.feedbackSection).getByRole('article', { name: 'Alert' })
+  get overlaysSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Overlays' })
   }
 
-  get alertCardHeading(): HTMLElement {
-    return within(this.alertCard).getByRole('heading', { level: 3 })
+  // The Overlays section's button named `name`, e.g. "Open match drawer".
+  overlaysButton(name: string): HTMLElement {
+    return within(this.overlaysSection).getByRole('button', { name })
   }
 
-  // The alert card's alerts, in order.
-  get alerts(): HTMLElement[] {
-    return within(this.alertCard).getAllByRole('alert')
+  get matchSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Match components' })
   }
 
-  get toastCard(): HTMLElement {
-    return within(this.feedbackSection).getByRole('article', {
-      name: 'Sonner / Toast',
-    })
+  // The Match components section's button named `name`, e.g. "+1 Patel".
+  matchButton(name: string | RegExp): HTMLElement {
+    return within(this.matchSection).getByRole('button', { name })
   }
 
-  get toastCardHeading(): HTMLElement {
-    return within(this.toastCard).getByRole('heading', { level: 3 })
+  // The Match components section's example titled `title`, e.g. "Match
+  // row".
+  matchExample(title: string): HTMLElement {
+    return within(this.matchSection).getByRole('article', { name: title })
   }
 
-  // The toast card's toasts, in order.
-  get toasts(): HTMLElement[] {
-    return within(this.toastCard).queryAllByRole('status')
+  get moreSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'More components' })
   }
 
-  // The close button of the toast titled `title`.
-  toastDismissButton(title: string): HTMLElement {
-    return within(this.toastCard).getByRole('button', {
-      name: `Dismiss "${title}"`,
-    })
+  // The More components section's example titled `title`, e.g. "Menubar".
+  moreExample(title: string): HTMLElement {
+    return within(this.moreSection).getByRole('article', { name: title })
   }
 
-  // The toast card's action button named `name`, e.g. "Reload".
-  toastActionButton(name: string): HTMLElement {
-    return within(this.toastCard).getByRole('button', { name })
+  // The open dialog or sheet named `name`, e.g. "Patel vs Wójcik-Szymańska".
+  dialog(name: string): HTMLElement {
+    return screen.getByRole('dialog', { name })
+  }
+
+  // The open dialogs and sheets.
+  get openDialogs(): HTMLElement[] {
+    return screen.queryAllByRole('dialog')
+  }
+
+  // The page's tooltip, or null while none shows.
+  get tooltip(): HTMLElement | null {
+    return screen.queryByRole('tooltip')
+  }
+
+  // The command palette's search field, while it's open.
+  get paletteSearch(): HTMLElement {
+    return within(this.dialog('Command palette')).getByRole('combobox')
+  }
+
+  // The command palette's group named `name`, e.g. "Go to", while it's open.
+  paletteGroup(name: string): HTMLElement {
+    return within(this.dialog('Command palette')).getByRole('group', { name })
+  }
+
+  // Where the app's toasts show, bottom centre.
+  get toastRegion(): HTMLElement {
+    return screen.getByRole('status', { name: 'Notifications' })
+  }
+
+  // The button named `name` on the shown toast, e.g. "Undo".
+  toastButton(name: string): HTMLElement {
+    return within(this.toastRegion).getByRole('button', { name })
   }
 }

@@ -1,131 +1,36 @@
 import { render, screen, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { Button } from './Button'
 import { Card } from './Card'
 
 describe('Card', () => {
-  it('renders an article named by its title, at the given heading level', () => {
+  it('is a region named by its title, with its subtitle, status, body and actions', () => {
     render(
       <Card
-        headingLevel={4}
-        title="April Spring Open"
-        description="Hosted by Brooklyn TT Club"
+        title="Your next match"
+        subtitle="Open singles · Round of 16"
+        status={<span>12:05</span>}
+        actions={<button type="button">I'm at the table</button>}
       >
-        32 players, single-elimination.
+        <p>Opponent: Park, Ji-ho</p>
       </Card>,
     )
 
-    const card = screen.getByRole('article', { name: 'April Spring Open' })
-    expect(
-      within(card).getByRole('heading', { level: 4, name: 'April Spring Open' }),
-    ).toBeInTheDocument()
-    expect(within(card).getByText('Hosted by Brooklyn TT Club')).toBeVisible()
-    expect(within(card).getByText('32 players, single-elimination.')).toBeVisible()
+    const card = screen.getByRole('region', { name: 'Your next match' })
+    expect(within(card).getByRole('heading', { level: 3 })).toHaveTextContent('Your next match')
+    expect(card).toHaveTextContent(
+      "Your next matchOpen singles · Round of 1612:05Opponent: Park, Ji-hoI'm at the table",
+    )
+    expect(within(card).getByRole('button', { name: "I'm at the table" })).toBeVisible()
   })
 
-  it.each([2, 3, 5, 6] as const)('renders its title as an h%i', (level) => {
-    render(
-      <Card headingLevel={level} title="Results">
-        Body
+  it('has no footer without actions', () => {
+    const { container } = render(
+      <Card title="Check-in">
+        <p>12 of 16 players here</p>
       </Card>,
     )
 
-    expect(
-      screen.getByRole('heading', { level, name: 'Results' }),
-    ).toBeInTheDocument()
-    expect(screen.getAllByRole('heading')).toHaveLength(1)
-  })
-
-  it('shows its title, description and body in that order', () => {
-    render(
-      <Card headingLevel={3} title="Title" description="Description">
-        Body
-      </Card>,
-    )
-
-    expect(screen.getByRole('article')).toHaveTextContent(
-      /^TitleDescriptionBody$/,
-    )
-  })
-
-  it('has no description or footer unless given one', () => {
-    render(
-      <Card headingLevel={3} title="Title">
-        Body
-      </Card>,
-    )
-
-    const card = screen.getByRole('article', { name: 'Title' })
-    expect(card).toHaveTextContent(/^TitleBody$/)
-    expect(within(card).queryByRole('paragraph')).not.toBeInTheDocument()
-    expect(within(card).queryByRole('button')).not.toBeInTheDocument()
-  })
-
-  it('shows its footer after the body', () => {
-    render(
-      <Card
-        headingLevel={3}
-        title="Title"
-        footer={
-          <>
-            <Button size="sm">Register</Button>
-            <Button size="sm" variant="outline">
-              View draw
-            </Button>
-          </>
-        }
-      >
-        Body
-      </Card>,
-    )
-
-    const card = screen.getByRole('article', { name: 'Title' })
-    expect(within(card).getByRole('button', { name: 'Register' })).toBeVisible()
-    expect(within(card).getByRole('button', { name: 'View draw' })).toBeVisible()
-    expect(card).toHaveTextContent(/^TitleBodyRegisterView draw$/)
-  })
-
-  it('names each card by its own title', () => {
-    render(
-      <>
-        <Card headingLevel={3} title="First">
-          One
-        </Card>
-        <Card headingLevel={3} title="Second">
-          Two
-        </Card>
-      </>,
-    )
-
-    expect(screen.getByRole('article', { name: 'First' })).toHaveTextContent(
-      'One',
-    )
-    expect(screen.getByRole('article', { name: 'Second' })).toHaveTextContent(
-      'Two',
-    )
-  })
-
-  // The featured look is only CSS (border, glow and title colour, checked
-  // against the reference kit in the Playwright suite), so its class is the
-  // only contract jsdom can see.
-  it('takes the featured class only for the featured variant', () => {
-    render(
-      <>
-        <Card headingLevel={3} title="Plain">
-          One
-        </Card>
-        <Card headingLevel={3} title="Featured" variant="featured">
-          Two
-        </Card>
-      </>,
-    )
-
-    expect(screen.getByRole('article', { name: 'Plain' })).not.toHaveClass(
-      'card--featured',
-    )
-    expect(screen.getByRole('article', { name: 'Featured' })).toHaveClass(
-      'card',
-      'card--featured',
-    )
+    expect(container.querySelector('.fm-card__foot')).not.toBeInTheDocument()
+    expect(container.querySelector('.fm-card__sub')).not.toBeInTheDocument()
   })
 })

@@ -1,97 +1,89 @@
 import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import userEvent from '@testing-library/user-event'
+import { useRef } from 'react'
+import { describe, expect, it, vi } from 'vitest'
+import { Button } from './Button'
+import { closeDialog } from './closeDialog'
 import { Dialog } from './Dialog'
 
-describe('Dialog', () => {
-  it('is a dialog named by its title and described by its description', () => {
-    render(<Dialog title="Forfeit?" description="This can't be undone." />)
-
-    const dialog = screen.getByRole('dialog', {
-      name: 'Forfeit?',
-      description: "This can't be undone.",
-    })
-    expect(dialog).toHaveClass('dialog')
-    expect(dialog).not.toHaveAttribute('aria-modal')
-    expect(screen.getByRole('heading', { level: 4 })).toHaveTextContent(
-      'Forfeit?',
-    )
-  })
-
-  it('is an alert dialog as the alert variant', () => {
-    render(
-      <Dialog variant="alert" title="Delete account" description="Gone." />,
-    )
-
-    expect(
-      screen.getByRole('alertdialog', {
-        name: 'Delete account',
-        description: 'Gone.',
-      }),
-    ).toHaveClass('dialog', 'dialog--alert')
-    expect(screen.queryByRole('dialog')).toBeNull()
-  })
-
-  it('is a dialog styled as a sheet as the sheet variant', () => {
-    render(
-      <Dialog variant="sheet" title="Filters" description="Narrow it." />,
-    )
-
-    expect(
-      screen.getByRole('dialog', {
-        name: 'Filters',
-        description: 'Narrow it.',
-      }),
-    ).toHaveClass('sheet')
-  })
-
-  it('is a dialog styled as a drawer as the drawer variant', () => {
-    render(
-      <Dialog variant="drawer" title="Quick log" description="Tap to log." />,
-    )
-
-    expect(
-      screen.getByRole('dialog', {
-        name: 'Quick log',
-        description: 'Tap to log.',
-      }),
-    ).toHaveClass('drawer')
-  })
-
-  it('is a dialog styled as a popover as the popover variant', () => {
-    render(
-      <Dialog variant="popover" title="Skill rating" description="Glicko-2." />,
-    )
-
-    expect(
-      screen.getByRole('dialog', {
-        name: 'Skill rating',
-        description: 'Glicko-2.',
-      }),
-    ).toHaveClass('popover')
-  })
-
-  it('shows the body, then the actions in their row', () => {
-    render(
+function WithdrawDemo({ onClose }: { onClose: (returnValue: string) => void }) {
+  const dialog = useRef<HTMLDialogElement>(null)
+  return (
+    <>
+      <Button variant="danger" onClick={() => dialog.current?.showModal()}>
+        Withdraw player…
+      </Button>
       <Dialog
-        title="Forfeit?"
-        description="Sure?"
-        actions={<button type="button">Cancel</button>}
+        ref={dialog}
+        title="Withdraw Okafor-Adeyemi from the draw?"
+        onClose={(event) => onClose(event.currentTarget.returnValue)}
+        actions={
+          <>
+            <Button variant="secondary" onClick={closeDialog}>
+              Keep in draw
+            </Button>
+            <Button variant="danger-solid" value="withdraw" onClick={closeDialog}>
+              Withdraw
+            </Button>
+          </>
+        }
       >
-        <p>Body</p>
-      </Dialog>,
-    )
+        <p>Johansen-Whitfield advances to the quarterfinal.</p>
+      </Dialog>
+    </>
+  )
+}
 
-    const body = screen.getByText('Body')
-    const cancel = screen.getByRole('button', { name: 'Cancel' })
-    expect(cancel.parentElement).toHaveClass('dialog-actions')
+describe('Dialog', () => {
+  it('opens named by its title', async () => {
+    const user = userEvent.setup()
+    render(<WithdrawDemo onClose={() => {}} />)
+
+    await user.click(screen.getByRole('button', { name: 'Withdraw player…' }))
+
     expect(
-      body.compareDocumentPosition(cancel) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
+      screen.getByRole('dialog', { name: 'Withdraw Okafor-Adeyemi from the draw?' }),
+    ).toHaveTextContent('Johansen-Whitfield advances to the quarterfinal.')
   })
 
-  it('has no actions row without actions', () => {
-    const { container } = render(<Dialog title="Note" description="Hi." />)
+  it.each([
+    ['Keep in draw', ''],
+    ['Withdraw', 'withdraw'],
+  ])('closes on %s, with its value', async (name, returnValue) => {
+    const onClose = vi.fn()
+    const user = userEvent.setup()
+    render(<WithdrawDemo onClose={onClose} />)
+    await user.click(screen.getByRole('button', { name: 'Withdraw player…' }))
 
-    expect(container.querySelector('.dialog-actions')).toBeNull()
+    await user.click(screen.getByRole('button', { name }))
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(onClose).toHaveBeenCalledWith(returnValue)
+  })
+
+  it('closes on a click on the backdrop', async () => {
+    const user = userEvent.setup()
+    render(<WithdrawDemo onClose={() => {}} />)
+    await user.click(screen.getByRole('button', { name: 'Withdraw player…' }))
+
+    // The backdrop takes clicks for the dialog: they land on it, outside
+    // its box.
+    await user.pointer({
+      keys: '[MouseLeft]',
+      target: screen.getByRole('dialog'),
+      coords: { clientX: 5, clientY: 5 },
+    })
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('stays open on a click inside it', async () => {
+    const user = userEvent.setup()
+    render(<WithdrawDemo onClose={() => {}} />)
+    await user.click(screen.getByRole('button', { name: 'Withdraw player…' }))
+
+    await user.click(screen.getByText('Johansen-Whitfield advances to the quarterfinal.'))
+
+    expect(screen.getByRole('dialog')).toBeVisible()
   })
 })

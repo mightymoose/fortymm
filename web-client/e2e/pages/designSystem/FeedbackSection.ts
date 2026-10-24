@@ -1,43 +1,23 @@
 import type { Locator, Page } from '@playwright/test'
 import { SectionObject } from './SectionObject.ts'
 
-// The design system page's Feedback section.
+// The Feedback section.
 export class FeedbackSection extends SectionObject {
-  readonly alertCard: Locator
-  readonly toastCard: Locator
+  readonly toast: Locator
+  readonly inlineNotice: Locator
+  readonly warningAndError: Locator
+  readonly statusSet: Locator
 
   constructor(page: Page) {
-    super(page, 'Feedback')
-    this.alertCard = this.region.getByRole('article', {
-      name: 'Alert',
-      exact: true,
-    })
-    this.toastCard = this.region.getByRole('article', {
-      name: 'Sonner / Toast',
-      exact: true,
-    })
+    super(page, 'feedback')
+    this.toast = this.example('ex-toast')
+    this.inlineNotice = this.example('ex-inline-notice')
+    this.warningAndError = this.example('ex-warning-and-error')
+    this.statusSet = this.example('ex-status-set')
   }
 
-  // The alert card's alert titled `name`, e.g. "Heads up".
-  alert(name: string): Locator {
-    return this.alertCard.getByRole('alert', { name, exact: true })
-  }
-
-  // The toast card's toast titled `name`, e.g. "Reminder".
-  toast(name: string): Locator {
-    return this.toastCard.getByRole('status', { name, exact: true })
-  }
-
-  // The close button of the toast titled `title`.
-  toastDismissButton(title: string): Locator {
-    return this.toastCard.getByRole('button', {
-      name: `Dismiss "${title}"`,
-      exact: true,
-    })
-  }
-
-  // The toast card's action button named `name`, e.g. "Reload".
-  toastActionButton(name: string): Locator {
-    return this.toastCard.getByRole('button', { name, exact: true })
+  // The section's button named `name`, e.g. "Mark Table 4 free".
+  button(name: string): Locator {
+    return this.region.getByRole('button', { name, exact: true })
   }
 }

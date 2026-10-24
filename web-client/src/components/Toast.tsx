@@ -1,83 +1,48 @@
-import { useId, type ReactNode } from 'react'
+import type { ComponentProps, ReactNode } from 'react'
+import { Icon } from './Icon'
+import type { ToastIcon } from './toastContext'
 
-export type ToastVariant = 'info' | 'success' | 'error'
-
-export type ToastAction = { label: string; onClick: () => void }
-
-const variantClasses: Record<ToastVariant, string> = {
-  info: 'toast--info',
-  success: 'toast--success',
-  error: 'toast--error',
-}
-
-// A short notice about something that just happened, as sonner shows them:
-// a title over a description, an optional action button, and a close
-// button. Styled by `.toast` in styles/base.css. It's a status, named by its
-// title. The title is an h4, as the toast sits in a component card.
-//
-// It's shown in place, with no stacking, timer or position on the screen.
-// The caller removes it on `onDismiss`, which the action also calls after
-// its own `onClick`, as sonner closes a toast when its action is taken. The
-// close button's name includes the title, so each toast's is unique.
+// One toast, styled by `.fm-toast` in styles/kit.css: an icon, the message,
+// Undo when `onUndo` is given, and Dismiss when `onDismiss` is. It only
+// draws the toast.
+// ToastProvider shows it in the toast region and times it out.
 export function Toast({
-  variant,
-  title,
-  description,
-  action,
+  message,
+  icon = 'check',
+  onUndo,
   onDismiss,
-}: {
-  variant: ToastVariant
-  title: string
-  description: ReactNode
-  action?: ToastAction
-  onDismiss: () => void
+  className,
+  ...props
+}: ComponentProps<'div'> & {
+  message: ReactNode
+  icon?: ToastIcon
+  onUndo?: () => void
+  onDismiss?: () => void
 }) {
-  const titleId = useId()
+  const classes = ['fm-toast']
+  if (icon !== 'check') classes.push('fm-toast--info')
+  if (className) classes.push(className)
   return (
-    <div
-      role="status"
-      aria-labelledby={titleId}
-      className={`toast ${variantClasses[variant]}`}
-    >
-      <div className="toast-body">
-        <h4 id={titleId} className="toast-title">
-          {title}
-        </h4>
-        <p className="toast-description">{description}</p>
-      </div>
-      {action && (
-        <div className="toast-actions">
-          <button
-            type="button"
-            className="toast-action"
-            onClick={() => {
-              action.onClick()
-              onDismiss()
-            }}
-          >
-            {action.label}
-          </button>
-        </div>
+    <div className={classes.join(' ')} {...props}>
+      <Icon name={icon} />
+      <span className="fm-toast__msg">{message}</span>
+      {/* The toast's buttons take no variant: .fm-toast__action and
+          .fm-toast__close set their colours. */}
+      {onUndo && (
+        <button type="button" className="fm-btn fm-btn--sm fm-toast__action" onClick={onUndo}>
+          Undo
+        </button>
       )}
-      <button
-        type="button"
-        className="toast-close"
-        aria-label={`Dismiss "${title}"`}
-        onClick={onDismiss}
-      >
-        <svg
-          width="12"
-          height="12"
-          viewBox="0 0 12 12"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          aria-hidden="true"
+      {onDismiss && (
+        <button
+          type="button"
+          className="fm-btn fm-btn--sm fm-toast__close"
+          aria-label="Dismiss"
+          onClick={onDismiss}
         >
-          <path d="M2 2 L10 10 M10 2 L2 10" />
-        </svg>
-      </button>
+          <Icon name="x" className="fm-ic--sm" />
+        </button>
+      )}
     </div>
   )
 }

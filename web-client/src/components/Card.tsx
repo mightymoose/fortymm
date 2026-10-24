@@ -1,43 +1,44 @@
-import { useId, type ReactNode } from 'react'
+import { useId, type CSSProperties, type ReactNode } from 'react'
 
-// A card holding one piece of content: a header with a title and an
-// optional description, the body, then an optional footer (e.g. buttons).
-// Styled by `.card` in styles/base.css. The article is named by its title.
-//
-// `headingLevel` has no default: the title's level depends on where the
-// card sits in the page's outline, so each caller picks it.
+// A card for persistent information, styled by `.fm-card` in styles/kit.css.
+// Its head has the title, the optional subtitle, and `status` at the right:
+// a status, or a control that acts on the whole card. The children are its
+// body, such as a DetailList. `actions` go at the bottom left, the primary
+// first, and a card without them has no footer. `style` and `bodyStyle`
+// style the card and its body.
 export function Card({
   title,
-  description,
-  footer,
+  subtitle,
+  status,
+  actions,
+  style,
+  bodyStyle,
   children,
-  variant = 'default',
-  headingLevel,
 }: {
   title: ReactNode
-  description?: ReactNode
-  footer?: ReactNode
+  subtitle?: ReactNode
+  status?: ReactNode
+  actions?: ReactNode
+  style?: CSSProperties
+  bodyStyle?: CSSProperties
   children: ReactNode
-  variant?: 'default' | 'featured'
-  headingLevel: 2 | 3 | 4 | 5 | 6
 }) {
   const titleId = useId()
-  const Heading = `h${headingLevel}` as const
   return (
-    <article
-      className={variant === 'featured' ? 'card card--featured' : 'card'}
-      aria-labelledby={titleId}
-    >
-      <div className="card-header">
-        <Heading className="card-title" id={titleId}>
-          {title}
-        </Heading>
-        {description !== undefined && (
-          <p className="card-description">{description}</p>
-        )}
+    <section className="fm-card" style={style} aria-labelledby={titleId}>
+      <div className="fm-card__head">
+        <div>
+          <h3 className="fm-card__title" id={titleId}>
+            {title}
+          </h3>
+          {subtitle && <p className="fm-card__sub">{subtitle}</p>}
+        </div>
+        {status}
       </div>
-      <div className="card-body">{children}</div>
-      {footer !== undefined && <div className="card-footer">{footer}</div>}
-    </article>
+      <div className="fm-card__body" style={bodyStyle}>
+        {children}
+      </div>
+      {actions && <div className="fm-card__foot">{actions}</div>}
+    </section>
   )
 }

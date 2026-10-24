@@ -1,97 +1,135 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
-import { Menubar } from './Menubar'
+import { describe, expect, it, vi } from 'vitest'
+import { Menubar, type MenubarMenu } from './Menubar'
 
-const items = ['File', 'Edit', 'View']
+const menus: readonly MenubarMenu[] = [
+  { label: 'File', items: [{ label: 'Open' }, { label: 'Print', shortcut: '⌘P' }] },
+  { label: 'Edit', items: [{ label: 'Undo' }, 'divider', { label: 'Delete all', danger: true }] },
+  { label: 'View', items: [{ label: 'Zoom in' }, { label: 'Zoom out' }] },
+]
 
-function item(name: string) {
-  return screen.getByRole('menuitem', { name })
+function renderMenubar() {
+  const onChoose = vi.fn()
+  render(
+    <>
+      <button type="button">Before</button>
+      <Menubar label="Tools" menus={menus} onChoose={onChoose} />
+      <button type="button">After</button>
+    </>,
+  )
+  return onChoose
 }
 
-function tabIndexes() {
-  return screen.getAllByRole('menuitem').map((menuitem) => menuitem.tabIndex)
-}
-
-function active() {
-  return screen
-    .getAllByRole('menuitem')
-    .filter((menuitem) => menuitem.classList.contains('menubar-item--active'))
-    .map((menuitem) => menuitem.textContent)
-}
+// The bar's item for the menu `name`, and the command `name` in the open
+// menu. Both are menu items, and no menu shares a name with a command.
+const top = (name: string | RegExp) => screen.getByRole('menuitem', { name })
+const command = top
+const openMenu = () => screen.queryByRole('menu')
 
 describe('Menubar', () => {
-  it('renders a named menubar of menuitem buttons', () => {
-    render(<Menubar label="App" items={items} />)
-
-    expect(screen.getByRole('menubar', { name: 'App' })).toHaveClass('menubar')
-    const menuitems = screen.getAllByRole('menuitem')
-    expect(menuitems.map((menuitem) => menuitem.textContent)).toEqual(items)
-    for (const menuitem of menuitems) {
-      expect(menuitem.tagName).toBe('BUTTON')
-      expect(menuitem).toHaveAttribute('type', 'button')
-      expect(menuitem).toHaveClass('menubar-item')
-    }
-  })
-
-  it('is one Tab stop, on the first item unless given an active one', async () => {
+  it('is one tab stop, on its first menu', async () => {
     const user = userEvent.setup()
-    render(<Menubar label="App" items={items} />)
+    renderMenubar()
 
-    expect(tabIndexes()).toEqual([0, -1, -1])
-    expect(active()).toEqual([])
+    await user.click(screen.getByRole('button', { name: 'Before' }))
     await user.tab()
-    expect(item('File')).toHaveFocus()
-  })
-
-  it('shows the active item until the bar takes the focus', async () => {
-    const user = userEvent.setup()
-    render(
-      <>
-        <Menubar label="App" items={items} activeIndex={1} />
-        <button type="button">After</button>
-      </>,
-    )
-    expect(active()).toEqual(['Edit'])
-    expect(tabIndexes()).toEqual([-1, 0, -1])
-
+    expect(top('File')).toHaveFocus()
     await user.tab()
-    expect(item('Edit')).toHaveFocus()
-    expect(active()).toEqual([])
 
-    await user.keyboard('{ArrowRight}')
-    expect(active()).toEqual([])
-
-    await user.tab()
     expect(screen.getByRole('button', { name: 'After' })).toHaveFocus()
-    expect(active()).toEqual(['Edit'])
   })
 
-  it('moves the focus with the arrow keys, wrapping, and Home and End', async () => {
+  it('moves between its menus with ← and →, wrapping at the ends', async () => {
     const user = userEvent.setup()
-    render(<Menubar label="App" items={items} />)
-    await user.tab()
+    renderMenubar()
+    top('File').focus()
 
-    await user.keyboard('{ArrowRight}')
-    expect(item('Edit')).toHaveFocus()
-    expect(tabIndexes()).toEqual([-1, 0, -1])
-    await user.keyboard('{ArrowLeft}{ArrowLeft}')
-    expect(item('View')).toHaveFocus()
-    await user.keyboard('{ArrowRight}')
-    expect(item('File')).toHaveFocus()
-    await user.keyboard('{End}')
-    expect(item('View')).toHaveFocus()
-    await user.keyboard('{Home}')
-    expect(item('File')).toHaveFocus()
+    await user.keyboard('{ArrowLeft}')
+    expect(top('View')).toHaveFocus()
+    await user.keyboard('{ArrowRight}{ArrowRight}')
+
+    expect(top('Edit')).toHaveFocus()
+    expect(openMenu()).toBeNull()
   })
 
-  it('makes a clicked item the Tab stop', async () => {
+  it('opens a menu at its first command with ↓ or Enter, and at its last with ↑', async () => {
     const user = userEvent.setup()
-    render(<Menubar label="App" items={items} />)
+    renderMenubar()
+    top('File').focus()
 
-    await user.click(item('View'))
+    await user.keyboard('{ArrowDown}')
+    expect(openMenu()).toHaveAccessibleName('File')
+    expect(top('File')).toHaveAttribute('aria-expanded', 'true')
+    expect(command('Open')).toHaveFocus()
 
-    expect(item('View')).toHaveFocus()
-    expect(tabIndexes()).toEqual([-1, -1, 0])
+    await user.keyboard('{Escape}{ArrowRight}{Enter}')
+    expect(openMenu()).toHaveAccessibleName('Edit')
+    expect(command('Undo')).toHaveFocus()
+
+    await user.keyboard('{Escape}{ArrowUp}')
+    expect(command('Delete all')).toHaveFocus()
+  })
+
+  it('moves inside a menu with ↑ and ↓, and to the next menu with →', async () => {
+    const user = userEvent.setup()
+    renderMenubar()
+    top('File').focus()
+    await user.keyboard('{Enter}')
+
+    await user.keyboard('{ArrowUp}')
+    expect(command(/^Print/)).toHaveFocus()
+    await user.keyboard('{ArrowDown}')
+    expect(command('Open')).toHaveFocus()
+
+    await user.keyboard('{ArrowRight}')
+    expect(openMenu()).toHaveAccessibleName('Edit')
+    expect(command('Undo')).toHaveFocus()
+  })
+
+  it('closes with Esc and puts focus back on its menu', async () => {
+    const user = userEvent.setup()
+    renderMenubar()
+    top('File').focus()
+    await user.keyboard('{ArrowRight}{Enter}')
+
+    await user.keyboard('{Escape}')
+
+    expect(openMenu()).toBeNull()
+    expect(top('Edit')).toHaveFocus()
+    expect(top('Edit')).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('chooses a command, closes the menu and says which', async () => {
+    const user = userEvent.setup()
+    const onChoose = renderMenubar()
+
+    await user.click(top('Edit'))
+    await user.click(command('Delete all'))
+
+    expect(openMenu()).toBeNull()
+    expect(onChoose).toHaveBeenCalledWith(menus[1], { label: 'Delete all', danger: true })
+  })
+
+  it('closes on a click outside it', async () => {
+    const user = userEvent.setup()
+    const onChoose = renderMenubar()
+    await user.click(top('View'))
+    expect(openMenu()).toHaveAccessibleName('View')
+
+    await user.click(screen.getByRole('button', { name: 'After' }))
+
+    expect(openMenu()).toBeNull()
+    expect(onChoose).not.toHaveBeenCalled()
+  })
+
+  it('switches to the menu the pointer moves onto while one is open', async () => {
+    const user = userEvent.setup()
+    renderMenubar()
+    await user.click(top('File'))
+
+    await user.hover(top('View'))
+
+    expect(openMenu()).toHaveAccessibleName('View')
   })
 })

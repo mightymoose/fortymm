@@ -1,7 +1,9 @@
-import { within } from '@testing-library/react'
+import { act, fireEvent, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DesignSystemPage } from '../test/pages/DesignSystemPage'
+import { TOOLTIP_DELAY_MS } from '../components/TooltipProvider'
+import { BUSY_MS } from './designSystem/BusyDemoButton'
 
 describe('DesignSystem', () => {
   it('shows the Design System title', async () => {
@@ -10,1284 +12,870 @@ describe('DesignSystem', () => {
     expect(designSystemPage.title).toHaveTextContent('Design System')
   })
 
-  it('introduces the design system under the header', async () => {
+  it('introduces the design system under the title', async () => {
     const designSystemPage = await DesignSystemPage.render()
 
     expect(designSystemPage.intro).toHaveTextContent(
-      /^Every FortyMM component, styled with the design system's tokens\./,
+      /^Equipment for running a tournament day\./,
     )
   })
 
-  it('has a Forms & Input section with a lead line', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.formsSectionHeading).toHaveTextContent(
-      'Forms & Input',
-    )
-    expect(designSystemPage.formsSectionLead).toHaveTextContent(
-      /^Buttons, inputs, selectors\./,
-    )
-  })
-
-  it('has a Button card in the Forms & Input section', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.buttonCardHeading).toHaveTextContent('Button')
-    expect(designSystemPage.buttonCard).toHaveTextContent(
-      '7 variants · 4 sizes',
-    )
-  })
-
-  it.each([
-    'Log a match',
-    'Save draft',
-    'Cancel',
-    'Skip',
-    'Forfeit match',
-    'Read manifesto',
-    'Small',
-    'Default',
-    'Large',
-    'Add',
-  ])('shows an enabled %s button', async (name) => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.button(name)).toBeEnabled()
-  })
-
-  it('shows a disabled button', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.button('Disabled')).toBeDisabled()
-  })
-
-  it('has an Input · Label · Form Field card in the Forms & Input section', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.inputCardHeading).toHaveTextContent(
-      'Input · Label · Form Field',
-    )
-    expect(designSystemPage.inputCard).toHaveTextContent('composite')
-  })
-
-  it('describes the Player tag input with its help text', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const input = designSystemPage.input('Player tag')
-    expect(input).toHaveValue('@nguyen.t')
-    expect(input).toHaveAttribute('placeholder', '@yourname')
-    expect(input).toHaveAccessibleDescription(
-      'Visible to opponents in match invites.',
-    )
-    expect(input).toBeValid()
-    expect(input).not.toBeRequired()
-  })
-
-  it('shows a required, invalid Email input with an error', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    // The label's asterisk isn't part of the input's name.
-    const input = designSystemPage.input('Email')
-    expect(input).toHaveValue('not-an-email')
-    expect(input).toBeRequired()
-    expect(input).toBeInvalid()
-    expect(input).toHaveAccessibleDescription('Enter a valid email address.')
-  })
-
-  it('shows a disabled input', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const input = designSystemPage.input('Disabled')
-    expect(input).toBeDisabled()
-    expect(input).toHaveValue('Locked field')
-  })
-
-  it('shows a Search input with no description', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const input = designSystemPage.input('Search')
-    expect(input).toHaveAttribute(
-      'placeholder',
-      'Search clubs, players, tournaments…',
-    )
-    expect(input).toHaveValue('')
-    expect(input).not.toHaveAccessibleDescription()
-  })
-
-  it('shows the Textarea card after the Input card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.textareaCardHeading).toHaveTextContent('Textarea')
-    expect(designSystemPage.textareaCard).toHaveTextContent('resizable')
-    expect(
-      designSystemPage.inputCard.compareDocumentPosition(
-        designSystemPage.textareaCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it('shows a labelled Match notes textarea', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const textarea = designSystemPage.textarea
-    expect(textarea).toHaveValue(
-      "Played in the back hall. Andrew's forehand was on fire today — three straight games to 11.",
-    )
-    expect(textarea).toHaveAttribute(
-      'placeholder',
-      'Add context — venue, conditions, anything memorable.',
-    )
-    expect(textarea).not.toHaveAccessibleDescription()
-  })
-  it('shows the Input OTP card after the Textarea card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.otpCardHeading).toHaveTextContent('Input OTP')
-    expect(designSystemPage.otpCard).toHaveTextContent('6-digit')
-    expect(
-      designSystemPage.textareaCard.compareDocumentPosition(
-        designSystemPage.otpCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it('shows a one-time code input with a hidden label', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const input = designSystemPage.otpInput
-    expect(input).toHaveValue('40MM')
-    expect(input).toHaveAttribute('autocomplete', 'one-time-code')
-    expect(input).not.toHaveAccessibleDescription()
-    expect(designSystemPage.otpLabel).toHaveClass('visually-hidden')
-  })
-
-  it('shows the Checkbox card after the Input OTP card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.checkboxCardHeading).toHaveTextContent('Checkbox')
-    expect(designSystemPage.checkboxCard).toHaveTextContent('3 states')
-    expect(
-      designSystemPage.otpCard.compareDocumentPosition(
-        designSystemPage.checkboxCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it('shows a checked, an unchecked and a disabled checkbox', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const agree = designSystemPage.checkbox('I agree to the rules of fair play')
-    expect(agree).toBeChecked()
-    expect(agree).toBeEnabled()
-    const invites = designSystemPage.checkbox('Email me match invites')
-    expect(invites).not.toBeChecked()
-    expect(invites).toBeEnabled()
-    const disabled = designSystemPage.checkbox('Disabled option')
-    expect(disabled).not.toBeChecked()
-    expect(disabled).toBeDisabled()
-  })
-
-  it('shows the Radio Group card after the Checkbox card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.radioCardHeading).toHaveTextContent('Radio Group')
-    expect(designSystemPage.radioCard).toHaveTextContent('single-select')
-    expect(
-      designSystemPage.checkboxCard.compareDocumentPosition(
-        designSystemPage.radioCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it('shows a match format group with the first option selected', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.radioGroupLabel).toHaveClass('visually-hidden')
-    const options = [
-      'Singles · best of 5',
-      'Singles · best of 7',
-      'Doubles · best of 5',
-    ].map((name) => designSystemPage.radio(name))
-    expect(options[0]).toBeChecked()
-    expect(options[1]).not.toBeChecked()
-    expect(options[2]).not.toBeChecked()
-    const name = options[0].getAttribute('name')
-    expect(name).toBeTruthy()
-    for (const option of options) {
-      expect(option).toBeEnabled()
-      expect(option).toHaveAttribute('name', name)
-    }
-  })
-
-  it('shows the Switch card after the Radio Group card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.switchCardHeading).toHaveTextContent('Switch')
-    expect(designSystemPage.switchCard).toHaveTextContent('on/off')
-    expect(
-      designSystemPage.radioCard.compareDocumentPosition(
-        designSystemPage.switchCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it('shows an on and an off switch', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const profile = designSystemPage.switch('Public profile')
-    expect(profile).toBeChecked()
-    expect(profile).toBeEnabled()
-    const nearby = designSystemPage.switch('Notify me of nearby matches')
-    expect(nearby).not.toBeChecked()
-    expect(nearby).toBeEnabled()
-  })
-
-  it('shows the Slider card after the Switch card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.sliderCardHeading).toHaveTextContent('Slider')
-    expect(designSystemPage.sliderCard).toHaveTextContent('single + range')
-    expect(
-      designSystemPage.switchCard.compareDocumentPosition(
-        designSystemPage.sliderCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it('shows a single slider and a range slider with their values', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.slider('Skill level')).toHaveValue('1620')
-    expect(designSystemPage.slider('Rating range minimum')).toHaveValue('1400')
-    expect(designSystemPage.slider('Rating range maximum')).toHaveValue('1800')
-    expect(
-      designSystemPage.sliderValues.map((readout) => readout.textContent),
-    ).toEqual(['1620', '1400 – 1800'])
-  })
-
-  it('shows the Select card after the Slider card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.selectCardHeading).toHaveTextContent('Select')
-    expect(designSystemPage.selectCard).toHaveTextContent('native')
-    expect(
-      designSystemPage.sliderCard.compareDocumentPosition(
-        designSystemPage.selectCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("shows two selects with the reference's options", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const type = designSystemPage.select('Match type')
-    expect(type).toHaveValue('Singles')
-    expect(
-      within(type)
-        .getAllByRole('option')
-        .map((option) => option.textContent),
-    ).toEqual(['Singles', 'Doubles'])
-    expect(type).toBeEnabled()
-    const length = designSystemPage.select('Match length')
-    expect(length).toHaveValue('Best of 5 games')
-    expect(length).toBeEnabled()
-  })
-
-  it('shows the Combobox card after the Select card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.comboboxCardHeading).toHaveTextContent('Combobox')
-    expect(designSystemPage.comboboxCard).toHaveTextContent(
-      'searchable select · open',
-    )
-    expect(
-      designSystemPage.selectCard.compareDocumentPosition(
-        designSystemPage.comboboxCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("shows the reference's query and its three matches, the first active", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const combobox = designSystemPage.combobox
-    expect(combobox).toHaveValue('ngu')
-    expect(combobox).toHaveAttribute('aria-expanded', 'true')
-    const options = designSystemPage.comboboxOptions
-    expect(options.map((option) => option.textContent)).toEqual([
-      'Nguyen, Tien 1620',
-      'Nguyen, Mai 1455',
-      'Nguyen, Phuc 1380',
-    ])
-    expect(combobox).toHaveAttribute('aria-activedescendant', options[0].id)
-    expect(
-      options.map((option) => option.getAttribute('aria-selected')),
-    ).toEqual(['true', 'false', 'false'])
-  })
-
-  it('shows the Date Picker card after the Combobox card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.datePickerCardHeading).toHaveTextContent(
-      'Date Picker',
-    )
-    expect(designSystemPage.datePickerCard).toHaveTextContent(
-      'calendar in popover',
-    )
-    expect(
-      designSystemPage.comboboxCard.compareDocumentPosition(
-        designSystemPage.datePickerCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it('shows the Toggle card after the Date Picker card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.toggleCardHeading).toHaveTextContent(
-      'Toggle · Toggle Group',
-    )
-    expect(designSystemPage.toggleCard).toHaveTextContent('single + multi')
-    expect(
-      designSystemPage.datePickerCard.compareDocumentPosition(
-        designSystemPage.toggleCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("shows the reference's toggles: Bold pressed, Italic not, then a separator and the group with Singles chosen", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.toggle('Bold')).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    )
-    expect(designSystemPage.toggle('Bold')).toHaveTextContent('B')
-    expect(designSystemPage.toggle('Italic')).toHaveAttribute(
-      'aria-pressed',
-      'false',
-    )
-    expect(designSystemPage.toggle('Italic')).toHaveTextContent('I')
-    expect(designSystemPage.toggleSeparator).toHaveAttribute(
-      'aria-orientation',
-      'vertical',
-    )
-    const items = designSystemPage.toggleGroupItems
-    expect(items.map((item) => item.textContent)).toEqual([
-      'Singles',
-      'Doubles',
-      'Mixed',
-    ])
-    expect(items.map((item) => item.getAttribute('aria-checked'))).toEqual([
-      'true',
-      'false',
-      'false',
-    ])
-  })
-
-  it('has a Data Display section after Forms & Input, with a lead line', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.displaySectionHeading).toHaveTextContent(
-      'Data Display',
-    )
-    expect(designSystemPage.displaySectionLead).toHaveTextContent(
-      'Cards, tables, badges, avatars. The product is ratings and rankings — these components are where the numbers live.',
-    )
-    expect(
-      designSystemPage.formsSection.compareDocumentPosition(
-        designSystemPage.displaySection,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it('has a Card card in the Data Display section', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.cardCardHeading).toHaveTextContent('Card')
-    expect(designSystemPage.cardCard).toHaveTextContent('container')
-  })
-
-  it('has a Badge card after the Card card in the Data Display section', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.badgeCardHeading).toHaveTextContent('Badge')
-    expect(designSystemPage.badgeCard).toHaveTextContent('5 variants')
-    expect(
-      designSystemPage.cardCard.compareDocumentPosition(
-        designSystemPage.badgeCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("shows the reference's five badges in order", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(
-      designSystemPage.badges.map((badge) => badge.textContent),
-    ).toEqual([
-      'Seed 1',
-      'Doubles',
-      'Pending',
-      'Disqualified',
-      'Live · Court 3',
-    ])
-  })
-
-  it('has an Avatar card after the Badge card in the Data Display section', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.avatarCardHeading).toHaveTextContent('Avatar')
-    expect(designSystemPage.avatarCard).toHaveTextContent(
-      'image · initials · stack',
-    )
-    expect(
-      designSystemPage.badgeCard.compareDocumentPosition(
-        designSystemPage.avatarCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("shows the reference's avatars in order, then the group's overflow", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(
-      designSystemPage.avatars.map((avatar) => avatar.getAttribute('aria-label')),
-    ).toEqual([
-      'Tien Nguyen',
-      'Daniel Okafor',
-      'Marta Kowalski',
-      'Tien Nguyen',
-      'Daniel Okafor',
-      'Marta Kowalski',
-      '12 more',
-    ])
-  })
-
-  it('stacks the last three avatars and the overflow in a group', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(
-      within(designSystemPage.avatarGroup)
-        .getAllByRole('img')
-        .map((avatar) => avatar.getAttribute('aria-label')),
-    ).toEqual(['Tien Nguyen', 'Daniel Okafor', 'Marta Kowalski', '12 more'])
-  })
-
-  it('has a Table · Data Table card after the Avatar card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.tableCardHeading).toHaveTextContent(
-      'Table · Data Table',
-    )
-    expect(designSystemPage.tableCard).toHaveTextContent('sortable rows')
-    expect(
-      designSystemPage.avatarCard.compareDocumentPosition(
-        designSystemPage.tableCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("heads the standings table with the reference's columns", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(
-      within(designSystemPage.standingsTable)
-        .getAllByRole('columnheader')
-        .map((header) => header.textContent),
-    ).toEqual(['Player', 'Club', 'Rating', 'W-L', 'Δ'])
-  })
-
-  it("shows the reference's standings, a signed rating change last", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-    const [, ...rows] = within(designSystemPage.standingsTable).getAllByRole(
-      'row',
-    )
-
-    expect(
-      rows.map((row) =>
-        within(row)
-          .getAllByRole('cell')
-          .slice(1)
-          .map((cell) => cell.textContent),
-      ),
-    ).toEqual([
-      ['Brooklyn TT', '1620', '14\u20133', '+18'],
-      ['NYC Open Hall', '1582', '11\u20134', '+12'],
-      ['Brooklyn TT', '1505', '8\u20136', '\u22124'],
-    ])
-  })
-
-  it.each([
-    [0, 'Tien Nguyen', 'Nguyen, Tien'],
-    [1, 'Daniel Okafor', 'Okafor, Daniel'],
-    [2, 'Marta Kowalski', 'Kowalski, Marta'],
-  ])(
-    "shows row %i's player as an avatar of %s beside %j",
-    async (index, name, shown) => {
+  describe('Roles at a glance', () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('comes first, before Buttons', async () => {
       const designSystemPage = await DesignSystemPage.render()
-      const [, ...rows] = within(designSystemPage.standingsTable).getAllByRole(
-        'row',
-      )
-      const player = within(rows[index]).getAllByRole('cell')[0]
 
-      expect(within(player).getByRole('img')).toHaveAccessibleName(name)
-      expect(within(player).getByText(shown)).toBeVisible()
+      expect(
+        designSystemPage.rolesSection.compareDocumentPosition(designSystemPage.buttonsSection),
+      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    })
+
+    it('shows Retrying… while Retry now retries, then its label again', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      const designSystemPage = await DesignSystemPage.render()
+      const button = designSystemPage.rolesButton('Retry now')
+
+      await user.click(button)
+
+      expect(button).toHaveAccessibleName('Retrying…')
+      expect(button).toHaveAttribute('aria-busy', 'true')
+      act(() => vi.advanceTimersByTime(BUSY_MS))
+      expect(button).toHaveAccessibleName('Retry now')
+      expect(designSystemPage.toastRegion).toBeEmptyDOMElement()
+    })
+
+    it.each(["I'm at the table", 'Directions', 'Move to 12:05', 'Keep 11:50', 'Undo'])(
+      'does nothing on %s, which is visual only',
+      async (name) => {
+        const user = userEvent.setup()
+        const designSystemPage = await DesignSystemPage.render()
+
+        await user.click(designSystemPage.rolesButton(name))
+
+        expect(designSystemPage.toastRegion).toBeEmptyDOMElement()
+        expect(designSystemPage.rolesButton(name)).toBeInTheDocument()
+      },
+    )
+  })
+
+  describe('Buttons', () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it.each([
+      'Call to table',
+      'Reschedule',
+      'Print score sheet',
+      'Withdraw player…',
+      'Small',
+      'Default',
+      'Large',
+      'More options',
+    ])('shows a %s button', async (name) => {
+      const designSystemPage = await DesignSystemPage.render()
+
+      expect(designSystemPage.button(name)).toBeEnabled()
+    })
+
+    it.each([
+      ['Save result', 'Saving…'],
+      ['Export results', 'Exporting…'],
+    ])('%s shows %s while it saves, then its label again', async (label, busyLabel) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      const designSystemPage = await DesignSystemPage.render()
+
+      const button = designSystemPage.button(label)
+
+      await user.click(button)
+
+      expect(button).toHaveAccessibleName(busyLabel)
+      expect(button).toHaveAttribute('aria-busy', 'true')
+      act(() => vi.advanceTimersByTime(BUSY_MS))
+      expect(button).toHaveAccessibleName(label)
+      expect(button).not.toHaveAttribute('aria-busy')
+    })
+
+    it('says the result is saved once Save result is done', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      const designSystemPage = await DesignSystemPage.render()
+
+      await user.click(designSystemPage.button('Save result'))
+      expect(designSystemPage.toastRegion).toBeEmptyDOMElement()
+      act(() => vi.advanceTimersByTime(BUSY_MS))
+
+      expect(designSystemPage.toastRegion).toHaveTextContent(
+        'Result saved. Okafor-Adeyemi ▲ +9',
+      )
+    })
+
+    it('shows More options in a tooltip on hover', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      const designSystemPage = await DesignSystemPage.render()
+      const moreOptions = designSystemPage.button('More options')
+
+      await user.hover(moreOptions)
+      act(() => vi.advanceTimersByTime(TOOLTIP_DELAY_MS))
+
+      expect(designSystemPage.tooltip).toHaveTextContent('More options')
+      expect(moreOptions).toHaveAccessibleDescription('More options')
+    })
+
+    it('asks before Withdraw player… withdraws', async () => {
+      const user = userEvent.setup()
+      const designSystemPage = await DesignSystemPage.render()
+
+      await user.click(designSystemPage.button('Withdraw player…'))
+
+      expect(
+        designSystemPage.dialog('Withdraw Okafor-Adeyemi from the draw?'),
+      ).toHaveTextContent(
+        "Johansen-Whitfield advances to the quarterfinal. This can't be undone once her next match starts.",
+      )
+    })
+
+    it('says why Start match is off', async () => {
+      const designSystemPage = await DesignSystemPage.render()
+      const startMatch = designSystemPage.button('Start match')
+
+      expect(startMatch).toHaveAttribute('aria-disabled', 'true')
+      expect(startMatch).toHaveAccessibleDescription(
+        "Both players need to check in first. Park hasn't yet.",
+      )
+    })
+  })
+})
+
+describe('Fields and choices', () => {
+  it('shows the Table error until the table is 1 to 6', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const example = designSystemPage.fieldsExample('Text field')
+    const table = within(example).getByRole('textbox', { name: 'Table' })
+    expect(table).toBeInvalid()
+    expect(table).toHaveAccessibleDescription('This venue has 6 tables. Enter 1–6.')
+
+    await user.clear(table)
+    await user.type(table, '4')
+
+    expect(table).toBeValid()
+    expect(within(example).queryByText('This venue has 6 tables. Enter 1–6.')).not.toBeVisible()
+  })
+
+  it('finds Spring Open 2026 by its code', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const example = designSystemPage.fieldsExample('Code input')
+    const found = within(example).getByText('Spring Open 2026').closest('p')!
+    expect(found).not.toBeVisible()
+
+    await user.click(within(example).getAllByRole('textbox', { name: 'Character 1 of 6' })[0])
+    await user.keyboard('sp26rv')
+
+    expect(found).toBeVisible()
+    expect(found).toHaveTextContent('Spring Open 2026 · Riverside Sports Hall · 11 April')
+  })
+
+  it('says no tournament uses an unknown code, until the code changes', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const example = designSystemPage.fieldsExample('Code input')
+    const first = within(example).getAllByRole('textbox', { name: 'Character 1 of 6' })[0]
+
+    await user.click(first)
+    await user.keyboard('sp26rx')
+
+    expect(first).toBeInvalid()
+    expect(first).toHaveAccessibleDescription(
+      'No tournament uses that code. Check the poster or ask the desk. On the poster at the venue entrance. Try SP26RV.',
+    )
+    await user.keyboard('{Backspace}')
+    expect(first).toBeValid()
+    expect(first).toHaveAccessibleDescription('On the poster at the venue entrance. Try SP26RV.')
+  })
+
+  it('leaves the closed tournament’s code input off', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const example = designSystemPage.fieldsExample('Code input')
+    const closed = within(example).getAllByRole('textbox', { name: 'Character 1 of 6' })[1]
+
+    expect(closed).toBeDisabled()
+    expect(closed).toHaveAccessibleDescription('Entries for this tournament have closed.')
+  })
+
+  it('says who was picked as the opponent', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const example = designSystemPage.fieldsExample('Combobox')
+    expect(example).toHaveTextContent('Nothing picked yet.')
+
+    await user.type(designSystemPage.opponentField, 'wojcik{Enter}')
+
+    expect(example).toHaveTextContent('Picked: Wójcik-Szymańska, Agnieszka · Northside')
+  })
+
+  it('shows Saturday 11 April 2026 in the date field and selected inline', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const example = designSystemPage.fieldsExample('Date picker')
+
+    expect(within(example).getByRole('textbox', { name: 'Tournament date' })).toHaveValue(
+      'Saturday 11 April 2026',
+    )
+    expect(
+      within(example).getByRole('button', { name: 'Saturday 11 April 2026' }),
+    ).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('shows All players as partly checked', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const example = designSystemPage.fieldsExample('Checkbox, radio and switch')
+
+    expect(within(example).getByRole('checkbox', { name: 'All players (12 of 16)' })).toBePartiallyChecked()
+  })
+
+  it('shows the minimum rest as the slider moves', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const example = designSystemPage.fieldsExample('Checkbox, radio and switch')
+    const slider = within(example).getByRole('slider')
+
+    fireEvent.change(slider, { target: { value: '25' } })
+
+    expect(slider).toHaveAccessibleName('Minimum rest between matches · 25 min')
+  })
+
+  it('turns a switch on', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const example = designSystemPage.fieldsExample('Checkbox, radio and switch')
+    const ratings = within(example).getByRole('switch', { name: 'Show ratings to spectators' })
+
+    await user.click(ratings)
+
+    expect(ratings).toBeChecked()
+  })
+})
+
+describe('Selection', () => {
+  it('shows the panel of the tab picked by click or arrow key', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const section = designSystemPage.selectionSection
+    expect(within(section).getByRole('tabpanel')).toHaveTextContent(
+      '32 players · 4 tables · expected finish 18:45',
+    )
+
+    await user.click(designSystemPage.selectionControl('tab', 'Standings'))
+    expect(within(section).getByRole('tabpanel')).toHaveTextContent(
+      'Groups A–D, top two advance.',
+    )
+    await user.keyboard('{ArrowLeft}')
+
+    expect(designSystemPage.selectionControl('tab', 'Schedule')).toHaveFocus()
+    expect(within(section).getByRole('tabpanel', { name: 'Schedule' })).toHaveTextContent(
+      '14 of 31 matches played.',
+    )
+  })
+
+  it('changes the schedule view', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.click(designSystemPage.selectionControl('radio', 'By player'))
+
+    expect(designSystemPage.selectionControl('radio', 'By player')).toBeChecked()
+    expect(designSystemPage.selectionControl('radio', 'Timeline')).not.toBeChecked()
+  })
+
+  it('says which events the filter chips show', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const section = designSystemPage.selectionSection
+    expect(within(section).getByText(/^Showing:/)).toHaveTextContent('Showing: All events')
+
+    await user.click(designSystemPage.selectionControl('button', 'Under 18'))
+    await user.click(designSystemPage.selectionControl('button', 'Open singles'))
+    expect(within(section).getByText(/^Showing:/)).toHaveTextContent(
+      'Showing: Open singles, Under 18',
+    )
+
+    await user.click(designSystemPage.selectionControl('button', 'All events'))
+    expect(within(section).getByText(/^Showing:/)).toHaveTextContent('Showing: All events')
+  })
+
+  it('turns calling players automatically off', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const calling = designSystemPage.selectionControl('switch', 'Call players automatically')
+    expect(calling).toBeChecked()
+
+    await user.click(calling)
+
+    expect(calling).not.toBeChecked()
+  })
+})
+
+describe('Containers', () => {
+  it.each(['Move table', 'View matches', 'Message'])(
+    'says %s is not wired up in this demo',
+    async (name) => {
+      const user = userEvent.setup()
+      const designSystemPage = await DesignSystemPage.render()
+
+      await user.click(designSystemPage.containersButton(name))
+
+      expect(designSystemPage.toastRegion).toHaveTextContent(
+        `“${name}” isn’t wired up in this demo`,
+      )
     },
   )
 
-  it('has a Progress card after the Table · Data Table card', async () => {
+  it('checks everyone in, and Undo puts the boxes back', async () => {
+    const user = userEvent.setup()
     const designSystemPage = await DesignSystemPage.render()
+    const players = within(designSystemPage.containersExample('Scroll area'))
+    const notHere = ['Kim, Hyun-woo', 'Lindqvist, Erik', 'Fernández-Castillo, Marisol']
 
-    expect(designSystemPage.progressCardHeading).toHaveTextContent('Progress')
-    expect(designSystemPage.progressCard).toHaveTextContent('determinate')
-    expect(
-      designSystemPage.tableCard.compareDocumentPosition(
-        designSystemPage.progressCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
+    await user.click(designSystemPage.containersButton('Check in all'))
 
-  it("shows the reference's two bars, a round's matches and a group's", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(
-      designSystemPage.progressBars.map((bar) => [
-        bar.getAttribute('aria-valuenow'),
-        bar.getAttribute('aria-valuemax'),
-        bar.getAttribute('aria-valuetext'),
-      ]),
-    ).toEqual([
-      ['12', '16', '12 of 16'],
-      ['25', '100', '25%'],
-    ])
-    expect(designSystemPage.progressBars[0]).toHaveAccessibleName(
-      'Round 1 of 5',
+    expect(players.getAllByRole('checkbox').every((box) => (box as HTMLInputElement).checked)).toBe(
+      true,
     )
-    expect(designSystemPage.progressBars[1]).toHaveAccessibleName('Group B')
-    expect(designSystemPage.progressCard).toHaveTextContent('12 / 16')
-    expect(designSystemPage.progressCard).toHaveTextContent('25%')
-  })
+    expect(designSystemPage.toastRegion).toHaveTextContent('3 more players checked in')
 
-  it('has a Skeleton card after the Progress card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
+    await user.click(designSystemPage.toastButton('Undo'))
 
-    expect(designSystemPage.skeletonCardHeading).toHaveTextContent('Skeleton')
-    expect(designSystemPage.skeletonCard).toHaveTextContent('loading state')
-    expect(
-      designSystemPage.progressCard.compareDocumentPosition(
-        designSystemPage.skeletonCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("hides the Skeleton card's three placeholders from assistive tech", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.skeletons).toHaveLength(3)
-    for (const skeleton of designSystemPage.skeletons) {
-      expect(skeleton).toHaveAttribute('aria-hidden', 'true')
+    for (const name of notHere) {
+      expect(players.getByRole('checkbox', { name })).not.toBeChecked()
     }
+    expect(players.getByRole('checkbox', { name: 'Moreau, Élodie' })).toBeChecked()
   })
 
-  it('has an Aspect Ratio card after the Skeleton card', async () => {
+  it('says when everyone was already checked in, with no Undo', async () => {
+    const user = userEvent.setup()
     const designSystemPage = await DesignSystemPage.render()
+    const players = within(designSystemPage.containersExample('Scroll area'))
+    for (const name of ['Kim, Hyun-woo', 'Lindqvist, Erik', 'Fernández-Castillo, Marisol']) {
+      await user.click(players.getByRole('checkbox', { name }))
+    }
 
-    expect(designSystemPage.aspectRatioCardHeading).toHaveTextContent(
-      'Aspect Ratio',
+    await user.click(designSystemPage.containersButton('Check in all'))
+
+    expect(designSystemPage.toastRegion).toHaveTextContent('Everyone was already checked in')
+    expect(
+      within(designSystemPage.toastRegion).queryByRole('button', { name: 'Undo' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows the match of the block picked in the schedule', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const splitView = within(designSystemPage.containersExample('Split view'))
+    expect(splitView.getByRole('region', { name: 'Patel vs Park' })).toHaveTextContent(
+      'Patel would get 5 minutes’ rest',
     )
-    expect(designSystemPage.aspectRatioCard).toHaveTextContent(
-      '16:9 · 4:3 · 1:1',
+
+    await user.click(designSystemPage.containersButton(/Okafor-Adeyemi, Daniel vs/))
+
+    const details = splitView.getByRole('region', { name: 'Okafor-Adeyemi vs Johansen-Whitfield' })
+    expect(within(details).getByRole('link', { name: 'Open scoring' })).toHaveAttribute(
+      'href',
+      'https://github.com/mightymoose/fortymm/blob/main/references/design-system/ui_kits/tournament/mobile.html',
     )
     expect(
-      designSystemPage.skeletonCard.compareDocumentPosition(
-        designSystemPage.aspectRatioCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
+      within(details).getByRole('table', {
+        name: 'Game scores, Okafor-Adeyemi, Daniel vs Johansen-Whitfield, Annika',
+      }),
+    ).toBeVisible()
   })
 
-  it("shows the reference's two boxes, 16 : 9 and 1 : 1", async () => {
+  it('says the conflict’s fix works on the tournament screen', async () => {
+    const user = userEvent.setup()
     const designSystemPage = await DesignSystemPage.render()
 
-    expect(
-      designSystemPage.aspectRatioBoxes.map((box) => box.textContent),
-    ).toEqual(['16 : 9', '1 : 1'])
-  })
+    await user.click(designSystemPage.containersButton('Move to 12:05'))
 
-  it('has a Navigation section after Data Display, with a lead line', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.navSectionHeading).toHaveTextContent('Navigation')
-    expect(designSystemPage.navSectionLead).toHaveTextContent(
-      'Tabs, breadcrumbs, pagination, menus. Wayfinding inside the app.',
+    expect(designSystemPage.toastRegion).toHaveTextContent(
+      'Works on the tournament screen, not in this gallery',
     )
-    expect(
-      designSystemPage.displaySection.compareDocumentPosition(
-        designSystemPage.navSection,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
   })
 
-  it('has a Tabs card first in the Navigation section', async () => {
+  it('opens the withdraw-a-player dialog from an upcoming match, and Cancel closes it', async () => {
+    const user = userEvent.setup()
     const designSystemPage = await DesignSystemPage.render()
+    await user.click(designSystemPage.containersButton(/Chen, Wei vs Ali, Rashid/))
 
-    expect(designSystemPage.tabsCardHeading).toHaveTextContent('Tabs')
-    expect(designSystemPage.tabsCard).toHaveTextContent('underlined or boxed')
-    expect(
-      designSystemPage.navSectionLead.compareDocumentPosition(
-        designSystemPage.tabsCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
+    await user.click(designSystemPage.containersButton('Withdraw a player…'))
+    const dialog = designSystemPage.dialog('Withdraw a player from this match?')
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+    expect(designSystemPage.openDialogs).toEqual([])
   })
 
-  it("shows the reference's four tabs, Overview chosen with its panel", async () => {
+  it('keeps Call to table off while Lindqvist rests', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    await user.click(designSystemPage.containersButton(/Dubois, Camille vs Lindqvist, Erik/))
+
+    await user.click(designSystemPage.containersButton('Call to table'))
+
+    expect(designSystemPage.containersButton('Call to table')).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    )
+    expect(designSystemPage.toastRegion).toBeEmptyDOMElement()
+  })
+})
+
+describe('Feedback', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('calls Chen vs Ali, and Undo calls the match back', async () => {
+    const user = userEvent.setup()
     const designSystemPage = await DesignSystemPage.render()
 
-    expect(designSystemPage.tabs.map((tab) => tab.textContent)).toEqual([
-      'Overview',
-      'Schedule',
-      'Standings',
+    await user.click(designSystemPage.feedbackButton('Call Chen vs Ali'))
+
+    const called = designSystemPage.feedbackButton('Called · Table 1')
+    expect(called).toHaveAttribute('aria-disabled', 'true')
+    expect(designSystemPage.toastRegion).toHaveTextContent('Chen vs Ali called to Table 1')
+
+    await user.click(designSystemPage.toastButton('Undo'))
+
+    const call = designSystemPage.feedbackButton('Call Chen vs Ali')
+    expect(call).not.toHaveAttribute('aria-disabled')
+    expect(call).toHaveFocus()
+    expect(designSystemPage.toastRegion).toBeEmptyDOMElement()
+  })
+
+  it('marks Table 4 free, with no Undo', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.click(designSystemPage.feedbackButton('Mark Table 4 free'))
+
+    expect(designSystemPage.toastRegion).toHaveTextContent('Table 4 marked free')
+    expect(
+      within(designSystemPage.toastRegion).queryByRole('button', { name: 'Undo' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('moves the doubles, and Undo brings the warning back', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const example = designSystemPage.feedbackExample('Warning and error')
+    const warning = within(example).getByText(
+      'Okafor-Adeyemi is booked on two tables at 12:00',
+    )
+    const resolved = within(example).getByText(
+      'Doubles moved to 12:40. Okafor-Adeyemi has 5 minutes between his matches.',
+    )
+    expect(resolved).not.toBeVisible()
+
+    await user.click(designSystemPage.feedbackButton('Move doubles to 12:40'))
+
+    expect(warning).not.toBeVisible()
+    expect(resolved).toBeVisible()
+    expect(designSystemPage.toastRegion).toHaveTextContent('Doubles moved to 12:40')
+
+    await user.click(designSystemPage.toastButton('Undo'))
+
+    expect(warning).toBeVisible()
+    expect(resolved).not.toBeVisible()
+    expect(designSystemPage.feedbackButton('Move doubles to 12:40')).toHaveFocus()
+  })
+
+  it('shows the error as an alert', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(
+      within(designSystemPage.feedbackSection).getByRole('alert'),
+    ).toHaveTextContent(/^Table 4 scorer is offline/)
+  })
+
+  it.each(['Choose another time', 'Score from this device'])(
+    'says %s is not wired up in this demo',
+    async (name) => {
+      const user = userEvent.setup()
+      const designSystemPage = await DesignSystemPage.render()
+
+      await user.click(designSystemPage.feedbackButton(name))
+
+      expect(designSystemPage.toastRegion).toHaveTextContent(
+        `“${name}” isn’t wired up in this demo`,
+      )
+    },
+  )
+
+  it('shows Sending… while Send a reminder sends', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const designSystemPage = await DesignSystemPage.render()
+    const button = designSystemPage.feedbackButton('Send a reminder')
+
+    await user.click(button)
+
+    expect(button).toHaveAccessibleName('Sending…')
+    act(() => vi.advanceTimersByTime(BUSY_MS))
+    expect(button).toHaveAccessibleName('Send a reminder')
+    expect(designSystemPage.toastRegion).toBeEmptyDOMElement()
+  })
+})
+
+describe('Overlays', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('shows each tooltip trigger’s tooltip on hover', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.hover(designSystemPage.overlaysButton('Move to free table'))
+    act(() => vi.advanceTimersByTime(TOOLTIP_DELAY_MS))
+
+    expect(designSystemPage.tooltip).toHaveTextContent(
+      'Moves this match to the next free table and tells both players. Their rest times are kept.',
+    )
+  })
+
+  it('opens the withdraw dialog, and Keep in draw closes it', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.click(designSystemPage.overlaysButton('Withdraw player…'))
+    const dialog = designSystemPage.dialog('Withdraw Okafor-Adeyemi from the draw?')
+    await user.click(within(dialog).getByRole('button', { name: 'Keep in draw' }))
+
+    expect(designSystemPage.openDialogs).toEqual([])
+  })
+
+  it('opens the match drawer on Patel vs Wójcik-Szymańska', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.click(designSystemPage.overlaysButton('Open match drawer'))
+
+    const drawer = designSystemPage.dialog('Patel vs Wójcik-Szymańska')
+    expect(drawer).toHaveTextContent('Table 3 · Open singles · Round of 32')
+    expect(
+      within(drawer).getByRole('article', {
+        name: 'Patel, Meera vs Wójcik-Szymańska, Agnieszka',
+      }),
+    ).toBeVisible()
+    expect(
+      within(drawer).getByRole('table', {
+        name: 'Game scores, Patel, Meera vs Wójcik-Szymańska, Agnieszka',
+      }),
+    ).toBeVisible()
+    expect(within(drawer).getByRole('link', { name: 'Open scoring' })).toHaveAttribute(
+      'href',
+      'https://github.com/mightymoose/fortymm/blob/main/references/design-system/ui_kits/tournament/mobile.html',
+    )
+  })
+
+  it('offers the tables the match isn’t on, with Table 4 off while its scorer is offline', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.click(designSystemPage.overlaysButton('Move match to another table…'))
+
+    const sheet = designSystemPage.dialog('Move to another table')
+    const tables = within(sheet).getAllByRole('radio')
+    expect(tables.map((table) => table.getAttribute('value'))).toEqual([
+      'Table 2',
+      'Table 5',
+      'Table 4',
+    ])
+    expect(tables[0]).toBeChecked()
+    expect(tables[2]).toBeDisabled()
+  })
+
+  it('shows the match actions menu, its destructive command last', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const menu = within(designSystemPage.overlaysSection).getByRole('menu', {
+      name: 'Match actions',
+    })
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Edit match',
+      'Move to another table',
+      'Print score sheet⌘P',
+      'Remove from schedule',
+    ])
+  })
+
+  it('opens the command palette from its button', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.click(designSystemPage.overlaysButton('Search commands'))
+
+    expect(designSystemPage.paletteSearch).toHaveFocus()
+  })
+
+  it('lists only the sections the page has under Go to', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.keyboard('{Control>}k{/Control}')
+
+    expect(
+      within(designSystemPage.paletteGroup('Go to'))
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual([
+      'Roles at a glance',
+      'Buttons',
+      'Fields, dates and choices',
+      'Selection',
+      'Containers',
+      'Feedback',
+      'Overlays',
+      'Match components',
+      'More components',
+    ])
+  })
+
+  it('goes to a section from the palette', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    await user.keyboard('{Control>}k{/Control}')
+
+    await user.type(designSystemPage.paletteSearch, 'feedback{Enter}')
+
+    await waitFor(() =>
+      expect(
+        within(designSystemPage.feedbackSection).getByRole('heading', { level: 2 }),
+      ).toHaveFocus(),
+    )
+  })
+
+  it('opens the withdraw dialog from the palette', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    await user.keyboard('{Control>}k{/Control}')
+
+    await user.type(designSystemPage.paletteSearch, 'withdraw{Enter}')
+
+    expect(
+      await within(document.body).findByRole('dialog', {
+        name: 'Withdraw Okafor-Adeyemi from the draw?',
+      }),
+    ).toBeVisible()
+  })
+
+  it('finds a player from the palette in the opponent combobox', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    await user.keyboard('{Control>}k{/Control}')
+
+    await user.type(designSystemPage.paletteSearch, 'patel{Enter}')
+
+    await waitFor(() => expect(designSystemPage.opponentField).toHaveFocus())
+    expect(designSystemPage.opponentField).toHaveValue('Patel, Meera')
+    expect(
+      within(within(designSystemPage.fieldsSection).getByRole('listbox', { name: 'Opponent' }))
+        .getAllByRole('option')
+        .map((option) => option.querySelector('b')!.textContent),
+    ).toEqual(['Patel, Meera'])
+  })
+})
+
+describe('Match components', () => {
+  it('shows a match row in each state', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const rows = within(designSystemPage.matchExample('Match row'))
+
+    for (const [name, status] of [
+      ['Okafor-Adeyemi, Daniel vs Johansen-Whitfield, Annika', 'Live'],
+      ['Patel, Meera vs Wójcik-Szymańska, Agnieszka', 'Live'],
+      ['Dubois, Camille vs Lindqvist, Erik', '12:15'],
+      ['Nguyen, Thanh vs Silva, Rafael', 'Final'],
+      ['Patel, Meera vs Park, Ji-ho', 'Needs decision'],
+    ]) {
+      expect(rows.getByRole('article', { name })).toHaveTextContent(status)
+    }
+    expect(
+      within(designSystemPage.matchExample('Empty and disconnected')).getByRole('article', {
+        name: 'Rossi, Giulia / Haddad, Youssef vs Fernández-Castillo, Marisol / Kim, Hyun-woo',
+      }),
+    ).toHaveTextContent('Scorer offline')
+  })
+
+  it('shows a match’s game scores from its row', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const row = within(
+      within(designSystemPage.matchExample('Match row')).getByRole('article', {
+        name: 'Nguyen, Thanh vs Silva, Rafael',
+      }),
+    )
+
+    await user.click(row.getByRole('button', { name: 'Game scores' }))
+
+    expect(
+      row.getByRole('table', { name: 'Game scores, Nguyen, Thanh vs Silva, Rafael' }),
+    ).toBeVisible()
+  })
+
+  it('says Assign a match is not wired up in this demo', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.click(designSystemPage.matchButton('Assign a match'))
+
+    expect(designSystemPage.toastRegion).toHaveTextContent(
+      '“Assign a match” isn’t wired up in this demo',
+    )
+  })
+
+  it('scores the deciding game, and the toast’s Undo takes the winning point back', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const pad = within(designSystemPage.matchExample('Score entry and game history'))
+
+    await user.click(designSystemPage.matchButton('+1 Wójcik-Szymańska'))
+    await user.click(designSystemPage.matchButton('+1 Wójcik-Szymańska'))
+
+    expect(designSystemPage.toastRegion).toHaveTextContent('Game 5 to Wójcik-Szymańska, 11–9')
+    expect(designSystemPage.matchButton('+1 Patel')).toBeDisabled()
+
+    await user.click(designSystemPage.toastButton('Undo'))
+
+    expect(pad.getByLabelText('Wójcik-Szymańska points')).toHaveTextContent('10')
+    expect(designSystemPage.matchButton('+1 Patel')).toBeEnabled()
+  })
+
+  it('starts with no schedule block pressed, and presses the one picked', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const blocks = within(designSystemPage.matchExample('Schedule blocks'))
+    expect(blocks.queryAllByRole('button', { pressed: true })).toEqual([])
+
+    await user.click(blocks.getByRole('button', { name: /Nguyen, Thanh vs Silva, Rafael/ }))
+
+    expect(blocks.getByRole('button', { name: /Nguyen, Thanh vs Silva, Rafael/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(await within(document.body).findByText('Nguyen vs Silva, selected')).toBeInTheDocument()
+  })
+
+  it('shows the rest left at the schedule’s 11:47', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const rest = within(designSystemPage.matchExample('Rest indicator'))
+
+    expect(rest.getByText('8 min left')).toBeVisible()
+    const meter = rest.getByRole('progressbar', { name: 'Rest elapsed' })
+    expect(meter).toHaveAttribute('aria-valuenow', '7')
+    expect(meter).toHaveAttribute('aria-valuemax', '15')
+  })
+})
+
+describe('More components', () => {
+  it('shows the players’ numbers and signed rating changes in the data table', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const table = within(designSystemPage.moreExample('Data table')).getByRole('table')
+
+    expect(
+      within(table)
+        .getAllByRole('row')
+        .map((row) => [...(row as HTMLTableRowElement).cells].map((cell) => cell.textContent)),
+    ).toEqual([
+      ['Player', 'Club', 'Played', 'Rating', 'Change'],
+      ['Nguyen, Thanh', 'Riverside TT', '42', '2,145', '▲ +12'],
+      ['Wójcik-Szymańska, Agnieszka', 'Northside', '37', '2,088', '▲ +4'],
+      ['Okafor-Adeyemi, Daniel', 'Eastgate', '51', '1,987', '▼ −12'],
+    ])
+  })
+
+  it('shows the Round of 16 as 5 of 8 played', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const example = within(designSystemPage.moreExample('Tags, avatar, progress'))
+
+    const progress = example.getByRole('progressbar', { name: 'Round of 16 progress' })
+    expect(progress).toHaveAttribute('aria-valuenow', '5')
+    expect(progress).toHaveAttribute('aria-valuemax', '8')
+  })
+
+  it('links its navigation to the section itself, since the pages it names don’t exist', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const example = within(designSystemPage.moreExample('Navigation'))
+
+    const links = example.getAllByRole('link')
+    expect(links.map((link) => link.textContent)).toEqual([
+      'Spring Open',
+      'Open singles',
+      'Tables & schedule',
+      'Draws',
       'Players',
+      'Results',
     ])
+    for (const link of links) expect(link).toHaveAttribute('href', '#more')
     expect(
-      designSystemPage.tabs.map((tab) => tab.getAttribute('aria-selected')),
-    ).toEqual(['true', 'false', 'false', 'false'])
-    expect(designSystemPage.tabPanel).toHaveTextContent(
-      'Tournament overview — 32 players, 4 courts, finals projected for 6:45pm.',
-    )
-  })
-
-  it('has an Accordion card after the Tabs card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.accordionCardHeading).toHaveTextContent(
-      'Accordion',
-    )
-    expect(designSystemPage.accordionCard).toHaveTextContent('collapsible FAQ')
-    expect(
-      designSystemPage.tabsCard.compareDocumentPosition(
-        designSystemPage.accordionCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("shows the reference's three questions, only the first open", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const triggers = designSystemPage.accordionTriggers
-    expect(
-      triggers.map((trigger) => [
-        trigger.textContent,
-        trigger.getAttribute('aria-expanded'),
-      ]),
-    ).toEqual([
-      ['How does the SMT scheduler work?⌄', 'true'],
-      ['Is FortyMM really free?⌄', 'false'],
-      ['How do ratings update?⌄', 'false'],
-    ])
-    for (const trigger of triggers) {
-      expect(trigger.parentElement?.tagName).toBe('H4')
-    }
-    expect(
-      designSystemPage.accordionContents.map((content) => content.textContent),
-    ).toEqual([
-      'It treats every match as a constraint and solves for an assignment that minimizes back-to-backs, balances court usage, and respects player breaks.',
-    ])
-  })
-
-  it('has a Breadcrumb card after the Accordion card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.breadcrumbCardHeading).toHaveTextContent(
-      'Breadcrumb',
-    )
-    expect(designSystemPage.breadcrumbCard).toHaveTextContent('trail')
-    expect(
-      designSystemPage.accordionCard.compareDocumentPosition(
-        designSystemPage.breadcrumbCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("shows the reference's trail, Round 3 the current page", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const breadcrumb = designSystemPage.breadcrumb
-    expect(
-      within(breadcrumb)
-        .getAllByRole('link')
-        .map((link) => link.textContent),
-    ).toEqual(['Tournaments', 'April Spring Open'])
-    expect(within(breadcrumb).getByText('Round 3')).toHaveAttribute(
+      within(example.getByRole('navigation', { name: 'Breadcrumb' })).getByText('Round of 16'),
+    ).toHaveAttribute('aria-current', 'page')
+    expect(example.getByRole('link', { name: 'Tables & schedule' })).toHaveAttribute(
       'aria-current',
       'page',
     )
   })
 
-  it('has a Pagination card after the Breadcrumb card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.paginationCardHeading).toHaveTextContent(
-      'Pagination',
-    )
-    expect(designSystemPage.paginationCard).toHaveTextContent('paged tables')
-    expect(
-      designSystemPage.breadcrumbCard.compareDocumentPosition(
-        designSystemPage.paginationCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("shows the reference's row, page 1 of 12", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const pagination = designSystemPage.pagination
-    expect(pagination).toHaveTextContent('‹123…12›')
-    expect(
-      within(pagination).getByRole('button', { name: 'Page 1' }),
-    ).toHaveAttribute('aria-current', 'page')
-  })
-
-  it('has a Navigation Menu card after the Pagination card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.navMenuCardHeading).toHaveTextContent(
-      'Navigation Menu',
-    )
-    expect(designSystemPage.navMenuCard).toHaveTextContent('mega-dropdown')
-    expect(
-      designSystemPage.paginationCard.compareDocumentPosition(
-        designSystemPage.navMenuCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("shows the reference's Product panel, labelled as hovered", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.navMenuCard).toHaveTextContent('Hovered: Product')
-    expect(
-      within(designSystemPage.navMenuPanel)
-        .getAllByRole('link')
-        .map((link) => link.textContent),
-    ).toEqual([
-      'Match recorderTrack scores in real time, no internet needed.',
-      'Tournament adminSMT-solved draws and live scoring.',
-      'Spectator bracketsShareable, public, branded.',
-      'Club toolsMember rosters, ladder leagues.',
-    ])
-  })
-
-  it('has a Menubar card after the Navigation Menu card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.menubarCardHeading).toHaveTextContent('Menubar')
-    expect(designSystemPage.menubarCard).toHaveTextContent('desktop app')
-    expect(
-      designSystemPage.navMenuCard.compareDocumentPosition(
-        designSystemPage.menubarCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("shows the reference's five menus, File active", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const items = designSystemPage.menubarItems
-    expect(items.map((item) => item.textContent)).toEqual([
-      'File',
-      'Edit',
-      'View',
-      'Tournament',
-      'Help',
-    ])
-    expect(
-      items.filter((item) => item.classList.contains('menubar-item--active')),
-    ).toEqual([items[0]])
-  })
-
-  it('has an Overlays section after Navigation, with a lead line', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.overlaysSectionHeading).toHaveTextContent(
-      'Overlays',
-    )
-    expect(designSystemPage.overlaysSectionLead).toHaveTextContent(
-      'Dialogs, sheets, popovers, menus. Content that floats above the canvas. All shown in their open state.',
-    )
-    expect(
-      designSystemPage.navSection.compareDocumentPosition(
-        designSystemPage.overlaysSection,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it('has a Feedback section after Overlays, with a lead line', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.feedbackSectionHeading).toHaveTextContent(
-      'Feedback',
-    )
-    expect(designSystemPage.feedbackSectionLead).toHaveTextContent(
-      'Alerts and toasts. The app talking back.',
-    )
-    expect(
-      designSystemPage.overlaysSection.compareDocumentPosition(
-        designSystemPage.feedbackSection,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it('has an Alert card first in the Feedback section', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.alertCardHeading).toHaveTextContent('Alert')
-    expect(designSystemPage.alertCard).toHaveTextContent('4 variants')
-    expect(
-      designSystemPage.feedbackSectionLead.compareDocumentPosition(
-        designSystemPage.alertCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("shows the reference's four alerts, one per variant", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(
-      designSystemPage.alerts.map((alert) => [
-        within(alert).getByRole('heading', { level: 4 }).textContent,
-        within(alert).getByRole('paragraph').textContent,
-        alert.className,
-      ]),
-    ).toEqual([
-      ['Heads up', 'The next round starts in 12 minutes.', 'alert alert--default'],
-      [
-        'Late check-in',
-        "3 players haven't checked in. They'll be defaulted at 6:00pm.",
-        'alert alert--warn',
-      ],
-      [
-        'Match disputed',
-        'A player has filed a score dispute. Review the appeal in the admin panel.',
-        'alert alert--destructive',
-      ],
-      [
-        'Match logged',
-        'Your rating moved from 1602 to 1620 (+18).',
-        'alert alert--success',
-      ],
-    ])
-  })
-
-  it('has a Sonner / Toast card after the Alert card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.toastCardHeading).toHaveTextContent(
-      'Sonner / Toast',
-    )
-    expect(designSystemPage.toastCard).toHaveTextContent('4 variants')
-    expect(
-      designSystemPage.alertCard.compareDocumentPosition(
-        designSystemPage.toastCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("shows the reference's four toasts, only the first with an action", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(
-      designSystemPage.toasts.map((toast) => [
-        within(toast).getByRole('heading', { level: 4 }).textContent,
-        within(toast).getByRole('paragraph').textContent,
-        toast.className,
-        within(toast)
-          .getAllByRole('button')
-          .map((button) => button.textContent),
-      ]),
-    ).toEqual([
-      [
-        'A new version of FortyMM is ready',
-        'Reload to get the latest update.',
-        'toast toast--info',
-        ['Reload', ''],
-      ],
-      ['Match logged', 'Rating: 1620 (+18)', 'toast toast--success', ['']],
-      [
-        "Couldn't save",
-        'Try again — your changes are still in the editor.',
-        'toast toast--error',
-        [''],
-      ],
-      [
-        'Reminder',
-        "You're up next on Court 3.",
-        'toast toast--info',
-        [''],
-      ],
-    ])
-  })
-
-  it('removes a toast when it is dismissed', async () => {
+  it('says which menubar command was chosen, and nothing else happens', async () => {
     const user = userEvent.setup()
     const designSystemPage = await DesignSystemPage.render()
+    const example = within(designSystemPage.moreExample('Menubar'))
+    expect(example.getByText('Demo: choosing a command only shows its name here.')).toBeVisible()
 
-    await user.click(designSystemPage.toastDismissButton("Couldn't save"))
+    await user.click(example.getByRole('menuitem', { name: 'Tournament' }))
+    await user.click(example.getByRole('menuitem', { name: /^Print entry list/ }))
 
     expect(
-      designSystemPage.toasts.map(
-        (toast) => within(toast).getByRole('heading').textContent,
-      ),
-    ).toEqual(['A new version of FortyMM is ready', 'Match logged', 'Reminder'])
+      example.getByText('Chose Tournament → Print entry list⌘P. (Demo: nothing else happens.)'),
+    ).toBeVisible()
+    expect(example.queryByRole('menu')).toBeNull()
   })
 
-  it('removes the first toast when its Reload action is clicked', async () => {
+  it('shows this morning’s five finished matches in the carousel', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const example = within(designSystemPage.moreExample('Carousel'))
+
+    expect(example.getByRole('region', { name: 'Finished this morning' })).toBeVisible()
+    expect(
+      example.getAllByRole('group').map((slide) => [
+        slide.getAttribute('aria-label'),
+        within(slide).getByRole('article').getAttribute('aria-label'),
+        slide.querySelector('.fm-match__scores')!.textContent,
+      ]),
+    ).toEqual([
+      ['1 of 5', 'Nguyen, Thanh vs Silva, Rafael', '11–7, 9–11, 11–8, 11–6'],
+      ['2 of 5', 'Lindqvist, Erik vs Haddad, Youssef', '11–5, 11–8, 11–4'],
+      ['3 of 5', 'Moreau, Élodie vs Kim, Hyun-woo', '11–9, 7–11, 11–13, 11–8, 12–10'],
+      ['4 of 5', 'Patel, Meera vs Dubois, Camille', '11–6, 11–9, 8–11, 11–7'],
+      ['5 of 5', 'Haddad, Youssef vs Ali, Rashid', '9–11, 11–7, 11–13, 11–9, 11–8'],
+    ])
+  })
+
+  it('starts the accordion with the first answer open and the second closed', async () => {
     const user = userEvent.setup()
     const designSystemPage = await DesignSystemPage.render()
+    const example = within(designSystemPage.moreExample('Accordion'))
+    const [first, second] = example.getAllByRole('group')
+    expect(first).toHaveAttribute('open')
+    expect(second).not.toHaveAttribute('open')
 
-    await user.click(designSystemPage.toastActionButton('Reload'))
+    await user.click(example.getByText('Scheduling details'))
 
-    expect(
-      designSystemPage.toasts.map(
-        (toast) => within(toast).getByRole('heading').textContent,
-      ),
-    ).toEqual(['Match logged', "Couldn't save", 'Reminder'])
-  })
-
-  it('has a Dialog · Alert Dialog card first in the Overlays section', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.dialogCardHeading).toHaveTextContent(
-      'Dialog · Alert Dialog',
-    )
-    expect(designSystemPage.dialogCard).toHaveTextContent('modal')
-    expect(
-      within(designSystemPage.overlaysSection).getAllByRole('article')[0],
-    ).toBe(designSystemPage.dialogCard)
-  })
-
-  it("shows the reference's dialog and alert dialog, open", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const { dialog, alertDialog } = designSystemPage
-    expect(dialog).toHaveAccessibleName('Forfeit this match?')
-    expect(dialog).toHaveAccessibleDescription(
-      "Your opponent will be awarded the win and your rating will be adjusted accordingly. This can't be undone.",
-    )
-    expect(
-      within(dialog).getByRole('checkbox', {
-        name: 'Send a note to my opponent',
-      }),
-    ).not.toBeChecked()
-    expect(
-      within(dialog)
-        .getAllByRole('button')
-        .map((button) => button.textContent),
-    ).toEqual(['Cancel', 'Forfeit'])
-    expect(alertDialog).toHaveAccessibleName('Delete account')
-    expect(alertDialog).toHaveAccessibleDescription(
-      'All match history, ratings, and tournament records will be permanently deleted.',
-    )
-    expect(
-      within(alertDialog)
-        .getAllByRole('button')
-        .map((button) => button.textContent),
-    ).toEqual(['Keep account', 'Delete'])
-    expect(
-      Array.from(
-        designSystemPage.dialogCard.querySelectorAll('.mock-label'),
-        (label) => label.textContent,
-      ),
-    ).toEqual(['Dialog', 'Alert Dialog'])
-  })
-
-  it('has a Sheet card after the Dialog · Alert Dialog card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.sheetCardHeading).toHaveTextContent('Sheet')
-    expect(designSystemPage.sheetCard).toHaveTextContent('side panel')
-    expect(
-      designSystemPage.dialogCard.compareDocumentPosition(
-        designSystemPage.sheetCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("shows the reference's Filters sheet, open", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const sheet = designSystemPage.sheet
-    expect(designSystemPage.sheetCard).toHaveTextContent('Sheet (right)')
-    expect(sheet).toHaveAccessibleName('Filters')
-    expect(sheet).toHaveAccessibleDescription('Narrow the player list.')
-    expect(within(sheet).getByRole('combobox', { name: 'Club' })).toHaveValue(
-      'Brooklyn TT',
-    )
-    expect(
-      within(sheet).getByRole('slider', { name: 'Rating range minimum' }),
-    ).toHaveValue('1300')
-    expect(
-      within(sheet).getByRole('slider', { name: 'Rating range maximum' }),
-    ).toHaveValue('2200')
-    expect(
-      within(sheet).getByRole('button', { name: 'Apply filters' }),
-    ).toBeInTheDocument()
-  })
-
-  it('has a Drawer card after the Sheet card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.drawerCardHeading).toHaveTextContent('Drawer')
-    expect(designSystemPage.drawerCard).toHaveTextContent('mobile bottom sheet')
-    expect(
-      designSystemPage.sheetCard.compareDocumentPosition(
-        designSystemPage.drawerCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("shows the reference's Quick log drawer, open", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const drawer = designSystemPage.drawer
-    expect(designSystemPage.drawerCard).toHaveTextContent('Drawer (bottom)')
-    expect(drawer).toHaveAccessibleName('Quick log')
-    expect(drawer).toHaveAccessibleDescription(
-      'Tap to record a finished match.',
-    )
-    expect(
-      within(drawer).getByRole('button', { name: 'Pick opponent' }),
-    ).toBeInTheDocument()
-  })
-
-  it('has a Popover card after the Drawer card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.popoverCardHeading).toHaveTextContent('Popover')
-    expect(designSystemPage.popoverCard).toHaveTextContent('contextual content')
-    expect(
-      designSystemPage.drawerCard.compareDocumentPosition(
-        designSystemPage.popoverCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("shows the reference's Skill rating popover, open", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.popover).toHaveAccessibleName('Skill rating')
-    expect(designSystemPage.popover).toHaveAccessibleDescription(
-      'Your rating is calculated using a Glicko-2 system with a 0.06 volatility cap. Updates after every match.',
-    )
-  })
-
-  it('has a Tooltip card after the Popover card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.tooltipCardHeading).toHaveTextContent('Tooltip')
-    expect(designSystemPage.tooltipCard).toHaveTextContent('on hover')
-    expect(
-      designSystemPage.popoverCard.compareDocumentPosition(
-        designSystemPage.tooltipCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("shows the reference's two tooltips, each describing its trigger", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const card = within(designSystemPage.tooltipCard)
-    expect(
-      card.getAllByRole('tooltip').map((tooltip) => tooltip.textContent),
-    ).toEqual(['Refresh standings', 'Highest rated player in this bracket'])
-    expect(
-      card.getByRole('button', {
-        name: 'Refresh',
-        description: 'Refresh standings',
-      }),
-    ).toHaveTextContent('↻')
-    expect(card.getByText('Seed 1')).toHaveAccessibleDescription(
-      'Highest rated player in this bracket',
-    )
-  })
-
-  it('has a Hover Card card after the Tooltip card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.hoverCardCardHeading).toHaveTextContent(
-      'Hover Card',
-    )
-    expect(designSystemPage.hoverCardCard).toHaveTextContent('player preview')
-    expect(
-      designSystemPage.tooltipCard.compareDocumentPosition(
-        designSystemPage.hoverCardCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("shows the reference's preview of Tien Nguyen, open", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const card = designSystemPage.hoverCard
-    expect(card).toHaveAccessibleName('Tien Nguyen')
-    expect(card).toHaveTextContent(
-      'Tien NguyenBrooklyn TT · Joined 2024Rating 1620W-L 14–3',
-    )
-    expect(within(card).getByRole('img', { name: 'Tien Nguyen' })).toHaveClass(
-      'avatar--blue',
-    )
-  })
-
-  it('has a Dropdown Menu · Context Menu card after the Hover Card card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.menuCardHeading).toHaveTextContent(
-      'Dropdown Menu · Context Menu',
-    )
-    expect(designSystemPage.menuCard).toHaveTextContent(
-      'right-click + chevron',
-    )
-    expect(
-      designSystemPage.hoverCardCard.compareDocumentPosition(
-        designSystemPage.menuCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("shows the reference's dropdown and context menus, open", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const dropdown = designSystemPage.menu('Match actions')
-    expect(dropdown).toHaveTextContent(/^Match actions/)
-    expect(
-      within(dropdown)
-        .getAllByRole('menuitem')
-        .map((item) => [item.textContent, item.ariaKeyShortcuts]),
-    ).toEqual([
-      ['Rematch⌘ R', 'Meta+R'],
-      ['Share match link⌘ ↑ S', 'Meta+Shift+S'],
-      ['Edit score', null],
-      ['Forfeit', null],
-    ])
-    const context = designSystemPage.menu('Bracket')
-    expect(
-      within(context)
-        .getAllByRole('menuitemcheckbox')
-        .map((item) => [item.textContent, item.ariaChecked]),
-    ).toEqual([
-      ['✓ Show seeds', 'true'],
-      ['\u00a0\u00a0Show ratings', 'false'],
-    ])
-    expect(
-      within(context)
-        .getAllByRole('menuitem')
-        .map((item) => item.textContent),
-    ).toEqual(['Reschedule…', 'Print bracket'])
-  })
-
-  it('has a Command card after the Dropdown Menu · Context Menu card', async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    expect(designSystemPage.commandCardHeading).toHaveTextContent('Command')
-    expect(designSystemPage.commandCard).toHaveTextContent('cmd+k palette')
-    expect(
-      designSystemPage.menuCard.compareDocumentPosition(
-        designSystemPage.commandCard,
-      ) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
-  })
-
-  it("shows the reference's palette, open on Log a match", async () => {
-    const designSystemPage = await DesignSystemPage.render()
-
-    const input = designSystemPage.commandInput
-    expect(designSystemPage.commandCard).toHaveTextContent('Command (⌘K)')
-    expect(input).toHaveValue('')
-    expect(input).toHaveAttribute('placeholder', 'Type a command or search…')
-    const list = within(designSystemPage.commandList)
-    expect(
-      list
-        .getAllByRole('group')
-        .map((group) => [
-          group.textContent?.match(/^(Suggestions|Recent)/)?.[0],
-          within(group)
-            .getAllByRole('option')
-            .map((option) => option.textContent),
-        ]),
-    ).toEqual([
-      [
-        'Suggestions',
-        ['Log a match⌘ L', 'Find a player⌘ P', 'Open tournament admin⌘ T'],
-      ],
-      [
-        'Recent',
-        ['Nguyen vs. Okafor · 2h ago', 'April Spring Open · yesterday'],
-      ],
-    ])
-    const active = list.getByRole('option', { selected: true })
-    expect(active).toHaveAccessibleName('Log a match')
-    expect(input).toHaveAttribute('aria-activedescendant', active.id)
-  })
-
-  it.each([
-    {
-      title: 'April Spring Open',
-      description: 'Hosted by Brooklyn TT Club',
-      body: '32 players, single-elimination, 4 courts. Scheduling auto-generated by SMT solver.',
-      buttons: ['Register', 'View draw'],
-    },
-    {
-      title: '★ Featured',
-      description: 'National Championships qualifier',
-      body: 'Top 8 advance to the regional bracket. Limited to USATT members.',
-      buttons: ['Apply'],
-    },
-  ])(
-    "shows the reference's $title card",
-    async ({ title, description, body, buttons }) => {
-      const designSystemPage = await DesignSystemPage.render()
-
-      const card = designSystemPage.demoCard(title)
-      expect(
-        within(card).getByRole('heading', { level: 4, name: title }),
-      ).toBeInTheDocument()
-      expect(card).toHaveTextContent(
-        `${title}${description}${body}${buttons.join('')}`,
-      )
-      expect(
-        within(card)
-          .getAllByRole('button')
-          .map((button) => button.textContent),
-      ).toEqual(buttons)
-    },
-  )
-
-  describe('on April 14, 2026', () => {
-    afterEach(() => {
-      vi.useRealTimers()
-    })
-
-    it("shows the reference's April 2026, open, the 12th chosen and the 14th today", async () => {
-      vi.useFakeTimers({ toFake: ['Date'] })
-      vi.setSystemTime(new Date(2026, 3, 14, 12))
-      const designSystemPage = await DesignSystemPage.render()
-
-      const trigger = designSystemPage.datePickerTrigger
-      expect(trigger).toHaveAccessibleName('Match date April 12, 2026')
-      expect(trigger).toHaveAttribute('aria-expanded', 'true')
-      expect(designSystemPage.datePickerDialog).toHaveAccessibleName(
-        'Match date',
-      )
-      expect(designSystemPage.datePickerGrid).toHaveAccessibleName(
-        'April 2026',
-      )
-      expect(
-        designSystemPage.datePickerDay('April 12, 2026'),
-      ).toHaveAttribute('aria-selected', 'true')
-      expect(
-        designSystemPage.datePickerDay('April 14, 2026'),
-      ).toHaveAttribute('aria-current', 'date')
-      expect(document.body).toHaveFocus()
-    })
+    expect(second).toHaveAttribute('open')
   })
 })

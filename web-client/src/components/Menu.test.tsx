@@ -1,105 +1,61 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
-import { Menu, type MenuEntry } from './Menu'
-
-const entries: MenuEntry[] = [
-  { kind: 'label', text: 'Match actions' },
-  {
-    kind: 'item',
-    label: 'Rematch',
-    shortcut: { label: '⌘ R', keys: 'Meta+R' },
-  },
-  { kind: 'checkbox', label: 'Show seeds', checked: true },
-  { kind: 'separator' },
-  { kind: 'item', label: 'Forfeit', destructive: true },
-]
-
-function items() {
-  return [
-    screen.getByRole('menuitem', { name: 'Rematch' }),
-    screen.getByRole('menuitemcheckbox', { name: 'Show seeds' }),
-    screen.getByRole('menuitem', { name: 'Forfeit' }),
-  ]
-}
+import { describe, expect, it, vi } from 'vitest'
+import { Menu } from './Menu'
 
 describe('Menu', () => {
-  it('renders a named menu of its entries, in order', () => {
-    render(<Menu label="Match" entries={entries} />)
-
-    const menu = screen.getByRole('menu', { name: 'Match' })
-    expect(menu).toHaveClass('menu')
-    expect(
-      Array.from(menu.children, (child) => [
-        child.getAttribute('role'),
-        child.className,
-        child.textContent,
-      ]),
-    ).toEqual([
-      ['presentation', 'menu-label', 'Match actions'],
-      ['menuitem', 'menu-item', 'Rematch⌘ R'],
-      ['menuitemcheckbox', 'menu-item', '✓ Show seeds'],
-      ['separator', 'menu-sep', ''],
-      ['menuitem', 'menu-item menu-item--destructive', 'Forfeit'],
-    ])
-  })
-
-  it("shows a shortcut, read as the item's key shortcut", () => {
-    render(<Menu label="Match" entries={entries} />)
-
-    const rematch = screen.getByRole('menuitem', { name: 'Rematch' })
-    expect(rematch).toHaveAttribute('aria-keyshortcuts', 'Meta+R')
-    expect(rematch.querySelector('kbd')).toHaveClass('kbd')
-  })
-
-  it('leads a checkbox item with ✓ while checked, two spaces otherwise', () => {
+  it('is a menu named by its label, its commands in order with their shortcuts', () => {
     render(
       <Menu
-        label="Bracket"
-        entries={[
-          { kind: 'checkbox', label: 'Show seeds', checked: true },
-          { kind: 'checkbox', label: 'Show ratings', checked: false },
+        label="Match actions"
+        items={[
+          { label: 'Edit match' },
+          { label: 'Print score sheet', shortcut: '⌘P' },
+          'divider',
+          { label: 'Remove from schedule', danger: true },
         ]}
       />,
     )
 
-    const seeds = screen.getByRole('menuitemcheckbox', { name: 'Show seeds' })
-    const ratings = screen.getByRole('menuitemcheckbox', {
-      name: 'Show ratings',
-    })
-    expect(seeds).toBeChecked()
-    expect(seeds.textContent).toBe('✓ Show seeds')
-    expect(ratings).not.toBeChecked()
-    expect(ratings.textContent).toBe('\u00a0\u00a0Show ratings')
+    const menu = screen.getByRole('menu', { name: 'Match actions' })
+    expect(menu).toBeVisible()
+    expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Edit match',
+      'Print score sheet⌘P',
+      'Remove from schedule',
+    ])
+    expect(screen.getByText('⌘P').tagName).toBe('SMALL')
   })
 
-  it('is one Tab stop, on the first item', async () => {
-    const user = userEvent.setup()
-    render(<Menu label="Match" entries={entries} />)
+  it('puts a divider before the destructive command, and marks it in red', () => {
+    render(
+      <Menu
+        label="Match actions"
+        items={[{ label: 'Edit match' }, 'divider', { label: 'Remove', danger: true }]}
+      />,
+    )
 
-    expect(items().map((item) => item.tabIndex)).toEqual([0, -1, -1])
-    await user.tab()
-    expect(items()[0]).toHaveFocus()
+    const remove = screen.getByRole('menuitem', { name: 'Remove' })
+    expect(remove).toHaveClass('fm-menu__item--danger')
+    expect(screen.getByRole('menuitem', { name: 'Edit match' })).not.toHaveClass(
+      'fm-menu__item--danger',
+    )
+    expect(remove.previousElementSibling).toBe(screen.getByRole('separator'))
   })
 
-  it('moves the focus with the up and down arrows, wrapping, and Home and End', async () => {
+  it('gives each command the behaviour it is passed', async () => {
     const user = userEvent.setup()
-    render(<Menu label="Match" entries={entries} />)
-    await user.tab()
-    const [rematch, seeds, forfeit] = items()
+    const onEdit = vi.fn()
+    render(
+      <Menu
+        label="Match actions"
+        items={[{ label: 'Edit match' }]}
+        commandProps={(command) => ({ onClick: () => onEdit(command.label) })}
+      />,
+    )
 
-    await user.keyboard('{ArrowDown}')
-    expect(seeds).toHaveFocus()
-    expect(items().map((item) => item.tabIndex)).toEqual([-1, 0, -1])
-    await user.keyboard('{ArrowDown}')
-    expect(forfeit).toHaveFocus()
-    await user.keyboard('{ArrowDown}')
-    expect(rematch).toHaveFocus()
-    await user.keyboard('{ArrowUp}')
-    expect(forfeit).toHaveFocus()
-    await user.keyboard('{Home}')
-    expect(rematch).toHaveFocus()
-    await user.keyboard('{End}')
-    expect(forfeit).toHaveFocus()
+    await user.click(screen.getByRole('menuitem', { name: 'Edit match' }))
+
+    expect(onEdit).toHaveBeenCalledWith('Edit match')
   })
 })

@@ -1,228 +1,240 @@
 import {
-  useId,
-  useReducer,
-  type ChangeEvent,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useRef,
+  useState,
   type ComponentProps,
-  type FocusEvent,
   type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+  type Ref,
 } from 'react'
-import { useField, useFieldControl } from './fieldContext'
+import { useAnnounce } from './announceContext'
+import { Icon } from './Icon'
 
-// One choice in a Combobox. `label` is what the query filters and what
-// choosing it writes into the input. `hint` is shown beside it in mono, e.g.
-// a player's rating. `id` must be unique in the options and valid in an
-// element id.
-export type ComboboxOption = { id: string; label: string; hint?: string }
+// A player the combobox lists. The club and rating tell same-name players
+// apart.
+export type ComboboxOption = { name: string; club?: string; rating?: string }
 
-type ComboboxState = {
-  query: string
-  list: { open: false } | { open: true; activeId: string | null }
+export type ComboboxHandle = {
+  // Types `text` into the field, focuses it and lists what it finds.
+  search: (text: string) => void
 }
 
-// Each action that moves the active option carries the ids of the options
-// its query matches, so the active option is always one that's shown.
-type ComboboxAction =
-  | { type: 'typed'; query: string; matchIds: string[] }
-  | { type: 'moved'; step: number; matchIds: string[] }
-  | { type: 'pointed'; id: string }
-  | { type: 'chose'; label: string }
-  | { type: 'closed' }
+// How long the result count waits before it's read out, so it isn't read
+// for every key.
+export const ANNOUNCE_DELAY_MS = 500
 
-function reducer(state: ComboboxState, action: ComboboxAction): ComboboxState {
-  switch (action.type) {
-    case 'typed':
-      return {
-        query: action.query,
-        list: { open: true, activeId: action.matchIds[0] ?? null },
-      }
-    // A closed list opens on its first match (down) or its last (up).
-    case 'moved': {
-      const { step, matchIds } = action
-      if (matchIds.length === 0) return state
-      const at = state.list.open && state.list.activeId !== null
-        ? matchIds.indexOf(state.list.activeId)
-        : -1
-      const next = at === -1
-        ? (step > 0 ? 0 : matchIds.length - 1)
-        : (at + step + matchIds.length) % matchIds.length
-      return { ...state, list: { open: true, activeId: matchIds[next] } }
-    }
-    case 'pointed':
-      if (!state.list.open || state.list.activeId === action.id) return state
-      return { ...state, list: { open: true, activeId: action.id } }
-    case 'chose':
-      return { query: action.label, list: { open: false } }
-    case 'closed':
-      return state.list.open ? { ...state, list: { open: false } } : state
-  }
+// Lowercased with accents dropped, so "wojcik" finds "Wójcik".
+function normalize(text: string): string {
+  return text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
 }
 
-// The options whose label holds the query, ignoring case. A hint never
-// matches, so "16" doesn't find a 1620 rating.
-function matching(options: ComboboxOption[], query: string): ComboboxOption[] {
-  const needle = query.toLowerCase()
-  return options.filter((option) => option.label.toLowerCase().includes(needle))
-}
-
-// A text input that filters a list of options as the user types, from the
-// reference kit's Command: a `.cmd` box holding the `.cmd-input` row and a
-// `.cmd-list` of `.menu-item` options (styles/base.css). The input is a
-// combobox and the list its listbox. The active option follows the arrow keys
-// and the pointer, and Enter or a click chooses it: its label goes into the
-// input, the list closes and `onValueChange` gets the option. Escape and
-// leaving the input close the list.
-//
-// It's uncontrolled: `defaultQuery` fills the input, and `defaultOpen` opens
-// the list on its first match. `className` adds to the box's class, and the
-// other props go to the input.
-//
-// Inside a Field it's wired to the field's label, help text and every state,
-// as a text input is, since the control is one. Its list is named as the
-// input is.
-export function Combobox({
-  options,
-  defaultQuery = '',
-  defaultOpen = false,
-  onValueChange,
-  className,
-  onChange,
-  onKeyDown,
-  onBlur,
-  ...props
-}: Omit<
-  ComponentProps<'input'>,
-  'value' | 'defaultValue' | 'type' | 'role'
-> & {
-  options: ComboboxOption[]
-  defaultQuery?: string
-  defaultOpen?: boolean
-  onValueChange?: (option: ComboboxOption) => void
-}) {
-  const [state, dispatch] = useReducer(
-    reducer,
-    undefined,
-    (): ComboboxState => ({
-      query: defaultQuery,
-      list: defaultOpen
-        ? {
-            open: true,
-            activeId: matching(options, defaultQuery)[0]?.id ?? null,
-          }
-        : { open: false },
-    }),
-  )
-  const inputProps = useFieldControl(props)
-  const field = useField()
-  const listId = useId()
-  const optionId = (option: ComboboxOption) => `${listId}-${option.id}`
-
-  const matches = matching(options, state.query)
-  const matchIds = matches.map((option) => option.id)
-  const expanded =
-    state.list.open && matches.length > 0 && !inputProps.disabled
-  const activeId = expanded && state.list.open ? state.list.activeId : null
-  const active = matches.find((option) => option.id === activeId)
-
-  function choose(option: ComboboxOption) {
-    dispatch({ type: 'chose', label: option.label })
-    onValueChange?.(option)
-  }
-
-  function handleChange(event: ChangeEvent<HTMLInputElement>) {
-    const query = event.target.value
-    dispatch({
-      type: 'typed',
-      query,
-      matchIds: matching(options, query).map((option) => option.id),
-    })
-    onChange?.(event)
-  }
-
-  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    onKeyDown?.(event)
-    if (event.defaultPrevented || inputProps.disabled) return
-    const step = { ArrowDown: 1, ArrowUp: -1 }[event.key]
-    if (step !== undefined && matches.length > 0) {
-      // Natively the arrows would move the caret to the start or end.
-      event.preventDefault()
-      dispatch({ type: 'moved', step, matchIds })
-    } else if (event.key === 'Enter' && active) {
-      event.preventDefault()
-      choose(active)
-    } else if (event.key === 'Escape' && expanded) {
-      event.preventDefault()
-      dispatch({ type: 'closed' })
-    }
-  }
-
-  function handleBlur(event: FocusEvent<HTMLInputElement>) {
-    dispatch({ type: 'closed' })
-    onBlur?.(event)
-  }
-
-  const ownName = props['aria-label'] || props['aria-labelledby']
+// `name` with the first match of `query` in bold.
+function highlight(name: string, query: string): ReactNode {
+  const at = query ? normalize(name).indexOf(query) : -1
+  if (at < 0) return name
   return (
-    <div className={className ? `cmd ${className}` : 'cmd'}>
-      <div className="cmd-input">
-        <svg
-          aria-hidden="true"
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-        >
-          <circle cx="11" cy="11" r="7" />
-          <path d="M21 21l-4-4" />
-        </svg>
-        <input
-          role="combobox"
-          aria-expanded={expanded}
-          aria-controls={listId}
-          aria-autocomplete="list"
-          aria-activedescendant={active ? optionId(active) : undefined}
-          autoComplete="off"
-          {...inputProps}
-          value={state.query}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          onBlur={handleBlur}
-        />
-      </div>
-      <div
-        className="cmd-list"
-        role="listbox"
+    <>
+      {name.slice(0, at)}
+      <mark>{name.slice(at, at + query.length)}</mark>
+      {name.slice(at + query.length)}
+    </>
+  )
+}
+
+// A searchable player picker, styled by `.fm-combo` in styles/kit.css, as
+// kit.js's combobox draws it: an ARIA 1.2 combobox with a list that filters
+// as you type. It matches the name or the club, ignoring accents. ↓ and ↑
+// move, Enter picks, Esc closes the list and a second Esc clears the field.
+// `id` is the field's, for its <label>, and `label` names the list.
+export function Combobox({
+  id,
+  label,
+  options,
+  placeholder,
+  'aria-describedby': describedBy,
+  onChange,
+  ref,
+  ...props
+}: Omit<ComponentProps<'div'>, 'onChange' | 'ref'> & {
+  id: string
+  label: string
+  options: readonly ComboboxOption[]
+  placeholder?: string
+  onChange?: (option: ComboboxOption) => void
+  ref?: Ref<ComboboxHandle>
+}) {
+  const input = useRef<HTMLInputElement>(null)
+  const list = useRef<HTMLUListElement>(null)
+  const announce = useAnnounce()
+  const [text, setText] = useState('')
+  const [open, setOpen] = useState(false)
+  const [active, setActive] = useState(-1)
+  const [chosen, setChosen] = useState<ComboboxOption | null>(null)
+
+  const listId = `${id}-list`
+  const optionId = (index: number) => `${id}-o${index}`
+  const query = normalize(text.trim())
+  const found = options.filter(
+    (option) =>
+      !query || normalize(option.name).includes(query) || normalize(option.club ?? '').includes(query),
+  )
+
+  function type(value: string) {
+    setText(value)
+    setChosen(null)
+    setActive(value.trim() ? 0 : -1)
+    setOpen(true)
+  }
+
+  useImperativeHandle(ref, () => ({
+    search: (value) => {
+      input.current?.focus()
+      type(value)
+    },
+  }))
+
+  function close() {
+    setOpen(false)
+    setActive(-1)
+  }
+
+  function pick(index: number) {
+    const option = found[index]
+    if (!option) return
+    setChosen(option)
+    setText(option.name)
+    close()
+    onChange?.(option)
+  }
+
+  // Keeps the active option in view.
+  useLayoutEffect(() => {
+    const scroller = list.current
+    const option = open && active >= 0 ? document.getElementById(optionId(active)) : null
+    if (!scroller || !option) return
+    const top = option.offsetTop
+    const bottom = top + option.offsetHeight
+    if (top < scroller.scrollTop) scroller.scrollTop = top
+    else if (bottom > scroller.scrollTop + scroller.clientHeight) {
+      scroller.scrollTop = bottom - scroller.clientHeight
+    }
+  })
+
+  const count = found.length
+  useEffect(() => {
+    if (!open) return
+    const timer = setTimeout(
+      () =>
+        announce(count ? `${count} player${count > 1 ? 's' : ''} found` : 'No players found'),
+      ANNOUNCE_DELAY_MS,
+    )
+    return () => clearTimeout(timer)
+  }, [open, text, active, count, announce])
+
+  function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      if (!open) {
+        setOpen(true)
+        setActive(0)
+      } else if (count) setActive((active + 1) % count)
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      if (!open) {
+        setOpen(true)
+        setActive(count - 1)
+      } else if (count) setActive((active - 1 + count) % count)
+    } else if (event.key === 'Enter') {
+      if (open && active >= 0) {
+        event.preventDefault()
+        pick(active)
+      }
+    } else if (event.key === 'Escape') {
+      if (open) {
+        event.preventDefault()
+        close()
+      } else if (text) {
+        setText('')
+        setChosen(null)
+      }
+    } else if (event.key === 'Tab') {
+      close()
+    }
+  }
+
+  const optionIndex = (event: MouseEvent<HTMLElement>) => {
+    const option = (event.target as HTMLElement).closest<HTMLElement>('[role=option]')
+    return option ? Number(option.id.slice(`${id}-o`.length)) : -1
+  }
+
+  return (
+    <div className="fm-combo" {...props}>
+      <Icon name="search" />
+      <input
+        ref={input}
+        id={id}
+        className="fm-input"
+        placeholder={placeholder}
+        aria-describedby={describedBy}
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={open}
+        aria-controls={listId}
+        aria-activedescendant={open && active >= 0 ? optionId(active) : undefined}
+        autoComplete="off"
+        value={text}
+        onChange={(event) => type(event.target.value)}
+        onClick={() => {
+          if (!open) setOpen(true)
+        }}
+        onKeyDown={onKeyDown}
+        onBlur={() => setTimeout(close, 0)}
+      />
+      <ul
+        ref={list}
+        className="fm-overlay fm-combo__list"
         id={listId}
-        hidden={!expanded}
-        aria-label={ownName ? props['aria-label'] : undefined}
-        aria-labelledby={
-          ownName ? props['aria-labelledby'] : field?.labelId
-        }
+        role="listbox"
+        aria-label={label}
+        hidden={!open}
+        // Keeps focus in the field.
+        onPointerDown={(event) => event.preventDefault()}
+        onClick={(event) => pick(optionIndex(event))}
+        onPointerMove={(event) => {
+          const index = optionIndex(event)
+          if (index >= 0 && index !== active) setActive(index)
+        }}
       >
-        {matches.map((option) => (
-          <div
-            key={option.id}
-            className="menu-item"
-            role="option"
-            id={optionId(option)}
-            aria-selected={option === active}
-            // Keeps the focus in the input, so choosing doesn't close the
-            // list first.
-            onMouseDown={(event) => event.preventDefault()}
-            onPointerMove={() => dispatch({ type: 'pointed', id: option.id })}
-            onClick={() => choose(option)}
-          >
-            {option.label}
-            {option.hint !== undefined && (
-              <>
-                {' '}
-                <span className="menu-item-hint">{option.hint}</span>
-              </>
-            )}
-          </div>
-        ))}
-      </div>
+        {count ? (
+          found.map((option, index) => (
+            <li
+              key={`${option.name} ${option.club}`}
+              className="fm-combo__opt"
+              role="option"
+              id={optionId(index)}
+              aria-selected={index === active}
+            >
+              <span className="ck">
+                {chosen === option && <Icon name="check" className="fm-ic--sm" />}
+              </span>
+              <b>{highlight(option.name, query)}</b>
+              {option.club && <small>{option.club}</small>}
+              {option.rating && (
+                <span className="r" aria-label={`rating ${option.rating}`}>
+                  {option.rating}
+                </span>
+              )}
+            </li>
+          ))
+        ) : (
+          <li className="fm-combo__empty" role="presentation">
+            No players match “{text.trim()}”. Check the spelling or search by club.
+          </li>
+        )}
+      </ul>
     </div>
   )
 }
