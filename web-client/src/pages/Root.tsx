@@ -5,7 +5,7 @@ export function Root() {
   return (
     <div className="page">
       {/* Temporary navigation between the pages while the app is built out. */}
-      <nav className="toc" aria-label="Pages">
+      <nav className="page-links" aria-label="Pages">
         <Link to="/">Home</Link>
         <Link to="/design-system">Design System</Link>
       </nav>

@@ -1,25 +1,16 @@
-import { PageHeader } from '../components/PageHeader'
-import { PageIntro } from '../components/PageIntro'
-import { DataDisplaySection } from './designSystem/DataDisplaySection'
-import { FeedbackSection } from './designSystem/FeedbackSection'
-import { FormsSection } from './designSystem/FormsSection'
-import { NavigationSection } from './designSystem/NavigationSection'
-import { OverlaysSection } from './designSystem/OverlaysSection'
-
+// The app's copy of the design system's component gallery
+// (references/design-system/ui_kits/components/index.html), built from the
+// app's own components and styled by styles/page.css and styles/kit.css.
 export function DesignSystem() {
   return (
-    <>
-      <PageHeader title="Design System" subtitle="FortyMM · tokens · components" />
-      <PageIntro>
-        Every FortyMM component, styled with the design system's tokens. Use
-        this page as your visual reference: if a component looks different
-        here, it looks different in the app.
-      </PageIntro>
-      <FormsSection />
-      <DataDisplaySection />
-      <NavigationSection />
-      <OverlaysSection />
-      <FeedbackSection />
-    </>
+    <header className="doc-head">
+      <h1>Design System</h1>
+      <p>
+        Equipment for running a tournament day. Each component has its own
+        shape for its job: cards hold what stays, notices sit in the text,
+        alerts carry a fix, toasts float briefly, tooltips add detail. Orange
+        marks actions and selection only.
+      </p>
+    </header>
   )
 }
