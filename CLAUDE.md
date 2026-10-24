@@ -479,8 +479,8 @@ main config ignores it; `web-client/playwright.deployed.config.ts` runs it,
 with `baseURL` from `PLAYWRIGHT_BASE_URL` (it fails fast without one) and no
 screenshot tests. Its `ready` project retries `/api/v1/health` for up to a
 minute (Cloud Run cold starts, Preview propagation) before the other specs
-run. Against production (`fortymm.com`, `www.fortymm.com` or
-`fortymm.mightymoose.workers.dev`), the config runs only the `ready` project.
+run. Against production (`fortymm.com` or `www.fortymm.com`), the config runs
+only the `ready` project.
 The app's pages will make a guest account on load, and production keeps every
 account. So a production run checks only `/api/v1/health`.
 
@@ -640,12 +640,16 @@ container, so the tasks write the file there. If `WORKER_SECRET` is empty,
 they warn that the API will answer the Worker with a 403.
 
 Production is served on `fortymm.com` and `www.fortymm.com` (Custom Domains
-in `routes`, whose DNS records and certificates Cloudflare manages) and on
-`fortymm.mightymoose.workers.dev`. Each host has its own cookie jar. So the
-Worker answers requests on `www.fortymm.com` and
-`fortymm.mightymoose.workers.dev` with a 301 to the same path and query on
-`fortymm.com`, and a browser keeps one cookie jar. This includes `/api/*`
-paths. The Worker names the two hosts exactly, so Previews get no redirect.
+in `routes`, whose DNS records and certificates Cloudflare manages). Each host
+has its own cookie jar. So the Worker answers requests on `www.fortymm.com`
+with a 301 to the same path and query on `fortymm.com`, and a browser keeps one
+cookie jar. This includes `/api/*` paths.
+
+The Worker's own workers.dev URL, `fortymm.mightymoose.workers.dev`, is off.
+Cloudflare answers it with a 404 (error 1042) and never runs the Worker. The
+Worker still lists it with `www.fortymm.com`, so the URL redirects to
+`fortymm.com` if someone turns it on. The Worker names both hosts exactly,
+so Previews get no redirect.
 
 Previews (`wrangler preview`, open beta) are served on
 `<preview-name>-fortymm.mightymoose.workers.dev` because `preview_urls` is on in

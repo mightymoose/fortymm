@@ -13,11 +13,7 @@ if (!baseURL) {
 
 // The app's pages will make a guest account on load, and production keeps
 // every account. So production gets only the health check.
-const PRODUCTION_HOSTS = [
-  'fortymm.com',
-  'www.fortymm.com',
-  'fortymm.mightymoose.workers.dev',
-]
+const PRODUCTION_HOSTS = ['fortymm.com', 'www.fortymm.com']
 const production = PRODUCTION_HOSTS.includes(new URL(baseURL).hostname)
 
 export default defineConfig({
