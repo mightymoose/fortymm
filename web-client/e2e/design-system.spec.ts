@@ -1,6 +1,44 @@
 import type { Locator } from '@playwright/test'
 import { expect, test } from './fixtures.ts'
 
+// The card's today is the 14th, as the reference draws it, so the app's
+// tests fix the page's clock there. The reference has no clock to fix.
+const april14 = new Date(2026, 3, 14, 12)
+
+// Checks `target` against the screenshot `name` in a step of its own. The
+// check is soft, so a mismatch fails the journey but the journey still takes
+// its later screenshots.
+async function screenshotStep(
+  title: string,
+  target: Locator,
+  name: string,
+  options?: { animations?: 'disabled'; maxDiffPixels?: number },
+): Promise<void> {
+  await test.step(title, async () => {
+    await expect.soft(target).toHaveScreenshot(name, options)
+  })
+}
+
+// Focuses the text control `control` and checks it and its focus ring
+// against the screenshot `name`, as screenshotStep() does.
+async function focusedScreenshotStep(
+  title: string,
+  control: Locator,
+  name: string,
+): Promise<void> {
+  await test.step(title, async () => {
+    // From the top of the page, as on a fresh load, so the focus scrolls the
+    // control fully into view. Earlier steps can leave it half off screen,
+    // which would cut the clip short.
+    await control
+      .page()
+      .locator('html')
+      .evaluate((html) => (html.scrollTop = 0))
+    const clip = await focusWithRing(control)
+    await expect.soft(control.page()).toHaveScreenshot(name, { clip })
+  })
+}
+
 test('shows the Design System title', async ({ designSystemPage }) => {
   await designSystemPage.goto()
 
@@ -71,121 +109,139 @@ test.describe('intro', () => {
   })
 })
 
-test.describe('Forms & Input section', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.forms.heading).toHaveScreenshot(
-      'forms-heading.png',
-    )
-    await expect(designSystemPage.forms.lead).toHaveScreenshot(
-      'forms-lead.png',
-    )
+// The journey takes every screenshot first, with nothing hovered, focused or
+// clicked, so each card shows its resting styles with no focus ring. Then it
+// focuses the text inputs one by one. The kit's half checks its copy of each
+// card against the same screenshot.
+test('the Forms & Input section matches its screenshots and the kit', async ({
+  designSystemPage,
+  referenceKitPage,
+  page,
+}) => {
+  // The Date Picker opens on the reference's April 2026, with the 12th
+  // chosen. Today comes from the clock.
+  await page.clock.setFixedTime(april14)
+  await designSystemPage.goto()
+  const forms = designSystemPage.forms
+  await screenshotStep('heading', forms.heading, 'forms-heading.png')
+  await screenshotStep('lead', forms.lead, 'forms-lead.png')
+  await screenshotStep('Button card', forms.buttonCard, 'button-card.png')
+  await screenshotStep('Input card', forms.inputCard, 'input-card.png')
+  await screenshotStep('Textarea card', forms.textareaCard, 'textarea-card.png')
+  // The fourth cell is shown active by the demo's `activeIndex` until the
+  // input is focused, as the kit's is by its static `.on` cell.
+  await screenshotStep('Input OTP card', forms.otpCard, 'otp-card.png')
+  await screenshotStep('Checkbox card', forms.checkboxCard, 'checkbox-card.png')
+  await screenshotStep('Radio Group card', forms.radioCard, 'radio-card.png')
+  await screenshotStep('Switch card', forms.switchCard, 'switch-card.png')
+  await screenshotStep('Slider card', forms.sliderCard, 'slider-card.png')
+  // The chevron's 45° hard edges sit half a pixel off the grid, so Chromium
+  // rounds a few edge pixels differently on the app's page than on the kit's,
+  // with the same styles and rects: 4 to 12 of them, depending on where the
+  // card sits. The smallest real change, the chevron moved 1px, is 19.
+  await screenshotStep('Select card', forms.selectCard, 'select-card.png', {
+    maxDiffPixels: 15,
   })
+  // The combobox opens on the reference's query, with its first match
+  // active.
+  await screenshotStep('Combobox card', forms.comboboxCard, 'combobox-card.png')
+  await screenshotStep(
+    'Date Picker card',
+    forms.datePickerCard,
+    'date-picker-card.png',
+  )
+  // Bold and Singles show pressed.
+  await screenshotStep('Toggle card', forms.toggleCard, 'toggle-card.png')
+  // Player tag shows the focus style. Email shows it on an invalid input,
+  // where the error border stays and the focus ring is added. Match notes
+  // shows the textarea's. The caret is hidden.
+  await focusedScreenshotStep(
+    'focused Player tag input',
+    forms.input('Player tag'),
+    'player-tag-focused.png',
+  )
+  await focusedScreenshotStep(
+    'focused Email input',
+    forms.input('Email'),
+    'email-focused.png',
+  )
+  await focusedScreenshotStep(
+    'focused Match notes textarea',
+    forms.textarea,
+    'match-notes-focused.png',
+  )
 
-  test('matches the reference kit section', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.forms.heading).toHaveScreenshot(
-      'forms-heading.png',
-    )
-    await expect(referenceKitPage.forms.lead).toHaveScreenshot(
-      'forms-lead.png',
-    )
-  })
-})
-
-// Nothing is hovered or focused first, so these show the buttons' resting
-// styles.
-test.describe('Button card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.forms.buttonCard).toHaveScreenshot(
-      'button-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.forms.buttonCard).toHaveScreenshot(
-      'button-card.png',
-    )
-  })
-})
-
-// Nothing is focused or typed into first, so these show the inputs' resting
-// styles, with no focus ring or caret.
-test.describe('Input · Label · Form Field card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.forms.inputCard).toHaveScreenshot('input-card.png')
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.forms.inputCard).toHaveScreenshot('input-card.png')
-  })
-})
-
-// Nothing is focused or typed into first, so these show the textarea's
-// resting style, with no focus ring or caret.
-test.describe('Textarea card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.forms.textareaCard).toHaveScreenshot(
-      'textarea-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.forms.textareaCard).toHaveScreenshot(
-      'textarea-card.png',
-    )
-  })
-})
-
-// Nothing is focused or typed into first. The app's fourth cell is shown
-// active by the demo's `activeIndex` until the input is focused, as the
-// kit's is by its static `.on` cell.
-test.describe('Input OTP card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.forms.otpCard).toHaveScreenshot('otp-card.png')
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.forms.otpCard).toHaveScreenshot('otp-card.png')
-  })
-})
-
-// Nothing is hovered, focused or clicked first, so these show the boxes'
-// resting styles, with no focus ring.
-test.describe('Checkbox card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.forms.checkboxCard).toHaveScreenshot(
-      'checkbox-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.forms.checkboxCard).toHaveScreenshot(
-      'checkbox-card.png',
-    )
-  })
+  await referenceKitPage.goto()
+  const kit = referenceKitPage.forms
+  await screenshotStep("the kit's heading", kit.heading, 'forms-heading.png')
+  await screenshotStep("the kit's lead", kit.lead, 'forms-lead.png')
+  await screenshotStep(
+    "the kit's Button card",
+    kit.buttonCard,
+    'button-card.png',
+  )
+  await screenshotStep("the kit's Input card", kit.inputCard, 'input-card.png')
+  await screenshotStep(
+    "the kit's Textarea card",
+    kit.textareaCard,
+    'textarea-card.png',
+  )
+  await screenshotStep("the kit's Input OTP card", kit.otpCard, 'otp-card.png')
+  await screenshotStep(
+    "the kit's Checkbox card",
+    kit.checkboxCard,
+    'checkbox-card.png',
+  )
+  await screenshotStep(
+    "the kit's Radio Group card",
+    kit.radioCard,
+    'radio-card.png',
+  )
+  await screenshotStep(
+    "the kit's Switch card",
+    kit.switchCard,
+    'switch-card.png',
+  )
+  await screenshotStep(
+    "the kit's Slider card",
+    kit.sliderCard,
+    'slider-card.png',
+  )
+  await screenshotStep(
+    "the kit's Select card",
+    kit.selectCard,
+    'select-card.png',
+  )
+  await screenshotStep(
+    "the kit's Combobox card",
+    kit.comboboxCard,
+    'combobox-card.png',
+  )
+  await screenshotStep(
+    "the kit's Date Picker card",
+    kit.datePickerCard,
+    'date-picker-card.png',
+  )
+  await screenshotStep(
+    "the kit's Toggle card",
+    kit.toggleCard,
+    'toggle-card.png',
+  )
+  await focusedScreenshotStep(
+    "the kit's focused Player tag input",
+    kit.input('Player tag'),
+    'player-tag-focused.png',
+  )
+  await focusedScreenshotStep(
+    "the kit's focused Email input",
+    kit.input('Email'),
+    'email-focused.png',
+  )
+  await focusedScreenshotStep(
+    "the kit's focused Match notes textarea",
+    kit.textarea,
+    'match-notes-focused.png',
+  )
 })
 
 // The kit's checkboxes are static, with no focus style, so the tests below
@@ -193,12 +249,16 @@ test.describe('Checkbox card', () => {
 test.describe('Checkbox', () => {
   test('clicking a label toggles its box', async ({ designSystemPage }) => {
     await designSystemPage.goto()
-    const agree = designSystemPage.forms.checkbox('I agree to the rules of fair play')
+    const agree = designSystemPage.forms.checkbox(
+      'I agree to the rules of fair play',
+    )
     const invites = designSystemPage.forms.checkbox('Email me match invites')
     await expect(agree).toBeChecked()
     await expect(invites).not.toBeChecked()
 
-    await designSystemPage.forms.clickCheckboxLabel('I agree to the rules of fair play')
+    await designSystemPage.forms.clickCheckboxLabel(
+      'I agree to the rules of fair play',
+    )
     await designSystemPage.forms.clickCheckboxLabel('Email me match invites')
 
     await expect(agree).not.toBeChecked()
@@ -224,7 +284,9 @@ test.describe('Checkbox', () => {
     await designSystemPage.goto()
     const invites = designSystemPage.forms.checkbox('Email me match invites')
     const box = designSystemPage.forms.checkboxBox('Email me match invites')
-    await designSystemPage.forms.checkbox('I agree to the rules of fair play').focus()
+    await designSystemPage.forms
+      .checkbox('I agree to the rules of fair play')
+      .focus()
 
     await page.keyboard.press('Tab')
 
@@ -249,26 +311,6 @@ test.describe('Checkbox', () => {
 
     await expect(invites).toBeFocused()
     await expect(box).toHaveCSS('box-shadow', 'none')
-  })
-})
-
-// Nothing is hovered, focused or clicked first, so these show the dots'
-// resting styles, with no focus ring.
-test.describe('Radio Group card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.forms.radioCard).toHaveScreenshot(
-      'radio-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.forms.radioCard).toHaveScreenshot(
-      'radio-card.png',
-    )
   })
 })
 
@@ -307,14 +349,15 @@ test.describe('Radio Group', () => {
       'box-shadow',
       'color(srgb 1 0.478431 0.101961 / 0.15) 0px 0px 0px 3px',
     )
-    await expect(designSystemPage.forms.radioDot('Singles · best of 7')).toHaveCSS(
-      'box-shadow',
-      'none',
-    )
+    await expect(
+      designSystemPage.forms.radioDot('Singles · best of 7'),
+    ).toHaveCSS('box-shadow', 'none')
 
     // The next Tab leaves the group rather than going to its next option.
     await page.keyboard.press('Tab')
-    await expect(designSystemPage.forms.radioGroup.locator(':focus')).toHaveCount(0)
+    await expect(
+      designSystemPage.forms.radioGroup.locator(':focus'),
+    ).toHaveCount(0)
   })
 
   test('the arrow keys move the selection and the focus', async ({
@@ -331,7 +374,9 @@ test.describe('Radio Group', () => {
     await expect(best7).toBeChecked()
     await expect(best7).toBeFocused()
     await expect(best5).not.toBeChecked()
-    await expect(designSystemPage.forms.radioDot('Singles · best of 7')).toHaveCSS(
+    await expect(
+      designSystemPage.forms.radioDot('Singles · best of 7'),
+    ).toHaveCSS(
       'box-shadow',
       'color(srgb 1 0.478431 0.101961 / 0.15) 0px 0px 0px 3px',
     )
@@ -354,30 +399,9 @@ test.describe('Radio Group', () => {
     await designSystemPage.forms.clickRadioLabel('Singles · best of 7')
 
     await expect(best7).toBeFocused()
-    await expect(designSystemPage.forms.radioDot('Singles · best of 7')).toHaveCSS(
-      'box-shadow',
-      'none',
-    )
-  })
-})
-
-// Nothing is hovered, focused or clicked first, so these show the tracks'
-// resting styles, with no focus ring.
-test.describe('Switch card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.forms.switchCard).toHaveScreenshot(
-      'switch-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.forms.switchCard).toHaveScreenshot(
-      'switch-card.png',
-    )
+    await expect(
+      designSystemPage.forms.radioDot('Singles · best of 7'),
+    ).toHaveCSS('box-shadow', 'none')
   })
 })
 
@@ -412,7 +436,9 @@ test.describe('Switch', () => {
     await expect(profile).not.toBeChecked()
     await expect(nearby).toBeChecked()
     await expect
-      .poll(thumbTransform(designSystemPage.forms.switchTrack('Public profile')))
+      .poll(
+        thumbTransform(designSystemPage.forms.switchTrack('Public profile')),
+      )
       .toBe('none')
     await expect
       .poll(
@@ -431,7 +457,9 @@ test.describe('Switch', () => {
   }) => {
     await designSystemPage.goto()
     const nearby = designSystemPage.forms.switch('Notify me of nearby matches')
-    const track = designSystemPage.forms.switchTrack('Notify me of nearby matches')
+    const track = designSystemPage.forms.switchTrack(
+      'Notify me of nearby matches',
+    )
     await designSystemPage.forms.switch('Public profile').focus()
 
     await page.keyboard.press('Tab')
@@ -474,10 +502,9 @@ test.describe('Switch', () => {
     await designSystemPage.forms.clickSwitchLabel('Public profile')
 
     await expect(profile).toBeChecked()
-    await expect(designSystemPage.forms.switchLabel('Public profile')).toHaveCSS(
-      'opacity',
-      '0.5',
-    )
+    await expect(
+      designSystemPage.forms.switchLabel('Public profile'),
+    ).toHaveCSS('opacity', '0.5')
   })
 
   test.describe('with reduced motion', () => {
@@ -487,33 +514,17 @@ test.describe('Switch', () => {
       designSystemPage,
     }) => {
       await designSystemPage.goto()
-      const track = designSystemPage.forms.switchTrack('Notify me of nearby matches')
+      const track = designSystemPage.forms.switchTrack(
+        'Notify me of nearby matches',
+      )
 
-      await designSystemPage.forms.clickSwitchLabel('Notify me of nearby matches')
+      await designSystemPage.forms.clickSwitchLabel(
+        'Notify me of nearby matches',
+      )
 
       expect(await thumbTransform(track)()).toBe(thumbOn)
       await expect(track).toHaveCSS('transition-duration', '0s')
     })
-  })
-})
-
-// Nothing is hovered, focused or dragged first, so these show the thumbs'
-// resting styles, with no focus ring.
-test.describe('Slider card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.forms.sliderCard).toHaveScreenshot(
-      'slider-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.forms.sliderCard).toHaveScreenshot(
-      'slider-card.png',
-    )
   })
 })
 
@@ -530,7 +541,9 @@ test.describe('Slider', () => {
 
     await designSystemPage.forms.dragSlider('Skill level', 0.75)
 
-    await expect(designSystemPage.forms.slider('Skill level')).toHaveValue('1820')
+    await expect(designSystemPage.forms.slider('Skill level')).toHaveValue(
+      '1820',
+    )
     await expect(designSystemPage.forms.sliderValue('Skill level')).toHaveText(
       '1820',
     )
@@ -582,7 +595,9 @@ test.describe('Slider', () => {
 
     await page.keyboard.press('Tab')
 
-    await expect(designSystemPage.forms.slider('Rating range minimum')).toBeFocused()
+    await expect(
+      designSystemPage.forms.slider('Rating range minimum'),
+    ).toBeFocused()
     await expect(low).toHaveCSS('box-shadow', ring)
     await expect(low).toHaveCSS('border-color', 'rgb(255, 122, 26)')
     await expect(high).toHaveCSS('box-shadow', resting)
@@ -602,7 +617,9 @@ test.describe('Slider', () => {
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2)
 
     await expect(designSystemPage.forms.slider('Skill level')).toBeFocused()
-    await expect(designSystemPage.forms.slider('Skill level')).toHaveValue('1620')
+    await expect(designSystemPage.forms.slider('Skill level')).toHaveValue(
+      '1620',
+    )
     await expect(thumb).toHaveCSS('box-shadow', resting)
   })
 
@@ -683,31 +700,6 @@ test.describe('Slider', () => {
         designSystemPage.forms.sliderThumb('Skill level'),
       ).toHaveCSS('transition-duration', '0s')
     })
-  })
-})
-
-// Nothing is hovered, focused or opened first, so these show the selects'
-// resting styles, with no focus ring.
-test.describe('Select card', () => {
-  // The chevron's 45° hard edges sit half a pixel off the grid, so Chromium
-  // rounds a few edge pixels differently on the app's page than on the kit's,
-  // with the same styles and rects: 4 to 12 of them, depending on where the
-  // card sits. The smallest real change, the chevron moved 1px, is 19.
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.forms.selectCard).toHaveScreenshot(
-      'select-card.png',
-      { maxDiffPixels: 15 },
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.forms.selectCard).toHaveScreenshot(
-      'select-card.png',
-    )
   })
 })
 
@@ -839,26 +831,6 @@ test.describe('Select', () => {
   })
 })
 
-// The card opens on the reference's query, with its first match active, but
-// nothing is hovered or focused, so there's no focus ring.
-test.describe('Combobox card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.forms.comboboxCard).toHaveScreenshot(
-      'combobox-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.forms.comboboxCard).toHaveScreenshot(
-      'combobox-card.png',
-    )
-  })
-})
-
 // The kit's combobox is static, with no focus style, so the tests below are
 // the app's alone.
 test.describe('Combobox', () => {
@@ -923,12 +895,18 @@ test.describe('Combobox', () => {
     await page.keyboard.press('Tab')
 
     await expect(designSystemPage.forms.combobox).toBeFocused()
-    await expect(designSystemPage.forms.comboboxBox).toHaveCSS('box-shadow', ring)
+    await expect(designSystemPage.forms.comboboxBox).toHaveCSS(
+      'box-shadow',
+      ring,
+    )
     await expect(designSystemPage.forms.comboboxBox).toHaveCSS(
       'border-color',
       'rgb(255, 122, 26)',
     )
-    await expect(designSystemPage.forms.combobox).toHaveCSS('outline-style', 'none')
+    await expect(designSystemPage.forms.combobox).toHaveCSS(
+      'outline-style',
+      'none',
+    )
   })
 
   // The screenshot can't see the highlight: --bg-hover is white at 4%,
@@ -980,7 +958,10 @@ test.describe('Combobox', () => {
     await designSystemPage.forms.combobox.click()
 
     await expect(designSystemPage.forms.combobox).toBeFocused()
-    await expect(designSystemPage.forms.comboboxBox).toHaveCSS('box-shadow', ring)
+    await expect(designSystemPage.forms.comboboxBox).toHaveCSS(
+      'box-shadow',
+      ring,
+    )
   })
 
   // The demo's combobox isn't disabled, so this test disables it in place.
@@ -1037,7 +1018,10 @@ test.describe('Combobox', () => {
       input.setAttribute('aria-invalid', 'true'),
     )
 
-    await expect(designSystemPage.forms.comboboxBox).toHaveCSS('box-shadow', ring)
+    await expect(designSystemPage.forms.comboboxBox).toHaveCSS(
+      'box-shadow',
+      ring,
+    )
     await expect(designSystemPage.forms.comboboxBox).toHaveCSS(
       'border-color',
       'rgb(255, 77, 109)',
@@ -1070,31 +1054,6 @@ test.describe('Combobox', () => {
   })
 })
 
-// The card's today is the 14th, as the reference draws it, so the app's
-// tests fix the page's clock there. The reference has no clock to fix.
-const april14 = new Date(2026, 3, 14, 12)
-
-// The card opens on the reference's April 2026, with the 12th chosen, but
-// nothing is hovered or focused, so there's no focus ring.
-test.describe('Date Picker card', () => {
-  test('matches the screenshot', async ({ designSystemPage, page }) => {
-    await page.clock.setFixedTime(april14)
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.forms.datePickerCard).toHaveScreenshot(
-      'date-picker-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.forms.datePickerCard).toHaveScreenshot(
-      'date-picker-card.png',
-    )
-  })
-})
-
 // The kit's calendar is static, with no focus or hover style, so the tests
 // below are the app's alone.
 test.describe('Date Picker', () => {
@@ -1119,7 +1078,9 @@ test.describe('Date Picker', () => {
 
     await trigger.click()
     await expect(designSystemPage.forms.datePickerDialog).toBeVisible()
-    await expect(designSystemPage.forms.datePickerDay('April 12, 2026')).toBeFocused()
+    await expect(
+      designSystemPage.forms.datePickerDay('April 12, 2026'),
+    ).toBeFocused()
   })
 
   test('the arrow and Page keys move the focused day and change the month', async ({
@@ -1130,20 +1091,30 @@ test.describe('Date Picker', () => {
     await designSystemPage.forms.datePickerDay('April 12, 2026').focus()
 
     await page.keyboard.press('ArrowRight')
-    await expect(designSystemPage.forms.datePickerDay('April 13, 2026')).toBeFocused()
+    await expect(
+      designSystemPage.forms.datePickerDay('April 13, 2026'),
+    ).toBeFocused()
     await page.keyboard.press('ArrowDown')
-    await expect(designSystemPage.forms.datePickerDay('April 20, 2026')).toBeFocused()
+    await expect(
+      designSystemPage.forms.datePickerDay('April 20, 2026'),
+    ).toBeFocused()
     await page.keyboard.press('End')
-    await expect(designSystemPage.forms.datePickerDay('April 25, 2026')).toBeFocused()
+    await expect(
+      designSystemPage.forms.datePickerDay('April 25, 2026'),
+    ).toBeFocused()
 
     await page.keyboard.press('PageDown')
     await expect(grid).toHaveAccessibleName('May 2026')
-    await expect(designSystemPage.forms.datePickerDay('May 25, 2026')).toBeFocused()
+    await expect(
+      designSystemPage.forms.datePickerDay('May 25, 2026'),
+    ).toBeFocused()
 
     await page.keyboard.press('PageUp')
     await page.keyboard.press('PageUp')
     await expect(grid).toHaveAccessibleName('March 2026')
-    await expect(designSystemPage.forms.datePickerDay('March 25, 2026')).toBeFocused()
+    await expect(
+      designSystemPage.forms.datePickerDay('March 25, 2026'),
+    ).toBeFocused()
 
     await page.keyboard.press('ArrowUp')
     await page.keyboard.press('ArrowUp')
@@ -1221,10 +1192,9 @@ test.describe('Date Picker', () => {
     await expect(chosen).toHaveCSS('outline-style', 'none')
 
     await page.keyboard.press('ArrowRight')
-    await expect(designSystemPage.forms.datePickerDay('April 13, 2026')).toHaveCSS(
-      'box-shadow',
-      ring,
-    )
+    await expect(
+      designSystemPage.forms.datePickerDay('April 13, 2026'),
+    ).toHaveCSS('box-shadow', ring)
     await expect(chosen).toHaveCSS('box-shadow', 'none')
   })
 
@@ -1379,8 +1349,12 @@ test.describe('Date Picker', () => {
 
     const dialog = designSystemPage.forms.datePickerDialog
     await expect(dialog).toHaveCSS('position', 'absolute')
-    await expect(dialog).toHaveCSS('box-shadow', 'rgba(0, 0, 0, 0.55) 0px 12px 32px 0px')
-    const trigger = (await designSystemPage.forms.datePickerTrigger.boundingBox())!
+    await expect(dialog).toHaveCSS(
+      'box-shadow',
+      'rgba(0, 0, 0, 0.55) 0px 12px 32px 0px',
+    )
+    const trigger =
+      (await designSystemPage.forms.datePickerTrigger.boundingBox())!
     const calendar = (await dialog.boundingBox())!
     const floating = (await card.boundingBox())!
     expect(calendar.x).toBe(trigger.x)
@@ -1408,26 +1382,6 @@ test.describe('Date Picker', () => {
         designSystemPage.forms.datePickerDay('April 15, 2026'),
       ).toHaveCSS('transition-duration', '0s')
     })
-  })
-})
-
-// Nothing is hovered or focused, so the card shows Bold and Singles pressed,
-// with no focus ring.
-test.describe('Toggle · Toggle Group card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.forms.toggleCard).toHaveScreenshot(
-      'toggle-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.forms.toggleCard).toHaveScreenshot(
-      'toggle-card.png',
-    )
   })
 })
 
@@ -1686,66 +1640,75 @@ test.describe('Toggle', () => {
   })
 })
 
-test.describe('Data Display section', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.display.heading).toHaveScreenshot(
-      'display-heading.png',
-    )
-    await expect(designSystemPage.display.lead).toHaveScreenshot(
-      'display-lead.png',
-    )
-  })
-
-  test('matches the reference kit section', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.display.heading).toHaveScreenshot(
-      'display-heading.png',
-    )
-    await expect(referenceKitPage.display.lead).toHaveScreenshot(
-      'display-lead.png',
-    )
-  })
-})
-
 // Nothing is hovered or focused, so the buttons show their resting styles.
-test.describe('Card card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.display.cardCard).toHaveScreenshot('card-card.png')
+// The badge, skeleton and kit screenshots stop the live dot's pulse and the
+// shimmer at their first frame, so they match whenever they're taken.
+test('the Data Display section matches its screenshots and the kit', async ({
+  designSystemPage,
+  referenceKitPage,
+}) => {
+  await designSystemPage.goto()
+  const display = designSystemPage.display
+  await screenshotStep('heading', display.heading, 'display-heading.png')
+  await screenshotStep('lead', display.lead, 'display-lead.png')
+  await screenshotStep('Card card', display.cardCard, 'card-card.png')
+  await screenshotStep('Badge card', display.badgeCard, 'badge-card.png', {
+    animations: 'disabled',
   })
+  await screenshotStep('Avatar card', display.avatarCard, 'avatar-card.png')
+  await screenshotStep('Table card', display.tableCard, 'table-card.png')
+  await screenshotStep(
+    'Progress card',
+    display.progressCard,
+    'progress-card.png',
+  )
+  await screenshotStep(
+    'Skeleton card',
+    display.skeletonCard,
+    'skeleton-card.png',
+    { animations: 'disabled' },
+  )
+  // The kit's card overflows, so the app's screenshot is its own, not the
+  // kit's (see the Aspect Ratio card's tests).
+  await screenshotStep(
+    'Aspect Ratio card',
+    display.aspectRatioCard,
+    'aspect-ratio-card.png',
+  )
 
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.display.cardCard).toHaveScreenshot('card-card.png')
-  })
+  await referenceKitPage.goto()
+  const kit = referenceKitPage.display
+  await screenshotStep("the kit's heading", kit.heading, 'display-heading.png')
+  await screenshotStep("the kit's lead", kit.lead, 'display-lead.png')
+  await screenshotStep("the kit's Card card", kit.cardCard, 'card-card.png')
+  await screenshotStep(
+    "the kit's Badge card",
+    kit.badgeCard,
+    'badge-card.png',
+    {
+      animations: 'disabled',
+    },
+  )
+  await screenshotStep(
+    "the kit's Avatar card",
+    kit.avatarCard,
+    'avatar-card.png',
+  )
+  await screenshotStep("the kit's Table card", kit.tableCard, 'table-card.png')
+  await screenshotStep(
+    "the kit's Progress card",
+    kit.progressCard,
+    'progress-card.png',
+  )
+  await screenshotStep(
+    "the kit's Skeleton card",
+    kit.skeletonCard,
+    'skeleton-card.png',
+    { animations: 'disabled' },
+  )
 })
 
-// Both screenshots stop the live dot's pulse at its first frame, so they
-// match whenever they're taken.
 test.describe('Badge card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.display.badgeCard).toHaveScreenshot(
-      'badge-card.png',
-      { animations: 'disabled' },
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.display.badgeCard).toHaveScreenshot(
-      'badge-card.png',
-      { animations: 'disabled' },
-    )
-  })
-
   test("the live badge's dot pulses", async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
@@ -1761,86 +1724,22 @@ test.describe('Badge card', () => {
     test("the live badge's dot holds still", async ({ designSystemPage }) => {
       await designSystemPage.goto()
 
-      await expect(designSystemPage.display.liveDot).toHaveCSS('animation-name', 'none')
+      await expect(designSystemPage.display.liveDot).toHaveCSS(
+        'animation-name',
+        'none',
+      )
     })
   })
 })
 
-test.describe('Avatar card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.display.avatarCard).toHaveScreenshot(
-      'avatar-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.display.avatarCard).toHaveScreenshot(
-      'avatar-card.png',
-    )
-  })
-})
-
-test.describe('Table · Data Table card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.display.tableCard).toHaveScreenshot('table-card.png')
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.display.tableCard).toHaveScreenshot('table-card.png')
-  })
-})
-
-test.describe('Progress card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.display.progressCard).toHaveScreenshot(
-      'progress-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.display.progressCard).toHaveScreenshot(
-      'progress-card.png',
-    )
-  })
-})
-
-// Both screenshots stop the shimmer at its first frame, so they match
-// whenever they're taken.
 test.describe('Skeleton card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.display.skeletonCard).toHaveScreenshot(
-      'skeleton-card.png',
-      { animations: 'disabled' },
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.display.skeletonCard).toHaveScreenshot(
-      'skeleton-card.png',
-      { animations: 'disabled' },
-    )
-  })
-
   test('the placeholders shimmer', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.display.skeleton).toHaveCSS('animation-name', 'skel')
+    await expect(designSystemPage.display.skeleton).toHaveCSS(
+      'animation-name',
+      'skel',
+    )
   })
 
   test.describe('with reduced motion', () => {
@@ -1849,7 +1748,10 @@ test.describe('Skeleton card', () => {
     test('the placeholders hold still', async ({ designSystemPage }) => {
       await designSystemPage.goto()
 
-      await expect(designSystemPage.display.skeleton).toHaveCSS('animation-name', 'none')
+      await expect(designSystemPage.display.skeleton).toHaveCSS(
+        'animation-name',
+        'none',
+      )
     })
   })
 })
@@ -1859,21 +1761,15 @@ test.describe('Skeleton card', () => {
 // the page scrolls sideways by 276px. The app keeps each box's own height,
 // so its screenshot is its own, not the kit's.
 test.describe('Aspect Ratio card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.display.aspectRatioCard).toHaveScreenshot(
-      'aspect-ratio-card.png',
-    )
-  })
-
   test('its boxes keep their ratios inside the card', async ({
     designSystemPage,
     page,
   }) => {
     await designSystemPage.goto()
     const card = (await designSystemPage.display.aspectRatioCard.boundingBox())!
-    const wide = (await designSystemPage.display.aspectRatioBox('16 : 9').boundingBox())!
+    const wide = (await designSystemPage.display
+      .aspectRatioBox('16 : 9')
+      .boundingBox())!
     const square = (await designSystemPage.display
       .aspectRatioBox('1 : 1')
       .boundingBox())!
@@ -1893,43 +1789,75 @@ test.describe('Aspect Ratio card', () => {
   })
 })
 
-test.describe('Navigation section', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
+// Nothing is hovered or focused, so the tabs, links and items show their
+// resting styles, and File shows active, as in the kit. The accordion
+// screenshots finish the chevron's turn, so they match whenever they're
+// taken.
+test('the Navigation section matches its screenshots and the kit', async ({
+  designSystemPage,
+  referenceKitPage,
+}) => {
+  await designSystemPage.goto()
+  const nav = designSystemPage.nav
+  await screenshotStep('heading', nav.heading, 'nav-heading.png')
+  await screenshotStep('lead', nav.lead, 'nav-lead.png')
+  await screenshotStep('Tabs card', nav.tabsCard, 'tabs-card.png')
+  await screenshotStep(
+    'Accordion card',
+    nav.accordionCard,
+    'accordion-card.png',
+    {
+      animations: 'disabled',
+    },
+  )
+  await screenshotStep(
+    'Breadcrumb card',
+    nav.breadcrumbCard,
+    'breadcrumb-card.png',
+  )
+  await screenshotStep(
+    'Pagination card',
+    nav.paginationCard,
+    'pagination-card.png',
+  )
+  await screenshotStep(
+    'Navigation Menu card',
+    nav.navMenuCard,
+    'nav-menu-card.png',
+  )
+  await screenshotStep('Menubar card', nav.menubarCard, 'menubar-card.png')
 
-    await expect(designSystemPage.nav.heading).toHaveScreenshot(
-      'nav-heading.png',
-    )
-    await expect(designSystemPage.nav.lead).toHaveScreenshot(
-      'nav-lead.png',
-    )
-  })
-
-  test('matches the reference kit section', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.nav.heading).toHaveScreenshot(
-      'nav-heading.png',
-    )
-    await expect(referenceKitPage.nav.lead).toHaveScreenshot(
-      'nav-lead.png',
-    )
-  })
-})
-
-// Nothing is focused first, so the tabs show their resting styles.
-test.describe('Tabs card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.nav.tabsCard).toHaveScreenshot('tabs-card.png')
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.nav.tabsCard).toHaveScreenshot('tabs-card.png')
-  })
+  await referenceKitPage.goto()
+  const kit = referenceKitPage.nav
+  await screenshotStep("the kit's heading", kit.heading, 'nav-heading.png')
+  await screenshotStep("the kit's lead", kit.lead, 'nav-lead.png')
+  await screenshotStep("the kit's Tabs card", kit.tabsCard, 'tabs-card.png')
+  await screenshotStep(
+    "the kit's Accordion card",
+    kit.accordionCard,
+    'accordion-card.png',
+    { animations: 'disabled' },
+  )
+  await screenshotStep(
+    "the kit's Breadcrumb card",
+    kit.breadcrumbCard,
+    'breadcrumb-card.png',
+  )
+  await screenshotStep(
+    "the kit's Pagination card",
+    kit.paginationCard,
+    'pagination-card.png',
+  )
+  await screenshotStep(
+    "the kit's Navigation Menu card",
+    kit.navMenuCard,
+    'nav-menu-card.png',
+  )
+  await screenshotStep(
+    "the kit's Menubar card",
+    kit.menubarCard,
+    'menubar-card.png',
+  )
 })
 
 // The kit's tabs are static, with no focus style, so the tests below are
@@ -2017,28 +1945,6 @@ test.describe('Tabs', () => {
   })
 })
 
-// Both screenshots finish the chevron's turn, so they match whenever
-// they're taken.
-test.describe('Accordion card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.nav.accordionCard).toHaveScreenshot(
-      'accordion-card.png',
-      { animations: 'disabled' },
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.nav.accordionCard).toHaveScreenshot(
-      'accordion-card.png',
-      { animations: 'disabled' },
-    )
-  })
-})
-
 // The kit's accordion is static, with no focus style, so the tests below
 // are the app's alone.
 test.describe('Accordion', () => {
@@ -2062,7 +1968,9 @@ test.describe('Accordion', () => {
     await expect(second).toHaveAttribute('aria-expanded', 'true')
     await expect(designSystemPage.nav.accordionContent(free)).toBeVisible()
     await expect(first).toHaveAttribute('aria-expanded', 'false')
-    await expect(designSystemPage.nav.accordionContent(scheduler)).toHaveCount(0)
+    await expect(designSystemPage.nav.accordionContent(scheduler)).toHaveCount(
+      0,
+    )
 
     await second.click()
     await expect(second).toHaveAttribute('aria-expanded', 'false')
@@ -2139,26 +2047,6 @@ test.describe('Accordion', () => {
   })
 })
 
-// Nothing is hovered or focused first, so the links show their resting
-// styles.
-test.describe('Breadcrumb card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.nav.breadcrumbCard).toHaveScreenshot(
-      'breadcrumb-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.nav.breadcrumbCard).toHaveScreenshot(
-      'breadcrumb-card.png',
-    )
-  })
-})
-
 test.describe('Breadcrumb', () => {
   const orange = 'rgb(255, 122, 26)'
   // --fg-3 and --fg-1.
@@ -2195,26 +2083,6 @@ test.describe('Breadcrumb', () => {
   })
 })
 
-// Nothing is hovered or focused first, so the items show their resting
-// styles.
-test.describe('Pagination card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.nav.paginationCard).toHaveScreenshot(
-      'pagination-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.nav.paginationCard).toHaveScreenshot(
-      'pagination-card.png',
-    )
-  })
-})
-
 test.describe('Pagination', () => {
   const orange = 'rgb(255, 122, 26)'
   // --fg-2.
@@ -2231,10 +2099,9 @@ test.describe('Pagination', () => {
 
     await designSystemPage.nav.paginationButton('Page 3').click()
     await expect(pagination).toHaveText('‹1234…12›')
-    await expect(designSystemPage.nav.paginationButton('Page 3')).toHaveAttribute(
-      'aria-current',
-      'page',
-    )
+    await expect(
+      designSystemPage.nav.paginationButton('Page 3'),
+    ).toHaveAttribute('aria-current', 'page')
 
     await designSystemPage.nav.paginationButton('Next page').click()
     await expect(pagination).toHaveText('‹12345…12›')
@@ -2242,10 +2109,9 @@ test.describe('Pagination', () => {
     await expect(pagination).toHaveText('‹1…101112›')
     await designSystemPage.nav.paginationButton('Previous page').click()
     await expect(pagination).toHaveText('‹1…101112›')
-    await expect(designSystemPage.nav.paginationButton('Page 11')).toHaveAttribute(
-      'aria-current',
-      'page',
-    )
+    await expect(
+      designSystemPage.nav.paginationButton('Page 11'),
+    ).toHaveAttribute('aria-current', 'page')
   })
 
   // The screenshot can't tell the disabled color from a close one, so this
@@ -2274,10 +2140,9 @@ test.describe('Pagination', () => {
 
     await expect(next).toBeDisabled()
     await expect(next).toBeFocused()
-    await expect(designSystemPage.nav.paginationButton('Page 12')).toHaveAttribute(
-      'aria-current',
-      'page',
-    )
+    await expect(
+      designSystemPage.nav.paginationButton('Page 12'),
+    ).toHaveAttribute('aria-current', 'page')
   })
 
   // The kit's items have no focus style, so this is the app's alone.
@@ -2298,26 +2163,6 @@ test.describe('Pagination', () => {
     await second.click()
     await expect(second).toBeFocused()
     await expect(second).toHaveCSS('outline-style', 'none')
-  })
-})
-
-// Nothing is hovered or focused first, so the links show their resting
-// styles.
-test.describe('Navigation Menu card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.nav.navMenuCard).toHaveScreenshot(
-      'nav-menu-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.nav.navMenuCard).toHaveScreenshot(
-      'nav-menu-card.png',
-    )
   })
 })
 
@@ -2356,25 +2201,6 @@ test.describe('Navigation Menu', () => {
     await expect(second).toBeFocused()
     await expect(second).toHaveCSS('outline', `${orange} solid 2px`)
     await expect(second).toHaveCSS('outline-offset', '2px')
-  })
-})
-
-// Nothing is hovered or focused first, so File shows active, as in the kit.
-test.describe('Menubar card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.nav.menubarCard).toHaveScreenshot(
-      'menubar-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.nav.menubarCard).toHaveScreenshot(
-      'menubar-card.png',
-    )
   })
 })
 
@@ -2470,48 +2296,70 @@ test.describe('Menubar', () => {
   })
 })
 
-test.describe('Overlays section', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.overlays.heading).toHaveScreenshot(
-      'overlays-heading.png',
-    )
-    await expect(designSystemPage.overlays.lead).toHaveScreenshot(
-      'overlays-lead.png',
-    )
+// Nothing is hovered or focused, so the buttons, controls, triggers and
+// items show their resting styles, and the palette shows its first command
+// active, as in the kit, with no focus ring.
+test('the Overlays section matches its screenshots and the kit', async ({
+  designSystemPage,
+  referenceKitPage,
+}) => {
+  await designSystemPage.goto()
+  const overlays = designSystemPage.overlays
+  await screenshotStep('heading', overlays.heading, 'overlays-heading.png')
+  await screenshotStep('lead', overlays.lead, 'overlays-lead.png')
+  await screenshotStep('Dialog card', overlays.dialogCard, 'dialog-card.png')
+  // The select's chevron rounds a few edge pixels differently on the two
+  // pages, as on the Select card: 2 of them here, both on the chevron.
+  await screenshotStep('Sheet card', overlays.sheetCard, 'sheet-card.png', {
+    maxDiffPixels: 15,
   })
+  await screenshotStep('Drawer card', overlays.drawerCard, 'drawer-card.png')
+  await screenshotStep('Popover card', overlays.popoverCard, 'popover-card.png')
+  await screenshotStep('Tooltip card', overlays.tooltipCard, 'tooltip-card.png')
+  await screenshotStep(
+    'Hover Card card',
+    overlays.hoverCardCard,
+    'hover-card-card.png',
+  )
+  await screenshotStep('Menu card', overlays.menuCard, 'menu-card.png')
+  await screenshotStep('Command card', overlays.commandCard, 'command-card.png')
 
-  test('matches the reference kit section', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.overlays.heading).toHaveScreenshot(
-      'overlays-heading.png',
-    )
-    await expect(referenceKitPage.overlays.lead).toHaveScreenshot(
-      'overlays-lead.png',
-    )
-  })
-})
-
-// Nothing is hovered or focused first, so the buttons and the checkbox show
-// their resting styles.
-test.describe('Dialog · Alert Dialog card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.overlays.dialogCard).toHaveScreenshot(
-      'dialog-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.overlays.dialogCard).toHaveScreenshot(
-      'dialog-card.png',
-    )
-  })
+  await referenceKitPage.goto()
+  const kit = referenceKitPage.overlays
+  await screenshotStep("the kit's heading", kit.heading, 'overlays-heading.png')
+  await screenshotStep("the kit's lead", kit.lead, 'overlays-lead.png')
+  await screenshotStep(
+    "the kit's Dialog card",
+    kit.dialogCard,
+    'dialog-card.png',
+  )
+  await screenshotStep("the kit's Sheet card", kit.sheetCard, 'sheet-card.png')
+  await screenshotStep(
+    "the kit's Drawer card",
+    kit.drawerCard,
+    'drawer-card.png',
+  )
+  await screenshotStep(
+    "the kit's Popover card",
+    kit.popoverCard,
+    'popover-card.png',
+  )
+  await screenshotStep(
+    "the kit's Tooltip card",
+    kit.tooltipCard,
+    'tooltip-card.png',
+  )
+  await screenshotStep(
+    "the kit's Hover Card card",
+    kit.hoverCardCard,
+    'hover-card-card.png',
+  )
+  await screenshotStep("the kit's Menu card", kit.menuCard, 'menu-card.png')
+  await screenshotStep(
+    "the kit's Command card",
+    kit.commandCard,
+    'command-card.png',
+  )
 })
 
 // The kit's dialogs are static, so this is the app's alone.
@@ -2538,88 +2386,6 @@ test('Tab goes through each dialog in order, showing the outline', async ({
   }
 })
 
-// Nothing is hovered or focused first, so the controls show their resting
-// styles.
-test.describe('Sheet card', () => {
-  // The select's chevron rounds a few edge pixels differently on the two
-  // pages, as on the Select card (see there): 2 of them here, both on the
-  // chevron. The smallest real change, the chevron moved 1px, is 19.
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.overlays.sheetCard).toHaveScreenshot(
-      'sheet-card.png',
-      { maxDiffPixels: 15 },
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.overlays.sheetCard).toHaveScreenshot(
-      'sheet-card.png',
-    )
-  })
-})
-
-// Nothing is hovered or focused first, so the button shows its resting
-// style.
-test.describe('Drawer card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.overlays.drawerCard).toHaveScreenshot(
-      'drawer-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.overlays.drawerCard).toHaveScreenshot(
-      'drawer-card.png',
-    )
-  })
-})
-
-test.describe('Popover card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.overlays.popoverCard).toHaveScreenshot(
-      'popover-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.overlays.popoverCard).toHaveScreenshot(
-      'popover-card.png',
-    )
-  })
-})
-
-// Nothing is hovered or focused first, so the triggers show their resting
-// styles.
-test.describe('Tooltip card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.overlays.tooltipCard).toHaveScreenshot(
-      'tooltip-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.overlays.tooltipCard).toHaveScreenshot(
-      'tooltip-card.png',
-    )
-  })
-})
-
 // Each bubble is out of the layout, so the screenshot only sees it if it
 // stays inside the card. It sits centered above its trigger, inside the
 // frame.
@@ -2631,10 +2397,15 @@ test('each tooltip sits above its trigger, inside the frame', async ({
 
   for (const [trigger, text] of [
     [designSystemPage.overlays.refreshButton, 'Refresh standings'],
-    [designSystemPage.overlays.seedBadge, 'Highest rated player in this bracket'],
+    [
+      designSystemPage.overlays.seedBadge,
+      'Highest rated player in this bracket',
+    ],
   ] as const) {
     const box = (await trigger.boundingBox())!
-    const bubble = (await designSystemPage.overlays.tooltip(text).boundingBox())!
+    const bubble = (await designSystemPage.overlays
+      .tooltip(text)
+      .boundingBox())!
     expect(bubble.x + bubble.width / 2, text).toBeCloseTo(
       box.x + box.width / 2,
       0,
@@ -2644,40 +2415,6 @@ test('each tooltip sits above its trigger, inside the frame', async ({
     expect(bubble.x, text).toBeGreaterThan(frame.x)
     expect(bubble.x + bubble.width, text).toBeLessThan(frame.x + frame.width)
   }
-})
-
-test.describe('Hover Card card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.overlays.hoverCardCard).toHaveScreenshot(
-      'hover-card-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.overlays.hoverCardCard).toHaveScreenshot(
-      'hover-card-card.png',
-    )
-  })
-})
-
-// Nothing is hovered or focused first, so the items show their resting
-// styles.
-test.describe('Dropdown Menu · Context Menu card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.overlays.menuCard).toHaveScreenshot('menu-card.png')
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.overlays.menuCard).toHaveScreenshot('menu-card.png')
-  })
 })
 
 // The kit's menus are static, with no focus style, so the tests below other
@@ -2721,7 +2458,10 @@ test.describe('Dropdown Menu · Context Menu', () => {
       ['Home', 'Rematch'],
     ]) {
       await page.keyboard.press(key)
-      await expect(designSystemPage.overlays.dropdownItem(name), key).toBeFocused()
+      await expect(
+        designSystemPage.overlays.dropdownItem(name),
+        key,
+      ).toBeFocused()
       expect(
         await page.locator('html').evaluate((html) => html.scrollTop),
         key,
@@ -2746,26 +2486,6 @@ test.describe('Dropdown Menu · Context Menu', () => {
     await forfeit.click()
     await expect(forfeit).toBeFocused()
     await expect(forfeit).toHaveCSS('outline-style', 'none')
-  })
-})
-
-// Nothing is hovered or focused first, so the palette shows its first
-// command active, as in the kit, with no focus ring.
-test.describe('Command card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.overlays.commandCard).toHaveScreenshot(
-      'command-card.png',
-    )
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.overlays.commandCard).toHaveScreenshot(
-      'command-card.png',
-    )
   })
 })
 
@@ -2819,7 +2539,9 @@ test.describe('Command', () => {
       await expect(input, key).toBeFocused()
     }
     await expect(
-      designSystemPage.overlays.commandList.getByRole('option', { selected: true }),
+      designSystemPage.overlays.commandList.getByRole('option', {
+        selected: true,
+      }),
     ).toHaveCount(1)
   })
 
@@ -2837,58 +2559,25 @@ test.describe('Command', () => {
   })
 })
 
-test.describe('Feedback section', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.feedback.heading).toHaveScreenshot(
-      'feedback-heading.png',
-    )
-    await expect(designSystemPage.feedback.lead).toHaveScreenshot(
-      'feedback-lead.png',
-    )
-  })
-
-  test('matches the reference kit section', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.feedback.heading).toHaveScreenshot(
-      'feedback-heading.png',
-    )
-    await expect(referenceKitPage.feedback.lead).toHaveScreenshot(
-      'feedback-lead.png',
-    )
-  })
-})
-
-test.describe('Alert card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.feedback.alertCard).toHaveScreenshot('alert-card.png')
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.feedback.alertCard).toHaveScreenshot('alert-card.png')
-  })
-})
-
-// Nothing is hovered or focused first, so the buttons show their resting
+// Nothing is hovered or focused, so the toasts' buttons show their resting
 // styles.
-test.describe('Sonner / Toast card', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
+test('the Feedback section matches its screenshots and the kit', async ({
+  designSystemPage,
+  referenceKitPage,
+}) => {
+  await designSystemPage.goto()
+  const feedback = designSystemPage.feedback
+  await screenshotStep('heading', feedback.heading, 'feedback-heading.png')
+  await screenshotStep('lead', feedback.lead, 'feedback-lead.png')
+  await screenshotStep('Alert card', feedback.alertCard, 'alert-card.png')
+  await screenshotStep('Toast card', feedback.toastCard, 'toast-card.png')
 
-    await expect(designSystemPage.feedback.toastCard).toHaveScreenshot('toast-card.png')
-  })
-
-  test('matches the reference kit card', async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.feedback.toastCard).toHaveScreenshot('toast-card.png')
-  })
+  await referenceKitPage.goto()
+  const kit = referenceKitPage.feedback
+  await screenshotStep("the kit's heading", kit.heading, 'feedback-heading.png')
+  await screenshotStep("the kit's lead", kit.lead, 'feedback-lead.png')
+  await screenshotStep("the kit's Alert card", kit.alertCard, 'alert-card.png')
+  await screenshotStep("the kit's Toast card", kit.toastCard, 'toast-card.png')
 })
 
 // The kit's toasts are static, with no focus style, so the tests below are
@@ -2959,8 +2648,12 @@ test.describe('Sonner / Toast', () => {
   test('dismissing a toast removes it', async ({ designSystemPage }) => {
     await designSystemPage.feedback.toastDismissButton("Couldn't save").click()
 
-    await expect(designSystemPage.feedback.toast("Couldn't save")).toHaveCount(0)
-    await expect(designSystemPage.feedback.toastCard.getByRole('status')).toHaveCount(3)
+    await expect(designSystemPage.feedback.toast("Couldn't save")).toHaveCount(
+      0,
+    )
+    await expect(
+      designSystemPage.feedback.toastCard.getByRole('status'),
+    ).toHaveCount(3)
   })
 
   test("the action removes its toast and doesn't reload the page", async ({
@@ -2975,7 +2668,9 @@ test.describe('Sonner / Toast', () => {
     await expect(
       designSystemPage.feedback.toast('A new version of FortyMM is ready'),
     ).toHaveCount(0)
-    await expect(designSystemPage.feedback.toastCard.getByRole('status')).toHaveCount(3)
+    await expect(
+      designSystemPage.feedback.toastCard.getByRole('status'),
+    ).toHaveCount(3)
     expect(loads).toBe(0)
   })
 })
@@ -2987,17 +2682,23 @@ test('focusing the Input OTP activates the next empty cell', async ({
 }) => {
   await designSystemPage.goto()
   await expect(designSystemPage.forms.activeOtpCell).toHaveCount(1)
-  await expect(designSystemPage.forms.otpCell(3)).toHaveClass(/otp-cell--active/)
+  await expect(designSystemPage.forms.otpCell(3)).toHaveClass(
+    /otp-cell--active/,
+  )
 
   await designSystemPage.forms.otpInput.focus()
 
   await expect(designSystemPage.forms.activeOtpCell).toHaveCount(1)
-  await expect(designSystemPage.forms.otpCell(4)).toHaveClass(/otp-cell--active/)
+  await expect(designSystemPage.forms.otpCell(4)).toHaveClass(
+    /otp-cell--active/,
+  )
 
   await designSystemPage.forms.otpInput.press('1')
   await expect(designSystemPage.forms.otpInput).toHaveValue('40MM1')
   await expect(designSystemPage.forms.otpCell(4)).toHaveText('1')
-  await expect(designSystemPage.forms.otpCell(5)).toHaveClass(/otp-cell--active/)
+  await expect(designSystemPage.forms.otpCell(5)).toHaveClass(
+    /otp-cell--active/,
+  )
 })
 
 // The usual one-time code behaviour, in a real browser: a click goes to the
@@ -3012,17 +2713,25 @@ test('the Input OTP takes clicks, typing, arrows and Backspace', async ({
   const input = designSystemPage.forms.otpInput
 
   await designSystemPage.forms.clickOtpCell(1)
-  await expect(designSystemPage.forms.otpCell(1)).toHaveClass(/otp-cell--active/)
+  await expect(designSystemPage.forms.otpCell(1)).toHaveClass(
+    /otp-cell--active/,
+  )
   await page.keyboard.type('X')
   await expect(input).toHaveValue('4XMM')
-  await expect(designSystemPage.forms.otpCell(2)).toHaveClass(/otp-cell--active/)
+  await expect(designSystemPage.forms.otpCell(2)).toHaveClass(
+    /otp-cell--active/,
+  )
 
   await page.keyboard.press('ArrowLeft')
-  await expect(designSystemPage.forms.otpCell(1)).toHaveClass(/otp-cell--active/)
+  await expect(designSystemPage.forms.otpCell(1)).toHaveClass(
+    /otp-cell--active/,
+  )
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('ArrowRight')
   await page.keyboard.press('ArrowRight')
-  await expect(designSystemPage.forms.otpCell(4)).toHaveClass(/otp-cell--active/)
+  await expect(designSystemPage.forms.otpCell(4)).toHaveClass(
+    /otp-cell--active/,
+  )
 
   await page.keyboard.press('Backspace')
   await expect(input).toHaveValue('4XM')
@@ -3075,7 +2784,9 @@ test.describe('on a phone', () => {
     const card = (await designSystemPage.forms.switchCard.boundingBox())!
     const row = (await designSystemPage.forms.switchLabel(name).boundingBox())!
     const text = (await designSystemPage.forms.switchText(name).boundingBox())!
-    const track = (await designSystemPage.forms.switchTrack(name).boundingBox())!
+    const track = (await designSystemPage.forms
+      .switchTrack(name)
+      .boundingBox())!
 
     // Inside the card's 1px border and 32px padding on the right.
     expect(row.x + row.width).toBeLessThanOrEqual(card.x + card.width - 33)
@@ -3089,18 +2800,25 @@ test.describe('on a phone', () => {
   test('the slider card fits', async ({ designSystemPage, page }) => {
     await designSystemPage.goto()
 
-    for (const element of [designSystemPage.forms.sliderCard, page.locator('html')]) {
-      expect(
-        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
-      ).toBe(0)
+    for (const element of [
+      designSystemPage.forms.sliderCard,
+      page.locator('html'),
+    ]) {
+      expect(await element.evaluate((e) => e.scrollWidth - e.clientWidth)).toBe(
+        0,
+      )
     }
     for (const [label, name, fraction] of [
       ['Skill level', 'Skill level', 0.55],
       ['Rating range', 'Rating range minimum', 0.3],
       ['Rating range', 'Rating range maximum', 0.7],
     ] as const) {
-      const track = (await designSystemPage.forms.sliderTrack(label).boundingBox())!
-      const thumb = (await designSystemPage.forms.sliderThumb(name).boundingBox())!
+      const track = (await designSystemPage.forms
+        .sliderTrack(label)
+        .boundingBox())!
+      const thumb = (await designSystemPage.forms
+        .sliderThumb(name)
+        .boundingBox())!
       expect(track.width).toBeLessThan(480)
       expect(thumb.x + thumb.width / 2).toBeCloseTo(
         track.x + track.width * fraction,
@@ -3114,10 +2832,13 @@ test.describe('on a phone', () => {
   test('the select card fits', async ({ designSystemPage, page }) => {
     await designSystemPage.goto()
 
-    for (const element of [designSystemPage.forms.selectCard, page.locator('html')]) {
-      expect(
-        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
-      ).toBe(0)
+    for (const element of [
+      designSystemPage.forms.selectCard,
+      page.locator('html'),
+    ]) {
+      expect(await element.evaluate((e) => e.scrollWidth - e.clientWidth)).toBe(
+        0,
+      )
     }
     const card = (await designSystemPage.forms.selectCard.boundingBox())!
     for (const name of ['Match type', 'Match length']) {
@@ -3150,7 +2871,9 @@ test.describe('on a phone', () => {
     expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width - 33)
     // The box clips what overflows it, so check the input stays inside too.
     expect(input.x + input.width).toBeLessThanOrEqual(box.x + box.width)
-    expect((await designSystemPage.forms.comboboxIcon.boundingBox())!.width).toBe(14)
+    expect(
+      (await designSystemPage.forms.comboboxIcon.boundingBox())!.width,
+    ).toBe(14)
   })
 
   // The row wraps the calendar under the button, as the kit's does. The
@@ -3170,8 +2893,10 @@ test.describe('on a phone', () => {
     }
     const card = (await designSystemPage.forms.datePickerCard.boundingBox())!
     const label = (await designSystemPage.forms.datePickerLabel.boundingBox())!
-    const trigger = (await designSystemPage.forms.datePickerTrigger.boundingBox())!
-    const calendar = (await designSystemPage.forms.datePickerDialog.boundingBox())!
+    const trigger =
+      (await designSystemPage.forms.datePickerTrigger.boundingBox())!
+    const calendar =
+      (await designSystemPage.forms.datePickerDialog.boundingBox())!
     // Inside the card's 1px border and 32px padding on the right.
     const right = card.x + card.width - 33
     expect(trigger.width).toBe(200)
@@ -3182,7 +2907,9 @@ test.describe('on a phone', () => {
     // The row's 24px gap, under the button.
     expect(calendar.y).toBe(trigger.y + trigger.height + 24)
     for (const name of ['March 29, 2026', 'May 2, 2026']) {
-      const day = (await designSystemPage.forms.datePickerDay(name).boundingBox())!
+      const day = (await designSystemPage.forms
+        .datePickerDay(name)
+        .boundingBox())!
       expect(day.x).toBeGreaterThanOrEqual(calendar.x)
       expect(day.x + day.width).toBeLessThanOrEqual(
         calendar.x + calendar.width,
@@ -3206,8 +2933,11 @@ test.describe('on a phone', () => {
     }
     const card = (await designSystemPage.forms.toggleCard.boundingBox())!
     const bold = (await designSystemPage.forms.toggle('Bold').boundingBox())!
-    const italic = (await designSystemPage.forms.toggle('Italic').boundingBox())!
-    const separator = (await designSystemPage.forms.toggleSeparator.boundingBox())!
+    const italic = (await designSystemPage.forms
+      .toggle('Italic')
+      .boundingBox())!
+    const separator =
+      (await designSystemPage.forms.toggleSeparator.boundingBox())!
     const group = (await designSystemPage.forms.toggleGroup.boundingBox())!
     // Inside the card's 1px border and 32px padding on each side.
     const left = card.x + 33
@@ -3235,10 +2965,13 @@ test.describe('on a phone', () => {
   test('the tabs card fits', async ({ designSystemPage, page }) => {
     await designSystemPage.goto()
 
-    for (const element of [designSystemPage.nav.tabsCard, page.locator('html')]) {
-      expect(
-        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
-      ).toBe(0)
+    for (const element of [
+      designSystemPage.nav.tabsCard,
+      page.locator('html'),
+    ]) {
+      expect(await element.evaluate((e) => e.scrollWidth - e.clientWidth)).toBe(
+        0,
+      )
     }
     const card = (await designSystemPage.nav.tabsCard.boundingBox())!
     const list = (await designSystemPage.nav.tabList.boundingBox())!
@@ -3338,7 +3071,9 @@ test.describe('on a phone', () => {
     }
     const card = (await designSystemPage.nav.menubarCard.boundingBox())!
     const bar = (await designSystemPage.nav.menubar.boundingBox())!
-    const first = (await designSystemPage.nav.menubarItem('File').boundingBox())!
+    const first = (await designSystemPage.nav
+      .menubarItem('File')
+      .boundingBox())!
     const last = (await designSystemPage.nav.menubarItem('Help').boundingBox())!
     // Inside the card's 1px border and 32px padding on the right.
     expect(bar.x + bar.width).toBeLessThanOrEqual(card.x + card.width - 33)
@@ -3371,7 +3106,9 @@ test.describe('on a phone', () => {
   test("the badge card's badges wrap", async ({ designSystemPage, page }) => {
     await designSystemPage.goto()
     const card = (await designSystemPage.display.badgeCard.boundingBox())!
-    const first = (await designSystemPage.display.badge('Seed 1').boundingBox())!
+    const first = (await designSystemPage.display
+      .badge('Seed 1')
+      .boundingBox())!
     const last = (await designSystemPage.display
       .badge('Live · Court 3')
       .boundingBox())!
@@ -3408,7 +3145,9 @@ test.describe('on a phone', () => {
         .evaluate((html) => html.scrollWidth - html.clientWidth),
     ).toBeLessThanOrEqual(0)
 
-    const stacked = await designSystemPage.display.avatarGroup.getByRole('img').all()
+    const stacked = await designSystemPage.display.avatarGroup
+      .getByRole('img')
+      .all()
     expect(stacked).toHaveLength(4)
     for (let i = 1; i < stacked.length; i++) {
       const previous = (await stacked[i - 1].boundingBox())!
@@ -3590,7 +3329,9 @@ test.describe('on a phone', () => {
       'Refresh standings',
       'Highest rated player in this bracket',
     ]) {
-      const bubble = (await designSystemPage.overlays.tooltip(text).boundingBox())!
+      const bubble = (await designSystemPage.overlays
+        .tooltip(text)
+        .boundingBox())!
       // Inside the card's 1px border and 32px padding on each side.
       expect(bubble.x, text).toBeGreaterThanOrEqual(card.x + 33)
       expect(bubble.x + bubble.width, text).toBeLessThanOrEqual(
@@ -3603,7 +3344,8 @@ test.describe('on a phone', () => {
     const refresh = (await designSystemPage.overlays
       .tooltip('Refresh standings')
       .boundingBox())!
-    const button = (await designSystemPage.overlays.refreshButton.boundingBox())!
+    const button =
+      (await designSystemPage.overlays.refreshButton.boundingBox())!
     const seed = (await designSystemPage.overlays
       .tooltip('Highest rated player in this bracket')
       .boundingBox())!
@@ -3646,7 +3388,8 @@ test.describe('on a phone', () => {
       ).toBe(0)
     }
     const card = (await designSystemPage.overlays.menuCard.boundingBox())!
-    const dropdown = (await designSystemPage.overlays.dropdownMenu.boundingBox())!
+    const dropdown =
+      (await designSystemPage.overlays.dropdownMenu.boundingBox())!
     const context = (await designSystemPage.overlays.contextMenu.boundingBox())!
     for (const box of [dropdown, context]) {
       // Inside the card's 1px border and 32px padding on each side.
@@ -3735,7 +3478,9 @@ test.describe('on a phone', () => {
       .commandOption('Log a match')
       .locator('kbd')
       .boundingBox())!
-    for (const kbd of await designSystemPage.overlays.commandList.locator('kbd').all()) {
+    for (const kbd of await designSystemPage.overlays.commandList
+      .locator('kbd')
+      .all()) {
       expect((await kbd.boundingBox())!.height).toBe(first.height)
     }
   })
@@ -3754,49 +3499,3 @@ async function focusWithRing(control: Locator) {
     height: box.height + 2 * ring,
   }
 }
-
-// Player tag shows the focus style; Email shows it on an invalid input, where
-// the error border stays and the focus ring is added. The caret is hidden.
-for (const [name, screenshot] of [
-  ['Player tag', 'player-tag-focused.png'],
-  ['Email', 'email-focused.png'],
-] as const) {
-  test.describe(`focused ${name} input`, () => {
-    test('matches the screenshot', async ({ designSystemPage, page }) => {
-      await designSystemPage.goto()
-      const clip = await focusWithRing(designSystemPage.forms.input(name))
-
-      await expect(page).toHaveScreenshot(screenshot, { clip })
-    })
-
-    test('matches the reference kit input', async ({
-      referenceKitPage,
-      page,
-    }) => {
-      await referenceKitPage.goto()
-      const clip = await focusWithRing(referenceKitPage.forms.input(name))
-
-      await expect(page).toHaveScreenshot(screenshot, { clip })
-    })
-  })
-}
-
-// The Match notes textarea shows the focus style. The caret is hidden.
-test.describe('focused Match notes textarea', () => {
-  test('matches the screenshot', async ({ designSystemPage, page }) => {
-    await designSystemPage.goto()
-    const clip = await focusWithRing(designSystemPage.forms.textarea)
-
-    await expect(page).toHaveScreenshot('match-notes-focused.png', { clip })
-  })
-
-  test('matches the reference kit textarea', async ({
-    referenceKitPage,
-    page,
-  }) => {
-    await referenceKitPage.goto()
-    const clip = await focusWithRing(referenceKitPage.forms.textarea)
-
-    await expect(page).toHaveScreenshot('match-notes-focused.png', { clip })
-  })
-})
