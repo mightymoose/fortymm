@@ -5,7 +5,7 @@ import { useSingleSelect } from './singleSelect'
 import { ToastProvider } from './ToastProvider'
 
 // A group of pressed buttons, as the schedule timeline's blocks are.
-function PressedGroup({ labels, initial }: { labels: string[]; initial?: number }) {
+function PressedGroup({ labels, initial }: { labels: string[]; initial?: number | null }) {
   const { optionProps } = useSingleSelect('pressed', labels, undefined, initial)
   return (
     <div>
@@ -18,7 +18,7 @@ function PressedGroup({ labels, initial }: { labels: string[]; initial?: number 
   )
 }
 
-function renderGroup(initial?: number) {
+function renderGroup(initial?: number | null) {
   render(
     <ToastProvider>
       <PressedGroup labels={['Table 1', 'Table 2', 'Table 3']} initial={initial} />
@@ -40,6 +40,14 @@ describe('useSingleSelect, pressed buttons', () => {
     expect(button('Table 1')).toHaveAttribute('aria-pressed', 'false')
     expect(button('Table 2')).toHaveAttribute('aria-pressed', 'false')
     expect(await screen.findByText('Table 3, selected')).toBeInTheDocument()
+  })
+
+  it('starts with none pressed when given none', () => {
+    renderGroup(null)
+
+    for (const name of ['Table 1', 'Table 2', 'Table 3']) {
+      expect(button(name)).toHaveAttribute('aria-pressed', 'false')
+    }
   })
 
   it('starts with the option it is given pressed', () => {

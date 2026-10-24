@@ -1,8 +1,8 @@
-import { matchScore, shortName, type Match, type Side } from './match'
+import { matchScore, shortName, type Scoresheet, type Side } from './match'
 
 // A match's game history as match.js's `games()` draws it: an `.fm-games`
 // table with a column per game, the game in play marked "now".
-export function GameScores({ match }: { match: Match }) {
+export function GameScores({ match }: { match: Scoresheet }) {
   const { done, current } = matchScore(match)
   const games = current ? [...done, current] : done
   if (!games.length) return <p className="fm-help">No games played yet.</p>

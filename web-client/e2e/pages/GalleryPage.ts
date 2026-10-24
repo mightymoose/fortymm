@@ -3,6 +3,7 @@ import { ButtonsSection } from './designSystem/ButtonsSection.ts'
 import { ContainersSection } from './designSystem/ContainersSection.ts'
 import { FeedbackSection } from './designSystem/FeedbackSection.ts'
 import { FieldsSection } from './designSystem/FieldsSection.ts'
+import { MatchSection } from './designSystem/MatchSection.ts'
 import { OverlaysSection } from './designSystem/OverlaysSection.ts'
 import { SelectionSection } from './designSystem/SelectionSection.ts'
 
@@ -19,6 +20,7 @@ export abstract class GalleryPage {
   readonly containers: ContainersSection
   readonly feedback: FeedbackSection
   readonly overlays: OverlaysSection
+  readonly match: MatchSection
   // Where raised toasts show, bottom centre, outside every section. Found
   // by its class, because the gallery's region has no name to find it by.
   readonly toasts: Locator
@@ -39,6 +41,7 @@ export abstract class GalleryPage {
     this.containers = new ContainersSection(page)
     this.feedback = new FeedbackSection(page)
     this.overlays = new OverlaysSection(page)
+    this.match = new MatchSection(page)
     this.toasts = page.locator('.fm-toast-region')
     this.shownTooltip = page.getByRole('tooltip')
     this.withdrawDialog = page.getByTestId('dialog-withdraw')

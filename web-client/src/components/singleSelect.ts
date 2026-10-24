@@ -37,9 +37,10 @@ export function keyTarget(key: string, index: number, count: number): number | n
   }
 }
 
-// A single-select group's state, as kit.js's FM.select keeps it: one option
-// is always on, option `initial` (the first by default) to start with, and a
-// click turns another on. Tabs
+// A single-select group's state, as kit.js's FM.select keeps it: option
+// `initial` (the first by default) starts on, and a click turns another on.
+// A group of pressed buttons can start with none on, with `initial` null.
+// Tabs
 // and radios rove: only the option that's on is a tab stop, and the arrow
 // keys, Home and End turn on another option and focus it. Pressed buttons
 // are each a tab stop, and read out the option a click turns on.
@@ -49,8 +50,8 @@ export function useSingleSelect(
   kind: SingleSelectKind,
   labels: readonly string[],
   onChange?: (label: string) => void,
-  initial = 0,
-): { selected: number; optionProps: (index: number) => SingleSelectOptionProps } {
+  initial: number | null = 0,
+): { selected: number | null; optionProps: (index: number) => SingleSelectOptionProps } {
   const [selected, setSelected] = useState(initial)
   const buttons = useRef<(HTMLButtonElement | null)[]>([])
   const announce = useAnnounce()

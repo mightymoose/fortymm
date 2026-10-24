@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { Button } from '../../components/Button'
 import { Icon } from '../../components/Icon'
+import { RestIndicator } from '../../components/RestIndicator'
 import { Toast } from '../../components/Toast'
 import { useToast } from '../../components/toastContext'
 import { BusyDemoButton } from './BusyDemoButton'
@@ -195,10 +196,7 @@ export function FeedbackSection() {
             <p>Red outline on the action only. Always confirmed in a dialog.</p>
           </div>
           <div>
-            <span className="fm-rest">
-              <Icon name="clock" />
-              Rest until <span className="num">12:10</span>
-            </span>
+            <RestIndicator until="12:10" />
             <h4>Rest</h4>
             <p>Blue clock + the end time. Information, not a problem.</p>
           </div>

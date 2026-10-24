@@ -74,7 +74,10 @@ export type MatchScore = {
   winner: Side | null
 }
 
-export function matchScore(match: Match): MatchScore {
+// The parts of a match that its scores come from.
+export type Scoresheet = Pick<Match, 'state' | 'players' | 'games'>
+
+export function matchScore(match: Scoresheet): MatchScore {
   const { games } = match
   const inPlay =
     (match.state === 'live' || match.state === 'offline') && games.length > 0
@@ -106,6 +109,36 @@ export function clockTime(count: number): string {
 
 export function shortName(player: MatchPlayer): string {
   return player.short ?? player.name.split(',')[0]
+}
+
+// The players of a match as a schedule block's selection reads them out.
+export const matchLabel = (match: Match) =>
+  `${shortName(match.players[0])} vs ${shortName(match.players[1])}`
+
+// A match's score as it stands: the games finished, the points of the game
+// in play, and who serves.
+export type Score = {
+  games: readonly GameScore[]
+  points: GameScore
+  serve: Side
+}
+
+// The side across the table from `side`.
+export const otherSide = (side: Side): Side => (side === 0 ? 1 : 0)
+
+// The score after `side` wins a point, by kit.js's rules: the serve changes
+// every two points, and after every point from 10–10. A game goes to the
+// first to 11 with a lead of 2, and the next starts at 0–0.
+export function addPoint(score: Score, side: Side): Score {
+  const [first, second] = score.points
+  const points: GameScore = side === 0 ? [first + 1, second] : [first, second + 1]
+  const [a, b] = points
+  const deuce = a >= 10 && b >= 10
+  const serve = deuce || (a + b) % 2 === 0 ? otherSide(score.serve) : score.serve
+  if ((a >= 11 || b >= 11) && Math.abs(a - b) >= 2) {
+    return { games: [...score.games, points], points: [0, 0], serve }
+  }
+  return { games: score.games, points, serve }
 }
 
 const player = (name: string, club: string, short?: string): MatchPlayer =>

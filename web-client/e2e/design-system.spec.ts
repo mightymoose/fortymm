@@ -775,6 +775,111 @@ test('the Overlays section matches its screenshots and the gallery', async ({
   await test.step('gallery', () => overlaysScreenshots(referenceKitPage))
 })
 
+async function matchScreenshots(gallery: GalleryPage): Promise<void> {
+  const match = gallery.match
+  const page = gallery.page
+  await gallery.goto(match.testId)
+  await screenshotStep('heading', match.heading, 'match-heading.png')
+  await screenshotStep('lead', match.lead, 'match-lead.png')
+
+  await gallery.goto('ex-match-row')
+  await screenshotStep('Match row', match.matchRow, 'match-match-row.png')
+  const gameScores = match
+    .row('Nguyen, Thanh vs Silva, Rafael')
+    .getByRole('button', { name: 'Game scores' })
+  await hoveredScreenshotStep(
+    'Game scores, hovered',
+    gameScores,
+    'match-match-row-game-scores-hovered.png',
+  )
+  await page.mouse.move(0, 0)
+  await focusedScreenshotStep(
+    'Game scores, focused',
+    gameScores,
+    'match-match-row-game-scores-focused.png',
+  )
+  await gameScores.click()
+  await page.mouse.move(0, 0)
+  await screenshotStep(
+    'Match row, game scores shown',
+    match.matchRow,
+    'match-match-row-game-scores-shown.png',
+  )
+
+  await gallery.goto('ex-empty-and-disconnected')
+  await screenshotStep(
+    'Empty and disconnected',
+    match.emptyAndDisconnected,
+    'match-empty-and-disconnected.png',
+  )
+
+  await gallery.goto('ex-score-entry-and-game-history')
+  await screenshotStep('Score entry', match.scoreEntry, 'match-score-entry.png')
+  const plusPatel = match.button('+1 Patel')
+  await hoveredScreenshotStep('+1 Patel, hovered', plusPatel, 'match-score-entry-add-hovered.png')
+  await page.mouse.move(0, 0)
+  await focusedScreenshotStep('+1 Patel, focused', plusPatel, 'match-score-entry-add-focused.png')
+  await match.score('Patel', 'Wójcik-Szymańska')
+  await page.mouse.move(0, 0)
+  await expect(match.points('Wójcik-Szymańska')).toHaveText('10')
+  await screenshotStep(
+    'Score entry, 10–10',
+    match.scoreEntry,
+    'match-score-entry-scored.png',
+  )
+  await match.score('Patel')
+  await gallery.raiseToast(plusPatel, 'Game 5 to Patel, 12–10')
+  await page.mouse.move(0, 0)
+  await pageScreenshotStep('Score entry, game won', gallery, 'match-score-entry-game-won.png')
+  await gallery.toastButton('Undo').click()
+  await page.mouse.move(0, 0)
+  await expect(match.points('Patel')).toHaveText('11')
+  await screenshotStep(
+    'Score entry, game won and undone',
+    match.scoreEntry,
+    'match-score-entry-undone.png',
+  )
+
+  await gallery.goto('ex-schedule-blocks')
+  await screenshotStep('Schedule blocks', match.scheduleBlocks, 'match-schedule-blocks.png')
+  const conflict = match.block('Patel, Meera vs Park, Ji-ho')
+  await hoveredScreenshotStep(
+    'Patel vs Park, hovered',
+    conflict,
+    'match-schedule-blocks-block-hovered.png',
+  )
+  await pageScreenshotStep(
+    'Patel vs Park, tooltip shown',
+    gallery,
+    'match-schedule-blocks-tooltip-shown.png',
+  )
+  await settlePointer(gallery)
+  await focusedScreenshotStep(
+    'Patel vs Park, focused',
+    conflict,
+    'match-schedule-blocks-block-focused.png',
+  )
+  await conflict.click()
+  await settlePointer(gallery)
+  await expect(conflict).toHaveAttribute('aria-pressed', 'true')
+  await screenshotStep(
+    'Schedule blocks, Patel vs Park picked',
+    match.scheduleBlocks,
+    'match-schedule-blocks-picked.png',
+  )
+
+  await gallery.goto('ex-rest-indicator')
+  await screenshotStep('Rest indicator', match.restIndicator, 'match-rest-indicator.png')
+}
+
+test('the Match components section matches its screenshots and the gallery', async ({
+  designSystemPage,
+  referenceKitPage,
+}) => {
+  await test.step('app', () => matchScreenshots(designSystemPage))
+  await test.step('gallery', () => matchScreenshots(referenceKitPage))
+})
+
 // The overlays' behaviour, which jsdom can't show: the top layer, focus,
 // :focus-visible and layout. Each test runs on the app and on the gallery,
 // so both behave alike.
@@ -1397,6 +1502,117 @@ for (const site of ['app', 'gallery'] as const) {
       expect(detailsBox.y).toBeGreaterThanOrEqual(scheduleBox.y + scheduleBox.height)
       expect(detailsBox.x).toBe(scheduleBox.x)
       expect(detailsBox.x + detailsBox.width).toBeLessThanOrEqual(390)
+    })
+  })
+}
+
+// The match components' behaviour in a real browser: scoring, picking
+// blocks, keyboard tooltips and names at phone width. Each test runs on the
+// app and on the gallery, so both behave alike.
+for (const site of ['app', 'gallery'] as const) {
+  test.describe(`Match components on the ${site}`, () => {
+    let gallery: GalleryPage
+    test.beforeEach(({ designSystemPage, referenceKitPage }) => {
+      gallery = site === 'app' ? designSystemPage : referenceKitPage
+    })
+
+    test('a point flashes the number it changed, and Undo last point takes it back', async () => {
+      await gallery.goto('ex-score-entry-and-game-history')
+      const match = gallery.match
+      const undo = match.button('Undo last point')
+      await expect(undo).toBeDisabled()
+
+      await match.score('Wójcik-Szymańska')
+
+      await expect(match.points('Wójcik-Szymańska')).toHaveText('10')
+      await expect(match.points('Wójcik-Szymańska')).toHaveClass(/score-updated/)
+      await expect(match.points('Patel')).not.toHaveClass(/score-updated/)
+      await expect(match.history.getByRole('row').nth(2)).toHaveText(
+        /^Wójcik-Szymańska\s*8\s*11\s*9\s*11\s*10$/,
+      )
+      await undo.click()
+      await expect(match.points('Wójcik-Szymańska')).toHaveText('9')
+      await expect(undo).toBeDisabled()
+    })
+
+    test('a won game ends the match, and the toast’s Undo takes the winning point back', async () => {
+      await gallery.goto('ex-score-entry-and-game-history')
+      const match = gallery.match
+      await match.score('Wójcik-Szymańska')
+
+      await gallery.raiseToast(match.button('+1 Wójcik-Szymańska'), 'Game 5 to Wójcik-Szymańska, 11–9')
+      await expect(match.button('+1 Patel')).toBeDisabled()
+      await expect(match.button('+1 Wójcik-Szymańska')).toBeDisabled()
+      await expect(match.points('Wójcik-Szymańska')).toHaveText('0')
+      await gallery.toastButton('Undo').click()
+
+      await expect(match.points('Wójcik-Szymańska')).toHaveText('10')
+      await expect(match.points('Patel')).toHaveText('9')
+      await expect(match.button('+1 Patel')).toBeEnabled()
+    })
+
+    test('no block starts picked, and a click picks one', async () => {
+      await gallery.goto('ex-schedule-blocks')
+      const { scheduleBlocks } = gallery.match
+      await expect(scheduleBlocks.getByRole('button', { pressed: true })).toHaveCount(0)
+
+      await gallery.match.block('Dubois, Camille vs Lindqvist, Erik').click()
+
+      await expect(scheduleBlocks.getByRole('button', { pressed: true })).toHaveAccessibleName(
+        /Dubois, Camille vs Lindqvist, Erik/,
+      )
+    })
+
+    test('a block’s tooltip shows on keyboard focus with its full names', async ({ page }) => {
+      await gallery.goto('ex-schedule-blocks')
+      const first = gallery.match.block('Nguyen, Thanh vs Silva, Rafael')
+
+      await page.keyboard.press('Tab')
+
+      await expect(first).toBeFocused()
+      await expect(gallery.shownTooltip).toHaveText(
+        'Nguyen, Thanh vs Silva, Rafael · Table 1 · 10:30–11:05',
+      )
+    })
+
+    test('Game scores shows and hides a row’s game scores', async () => {
+      await gallery.goto('ex-match-row')
+      const row = gallery.match.row('Okafor-Adeyemi, Daniel vs Johansen-Whitfield, Annika')
+      const toggle = row.getByRole('button', { name: 'Game scores' })
+      const table = row.getByRole('table')
+      await expect(table).toBeHidden()
+
+      await toggle.click()
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+      await expect(table).toBeVisible()
+
+      await toggle.click()
+      await expect(table).toBeHidden()
+    })
+
+    test('at phone width the longest names wrap instead of being cut off', async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 })
+      await gallery.goto()
+      const match = gallery.match
+      const names = [
+        match.emptyAndDisconnected.getByText(
+          'Fernández-Castillo, Marisol / Kim, Hyun-woo',
+          { exact: true },
+        ),
+        match.scoreEntry.getByText('Wójcik-Szymańska, Agnieszka', { exact: true }),
+      ]
+
+      for (const name of names) {
+        await name.scrollIntoViewIfNeeded()
+        const { scrollWidth, clientWidth, height, lineHeight } = await name.evaluate((el) => ({
+          scrollWidth: el.scrollWidth,
+          clientWidth: el.clientWidth,
+          height: el.getBoundingClientRect().height,
+          lineHeight: parseFloat(el.ownerDocument.defaultView!.getComputedStyle(el).lineHeight),
+        }))
+        expect(scrollWidth).toBeLessThanOrEqual(clientWidth)
+        expect(height).toBeGreaterThan(lineHeight * 1.5)
+      }
     })
   })
 }

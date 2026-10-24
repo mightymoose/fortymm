@@ -3,6 +3,7 @@ import { useSingleSelect, type SingleSelectOptionProps } from '../../components/
 import { useTooltip } from '../../components/tooltipContext'
 import {
   clockTime,
+  matchLabel,
   matchScore,
   minutes,
   shortName,
@@ -109,10 +110,6 @@ export function FreeSlotBlock({ slot, from }: { slot: FreeSlot; from?: string })
     </div>
   )
 }
-
-// The players of a match as a block's selection reads them out.
-const matchLabel = (match: Match) =>
-  `${shortName(match.players[0])} vs ${shortName(match.players[1])}`
 
 // A day's schedule as match.js's `timeline()` draws it, styled by
 // `.fm-timeline` in styles/kit.css: a ruler every half hour with the time

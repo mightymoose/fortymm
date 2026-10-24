@@ -584,6 +584,7 @@ describe('Overlays', () => {
       'Containers',
       'Feedback',
       'Overlays',
+      'Match components',
     ])
   })
 
@@ -629,5 +630,96 @@ describe('Overlays', () => {
         .getAllByRole('option')
         .map((option) => option.querySelector('b')!.textContent),
     ).toEqual(['Patel, Meera'])
+  })
+})
+
+describe('Match components', () => {
+  it('shows a match row in each state', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const rows = within(designSystemPage.matchExample('Match row'))
+
+    for (const [name, status] of [
+      ['Okafor-Adeyemi, Daniel vs Johansen-Whitfield, Annika', 'Live'],
+      ['Patel, Meera vs Wójcik-Szymańska, Agnieszka', 'Live'],
+      ['Dubois, Camille vs Lindqvist, Erik', '12:15'],
+      ['Nguyen, Thanh vs Silva, Rafael', 'Final'],
+      ['Patel, Meera vs Park, Ji-ho', 'Needs decision'],
+    ]) {
+      expect(rows.getByRole('article', { name })).toHaveTextContent(status)
+    }
+    expect(
+      within(designSystemPage.matchExample('Empty and disconnected')).getByRole('article', {
+        name: 'Rossi, Giulia / Haddad, Youssef vs Fernández-Castillo, Marisol / Kim, Hyun-woo',
+      }),
+    ).toHaveTextContent('Scorer offline')
+  })
+
+  it('shows a match’s game scores from its row', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const row = within(
+      within(designSystemPage.matchExample('Match row')).getByRole('article', {
+        name: 'Nguyen, Thanh vs Silva, Rafael',
+      }),
+    )
+
+    await user.click(row.getByRole('button', { name: 'Game scores' }))
+
+    expect(
+      row.getByRole('table', { name: 'Game scores, Nguyen, Thanh vs Silva, Rafael' }),
+    ).toBeVisible()
+  })
+
+  it('says Assign a match is not wired up in this demo', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.click(designSystemPage.matchButton('Assign a match'))
+
+    expect(designSystemPage.toastRegion).toHaveTextContent(
+      '“Assign a match” isn’t wired up in this demo',
+    )
+  })
+
+  it('scores the deciding game, and the toast’s Undo takes the winning point back', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const pad = within(designSystemPage.matchExample('Score entry and game history'))
+
+    await user.click(designSystemPage.matchButton('+1 Wójcik-Szymańska'))
+    await user.click(designSystemPage.matchButton('+1 Wójcik-Szymańska'))
+
+    expect(designSystemPage.toastRegion).toHaveTextContent('Game 5 to Wójcik-Szymańska, 11–9')
+    expect(designSystemPage.matchButton('+1 Patel')).toBeDisabled()
+
+    await user.click(designSystemPage.toastButton('Undo'))
+
+    expect(pad.getByLabelText('Wójcik-Szymańska points')).toHaveTextContent('10')
+    expect(designSystemPage.matchButton('+1 Patel')).toBeEnabled()
+  })
+
+  it('starts with no schedule block pressed, and presses the one picked', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const blocks = within(designSystemPage.matchExample('Schedule blocks'))
+    expect(blocks.queryAllByRole('button', { pressed: true })).toEqual([])
+
+    await user.click(blocks.getByRole('button', { name: /Nguyen, Thanh vs Silva, Rafael/ }))
+
+    expect(blocks.getByRole('button', { name: /Nguyen, Thanh vs Silva, Rafael/ })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(await within(document.body).findByText('Nguyen vs Silva, selected')).toBeInTheDocument()
+  })
+
+  it('shows the rest left at the schedule’s 11:47', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const rest = within(designSystemPage.matchExample('Rest indicator'))
+
+    expect(rest.getByText('8 min left')).toBeVisible()
+    const meter = rest.getByRole('progressbar', { name: 'Rest elapsed' })
+    expect(meter).toHaveAttribute('aria-valuenow', '7')
+    expect(meter).toHaveAttribute('aria-valuemax', '15')
   })
 })

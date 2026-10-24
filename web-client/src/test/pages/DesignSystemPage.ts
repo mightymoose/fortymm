@@ -100,6 +100,21 @@ export class DesignSystemPage {
     return within(this.overlaysSection).getByRole('button', { name })
   }
 
+  get matchSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Match components' })
+  }
+
+  // The Match components section's button named `name`, e.g. "+1 Patel".
+  matchButton(name: string | RegExp): HTMLElement {
+    return within(this.matchSection).getByRole('button', { name })
+  }
+
+  // The Match components section's example titled `title`, e.g. "Match
+  // row".
+  matchExample(title: string): HTMLElement {
+    return within(this.matchSection).getByRole('article', { name: title })
+  }
+
   // The open dialog or sheet named `name`, e.g. "Patel vs Wójcik-Szymańska".
   dialog(name: string): HTMLElement {
     return screen.getByRole('dialog', { name })

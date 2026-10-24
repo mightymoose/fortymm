@@ -5,6 +5,7 @@ import { ButtonsSection } from './designSystem/ButtonsSection'
 import { ContainersSection } from './designSystem/ContainersSection'
 import { FeedbackSection } from './designSystem/FeedbackSection'
 import { FieldsSection } from './designSystem/FieldsSection'
+import { MatchSection } from './designSystem/MatchSection'
 import { OverlaysSection, WithdrawDialog } from './designSystem/OverlaysSection'
 import { SelectionSection } from './designSystem/SelectionSection'
 
@@ -36,6 +37,7 @@ export function DesignSystem() {
       <ContainersSection />
       <FeedbackSection />
       <OverlaysSection onWithdraw={openWithdrawDialog} onFindPlayer={findPlayer} />
+      <MatchSection />
       <WithdrawDialog ref={withdrawDialog} />
     </>
   )
