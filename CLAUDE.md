@@ -108,9 +108,10 @@ API's URL.
 ## References
 
 `references/` holds reference material that isn't built or deployed (see
-`references/README.md`). `references/fortymm-design-system/` is the FortyMM
-design system: read its `README.md` and `colors_and_type.css` before designing
-or styling UI.
+`references/README.md`). `references/deprecated/fortymm-design-system/` is
+the deprecated FortyMM design system. The app moves to the new design system
+step by step, and until then it still matches the deprecated one. Read its
+`README.md` and `colors_and_type.css` before designing or styling UI.
 
 ## api
 
@@ -368,8 +369,8 @@ container, so regenerate them there (`docker compose exec playwright npx
 playwright test --update-snapshots`, with the stack and dev server up as in
 `web-client:e2e`). `design-system.spec.ts` checks the design system page's
 header against the same screenshot as the reference kit's header
-(`references/fortymm-design-system/ui_kits/shadcn/index.html`, opened from
-disk with the app's copy swapped in), so the two must render identically.
+(`references/deprecated/fortymm-design-system/ui_kits/shadcn/index.html`,
+opened from disk with the app's copy swapped in), so the two must render identically.
 Each section has one journey test. It takes every screenshot of the section's
 cards on the app, then the same screenshots on the kit, each in its own
 `test.step`. The checks are soft, so one mismatch doesn't hide the rest. The
@@ -413,8 +414,8 @@ run's, and CI uploads them in the same `playwright-traces` artifact.
 The design system's styles apply to the whole app; `main.tsx` imports them:
 
 - `src/styles/tokens.css`: the tokens (CSS variables) from
-  `references/fortymm-design-system/colors_and_type.css`, plus the self-hosted
-  fonts in `src/assets/fonts/`.
+  `references/deprecated/fortymm-design-system/colors_and_type.css`, plus the
+  self-hosted fonts in `src/assets/fonts/`.
 - `src/styles/base.css`: the reset, type styles (also applied to `h1`-`h4`,
   `p` and `code`) and brand utilities from the same file, then the page
   chrome from the reference shadcn/ui kit: `.page` (the root route's

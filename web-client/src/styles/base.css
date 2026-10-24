@@ -1,7 +1,8 @@
 /* App-wide base styles: the reset, type and brand utilities from
-   references/fortymm-design-system/colors_and_type.css (with its heading
-   classes also applied to h1-h4), then the page chrome from the reference
-   shadcn/ui kit (references/fortymm-design-system/ui_kits/shadcn/index.html)
+   references/deprecated/fortymm-design-system/colors_and_type.css (with its
+   heading classes also applied to h1-h4), then the page chrome from the
+   reference shadcn/ui kit
+   (references/deprecated/fortymm-design-system/ui_kits/shadcn/index.html)
    and the components built from it.
    Every page gets these; /design-system shows them next to the reference. */
 

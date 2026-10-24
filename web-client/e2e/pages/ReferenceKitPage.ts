@@ -9,7 +9,7 @@ import { KitOverlaysSection } from './referenceKit/KitOverlaysSection.ts'
 // The design system's shadcn/ui kit page, opened straight from references/.
 // Its page chrome is what the app's design system page is built to match.
 const kitUrl = new URL(
-  '../../../references/fortymm-design-system/ui_kits/shadcn/index.html',
+  '../../../references/deprecated/fortymm-design-system/ui_kits/shadcn/index.html',
   import.meta.url,
 ).href
 
