@@ -554,9 +554,8 @@ container, e.g.
 
 ## Deploy
 
-Production is `https://fortymm.com` (and `www.fortymm.com`): a Cloudflare
-Worker serves the web-client and forwards `/api/*` to the API on Google Cloud
-Run, so the app's `/api` client is same-origin, as in dev, with no CORS.
+Production is `https://fortymm.com`: a Cloudflare Worker serves the
+web-client and forwards `/api/*` to the API on Google Cloud Run, so the app's `/api` client is same-origin, as in dev, with no CORS.
 
 The API's `*.run.app` URLs are public, so the Worker proves each request came
 through it. It sends the Worker secret in the `X-FortyMM-Worker-Secret`
@@ -627,10 +626,11 @@ answers 429 with `Retry-After: 60`. Cloudflare counts each location
 separately, so the limit is approximate. Previews get only the bindings under
 `previews` in `wrangler.jsonc`, so that block repeats the rate limit.
 Everything else goes to the static assets in `dist/` (the `ASSETS` binding).
-`assets.run_worker_first: ["/api/*"]` runs the Worker before the assets for
-those paths, and `not_found_handling: "single-page-application"` serves
-`index.html` for any other path with no matching file, so client-side routes
-load directly.
+`assets.run_worker_first: true` runs the Worker before the assets for every
+path, so the host redirect below also covers `/`. When the Worker passes a
+request to `ASSETS`, `not_found_handling: "single-page-application"` serves
+`index.html` for any path with no matching file. So client-side routes load
+directly.
 
 `API_ORIGIN` isn't in `wrangler.jsonc`: `web-client:deploy` and
 `web-client:preview` pass it with `--var` from the environment (CI sets it
@@ -641,7 +641,11 @@ they warn that the API will answer the Worker with a 403.
 
 Production is served on `fortymm.com` and `www.fortymm.com` (Custom Domains
 in `routes`, whose DNS records and certificates Cloudflare manages) and on
-`fortymm.mightymoose.workers.dev`.
+`fortymm.mightymoose.workers.dev`. Each host has its own cookie jar. So the
+Worker answers requests on `www.fortymm.com` and
+`fortymm.mightymoose.workers.dev` with a 301 to the same path and query on
+`fortymm.com`, and a browser keeps one cookie jar. This includes `/api/*`
+paths. The Worker names the two hosts exactly, so Previews get no redirect.
 
 Previews (`wrangler preview`, open beta) are served on
 `<preview-name>-fortymm.mightymoose.workers.dev` because `preview_urls` is on in
