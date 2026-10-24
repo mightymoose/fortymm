@@ -125,7 +125,13 @@ through FastAPI's `TestClient`).
   functions' names, so generated clients get names like `health`. If
   `WORKER_SECRET` is set, the app answers 403 to every request without a
   matching `X-FortyMM-Worker-Secret` header (see Deploy). Local dev, the
-  tests and `api:smoke` don't set it, so they need no secret.
+  tests and `api:smoke` don't set it, so they need no secret. The app
+  answers 415 to a `POST`, `PUT`, `PATCH` or `DELETE` whose `Content-Type`
+  isn't `application/json`. The check ignores case and parameters such as
+  `charset`. A cross-site HTML form can't send that type, so another site
+  can't make `POST /v1/session` replace a visitor's session. The 403 check
+  runs first. Both answer in the `errors` shape, such as `{"errors":
+  [{"status": "415", "title": "..."}]}`.
 - `v1/`: the `/v1` routes, one module per resource, each with its own
   `APIRouter` and Pydantic request/response models; `v1/__init__.py` mounts
   them. Annotate route return types with the response model.
@@ -144,10 +150,11 @@ through FastAPI's `TestClient`).
   `Player`. The model for the `sessions` table is `AuthSession`, so
   `Session` stays SQLAlchemy's. Use `relationship()` from `models.py`. It
   defaults to `lazy="raise"`, so a lazy load fails and every load shows in
-  its query. Code uses the mapped classes directly. The one extra type will
-  be `CurrentAccount = GuestAccount | VerifiedAccount`. The dependency that
-  reads the request's `AuthSession` loads the account into it, because a
-  nullable `email` can't tell a guest from a verified account.
+  its query. Code uses the mapped classes directly. The ids and emails use
+  the NewTypes `AccountId`, `PlayerId` and `Email` from `accounts.py`.
+  SQLAlchemy can't see through a NewType, so `Base.type_annotation_map`
+  gives each one its column type. The tables are `accounts`, `players`,
+  `player_managers` and `sessions` (see Accounts and sessions).
 - `/v1/health` runs `SELECT 1` and returns `{"data": {"database": "ok"}}`.
   The healthchecks, `api:smoke`, the 403 check and the post-deploy suite use
   it.
@@ -168,7 +175,56 @@ data lives in the `postgres-data` volume. The `api` service gets
 which `list-ports` prints. `api:test` starts `postgres` first, and the tests
 use the real database. A test that makes tables uses the
 `throwaway_database_url` fixture, a new database that the test drops after.
-Tables a test makes in `fortymm` would fail `alembic check`.
+Tables a test makes in `fortymm` would fail `alembic check`. The
+`migrated_database` fixture is an `Engine` for a throwaway database that the
+migrations ran on.
+
+### Accounts and sessions
+
+Every visitor gets a guest account the first time the app loads. A guest
+account has no `email`. A verified account has one, always lowercase.
+
+- `accounts.py`: `CurrentAccount = GuestAccount | VerifiedAccount`, the
+  account of a valid session. An adopted account (`adopted_into` set) is
+  neither kind, so its sessions are invalid. `auth.current_account()` decides
+  the kind in one place. It checks `adopted_into` first, then `email`.
+- Players are permanent. The `players_are_permanent` trigger refuses every
+  `DELETE` on `players`. An account manages players through
+  `player_managers`. Each row has `relationship` `self` or `managed`. An
+  account has at most one `self` player, and a player at most one `self`
+  account.
+- `ownership.py`: `OWNERSHIP_RULES` says what adoption and player merge do
+  to each foreign key to `accounts` or `players`. `tests/test_ownership.py`
+  reads every such foreign key from `information_schema`. It fails if one
+  has no entry. So a new foreign key to either table needs an entry in the
+  same change.
+- `POST /v1/session` (`v1/session.py`) starts or resumes the visitor's
+  session. With a valid session, it updates `accounts.last_seen_at`, moves
+  `sessions.expires_at` to 400 days from now and sets the same cookie
+  again. With no cookie, or an unknown, expired or adopted one, it makes a
+  guest account and a session.
+  It deletes the session row that the old cookie matched, and keeps that
+  row's account. Every response sets `Cache-Control: no-store`. The body is
+  `{"data": {"account": {"id": "...", "kind": "guest"}}}`, or `"verified"`.
+- The cookie is `__Host-fortymm_session`: 32 random bytes in base64url, with
+  `Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=34560000` (400 days).
+  `sessions.expires_at` also ends 400 days after the last `POST
+  /v1/session`. The API stores only the token's sha256, in
+  `sessions.token_hash`.
+- `auth.py`: a session is valid if its `token_hash` matches, `expires_at` is
+  in the future and its account has no `adopted_into`. A route that needs
+  the account takes a `RequestAccount` parameter. Without a valid session,
+  that dependency answers 401 in the `errors` shape. Only `POST /v1/session`
+  makes a guest account.
+- A route that writes as an account loads the account row with
+  `with_for_update(read=True)`, which is `SELECT ... FOR SHARE`. After the
+  lock, it checks `adopted_into` again and answers 401 if it is set. So a
+  write can't land on a guest account after an adoption moved its data.
+  `RequestAccount` takes no lock. `POST /v1/session` locks the account `FOR
+  UPDATE`, because it writes `last_seen_at`.
+- `alembic check` doesn't compare a partial index's `WHERE` clause. So
+  `tests/test_schema.py` checks each constraint, each index and the trigger
+  on a `migrated_database`.
 
 ### Migrations
 
