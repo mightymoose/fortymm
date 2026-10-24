@@ -1,35 +1,6 @@
 import type { Locator } from '@playwright/test'
 import { expect, test } from './fixtures.ts'
-import type { ButtonsSection } from './pages/designSystem/ButtonsSection.ts'
-import type { KitButtonsSection } from './pages/referenceKit/KitButtonsSection.ts'
-
-// Shows `target` alone, flush top-left with 24px padding, as the gallery's
-// `?only=<testid>` test mode does (see its TESTING.md). The mode's rules are
-// in kit.css, which the app has too, so this works the same on both pages.
-// Each example then starts on a whole pixel on both, whatever comes before
-// it on the page.
-async function isolate(target: Locator): Promise<void> {
-  // Show the whole page again first: a hidden target has no role to be
-  // found by.
-  await target
-    .page()
-    .locator('html')
-    .evaluate((html) => {
-      html.classList.remove('fm-only')
-      for (const marked of html.querySelectorAll('[data-fm-only], [data-fm-path]')) {
-        marked.removeAttribute('data-fm-only')
-        marked.removeAttribute('data-fm-path')
-      }
-    })
-  await target.evaluate((el) => {
-    const body = el.ownerDocument.body
-    el.ownerDocument.documentElement.classList.add('fm-only')
-    el.setAttribute('data-fm-only', '')
-    for (let up = el.parentElement; up && up !== body; up = up.parentElement) {
-      up.setAttribute('data-fm-path', '')
-    }
-  })
-}
+import type { GalleryPage } from './pages/GalleryPage.ts'
 
 // Checks `target` against the screenshot `name` in a step of its own. The
 // check is soft, so a mismatch fails the journey but the journey still takes
@@ -147,17 +118,16 @@ test.describe('intro', () => {
 })
 
 // Each section's journey takes the same screenshots on the app and then on
-// the gallery, so each pair must render identically. The resting
-// screenshots come first, before anything is hovered or focused.
-async function buttonsScreenshots(
-  buttons: ButtonsSection | KitButtonsSection,
-): Promise<void> {
-  await isolate(buttons.region)
+// the gallery, so each pair must render identically. It opens each section
+// and example on its own with `only`, then takes its resting screenshot
+// before anything is hovered or focused.
+async function buttonsScreenshots(gallery: GalleryPage): Promise<void> {
+  const buttons = gallery.buttons
+  await gallery.goto(buttons.testId)
   await screenshotStep('heading', buttons.heading, 'buttons-heading.png')
   await screenshotStep('lead', buttons.lead, 'buttons-lead.png')
-  await isolate(buttons.variants)
-  await screenshotStep('Variants', buttons.variants, 'buttons-variants.png')
-  await isolate(buttons.loadingAndDisabled)
+
+  await gallery.goto('ex-loading-and-disabled')
   await screenshotStep(
     'Loading and disabled',
     buttons.loadingAndDisabled,
@@ -168,7 +138,9 @@ async function buttonsScreenshots(
     buttons.button('Start match'),
     'button-disabled-hovered.png',
   )
-  await isolate(buttons.variants)
+
+  await gallery.goto('ex-variants')
+  await screenshotStep('Variants', buttons.variants, 'buttons-variants.png')
   for (const [name, file] of [
     ['Call to table', 'primary'],
     ['Reschedule', 'secondary'],
@@ -192,9 +164,6 @@ test('the Buttons section matches its screenshots and the gallery', async ({
   designSystemPage,
   referenceKitPage,
 }) => {
-  await designSystemPage.goto()
-  await test.step('app', () => buttonsScreenshots(designSystemPage.buttons))
-
-  await referenceKitPage.goto()
-  await test.step('gallery', () => buttonsScreenshots(referenceKitPage.buttons))
+  await test.step('app', () => buttonsScreenshots(designSystemPage))
+  await test.step('gallery', () => buttonsScreenshots(referenceKitPage))
 })

@@ -1,27 +1,17 @@
 import type { Locator, Page } from '@playwright/test'
-import { ButtonsSection } from './designSystem/ButtonsSection.ts'
+import { GalleryPage } from './GalleryPage.ts'
 
-// Page object for the design system page in the Playwright suite: the page
-// chrome, plus one object per section for its examples.
-export class DesignSystemPage {
-  readonly page: Page
+// Page object for the app's design system page in the Playwright suite. It
+// shows no loading screen, so there's nothing to wait out.
+export class DesignSystemPage extends GalleryPage {
   readonly loadingScreen: Locator
-  readonly title: Locator
-  readonly intro: Locator
-  readonly buttons: ButtonsSection
 
   constructor(page: Page) {
-    this.page = page
+    super(page)
     this.loadingScreen = page.getByRole('status', { name: 'Loading FortyMM' })
-    this.title = page.getByRole('heading', { level: 1 })
-    // The paragraph right after the title.
-    this.intro = page.getByRole('paragraph').first()
-    this.buttons = new ButtonsSection(page)
   }
 
-  // Opens the page. It shows no loading screen, so there's nothing to wait
-  // out.
-  async goto(): Promise<void> {
-    await this.page.goto('/design-system')
+  protected url(query: string): string {
+    return `/design-system${query}`
   }
 }

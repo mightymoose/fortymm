@@ -47,6 +47,7 @@ export function ButtonsSection() {
       lead="Label with the verb that happens. One primary per card or dialog."
     >
       <Example
+        testId="ex-variants"
         title="Variants"
         description="Primary for the main action, secondary for alternatives, ghost for low-weight actions in a row, danger for removal (always confirmed)."
       >
@@ -73,6 +74,7 @@ export function ButtonsSection() {
         </div>
       </Example>
       <Example
+        testId="ex-loading-and-disabled"
         title="Loading and disabled"
         description={
           'Loading keeps the button\'s colours and swaps the label ("Saving…"). Disabled looks the same under the pointer, and says why nearby.'
