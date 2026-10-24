@@ -46,13 +46,15 @@ working-directory label.
 then removes the stack's containers. The `dev` service stays up by running
 `sleep infinity`, and its healthcheck passes once the entrypoint has installed
 the container's tools, so `--wait` returns only when commands can be exec'd.
-The `api` service's healthcheck is a request to `/v1/health`, so `--wait`
-also blocks until the API answers and reaches the database. The `api` service
+The `api` service's healthcheck is a request to `/v1/health`. The API
+migrates its database before it answers, so `--wait` also blocks until the
+migrations ran and the API reaches the database. The `api` service
 starts after the `postgres` service is healthy (`pg_isready`). To add a project's checks, call its
 `<project>:ci` task from `[tasks.ci]`.
 
-`api:ci` runs `uv sync --locked`, ruff (lint and format), mypy and pytest in
-the running `api` container. `api:smoke` then builds the API's production
+`api:ci` runs `uv sync --locked`, ruff (lint and format), mypy, pytest and
+`alembic check` in the running `api` container. `alembic check` fails when
+the models and the migrations disagree. `api:smoke` then builds the API's production
 image (`api:build`), runs it with `PORT` set on the `postgres` service's
 network, and checks that `/v1/health` reaches the database.
 
@@ -126,11 +128,25 @@ through FastAPI's `TestClient`).
 - `v1/`: the `/v1` routes, one module per resource, each with its own
   `APIRouter` and Pydantic request/response models; `v1/__init__.py` mounts
   them. Annotate route return types with the response model.
-- `database.py`: the Postgres connections. If `DATABASE_URL` is set,
-  `create_app()` makes a psycopg `ConnectionPool` and opens it in the app's
-  lifespan. A route takes a connection from it with a `DatabaseConnection`
-  parameter. `DATABASE_URL` is optional off Cloud Run, so the OpenAPI export
-  runs with no database. On Cloud Run, `create_app()` raises without it.
+- `database.py`: the Postgres connections, through SQLAlchemy 2.0 and the
+  psycopg 3 driver. If `DATABASE_URL` is set, `create_app()` makes an
+  `Engine` (at most 4 connections) and a `sessionmaker`. The app's lifespan
+  migrates the database first (see Migrations). A route takes an ORM
+  `Session` with a `DatabaseSession` parameter. Each request runs in one
+  transaction. It commits before the response goes out, so a failed commit
+  answers 500. An exception rolls it back. `DATABASE_URL` is optional off
+  Cloud Run, so the OpenAPI export runs with no database. On Cloud Run,
+  `create_app()` raises without it.
+- `models.py`: the ORM's declarative `Base`. Its metadata has a naming
+  convention, so constraints get stable names in migrations. Mapped classes
+  subclass it and take the singular entity name, such as `Account` and
+  `Player`. The model for the `sessions` table is `AuthSession`, so
+  `Session` stays SQLAlchemy's. Use `relationship()` from `models.py`. It
+  defaults to `lazy="raise"`, so a lazy load fails and every load shows in
+  its query. Code uses the mapped classes directly. The one extra type will
+  be `CurrentAccount = GuestAccount | VerifiedAccount`. The dependency that
+  reads the request's `AuthSession` loads the account into it, because a
+  nullable `email` can't tell a guest from a verified account.
 - `/v1/health` runs `SELECT 1` and returns `{"data": {"database": "ok"}}`.
   The healthchecks, `api:smoke`, the 403 check and the post-deploy suite use
   it.
@@ -149,19 +165,46 @@ version as Cloud SQL), with user, password and database all `fortymm`. Its
 data lives in the `postgres-data` volume. The `api` service gets
 `DATABASE_URL` pointing at it. Port 5432 is published on a free host port,
 which `list-ports` prints. `api:test` starts `postgres` first, and the tests
-use the real database.
+use the real database. A test that makes tables uses the
+`throwaway_database_url` fixture, a new database that the test drops after.
+Tables a test makes in `fortymm` would fail `alembic check`.
+
+### Migrations
+
+Alembic migrates the database. `api/migrations/` holds `env.py`, the
+revision template and the revisions in `versions/`. `api/alembic.ini` points
+the CLI (run from `api/`) and the app at it. The app reads `alembic.ini`
+from its working directory: `api/` in dev and the tests, `/app` in the
+production image.
+
+- The app runs `alembic upgrade head` in its lifespan, before it serves. So
+  dev, the tests, `api:smoke` and Cloud Run all get the schema the same way.
+  If the database can't be reached or a migration fails, the API doesn't
+  start.
+- `env.py` takes a Postgres advisory lock before it migrates. A second
+  instance waits for the lock, then finds nothing left to apply.
+- Migrations are forward-only. The template has no `downgrade()`.
+  Autogenerate can't see triggers, functions or views, so write those as
+  `op.execute(...)`.
+- `api:revision` drafts a revision with autogenerate from the models'
+  changes. A person reviews every draft before commit. ruff fixes and
+  formats the draft, so it passes the ruff checks in `api:ci`.
+- `api:ci` runs `alembic check`, which fails when a model changes without a
+  revision.
 
 ```sh
 ./bin/mise run api:dev       # start the API and stream its logs
 ./bin/mise run api:test      # run the API's tests
 ./bin/mise run api:openapi   # regenerate the OpenAPI schema and client types
+./bin/mise run api:revision "add accounts"  # draft a migration from the models' changes
 ./bin/mise run api:build     # build the production image as fortymm-api-production
 ```
 
 `api/Dockerfile` is its production image, separate from the dev image: a
 multi-stage uv build (`uv sync --locked --no-dev`) that runs uvicorn as a
 non-root user on `$PORT` with `--root-path /api` and the proxy headers
-trusted, without `--reload`. `api:build` passes it the Python and uv versions
+trusted, without `--reload`. It copies `alembic.ini` and `migrations/` to
+its working directory, `/app`, for the startup migration. `api:build` passes it the Python and uv versions
 from `mise.container.toml`, so it runs the same ones as the dev container.
 
 ### OpenAPI schema and clients

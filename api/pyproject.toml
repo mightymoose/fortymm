@@ -5,9 +5,11 @@ description = "The FortyMM HTTP API"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "alembic>=1.20.1",
     "fastapi>=0.159.1",
-    "psycopg[binary,pool]>=3.3.6",
+    "psycopg[binary]>=3.3.6",
     "pydantic>=2.14.1",
+    "sqlalchemy>=2.1.6",
     "uvicorn[standard]>=0.54.0",
 ]
 
