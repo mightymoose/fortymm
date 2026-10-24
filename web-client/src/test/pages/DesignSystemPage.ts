@@ -52,6 +52,40 @@ export class DesignSystemPage {
     return within(this.feedbackSection).getByRole('article', { name: title })
   }
 
+  get overlaysSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Overlays' })
+  }
+
+  // The Overlays section's button named `name`, e.g. "Open match drawer".
+  overlaysButton(name: string): HTMLElement {
+    return within(this.overlaysSection).getByRole('button', { name })
+  }
+
+  // The open dialog or sheet named `name`, e.g. "Patel vs Wójcik-Szymańska".
+  dialog(name: string): HTMLElement {
+    return screen.getByRole('dialog', { name })
+  }
+
+  // The open dialogs and sheets.
+  get openDialogs(): HTMLElement[] {
+    return screen.queryAllByRole('dialog')
+  }
+
+  // The page's tooltip, or null while none shows.
+  get tooltip(): HTMLElement | null {
+    return screen.queryByRole('tooltip')
+  }
+
+  // The command palette's search field, while it's open.
+  get paletteSearch(): HTMLElement {
+    return within(this.dialog('Command palette')).getByRole('combobox')
+  }
+
+  // The command palette's group named `name`, e.g. "Go to", while it's open.
+  paletteGroup(name: string): HTMLElement {
+    return within(this.dialog('Command palette')).getByRole('group', { name })
+  }
+
   // Where the app's toasts show, bottom centre.
   get toastRegion(): HTMLElement {
     return screen.getByRole('status', { name: 'Notifications' })

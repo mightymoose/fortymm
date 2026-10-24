@@ -2,18 +2,18 @@ import { useId } from 'react'
 import { Button } from '../../components/Button'
 import { Icon } from '../../components/Icon'
 import { useToast } from '../../components/toastContext'
+import { useTooltip } from '../../components/tooltipContext'
 import { BusyDemoButton } from './BusyDemoButton'
 import { Example, GallerySection } from './GallerySection'
-
-// The reference's state matrix, which the app doesn't copy.
-const stateMatrixUrl =
-  'https://github.com/mightymoose/fortymm/blob/main/references/design-system/ui_kits/components/states.html'
+import { stateMatrixUrl } from './referenceLinks'
 
 // The design system page's Buttons section: the reference gallery's
-// `section-actions`.
-export function ButtonsSection() {
+// `section-actions`. "Withdraw player…" opens the page's withdraw dialog
+// through `onWithdraw`.
+export function ButtonsSection({ onWithdraw }: { onWithdraw: () => void }) {
   const reasonId = useId()
   const showToast = useToast()
+  const moreOptionsTip = useTooltip('More options')
   return (
     <GallerySection
       id="actions"
@@ -29,7 +29,9 @@ export function ButtonsSection() {
           <Button variant="primary">Call to table</Button>
           <Button variant="secondary">Reschedule</Button>
           <Button variant="ghost">Print score sheet</Button>
-          <Button variant="danger">Withdraw player…</Button>
+          <Button variant="danger" onClick={onWithdraw}>
+            Withdraw player…
+          </Button>
           <a className="fm-btn fm-btn--link" href="#match">
             View draw
           </a>
@@ -42,7 +44,7 @@ export function ButtonsSection() {
           <Button variant="secondary" size="lg">
             Large
           </Button>
-          <Button variant="secondary" icon aria-label="More options">
+          <Button variant="secondary" icon aria-label="More options" {...moreOptionsTip}>
             <Icon name="more" />
           </Button>
         </div>

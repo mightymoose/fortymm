@@ -1,6 +1,7 @@
 import type { Locator, Page } from '@playwright/test'
 import { ButtonsSection } from './designSystem/ButtonsSection.ts'
 import { FeedbackSection } from './designSystem/FeedbackSection.ts'
+import { OverlaysSection } from './designSystem/OverlaysSection.ts'
 
 // The design system gallery, as the app's /design-system or the reference
 // draws it: the page chrome, plus one object per section for its examples.
@@ -11,9 +12,15 @@ export abstract class GalleryPage {
   readonly intro: Locator
   readonly buttons: ButtonsSection
   readonly feedback: FeedbackSection
+  readonly overlays: OverlaysSection
   // Where raised toasts show, bottom centre, outside every section. Found
   // by its class, because the gallery's region has no name to find it by.
   readonly toasts: Locator
+  // The page's one tooltip, on <body>, while it's shown.
+  readonly shownTooltip: Locator
+  // The dialog that "Withdraw player…" opens, from the Buttons section and
+  // the Overlays section's Dialog example.
+  readonly withdrawDialog: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -22,7 +29,10 @@ export abstract class GalleryPage {
     this.intro = page.getByRole('paragraph').first()
     this.buttons = new ButtonsSection(page)
     this.feedback = new FeedbackSection(page)
+    this.overlays = new OverlaysSection(page)
     this.toasts = page.locator('.fm-toast-region')
+    this.shownTooltip = page.getByRole('tooltip')
+    this.withdrawDialog = page.getByTestId('dialog-withdraw')
   }
 
   // The button named `name` on a raised toast, e.g. "Undo".
@@ -35,6 +45,19 @@ export abstract class GalleryPage {
   async raiseToast(trigger: Locator, message: string): Promise<void> {
     await trigger.click()
     await this.toasts.getByText(message, { exact: true }).waitFor()
+  }
+
+  // Rests the pointer on `trigger` and waits for its tooltip, `text`. In
+  // test mode it shows at once.
+  async showTooltip(trigger: Locator, text: string): Promise<void> {
+    await trigger.hover()
+    await this.page.getByRole('tooltip', { name: text, exact: true }).waitFor()
+  }
+
+  // Opens the withdraw dialog with `trigger`, a "Withdraw player…" button.
+  async openWithdrawDialog(trigger: Locator): Promise<void> {
+    await trigger.click()
+    await this.withdrawDialog.waitFor()
   }
 
   // The page's URL with `query` added.

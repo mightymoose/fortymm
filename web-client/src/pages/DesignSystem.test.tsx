@@ -1,7 +1,8 @@
-import { act, within } from '@testing-library/react'
+import { act, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DesignSystemPage } from '../test/pages/DesignSystemPage'
+import { TOOLTIP_DELAY_MS } from '../components/TooltipProvider'
 import { BUSY_MS } from './designSystem/BusyDemoButton'
 
 describe('DesignSystem', () => {
@@ -69,6 +70,32 @@ describe('DesignSystem', () => {
 
       expect(designSystemPage.toastRegion).toHaveTextContent(
         'Result saved. Okafor-Adeyemi ▲ +9',
+      )
+    })
+
+    it('shows More options in a tooltip on hover', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      const designSystemPage = await DesignSystemPage.render()
+      const moreOptions = designSystemPage.button('More options')
+
+      await user.hover(moreOptions)
+      act(() => vi.advanceTimersByTime(TOOLTIP_DELAY_MS))
+
+      expect(designSystemPage.tooltip).toHaveTextContent('More options')
+      expect(moreOptions).toHaveAccessibleDescription('More options')
+    })
+
+    it('asks before Withdraw player… withdraws', async () => {
+      const user = userEvent.setup()
+      const designSystemPage = await DesignSystemPage.render()
+
+      await user.click(designSystemPage.button('Withdraw player…'))
+
+      expect(
+        designSystemPage.dialog('Withdraw Okafor-Adeyemi from the draw?'),
+      ).toHaveTextContent(
+        "Johansen-Whitfield advances to the quarterfinal. This can't be undone once her next match starts.",
       )
     })
 
@@ -178,5 +205,140 @@ describe('Feedback', () => {
     act(() => vi.advanceTimersByTime(BUSY_MS))
     expect(button).toHaveAccessibleName('Send a reminder')
     expect(designSystemPage.toastRegion).toBeEmptyDOMElement()
+  })
+})
+
+describe('Overlays', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('shows each tooltip trigger’s tooltip on hover', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.hover(designSystemPage.overlaysButton('Move to free table'))
+    act(() => vi.advanceTimersByTime(TOOLTIP_DELAY_MS))
+
+    expect(designSystemPage.tooltip).toHaveTextContent(
+      'Moves this match to the next free table and tells both players. Their rest times are kept.',
+    )
+  })
+
+  it('opens the withdraw dialog, and Keep in draw closes it', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.click(designSystemPage.overlaysButton('Withdraw player…'))
+    const dialog = designSystemPage.dialog('Withdraw Okafor-Adeyemi from the draw?')
+    await user.click(within(dialog).getByRole('button', { name: 'Keep in draw' }))
+
+    expect(designSystemPage.openDialogs).toEqual([])
+  })
+
+  it('opens the match drawer on Patel vs Wójcik-Szymańska', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.click(designSystemPage.overlaysButton('Open match drawer'))
+
+    const drawer = designSystemPage.dialog('Patel vs Wójcik-Szymańska')
+    expect(drawer).toHaveTextContent('Table 3 · Open singles · Round of 32')
+    expect(
+      within(drawer).getByRole('article', {
+        name: 'Patel, Meera vs Wójcik-Szymańska, Agnieszka',
+      }),
+    ).toBeVisible()
+    expect(
+      within(drawer).getByRole('table', {
+        name: 'Game scores, Patel, Meera vs Wójcik-Szymańska, Agnieszka',
+      }),
+    ).toBeVisible()
+    expect(within(drawer).getByRole('link', { name: 'Open scoring' })).toHaveAttribute(
+      'href',
+      'https://github.com/mightymoose/fortymm/blob/main/references/design-system/ui_kits/tournament/mobile.html',
+    )
+  })
+
+  it('offers the tables the match isn’t on, with Table 4 off while its scorer is offline', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.click(designSystemPage.overlaysButton('Move match to another table…'))
+
+    const sheet = designSystemPage.dialog('Move to another table')
+    const tables = within(sheet).getAllByRole('radio')
+    expect(tables.map((table) => table.getAttribute('value'))).toEqual([
+      'Table 2',
+      'Table 5',
+      'Table 4',
+    ])
+    expect(tables[0]).toBeChecked()
+    expect(tables[2]).toBeDisabled()
+  })
+
+  it('opens the command palette from its button', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.click(designSystemPage.overlaysButton('Search commands'))
+
+    expect(designSystemPage.paletteSearch).toHaveFocus()
+  })
+
+  it('lists only the sections the page has under Go to', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.keyboard('{Control>}k{/Control}')
+
+    expect(
+      within(designSystemPage.paletteGroup('Go to'))
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['Buttons', 'Feedback', 'Overlays'])
+  })
+
+  it('goes to a section from the palette', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    await user.keyboard('{Control>}k{/Control}')
+
+    await user.type(designSystemPage.paletteSearch, 'feedback{Enter}')
+
+    await waitFor(() =>
+      expect(
+        within(designSystemPage.feedbackSection).getByRole('heading', { level: 2 }),
+      ).toHaveFocus(),
+    )
+  })
+
+  it('opens the withdraw dialog from the palette', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    await user.keyboard('{Control>}k{/Control}')
+
+    await user.type(designSystemPage.paletteSearch, 'withdraw{Enter}')
+
+    expect(
+      await within(document.body).findByRole('dialog', {
+        name: 'Withdraw Okafor-Adeyemi from the draw?',
+      }),
+    ).toBeVisible()
+  })
+
+  it('says a player isn’t wired up yet', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    await user.keyboard('{Control>}k{/Control}')
+
+    await user.type(designSystemPage.paletteSearch, 'patel{Enter}')
+
+    await waitFor(() =>
+      expect(designSystemPage.toastRegion).toHaveTextContent(
+        '“Patel, Meera” isn’t wired up in this demo',
+      ),
+    )
   })
 })
