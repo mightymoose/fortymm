@@ -62,6 +62,7 @@ export class ReferenceKitPage {
   readonly commandCard: Locator
   readonly feedbackSectionHeading: Locator
   readonly feedbackSectionLead: Locator
+  readonly alertCard: Locator
   constructor(page: Page) {
     this.page = page
     this.header = page.getByRole('banner')
@@ -284,6 +285,13 @@ export class ReferenceKitPage {
       level: 2,
     })
     this.feedbackSectionLead = feedbackSection.getByRole('paragraph').first()
+    this.alertCard = feedbackSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Alert',
+        exact: true,
+      }),
+    })
   }
 
   async goto(): Promise<void> {

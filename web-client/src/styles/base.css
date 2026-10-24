@@ -2544,6 +2544,72 @@ h4, .h4 {
   min-height: 340px;
 }
 
+/* =========================================================================
+   Alert (the reference kit's .alert, .at, .ad, .icon and its variants): an
+   .alert holding an .alert-icon beside an .alert-title over an
+   .alert-description. The kit's variants .alert-default, .alert-warn,
+   .alert-destructive and .alert-success are .alert--default and so on. The
+   tints are the kit's, raw.
+   ========================================================================= */
+.alert {
+  padding: 16px 18px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  gap: 12px;
+}
+
+.alert-title {
+  font: 600 14px var(--font-ui);
+  margin: 0 0 4px;
+}
+
+.alert-description {
+  font-size: 13px;
+  color: var(--fg-3);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.alert-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  color: var(--fg-2);
+  margin-top: 1px;
+}
+
+.alert--default {
+  background: var(--ink-900);
+}
+
+.alert--warn {
+  background: rgba(255,196,61,0.08);
+  border-color: rgba(255,196,61,0.3);
+}
+
+.alert--warn .alert-icon, .alert--warn .alert-title {
+  color: var(--warn);
+}
+
+.alert--destructive {
+  background: rgba(255,77,109,0.08);
+  border-color: rgba(255,77,109,0.3);
+}
+
+.alert--destructive .alert-icon, .alert--destructive .alert-title {
+  color: var(--loss);
+}
+
+.alert--success {
+  background: rgba(0,226,154,0.08);
+  border-color: rgba(0,226,154,0.3);
+}
+
+.alert--success .alert-icon, .alert--success .alert-title {
+  color: var(--serve-500);
+}
+
 /* A .slider-field whose header is only its label, styled as a
    .field-label, as the kit draws a bare .label over its Sheet's slider.
    The readout is still there for assistive tech, hidden (below). */

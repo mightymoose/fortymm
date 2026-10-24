@@ -1,4 +1,5 @@
 import { Accordion, type AccordionItem } from '../components/Accordion'
+import { Alert } from '../components/Alert'
 import { AspectRatio } from '../components/AspectRatio'
 import { Avatar, type AvatarTone } from '../components/Avatar'
 import { AvatarGroup } from '../components/AvatarGroup'
@@ -754,7 +755,29 @@ export function DesignSystem() {
         id="feedback"
         title="Feedback"
         lead="Alerts and toasts. The app talking back."
-      />
+      >
+        <ComponentCard title="Alert" tag="4 variants">
+          <div className="col">
+            <Alert title="Heads up" headingLevel={4}>
+              The next round starts in 12 minutes.
+            </Alert>
+            <Alert variant="warn" title="Late check-in" headingLevel={4}>
+              3 players haven't checked in. They'll be defaulted at 6:00pm.
+            </Alert>
+            <Alert
+              variant="destructive"
+              title="Match disputed"
+              headingLevel={4}
+            >
+              A player has filed a score dispute. Review the appeal in the
+              admin panel.
+            </Alert>
+            <Alert variant="success" title="Match logged" headingLevel={4}>
+              Your rating moved from 1602 to 1620 (+18).
+            </Alert>
+          </div>
+        </ComponentCard>
+      </Section>
     </>
   )
 }

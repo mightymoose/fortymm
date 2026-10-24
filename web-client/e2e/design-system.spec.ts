@@ -2861,6 +2861,20 @@ test.describe('Feedback section', () => {
   })
 })
 
+test.describe('Alert card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.alertCard).toHaveScreenshot('alert-card.png')
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.alertCard).toHaveScreenshot('alert-card.png')
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -3535,6 +3549,34 @@ test.describe('on a phone', () => {
       expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width - 33)
     }
     expect(context.y).toBeGreaterThan(dropdown.y + dropdown.height)
+  })
+
+  // The alerts' descriptions wrap inside the card.
+  test('the alert card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.alertCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.alertCard.boundingBox())!
+    for (const name of [
+      'Heads up',
+      'Late check-in',
+      'Match disputed',
+      'Match logged',
+    ]) {
+      const box = (await designSystemPage.alert(name).boundingBox())!
+      // Inside the card's 1px border and 32px padding on each side.
+      expect(box.x, name).toBeGreaterThanOrEqual(card.x + 33)
+      expect(box.x + box.width, name).toBeLessThanOrEqual(
+        card.x + card.width - 33,
+      )
+    }
   })
 
   // The palette is wider than its frame's content, so it narrows to fit,

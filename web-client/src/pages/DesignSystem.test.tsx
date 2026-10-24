@@ -837,6 +837,47 @@ describe('DesignSystem', () => {
     ).toBeTruthy()
   })
 
+  it('has an Alert card first in the Feedback section', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.alertCardHeading).toHaveTextContent('Alert')
+    expect(designSystemPage.alertCard).toHaveTextContent('4 variants')
+    expect(
+      designSystemPage.feedbackSectionLead.compareDocumentPosition(
+        designSystemPage.alertCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's four alerts, one per variant", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(
+      designSystemPage.alerts.map((alert) => [
+        within(alert).getByRole('heading', { level: 4 }).textContent,
+        within(alert).getByRole('paragraph').textContent,
+        alert.className,
+      ]),
+    ).toEqual([
+      ['Heads up', 'The next round starts in 12 minutes.', 'alert alert--default'],
+      [
+        'Late check-in',
+        "3 players haven't checked in. They'll be defaulted at 6:00pm.",
+        'alert alert--warn',
+      ],
+      [
+        'Match disputed',
+        'A player has filed a score dispute. Review the appeal in the admin panel.',
+        'alert alert--destructive',
+      ],
+      [
+        'Match logged',
+        'Your rating moved from 1602 to 1620 (+18).',
+        'alert alert--success',
+      ],
+    ])
+  })
+
   it('has a Dialog · Alert Dialog card first in the Overlays section', async () => {
     const designSystemPage = await DesignSystemPage.render()
 

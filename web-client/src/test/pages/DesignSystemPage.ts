@@ -637,4 +637,17 @@ export class DesignSystemPage {
   get feedbackSectionLead(): HTMLElement {
     return within(this.feedbackSection).getAllByRole('paragraph')[0]
   }
+
+  get alertCard(): HTMLElement {
+    return within(this.feedbackSection).getByRole('article', { name: 'Alert' })
+  }
+
+  get alertCardHeading(): HTMLElement {
+    return within(this.alertCard).getByRole('heading', { level: 3 })
+  }
+
+  // The alert card's alerts, in order.
+  get alerts(): HTMLElement[] {
+    return within(this.alertCard).getAllByRole('alert')
+  }
 }
