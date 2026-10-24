@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# Create or drop a Preview's own database on the Cloud SQL instance `fortymm`.
+# cloud-run-deploy creates it on each Preview deploy, and
+# `mise run api:preview-delete` drops it. Needs GCP_PROJECT and gcloud,
+# authenticated as an account that can manage the instance's databases.
+#
+#   preview-database create NAME  create the database if it's missing
+#   preview-database drop NAME    drop the database if it's there
+#
+# NAME is a Preview name from bin/preview-name. The database is
+# fortymm_preview_<NAME> with dashes as underscores, so psql needs no quotes.
+# Everything but the database's name goes to stderr, so the last line of
+# stdout is that name.
+set -euo pipefail
+
+: "${GCP_PROJECT:?}"
+usage='usage: preview-database create|drop NAME'
+action=${1:?$usage}
+name=${2:?$usage}
+case $name in
+  [a-z]*[!a-z0-9-]* | [!a-z]*)
+    echo "preview-database: $name isn't a Preview name (see bin/preview-name)" >&2
+    exit 2 ;;
+esac
+db="fortymm_preview_${name//-/_}"
+instance=fortymm
+gc() { gcloud "$@" --instance "$instance" --project "$GCP_PROJECT"; }
+
+# Cloud SQL runs one admin operation per instance at a time, so two branches'
+# CI runs can collide. Retry only that error, every 15 seconds for about 5
+# minutes.
+admin() {
+  local tries=0 status out
+  while :; do
+    status=0
+    out=$(gc "$@" 2>&1) || status=$?
+    [ -z "$out" ] || printf '%s\n' "$out" >&2
+    [ "$status" -ne 0 ] || return 0
+    grep -qiE 'operation.*in progress' <<<"$out" || return "$status"
+    if [ "$tries" -ge 20 ]; then
+      echo "Another operation on $instance is still running after about 5 minutes." >&2
+      return "$status"
+    fi
+    tries=$((tries + 1))
+    echo "Another operation on $instance is running, trying again in 15 seconds..." >&2
+    sleep 15
+  done
+}
+
+case $action in
+  create | drop) ;;
+  *)
+    echo "$usage" >&2
+    exit 2 ;;
+esac
+# list (unlike describe) succeeds with no output when the database is
+# missing, so an auth or API error still fails the script. Not inside the
+# `if`, where set -e wouldn't stop on it.
+names=$(gc sql databases list --filter "name=$db" --format 'value(name)')
+
+case $action in
+  create)
+    if grep -qx "$db" <<<"$names"; then
+      echo "$db already exists" >&2
+    else
+      echo "Creating $db..." >&2
+      admin sql databases create "$db"
+    fi
+    echo "$db" ;;
+  drop)
+    if grep -qx "$db" <<<"$names"; then
+      echo "Dropping $db..." >&2
+      admin sql databases delete "$db" --quiet
+    else
+      echo "$db doesn't exist, so there's nothing to drop" >&2
+    fi ;;
+esac

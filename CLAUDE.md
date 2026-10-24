@@ -464,7 +464,7 @@ that. The Worker secret section below describes where the value lives.
 ./bin/mise run api:url              # print the production API's URL
 ./bin/mise run web-client:deploy    # wrangler deploy of web-client/dist and the Worker
 ./bin/mise run web-client:preview   # a Cloudflare Preview named after the git branch
-./bin/mise run api:preview-delete <branch>         # remove that branch's API Preview tag
+./bin/mise run api:preview-delete <branch>         # remove that branch's API Preview tag and database
 ./bin/mise run web-client:preview-delete <branch>  # delete that branch's Cloudflare Preview
 ```
 
@@ -576,13 +576,15 @@ They need `gcloud` logged in as an account that can deploy, and Docker.
   with the branch's Preview name and no traffic, served on
   `https://<preview-name>---<api-preview's host>`. Each push moves the tag to
   the new revision. Keeping Previews on their own service means a branch
-  deploy can never change production's traffic or settings.
+  deploy can never change production's traffic or settings. The revision
+  uses the branch's own database (see The database below).
 - `api:preview-delete <branch>` removes the branch's tag from `api-preview`
-  (`gcloud run services update-traffic --remove-tags`). It first checks that
-  the service and the tag exist, and does nothing if either is missing. The
-  revision stays, untagged and with no traffic. Cloud Run keeps a limited
-  number of revisions per service, and an idle revision costs nothing, so
-  nothing deletes revisions.
+  (`gcloud run services update-traffic --remove-tags`), then drops the
+  branch's database. It first checks that the service and the tag exist, and
+  skips the tag removal if either is missing. It drops the database in every
+  case, because a database can outlive its tag. The revision stays, untagged
+  and with no traffic. Cloud Run keeps a limited number of revisions per
+  service, and an idle revision costs nothing, so nothing deletes revisions.
 
 #### The database
 
@@ -595,11 +597,24 @@ Enterprise edition, `db-f1-micro`, 10 GB SSD) in the same region.
 | Target | Database | User | Password secret | Runs as |
 | --- | --- | --- | --- | --- |
 | `api` | `fortymm` | `api` | `api-database-password` | `api-runtime` |
-| `api-preview` | `fortymm_preview` | `api_preview` | `api-preview-database-password` | `api-preview-runtime` |
+| `api-preview` | `fortymm_preview_<name>` | `api_preview` | `api-preview-database-password` | `api-preview-runtime` |
 
-Every Preview shares `fortymm_preview`. Only the matching runtime service
-account can read each password secret, so branch code can't read
-production's password. The instance costs about $9-10 a month and never scales to zero.
+Each Preview gets its own database, because the API migrates its database at
+startup and two branches can have different schemas.
+`api/deploy/preview-database` makes the name. It is `fortymm_preview_` and
+then the Preview name with dashes changed to underscores
+(`feat-db-per-preview` -> `fortymm_preview_feat_db_per_preview`). `cloud-run-deploy` creates the
+database on the branch's first Preview deploy. `api:preview-delete` drops it,
+and the preview-cleanup workflow runs that task when the branch is deleted.
+All Previews connect as `api_preview`. Cloud SQL runs one admin operation per
+instance at a time, so `preview-database` retries a create or drop that
+collides with another one for about 5 minutes.
+
+Only the matching runtime service account can read each password secret, so
+branch code can't read production's password. The instance allows 25
+connections. Production holds up to 12 (3 instances with 4 each), and each
+warm Preview holds up to 4, so about 3 warm Previews fit at once. The
+instance costs about $9-10 a month and never scales to zero.
 
 #### The Worker secret
 

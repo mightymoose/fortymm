@@ -33,9 +33,11 @@ version=${WORKER_SECRET_VERSION:-$(gcloud secrets versions list api-worker-secre
   --format='value(name.basename())')}
 : "${version:?api-worker-secret has no enabled version (see api/deploy/README.md)}"
 
-# Production and the Previews share the Cloud SQL instance, but each has its
-# own database, user and password secret, and runs as its own service
-# account, so a Preview can't read production's password.
+# Production and the Previews share the Cloud SQL instance. Production has
+# its own database, user and password secret, and runs as its own service
+# account, so a Preview can't read production's password. The Previews share
+# one user, but each gets its own database, because the API migrates it at
+# startup and two branches can have different schemas.
 if [ -z "$tag" ]; then
   service=api
   runtime=api-runtime
@@ -47,7 +49,7 @@ else
   service=api-preview
   runtime=api-preview-runtime
   db_user=api_preview
-  db_name=fortymm_preview
+  db_name=$("$(dirname "$0")/preview-database" create "$tag")
   db_password=api-preview-database-password
   max_instances=1
 fi
