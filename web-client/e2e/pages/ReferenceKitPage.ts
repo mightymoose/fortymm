@@ -60,6 +60,10 @@ export class ReferenceKitPage {
   readonly hoverCardCard: Locator
   readonly menuCard: Locator
   readonly commandCard: Locator
+  readonly feedbackSectionHeading: Locator
+  readonly feedbackSectionLead: Locator
+  readonly alertCard: Locator
+  readonly toastCard: Locator
   constructor(page: Page) {
     this.page = page
     this.header = page.getByRole('banner')
@@ -274,6 +278,25 @@ export class ReferenceKitPage {
       has: page.getByRole('heading', {
         level: 3,
         name: 'Command',
+        exact: true,
+      }),
+    })
+    const feedbackSection = page.locator('#feedback')
+    this.feedbackSectionHeading = feedbackSection.getByRole('heading', {
+      level: 2,
+    })
+    this.feedbackSectionLead = feedbackSection.getByRole('paragraph').first()
+    this.alertCard = feedbackSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Alert',
+        exact: true,
+      }),
+    })
+    this.toastCard = feedbackSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Sonner / Toast',
         exact: true,
       }),
     })

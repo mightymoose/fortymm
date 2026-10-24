@@ -1,4 +1,5 @@
 import { within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DesignSystemPage } from '../test/pages/DesignSystemPage'
 
@@ -819,6 +820,138 @@ describe('DesignSystem', () => {
         designSystemPage.overlaysSection,
       ) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
+  })
+
+  it('has a Feedback section after Overlays, with a lead line', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.feedbackSectionHeading).toHaveTextContent(
+      'Feedback',
+    )
+    expect(designSystemPage.feedbackSectionLead).toHaveTextContent(
+      'Alerts and toasts. The app talking back.',
+    )
+    expect(
+      designSystemPage.overlaysSection.compareDocumentPosition(
+        designSystemPage.feedbackSection,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('has an Alert card first in the Feedback section', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.alertCardHeading).toHaveTextContent('Alert')
+    expect(designSystemPage.alertCard).toHaveTextContent('4 variants')
+    expect(
+      designSystemPage.feedbackSectionLead.compareDocumentPosition(
+        designSystemPage.alertCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's four alerts, one per variant", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(
+      designSystemPage.alerts.map((alert) => [
+        within(alert).getByRole('heading', { level: 4 }).textContent,
+        within(alert).getByRole('paragraph').textContent,
+        alert.className,
+      ]),
+    ).toEqual([
+      ['Heads up', 'The next round starts in 12 minutes.', 'alert alert--default'],
+      [
+        'Late check-in',
+        "3 players haven't checked in. They'll be defaulted at 6:00pm.",
+        'alert alert--warn',
+      ],
+      [
+        'Match disputed',
+        'A player has filed a score dispute. Review the appeal in the admin panel.',
+        'alert alert--destructive',
+      ],
+      [
+        'Match logged',
+        'Your rating moved from 1602 to 1620 (+18).',
+        'alert alert--success',
+      ],
+    ])
+  })
+
+  it('has a Sonner / Toast card after the Alert card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.toastCardHeading).toHaveTextContent(
+      'Sonner / Toast',
+    )
+    expect(designSystemPage.toastCard).toHaveTextContent('4 variants')
+    expect(
+      designSystemPage.alertCard.compareDocumentPosition(
+        designSystemPage.toastCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's four toasts, only the first with an action", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(
+      designSystemPage.toasts.map((toast) => [
+        within(toast).getByRole('heading', { level: 4 }).textContent,
+        within(toast).getByRole('paragraph').textContent,
+        toast.className,
+        within(toast)
+          .getAllByRole('button')
+          .map((button) => button.textContent),
+      ]),
+    ).toEqual([
+      [
+        'A new version of FortyMM is ready',
+        'Reload to get the latest update.',
+        'toast toast--info',
+        ['Reload', ''],
+      ],
+      ['Match logged', 'Rating: 1620 (+18)', 'toast toast--success', ['']],
+      [
+        "Couldn't save",
+        'Try again — your changes are still in the editor.',
+        'toast toast--error',
+        [''],
+      ],
+      [
+        'Reminder',
+        "You're up next on Court 3.",
+        'toast toast--info',
+        [''],
+      ],
+    ])
+  })
+
+  it('removes a toast when it is dismissed', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.click(designSystemPage.toastDismissButton("Couldn't save"))
+
+    expect(
+      designSystemPage.toasts.map(
+        (toast) => within(toast).getByRole('heading').textContent,
+      ),
+    ).toEqual(['A new version of FortyMM is ready', 'Match logged', 'Reminder'])
+  })
+
+  it('removes the first toast when its Reload action is clicked', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.click(designSystemPage.toastActionButton('Reload'))
+
+    expect(
+      designSystemPage.toasts.map(
+        (toast) => within(toast).getByRole('heading').textContent,
+      ),
+    ).toEqual(['Match logged', "Couldn't save", 'Reminder'])
   })
 
   it('has a Dialog · Alert Dialog card first in the Overlays section', async () => {

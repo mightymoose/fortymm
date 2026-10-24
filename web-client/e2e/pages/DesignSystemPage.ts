@@ -100,6 +100,11 @@ export class DesignSystemPage {
   readonly commandBox: Locator
   readonly commandInput: Locator
   readonly commandList: Locator
+  readonly feedbackSection: Locator
+  readonly feedbackSectionHeading: Locator
+  readonly feedbackSectionLead: Locator
+  readonly alertCard: Locator
+  readonly toastCard: Locator
   constructor(page: Page) {
     this.page = page
     this.loadingScreen = page.getByRole('status', { name: 'Loading FortyMM' })
@@ -346,6 +351,22 @@ export class DesignSystemPage {
     this.commandList = this.commandCard.getByRole('listbox', {
       name: 'Command',
     })
+    this.feedbackSection = page.getByRole('region', { name: 'Feedback' })
+    this.feedbackSectionHeading = this.feedbackSection.getByRole('heading', {
+      level: 2,
+    })
+    // The first paragraph: the cards in the section have paragraphs too.
+    this.feedbackSectionLead = this.feedbackSection
+      .getByRole('paragraph')
+      .first()
+    this.alertCard = this.feedbackSection.getByRole('article', {
+      name: 'Alert',
+      exact: true,
+    })
+    this.toastCard = this.feedbackSection.getByRole('article', {
+      name: 'Sonner / Toast',
+      exact: true,
+    })
   }
 
   // A component card's title, in its header.
@@ -563,6 +584,29 @@ export class DesignSystemPage {
   // The command palette's option named `name`, e.g. "Log a match".
   commandOption(name: string): Locator {
     return this.commandList.getByRole('option', { name, exact: true })
+  }
+
+  // The alert card's alert titled `name`, e.g. "Heads up".
+  alert(name: string): Locator {
+    return this.alertCard.getByRole('alert', { name, exact: true })
+  }
+
+  // The toast card's toast titled `name`, e.g. "Reminder".
+  toast(name: string): Locator {
+    return this.toastCard.getByRole('status', { name, exact: true })
+  }
+
+  // The close button of the toast titled `title`.
+  toastDismissButton(title: string): Locator {
+    return this.toastCard.getByRole('button', {
+      name: `Dismiss "${title}"`,
+      exact: true,
+    })
+  }
+
+  // The toast card's action button named `name`, e.g. "Reload".
+  toastActionButton(name: string): Locator {
+    return this.toastCard.getByRole('button', { name, exact: true })
   }
 
   // Clicks the middle of the text `name` in `card` with a plain mouse click.

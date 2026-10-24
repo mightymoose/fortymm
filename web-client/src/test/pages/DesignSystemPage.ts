@@ -624,4 +624,57 @@ export class DesignSystemPage {
   get commandList(): HTMLElement {
     return within(this.commandCard).getByRole('listbox', { name: 'Command' })
   }
+
+  get feedbackSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Feedback' })
+  }
+
+  get feedbackSectionHeading(): HTMLElement {
+    return within(this.feedbackSection).getByRole('heading', { level: 2 })
+  }
+
+  // The first paragraph: the cards in the section have paragraphs too.
+  get feedbackSectionLead(): HTMLElement {
+    return within(this.feedbackSection).getAllByRole('paragraph')[0]
+  }
+
+  get alertCard(): HTMLElement {
+    return within(this.feedbackSection).getByRole('article', { name: 'Alert' })
+  }
+
+  get alertCardHeading(): HTMLElement {
+    return within(this.alertCard).getByRole('heading', { level: 3 })
+  }
+
+  // The alert card's alerts, in order.
+  get alerts(): HTMLElement[] {
+    return within(this.alertCard).getAllByRole('alert')
+  }
+
+  get toastCard(): HTMLElement {
+    return within(this.feedbackSection).getByRole('article', {
+      name: 'Sonner / Toast',
+    })
+  }
+
+  get toastCardHeading(): HTMLElement {
+    return within(this.toastCard).getByRole('heading', { level: 3 })
+  }
+
+  // The toast card's toasts, in order.
+  get toasts(): HTMLElement[] {
+    return within(this.toastCard).queryAllByRole('status')
+  }
+
+  // The close button of the toast titled `title`.
+  toastDismissButton(title: string): HTMLElement {
+    return within(this.toastCard).getByRole('button', {
+      name: `Dismiss "${title}"`,
+    })
+  }
+
+  // The toast card's action button named `name`, e.g. "Reload".
+  toastActionButton(name: string): HTMLElement {
+    return within(this.toastCard).getByRole('button', { name })
+  }
 }

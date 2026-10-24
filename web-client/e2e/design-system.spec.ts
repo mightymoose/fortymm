@@ -52,11 +52,11 @@ test.describe('header', () => {
   })
 })
 
-// The intro, the Forms & Input, Data Display, Navigation and Overlays
-// sections and their component cards use the reference kit's own copy, so
-// they're compared with the kit as is. The kit's sections go on to more
-// cards than the app has yet, so each section's heading, lead and cards are
-// compared one by one.
+// The intro, the Forms & Input, Data Display, Navigation, Overlays and
+// Feedback sections and their component cards use the reference kit's own
+// copy, so they're compared with the kit as is. The kit's sections go on to
+// more cards than the app has yet, so each section's heading, lead and cards
+// are compared one by one.
 test.describe('intro', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
@@ -2837,6 +2837,149 @@ test.describe('Command', () => {
   })
 })
 
+test.describe('Feedback section', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.feedbackSectionHeading).toHaveScreenshot(
+      'feedback-heading.png',
+    )
+    await expect(designSystemPage.feedbackSectionLead).toHaveScreenshot(
+      'feedback-lead.png',
+    )
+  })
+
+  test('matches the reference kit section', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.feedbackSectionHeading).toHaveScreenshot(
+      'feedback-heading.png',
+    )
+    await expect(referenceKitPage.feedbackSectionLead).toHaveScreenshot(
+      'feedback-lead.png',
+    )
+  })
+})
+
+test.describe('Alert card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.alertCard).toHaveScreenshot('alert-card.png')
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.alertCard).toHaveScreenshot('alert-card.png')
+  })
+})
+
+// Nothing is hovered or focused first, so the buttons show their resting
+// styles.
+test.describe('Sonner / Toast card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.toastCard).toHaveScreenshot('toast-card.png')
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.toastCard).toHaveScreenshot('toast-card.png')
+  })
+})
+
+// The kit's toasts are static, with no focus style, so the tests below are
+// the app's alone.
+test.describe('Sonner / Toast', () => {
+  const orange = 'rgb(255, 122, 26)'
+  const none = 'rgba(0, 0, 0, 0)'
+  const hover = 'rgba(255, 255, 255, 0.04)'
+  // --fg-1, --fg-2 and --fg-3.
+  const fg1 = 'rgb(247, 248, 251)'
+  const fg2 = 'rgb(228, 231, 239)'
+  const fg3 = 'rgb(169, 176, 194)'
+
+  test.beforeEach(async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+  })
+
+  // The screenshot can't see it: --bg-hover is white at 4%, under its
+  // color threshold.
+  test('hovering a close button lightens it', async ({ designSystemPage }) => {
+    const close = designSystemPage.toastDismissButton('Reminder')
+    await expect(close).toHaveCSS('background-color', none)
+    await expect(close).toHaveCSS('color', fg3)
+
+    await close.hover()
+
+    await expect(close).toHaveCSS('background-color', hover)
+    await expect(close).toHaveCSS('color', fg1)
+  })
+
+  test('hovering the action dims it', async ({ designSystemPage }) => {
+    const reload = designSystemPage.toastActionButton('Reload')
+    await expect(reload).toHaveCSS('background-color', fg1)
+
+    await reload.hover()
+
+    await expect(reload).toHaveCSS('background-color', fg2)
+  })
+
+  // A click removes the toast, so the pointer's focus is checked with the
+  // button held down.
+  test('keyboard focus shows the outline, a press of the pointer none', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const reload = designSystemPage.toastActionButton('Reload')
+    const close = designSystemPage.toastDismissButton(
+      'A new version of FortyMM is ready',
+    )
+    await reload.focus()
+    await page.keyboard.press('Shift+Tab')
+
+    for (const button of [reload, close]) {
+      await page.keyboard.press('Tab')
+      await expect(button).toBeFocused()
+      await expect(button).toHaveCSS('outline', `${orange} solid 2px`)
+      await expect(button).toHaveCSS('outline-offset', '2px')
+    }
+
+    const reminder = designSystemPage.toastDismissButton('Reminder')
+    await reminder.hover()
+    await page.mouse.down()
+    await expect(reminder).toBeFocused()
+    await expect(reminder).toHaveCSS('outline-style', 'none')
+    await page.mouse.up()
+  })
+
+  test('dismissing a toast removes it', async ({ designSystemPage }) => {
+    await designSystemPage.toastDismissButton("Couldn't save").click()
+
+    await expect(designSystemPage.toast("Couldn't save")).toHaveCount(0)
+    await expect(designSystemPage.toastCard.getByRole('status')).toHaveCount(3)
+  })
+
+  test("the action removes its toast and doesn't reload the page", async ({
+    designSystemPage,
+    page,
+  }) => {
+    let loads = 0
+    page.on('load', () => loads++)
+
+    await designSystemPage.toastActionButton('Reload').click()
+
+    await expect(
+      designSystemPage.toast('A new version of FortyMM is ready'),
+    ).toHaveCount(0)
+    await expect(designSystemPage.toastCard.getByRole('status')).toHaveCount(3)
+    expect(loads).toBe(0)
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -3511,6 +3654,62 @@ test.describe('on a phone', () => {
       expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width - 33)
     }
     expect(context.y).toBeGreaterThan(dropdown.y + dropdown.height)
+  })
+
+  // The alerts' descriptions wrap inside the card.
+  test('the alert card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.alertCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.alertCard.boundingBox())!
+    for (const name of [
+      'Heads up',
+      'Late check-in',
+      'Match disputed',
+      'Match logged',
+    ]) {
+      const box = (await designSystemPage.alert(name).boundingBox())!
+      // Inside the card's 1px border and 32px padding on each side.
+      expect(box.x, name).toBeGreaterThanOrEqual(card.x + 33)
+      expect(box.x + box.width, name).toBeLessThanOrEqual(
+        card.x + card.width - 33,
+      )
+    }
+  })
+
+  // The toasts are wider than the card's content, so they narrow to fit.
+  test('the toast card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.toastCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.toastCard.boundingBox())!
+    for (const name of [
+      'A new version of FortyMM is ready',
+      'Match logged',
+      "Couldn't save",
+      'Reminder',
+    ]) {
+      const box = (await designSystemPage.toast(name).boundingBox())!
+      // Inside the card's 1px border and 32px padding on each side.
+      expect(box.x, name).toBeGreaterThanOrEqual(card.x + 33)
+      expect(box.x + box.width, name).toBeLessThanOrEqual(
+        card.x + card.width - 33,
+      )
+    }
   })
 
   // The palette is wider than its frame's content, so it narrows to fit,

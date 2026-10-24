@@ -2544,6 +2544,175 @@ h4, .h4 {
   min-height: 340px;
 }
 
+/* =========================================================================
+   Alert (the reference kit's .alert, .at, .ad, .icon and its variants): an
+   .alert holding an .alert-icon beside an .alert-title over an
+   .alert-description. The kit's variants .alert-default, .alert-warn,
+   .alert-destructive and .alert-success are .alert--default and so on. The
+   tints are the kit's, raw.
+   ========================================================================= */
+.alert {
+  padding: 16px 18px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border-subtle);
+  display: flex;
+  gap: 12px;
+}
+
+.alert-title {
+  font: 600 14px var(--font-ui);
+  margin: 0 0 4px;
+}
+
+.alert-description {
+  font-size: 13px;
+  color: var(--fg-3);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.alert-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  color: var(--fg-2);
+  margin-top: 1px;
+}
+
+.alert--default {
+  background: var(--ink-900);
+}
+
+.alert--warn {
+  background: rgba(255,196,61,0.08);
+  border-color: rgba(255,196,61,0.3);
+}
+
+.alert--warn .alert-icon, .alert--warn .alert-title {
+  color: var(--warn);
+}
+
+.alert--destructive {
+  background: rgba(255,77,109,0.08);
+  border-color: rgba(255,77,109,0.3);
+}
+
+.alert--destructive .alert-icon, .alert--destructive .alert-title {
+  color: var(--loss);
+}
+
+.alert--success {
+  background: rgba(0,226,154,0.08);
+  border-color: rgba(0,226,154,0.3);
+}
+
+.alert--success .alert-icon, .alert--success .alert-title {
+  color: var(--serve-500);
+}
+
+/* =========================================================================
+   Toast (the reference kit's Sonner: .sonner, .sonner-body, .ti, .td,
+   .sonner-actions, .sonner-action, .sonner-close and its variants): a
+   .toast holding a .toast-body (a .toast-title over a .toast-description),
+   an optional .toast-actions row and the .toast-close button. The kit's
+   .sonner-info, .sonner-success and .sonner-error are .toast--info and so
+   on. The buttons take the .button focus outline, keyboard focus only. The
+   kit gives them none.
+   ========================================================================= */
+.toast {
+  position: relative;
+  background: var(--ink-800);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  padding: 14px 16px;
+  box-shadow: var(--shadow-lg);
+  width: 380px;
+  /* Where the card is narrower (e.g. on a phone), the toast narrows to
+     fit. */
+  max-width: 100%;
+}
+
+.toast-body {
+  padding-right: 28px;
+}
+
+.toast-title {
+  font: 500 14px var(--font-ui);
+  margin: 0 0 2px;
+  color: var(--fg-1);
+}
+
+.toast-description {
+  font-size: 12px;
+  color: var(--fg-3);
+  margin: 0;
+}
+
+.toast-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.toast-action {
+  background: var(--fg-1);
+  color: var(--ink-900);
+  border: 0;
+  border-radius: var(--r-sm);
+  padding: 6px 12px;
+  font: 500 12px var(--font-ui);
+  cursor: pointer;
+}
+
+.toast-action:hover {
+  background: var(--fg-2);
+}
+
+.toast-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  line-height: 1;
+  transition: background 120ms, color 120ms;
+}
+
+.toast-close:hover {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+
+.toast-action:focus-visible, .toast-close:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+.toast--success {
+  border-left: 3px solid var(--serve-500);
+}
+
+.toast--error {
+  border-left: 3px solid var(--loss);
+}
+
+.toast--info {
+  border-left: 3px solid var(--info);
+}
+
+/* The Sonner / Toast card's .col, with the kit's inline width. */
+.toast-demo {
+  max-width: 440px;
+}
+
 /* A .slider-field whose header is only its label, styled as a
    .field-label, as the kit draws a bare .label over its Sheet's slider.
    The readout is still there for assistive tech, hidden (below). */
