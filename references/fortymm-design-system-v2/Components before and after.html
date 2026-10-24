@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Overview" name="Components before and after (v2 → v2.1)" subtitle="Tooltip, toast, card, field, buttons, match row" viewport="1280x1200" -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>FortyMM v2.1 · Components before and after</title>
+<link rel="stylesheet" href="colors_and_type.css"><link rel="stylesheet" href="ui_kits/components/kit.css">
+<style>
+body{margin:0}
+.wrap{max-width:1180px;margin:0 auto;padding:56px 24px 120px}
+h1{margin:0 0 12px;font:700 40px/1.1 var(--font-ui);letter-spacing:-0.02em}
+.lead{margin:0;max-width:760px;font:400 17px/1.55 var(--font-ui);color:var(--fg-2)}
+.pair{margin-top:96px}
+.pair>h2{margin:0 0 6px;font:600 24px/1.25 var(--font-ui)}
+.pair>p{margin:0 0 28px;max-width:760px;font:400 15px/1.55 var(--font-ui);color:var(--fg-3)}
+.ba{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:24px 64px}
+.ba>div{min-width:0;display:flex;flex-direction:column;gap:16px}
+.lbl{font:600 13px var(--font-ui);color:var(--fg-3)}.lbl.new{color:var(--fg-1)}
+.vo{display:inline-flex;margin-top:16px;font:500 12px var(--font-ui);color:var(--fg-3);box-shadow:inset 0 0 0 1px var(--border-subtle);border-radius:4px;padding:3px 7px}
+/* v2 reference styles, reproduced for comparison only */
+.o-tip{display:inline-block;padding:6px 10px;border-radius:6px;background:var(--chalk-50);color:var(--ink-950);font:500 13px var(--font-ui);box-shadow:var(--shadow-overlay);max-width:max-content;white-space:nowrap}
+.o-panel{background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:8px;padding:16px}
+.o-toast{display:flex;align-items:center;gap:16px;padding:12px 16px;border-radius:8px;background:var(--bg-panel);border:1px solid var(--border-subtle);max-width:420px}
+.o-toast span{flex:1;font:400 14px/1.4 var(--font-ui);color:var(--fg-1)}
+.o-alert{display:flex;gap:12px;align-items:flex-start;padding:12px 16px;border-radius:8px;border:1px solid var(--border-subtle);background:var(--bg-panel)}
+.o-alert i{flex:none;width:20px;height:20px;border-radius:50%;display:grid;place-items:center;font:700 12px var(--font-ui);font-style:normal;color:var(--ink-950);background:var(--green-400)}
+.o-alert b{display:block;font:600 15px var(--font-ui);color:var(--fg-1)}.o-alert span{font:400 14px/1.45 var(--font-ui);color:var(--fg-2)}
+.o-btn{display:inline-flex;align-items:center;height:40px;padding:0 16px;border-radius:8px;border:1px solid transparent;font:600 14px var(--font-ui);background:transparent;color:var(--fg-1)}
+.o-btn.p{background:var(--accent);color:var(--on-accent)}.o-btn.s{border-color:var(--ink-500)}
+.o-btn:disabled{background:var(--bg-panel);color:var(--fg-disabled)}
+.o-btn.p:disabled.hv{background:var(--accent-hover);color:var(--on-accent)}
+.o-f{display:flex;flex-direction:column;gap:6px}.o-f label{font:500 13px var(--font-ui);color:var(--fg-2)}
+.o-in{height:40px;padding:0 12px;box-sizing:border-box;background:var(--bg-panel);border:1px solid var(--ink-500);border-radius:6px;color:var(--fg-1);font:400 15px var(--font-ui)}
+.o-in.e{border-color:var(--danger)}.o-in.ef{border-color:var(--accent);box-shadow:var(--focus-ring)}
+.o-help{font:400 13px var(--font-ui);color:var(--fg-3)}
+.o-ck{display:inline-flex;gap:10px;align-items:center;font:400 15px var(--font-ui)}.o-ck i{width:18px;height:18px;border:1px solid var(--ink-500);background:var(--bg-panel);border-radius:4px}
+.o-m{border-top:1px solid var(--border-subtle);border-bottom:1px solid var(--border-subtle);padding:12px 0;display:flex;flex-direction:column;gap:6px}
+.o-pr{display:grid;grid-template-columns:minmax(0,1fr) 14px 28px 44px;align-items:center;gap:8px}
+.o-pr .n{font:500 17px/1.25 var(--font-ui);color:var(--fg-2)}.o-pr .g{font:500 15px var(--font-num);color:var(--fg-3);text-align:right}.o-pr .p{font:700 28px/1 var(--font-num);color:var(--fg-1);text-align:right}
+.o-wrap{border:1px solid var(--border-subtle);border-radius:8px;padding:16px}
+.ctx{display:flex;flex-direction:column;gap:12px;align-items:flex-start}
+.ctx .anchor{font:600 13px var(--font-ui);padding:6px 8px;border:1px solid var(--border-control);border-radius:6px}
+</style></head>
+<body><main class="wrap">
+<h1>Components: before and after</h1>
+<p class="lead">v2 calmed the system down; v2.1 gives each component its own structure so roles are recognisable at a glance. Left is v2 as shipped, right is v2.1 from the shared <code>kit.css</code>.</p>
+<span class="vo">Visual only · examples are static</span>
+
+<section class="pair" data-testid="ba-tooltip"><h2>Tooltip</h2><p>The white tooltip was the brightest thing on screen — brighter than the score. Now it's the dark raised surface with a quiet edge and a smaller shadow, wraps at 280px, and appears on keyboard focus too.</p>
+<div class="ba"><div data-testid="ba-tooltip--before"><span class="lbl">Before</span><div class="ctx"><span class="o-tip">Johansen-Whitfield, Annika vs Rossi, Giulia · 11:05–11:40</span><span class="anchor">Johansen-Whitfield<br>Rossi</span></div></div>
+<div data-testid="ba-tooltip--after"><span class="lbl new">After</span><div class="ctx"><span class="fm-tooltip fm-tooltip--static">Johansen-Whitfield, Annika vs Rossi, Giulia · Table 1 · 11:05–11:40</span><button class="fm-slot" data-state="upcoming" style="--w:154px"><span class="fm-slot__names"><span>Johansen-Whitfield</span><span>Rossi</span></span><span class="fm-slot__time">11:05–11:40</span></button></div></div></div></section>
+
+<section class="pair" data-testid="ba-toast"><h2>Toast</h2><p>The toast shared a panel's fill, border and padding, and looked identical to an in-page alert. Now it's a single compact line on the raised surface with the overlay shadow, a green check, Undo as the action and a dismiss button. Errors moved out of toasts entirely.</p>
+<div class="ba"><div data-testid="ba-toast--before"><span class="lbl">Before</span><div class="o-toast"><span>Match saved. Nguyen <span class="rating-up">▲ +12</span></span><button class="o-btn">Undo</button></div><div class="o-alert"><i>✓</i><div><b>Schedule updated</b><span>Expected finish is now 18:45.</span></div></div></div>
+<div data-testid="ba-toast--after"><span class="lbl new">After</span><div class="fm-toast"><span data-icon="check"></span><span class="fm-toast__msg">Result saved. Nguyen <span class="rating-up">▲ +12</span></span><button class="fm-btn fm-btn--sm fm-toast__action">Undo</button><button class="fm-btn fm-btn--sm fm-toast__close" aria-label="Dismiss"><span data-icon="x" class="fm-ic--sm"></span></button></div><p class="fm-notice fm-notice--success"><span data-icon="check"></span><span>Schedule updated. Expected finish 18:45.</span></p></div></div></section>
+
+<section class="pair" data-testid="ba-card"><h2>Card</h2><p>The panel was a bordered box with a grey label as its heading and every line at a similar weight. The card has a real title, status at the top right, details grouped as label/value pairs, the rest time as an inline notice, and actions in a footer with the primary first.</p>
+<div class="ba"><div data-testid="ba-card--before"><span class="lbl">Before</span><div class="o-panel" style="display:flex;flex-direction:column;gap:8px"><span class="label">Your next match</span><span style="font:600 22px var(--font-ui)">Table 2 · <span class="num">19:40</span></span><span class="body">vs Park, Ji-ho</span><span style="font:400 14px var(--font-ui);color:var(--rest)">Rest until 19:35</span><div style="display:flex;gap:12px;margin-top:4px"><button class="o-btn p">I'm ready</button><button class="o-btn">Directions to table</button></div></div></div>
+<div data-testid="ba-card--after"><span class="lbl new">After</span><section class="fm-card"><div class="fm-card__head"><div><h3 class="fm-card__title">Your next match</h3><p class="fm-card__sub">Open singles · Round of 16</p></div><span class="fm-status"><span data-icon="clock"></span><span class="num">19:40</span></span></div><div class="fm-card__body"><dl class="fm-dl"><div><dt>Opponent</dt><dd>Park, Ji-ho</dd></div><div><dt>Table</dt><dd>Table 2</dd></div></dl><p class="fm-notice fm-notice--rest"><span data-icon="clock"></span><span>You rest until <span class="num">19:35</span>.</span></p></div><div class="fm-card__foot"><button class="fm-btn fm-btn--primary">I'm at the table</button><button class="fm-btn fm-btn--ghost">Directions</button></div></section></div></div></section>
+
+<section class="pair" data-testid="ba-fields"><h2>Fields</h2><p>Field and checkbox edges were the same grey as dividers, and a focused invalid field lost its red edge to the orange ring. Edges now use <code>--border-field</code> (3:1); errors add a 2px red edge, an icon and a fix, and keep all three while focused. Disabled fields have one consistent look.</p>
+<div class="ba"><div data-testid="ba-fields--before"><span class="lbl">Before</span><div class="o-f"><label>Table</label><input class="o-in ef" value="9" tabindex="-1" aria-label="Table, before"><span class="o-help" style="color:var(--danger)">This venue has 6 tables. Pick 1–6.</span></div><div class="o-f"><label>Entry fee</label><input class="o-in" value="Free" disabled aria-label="Fee, before"></div><span class="o-ck"><i></i>Needs umpire</span></div>
+<div data-testid="ba-fields--after"><span class="lbl new">After</span><div class="fm-field"><label class="fm-label" for="ba1">Table</label><input id="ba1" class="fm-input fm-input--num is-focus" value="9" aria-invalid="true" tabindex="-1" aria-describedby="ba1e"><p class="fm-error" id="ba1e"><span data-icon="error"></span><span>This venue has 6 tables. Enter 1–6.</span></p></div><div class="fm-field"><label class="fm-label" for="ba2">Entry fee</label><input id="ba2" class="fm-input" value="Free" disabled><p class="fm-help">Set by the club.</p></div><label class="fm-check"><input type="checkbox" tabindex="-1">Needs an umpire</label></div></div></section>
+
+<section class="pair" data-testid="ba-buttons"><h2>Buttons</h2><p>Loading used the disabled style, so "Saving…" was dim grey; disabled primary buttons still lit up on hover. Loading now keeps its colours with a static ring; disabled looks the same under the pointer; secondary edges are brighter.</p>
+<div class="ba"><div data-testid="ba-buttons--before"><span class="lbl">Before</span><div style="display:flex;flex-wrap:wrap;gap:12px"><button class="o-btn p">Start match</button><button class="o-btn s">Call to table</button><button class="o-btn p" disabled>Saving…</button><button class="o-btn p hv" disabled>Start match <span style="font-weight:400;margin-left:6px">(hovered)</span></button></div></div>
+<div data-testid="ba-buttons--after"><span class="lbl new">After</span><div style="display:flex;flex-wrap:wrap;gap:12px"><button class="fm-btn fm-btn--primary">Start match</button><button class="fm-btn fm-btn--secondary">Call to table</button><button class="fm-btn fm-btn--primary" aria-busy="true">Saving…</button><button class="fm-btn fm-btn--primary is-hover" disabled>Start match</button></div><p class="fm-help">The last button is disabled and hovered.</p></div></div></section>
+
+<section class="pair" data-testid="ba-match-row"><h2>Match row</h2><p>Games won and current points sat side by side in similar mono type, so "1 8" read as one number. Games are now a boxed tally, points stay large, both columns are labelled, the full game history opens from a tap target, and long names wrap.</p>
+<div class="ba"><div data-testid="ba-match-row--before"><span class="lbl">Before</span><div class="o-m"><div style="display:flex;gap:12px;align-items:center"><span class="live-marker">Live</span><span class="meta">Table 3 · Round of 16 · Game 3</span></div><div class="o-pr"><span class="n">Nguyen, Thanh</span><span class="serve-marker"></span><span class="g">1</span><span class="p">8</span></div><div class="o-pr"><span class="n">Okafor, Daniel</span><span></span><span class="g">1</span><span class="p">6</span></div></div></div>
+<div data-testid="ba-match-row--after"><span class="lbl new">After</span><div class="fm-matches" id="mr"></div></div></div></section>
+</main>
+<script src="ui_kits/components/match.js"></script><script src="ui_kits/components/kit.js"></script>
+<script>document.getElementById('mr').innerHTML=FMMatch.row(FMMatch.find('a2'),{idPrefix:'ba'});FM.icons()</script>
+</body></html>

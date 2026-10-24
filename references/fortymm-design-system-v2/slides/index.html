@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Slides" name="Slides · Sample deck" subtitle="Title, section, number, comparison, quote, venue scoreboard, closing" viewport="1280x720" -->
+<html lang="en"><head><meta charset="UTF-8"><title>FortyMM — Sample slides</title>
+<link rel="stylesheet" href="../colors_and_type.css">
+<script src="deck-stage.js"></script>
+<style>
+html,body{margin:0;background:#000}
+section{background:var(--ink-950);color:var(--fg-1);font-family:var(--font-ui);padding:120px 140px;box-sizing:border-box;display:flex;flex-direction:column}
+.kicker{font:500 30px var(--font-ui);color:var(--fg-3);margin:0 0 28px}
+.t1{font:700 120px/1.05 var(--font-ui);letter-spacing:-0.03em;margin:0;max-width:1500px;text-wrap:balance}
+.t2{font:600 72px/1.1 var(--font-ui);letter-spacing:-0.02em;margin:0 0 48px;max-width:1500px;text-wrap:balance}
+.lead{font:400 38px/1.45 var(--font-ui);color:var(--fg-2);margin:40px 0 0;max-width:1300px;text-wrap:pretty}
+.foot{margin-top:auto;display:flex;align-items:center;gap:20px;font:500 26px var(--font-ui);color:var(--fg-3)}
+.foot img{height:44px}
+.big{font:700 280px/1 var(--font-num);letter-spacing:-0.04em;color:var(--fg-1)}
+.cmp{display:grid;grid-template-columns:1fr 1fr;gap:48px}
+.cmp h3{font:600 40px var(--font-ui);margin:0 0 16px}
+.cmp ul{list-style:none;margin:0;padding:0}
+.cmp li{font:400 32px/1.4 var(--font-ui);color:var(--fg-2);padding:20px 0;border-top:1px solid var(--border-subtle)}
+.cmp li b{font-family:var(--font-num);color:var(--fg-1)}
+.q{font:500 76px/1.2 var(--font-ui);letter-spacing:-0.02em;margin:0;max-width:1500px;text-wrap:balance}
+.who{font:400 32px var(--font-ui);color:var(--fg-3);margin-top:56px}
+.sb{display:grid;grid-template-columns:minmax(0,1fr) 40px 120px 260px;align-items:center;gap:32px;padding:36px 0;border-bottom:1px solid var(--border-subtle)}
+.sb .nm{font:400 150px/1 var(--font-display);letter-spacing:0.01em}
+.sb .g{font:600 72px var(--font-num);color:var(--fg-3);text-align:right}
+.sb .p{font:700 220px/1 var(--font-num);letter-spacing:-0.04em;text-align:right}
+.sb .srv{width:36px;height:36px;border-radius:50%;background:var(--serving)}
+</style></head>
+<body>
+<deck-stage width="1920" height="1080">
+
+<section data-label="Title">
+<p class="kicker">Spring club meeting · 2026</p>
+<h1 class="t1">Running the Spring Open on FortyMM</h1>
+<p class="lead">How we'll score matches, call players and keep the day on time across six tables.</p>
+<div class="foot"><img src="../assets/logo-wordmark.svg" alt="FortyMM"></div>
+</section>
+
+<section data-label="Section" style="background:var(--ink-900);justify-content:center">
+<p class="kicker">Part 2</p>
+<h2 class="t1">On the day</h2>
+<p class="lead">What players, umpires and the control desk will see.</p>
+</section>
+
+<section data-label="Big number">
+<p class="kicker">Last year's Spring Open</p>
+<div class="big">47 min</div>
+<p class="lead" style="margin-top:24px">How late the final started. This year the schedule re-plans whenever a match runs long, and the control desk sees the expected finish all day.</p>
+</section>
+
+<section data-label="Comparison">
+<h2 class="t2">What changes for the control desk</h2>
+<div class="cmp">
+<div><h3 style="color:var(--fg-3)">Last year</h3><ul><li>Paper draw sheets on the wall</li><li>Calling players by walking the hall</li><li>Rest times checked by hand</li><li>Final started <b>47 min</b> late</li></ul></div>
+<div><h3>This year</h3><ul><li>Live draw on phones and the venue screen</li><li>Players called to a table from the desk</li><li>Rest conflicts flagged with a fix</li><li>Expected finish shown all day</li></ul></div>
+</div>
+</section>
+
+<section data-label="Quote" style="justify-content:center">
+<p class="q">“I could see which table was free and who was still resting without leaving the desk.”</p>
+<p class="who">Tournament director, Riverside TT autumn league</p>
+</section>
+
+<section data-label="Venue scoreboard" style="padding:80px 120px">
+<div style="display:flex;justify-content:space-between;align-items:center;font:500 36px var(--font-ui);color:var(--fg-2)"><span>Table 3 · Round of 16 · Game 4</span><span class="live-marker" style="font-size:36px;gap:14px">Live</span></div>
+<div style="margin-top:auto">
+<div class="sb"><span class="nm">Nguyen</span><span class="srv" aria-label="Serving"></span><span class="g">2</span><span class="p">9</span></div>
+<div class="sb" style="border-bottom:0"><span class="nm">Okafor</span><span></span><span class="g">1</span><span class="p">7</span></div>
+</div>
+<div style="margin-top:auto;font:400 30px var(--font-num);color:var(--fg-3)">11–6 · 9–11 · 11–8</div>
+</section>
+
+<section data-label="Closing" style="justify-content:center">
+<h2 class="t1">Questions before Saturday?</h2>
+<p class="lead">Ask at the control desk or email the organizers. The live draw opens at 9:00 on the FortyMM app.</p>
+<div class="foot"><img src="../assets/logo-wordmark.svg" alt="FortyMM"></div>
+</section>
+
+</deck-stage>
+</body></html>

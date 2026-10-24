@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Overview" name="Before and after (v1 → v2)" subtitle="Comparisons and the major decisions" viewport="1360x1200" -->
+<html lang="en"><head><meta charset="utf-8"><title>FortyMM v2 — before and after</title>
+<link rel="stylesheet" href="colors_and_type.css">
+<style>
+body{margin:0}
+.wrap{max-width:1320px;margin:0 auto;padding:40px 24px 80px;display:flex;flex-direction:column;gap:56px}
+h1{font:700 40px/1.1 var(--font-ui);letter-spacing:-0.02em;margin:0 0 12px;color:var(--fg-1)}
+h2{font:600 26px/1.2 var(--font-ui);margin:0 0 16px;color:var(--fg-1)}
+h3{font:600 17px var(--font-ui);margin:0 0 6px;color:var(--fg-1)}
+p,li{font:400 16px/1.55 var(--font-ui);color:var(--fg-2);margin:0}
+.lead{max-width:760px}
+.decisions{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:28px 40px}
+.pair{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,560px),1fr));gap:20px}
+.pane{display:flex;flex-direction:column;gap:8px;min-width:0}
+.tag{font:600 14px var(--font-ui);color:var(--fg-3)}
+.tag.after{color:var(--fg-1)}
+.frame{border:1px solid var(--border-subtle);border-radius:8px;overflow:hidden;position:relative;background:var(--bg-app)}
+.frame img{display:block;width:100%;height:auto}
+.frame iframe{border:0;transform-origin:0 0;position:absolute;top:0;left:0}
+ul{padding-left:20px;display:flex;flex-direction:column;gap:6px;margin:16px 0 0;max-width:900px}
+.tok{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:24px}
+.tok ul{margin:0}
+code{font:500 13px var(--font-num);color:var(--fg-1);background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:4px;padding:1px 5px}
+.links{display:flex;gap:20px;flex-wrap:wrap;font:500 15px var(--font-ui)}
+</style></head>
+<body><div class="wrap">
+
+<header>
+<h1>FortyMM v2: before and after</h1>
+<p class="lead">The system now aims to feel like dependable club equipment. Same name, same orange, same dark palette and big scores — with the decoration removed so the match is the first thing you see.</p>
+</header>
+
+<section>
+<h2>Major decisions</h2>
+<div class="decisions">
+<div><h3>Orange only means "you can act here"</h3><p>Buttons, focus, links and the selected tab. It no longer marks live matches, rating chips, headings or bullets, so it always points at the next action.</p></div>
+<div><h3>Each status gets its own cue</h3><p>Live is a static red dot and the word "Live". The server has a white ball. Winners are bold, losers step back to grey. Ratings use ▲ green / ▼ neutral. Conflicts are amber with a fix attached.</p></div>
+<div><h3>One signal per element</h3><p>v1 marked a winning live player with a green border, glow, gradient avatar, green name and green score. v2 uses one marker per state, so the score and names stay the loudest things.</p></div>
+<div><h3>Motion is feedback, then stillness</h3><p>Removed pulsing dots, hover lift, glow-on-hover and the bounce curve. Kept a 100ms press, a 160ms state change and a single 600ms flash on the number that changed. Reduced motion is honoured globally.</p></div>
+<div><h3>One typeface for words</h3><p>Space Grotesk for every label and heading, in sentence case at 13px or larger. Mono only where digits align. Bebas is limited to the wordmark and venue scoreboards.</p></div>
+<div><h3>Organizers see the day, not the solver</h3><p>Expected finish, decisions to make, free tables, rest and the schedule come first. Solver statistics moved into a collapsed "Scheduling details" section.</p></div>
+<div><h3>Rows instead of cards</h3><p>Lists use divider rows. Panels appear only where things belong together. There is one shadow, for floating UI.</p></div>
+<div><h3>Plain voice</h3><p>The hero says what you can do. "Free, no ads, no tracking" is stated once, as a fact. The manifesto, numbering and cheeky asides are gone.</p></div>
+</div>
+</section>
+
+<section>
+<h2>Mobile</h2>
+<div class="pair">
+<div class="pane"><span class="tag">Before</span><div class="frame"><img src="assets/before/mobile.jpg" alt="v1 mobile matches screen"></div></div>
+<div class="pane"><span class="tag after">After — interactive</span><div class="frame" data-w="1000" data-h="960"><iframe src="ui_kits/ios/index.html" width="1000" height="960" title="v2 mobile"></iframe></div></div>
+</div>
+<ul>
+<li>New scoring screen: full names, 112px scores, a white serve marker that follows the real serve rotation (including deuce), and one large point button per player.</li>
+<li>Game history, games won and the next match on that table are visible without leaving the screen. Undo is always one tap away.</li>
+<li>"Today" leads with table, time, opponent and rest — the things a player needs between matches.</li>
+<li>Removed: green glow on the live card, gradient avatars, tracked uppercase labels, the glowing orange + button.</li>
+</ul>
+</section>
+
+<section>
+<h2>Tournament admin</h2>
+<div class="pair">
+<div class="pane"><span class="tag">Before</span><div class="frame"><img src="assets/before/admin.jpg" alt="v1 admin courts screen"></div></div>
+<div class="pane"><span class="tag after">After — interactive</span><div class="frame" data-w="1440" data-h="1100"><iframe src="ui_kits/web_admin/index.html" width="1440" height="1100" title="v2 admin"></iframe></div></div>
+</div>
+<ul>
+<li>Expected finish against plan is the first and largest fact. "Behind schedule: 0" tiles are replaced by one line of real numbers.</li>
+<li>Decisions get their own block, each with a plain sentence and a fix button. Resolving one updates the finish time and the schedule.</li>
+<li>Free tables show who is ready, or who is still resting and when they can be called.</li>
+<li>Schedule blocks stack surnames on two lines and widen the time scale, so names are no longer truncated. Full names are in the tooltip.</li>
+<li>The solver panel and the "Solver ready" sidebar badge moved into collapsed scheduling details.</li>
+</ul>
+</section>
+
+<section>
+<h2>Marketing hero</h2>
+<div class="pair">
+<div class="pane"><span class="tag">Before</span><div class="frame"><img src="assets/before/marketing.jpg" alt="v1 marketing hero"></div></div>
+<div class="pane"><span class="tag after">After</span><div class="frame" data-w="1280" data-h="900"><iframe src="ui_kits/marketing/index.html" width="1280" height="900" title="v2 marketing"></iframe></div></div>
+</div>
+<ul>
+<li>The headline says what the product does. The commitments sit in one quiet line under the buttons.</li>
+<li>Removed: dot grid, orange halo, Bebas all-caps headline, vanity stats, raised shadow on the product panel.</li>
+<li>The product panel uses the same match row as the app, plus the organizer's finish time, so the page shows both audiences.</li>
+</ul>
+</section>
+
+<section>
+<h2>Tokens</h2>
+<div class="tok">
+<div><h3>Removed</h3><ul>
+<li><code>--shadow-glow</code>, <code>--shadow-live-glow</code>, <code>--shadow-sm/md/lg</code></li>
+<li><code>.fortymm-grid-bg</code>, <code>.ball-dot</code>, <code>@keyframes ball-pulse</code></li>
+<li><code>--ease-snap</code>, <code>--ease-in-out</code>, <code>--dur-slow</code></li>
+<li><code>.overline</code> and 10–11px tracked labels</li>
+<li><code>--s-10</code> as a "40mm" brand rule</li>
+<li><code>--serve-*</code>, <code>--win</code> (green no longer means both live and winning)</li>
+</ul></div>
+<div><h3>Added</h3><ul>
+<li><code>--accent</code>, <code>--accent-soft</code>, <code>--accent-text</code>, <code>--focus-ring</code></li>
+<li><code>--live</code>, <code>--serving</code>, <code>--winner</code>, <code>--loser</code>, <code>--rating-up</code>, <code>--rating-down</code>, <code>--conflict</code>, <code>--rest</code></li>
+<li><code>.live-marker</code>, <code>.serve-marker</code>, <code>.rating-up</code>, <code>.rating-down</code>, <code>.label</code></li>
+<li><code>--dur-press</code>, <code>--dur-change</code>, <code>--dur-score</code>, <code>.score-updated</code></li>
+<li><code>--shadow-overlay</code> (the only shadow)</li>
+<li>Global <code>prefers-reduced-motion</code> rule</li>
+</ul></div>
+</div>
+</section>
+
+<nav class="links"><a href="README.md">README</a><a href="ui_kits/components/index.html">Component library</a><a href="ui_kits/android/index.html">Android kit</a><a href="slides/index.html">Slides</a><a href="ui_kits/ios/index.html">Mobile kit</a><a href="ui_kits/web_admin/index.html">Admin kit</a><a href="ui_kits/marketing/index.html">Marketing kit</a><a href="ui_kits/spectator/index.html">Spectator kit</a></nav>
+</div>
+<script>
+function fit(){document.querySelectorAll('.frame[data-w]').forEach(f=>{const w=+f.dataset.w,h=+f.dataset.h,s=f.clientWidth/w;f.style.height=(h*s)+'px';f.querySelector('iframe').style.transform='scale('+s+')';});}
+addEventListener('resize',fit);addEventListener('load',fit);fit();
+</script>
+</body></html>

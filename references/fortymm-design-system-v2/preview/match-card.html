@@ -1,0 +1,8 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Components" name="Component · Match row" subtitle="Live, final, upcoming, offline — games boxed, points large" viewport="700x560" -->
+<html lang="en"><head><meta charset="utf-8"><link rel="stylesheet" href="../colors_and_type.css"><link rel="stylesheet" href="../ui_kits/components/kit.css"><style>body{margin:0;padding:20px 24px;display:flex;flex-direction:column;gap:20px}.note{font:400 13px/1.45 var(--font-ui);color:var(--fg-3);max-width:640px;margin:0}</style></head><body>
+<div class="fm-matches" id="r" style="max-width:560px"></div>
+<p class="note">Columns: name (wraps, never truncates) · serve · games won (boxed tally) · current points (large). "Game scores" opens the history from a tap target, so it works on touch. One status signal per row.</p>
+<script src="../ui_kits/components/match.js"></script><script src="../ui_kits/components/kit.js"></script>
+<script>document.getElementById('r').innerHTML=['a2','a1','c3','d1'].map(i=>FMMatch.row(FMMatch.find(i))).join('');FM.icons()</script>
+</body></html>
