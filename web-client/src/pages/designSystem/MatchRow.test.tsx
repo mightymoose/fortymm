@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { findMatch } from './match'
 import { MatchRow } from './MatchRow'
@@ -45,5 +46,35 @@ describe('MatchRow', () => {
 
     expect(screen.getByRole('article')).toHaveTextContent('12:15Table 3 · Semifinal')
     expect(screen.getByText(/rests until/)).toHaveTextContent('Lindqvist rests until 12:10')
+  })
+
+  it('shows and hides its game scores with the Game scores toggle', async () => {
+    const user = userEvent.setup()
+    render(<MatchRow match={findMatch('c2')} gameScores />)
+    const toggle = screen.getByRole('button', { name: 'Game scores' })
+    expect(toggle).toHaveAttribute('aria-expanded', 'false')
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+
+    await user.click(toggle)
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    expect(
+      screen.getByRole('table', {
+        name: 'Game scores, Patel, Meera vs Wójcik-Szymańska, Agnieszka',
+      }),
+    ).toBeVisible()
+    await user.click(toggle)
+    expect(screen.queryByRole('table')).not.toBeInTheDocument()
+  })
+
+  it('has no Game scores toggle unless asked, or before a game is played', () => {
+    render(
+      <>
+        <MatchRow match={findMatch('c2')} />
+        <MatchRow match={findMatch('a3')} gameScores />
+      </>,
+    )
+
+    expect(screen.queryByRole('button', { name: 'Game scores' })).not.toBeInTheDocument()
   })
 })

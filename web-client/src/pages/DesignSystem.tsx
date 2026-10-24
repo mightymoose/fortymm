@@ -2,6 +2,7 @@ import { useRef } from 'react'
 import type { ComboboxHandle } from '../components/Combobox'
 import { useTestMode } from '../testMode'
 import { ButtonsSection } from './designSystem/ButtonsSection'
+import { ContainersSection } from './designSystem/ContainersSection'
 import { FeedbackSection } from './designSystem/FeedbackSection'
 import { FieldsSection } from './designSystem/FieldsSection'
 import { OverlaysSection, WithdrawDialog } from './designSystem/OverlaysSection'
@@ -32,6 +33,7 @@ export function DesignSystem() {
       <ButtonsSection onWithdraw={openWithdrawDialog} />
       <FieldsSection opponent={opponent} />
       <SelectionSection />
+      <ContainersSection />
       <FeedbackSection />
       <OverlaysSection onWithdraw={openWithdrawDialog} onFindPlayer={findPlayer} />
       <WithdrawDialog ref={withdrawDialog} />

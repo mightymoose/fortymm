@@ -4,10 +4,9 @@ import { describe, expect, it } from 'vitest'
 import { useSingleSelect } from './singleSelect'
 import { ToastProvider } from './ToastProvider'
 
-// A group of pressed buttons, the kind that no component of the app uses yet,
-// such as the gallery's schedule timeline.
-function PressedGroup({ labels }: { labels: string[] }) {
-  const { optionProps } = useSingleSelect('pressed', labels)
+// A group of pressed buttons, as the schedule timeline's blocks are.
+function PressedGroup({ labels, initial }: { labels: string[]; initial?: number }) {
+  const { optionProps } = useSingleSelect('pressed', labels, undefined, initial)
   return (
     <div>
       {labels.map((label, index) => (
@@ -19,10 +18,10 @@ function PressedGroup({ labels }: { labels: string[] }) {
   )
 }
 
-function renderGroup() {
+function renderGroup(initial?: number) {
   render(
     <ToastProvider>
-      <PressedGroup labels={['Table 1', 'Table 2', 'Table 3']} />
+      <PressedGroup labels={['Table 1', 'Table 2', 'Table 3']} initial={initial} />
     </ToastProvider>,
   )
 }
@@ -41,6 +40,13 @@ describe('useSingleSelect, pressed buttons', () => {
     expect(button('Table 1')).toHaveAttribute('aria-pressed', 'false')
     expect(button('Table 2')).toHaveAttribute('aria-pressed', 'false')
     expect(await screen.findByText('Table 3, selected')).toBeInTheDocument()
+  })
+
+  it('starts with the option it is given pressed', () => {
+    renderGroup(1)
+
+    expect(button('Table 2')).toHaveAttribute('aria-pressed', 'true')
+    expect(button('Table 1')).toHaveAttribute('aria-pressed', 'false')
   })
 
   it('makes every button a tab stop, and ignores the arrow keys', async () => {

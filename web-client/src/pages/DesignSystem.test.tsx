@@ -279,6 +279,118 @@ describe('Selection', () => {
   })
 })
 
+describe('Containers', () => {
+  it.each(['Move table', 'View matches', 'Message'])(
+    'says %s is not wired up in this demo',
+    async (name) => {
+      const user = userEvent.setup()
+      const designSystemPage = await DesignSystemPage.render()
+
+      await user.click(designSystemPage.containersButton(name))
+
+      expect(designSystemPage.toastRegion).toHaveTextContent(
+        `“${name}” isn’t wired up in this demo`,
+      )
+    },
+  )
+
+  it('checks everyone in, and Undo puts the boxes back', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const players = within(designSystemPage.containersExample('Scroll area'))
+    const notHere = ['Kim, Hyun-woo', 'Lindqvist, Erik', 'Fernández-Castillo, Marisol']
+
+    await user.click(designSystemPage.containersButton('Check in all'))
+
+    expect(players.getAllByRole('checkbox').every((box) => (box as HTMLInputElement).checked)).toBe(
+      true,
+    )
+    expect(designSystemPage.toastRegion).toHaveTextContent('3 more players checked in')
+
+    await user.click(designSystemPage.toastButton('Undo'))
+
+    for (const name of notHere) {
+      expect(players.getByRole('checkbox', { name })).not.toBeChecked()
+    }
+    expect(players.getByRole('checkbox', { name: 'Moreau, Élodie' })).toBeChecked()
+  })
+
+  it('says when everyone was already checked in, with no Undo', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const players = within(designSystemPage.containersExample('Scroll area'))
+    for (const name of ['Kim, Hyun-woo', 'Lindqvist, Erik', 'Fernández-Castillo, Marisol']) {
+      await user.click(players.getByRole('checkbox', { name }))
+    }
+
+    await user.click(designSystemPage.containersButton('Check in all'))
+
+    expect(designSystemPage.toastRegion).toHaveTextContent('Everyone was already checked in')
+    expect(
+      within(designSystemPage.toastRegion).queryByRole('button', { name: 'Undo' }),
+    ).not.toBeInTheDocument()
+  })
+
+  it('shows the match of the block picked in the schedule', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const splitView = within(designSystemPage.containersExample('Split view'))
+    expect(splitView.getByRole('region', { name: 'Patel vs Park' })).toHaveTextContent(
+      'Patel would get 5 minutes’ rest',
+    )
+
+    await user.click(designSystemPage.containersButton(/Okafor-Adeyemi, Daniel vs/))
+
+    const details = splitView.getByRole('region', { name: 'Okafor-Adeyemi vs Johansen-Whitfield' })
+    expect(within(details).getByRole('link', { name: 'Open scoring' })).toHaveAttribute(
+      'href',
+      'https://github.com/mightymoose/fortymm/blob/main/references/design-system/ui_kits/tournament/mobile.html',
+    )
+    expect(
+      within(details).getByRole('table', {
+        name: 'Game scores, Okafor-Adeyemi, Daniel vs Johansen-Whitfield, Annika',
+      }),
+    ).toBeVisible()
+  })
+
+  it('says the conflict’s fix works on the tournament screen', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.click(designSystemPage.containersButton('Move to 12:05'))
+
+    expect(designSystemPage.toastRegion).toHaveTextContent(
+      'Works on the tournament screen, not in this gallery',
+    )
+  })
+
+  it('opens the withdraw-a-player dialog from an upcoming match, and Cancel closes it', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    await user.click(designSystemPage.containersButton(/Chen, Wei vs Ali, Rashid/))
+
+    await user.click(designSystemPage.containersButton('Withdraw a player…'))
+    const dialog = designSystemPage.dialog('Withdraw a player from this match?')
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+
+    expect(designSystemPage.openDialogs).toEqual([])
+  })
+
+  it('keeps Call to table off while Lindqvist rests', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    await user.click(designSystemPage.containersButton(/Dubois, Camille vs Lindqvist, Erik/))
+
+    await user.click(designSystemPage.containersButton('Call to table'))
+
+    expect(designSystemPage.containersButton('Call to table')).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    )
+    expect(designSystemPage.toastRegion).toBeEmptyDOMElement()
+  })
+})
+
 describe('Feedback', () => {
   afterEach(() => {
     vi.useRealTimers()
@@ -465,7 +577,14 @@ describe('Overlays', () => {
       within(designSystemPage.paletteGroup('Go to'))
         .getAllByRole('option')
         .map((option) => option.textContent),
-    ).toEqual(['Buttons', 'Fields, dates and choices', 'Selection', 'Feedback', 'Overlays'])
+    ).toEqual([
+      'Buttons',
+      'Fields, dates and choices',
+      'Selection',
+      'Containers',
+      'Feedback',
+      'Overlays',
+    ])
   })
 
   it('goes to a section from the palette', async () => {

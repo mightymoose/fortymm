@@ -1,5 +1,6 @@
 import type { Locator, Page } from '@playwright/test'
 import { ButtonsSection } from './designSystem/ButtonsSection.ts'
+import { ContainersSection } from './designSystem/ContainersSection.ts'
 import { FeedbackSection } from './designSystem/FeedbackSection.ts'
 import { FieldsSection } from './designSystem/FieldsSection.ts'
 import { OverlaysSection } from './designSystem/OverlaysSection.ts'
@@ -15,6 +16,7 @@ export abstract class GalleryPage {
   readonly buttons: ButtonsSection
   readonly fields: FieldsSection
   readonly selection: SelectionSection
+  readonly containers: ContainersSection
   readonly feedback: FeedbackSection
   readonly overlays: OverlaysSection
   // Where raised toasts show, bottom centre, outside every section. Found
@@ -34,6 +36,7 @@ export abstract class GalleryPage {
     this.buttons = new ButtonsSection(page)
     this.fields = new FieldsSection(page)
     this.selection = new SelectionSection(page)
+    this.containers = new ContainersSection(page)
     this.feedback = new FeedbackSection(page)
     this.overlays = new OverlaysSection(page)
     this.toasts = page.locator('.fm-toast-region')

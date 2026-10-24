@@ -459,6 +459,163 @@ test('the Selection section matches its screenshots and the gallery', async ({
   await test.step('gallery', () => selectionScreenshots(referenceKitPage))
 })
 
+// Moves the pointer off the page's controls and hides the tooltip that a
+// click leaves on the focused control, so the next screenshot has neither.
+async function settlePointer(gallery: GalleryPage): Promise<void> {
+  await gallery.page.mouse.move(0, 0)
+  await gallery.page.keyboard.press('Escape')
+  await expect(gallery.shownTooltip).toBeHidden()
+}
+
+async function containersScreenshots(gallery: GalleryPage): Promise<void> {
+  const containers = gallery.containers
+  const page = gallery.page
+  await gallery.goto(containers.testId)
+  await screenshotStep('heading', containers.heading, 'containers-heading.png')
+  await screenshotStep('lead', containers.lead, 'containers-lead.png')
+
+  await gallery.goto('ex-card')
+  await screenshotStep('Card', containers.card, 'containers-card.png')
+  const gameScores = containers.button('Game scores')
+  await hoveredScreenshotStep(
+    'Game scores, hovered',
+    gameScores,
+    'containers-card-game-scores-hovered.png',
+  )
+  await gameScores.click()
+  await page.mouse.move(0, 0)
+  await screenshotStep(
+    'Card, game scores shown',
+    containers.card,
+    'containers-card-game-scores-shown.png',
+  )
+  await gallery.raiseToast(
+    containers.button('Move table'),
+    '“Move table” isn’t wired up in this demo',
+  )
+  await page.mouse.move(0, 0)
+  await pageScreenshotStep(
+    'Move table, demo toast raised',
+    gallery,
+    'containers-card-demo-toast-raised.png',
+  )
+
+  await gallery.goto('ex-scroll-area')
+  await screenshotStep('Scroll area', containers.scrollArea, 'containers-scroll-area.png')
+  await focusedScreenshotStep(
+    'Players, focused',
+    containers.players,
+    'containers-scroll-area-focused.png',
+  )
+  await test.step('Players, scrolled by the mouse wheel', async () => {
+    const box = (await containers.players.boundingBox())!
+    await page.mouse.move(Math.round(box.x + box.width / 2), Math.round(box.y + box.height / 2))
+    await page.mouse.wheel(0, 120)
+    await expect.poll(() => containers.players.evaluate((el) => el.scrollTop)).toBe(120)
+    await page.mouse.move(0, 0)
+    await expect
+      .soft(containers.scrollArea)
+      .toHaveScreenshot('containers-scroll-area-scrolled.png')
+  })
+  await gallery.goto('ex-scroll-area')
+  await gallery.raiseToast(containers.button('Check in all'), '3 more players checked in')
+  await page.mouse.move(0, 0)
+  await pageScreenshotStep(
+    'Check in all, toast raised',
+    gallery,
+    'containers-scroll-area-checked-in-raised.png',
+  )
+
+  await gallery.goto('ex-split-view')
+  await screenshotStep('Split view', containers.splitView, 'containers-split-view.png')
+  await gallery.showTooltip(
+    containers.block('Patel, Meera vs Park, Ji-ho'),
+    'Patel, Meera vs Park, Ji-ho · Table 2 · 11:50–12:25 · Patel would rest 5 min',
+  )
+  await pageScreenshotStep(
+    'Patel vs Park, tooltip shown',
+    gallery,
+    'containers-split-view-block-tooltip-shown.png',
+  )
+  await settlePointer(gallery)
+  await gallery.raiseToast(
+    containers.button('Move to 12:05'),
+    'Works on the tournament screen, not in this gallery',
+  )
+  await page.mouse.move(0, 0)
+  await pageScreenshotStep(
+    'Move to 12:05, toast raised',
+    gallery,
+    'containers-split-view-act-toast-raised.png',
+  )
+  await gallery.toastButton('Dismiss').click()
+  for (const [match, name] of [
+    ['Patel, Meera vs Wójcik-Szymańska, Agnieszka', 'live'],
+    ['Nguyen, Thanh vs Silva, Rafael', 'final'],
+    ['Rossi, Giulia / Haddad, Youssef vs Fernández-Castillo, Marisol / Kim, Hyun-woo', 'offline'],
+    ['Dubois, Camille vs Lindqvist, Erik', 'resting'],
+  ]) {
+    await containers.block(match).click()
+    await settlePointer(gallery)
+    await screenshotStep(
+      `Split view, ${match} picked`,
+      containers.splitView,
+      `containers-split-view-${name}.png`,
+    )
+  }
+  await gallery.showTooltip(
+    containers.button('Call to table'),
+    'Lindqvist is resting until 12:10',
+  )
+  await pageScreenshotStep(
+    'Call to table, tooltip shown',
+    gallery,
+    'containers-split-view-call-tooltip-shown.png',
+  )
+  await settlePointer(gallery)
+  await containers.button('Withdraw a player…').click()
+  await containers.withdrawPlayerDialog.waitFor()
+  await page.mouse.move(0, 0)
+  await pageScreenshotStep(
+    'Withdraw a player, dialog open',
+    gallery,
+    'containers-split-view-withdraw-dialog.png',
+  )
+
+  await gallery.goto('ex-split-view')
+  await test.step('Split view, resized by keyboard', async () => {
+    await containers.splitHandle.focus()
+    await page.keyboard.press('ArrowLeft')
+    await page.keyboard.press('ArrowLeft')
+    await expect(containers.splitHandle).toHaveAttribute('aria-valuenow', '50')
+    await expect
+      .soft(containers.splitView)
+      .toHaveScreenshot('containers-split-view-keyboard-resized.png')
+  })
+  await gallery.goto('ex-split-view')
+  await test.step('Split view, resized by dragging', async () => {
+    const box = (await containers.splitHandle.boundingBox())!
+    const x = Math.round(box.x + box.width / 2)
+    const y = Math.round(box.y + box.height / 2)
+    await page.mouse.move(x, y)
+    await page.mouse.down()
+    await page.mouse.move(x + 60, y, { steps: 4 })
+    await page.mouse.up()
+    await page.mouse.move(0, 0)
+    await expect
+      .soft(containers.splitView)
+      .toHaveScreenshot('containers-split-view-dragged.png')
+  })
+}
+
+test('the Containers section matches its screenshots and the gallery', async ({
+  designSystemPage,
+  referenceKitPage,
+}) => {
+  await test.step('app', () => containersScreenshots(designSystemPage))
+  await test.step('gallery', () => containersScreenshots(referenceKitPage))
+})
+
 async function feedbackScreenshots(gallery: GalleryPage): Promise<void> {
   const feedback = gallery.feedback
   await gallery.goto(feedback.testId)
@@ -1080,6 +1237,166 @@ for (const site of ['app', 'gallery'] as const) {
       await expect(callPlayers).toHaveAttribute('aria-checked', 'false')
       await page.keyboard.press('Enter')
       await expect(callPlayers).toHaveAttribute('aria-checked', 'true')
+    })
+  })
+}
+
+// The containers' behaviour in a real browser: the split handle's keys and
+// drag, picking blocks, scrolling, and the layout at phone width. Each test
+// runs on the app and on the gallery, so both behave alike.
+for (const site of ['app', 'gallery'] as const) {
+  test.describe(`Containers on the ${site}`, () => {
+    let gallery: GalleryPage
+    test.beforeEach(({ designSystemPage, referenceKitPage }) => {
+      gallery = site === 'app' ? designSystemPage : referenceKitPage
+    })
+
+    test('the arrow keys, Home and End resize the split view within its bounds', async ({
+      page,
+    }) => {
+      await gallery.goto('ex-split-view')
+      const handle = gallery.containers.splitHandle
+
+      await handle.focus()
+      for (const [key, value] of [
+        ['ArrowRight', '62'],
+        ['ArrowLeft', '58'],
+        ['ArrowLeft', '54'],
+        ['End', '72'],
+        ['ArrowRight', '72'],
+        ['Home', '35'],
+        ['ArrowLeft', '35'],
+      ]) {
+        await page.keyboard.press(key)
+        await expect(handle).toHaveAttribute('aria-valuenow', value)
+      }
+    })
+
+    test('dragging the handle resizes the split view to the pointer', async ({ page }) => {
+      await gallery.goto('ex-split-view')
+      const { splitHandle, schedule } = gallery.containers
+      const box = (await splitHandle.boundingBox())!
+      const y = Math.round(box.y + box.height / 2)
+      const before = (await schedule.boundingBox())!.width
+
+      await page.mouse.move(Math.round(box.x + box.width / 2), y)
+      await page.mouse.down()
+      await page.mouse.move(Math.round(box.x + box.width / 2) - 200, y, { steps: 4 })
+      await page.mouse.up()
+
+      expect(Number(await splitHandle.getAttribute('aria-valuenow'))).toBeLessThan(58)
+      expect((await schedule.boundingBox())!.width).toBeLessThan(before)
+    })
+
+    test('a picked block is pressed and its match shows in the details', async () => {
+      await gallery.goto('ex-split-view')
+      const containers = gallery.containers
+      const conflict = containers.block('Patel, Meera vs Park, Ji-ho')
+      const live = containers.block('Patel, Meera vs Wójcik-Szymańska, Agnieszka')
+      await expect(conflict).toHaveAttribute('aria-pressed', 'true')
+      await expect(containers.matchDetails.getByRole('heading', { level: 3 })).toHaveText(
+        'Patel vs Park',
+      )
+
+      await live.click()
+
+      await expect(live).toHaveAttribute('aria-pressed', 'true')
+      await expect(conflict).toHaveAttribute('aria-pressed', 'false')
+      await expect(containers.matchDetails.getByRole('heading', { level: 3 })).toHaveText(
+        'Patel vs Wójcik-Szymańska',
+      )
+    })
+
+    test('Call to table stays off while Lindqvist rests', async () => {
+      await gallery.goto('ex-split-view')
+      const containers = gallery.containers
+      await containers.block('Dubois, Camille vs Lindqvist, Erik').click()
+
+      // Playwright waits for an aria-disabled control to turn on before it
+      // clicks, so the click is forced.
+      await containers.button('Call to table').click({ force: true })
+
+      await expect(containers.button('Call to table')).toHaveAttribute('aria-disabled', 'true')
+      // The gallery adds its toast region with its first toast.
+      await expect(gallery.toasts.locator('.fm-toast')).toHaveCount(0)
+    })
+
+    test('Check in all checks everyone in, and Undo puts the boxes back', async () => {
+      await gallery.goto('ex-scroll-area')
+      const { players } = gallery.containers
+      const kim = players.getByRole('checkbox', { name: 'Kim, Hyun-woo' })
+      const nguyen = players.getByRole('checkbox', { name: 'Nguyen, Thanh' })
+      await nguyen.uncheck()
+
+      await gallery.raiseToast(
+        gallery.containers.button('Check in all'),
+        '4 more players checked in',
+      )
+      await expect(players.getByRole('checkbox', { checked: false })).toHaveCount(0)
+      await gallery.toastButton('Undo').click()
+
+      await expect(kim).not.toBeChecked()
+      await expect(nguyen).not.toBeChecked()
+      await expect(players.getByRole('checkbox', { checked: true })).toHaveCount(8)
+    })
+
+    test('Check in all says when everyone was already in, with no Undo', async () => {
+      await gallery.goto('ex-scroll-area')
+      const containers = gallery.containers
+      for (const name of ['Kim, Hyun-woo', 'Lindqvist, Erik', 'Fernández-Castillo, Marisol']) {
+        await containers.players.getByRole('checkbox', { name }).check()
+      }
+
+      await gallery.raiseToast(containers.button('Check in all'), 'Everyone was already checked in')
+
+      await expect(gallery.toastButton('Undo')).toHaveCount(0)
+    })
+
+    test('Tab reaches the check-in list, and the arrow keys scroll it under its heading', async ({
+      page,
+    }) => {
+      await gallery.goto('ex-scroll-area')
+      const { players } = gallery.containers
+      const heading = players.getByText('Player', { exact: true })
+      await gallery.containers.button('Check in all').focus()
+
+      await page.keyboard.press('Tab')
+      await expect(players).toBeFocused()
+      const top = (await heading.boundingBox())!.y
+      await page.keyboard.press('ArrowDown')
+
+      await expect.poll(() => players.evaluate((el) => el.scrollTop)).toBeGreaterThan(0)
+      expect((await heading.boundingBox())!.y).toBe(top)
+    })
+
+    test('Game scores shows and hides the game scores', async () => {
+      await gallery.goto('ex-card')
+      const toggle = gallery.containers.button('Game scores')
+      const table = gallery.containers.card.getByRole('table')
+      await expect(table).toBeHidden()
+
+      await toggle.click()
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+      await expect(table).toBeVisible()
+
+      await toggle.click()
+      await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+      await expect(table).toBeHidden()
+    })
+
+    test('at phone width the split view stacks the details under the schedule, with no handle', async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 390, height: 844 })
+      await gallery.goto('ex-split-view')
+      const { splitHandle, schedule, matchDetails } = gallery.containers
+
+      await expect(splitHandle).toBeHidden()
+      const scheduleBox = (await schedule.boundingBox())!
+      const detailsBox = (await matchDetails.boundingBox())!
+      expect(detailsBox.y).toBeGreaterThanOrEqual(scheduleBox.y + scheduleBox.height)
+      expect(detailsBox.x).toBe(scheduleBox.x)
+      expect(detailsBox.x + detailsBox.width).toBeLessThanOrEqual(390)
     })
   })
 }

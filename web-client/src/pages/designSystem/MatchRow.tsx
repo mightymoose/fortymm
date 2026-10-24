@@ -1,4 +1,6 @@
+import { useId, useState } from 'react'
 import { Icon } from '../../components/Icon'
+import { GameScores } from './GameScores'
 import { isScored, matchScore, type Match, type Side } from './match'
 import { MatchStatus } from './MatchStatus'
 
@@ -23,20 +25,25 @@ function meta(match: Match, gameInPlay: number | null) {
 // (boxed) and current points (large), styled by `.fm-match` in
 // styles/kit.css. `large` is `.fm-match--lg`. `headHidden` keeps the status
 // line out of view where a heading above already says it, as in a sheet.
-// match.js's game-score disclosure isn't ported yet.
+// `gameScores` adds a "Game scores" toggle under a match with games, which
+// shows and hides its GameScores.
 export function MatchRow({
   match,
   large = false,
   headHidden = false,
   columns = true,
   clubs = false,
+  gameScores = false,
 }: {
   match: Match
   large?: boolean
   headHidden?: boolean
   columns?: boolean
   clubs?: boolean
+  gameScores?: boolean
 }) {
+  const scoresId = useId()
+  const [scoresShown, setScoresShown] = useState(false)
   const { done, current, won, winner } = matchScore(match)
   const scored = isScored(match)
   const [first, second] = match.players
@@ -99,6 +106,23 @@ export function MatchRow({
             {match.rest.who} rests until <span className="num">{match.rest.until}</span>
           </span>
         </p>
+      )}
+      {gameScores && match.games.length > 0 && (
+        <>
+          <button
+            type="button"
+            className="fm-match__toggle"
+            aria-expanded={scoresShown}
+            aria-controls={scoresId}
+            onClick={() => setScoresShown(!scoresShown)}
+          >
+            Game scores
+            <Icon name="chevron" />
+          </button>
+          <div id={scoresId} hidden={!scoresShown}>
+            <GameScores match={match} />
+          </div>
+        </>
       )}
     </article>
   )

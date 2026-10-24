@@ -92,6 +92,18 @@ export function isScored(match: Match): match is LiveMatch | OfflineMatch {
   return match.state === 'live' || match.state === 'offline'
 }
 
+// The minutes since midnight of a time of day such as "10:30".
+export function minutes(time: string): number {
+  const [hours, mins] = time.split(':').map(Number)
+  return hours * 60 + mins
+}
+
+// The time of day `count` minutes after midnight, such as "10:30".
+export function clockTime(count: number): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(Math.floor(count / 60))}:${pad(count % 60)}`
+}
+
 export function shortName(player: MatchPlayer): string {
   return player.short ?? player.name.split(',')[0]
 }

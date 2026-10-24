@@ -5,3 +5,5 @@ const reference = 'https://github.com/mightymoose/fortymm/blob/main/references/d
 export const stateMatrixUrl = `${reference}/ui_kits/components/states.html`
 
 export const scoringScreenUrl = `${reference}/ui_kits/tournament/mobile.html`
+
+export const tournamentScreenUrl = `${reference}/ui_kits/tournament/index.html`

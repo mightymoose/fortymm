@@ -63,6 +63,20 @@ export class DesignSystemPage {
     return within(this.selectionSection).getByRole(role, { name })
   }
 
+  get containersSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Containers' })
+  }
+
+  // The Containers section's button named `name`, e.g. "Check in all".
+  containersButton(name: string | RegExp): HTMLElement {
+    return within(this.containersSection).getByRole('button', { name })
+  }
+
+  // The Containers section's example titled `title`, e.g. "Split view".
+  containersExample(title: string): HTMLElement {
+    return within(this.containersSection).getByRole('article', { name: title })
+  }
+
   get feedbackSection(): HTMLElement {
     return screen.getByRole('region', { name: 'Feedback' })
   }
