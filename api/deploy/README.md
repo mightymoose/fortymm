@@ -11,6 +11,8 @@ sends. CLAUDE.md's Deploy section describes how it all fits together.
 - `cloud-run-deploy`: pushes the image and deploys it, to the `api` service
   (`./bin/mise run api:deploy`) or as a tagged, no-traffic revision of the
   `api-preview` service (`./bin/mise run api:preview`).
+- `preview-database`: creates or drops a Preview's own database (see The
+  database below).
 - `bootstrap-gcp.sh`: the one-time project setup below.
 - `cleanup-policy.json`: the Artifact Registry cleanup policy it applies (see
   Image cleanup below).
@@ -40,7 +42,11 @@ It's idempotent, so re-running it is safe. It:
      `roles/artifactregistry.writer` on the project,
      `roles/artifactregistry.repoAdmin` on the `fortymm` repository (moving
      the `production` tag needs it) and `roles/iam.serviceAccountUser` on
-     `api-runtime` and `api-preview-runtime`.
+     `api-runtime` and `api-preview-runtime`. It also gets the custom role
+     `previewDatabases` on the project, which the script creates or updates.
+     The role lets CI create, list and drop databases on the instance, and
+     nothing else. `roles/cloudsql.editor` would also let CI change and
+     restart the instance.
    - `api-runtime`, which production (the `api` service) runs as, with
      `roles/cloudsql.client` on the project.
    - `api-preview-runtime`, which the Previews (the `api-preview` service)
@@ -56,12 +62,15 @@ It's idempotent, so re-running it is safe. It:
    takes about 15 minutes. The script prints the instance's state every 30
    seconds until it's `RUNNABLE`, and a re-run waits the same way. Postgres 16 and later default to the Enterprise
    Plus edition, which costs far more and has no shared-core tiers. Then it
-   creates each database and its user:
+   creates the production database `fortymm` and each user:
 
-   | Database | User | Password secret | Readable by |
-   | --- | --- | --- | --- |
-   | `fortymm` | `api` | `api-database-password` | `api-runtime` |
-   | `fortymm_preview` | `api_preview` | `api-preview-database-password` | `api-preview-runtime` |
+   | User | Password secret | Readable by |
+   | --- | --- | --- |
+   | `api` | `api-database-password` | `api-runtime` |
+   | `api_preview` | `api-preview-database-password` | `api-preview-runtime` |
+
+   It creates no Preview database. Each Preview gets its own on its first
+   deploy (see The database below).
 
    If a password secret doesn't exist, the script creates it with a random
    64-character hex value. It never replaces an existing one, and it never
@@ -107,6 +116,21 @@ target's password secret at `latest`. The password only changes together
 with the database user, so a cold start reads the newest one. The Worker
 secret is pinned to a version for a different reason (see Rotating the
 Worker secret).
+
+Each Preview gets its own database, `fortymm_preview_<name>`, because the
+API migrates its database at startup and two branches can have different
+schemas. `preview-database` owns the name, with the Preview name's dashes
+changed to underscores. `cloud-run-deploy` runs `preview-database create` on
+each Preview deploy. If the database exists, the create does nothing.
+`mise run api:preview-delete` runs `preview-database drop`, and the
+preview-cleanup workflow runs that task when a branch is deleted. Cloud SQL
+runs one admin operation per instance at a time, so two branches' CI runs
+can collide. `preview-database` retries only that error, every 15 seconds
+for about 5 minutes.
+
+The instance allows 25 connections. Production holds up to 12 (3 instances
+with 4 each), and each warm Preview holds up to 4, so about 3 warm Previews
+fit at once.
 
 Production and the Previews share one instance. The split is per user and
 per database, not hard isolation. Postgres lets any user connect to any

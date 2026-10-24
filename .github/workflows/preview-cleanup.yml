@@ -40,9 +40,9 @@ jobs:
 
       - name: Skip the API Preview cleanup
         if: ${{ env.GCP_CONFIGURED != 'true' }}
-        run: echo "::warning::GCP_WORKLOAD_IDENTITY_PROVIDER and GCP_SERVICE_ACCOUNT aren't set, so the API Preview tag isn't removed. See api/deploy/README.md."
+        run: echo "::warning::GCP_WORKLOAD_IDENTITY_PROVIDER and GCP_SERVICE_ACCOUNT aren't set, so the API Preview tag and database aren't removed. See api/deploy/README.md."
 
-      - name: Remove the Cloud Run Preview tag
+      - name: Remove the Cloud Run Preview tag and database
         if: ${{ env.GCP_CONFIGURED == 'true' }}
         run: ./bin/mise run api:preview-delete "$BRANCH"
 
