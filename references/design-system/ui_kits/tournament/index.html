@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<!-- @dsCard group="UI Kit — Tournament" name="Tournament · Organizer desktop" subtitle="Issues, schedule beside match details, ready-to-call — all shared components" viewport="1440x1000" -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Spring Open · Tables &amp; schedule</title>
+<link rel="stylesheet" href="../../colors_and_type.css"><link rel="stylesheet" href="../components/kit.css">
+<style>
+body{margin:0}
+.top{display:flex;align-items:center;gap:24px;flex-wrap:wrap;padding:12px 32px;background:var(--bg-panel)}
+.top img{height:22px;display:block}
+.top .ev{display:flex;flex-direction:column;min-width:0}
+.top .ev b{font:600 15px/1.2 var(--font-ui);color:var(--fg-1)}
+.top .ev span{font:400 13px var(--font-ui);color:var(--fg-3)}
+.top .fm-nav{margin-left:8px}
+.top .end{margin-left:auto;display:flex;gap:8px}
+.page{max-width:1440px;margin:0 auto;padding:32px 32px 96px;box-sizing:border-box;display:flex;flex-direction:column;gap:40px}
+.sum{display:flex;flex-wrap:wrap;align-items:flex-end;gap:16px 56px}
+.sum h1{margin:0;font:700 32px/1.15 var(--font-ui);letter-spacing:-0.01em}
+.sum .fm-dl{grid-template-columns:repeat(3,auto);gap:4px 48px}
+.sum .fm-dl dd{font:600 20px var(--font-num)}
+.sum .fm-dl dd small{font:500 14px var(--font-ui);color:var(--conflict);margin-left:6px}
+.issues{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,420px),1fr));gap:16px}
+.h2{margin:0 0 16px;font:600 20px/1.3 var(--font-ui);color:var(--fg-1);display:flex;align-items:center;gap:12px}
+.h2 .fm-tag{font-family:var(--font-num)}
+.tools{display:flex;flex-wrap:wrap;gap:12px 24px;align-items:center;justify-content:space-between;margin-bottom:20px}
+.ready .fm-match{padding:16px 0}
+.ready li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:16px;align-items:center}
+@media (max-width:760px){.top{padding:12px 16px}.page{padding:24px 16px 80px}.top .fm-nav{order:3;width:100%;margin:0}.sum .fm-dl{grid-template-columns:1fr 1fr}.ready li{grid-template-columns:1fr}}
+</style></head>
+<body>
+<header class="top"><img src="../../assets/logo-wordmark.svg" alt="FortyMM"><div class="ev"><b>Spring Open 2026</b><span>Riverside Sports Hall · 4 tables</span></div>
+<nav class="fm-nav" aria-label="Tournament"><a href="#" aria-current="page">Tables &amp; schedule</a><a href="#">Draws</a><a href="#">Players</a><a href="#">Results</a></nav>
+<div class="end"><button class="fm-switch" role="switch" aria-checked="true"><span class="fm-switch__track"></span>Auto-call</button></div></header>
+<main class="page">
+<p class="fm-notice" style="margin:-8px 0 -16px"><span data-icon="info"></span><span>Demo data. Changes stay on this page and nothing is sent; Undo reverses them.</span></p>
+<section class="sum" aria-label="Day summary"><h1>Tables &amp; schedule</h1>
+<dl class="fm-dl"><div><dt>Expected finish</dt><dd>18:45<small>15 min over plan</small></dd></div><div><dt>Played</dt><dd>14 / 31</dd></div><div><dt>Now</dt><dd>11:47</dd></div></dl></section>
+
+<section aria-labelledby="iss"><h2 class="h2" id="iss">Needs a decision <span class="fm-tag" id="isscount">2</span></h2><div class="issues" id="issues">
+<div class="fm-alert fm-alert--warning" data-issue="b3"><span data-icon="alert"></span><p class="fm-alert__title">Patel would get 5 minutes’ rest before 11:50</p><p class="fm-alert__body">Her Table 3 match is running 10 minutes over. Starting Patel vs Park at 12:05 keeps the 15-minute minimum.</p><div class="fm-alert__actions"><button class="fm-btn fm-btn--primary fm-btn--sm" data-resolve="b3">Move to 12:05</button><button class="fm-btn fm-btn--secondary fm-btn--sm" data-show="b3">Review in schedule</button></div></div>
+<div class="fm-alert fm-alert--error" role="alert" data-issue="d1"><span data-icon="offline"></span><p class="fm-alert__title">Table 4 scorer is offline</p><p class="fm-alert__body">Rossi / Haddad vs Fernández-Castillo / Kim. Last score at 11:42 (game 3, 4–7). Points on that device sync when it reconnects.</p><div class="fm-alert__actions"><button class="fm-btn fm-btn--primary fm-btn--sm" data-resolve="d1">Score from this device</button><button class="fm-btn fm-btn--secondary fm-btn--sm" data-show="d1">View match</button></div></div>
+</div><p class="fm-notice fm-notice--success" id="allclear" hidden><span data-icon="check"></span><span>Nothing needs a decision. We'll flag anything that changes.</span></p></section>
+
+<section aria-labelledby="sch"><div class="tools"><h2 class="h2" id="sch" style="margin:0">Schedule</h2>
+<div class="doc-row" style="display:flex;flex-wrap:wrap;gap:12px"><div class="fm-chips" data-select="filter" aria-label="Filter by event" id="evf"><button class="fm-chip" aria-pressed="true" data-all>All events</button><button class="fm-chip" aria-pressed="false">Open singles</button><button class="fm-chip" aria-pressed="false">Under 18 singles</button><button class="fm-chip" aria-pressed="false">Open doubles</button></div></div></div>
+<div class="fm-split-host"><div class="fm-split"><div style="min-width:0"><div class="fm-scroll" tabindex="0" aria-label="Schedule timeline, scroll sideways" id="tl" style="padding-bottom:8px"></div>
+<p class="fm-help" style="margin-top:12px">Hover or focus a block for full names. Select it to see details.</p></div>
+<button class="fm-split__handle" role="separator" aria-orientation="vertical" aria-label="Resize schedule and match details" aria-valuemin="35" aria-valuemax="72" aria-valuenow="58"></button>
+<div id="detail" aria-live="polite"></div></div></div></section>
+
+<section aria-labelledby="rdy"><h2 class="h2" id="rdy">Ready to call</h2>
+<ul class="fm-list fm-list--divided ready" id="ready" style="max-width:860px"></ul></section>
+</main>
+<dialog id="dlg-withdraw" class="fm-dialog" aria-labelledby="dw"><h2 id="dw">Withdraw a player from this match?</h2><p>Their opponent advances and both players are told straight away. This can't be undone once the next round starts.</p><div class="fm-dialog__actions"><button class="fm-btn fm-btn--secondary" data-close autofocus>Cancel</button><button class="fm-btn fm-btn--danger-solid" data-close>Withdraw</button></div></dialog>
+<script src="../components/match.js"></script><script src="../components/kit.js"></script>
+<script>
+const M=FMMatch,tlEl=document.getElementById('tl'),det=document.getElementById('detail');
+function draw(){tlEl.innerHTML=M.timeline();const tl=tlEl.firstChild;tl.addEventListener('fm-change',e=>show(e.detail.button.dataset.id,false));FM.icons(tlEl);return tl}
+let tl=draw();
+function show(id,sel){const m=M.find(id);det.innerHTML=M.detail(m);FM.icons(det);if(sel!==false){const b=tl.querySelector('[data-id="'+id+'"]');if(b)FM.select(tl,b,true)}}
+show('b3');
+function readyList(){document.getElementById('ready').innerHTML=M.day.matches.filter(m=>m.state==='upcoming').map(m=>{let act;
+if(m.called)act='<button class="fm-btn fm-btn--secondary" data-uncall="'+m.id+'">Cancel call</button>';
+else if(m.rest)act='<button class="fm-btn fm-btn--primary" aria-disabled="true" aria-describedby="rd-why-'+m.id+'">Call to table</button><span class="fm-sr" id="rd-why-'+m.id+'">'+m.rest.who+' is resting until '+m.rest.until+'</span>';
+else act='<button class="fm-btn fm-btn--primary" data-call="'+m.id+'">Call to table</button>';
+return '<li>'+M.row(m,{details:false,idPrefix:'rd'})+'<div style="display:flex;gap:8px">'+act+'</div></li>'}).join('');FM.icons(document.getElementById('ready'))}
+readyList();
+const names=m=>m.p[0].name.split(',')[0]+' vs '+m.p[1].name.split(',')[0];
+function refresh(id){count();tl=draw();show(id,false);const b=tl.querySelector('[data-id="'+id+'"]');if(b)FM.select(tl,b,false);readyList()}
+/* Every change snapshots the match first; Undo restores the snapshot and redraws. */
+function change(id,mutate,msg,issue){const m=M.find(id),prev=JSON.stringify(m);mutate(m);const card=issue&&document.querySelector('[data-issue="'+issue+'"]');if(card)card.hidden=true;refresh(id);
+FM.toast(msg,{undo:()=>{Object.keys(m).forEach(k=>delete m[k]);Object.assign(m,JSON.parse(prev));if(card)card.hidden=false;refresh(id)}})}
+const fixB3=()=>change('b3',m=>{m.state='upcoming';m.start='12:05';m.end='12:40'},'Patel vs Park moved to 12:05','b3');
+const takeD1=()=>change('d1',m=>{m.state='live';delete m.offlineSince},'You’re scoring Table 4 from this device','d1');
+document.addEventListener('click',e=>{const b=e.target.closest('button');if(!b||b.getAttribute('aria-disabled')==='true')return;
+if(b.dataset.show)show(b.dataset.show);
+if(b.dataset.resolve==='b3'||b.dataset.act==='fix')fixB3();
+if(b.dataset.resolve==='d1'||b.dataset.act==='takeover')takeD1();
+if(b.dataset.act==='keep')change('b3',m=>{m.state='upcoming';m.kept=true},'Kept at 11:50. Patel rests 5 minutes.','b3');
+if(b.dataset.act==='ping')FM.toast('Reminders aren’t sent from this demo',{icon:'info'});
+if(b.dataset.call||b.dataset.act==='call'){const card=b.closest('[aria-labelledby^="dt-"]');const id=b.dataset.call||(card&&card.getAttribute('aria-labelledby').slice(3));const m=M.find(id);if(m)change(id,x=>{x.called=true},names(m)+' called to Table '+m.table)}
+if(b.dataset.uncall){const m=M.find(b.dataset.uncall);change(m.id,x=>{delete x.called},'Call cancelled for '+names(m))}
+});
+function count(){const n=[...document.querySelectorAll('[data-issue]')].filter(x=>!x.hidden).length;document.getElementById('isscount').textContent=n;document.getElementById('allclear').hidden=n>0}
+document.getElementById('evf').addEventListener('fm-change',e=>{const v=e.detail.values;tl.querySelectorAll('.fm-slot[data-id]').forEach(s=>{const m=M.find(s.dataset.id);s.style.visibility=(v.includes('All events')||v.includes(m.event))?'':'hidden'})});
+</script>
+</body></html>

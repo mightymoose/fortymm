@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<!-- @dsCard group="Components" name="Component library" subtitle="v2.1 — roles, controls, feedback, specialist match components" viewport="1280x1000" -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>FortyMM · Component library</title>
+<link rel="stylesheet" href="../../colors_and_type.css"><link rel="stylesheet" href="kit.css">
+<style>
+body{margin:0}
+.doc{max-width:1180px;margin:0 auto;padding:56px 24px 160px}
+.doc-head{display:flex;flex-direction:column;gap:12px;max-width:780px}
+.doc h1{margin:0;font:700 40px/1.1 var(--font-ui);letter-spacing:-0.02em}
+.doc-head p{margin:0;font:400 17px/1.55 var(--font-ui);color:var(--fg-2)}
+.doc-toc{display:flex;flex-wrap:wrap;gap:6px 20px;margin-top:12px;font:500 15px var(--font-ui)}
+.doc-toc a{color:var(--fg-2);text-decoration:none}.doc-toc a:hover{color:var(--fg-1);text-decoration:underline}
+.doc-cat{margin-top:128px;scroll-margin-top:24px}
+.doc-cat>h2{margin:0;font:600 30px/1.2 var(--font-ui);letter-spacing:-0.01em}
+.doc-cat>p{margin:10px 0 0;max-width:700px;font:400 16px/1.55 var(--font-ui);color:var(--fg-3)}
+.doc-ex{margin-top:72px;display:grid;grid-template-columns:minmax(0,250px) minmax(0,1fr);gap:20px 56px}
+.doc-ex>header h3{margin:0 0 8px;font:600 18px/1.3 var(--font-ui);color:var(--fg-1)}
+.doc-ex>header p{margin:0 0 8px;font:400 14px/1.6 var(--font-ui);color:var(--fg-3)}
+.doc-vo{display:inline-flex;margin-top:6px;font:500 12px var(--font-ui);color:var(--fg-3);box-shadow:inset 0 0 0 1px var(--border-subtle);border-radius:4px;padding:3px 7px}
+.doc-stage{min-width:0;display:flex;flex-direction:column;gap:28px}
+.doc-row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.doc-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:32px}
+.doc-cap{margin:0 0 10px;font:500 13px var(--font-ui);color:var(--fg-3)}
+.doc-roles{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,330px),1fr));gap:48px 40px;align-items:start}
+.doc-use{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:36px 40px}
+.doc-use h4{margin:16px 0 6px;font:600 15px var(--font-ui);color:var(--fg-1)}
+.doc-use p{margin:0;font:400 14px/1.55 var(--font-ui);color:var(--fg-3)}
+.doc-status{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,200px),1fr));gap:32px 32px}
+.doc-status h4{margin:14px 0 4px;font:600 14px var(--font-ui);color:var(--fg-1)}
+.doc-status p{margin:0;font:400 13px/1.5 var(--font-ui);color:var(--fg-3)}
+.doc-links{display:flex;flex-wrap:wrap;gap:12px;margin-top:16px}
+.doc-phone{width:360px;max-width:100%}
+code{font:500 13px var(--font-num);color:var(--fg-1)}
+@media (max-width:820px){.doc-ex{grid-template-columns:minmax(0,1fr)}.doc-cat{margin-top:88px}}
+</style></head>
+<body><main class="doc">
+<header class="doc-head">
+<h1>Component library</h1>
+<p>Equipment for running a tournament day. Each component has its own shape for its job: cards hold what stays, notices sit in the text, alerts carry a fix, toasts float briefly, tooltips add detail. Orange marks actions and selection only.</p>
+<nav class="doc-toc" aria-label="Sections"><a href="#roles">Roles</a><a href="#actions">Buttons</a><a href="#forms">Fields, dates and choices</a><a href="#selection">Selection</a><a href="#containers">Containers</a><a href="#feedback">Feedback</a><a href="#overlays">Overlays</a><a href="#match">Match components</a><a href="#more">More</a></nav>
+<p class="fm-notice" style="max-width:760px"><span data-icon="info"></span><span>Examples work unless marked <b>Visual only</b>. Nothing is sent anywhere: actions change only this page, and every Undo really reverses that change. Buttons that would need a server say “isn’t wired up in this demo” when pressed.</span></p>
+<div class="doc-links"><a class="fm-btn fm-btn--secondary fm-btn--sm" href="states.html">State matrix</a><a class="fm-btn fm-btn--secondary fm-btn--sm" href="../tournament/index.html">Tournament screen (desktop)</a><a class="fm-btn fm-btn--secondary fm-btn--sm" href="../tournament/mobile.html">Player screens (mobile)</a><a class="fm-btn fm-btn--secondary fm-btn--sm" href="../../Components%20before%20and%20after.html">Before and after</a></div>
+<p class="fm-help">The iOS, Android, web admin, marketing and spectator kits are <b>legacy v2</b> and don’t use these components. Don’t copy from them.</p>
+</header>
+
+<section class="doc-cat" id="roles" data-testid="section-roles"><h2>Roles at a glance</h2><p>Same tokens, different structure. You should know which one you're looking at before you read it.</p>
+<div class="doc-roles" style="margin-top:48px">
+<div data-testid="role-card"><p class="doc-cap">Card — persistent, structured</p>
+<section class="fm-card" aria-labelledby="r-card"><div class="fm-card__head"><div><h3 class="fm-card__title" id="r-card">Your next match</h3><p class="fm-card__sub">Open singles · Round of 16</p></div><span class="fm-status"><span data-icon="clock"></span><span class="num">12:05</span></span></div>
+<div class="fm-card__body"><dl class="fm-dl"><div><dt>Opponent</dt><dd>Park, Ji-ho</dd></div><div><dt>Table</dt><dd>Table 2</dd></div></dl>
+<p class="fm-notice fm-notice--rest"><span data-icon="clock"></span><span>You rest until <span class="num">11:55</span>. We'll call you after that.</span></p></div>
+<div class="fm-card__foot"><button class="fm-btn fm-btn--primary">I'm at the table</button><button class="fm-btn fm-btn--ghost">Directions</button></div></section></div>
+<div><p class="doc-cap">Inline notice — part of the text</p>
+<div style="display:flex;flex-direction:column;gap:12px" data-testid="role-notice-examples"><p class="body" style="margin:0">Round of 16 starts on all four tables once the last Round of 32 match finishes.</p><p class="fm-notice"><span data-icon="info"></span><span>Draws are fixed. Seeds come from ratings on 1 April.</span></p><p class="fm-notice fm-notice--success"><span data-icon="check"></span><span>Check-in saved at <span class="num">09:42</span>.</span></p></div>
+<p class="doc-cap" style="margin-top:40px">Toast — raised, brief, offers Undo</p>
+<div class="fm-toast" role="status" data-testid="role-toast"><span data-icon="check"></span><span class="fm-toast__msg">Result saved. Nguyen <span class="rating-up">▲ +12</span></span><button class="fm-btn fm-btn--sm fm-toast__action">Undo</button></div>
+<p class="doc-cap" style="margin-top:40px">Tooltip — supplementary</p>
+<span class="fm-tooltip fm-tooltip--static" data-testid="role-tooltip">Johansen-Whitfield, Annika vs Rossi, Giulia · 11:05–11:40</span></div>
+<div style="display:flex;flex-direction:column;gap:32px"><div data-testid="role-warning"><p class="doc-cap">Warning — problem and the fix</p>
+<div class="fm-alert fm-alert--warning"><span data-icon="alert"></span><p class="fm-alert__title">Patel would get 5 minutes’ rest</p><p class="fm-alert__body">Her Table 3 match is running over. Starting at 12:05 keeps the 15-minute minimum.</p><div class="fm-alert__actions"><button class="fm-btn fm-btn--primary fm-btn--sm">Move to 12:05</button><button class="fm-btn fm-btn--secondary fm-btn--sm">Keep 11:50</button></div></div></div>
+<div data-testid="role-error"><p class="doc-cap">Error — what failed and how to recover</p>
+<div class="fm-alert fm-alert--error"><span data-icon="error"></span><p class="fm-alert__title">Results didn't sync</p><p class="fm-alert__body">You're offline. 3 results are saved on this device.</p><div class="fm-alert__actions"><button class="fm-btn fm-btn--primary fm-btn--sm" data-busy="Retrying…">Retry now</button></div></div></div></div>
+</div><p class="doc-vo" style="margin-top:24px">Visual only · buttons in this overview are not wired up</p></section>
+
+<section class="doc-cat" id="actions" data-testid="section-actions"><h2>Buttons</h2><p>Label with the verb that happens. One primary per card or dialog.</p>
+<div class="doc-ex" data-testid="ex-variants"><header><h3>Variants</h3><p>Primary for the main action, secondary for alternatives, ghost for low-weight actions in a row, danger for removal (always confirmed).</p></header><div class="doc-stage">
+<div class="doc-row"><button class="fm-btn fm-btn--primary">Call to table</button><button class="fm-btn fm-btn--secondary">Reschedule</button><button class="fm-btn fm-btn--ghost">Print score sheet</button><button class="fm-btn fm-btn--danger" data-dialog="dlg">Withdraw player…</button><a class="fm-btn fm-btn--link" href="#match">View draw</a></div>
+<div class="doc-row"><button class="fm-btn fm-btn--secondary fm-btn--sm">Small</button><button class="fm-btn fm-btn--secondary">Default</button><button class="fm-btn fm-btn--secondary fm-btn--lg">Large</button><button class="fm-btn fm-btn--secondary fm-btn--icon" aria-label="More options" data-tip="More options"><span data-icon="more"></span></button></div></div></div>
+<div class="doc-ex" data-testid="ex-loading-and-disabled"><header><h3>Loading and disabled</h3><p>Loading keeps the button's colours and swaps the label ("Saving…"). Disabled looks the same under the pointer, and says why nearby.</p></header><div class="doc-stage">
+<div class="doc-row"><button class="fm-btn fm-btn--primary" data-busy="Saving…" data-done="Result saved. Okafor-Adeyemi ▲ +9">Save result</button><button class="fm-btn fm-btn--secondary" data-busy="Exporting…">Export results</button><button class="fm-btn fm-btn--primary" aria-busy="true">Saving…</button></div>
+<div style="display:flex;flex-direction:column;gap:8px;align-items:flex-start"><button class="fm-btn fm-btn--primary" aria-disabled="true" aria-describedby="why1">Start match</button><p class="fm-help" id="why1">Both players need to check in first. Park hasn't yet.</p></div>
+<p class="fm-help">Every state side by side: <a href="states.html">state matrix</a>.</p></div></div>
+</section>
+
+<section class="doc-cat" id="forms" data-testid="section-forms"><h2>Fields and choices</h2><p>Field and control edges are brighter than dividers, so you can find where to tap on a dark table-side screen.</p>
+<div class="doc-ex" data-testid="ex-text-field"><header><h3>Text field</h3><p>Label above, help below. An error adds a red edge, an icon and a sentence that says how to fix it — all three stay while the field is focused.</p></header><div class="doc-stage"><div class="doc-grid">
+<div class="fm-field"><label class="fm-label" for="f1">Player name</label><input id="f1" class="fm-input" value="Johansen-Whitfield, Annika" aria-describedby="f1h"><p class="fm-help" id="f1h">Surname first, as it should appear on the draw.</p></div>
+<div class="fm-field"><label class="fm-label" for="f2">Club <span class="opt">(optional)</span></label><input id="f2" class="fm-input" placeholder="Search clubs"></div>
+<div class="fm-field"><label class="fm-label" for="f3">Table</label><input id="f3" class="fm-input fm-input--num" value="9" inputmode="numeric" aria-invalid="true" aria-describedby="f3e" data-validate-table><p class="fm-error" id="f3e"><span data-icon="error"></span><span>This venue has 6 tables. Enter 1–6.</span></p></div>
+<div class="fm-field"><label class="fm-label" for="f4">Entry fee</label><input id="f4" class="fm-input" value="Free" disabled aria-describedby="f4h"><p class="fm-help" id="f4h">Set by the club. Can't be changed here.</p></div>
+<div class="fm-field"><label class="fm-label" for="f5">Event</label><select id="f5" class="fm-select"><option>Open singles</option><option>Under 18 singles</option><option>Over 40 singles</option><option>Open doubles</option></select></div>
+<div class="fm-field"><label class="fm-label" for="f6">Note for players</label><textarea id="f6" class="fm-textarea">Warm-up on tables 5 and 6 from 9:00.</textarea></div>
+</div></div></div>
+<div class="doc-ex" data-testid="ex-code-input"><header><h3>Code input</h3><p>Joining a tournament with the organizer's 6-character code. Type, paste or autofill — characters spread across the boxes. Backspace steps back, ← → move. Letters and numbers only; case doesn't matter.</p></header><div class="doc-stage"><div class="doc-grid" style="align-items:start">
+<div class="fm-field"><span class="fm-label" id="code1l">Tournament code</span><div class="fm-code" id="code1" data-testid="code-input" data-code="6" data-split="3" aria-labelledby="code1l" data-describedby="code1h"></div><p class="fm-help" id="code1h">On the poster at the venue entrance. Try SP26RV.</p><p class="fm-error" id="code1e" hidden><span data-icon="error"></span><span>No tournament uses that code. Check the poster or ask the desk.</span></p><p class="fm-notice fm-notice--success" id="code1ok" hidden><span data-icon="check"></span><span><b>Spring Open 2026</b> · Riverside Sports Hall · 11 April</span></p></div>
+<div class="fm-field"><span class="fm-label" id="code2l" style="color:var(--fg-3)">Tournament code</span><div class="fm-code" data-code="6" data-split="3" aria-labelledby="code2l" data-describedby="code2h" data-disabled></div><p class="fm-help" id="code2h">Entries for this tournament have closed.</p></div>
+</div></div></div>
+<div class="doc-ex" data-testid="ex-combobox"><header><h3>Combobox</h3><p>Searchable player picker. Matches surname, first name or club, ignoring accents (“wojcik” finds Wójcik). Club and rating tell same-name players apart. ↓ ↑ move, Enter picks, Esc closes, Esc again clears.</p></header><div class="doc-stage"><div class="doc-grid" style="align-items:start">
+<div class="fm-field"><label class="fm-label" for="cb1">Opponent</label><div class="fm-combo" data-testid="combobox-opponent" data-combobox='[{"name":"Nguyen, Thanh","club":"Riverside TT","rating":"2,145"},{"name":"Nguyen, Linh","club":"Eastgate","rating":"1,702"},{"name":"Wójcik-Szymańska, Agnieszka","club":"Northside","rating":"2,088"},{"name":"Okafor-Adeyemi, Daniel","club":"Eastgate","rating":"1,987"},{"name":"Johansen-Whitfield, Annika","club":"Northside","rating":"2,061"},{"name":"Patel, Meera","club":"Riverside TT","rating":"1,840"},{"name":"Park, Ji-ho","club":"Eastgate","rating":"1,812"},{"name":"Fernández-Castillo, Marisol","club":"Northside","rating":"1,765"},{"name":"Moreau, Élodie","club":"Eastgate","rating":"1,930"},{"name":"Lindqvist, Erik","club":"Northside","rating":"1,688"},{"name":"Chen, Wei","club":"Riverside TT","rating":"1,901"},{"name":"Ali, Rashid","club":"Eastgate","rating":"1,745"}]'><input id="cb1" class="fm-input" placeholder="Search players or clubs" aria-describedby="cb1h"></div><p class="fm-help" id="cb1h">Only checked-in players are listed.</p></div>
+<p class="fm-help" id="cbout" aria-hidden="true">Nothing picked yet.</p>
+</div></div></div>
+<div class="doc-ex" data-testid="ex-date-picker"><header><h3>Date picker</h3><p>Type a date (11 April 2026, 11/4/2026, Sat 11 Apr) or open the calendar. Typed dates are checked when you leave the field or press Enter, then shown in full. Selected day in orange; today outlined; past days struck through. Alt+↓ opens the calendar from the field. Arrows move by day and week, Page Up/Down by month, Esc closes and returns focus.</p></header><div class="doc-stage"><div class="doc-grid" style="align-items:start">
+<div class="fm-field"><label class="fm-label" for="dp1">Tournament date</label><div class="fm-datefield" data-testid="datepicker-field" data-datepicker='{"value":"2026-04-11","today":"2026-04-10","min":"2026-04-10"}'><input id="dp1" class="fm-input" aria-describedby="dp1h"><button class="fm-btn fm-btn--secondary fm-btn--icon" data-cal-open aria-label="Open calendar"><span data-icon="calendar"></span></button></div><p class="fm-help" id="dp1h">Players see this on the entry page.</p></div>
+<div data-testid="datepicker-inline"><p class="doc-cap">Inline, for scheduling screens</p><div class="fm-cal fm-cal--inline" data-datepicker='{"value":"2026-04-11","today":"2026-04-10","min":"2026-04-10"}'></div></div>
+</div></div></div>
+<div class="doc-ex" data-testid="ex-checkbox-radio-and-switch"><header><h3>Checkbox, radio and switch</h3><p>Native inputs, keyboard-operable. Unchecked boxes have a 1.5px bright edge. Switches show state by fill and knob position.</p></header><div class="doc-stage"><div class="doc-grid">
+<fieldset class="fm-choices"><legend>Before the match</legend><label class="fm-check"><input type="checkbox" checked>Checked in</label><label class="fm-check"><input type="checkbox">Needs an umpire</label><label class="fm-check"><input type="checkbox" id="mixed">All players (12 of 16)</label><label class="fm-check"><input type="checkbox" disabled>Paid online (not enabled)</label></fieldset>
+<fieldset class="fm-choices"><legend>Match length</legend><label class="fm-radio"><input type="radio" name="bo">Best of 3</label><label class="fm-radio"><input type="radio" name="bo" checked>Best of 5</label><label class="fm-radio"><input type="radio" name="bo">Best of 7</label><label class="fm-radio"><input type="radio" name="bo" disabled>Timed (not for this event)</label></fieldset>
+<div class="fm-choices"><span class="fm-label">Calling</span><button class="fm-switch" role="switch" aria-checked="true"><span class="fm-switch__track"></span>Call players automatically</button><button class="fm-switch" role="switch" aria-checked="false"><span class="fm-switch__track"></span>Show ratings to spectators</button><button class="fm-switch" role="switch" aria-checked="false" disabled><span class="fm-switch__track"></span>Text players (needs phone numbers)</button></div>
+</div>
+<div class="fm-field" style="max-width:420px"><label class="fm-label" for="rg">Minimum rest between matches · <span id="rgv" class="num">15 min</span></label><input id="rg" type="range" class="fm-range" min="5" max="30" step="5" value="15"></div></div></div>
+</section>
+
+<section class="doc-cat" id="selection" data-testid="section-selection"><h2>Selection</h2><p>Four controls that look related but do different jobs.</p>
+<div class="doc-use" style="margin-top:48px">
+<div><div class="fm-tabs" role="tablist" data-select="single" aria-label="Tournament sections"><button role="tab" aria-selected="true" aria-controls="tp1" id="tb1">Overview</button><button role="tab" aria-selected="false" aria-controls="tp2" id="tb2">Schedule</button><button role="tab" aria-selected="false" aria-controls="tp3" id="tb3">Standings</button></div>
+<div role="tabpanel" id="tp1" aria-labelledby="tb1" style="padding-top:12px"><p class="fm-help">32 players · 4 tables · expected finish 18:45</p></div><div role="tabpanel" id="tp2" aria-labelledby="tb2" hidden style="padding-top:12px"><p class="fm-help">14 of 31 matches played.</p></div><div role="tabpanel" id="tp3" aria-labelledby="tb3" hidden style="padding-top:12px"><p class="fm-help">Groups A–D, top two advance.</p></div>
+<h4>Tabs</h4><p>Move between sibling sections of one page. The whole content area changes. Arrow keys move between tabs.</p></div>
+<div><div class="fm-seg" role="radiogroup" data-select="single" aria-label="Schedule view"><button role="radio" aria-checked="true">Timeline</button><button role="radio" aria-checked="false">List</button><button role="radio" aria-checked="false">By player</button></div>
+<h4>Segmented control</h4><p>Change how the same data is shown. Exactly one option is always on. Use 2–4 short options.</p></div>
+<div><div class="fm-chips" data-select="filter" aria-label="Filter by event"><button class="fm-chip" aria-pressed="true" data-all>All events</button><button class="fm-chip" aria-pressed="false">Open singles</button><button class="fm-chip" aria-pressed="false">Under 18</button><button class="fm-chip" aria-pressed="false">Doubles</button></div>
+<h4>Filter chips</h4><p>Narrow a list. Several events can be on together. "All events" clears them, and switches back on when none are left.</p><p id="chipout" class="fm-help" style="margin-top:8px">Showing: All events</p></div>
+<div><button class="fm-switch" role="switch" aria-checked="true"><span class="fm-switch__track"></span>Call players automatically</button>
+<h4>Switch</h4><p>A setting that takes effect immediately and stays. Never for filtering or changing views.</p></div>
+</div></section>
+
+<section class="doc-cat" id="containers" data-testid="section-containers"><h2>Containers</h2><p>Enclose only when it marks a real boundary. Inside a card, whitespace and alignment do the grouping.</p>
+<div class="doc-ex" data-testid="ex-card"><header><h3>Card</h3><p>Persistent information: a title row with status at the right, grouped details, actions at the bottom left with the primary first. No border — the lighter surface is the edge.</p></header><div class="doc-stage"><div class="doc-grid">
+<section class="fm-card" aria-labelledby="c1t"><div class="fm-card__head"><div><h3 class="fm-card__title" id="c1t">Table 3</h3><p class="fm-card__sub">Open singles · Round of 32</p></div><span class="live-marker">Live</span></div><div class="fm-card__body" id="c1b"></div><div class="fm-card__foot"><a class="fm-btn fm-btn--secondary" href="../tournament/mobile.html">Open scoring</a><button class="fm-btn fm-btn--ghost" data-demo>Move table</button></div></section>
+<section class="fm-card" aria-labelledby="c2t"><div class="fm-card__head"><div><h3 class="fm-card__title" id="c2t">Wójcik-Szymańska, Agnieszka</h3><p class="fm-card__sub">Northside · seed 3</p></div></div><div class="fm-card__body"><dl class="fm-dl"><div><dt>Rating</dt><dd class="num">2,088</dd></div><div><dt>Today</dt><dd>Won 2, lost 0</dd></div><div><dt>Next</dt><dd>12:40 · Table 1</dd></div><div><dt>Events</dt><dd>Open singles, Open doubles</dd></div></dl></div><div class="fm-card__foot"><button class="fm-btn fm-btn--secondary" data-demo>View matches</button><button class="fm-btn fm-btn--ghost" data-demo>Message</button></div></section>
+</div></div></div>
+<div class="doc-ex" data-testid="ex-scroll-area"><header><h3>Scroll area</h3><p>Lives inside its card — no extra frame. The column heading sticks; the scrollbar is the only extra chrome. Focusable so keyboard users can scroll it.</p></header><div class="doc-stage">
+<section class="fm-card" style="max-width:520px" aria-labelledby="sct"><div class="fm-card__head"><div><h3 class="fm-card__title" id="sct">Check-in</h3><p class="fm-card__sub">12 of 16 players here</p></div><button class="fm-btn fm-btn--secondary fm-btn--sm" id="checkall">Check in all</button></div>
+<div class="fm-card__body" style="padding-top:8px"><div class="fm-scroll" style="max-height:236px" tabindex="0" aria-label="Players"><div class="fm-scroll__head">Player</div><ul class="fm-list" id="checkin" style="padding-right:8px"></ul></div></div></section></div></div>
+<div class="doc-ex" style="grid-template-columns:minmax(0,1fr)" data-testid="ex-split-view"><header style="max-width:640px"><h3>Split view</h3><p>Schedule beside match details. Actions in the details panel work on the <a href="../tournament/index.html">tournament screen</a>; here they only say so. Panes are separated by space; the handle is the one drawn element. Drag it or focus it and use ← →. Stacks below 900px. Click any block.</p></header><div class="doc-stage">
+<div class="fm-split-host"><div class="fm-split" id="split1"><div style="min-width:0"><div class="fm-scroll" tabindex="0" aria-label="Schedule timeline" style="padding-bottom:8px" id="tl1"></div></div><button class="fm-split__handle" role="separator" aria-orientation="vertical" aria-label="Resize schedule and match details" aria-valuemin="35" aria-valuemax="72" aria-valuenow="58"></button><div id="dt1" aria-live="polite"></div></div></div></div></div>
+</section>
+
+<section class="doc-cat" id="feedback" data-testid="section-feedback"><h2>Feedback</h2><p>Match the weight of the message to what you need to do about it.</p>
+<div class="doc-ex" data-testid="ex-toast"><header><h3>Toast</h3><p>Confirms something you just did. Compact, raised, bottom centre. Undo when the action can be reversed. Leaves after 6 s; pauses while hovered or focused. Never for errors.</p></header><div class="doc-stage">
+<div class="doc-row"><button class="fm-btn fm-btn--secondary" data-toast="Chen vs Ali called to Table 1" data-undo data-done-label="Called · Table 1">Call Chen vs Ali</button><button class="fm-btn fm-btn--secondary" data-toast="Table 4 marked free">Mark Table 4 free</button></div>
+<div class="fm-toast" role="status"><span data-icon="check"></span><span class="fm-toast__msg">Chen vs Ali called to Table 1</span><button class="fm-btn fm-btn--sm fm-toast__action">Undo</button><button class="fm-btn fm-btn--sm fm-toast__close" aria-label="Dismiss"><span data-icon="x" class="fm-ic--sm"></span></button></div>
+<p class="doc-vo">Static copy above is visual only</p></div></div>
+<div class="doc-ex" data-testid="ex-inline-notice"><header><h3>Inline notice</h3><p>A sentence with an icon, inside the content it's about. No box. Use for rest times, timing info and quiet confirmations.</p></header><div class="doc-stage"><div style="display:flex;flex-direction:column;gap:14px;max-width:560px">
+<p class="fm-notice fm-notice--rest"><span data-icon="clock"></span><span><b>Lindqvist rests until 12:10.</b> Table 3 can start after that.</span></p>
+<p class="fm-notice"><span data-icon="info"></span><span>Scores update live for spectators; ratings update when a result is saved.</span></p>
+<p class="fm-notice fm-notice--success"><span data-icon="check"></span><span>Schedule updated. Expected finish 18:45.</span></p></div></div></div>
+<div class="doc-ex" data-testid="ex-warning-and-error"><header><h3>Warning and error</h3><p>The title says what's wrong, the body why, the buttons fix it. They stay until resolved. Errors use <code>role="alert"</code>; warnings don't interrupt.</p></header><div class="doc-stage" style="max-width:620px">
+<div class="fm-alert fm-alert--warning" id="w1"><span data-icon="alert"></span><p class="fm-alert__title">Okafor-Adeyemi is booked on two tables at 12:00</p><p class="fm-alert__body">His doubles on Table 4 overlaps his singles on Table 1.</p><div class="fm-alert__actions"><button class="fm-btn fm-btn--primary fm-btn--sm" data-toast="Doubles moved to 12:40" data-undo data-hide="w1" data-reveal="w1done">Move doubles to 12:40</button><button class="fm-btn fm-btn--secondary fm-btn--sm" data-demo>Choose another time</button></div></div>
+<p class="fm-notice fm-notice--success" id="w1done" hidden><span data-icon="check"></span><span>Doubles moved to 12:40. Okafor-Adeyemi has 5 minutes between his matches.</span></p>
+<div class="fm-alert fm-alert--error" role="alert"><span data-icon="offline"></span><p class="fm-alert__title">Table 4 scorer is offline</p><p class="fm-alert__body">Last score arrived at 11:42. Points entered on that device will sync when it reconnects.</p><div class="fm-alert__actions"><button class="fm-btn fm-btn--primary fm-btn--sm" data-demo>Score from this device</button><button class="fm-btn fm-btn--secondary fm-btn--sm" data-busy="Sending…">Send a reminder</button></div></div></div></div>
+<div class="doc-ex" data-testid="ex-status-set"><header><h3>Status set</h3><p>Reviewed together so no two read alike. Each has its own hue, a non-colour cue and a place it belongs.</p></header><div class="doc-stage"><div class="doc-status">
+<div><span class="live-marker">Live</span><h4>Live</h4><p>Red dot + word. Static. One per match, never on the border.</p></div>
+<div><span class="fm-status fm-status--danger"><span data-icon="error"></span>Didn't sync</span><h4>Error</h4><p>Something failed. Red icon + sentence + recovery action. Persists.</p></div>
+<div><button class="fm-btn fm-btn--danger fm-btn--sm">Withdraw…</button><h4>Destructive</h4><p>Red outline on the action only. Always confirmed in a dialog.</p></div>
+<div><span class="fm-rest"><span data-icon="clock"></span>Rest until <span class="num">12:10</span></span><h4>Rest</h4><p>Blue clock + the end time. Information, not a problem.</p></div>
+<div><span class="fm-status fm-status--conflict"><span data-icon="alert"></span>Needs decision</span><h4>Conflict</h4><p>Amber triangle. Organizer screens, always with a suggested fix.</p></div>
+<div><span class="fm-status fm-status--offline">Scorer offline</span><h4>Disconnected</h4><p>Hollow grey dot. Scores shown greyed with the last update time.</p></div>
+</div></div></div>
+</section>
+
+<section class="doc-cat" id="overlays" data-testid="section-overlays"><h2>Overlays</h2><p>The only things with a shadow. Each has a clear way out: Esc, the backdrop, or a button.</p>
+<div class="doc-ex" data-testid="ex-tooltip"><header><h3>Tooltip</h3><p>Dark surface, 13px sentence case, wraps past 280px. Appears on hover and keyboard focus; Esc hides it. Supplementary only — never the only place information lives.</p></header><div class="doc-stage">
+<div class="doc-row"><button class="fm-btn fm-btn--secondary fm-btn--icon" aria-label="Print score sheet" data-tip="Print score sheet"><span data-icon="list"></span></button><button class="fm-btn fm-btn--secondary" data-testid="tooltip-trigger" data-tip="Moves this match to the next free table and tells both players. Their rest times are kept.">Move to free table</button></div>
+<div class="doc-row" style="align-items:flex-start"><span class="fm-tooltip fm-tooltip--static">Print score sheet</span><span class="fm-tooltip fm-tooltip--static" style="max-width:280px">Moves this match to the next free table and tells both players. Their rest times are kept.</span></div><p class="doc-vo">Static copies above are visual only</p></div></div>
+<div class="doc-ex" data-testid="ex-dialog"><header><h3>Dialog</h3><p>States the consequence, offers the safe choice first. Esc, the backdrop and "Keep in draw" all close it; focus returns to the trigger.</p></header><div class="doc-stage"><div class="doc-row"><button class="fm-btn fm-btn--danger" data-dialog="dlg" data-testid="dialog-trigger">Withdraw player…</button></div></div></div>
+<div class="doc-ex" data-testid="ex-menu"><header><h3>Menu</h3><p>Destructive items last, in red, after a divider.</p></header><div class="doc-stage"><div class="fm-overlay fm-menu" role="menu" aria-label="Match actions" style="align-self:flex-start"><button class="fm-menu__item" role="menuitem">Edit match</button><button class="fm-menu__item" role="menuitem">Move to another table</button><button class="fm-menu__item" role="menuitem">Print score sheet<small>⌘P</small></button><hr><button class="fm-menu__item fm-menu__item--danger" role="menuitem">Remove from schedule</button></div><p class="doc-vo">Visual only</p></div></div>
+<div class="doc-ex" data-testid="ex-sheet-and-drawer"><header><h3>Sheet and drawer</h3><p>For a task that needs more room than a dialog while keeping the page in view. Drawer from the right on wide screens; bottom sheet for short choices and on phones. Title, scrolling body, actions pinned at the bottom. Esc, the backdrop or Close dismisses; focus returns to the trigger.</p></header><div class="doc-stage">
+<div class="doc-row"><button class="fm-btn fm-btn--secondary" data-dialog="sheet-match" data-testid="sheet-match-trigger">Open match drawer</button><button class="fm-btn fm-btn--secondary" id="movebtn" data-testid="sheet-move-trigger">Move match to another table…</button></div>
+<p class="fm-notice"><span data-icon="table"></span><span>Patel vs Wójcik-Szymańska is on <b id="movetable">Table 3</b>.</span></p></div></div>
+<div class="doc-ex" data-testid="ex-command-palette"><header><h3>Command palette</h3><p>Jump to a section, open an overlay or find a player from anywhere. ⌘K or Ctrl+K opens it. Type to filter, ↑ ↓ move, Enter runs, Esc closes. Every command here really runs on this page.</p></header><div class="doc-stage"><div class="doc-row"><button class="fm-btn fm-btn--secondary" id="palbtn" data-testid="palette-trigger" aria-keyshortcuts="Meta+K Control+K"><span data-icon="search"></span>Search commands<span class="fm-kbd" aria-hidden="true">⌘K</span></button></div></div></div>
+</section>
+
+<section class="doc-cat" id="match" data-testid="section-match"><h2>Match components</h2><p>FortyMM's own parts. Names wrap rather than truncate. Games won sit in a small box; current points are the big number.</p>
+<div class="doc-ex" data-testid="ex-match-row"><header><h3>Match row</h3><p>Columns: name · serve · games won · points. Games and Points are labelled once per list. "Game scores" opens the full history — a tap target, so it works on touch.</p></header><div class="doc-stage"><div class="fm-matches" id="rows" style="max-width:620px"></div></div></div>
+<div class="doc-ex" data-testid="ex-empty-and-disconnected"><header><h3>Empty and disconnected</h3><p>Say what's happening and what to do next.</p></header><div class="doc-stage"><div class="doc-grid">
+<div class="fm-empty"><b>No matches on Table 5 yet</b><span>It opens for Round of 16 at about 12:30.</span><button class="fm-btn fm-btn--secondary fm-btn--sm">Assign a match</button></div>
+<div class="fm-matches" id="offrow"></div></div></div></div>
+<div class="doc-ex" data-testid="ex-score-entry-and-game-history"><header><h3>Score entry and game history</h3><p>Large targets for the table side. Each point flashes once. A won game shows a toast with Undo. The history below updates as you score.</p></header><div class="doc-stage">
+<div id="pad" class="fm-scorepad" style="max-width:560px" data-scorepad='{"names":["Patel, Meera","Wójcik-Szymańska, Agnieszka"],"games":[[11,8],[6,11],[11,9],[9,11]],"pts":[9,9],"serve":1,"bestOf":5}'>
+<div class="fm-scorepad__side"><div class="fm-scorepad__name"><span>Patel, Meera</span><span class="serve-marker" data-serve="0" role="img" aria-label="Serving"></span></div><div class="fm-scorepad__games">Games <b data-games="0">2</b></div><div class="fm-scorepad__pts" data-pts="0" aria-label="Patel points">9</div><button class="fm-btn fm-btn--primary fm-btn--xl fm-btn--block" data-add="0">+1 Patel</button></div>
+<div class="fm-scorepad__side"><div class="fm-scorepad__name"><span>Wójcik-Szymańska, Agnieszka</span><span class="serve-marker" data-serve="1" role="img" aria-label="Serving"></span></div><div class="fm-scorepad__games">Games <b data-games="1">2</b></div><div class="fm-scorepad__pts" data-pts="1" aria-label="Wójcik-Szymańska points">9</div><button class="fm-btn fm-btn--primary fm-btn--xl fm-btn--block" data-add="1">+1 Wójcik-Szymańska</button></div>
+<div class="fm-scorepad__bar"><button class="fm-btn fm-btn--secondary" data-undo><span data-icon="undo"></span>Undo last point</button><span class="fm-help">Game 5 · first to 11, win by 2</span></div>
+<div class="fm-scroll" style="grid-column:1/-1;padding-top:8px" data-history></div></div></div></div>
+<div class="doc-ex" data-testid="ex-schedule-blocks"><header><h3>Schedule blocks</h3><p>Surnames stacked so a 35-minute slot holds the longest names. Full names in the tooltip and accessible name. Selected uses the orange edge.</p></header><div class="doc-stage"><div class="doc-row" id="slots" data-select="single" style="align-items:stretch"></div></div></div>
+<div class="doc-ex" data-testid="ex-rest-indicator"><header><h3>Rest indicator</h3><p>Blue clock and the time rest ends. With a meter where the player is waiting on it.</p></header><div class="doc-stage" style="max-width:360px">
+<span class="fm-rest"><span data-icon="clock"></span>Rest until <span class="num">12:10</span></span>
+<div class="fm-field"><div style="display:flex;justify-content:space-between;gap:12px"><span class="fm-rest"><span data-icon="clock"></span>Rest until <span class="num">11:55</span></span><span class="fm-help num">8 min left</span></div><div class="fm-meter fm-meter--rest" role="progressbar" aria-label="Rest elapsed" aria-valuenow="7" aria-valuemax="15"><i style="width:47%"></i></div></div></div></div>
+</section>
+
+<section class="doc-cat" id="more" data-testid="section-more"><h2>More components</h2>
+<div class="doc-ex" data-testid="ex-data-table"><header><h3>Data table</h3><p>Mono, right-aligned numbers; signed rating changes. Only the header has a strong rule.</p></header><div class="doc-stage fm-scroll"><table class="fm-table"><thead><tr><th>Player</th><th>Club</th><th class="n">Played</th><th class="n">Rating</th><th class="n">Change</th></tr></thead><tbody>
+<tr><td style="color:var(--fg-1)">Nguyen, Thanh</td><td>Riverside TT</td><td class="n">42</td><td class="n">2,145</td><td class="n"><span class="rating-up">▲ +12</span></td></tr>
+<tr><td style="color:var(--fg-1)">Wójcik-Szymańska, Agnieszka</td><td>Northside</td><td class="n">37</td><td class="n">2,088</td><td class="n"><span class="rating-up">▲ +4</span></td></tr>
+<tr><td style="color:var(--fg-1)">Okafor-Adeyemi, Daniel</td><td>Eastgate</td><td class="n">51</td><td class="n">1,987</td><td class="n"><span class="rating-down">▼ −12</span></td></tr></tbody></table></div></div>
+<div class="doc-ex" data-testid="ex-tags-avatar-progress"><header><h3>Tags, avatar, progress</h3></header><div class="doc-stage"><div class="doc-row"><span class="fm-tag">Singles</span><span class="fm-tag fm-tag--outline">Seed 4</span><span class="fm-avatar">TN</span><span class="fm-avatar" style="width:28px;height:28px;font-size:11px">MP</span></div>
+<div class="fm-field" style="max-width:420px"><div style="display:flex;justify-content:space-between" class="fm-label"><span>Round of 16</span><span class="num">5 of 8 played</span></div><div class="fm-meter" role="progressbar" aria-label="Round of 16 progress" aria-valuenow="5" aria-valuemax="8"><i style="width:62.5%"></i></div></div></div></div>
+<div class="doc-ex" data-testid="ex-navigation"><header><h3>Navigation</h3></header><div class="doc-stage"><nav class="fm-crumbs" aria-label="Breadcrumb"><a href="#more">Spring Open</a><span aria-hidden="true">/</span><a href="#more">Open singles</a><span aria-hidden="true">/</span><span aria-current="page">Round of 16</span></nav>
+<nav class="fm-nav" aria-label="Admin"><a href="#more" aria-current="page">Tables &amp; schedule</a><a href="#more">Draws</a><a href="#more">Players</a><a href="#more">Results</a></nav>
+<nav class="fm-pages" aria-label="Results pages"><button aria-label="Previous page">‹</button><button aria-current="page">1</button><button>2</button><button>3</button><span class="fm-help">…</span><button>12</button><button aria-label="Next page">›</button></nav></div></div>
+<div class="doc-ex" data-testid="ex-menubar"><header><h3>Menubar</h3><p>Dense organizer tools on desktop only; phones use the tab bar. ← → move between menus, ↓ or Enter opens, ↑ ↓ inside, Esc closes.</p></header><div class="doc-stage">
+<ul class="fm-menubar" role="menubar" aria-label="Tournament tools">
+<li role="none"><button class="fm-menubar__top" aria-controls="mb1">Tournament</button><div class="fm-overlay fm-menu" role="menu" id="mb1" aria-label="Tournament" hidden><button class="fm-menu__item" role="menuitem">Edit details</button><button class="fm-menu__item" role="menuitem">Venue and tables</button><button class="fm-menu__item" role="menuitem">Print entry list<small>⌘P</small></button></div></li>
+<li role="none"><button class="fm-menubar__top" aria-controls="mb2">Schedule</button><div class="fm-overlay fm-menu" role="menu" id="mb2" aria-label="Schedule" hidden><button class="fm-menu__item" role="menuitem">Add a break</button><button class="fm-menu__item" role="menuitem">Re-plan from now</button><button class="fm-menu__item" role="menuitem">Change minimum rest</button></div></li>
+<li role="none"><button class="fm-menubar__top" aria-controls="mb3">Results</button><div class="fm-overlay fm-menu" role="menu" id="mb3" aria-label="Results" hidden><button class="fm-menu__item" role="menuitem">Export results (CSV)</button><button class="fm-menu__item" role="menuitem">Publish to spectators</button><hr role="separator"><button class="fm-menu__item fm-menu__item--danger" role="menuitem">Clear all results…</button></div></li></ul>
+<p class="fm-help" id="mbout" aria-live="polite">Demo: choosing a command only shows its name here.</p></div></div>
+<div class="doc-ex" data-testid="ex-carousel"><header><h3>Carousel</h3><p>Only for a short row of peers worth browsing — here, finished matches. Never auto-advances. Buttons step one card; the row also scrolls by touch or trackpad.</p></header><div class="doc-stage">
+<section class="fm-carousel" aria-roledescription="carousel" aria-labelledby="car-t"><div class="fm-carousel__head"><h4 class="fm-section-title" id="car-t">Finished this morning</h4><div class="fm-carousel__ctrl"><button class="fm-btn fm-btn--ghost fm-btn--sm fm-btn--icon" data-prev aria-label="Previous results"><span data-icon="left"></span></button><span class="fm-carousel__pos" aria-live="polite"></span><button class="fm-btn fm-btn--ghost fm-btn--sm fm-btn--icon" data-next aria-label="Next results"><span data-icon="right"></span></button></div></div><div class="fm-carousel__track" id="cartrack" tabindex="0" aria-label="Finished matches, scroll sideways"></div></section></div></div>
+<div class="doc-ex" data-testid="ex-accordion"><header><h3>Accordion</h3></header><div class="doc-stage"><div><details class="fm-disclosure" open><summary>How are matches scheduled?</summary><p>FortyMM fits every match onto your tables while keeping each player's rest time, then re-plans when a match runs long.</p></details><details class="fm-disclosure"><summary>Scheduling details</summary><p class="num" style="font-size:13px;color:var(--fg-3)">1,248 variables · 12 rules · solved in 234 ms</p></details></div></div></div>
+</section>
+</main>
+
+<dialog id="dlg" data-testid="dialog-withdraw" class="fm-dialog" aria-labelledby="dlgt"><h2 id="dlgt">Withdraw Okafor-Adeyemi from the draw?</h2><p>Johansen-Whitfield advances to the quarterfinal. This can't be undone once her next match starts.</p><div class="fm-dialog__actions"><button class="fm-btn fm-btn--secondary" data-close autofocus>Keep in draw</button><button class="fm-btn fm-btn--danger-solid" data-close value="withdraw">Withdraw</button></div></dialog>
+<dialog id="dlg-withdraw" class="fm-dialog" aria-labelledby="dlgt2"><h2 id="dlgt2">Withdraw a player from this match?</h2><p>Their opponent advances. Both players are told straight away.</p><div class="fm-dialog__actions"><button class="fm-btn fm-btn--secondary" data-close autofocus>Cancel</button><button class="fm-btn fm-btn--danger-solid" data-close>Withdraw</button></div></dialog>
+
+<dialog id="sheet-match" class="fm-sheet" data-testid="sheet-match" aria-labelledby="shm-t"><div class="fm-sheet__head"><div><h2 id="shm-t">Patel vs Wójcik-Szymańska</h2><p>Table 3 · Open singles · Round of 32</p></div><button class="fm-btn fm-btn--ghost fm-btn--icon" data-close aria-label="Close"><span data-icon="x"></span></button></div><div class="fm-sheet__body" id="shm-b"></div><div class="fm-sheet__foot"><a class="fm-btn fm-btn--primary" href="../tournament/mobile.html">Open scoring</a><button class="fm-btn fm-btn--ghost" data-close>Close</button></div></dialog>
+<dialog id="sheet-move" class="fm-sheet fm-sheet--bottom" data-testid="sheet-move" aria-labelledby="shv-t"><form method="dialog"><div class="fm-sheet__head"><div><h2 id="shv-t">Move to another table</h2><p id="shv-s">Patel vs Wójcik-Szymańska · now on Table 3</p></div><button class="fm-btn fm-btn--ghost fm-btn--icon" value="cancel" aria-label="Close"><span data-icon="x"></span></button></div><div class="fm-sheet__body"><fieldset class="fm-choices" id="shv-opts"><legend class="fm-sr">Table</legend></fieldset><p class="fm-notice"><span data-icon="info"></span><span>In the app, both players are told the new table. This demo only updates the page.</span></p></div><div class="fm-sheet__foot"><button class="fm-btn fm-btn--primary" value="move">Move match</button><button class="fm-btn fm-btn--ghost" value="cancel">Cancel</button></div></form></dialog>
+<dialog id="palette" data-testid="command-palette"></dialog>
+<script src="match.js"></script><script src="kit.js"></script>
+<script>
+const M=FMMatch;
+document.getElementById('c1b').innerHTML=M.row(M.find('c2'),{idPrefix:'c1'}).replace('<div class="fm-match__head">','<div class="fm-match__head" hidden>');
+document.getElementById('rows').innerHTML=['a2','c2','c3','a1','b3'].map(id=>M.row(M.find(id),{idPrefix:'r'})).join('');
+document.getElementById('offrow').innerHTML=M.row(M.find('d1'),{idPrefix:'o'});
+document.getElementById('slots').innerHTML=['a1','a2','b3','c3','d1','b2'].map(id=>M.slot(M.find(id),{abs:false})).join('');
+document.getElementById('tl1').innerHTML=M.timeline();
+const det=document.getElementById('dt1');
+function showDetail(id){det.innerHTML=M.detail(M.find(id));FM.icons(det)}
+const tl=document.querySelector('#tl1 .fm-timeline');tl.addEventListener('fm-change',e=>showDetail(e.detail.button.dataset.id));
+const first=tl.querySelector('[data-id="b3"]');FM.select(tl,first);
+document.getElementById('checkin').innerHTML=['Nguyen, Thanh','Okafor-Adeyemi, Daniel','Johansen-Whitfield, Annika','Patel, Meera','Park, Ji-ho','Wójcik-Szymańska, Agnieszka','Chen, Wei','Ali, Rashid','Moreau, Élodie','Kim, Hyun-woo','Lindqvist, Erik','Fernández-Castillo, Marisol'].map((n,i)=>'<li><label class="fm-check" style="width:100%"><input type="checkbox"'+(i<9?' checked':'')+'>'+n+'</label></li>').join('');
+document.getElementById('mixed').indeterminate=true;
+document.getElementById('rg').addEventListener('input',e=>document.getElementById('rgv').textContent=e.target.value+' min');
+document.querySelector('[data-select=filter]').addEventListener('fm-change',e=>document.getElementById('chipout').textContent='Showing: '+e.detail.values.join(', '));
+document.querySelectorAll('[data-validate-table]').forEach(i=>i.addEventListener('input',()=>{const v=+i.value,ok=v>=1&&v<=6;i.setAttribute('aria-invalid',String(!ok));i.nextElementSibling.hidden=ok}));
+document.getElementById('cb1').closest('.fm-combo').addEventListener('fm-change',e=>document.getElementById('cbout').textContent='Picked: '+e.detail.value.name+' · '+e.detail.value.club);
+det.addEventListener('click',e=>{const b=e.target.closest('[data-act],[data-uncall]');if(b&&b.getAttribute('aria-disabled')!=='true')FM.toast('Works on the tournament screen, not in this gallery',{icon:'info'})});
+// check in all — reversible
+document.getElementById('checkall').addEventListener('click',()=>{const boxes=[...document.querySelectorAll('#checkin input')];const prev=boxes.map(b=>b.checked);boxes.forEach(b=>b.checked=true);const n=prev.filter(x=>!x).length;FM.toast(n?n+' more players checked in':'Everyone was already checked in',{undo:n?()=>boxes.forEach((b,i)=>b.checked=prev[i]):null})});
+// code input
+const c1=document.getElementById('code1');
+c1.addEventListener('fm-input',()=>{document.getElementById('code1e').hidden=true;document.getElementById('code1ok').hidden=true;c1._fmCode.describe('code1h')});
+c1.addEventListener('fm-change',e=>{const ok=e.detail.value==='SP26RV';document.getElementById(ok?'code1ok':'code1e').hidden=false;if(ok)FM.announce('Spring Open 2026 found');else{c1._fmCode.invalid(true);c1._fmCode.describe('code1e code1h');FM.announce('No tournament uses that code')}});
+// drawer
+document.getElementById('shm-b').innerHTML=M.row(M.find('c2'),{lg:true,details:false,idPrefix:'sh'}).replace('<div class="fm-match__head">','<div class="fm-match__head" hidden>')+'<div><h3 class="fm-section-title" style="margin-bottom:8px">Game scores</h3><div class="fm-scroll">'+M.games(M.find('c2'))+'</div></div><dl class="fm-dl"><div><dt>Started</dt><dd>11:05</dd></div><div><dt>Umpire</dt><dd>Haddad, Youssef</dd></div><div><dt>Next on Table 3</dt><dd>Dubois vs Lindqvist, 12:15</dd></div></dl><p class="fm-notice fm-notice--rest"><span data-icon="clock"></span><span>Patel plays again at 12:05. She gets her 15 minutes’ rest if this ends by 11:50.</span></p>';
+// bottom sheet move — reversible
+const mv=document.getElementById('sheet-move'),mvT=document.getElementById('movetable');
+const tables=[['Table 2','Free until 11:45'],['Table 3','Free after this match'],['Table 5','Free all morning'],['Table 4','Scorer offline']];
+function openMove(){const cur=mvT.textContent;document.getElementById('shv-s').textContent='Patel vs Wójcik-Szymańska · now on '+cur;const opts=tables.filter(t=>t[0]!==cur);document.getElementById('shv-opts').innerHTML='<legend class="fm-sr">Table</legend>'+opts.map((t,i)=>'<label class="fm-radio"><input type="radio" name="tbl" value="'+t[0]+'"'+(t[0]==='Table 4'?' disabled':'')+(i===0?' checked':'')+'><span>'+t[0]+'<span class="fm-help" style="display:block">'+t[1]+'</span></span></label>').join('');mv.returnValue='';mv.showModal()}
+document.getElementById('movebtn').addEventListener('click',openMove);
+mv.addEventListener('close',()=>{if(mv.returnValue!=='move')return;const prev=mvT.textContent,next=mv.querySelector('input[name=tbl]:checked').value;mvT.textContent=next;FM.toast('Moved to '+next,{undo:()=>{mvT.textContent=prev}})});
+// menubar
+document.querySelector('.fm-menubar').addEventListener('fm-change',e=>{document.getElementById('mbout').textContent='Chose '+e.detail.value+'. (Demo: nothing else happens.)'});
+// carousel
+const fin=['a1','b1','c1'].map(id=>M.find(id)).concat([{id:'x1',table:2,state:'final',start:'09:45',end:'10:20',event:'Open singles',round:'Round of 64',p:[{name:'Patel, Meera'},{name:'Dubois, Camille'}],games:[[11,6],[11,9],[8,11],[11,7]]},{id:'x2',table:4,state:'final',start:'09:45',end:'10:25',event:'Under 18 singles',round:'Round of 16',p:[{name:'Haddad, Youssef'},{name:'Ali, Rashid'}],games:[[9,11],[11,7],[11,13],[11,9],[11,8]]}]);
+document.getElementById('cartrack').innerHTML=fin.map(m=>'<article class="fm-card"><div class="fm-card__body" style="gap:4px">'+M.row(m,{details:false,idPrefix:'car'})+'<p class="fm-match__scores" style="margin:0">'+m.games.map(g=>g.join('–')).join(', ')+'</p></div></article>').join('');
+// command palette — every command acts on this page
+const goTo=id=>{const s=document.getElementById(id)||document.querySelector('[data-testid="'+id+'"]');const hd=s.querySelector('h2,h3');hd.tabIndex=-1;scrollTo({top:s.getBoundingClientRect().top+scrollY-24});hd.focus({preventScroll:true})};
+const players=JSON.parse(document.querySelector('[data-combobox]').dataset.combobox);
+const cmds=[['roles','Roles at a glance'],['actions','Buttons'],['forms','Fields, dates and choices'],['selection','Selection'],['containers','Containers'],['feedback','Feedback'],['overlays','Overlays'],['match','Match components'],['more','More components']].map(([id,l])=>({group:'Go to',label:l,icon:'list',run:()=>goTo(id)}))
+.concat([{group:'Open',label:'Match drawer',icon:'table',keywords:'sheet side',run:()=>document.getElementById('sheet-match').showModal()},{group:'Open',label:'Move match to another table',icon:'table',keywords:'bottom sheet',run:openMove},{group:'Open',label:'Withdraw player dialog',icon:'x',keywords:'remove',run:()=>document.getElementById('dlg').showModal()},{group:'Open',label:'State matrix',icon:'list',run:()=>{location.href='states.html'}}])
+.concat(players.map(p=>({group:'Players',label:p.name,hint:p.club,icon:'user',run:()=>{goTo('ex-combobox');const i=document.getElementById('cb1');i.value=p.name;i.focus();i.dispatchEvent(new Event('input',{bubbles:true}))}})));
+const pal=FM.palette(document.getElementById('palette'),cmds,{shortcut:true});
+document.getElementById('palbtn').addEventListener('click',()=>pal.open());
+FM.init(document);
+</script>
+</body></html>

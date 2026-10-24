@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<!-- @dsCard group="UI Kit — Tournament" name="Tournament · Player + scorer mobile" subtitle="Player's day and table-side scoring, shared components" viewport="1000x940" -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Spring Open · Mobile</title>
+<link rel="stylesheet" href="../../colors_and_type.css"><link rel="stylesheet" href="../components/kit.css">
+<style>
+body{margin:0}
+.stage{display:flex;flex-wrap:wrap;gap:48px;justify-content:center;padding:40px 16px 80px}
+.col{display:flex;flex-direction:column;gap:12px;align-items:center}
+.cap{font:500 14px var(--font-ui);color:var(--fg-3)}
+.phone{width:390px;max-width:100%;height:844px;border-radius:44px;box-shadow:0 0 0 1px var(--ink-600),0 0 0 10px var(--ink-900);overflow:hidden;display:flex;flex-direction:column;background:var(--bg-app);position:relative}
+.sb{flex:none;height:44px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;font:600 15px var(--font-ui);color:var(--fg-1)}
+.scr{flex:1;overflow:auto;scrollbar-width:none;padding:8px 16px 24px;display:flex;flex-direction:column;gap:28px}
+.appbar{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.appbar h1{margin:0;font:700 24px/1.2 var(--font-ui)}
+.appbar p{margin:2px 0 0;font:400 13px var(--font-ui);color:var(--fg-3)}
+.h2{margin:0 0 4px;font:600 17px var(--font-ui);color:var(--fg-1)}
+.tabbar{flex:none;display:grid;grid-template-columns:repeat(4,1fr);padding:6px 8px 24px;background:var(--bg-panel)}
+.tabbar a{display:flex;flex-direction:column;align-items:center;gap:4px;min-height:48px;justify-content:center;border-radius:var(--r-md);font:500 12px var(--font-ui);color:var(--fg-3);text-decoration:none}
+.tabbar a[aria-current=page]{color:var(--accent-text)}
+.tabbar a[aria-current=page] .fm-ic{color:var(--accent)}
+.phone .fm-toast-region{position:absolute}
+.score-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.score-head h1{margin:0;font:600 17px var(--font-ui)}
+.phone .fm-scorepad{grid-template-columns:1fr 1fr;gap:8px}
+.phone .fm-scorepad__side{padding:12px}
+</style></head>
+<body><div class="stage">
+<div class="col"><div class="phone" id="p1"><div class="sb"><span class="num">11:47</span><span class="num">82%</span></div>
+<div class="scr">
+<div class="appbar"><div><h1>Today</h1><p>Spring Open · Riverside Sports Hall</p></div><span class="fm-avatar">MP</span></div>
+<section class="fm-card" aria-labelledby="nx"><div class="fm-card__head"><div><h2 class="fm-card__title" id="nx">Your next match</h2><p class="fm-card__sub">Open singles · Round of 16</p></div><span class="fm-status"><span data-icon="clock"></span><span class="num">12:05</span></span></div>
+<div class="fm-card__body"><dl class="fm-dl" style="grid-template-columns:1fr 1fr"><div><dt>Opponent</dt><dd>Park, Ji-ho</dd></div><div><dt>Table</dt><dd>Table 2</dd></div></dl>
+<p class="fm-notice"><span data-icon="info"></span><span>Moved from 11:50 so you get your full rest.</span></p>
+<div class="fm-field"><div style="display:flex;justify-content:space-between;gap:12px"><span class="fm-rest"><span data-icon="clock"></span>Rest until <span class="num">11:55</span></span><span class="fm-help num">8 min left</span></div><div class="fm-meter fm-meter--rest" role="progressbar" aria-label="Rest elapsed" aria-valuenow="7" aria-valuemax="15"><i style="width:47%"></i></div></div></div>
+<div class="fm-card__foot"><button class="fm-btn fm-btn--primary fm-btn--lg" data-toast="We've told the desk you're at Table 2" data-undo data-done-label="Desk told · Table 2">I'm at the table</button><button class="fm-btn fm-btn--ghost fm-btn--lg" data-demo="Directions"><span data-icon="map"></span>Directions</button></div></section>
+<section aria-labelledby="lv"><h2 class="h2" id="lv">Live now</h2>
+<div class="fm-chips" data-select="filter" aria-label="Filter by event" style="margin:12px 0 4px"><button class="fm-chip" aria-pressed="true" data-all>All events</button><button class="fm-chip" aria-pressed="false">Open singles</button><button class="fm-chip" aria-pressed="false">Doubles</button></div>
+<div class="fm-matches" id="live"></div></section>
+<section aria-labelledby="dn"><h2 class="h2" id="dn">Your results</h2><div class="fm-matches" id="done"></div></section>
+</div>
+<nav class="tabbar" aria-label="App"><a href="#" aria-current="page"><span data-icon="clock"></span>Today</a><a href="#"><span data-icon="list"></span>Draws</a><a href="#"><span data-icon="table"></span>Score</a><a href="#"><span data-icon="user"></span>Profile</a></nav>
+</div><span class="cap">Player · today · demo, nothing is sent</span></div>
+
+<div class="col"><div class="phone" id="p2"><div class="sb"><span class="num">11:47</span><span class="num">64%</span></div>
+<div class="scr" style="gap:16px">
+<div class="score-head"><div><h1>Table 3 · Round of 32</h1><span class="live-marker">Live</span></div><button class="fm-btn fm-btn--ghost fm-btn--icon" aria-label="Match options" data-tip="Match options" data-demo="Match options"><span data-icon="more"></span></button></div>
+<p class="fm-notice"><span data-icon="offline" style="color:var(--fg-3)"></span><span>No signal. Points are saved on this phone and sync when you reconnect.</span></p>
+<div id="pad2" class="fm-scorepad" data-scorepad='{"names":["Patel, Meera","Wójcik-Szymańska, Agnieszka"],"games":[[11,8],[6,11],[11,9],[9,11]],"pts":[9,9],"serve":1,"bestOf":5}'>
+<div class="fm-scorepad__side"><div class="fm-scorepad__name"><span>Patel, Meera</span><span class="serve-marker" data-serve="0" role="img" aria-label="Serving"></span></div><div class="fm-scorepad__games">Games <b data-games="0">2</b></div><div class="fm-scorepad__pts" data-pts="0" aria-label="Patel points">9</div><button class="fm-btn fm-btn--primary fm-btn--xl fm-btn--block" data-add="0">+1</button></div>
+<div class="fm-scorepad__side"><div class="fm-scorepad__name"><span>Wójcik-Szymańska, Agnieszka</span><span class="serve-marker" data-serve="1" role="img" aria-label="Serving"></span></div><div class="fm-scorepad__games">Games <b data-games="1">2</b></div><div class="fm-scorepad__pts" data-pts="1" aria-label="Wójcik-Szymańska points">9</div><button class="fm-btn fm-btn--primary fm-btn--xl fm-btn--block" data-add="1">+1</button></div>
+<div class="fm-scorepad__bar"><button class="fm-btn fm-btn--secondary fm-btn--lg" data-undo><span data-icon="undo"></span>Undo point</button><span class="fm-help">Game 5 · to 11</span></div>
+<div style="grid-column:1/-1;padding-top:12px"><h2 class="h2" style="margin-bottom:8px">Game scores</h2><div class="fm-scroll" data-history></div></div></div>
+</div></div><span class="cap">Scorer · table side</span></div>
+</div>
+<script src="../components/match.js"></script><script src="../components/kit.js"></script>
+<script>
+const M=FMMatch;
+document.getElementById('live').innerHTML=['a2','c2','d1'].map(id=>M.row(M.find(id),{idPrefix:'lv'})).join('');
+document.getElementById('done').innerHTML=['c1'].map(id=>M.row(Object.assign({},M.find(id),{p:[{name:'Patel, Meera'},{name:'Dubois, Camille'}],games:[[11,6],[11,9],[8,11],[11,7]],round:'Round of 32 · 10:30'}),{idPrefix:'dn'})).join('');
+const orig=FM.toast;FM.toast=(m,o)=>{const c=orig(m,o);const r=document.querySelector('body>.fm-toast-region');if(r){const act=document.activeElement&&document.activeElement.closest('.phone');(act||document.getElementById('p1')).appendChild(r)}return c};
+document.querySelector('#p1 [data-select=filter]').addEventListener('fm-change',e=>{const v=e.detail.values;document.querySelectorAll('#live .fm-match').forEach((el,i)=>{const m=M.find(['a2','c2','d1'][i]);el.hidden=!(v.includes('All events')||(v.includes('Doubles')&&m.event.includes('doubles'))||(v.includes('Open singles')&&m.event==='Open singles'))})});
+FM.init(document);
+</script>
+</body></html>

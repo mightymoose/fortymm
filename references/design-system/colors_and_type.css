@@ -1,0 +1,163 @@
+/* =========================================================================
+   FortyMM — tokens (v2, "club equipment")
+   Every token has one job. If a token you need isn't here, the effect
+   probably isn't part of the system.
+   - No glow shadows, no dot-grid textures, no gradient fills, no idle motion.
+   - Orange = actions + selection. Status colours never reuse orange.
+   ========================================================================= */
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
+
+@font-face{font-family:'Bebas Neue';src:url('fonts/BebasNeue-Regular.ttf') format('truetype');font-weight:400;font-style:normal;font-display:swap}
+@font-face{font-family:'JetBrains Mono';src:url('fonts/JetBrainsMono-VariableFont_wght.ttf') format('truetype-variations');font-weight:100 800;font-style:normal;font-display:swap}
+@font-face{font-family:'JetBrains Mono';src:url('fonts/JetBrainsMono-Italic-VariableFont_wght.ttf') format('truetype-variations');font-weight:100 800;font-style:italic;font-display:swap}
+
+:root{
+  /* ---------- Ink: surfaces ---------- */
+  --ink-950:#0B0D12;  /* app background */
+  --ink-900:#11141B;  /* panels, sidebars */
+  --ink-800:#171B24;  /* grouped content (only when grouping helps) */
+  --ink-700:#1F2430;  /* hover, pressed, score-update flash */
+  --ink-600:#2A3040;  /* subtle dividers */
+  --ink-500:#3A4152;  /* control borders */
+  --ink-400:#535B6E;  /* disabled text */
+
+  /* ---------- Chalk: text ---------- */
+  --chalk-50:#F7F8FB;   /* names, scores, headings */
+  --chalk-100:#E4E7EF;  /* body */
+  --chalk-300:#A9B0C2;  /* metadata, losing side */
+  --chalk-500:#7C8396;  /* placeholders only (4.5:1 on ink-950) */
+
+  /* ---------- Ball orange: actions + selection ONLY ---------- */
+  --ball-200:#FFCFA8;
+  --ball-400:#FF9A4A;
+  --ball-500:#FF7A1A;
+  --ball-600:#E85E00;
+
+  /* ---------- Status hues (never orange) ---------- */
+  --red-400:#F2496B;    /* live */
+  --green-400:#3DD68C;  /* rating up */
+  --amber-300:#F5C542;  /* conflict / needs attention */
+  --blue-300:#7AB8FF;   /* rest period / info */
+
+  /* ---------- Semantic: action + selection ---------- */
+  --accent:var(--ball-500);           /* primary buttons, focus ring, selected tab */
+  --accent-hover:var(--ball-400);
+  --accent-press:var(--ball-600);
+  --accent-soft:rgba(255,122,26,0.14);/* selected row / nav item background */
+  --on-accent:var(--ink-950);         /* text on orange */
+  --accent-text:var(--ball-200);      /* text on accent-soft */
+
+  /* ---------- Semantic: match status ---------- */
+  --live:var(--red-400);        /* static dot + the word "Live" */
+  --serving:var(--chalk-50);    /* white ball marker beside the server */
+  --winner:var(--chalk-50);     /* winners get weight, not colour */
+  --loser:var(--chalk-300);
+  --rating-up:var(--green-400); /* always with ▲ and a sign */
+  --rating-down:var(--chalk-300);/* neutral; always with ▼ and a sign */
+  --conflict:var(--amber-300);
+  --conflict-soft:rgba(245,197,66,0.10);
+  --rest:var(--blue-300);
+  --danger:#FF6B6B;             /* errors + destructive confirmations */
+  --danger-soft:rgba(255,107,107,0.10);
+  --rest-soft:rgba(122,184,255,0.10);
+  --success:var(--green-400);   /* confirmation icon in toasts/notices only */
+
+  /* ---------- Semantic: text ---------- */
+  --fg-1:var(--chalk-50);
+  --fg-2:var(--chalk-100);
+  --fg-3:var(--chalk-300);
+  --fg-placeholder:var(--chalk-500);
+  --fg-disabled:var(--ink-400);
+
+  /* ---------- Semantic: surfaces ---------- */
+  --bg-app:var(--ink-950);
+  --bg-panel:var(--ink-900);
+  --bg-group:var(--ink-800);
+  --bg-hover:var(--ink-700);
+
+  /* ---------- Borders ---------- */
+  --border-subtle:var(--ink-600);   /* dividers between rows */
+  --border-control:var(--ink-500);  /* overlay edges, scheduled blocks */
+  --border-field:#6B7389;           /* interactive boundaries: inputs, unchecked checkbox/radio, switch track, secondary buttons (3:1 on ink-900) */
+  --border-field-hover:var(--chalk-300);
+  --focus-ring:0 0 0 2px var(--ink-950), 0 0 0 4px var(--ball-500); /* @kind shadow */
+
+  /* ---------- Radii ---------- */
+  --r-sm:6px;     /* chips, inputs */
+  --r-md:8px;     /* buttons, groups, panels */
+  --r-lg:12px;    /* sheets, dialogs */
+  --r-pill:999px; /* filter chips only */
+
+  /* ---------- Spacing (4px base, chosen per layout — no magic numbers) ---------- */
+  --s-1:4px;
+  --s-2:8px;
+  --s-3:12px;
+  --s-4:16px;
+  --s-5:20px;
+  --s-6:24px;
+  --s-8:32px;
+  --s-12:48px;
+  --s-16:64px;
+
+  /* ---------- Elevation: one shadow, for things that float over content ---------- */
+  --shadow-overlay:0 8px 24px rgba(0,0,0,0.5); /* menus, dialogs, toasts */
+  --shadow-tooltip:0 4px 12px rgba(0,0,0,0.4); /* tooltips: smaller, closer */
+
+  /* ---------- Motion: feedback only ---------- */
+  --ease-out:cubic-bezier(0.2,0.8,0.2,1); /* @kind other */
+  --dur-press:100ms;   /* @kind other */ /* button press */
+  --dur-change:160ms;  /* @kind other */ /* hover, toggle, tab switch */
+  --dur-score:600ms;   /* @kind other */ /* one-shot score-update flash */
+
+  /* ---------- Type ---------- */
+  --font-ui:'Space Grotesk',ui-sans-serif,system-ui,sans-serif;    /* everything */
+  --font-num:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace; /* scores + aligned numbers */
+  --font-display:'Bebas Neue','Space Grotesk',sans-serif;         /* big-screen scoreboards, rare headlines */
+
+  --text-xs:12px;   /* smallest allowed */
+  --text-sm:13px;
+  --text-base:15px;
+  --text-md:17px;
+  --text-lg:20px;
+  --text-xl:24px;
+  --text-2xl:32px;
+  --text-3xl:48px;
+  --text-score:96px;
+
+  --lh-tight:1.1;   /* @kind other */
+  --lh-snug:1.3;    /* @kind other */
+  --lh-normal:1.5;  /* @kind other */
+}
+
+/* ---------- Base ---------- */
+html,body{background:var(--bg-app);color:var(--fg-1);font-family:var(--font-ui);font-size:var(--text-base);line-height:var(--lh-normal);-webkit-font-smoothing:antialiased}
+a{color:var(--ball-400);text-decoration:underline;text-underline-offset:2px}
+a:hover{color:var(--ball-200)}
+:focus-visible{outline:none;box-shadow:var(--focus-ring)}
+
+/* ---------- Type roles ---------- */
+.h1{font:700 var(--text-3xl)/var(--lh-tight) var(--font-ui);letter-spacing:-0.02em;color:var(--fg-1)}
+.h2{font:600 var(--text-2xl)/var(--lh-snug) var(--font-ui);letter-spacing:-0.01em;color:var(--fg-1)}
+.h3{font:600 var(--text-lg)/var(--lh-snug) var(--font-ui);color:var(--fg-1)}
+.body,p{font:400 var(--text-base)/var(--lh-normal) var(--font-ui);color:var(--fg-2)}
+.meta{font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
+.label{font:500 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)} /* sentence case, no tracking */
+.num{font-family:var(--font-num);font-variant-numeric:tabular-nums}
+.score{font:700 var(--text-score)/1 var(--font-num);font-variant-numeric:tabular-nums;letter-spacing:-0.03em;color:var(--fg-1)}
+.scoreboard-display{font:400 var(--text-3xl)/1 var(--font-display);letter-spacing:0.01em} /* big screens only */
+
+/* ---------- Status markers (static) ---------- */
+.live-marker{display:inline-flex;align-items:center;gap:6px;font:600 var(--text-sm)/1 var(--font-ui);color:var(--live)}
+.live-marker::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--live)}
+.serve-marker{display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--serving)}
+.rating-up{font:600 var(--text-sm) var(--font-num);color:var(--rating-up)}
+.rating-down{font:600 var(--text-sm) var(--font-num);color:var(--rating-down)}
+
+/* ---------- Motion: one-shot feedback ---------- */
+@keyframes fm-score-update{from{background-color:var(--ink-700)}to{background-color:transparent}}
+.score-updated{animation:fm-score-update var(--dur-score) var(--ease-out) 1}
+
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:1ms!important;animation-iteration-count:1!important;transition-duration:1ms!important;scroll-behavior:auto!important}
+}
