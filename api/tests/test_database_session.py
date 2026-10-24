@@ -8,6 +8,8 @@ from sqlalchemy import Engine, text
 from fortymm_api.database import DatabaseSession, create_database_engine
 from fortymm_api.main import create_app
 
+JSON = {"Content-Type": "application/json"}
+
 
 @pytest.fixture
 def database(throwaway_database_url: str) -> Iterator[Engine]:
@@ -53,17 +55,17 @@ def notes(database: Engine) -> list[str]:
 
 
 def test_commits_a_request_that_succeeds(client: TestClient, database: Engine) -> None:
-    assert client.post("/notes").status_code == 200
+    assert client.post("/notes", headers=JSON).status_code == 200
     assert notes(database) == ["kept"]
 
 
 def test_rolls_back_a_request_that_fails(client: TestClient, database: Engine) -> None:
-    assert client.post("/notes-then-fail").status_code == 500
+    assert client.post("/notes-then-fail", headers=JSON).status_code == 500
     assert notes(database) == []
 
 
 def test_answers_500_when_the_commit_fails(
     client: TestClient, database: Engine
 ) -> None:
-    assert client.post("/notes-that-fail-to-commit").status_code == 500
+    assert client.post("/notes-that-fail-to-commit", headers=JSON).status_code == 500
     assert notes(database) == []
