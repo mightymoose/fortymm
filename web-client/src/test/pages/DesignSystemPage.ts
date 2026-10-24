@@ -38,6 +38,21 @@ export class DesignSystemPage {
     return within(this.buttonsSection).getByRole('button', { name })
   }
 
+  get fieldsSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Fields and choices' })
+  }
+
+  // The Fields and choices section's example titled `title`, e.g. "Code
+  // input".
+  fieldsExample(title: string): HTMLElement {
+    return within(this.fieldsSection).getByRole('article', { name: title })
+  }
+
+  // The opponent combobox's field.
+  get opponentField(): HTMLElement {
+    return within(this.fieldsSection).getByRole('combobox', { name: 'Opponent' })
+  }
+
   get feedbackSection(): HTMLElement {
     return screen.getByRole('region', { name: 'Feedback' })
   }

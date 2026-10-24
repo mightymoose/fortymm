@@ -1,7 +1,9 @@
 import { useRef } from 'react'
+import type { ComboboxHandle } from '../components/Combobox'
 import { useTestMode } from '../testMode'
 import { ButtonsSection } from './designSystem/ButtonsSection'
 import { FeedbackSection } from './designSystem/FeedbackSection'
+import { FieldsSection } from './designSystem/FieldsSection'
 import { OverlaysSection, WithdrawDialog } from './designSystem/OverlaysSection'
 
 // The app's copy of the design system's component gallery
@@ -13,6 +15,8 @@ export function DesignSystem() {
   useTestMode()
   const withdrawDialog = useRef<HTMLDialogElement>(null)
   const openWithdrawDialog = () => withdrawDialog.current?.showModal()
+  const opponent = useRef<ComboboxHandle>(null)
+  const findPlayer = (name: string) => opponent.current?.search(name)
   return (
     <>
       <header className="doc-head">
@@ -25,8 +29,9 @@ export function DesignSystem() {
         </p>
       </header>
       <ButtonsSection onWithdraw={openWithdrawDialog} />
+      <FieldsSection opponent={opponent} />
       <FeedbackSection />
-      <OverlaysSection onWithdraw={openWithdrawDialog} />
+      <OverlaysSection onWithdraw={openWithdrawDialog} onFindPlayer={findPlayer} />
       <WithdrawDialog ref={withdrawDialog} />
     </>
   )

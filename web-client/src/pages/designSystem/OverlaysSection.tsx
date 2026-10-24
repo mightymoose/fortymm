@@ -112,8 +112,16 @@ function TooltipDemo() {
 
 // The design system page's Overlays section: the reference gallery's
 // `section-overlays`, with its sheets and command palette. "Withdraw
-// player…" opens the page's withdraw dialog through `onWithdraw`.
-export function OverlaysSection({ onWithdraw }: { onWithdraw: () => void }) {
+// player…" opens the page's withdraw dialog through `onWithdraw`. A player
+// in the palette goes to the opponent combobox and searches it for them
+// through `onFindPlayer`.
+export function OverlaysSection({
+  onWithdraw,
+  onFindPlayer,
+}: {
+  onWithdraw: () => void
+  onFindPlayer: (name: string) => void
+}) {
   const showToast = useToast()
   const matchSheet = useRef<HTMLDialogElement>(null)
   const moveSheet = useRef<HTMLDialogElement>(null)
@@ -168,16 +176,16 @@ export function OverlaysSection({ onWithdraw }: { onWithdraw: () => void }) {
       icon: 'list',
       run: () => window.location.assign(stateMatrixUrl),
     },
-    // The gallery fills its opponent combobox with the player. The page has
-    // no combobox yet, so a player only says so.
     ...checkedInPlayers.map(
       (player): Command => ({
         group: 'Players',
         label: player.name,
         hint: player.club,
         icon: 'user',
-        run: () =>
-          showToast(`“${player.name}” isn’t wired up in this demo`, { icon: 'info' }),
+        run: () => {
+          goTo('ex-combobox')
+          onFindPlayer(player.name)
+        },
       }),
     ),
   ]

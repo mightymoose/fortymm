@@ -1,6 +1,7 @@
 import type { Locator, Page } from '@playwright/test'
 import { ButtonsSection } from './designSystem/ButtonsSection.ts'
 import { FeedbackSection } from './designSystem/FeedbackSection.ts'
+import { FieldsSection } from './designSystem/FieldsSection.ts'
 import { OverlaysSection } from './designSystem/OverlaysSection.ts'
 
 // The design system gallery, as the app's /design-system or the reference
@@ -11,6 +12,7 @@ export abstract class GalleryPage {
   readonly title: Locator
   readonly intro: Locator
   readonly buttons: ButtonsSection
+  readonly fields: FieldsSection
   readonly feedback: FeedbackSection
   readonly overlays: OverlaysSection
   // Where raised toasts show, bottom centre, outside every section. Found
@@ -28,6 +30,7 @@ export abstract class GalleryPage {
     // The paragraph right after the title.
     this.intro = page.getByRole('paragraph').first()
     this.buttons = new ButtonsSection(page)
+    this.fields = new FieldsSection(page)
     this.feedback = new FeedbackSection(page)
     this.overlays = new OverlaysSection(page)
     this.toasts = page.locator('.fm-toast-region')

@@ -1,4 +1,4 @@
-import { act, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DesignSystemPage } from '../test/pages/DesignSystemPage'
@@ -108,6 +108,115 @@ describe('DesignSystem', () => {
         "Both players need to check in first. Park hasn't yet.",
       )
     })
+  })
+})
+
+describe('Fields and choices', () => {
+  it('shows the Table error until the table is 1 to 6', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const example = designSystemPage.fieldsExample('Text field')
+    const table = within(example).getByRole('textbox', { name: 'Table' })
+    expect(table).toBeInvalid()
+    expect(table).toHaveAccessibleDescription('This venue has 6 tables. Enter 1–6.')
+
+    await user.clear(table)
+    await user.type(table, '4')
+
+    expect(table).toBeValid()
+    expect(within(example).queryByText('This venue has 6 tables. Enter 1–6.')).not.toBeVisible()
+  })
+
+  it('finds Spring Open 2026 by its code', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const example = designSystemPage.fieldsExample('Code input')
+    const found = within(example).getByText('Spring Open 2026').closest('p')!
+    expect(found).not.toBeVisible()
+
+    await user.click(within(example).getAllByRole('textbox', { name: 'Character 1 of 6' })[0])
+    await user.keyboard('sp26rv')
+
+    expect(found).toBeVisible()
+    expect(found).toHaveTextContent('Spring Open 2026 · Riverside Sports Hall · 11 April')
+  })
+
+  it('says no tournament uses an unknown code, until the code changes', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const example = designSystemPage.fieldsExample('Code input')
+    const first = within(example).getAllByRole('textbox', { name: 'Character 1 of 6' })[0]
+
+    await user.click(first)
+    await user.keyboard('sp26rx')
+
+    expect(first).toBeInvalid()
+    expect(first).toHaveAccessibleDescription(
+      'No tournament uses that code. Check the poster or ask the desk. On the poster at the venue entrance. Try SP26RV.',
+    )
+    await user.keyboard('{Backspace}')
+    expect(first).toBeValid()
+    expect(first).toHaveAccessibleDescription('On the poster at the venue entrance. Try SP26RV.')
+  })
+
+  it('leaves the closed tournament’s code input off', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const example = designSystemPage.fieldsExample('Code input')
+    const closed = within(example).getAllByRole('textbox', { name: 'Character 1 of 6' })[1]
+
+    expect(closed).toBeDisabled()
+    expect(closed).toHaveAccessibleDescription('Entries for this tournament have closed.')
+  })
+
+  it('says who was picked as the opponent', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const example = designSystemPage.fieldsExample('Combobox')
+    expect(example).toHaveTextContent('Nothing picked yet.')
+
+    await user.type(designSystemPage.opponentField, 'wojcik{Enter}')
+
+    expect(example).toHaveTextContent('Picked: Wójcik-Szymańska, Agnieszka · Northside')
+  })
+
+  it('shows Saturday 11 April 2026 in the date field and selected inline', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const example = designSystemPage.fieldsExample('Date picker')
+
+    expect(within(example).getByRole('textbox', { name: 'Tournament date' })).toHaveValue(
+      'Saturday 11 April 2026',
+    )
+    expect(
+      within(example).getByRole('button', { name: 'Saturday 11 April 2026' }),
+    ).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('shows All players as partly checked', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const example = designSystemPage.fieldsExample('Checkbox, radio and switch')
+
+    expect(within(example).getByRole('checkbox', { name: 'All players (12 of 16)' })).toBePartiallyChecked()
+  })
+
+  it('shows the minimum rest as the slider moves', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const example = designSystemPage.fieldsExample('Checkbox, radio and switch')
+    const slider = within(example).getByRole('slider')
+
+    fireEvent.change(slider, { target: { value: '25' } })
+
+    expect(slider).toHaveAccessibleName('Minimum rest between matches · 25 min')
+  })
+
+  it('turns a switch on', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const example = designSystemPage.fieldsExample('Checkbox, radio and switch')
+    const ratings = within(example).getByRole('switch', { name: 'Show ratings to spectators' })
+
+    await user.click(ratings)
+
+    expect(ratings).toBeChecked()
   })
 })
 
@@ -297,7 +406,7 @@ describe('Overlays', () => {
       within(designSystemPage.paletteGroup('Go to'))
         .getAllByRole('option')
         .map((option) => option.textContent),
-    ).toEqual(['Buttons', 'Feedback', 'Overlays'])
+    ).toEqual(['Buttons', 'Fields, dates and choices', 'Feedback', 'Overlays'])
   })
 
   it('goes to a section from the palette', async () => {
@@ -328,17 +437,19 @@ describe('Overlays', () => {
     ).toBeVisible()
   })
 
-  it('says a player isn’t wired up yet', async () => {
+  it('finds a player from the palette in the opponent combobox', async () => {
     const user = userEvent.setup()
     const designSystemPage = await DesignSystemPage.render()
     await user.keyboard('{Control>}k{/Control}')
 
     await user.type(designSystemPage.paletteSearch, 'patel{Enter}')
 
-    await waitFor(() =>
-      expect(designSystemPage.toastRegion).toHaveTextContent(
-        '“Patel, Meera” isn’t wired up in this demo',
-      ),
-    )
+    await waitFor(() => expect(designSystemPage.opponentField).toHaveFocus())
+    expect(designSystemPage.opponentField).toHaveValue('Patel, Meera')
+    expect(
+      within(within(designSystemPage.fieldsSection).getByRole('listbox', { name: 'Opponent' }))
+        .getAllByRole('option')
+        .map((option) => option.querySelector('b')!.textContent),
+    ).toEqual(['Patel, Meera'])
   })
 })

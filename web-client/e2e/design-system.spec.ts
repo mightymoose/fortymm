@@ -205,6 +205,122 @@ test('the Buttons section matches its screenshots and the gallery', async ({
   await test.step('gallery', () => buttonsScreenshots(referenceKitPage))
 })
 
+async function fieldsScreenshots(gallery: GalleryPage): Promise<void> {
+  const fields = gallery.fields
+  await gallery.goto(fields.testId)
+  await screenshotStep('heading', fields.heading, 'fields-heading.png')
+  await screenshotStep('lead', fields.lead, 'fields-lead.png')
+
+  await gallery.goto('ex-text-field')
+  await screenshotStep('Text field', fields.textField, 'fields-text-field.png')
+  // A focused invalid field keeps its red edge, icon and message.
+  await fields.table.focus()
+  await screenshotStep(
+    'Text field, Table focused while invalid',
+    fields.textField,
+    'fields-text-field-invalid-focused.png',
+  )
+
+  await gallery.goto('ex-code-input')
+  await screenshotStep('Code input', fields.codeInput, 'fields-code-input.png')
+  await fields.typeCode('sp26rx')
+  await screenshotStep(
+    'Code input, unknown code',
+    fields.codeInput,
+    'fields-code-input-unknown.png',
+  )
+  await gallery.goto('ex-code-input')
+  await fields.typeCode('sp26rv')
+  await screenshotStep(
+    'Code input, tournament found',
+    fields.codeInput,
+    'fields-code-input-found.png',
+  )
+
+  await gallery.goto('ex-combobox')
+  await screenshotStep('Combobox', fields.combobox, 'fields-combobox.png')
+  await fields.searchOpponent('ngu')
+  await pageScreenshotStep('Combobox, "ngu" typed', gallery, 'fields-combobox-ngu.png')
+  await gallery.page.keyboard.press('ArrowDown')
+  await pageScreenshotStep(
+    'Combobox, second match active',
+    gallery,
+    'fields-combobox-ngu-second.png',
+  )
+  await gallery.page.keyboard.press('Enter')
+  await screenshotStep('Combobox, picked', fields.combobox, 'fields-combobox-picked.png')
+  await fields.opponent.click()
+  await pageScreenshotStep(
+    'Combobox, reopened on the pick',
+    gallery,
+    'fields-combobox-reopened.png',
+  )
+
+  await gallery.goto('ex-date-picker')
+  await screenshotStep('Date picker', fields.datePicker, 'fields-date-picker.png')
+  await fields.openCalendar()
+  await pageScreenshotStep('Date picker, open', gallery, 'fields-date-picker-open.png')
+  await gallery.page.keyboard.press('ArrowRight')
+  await pageScreenshotStep(
+    'Date picker, a day on by keyboard',
+    gallery,
+    'fields-date-picker-day-moved.png',
+  )
+  await gallery.page.keyboard.press('PageDown')
+  await pageScreenshotStep(
+    'Date picker, a month on by keyboard',
+    gallery,
+    'fields-date-picker-month-moved.png',
+  )
+  await gallery.goto('ex-date-picker')
+  await fields.date.fill('9 April')
+  await fields.date.press('Enter')
+  await screenshotStep(
+    'Date picker, a past date typed',
+    fields.datePicker,
+    'fields-date-picker-too-early.png',
+  )
+
+  await gallery.goto('ex-checkbox-radio-and-switch')
+  await screenshotStep(
+    'Checkbox, radio and switch',
+    fields.choices,
+    'fields-checkbox-radio-and-switch.png',
+  )
+  await focusedScreenshotStep(
+    'Needs an umpire, focused',
+    fields.control('checkbox', 'Needs an umpire'),
+    'fields-checkbox-focused.png',
+  )
+  await focusedScreenshotStep(
+    'Best of 5, focused',
+    fields.control('radio', 'Best of 5'),
+    'fields-radio-focused.png',
+  )
+  await focusedScreenshotStep(
+    'Call players automatically, focused',
+    fields.control('switch', 'Call players automatically'),
+    'fields-switch-focused.png',
+  )
+  await fields.control('checkbox', 'Needs an umpire').check()
+  await fields.control('radio', 'Best of 7').check()
+  await fields.control('switch', 'Show ratings to spectators').click()
+  await gallery.page.mouse.move(0, 0)
+  await screenshotStep(
+    'Checkbox, radio and switch, changed',
+    fields.choices,
+    'fields-checkbox-radio-and-switch-changed.png',
+  )
+}
+
+test('the Fields and choices section matches its screenshots and the gallery', async ({
+  designSystemPage,
+  referenceKitPage,
+}) => {
+  await test.step('app', () => fieldsScreenshots(designSystemPage))
+  await test.step('gallery', () => fieldsScreenshots(referenceKitPage))
+})
+
 async function feedbackScreenshots(gallery: GalleryPage): Promise<void> {
   const feedback = gallery.feedback
   await gallery.goto(feedback.testId)
@@ -512,6 +628,213 @@ for (const site of ['app', 'gallery'] as const) {
 
       await expect(overlays.palette).toBeHidden()
       await expect(page.getByTestId('palette-trigger')).toBeFocused()
+    })
+  })
+}
+
+// The fields' behaviour in a real browser: focus moves, selection, paste,
+// autofill and the keyboard. Each test runs on the app and on the gallery,
+// so both behave alike.
+for (const site of ['app', 'gallery'] as const) {
+  test.describe(`Fields and choices on the ${site}`, () => {
+    let gallery: GalleryPage
+    test.beforeEach(({ designSystemPage, referenceKitPage }) => {
+      gallery = site === 'app' ? designSystemPage : referenceKitPage
+    })
+
+    test('the Table field shows its error until it holds 1 to 6', async () => {
+      await gallery.goto('ex-text-field')
+      const fields = gallery.fields
+      const error = fields.textField.getByText('This venue has 6 tables. Enter 1–6.')
+
+      await fields.table.fill('4')
+      await expect(fields.table).toHaveAttribute('aria-invalid', 'false')
+      await expect(error).toBeHidden()
+
+      await fields.table.fill('7')
+      await expect(fields.table).toHaveAttribute('aria-invalid', 'true')
+      await expect(fields.table).toHaveAccessibleDescription(
+        'This venue has 6 tables. Enter 1–6.',
+      )
+    })
+
+    test('the code input spreads autofill, and Backspace and the arrows step back', async ({
+      page,
+    }) => {
+      await gallery.goto('ex-code-input')
+      const fields = gallery.fields
+
+      // Autofill writes the whole code into the first box.
+      await fields.codeBox(1).fill('sp26rv')
+
+      for (const [n, character] of [...'SP26RV'].entries()) {
+        await expect(fields.codeBox(n + 1)).toHaveValue(character)
+      }
+      await expect(fields.codeBox(6)).toBeFocused()
+      await expect(fields.codeInput.getByText('Spring Open 2026')).toBeVisible()
+
+      await page.keyboard.press('Backspace')
+      await expect(fields.codeBox(6)).toHaveValue('')
+      await expect(fields.codeInput.getByText('Spring Open 2026')).toBeHidden()
+      await page.keyboard.press('Backspace')
+      await expect(fields.codeBox(5)).toHaveValue('')
+      await expect(fields.codeBox(5)).toBeFocused()
+      await page.keyboard.press('ArrowLeft')
+      await expect(fields.codeBox(4)).toBeFocused()
+      await page.keyboard.press('ArrowRight')
+      await expect(fields.codeBox(5)).toBeFocused()
+    })
+
+    test('a code pasted into the code input spreads across its boxes', async ({
+      page,
+      context,
+    }) => {
+      await context.grantPermissions(['clipboard-read', 'clipboard-write'])
+      await gallery.goto('ex-code-input')
+      const fields = gallery.fields
+      // A string, because the suite's types have no DOM.
+      await page.evaluate("navigator.clipboard.writeText('xy-12 zz')")
+
+      await fields.codeBox(1).focus()
+      await page.keyboard.press('ControlOrMeta+V')
+
+      for (const [n, character] of [...'XY12ZZ'].entries()) {
+        await expect(fields.codeBox(n + 1)).toHaveValue(character)
+      }
+      await expect(fields.codeBox(1)).toHaveAttribute('aria-invalid', 'true')
+      await expect(fields.codeBox(1)).toHaveAccessibleDescription(
+        'No tournament uses that code. Check the poster or ask the desk. On the poster at the venue entrance. Try SP26RV.',
+      )
+    })
+
+    test('the combobox picks with Enter, and Esc closes the list, then clears', async ({
+      page,
+    }) => {
+      await gallery.goto('ex-combobox')
+      const fields = gallery.fields
+
+      await fields.searchOpponent('wojcik')
+      await expect(fields.opponentList.getByRole('option')).toHaveCount(1)
+      await page.keyboard.press('Enter')
+      await expect(fields.opponent).toHaveValue('Wójcik-Szymańska, Agnieszka')
+      await expect(fields.opponentList).toBeHidden()
+      await expect(fields.combobox).toContainText(
+        'Picked: Wójcik-Szymańska, Agnieszka · Northside',
+      )
+
+      await fields.searchOpponent('east')
+      await expect(fields.opponentList.getByRole('option')).toHaveCount(5)
+      await page.keyboard.press('Escape')
+      await expect(fields.opponentList).toBeHidden()
+      await expect(fields.opponent).toHaveValue('east')
+      await page.keyboard.press('Escape')
+      await expect(fields.opponent).toHaveValue('')
+    })
+
+    test('a player from the palette goes to the opponent combobox', async ({ page }) => {
+      await gallery.goto()
+      const fields = gallery.fields
+
+      await page.keyboard.press('Control+K')
+      await gallery.overlays.paletteSearch.fill('patel')
+      await page.keyboard.press('Enter')
+
+      await expect(fields.opponent).toBeFocused()
+      await expect(fields.opponent).toHaveValue('Patel, Meera')
+      await expect(fields.opponentList.getByRole('option')).toHaveCount(1)
+      await expect(fields.opponentList.getByRole('option')).toContainText('Patel, Meera')
+    })
+
+    test('typed dates are read and shown in full', async ({ page }) => {
+      await gallery.goto('ex-date-picker')
+      const { date } = gallery.fields
+
+      for (const [typed, shown] of [
+        ['11/4/2026', 'Saturday 11 April 2026'],
+        ['Sat 25 Apr', 'Saturday 25 April 2026'],
+        ['April 20 2026', 'Monday 20 April 2026'],
+        ['12.4.26', 'Sunday 12 April 2026'],
+        ['2026-05-01', 'Friday 1 May 2026'],
+      ]) {
+        await date.fill(typed)
+        await date.press('Enter')
+        await expect(date).toHaveValue(shown)
+      }
+
+      await date.fill('19 April 2026')
+      await page.keyboard.press('Tab')
+      await expect(date).toHaveValue('Sunday 19 April 2026')
+
+      await date.fill('31/2/2026')
+      await date.press('Enter')
+      await expect(date).toHaveAttribute('aria-invalid', 'true')
+      await expect(date).toHaveAccessibleDescription(
+        'Players see this on the entry page. Enter a date like 11 April 2026 or 11/4/2026.',
+      )
+    })
+
+    test('Alt+↓ opens the calendar, the keys move by day, week and month, and Esc returns focus', async ({
+      page,
+    }) => {
+      await gallery.goto('ex-date-picker')
+      const fields = gallery.fields
+
+      await fields.date.press('Alt+ArrowDown')
+      await expect(fields.day('Saturday 11 April 2026')).toBeFocused()
+      await page.keyboard.press('PageDown')
+      await expect(fields.day('Monday 11 May 2026')).toBeFocused()
+      await page.keyboard.press('End')
+      await expect(fields.day('Sunday 17 May 2026')).toBeFocused()
+      await page.keyboard.press('Home')
+      await expect(fields.day('Monday 11 May 2026')).toBeFocused()
+      await page.keyboard.press('ArrowUp')
+      await expect(fields.day('Monday 4 May 2026')).toBeFocused()
+      await page.keyboard.press('ArrowLeft')
+      await expect(fields.day('Sunday 3 May 2026')).toBeFocused()
+      await page.keyboard.press('ArrowDown')
+      await page.keyboard.press('PageUp')
+      await expect(fields.day('Friday 10 April 2026, today')).toBeFocused()
+
+      await page.keyboard.press('Escape')
+      await expect(fields.calendar).toBeHidden()
+      await expect(fields.calendarButton).toBeFocused()
+    })
+
+    test('a day picked in the calendar fills the field and closes it', async ({ page }) => {
+      await gallery.goto('ex-date-picker')
+      const fields = gallery.fields
+
+      await fields.openCalendar()
+      await page.keyboard.press('ArrowDown')
+      await page.keyboard.press('Enter')
+
+      await expect(fields.date).toHaveValue('Saturday 18 April 2026')
+      await expect(fields.calendar).toBeHidden()
+      await expect(fields.calendarButton).toBeFocused()
+      await fields.openCalendar()
+      await expect(fields.day('Saturday 18 April 2026')).toHaveAttribute('aria-selected', 'true')
+    })
+
+    test('a click outside closes the calendar', async ({ page }) => {
+      await gallery.goto('ex-date-picker')
+      const fields = gallery.fields
+
+      await fields.openCalendar()
+      await page.mouse.click(5, 5)
+
+      await expect(fields.calendar).toBeHidden()
+    })
+
+    test('the inline calendar picks a day and keeps focus on it', async () => {
+      await gallery.goto('ex-date-picker')
+      const day = gallery.fields.inlineCalendar.getByRole('button', {
+        name: 'Wednesday 15 April 2026',
+      })
+
+      await day.click()
+
+      await expect(day).toHaveAttribute('aria-selected', 'true')
+      await expect(day).toBeFocused()
     })
   })
 }

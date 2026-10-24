@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { isTestMode } from '../testMode'
+import { AnnounceContext } from './announceContext'
 import { Toast } from './Toast'
 import {
   ToastContext,
@@ -24,7 +25,9 @@ type LiveToast = {
 // Gives the app useToast() and shows its toasts bottom centre, in the
 // `.fm-toast-region` of styles/kit.css, as kit.js's FM.toast does. Each
 // toast leaves after TOAST_MS, and waits while it's hovered or focused. In
-// test mode toasts stay until dismissed, as the gallery's do.
+// test mode toasts stay until dismissed, as the gallery's do. It also gives
+// useAnnounce(), which reads a message out through the same polite region
+// that announces an Undo.
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<LiveToast[]>([])
   const [announcement, setAnnouncement] = useState('')
@@ -51,7 +54,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   return (
     <ToastContext value={showToast}>
-      {children}
+      <AnnounceContext value={announce}>{children}</AnnounceContext>
       {/* On <body>, as kit.js puts them, so the gallery's `only` test mode
           keeps them on screen. */}
       {createPortal(
