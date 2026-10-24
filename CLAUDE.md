@@ -134,7 +134,14 @@ through FastAPI's `TestClient`).
   [{"status": "415", "title": "..."}]}`.
 - `v1/`: the `/v1` routes, one module per resource, each with its own
   `APIRouter` and Pydantic request/response models; `v1/__init__.py` mounts
-  them. Annotate route return types with the response model.
+  them. Annotate route return types with the response model. A route does
+  only the HTTP work. It reads the request, calls a service and writes the
+  response.
+- `services/`: the business logic, one module per area, such as
+  `services/sessions.py`. A service takes an ORM `Session` and plain values,
+  and returns domain types. It never sees a request, a response or a cookie.
+  [.claude/rules/business-logic-in-services.md](.claude/rules/business-logic-in-services.md)
+  says why.
 - `database.py`: the Postgres connections, through SQLAlchemy 2.0 and the
   psycopg 3 driver. If `DATABASE_URL` is set, `create_app()` makes an
   `Engine` (at most 4 connections) and a `sessionmaker`. The app's lifespan
@@ -186,8 +193,8 @@ account has no `email`. A verified account has one, always lowercase.
 
 - `accounts.py`: `CurrentAccount = GuestAccount | VerifiedAccount`, the
   account of a valid session. An adopted account (`adopted_into` set) is
-  neither kind, so its sessions are invalid. `auth.current_account()` decides
-  the kind in one place. It checks `adopted_into` first, then `email`.
+  neither kind, so its sessions are invalid. `current_account()` in
+  `services/sessions.py` decides the kind in one place. It checks `adopted_into` first, then `email`.
 - Players are permanent. The `players_are_permanent` trigger refuses every
   `DELETE` on `players`. An account manages players through
   `player_managers`. Each row has `relationship` `self` or `managed`. An
@@ -199,26 +206,27 @@ account has no `email`. A verified account has one, always lowercase.
   has no entry. So a new foreign key to either table needs an entry in the
   same change.
 - `POST /v1/session` (`v1/session.py`) starts or resumes the visitor's
-  session. With a valid session, it updates `accounts.last_seen_at`, moves
+  session through `services.sessions.start_session()`. With a valid session, it updates `accounts.last_seen_at`, moves
   `sessions.expires_at` to 400 days from now and sets the same cookie
   again. With no cookie, or an unknown, expired or adopted one, it makes a
-  guest account and a session.
-  It deletes the session row that the old cookie matched, and keeps that
-  row's account. Every response sets `Cache-Control: no-store`. The body is
+  guest account and a session. It deletes the session row that the old
+  cookie matched, and keeps that row's account. Every response sets `Cache-Control: no-store`. The body is
   `{"data": {"account": {"id": "...", "kind": "guest"}}}`, or `"verified"`.
 - The cookie is `__Host-fortymm_session`: 32 random bytes in base64url, with
   `Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=34560000` (400 days).
   `sessions.expires_at` also ends 400 days after the last `POST
   /v1/session`. The API stores only the token's sha256, in
   `sessions.token_hash`.
-- `auth.py`: a session is valid if its `token_hash` matches, `expires_at` is
-  in the future and its account has no `adopted_into`. A route that needs
-  the account takes a `RequestAccount` parameter. Without a valid session,
-  that dependency answers 401 in the `errors` shape. Only `POST /v1/session`
-  makes a guest account.
-- A route that writes as an account loads the account row with
+- `services/sessions.py`: a session is valid if its `token_hash` matches,
+  `expires_at` is in the future and its account has no `adopted_into`.
+  `authenticate()` returns the account of a valid session, or `None`.
+- `auth.py`: the cookie and the `RequestAccount` dependency. A route that
+  needs the account takes a `RequestAccount` parameter. Without a valid
+  session, that dependency answers 401 in the `errors` shape. Only `POST
+  /v1/session` makes a guest account.
+- A service that writes as an account loads the account row with
   `with_for_update(read=True)`, which is `SELECT ... FOR SHARE`. After the
-  lock, it checks `adopted_into` again and answers 401 if it is set. So a
+  lock, it checks `adopted_into` again. If it is set, the route answers 401. So a
   write can't land on a guest account after an adoption moved its data.
   `RequestAccount` takes no lock. `POST /v1/session` locks the account `FOR
   UPDATE`, because it writes `last_seen_at`.

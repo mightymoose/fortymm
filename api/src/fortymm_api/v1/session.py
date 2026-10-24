@@ -3,21 +3,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Response
 from pydantic import BaseModel
-from sqlalchemy import func, update
 
-from fortymm_api.accounts import CurrentAccount, GuestAccount
-from fortymm_api.auth import (
-    SESSION_COOKIE,
-    SESSION_LIFETIME,
-    SESSION_MAX_AGE,
-    SessionToken,
-    ValidSession,
-    find_session,
-    hash_token,
-    new_token,
-)
+from fortymm_api.accounts import GuestAccount
+from fortymm_api.auth import SESSION_COOKIE, SESSION_MAX_AGE, SessionToken
 from fortymm_api.database import DatabaseSession
-from fortymm_api.models import Account, AuthSession
+from fortymm_api.services import sessions
 
 router = APIRouter(tags=["session"])
 
@@ -45,36 +35,11 @@ def start_session(
     a cookie for an expired, unknown or adopted session, the visitor gets a
     new guest account. The API deletes the session that cookie named.
     """
-    found = find_session(session, token, lock=True)
-    account: CurrentAccount
-    if isinstance(found, ValidSession) and token is not None:
-        account = found.account
-        found.row.expires_at = func.now() + SESSION_LIFETIME
-        session.execute(
-            update(Account)
-            .where(Account.id == account.id)
-            .values(last_seen_at=func.now())
-        )
-    else:
-        if found is not None:
-            session.delete(found.row)
-        guest = Account()
-        session.add(guest)
-        session.flush()
-        token = new_token()
-        session.add(
-            AuthSession(
-                token_hash=hash_token(token),
-                account_id=guest.id,
-                expires_at=func.now() + SESSION_LIFETIME,
-            )
-        )
-        account = GuestAccount(guest.id)
-
+    started = sessions.start_session(session, token)
     response.headers["Cache-Control"] = "no-store"
     response.set_cookie(
         SESSION_COOKIE,
-        token,
+        started.token,
         max_age=SESSION_MAX_AGE,
         path="/",
         secure=True,
@@ -82,8 +47,8 @@ def start_session(
         samesite="lax",
     )
     kind: Literal["guest", "verified"] = (
-        "guest" if isinstance(account, GuestAccount) else "verified"
+        "guest" if isinstance(started.account, GuestAccount) else "verified"
     )
     return SessionResponse(
-        data=SessionData(account=SessionAccount(id=account.id, kind=kind))
+        data=SessionData(account=SessionAccount(id=started.account.id, kind=kind))
     )
