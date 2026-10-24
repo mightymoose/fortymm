@@ -159,7 +159,7 @@ depends = ["api:build"]
 run = 'api/deploy/cloud-run-deploy --tag "$(bin/preview-name)"'
 
 [tasks."api:preview-delete"]
-description = "Remove a branch's Preview tag from the `api-preview` Cloud Run service (needs gcloud, authenticated); succeeds if the tag or the service isn't there"
+description = "Remove a branch's Preview tag from the `api-preview` Cloud Run service and drop its Preview database (needs gcloud, authenticated); succeeds if the tag, the service or the database isn't there"
 usage = 'arg "<branch>" help="The git branch whose Preview to remove"'
 # The revision itself stays, untagged and without traffic: Cloud Run keeps a
 # limited number of revisions per service and an idle one costs nothing.
@@ -168,16 +168,18 @@ name=$(bin/preview-name "$usage_branch")
 # list (unlike describe) succeeds with no output when the service is missing,
 # so an auth or API error still fails the task.
 service=$(gcloud run services list --project "$GCP_PROJECT" --region "$GCP_REGION" --filter=metadata.name=api-preview --format='value(metadata.name)')
-if [ -z "$service" ]; then
-  echo "api-preview doesn't exist, so there's no $name tag to remove"
-  exit 0
+tags=
+if [ -n "$service" ]; then
+  tags=$(gcloud run services describe api-preview --project "$GCP_PROJECT" --region "$GCP_REGION" --format='value(spec.traffic[].tag)')
 fi
-tags=$(gcloud run services describe api-preview --project "$GCP_PROJECT" --region "$GCP_REGION" --format='value(spec.traffic[].tag)')
-if ! printf '%s\n' "$tags" | tr ';' '\n' | grep -qx "$name"; then
+if printf '%s\n' "$tags" | tr ';' '\n' | grep -qx "$name"; then
+  gcloud run services update-traffic api-preview --project "$GCP_PROJECT" --region "$GCP_REGION" --remove-tags "$name" --quiet
+else
   echo "api-preview has no $name tag to remove"
-  exit 0
 fi
-gcloud run services update-traffic api-preview --project "$GCP_PROJECT" --region "$GCP_REGION" --remove-tags "$name" --quiet
+# Even with no tag: a database can outlive its tag, e.g. after a run that
+# failed between the two.
+api/deploy/preview-database drop "$name"
 """
 
 [tasks."api:url"]
