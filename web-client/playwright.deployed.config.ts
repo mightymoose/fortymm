@@ -11,6 +11,15 @@ if (!baseURL) {
   )
 }
 
+// The app's pages will make a guest account on load, and production keeps
+// every account. So production gets only the health check.
+const PRODUCTION_HOSTS = [
+  'fortymm.com',
+  'www.fortymm.com',
+  'fortymm.mightymoose.workers.dev',
+]
+const production = PRODUCTION_HOSTS.includes(new URL(baseURL).hostname)
+
 export default defineConfig({
   testDir: './e2e/deployed',
   // Subdirectories of the main run's, so neither run wipes the other's
@@ -29,11 +38,15 @@ export default defineConfig({
   projects: [
     // Waits for the deployment to answer before the other specs run.
     { name: 'ready', testMatch: 'ready.spec.ts' },
-    {
-      name: 'chromium',
-      testIgnore: 'ready.spec.ts',
-      dependencies: ['ready'],
-      use: { ...devices['Desktop Chrome'] },
-    },
+    ...(production
+      ? []
+      : [
+          {
+            name: 'chromium',
+            testIgnore: 'ready.spec.ts',
+            dependencies: ['ready'],
+            use: { ...devices['Desktop Chrome'] },
+          },
+        ]),
   ],
 })
