@@ -12,8 +12,10 @@
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
-    // Run the Worker, not the SPA fallback, for the API's paths.
-    "run_worker_first": ["/api/*"],
+    // Run the Worker before the assets for every path. It redirects
+    // www.fortymm.com and fortymm.mightymoose.workers.dev to fortymm.com,
+    // which it can't do for a path the assets answer first.
+    "run_worker_first": true,
     // Serve index.html for paths with no matching file, so client-side
     // (TanStack Router) routes work on a direct load or refresh.
     "not_found_handling": "single-page-application"

@@ -1,5 +1,6 @@
 // The Cloudflare Worker in front of the web-client's static assets (see
-// wrangler.jsonc). Requests to /api/* go to the API on Cloud Run with the
+// wrangler.jsonc). Requests on the redirect hosts get a 301 to fortymm.com.
+// Requests to /api/* go to the API on Cloud Run with the
 // prefix stripped, as the Vite dev server's proxy does in dev, so the app's
 // `/api` client works unchanged and same-origin; everything else is served
 // from the assets, with the SPA fallback.
@@ -24,10 +25,17 @@ interface RateLimit {
 
 const API_PREFIX = '/api'
 const WORKER_SECRET_HEADER = 'X-FortyMM-Worker-Secret'
+const CANONICAL_ORIGIN = 'https://fortymm.com'
+// Each host has its own cookie jar, so these redirect to one host. Previews
+// run this code on other *.workers.dev hosts, so the names are exact.
+const REDIRECT_HOSTS: ReadonlySet<string> = new Set(['www.fortymm.com', 'fortymm.mightymoose.workers.dev'])
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url)
+    if (REDIRECT_HOSTS.has(url.host)) {
+      return Response.redirect(new URL(url.pathname + url.search, CANONICAL_ORIGIN).href, 301)
+    }
     if (url.pathname.startsWith(`${API_PREFIX}/`)) {
       return proxyToApi(request, url, env)
     }
