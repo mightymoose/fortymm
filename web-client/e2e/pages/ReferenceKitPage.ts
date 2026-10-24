@@ -1,5 +1,10 @@
 import { fileURLToPath } from 'node:url'
 import type { Locator, Page } from '@playwright/test'
+import { KitDataDisplaySection } from './referenceKit/KitDataDisplaySection.ts'
+import { KitFeedbackSection } from './referenceKit/KitFeedbackSection.ts'
+import { KitFormsSection } from './referenceKit/KitFormsSection.ts'
+import { KitNavigationSection } from './referenceKit/KitNavigationSection.ts'
+import { KitOverlaysSection } from './referenceKit/KitOverlaysSection.ts'
 
 // The design system's shadcn/ui kit page, opened straight from references/.
 // Its page chrome is what the app's design system page is built to match.
@@ -17,53 +22,12 @@ export class ReferenceKitPage {
   readonly title: Locator
   readonly subtitle: Locator
   readonly intro: Locator
-  readonly formsSection: Locator
-  readonly formsSectionHeading: Locator
-  readonly formsSectionLead: Locator
-  readonly buttonCard: Locator
-  readonly inputCard: Locator
-  readonly textareaCard: Locator
-  readonly textarea: Locator
-  readonly otpCard: Locator
-  readonly checkboxCard: Locator
-  readonly radioCard: Locator
-  readonly switchCard: Locator
-  readonly sliderCard: Locator
-  readonly selectCard: Locator
-  readonly comboboxCard: Locator
-  readonly datePickerCard: Locator
-  readonly toggleCard: Locator
-  readonly displaySectionHeading: Locator
-  readonly displaySectionLead: Locator
-  readonly cardCard: Locator
-  readonly badgeCard: Locator
-  readonly avatarCard: Locator
-  readonly tableCard: Locator
-  readonly progressCard: Locator
-  readonly skeletonCard: Locator
-  readonly navSectionHeading: Locator
-  readonly navSectionLead: Locator
-  readonly tabsCard: Locator
-  readonly accordionCard: Locator
-  readonly breadcrumbCard: Locator
-  readonly paginationCard: Locator
-  readonly navMenuCard: Locator
-  readonly menubarCard: Locator
-  readonly overlaysSectionHeading: Locator
-  readonly overlaysSectionLead: Locator
+  readonly forms: KitFormsSection
+  readonly display: KitDataDisplaySection
+  readonly nav: KitNavigationSection
+  readonly overlays: KitOverlaysSection
+  readonly feedback: KitFeedbackSection
 
-  readonly dialogCard: Locator
-  readonly sheetCard: Locator
-  readonly drawerCard: Locator
-  readonly popoverCard: Locator
-  readonly tooltipCard: Locator
-  readonly hoverCardCard: Locator
-  readonly menuCard: Locator
-  readonly commandCard: Locator
-  readonly feedbackSectionHeading: Locator
-  readonly feedbackSectionLead: Locator
-  readonly alertCard: Locator
-  readonly toastCard: Locator
   constructor(page: Page) {
     this.page = page
     this.header = page.getByRole('banner')
@@ -71,235 +35,11 @@ export class ReferenceKitPage {
     this.subtitle = this.header.locator('.sub')
     // The paragraph right after the header.
     this.intro = page.getByRole('paragraph').first()
-    // The kit's sections have ids but no accessible names, so they aren't
-    // regions; find this one by its heading instead.
-    this.formsSection = page.locator('section', {
-      has: page.getByRole('heading', { level: 2, name: 'Forms & Input' }),
-    })
-    this.formsSectionHeading = this.formsSection.getByRole('heading', {
-      level: 2,
-    })
-    this.formsSectionLead = this.formsSection.getByRole('paragraph').first()
-    // The kit's component cards are plain divs; find this one by its heading.
-    this.buttonCard = this.formsSection.locator('.comp', {
-      has: page.getByRole('heading', { level: 3, name: 'Button', exact: true }),
-    })
-    this.inputCard = this.formsSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Input · Label · Form Field',
-        exact: true,
-      }),
-    })
-    this.textareaCard = this.formsSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Textarea',
-        exact: true,
-      }),
-    })
-    // The kit's label isn't tied to its textarea, so take the card's only
-    // textarea.
-    this.textarea = this.textareaCard.locator('textarea')
-    this.otpCard = this.formsSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Input OTP',
-        exact: true,
-      }),
-    })
-    this.checkboxCard = this.formsSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Checkbox',
-        exact: true,
-      }),
-    })
-    this.radioCard = this.formsSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Radio Group',
-        exact: true,
-      }),
-    })
-    this.switchCard = this.formsSection.locator('.comp', {
-      has: page.getByRole('heading', { level: 3, name: 'Switch', exact: true }),
-    })
-    this.sliderCard = this.formsSection.locator('.comp', {
-      has: page.getByRole('heading', { level: 3, name: 'Slider', exact: true }),
-    })
-    this.selectCard = this.formsSection.locator('.comp', {
-      has: page.getByRole('heading', { level: 3, name: 'Select', exact: true }),
-    })
-    this.comboboxCard = this.formsSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Combobox',
-        exact: true,
-      }),
-    })
-    this.datePickerCard = this.formsSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Date Picker',
-        exact: true,
-      }),
-    })
-    this.toggleCard = this.formsSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Toggle · Toggle Group',
-        exact: true,
-      }),
-    })
-    const displaySection = page.locator('#display')
-    this.displaySectionHeading = displaySection.getByRole('heading', {
-      level: 2,
-    })
-    this.displaySectionLead = displaySection.getByRole('paragraph').first()
-    this.cardCard = displaySection.locator('.comp', {
-      has: page.getByRole('heading', { level: 3, name: 'Card', exact: true }),
-    })
-    this.badgeCard = displaySection.locator('.comp', {
-      has: page.getByRole('heading', { level: 3, name: 'Badge', exact: true }),
-    })
-    this.avatarCard = displaySection.locator('.comp', {
-      has: page.getByRole('heading', { level: 3, name: 'Avatar', exact: true }),
-    })
-    this.tableCard = displaySection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Table · Data Table',
-        exact: true,
-      }),
-    })
-    this.progressCard = displaySection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Progress',
-        exact: true,
-      }),
-    })
-    this.skeletonCard = displaySection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Skeleton',
-        exact: true,
-      }),
-    })
-    const navSection = page.locator('#nav')
-    this.navSectionHeading = navSection.getByRole('heading', { level: 2 })
-    this.navSectionLead = navSection.getByRole('paragraph').first()
-    this.tabsCard = navSection.locator('.comp', {
-      has: page.getByRole('heading', { level: 3, name: 'Tabs', exact: true }),
-    })
-    this.accordionCard = navSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Accordion',
-        exact: true,
-      }),
-    })
-    this.breadcrumbCard = navSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Breadcrumb',
-        exact: true,
-      }),
-    })
-    this.paginationCard = navSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Pagination',
-        exact: true,
-      }),
-    })
-    this.navMenuCard = navSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Navigation Menu',
-        exact: true,
-      }),
-    })
-    this.menubarCard = navSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Menubar',
-        exact: true,
-      }),
-    })
-    const overlaysSection = page.locator('#overlays')
-    this.overlaysSectionHeading = overlaysSection.getByRole('heading', {
-      level: 2,
-    })
-    this.overlaysSectionLead = overlaysSection.getByRole('paragraph').first()
-    this.dialogCard = overlaysSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Dialog · Alert Dialog',
-        exact: true,
-      }),
-    })
-    this.sheetCard = overlaysSection.locator('.comp', {
-      has: page.getByRole('heading', { level: 3, name: 'Sheet', exact: true }),
-    })
-    this.drawerCard = overlaysSection.locator('.comp', {
-      has: page.getByRole('heading', { level: 3, name: 'Drawer', exact: true }),
-    })
-    this.popoverCard = overlaysSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Popover',
-        exact: true,
-      }),
-    })
-    this.tooltipCard = overlaysSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Tooltip',
-        exact: true,
-      }),
-    })
-    this.hoverCardCard = overlaysSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Hover Card',
-        exact: true,
-      }),
-    })
-    this.menuCard = overlaysSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Dropdown Menu · Context Menu',
-        exact: true,
-      }),
-    })
-    this.commandCard = overlaysSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Command',
-        exact: true,
-      }),
-    })
-    const feedbackSection = page.locator('#feedback')
-    this.feedbackSectionHeading = feedbackSection.getByRole('heading', {
-      level: 2,
-    })
-    this.feedbackSectionLead = feedbackSection.getByRole('paragraph').first()
-    this.alertCard = feedbackSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Alert',
-        exact: true,
-      }),
-    })
-    this.toastCard = feedbackSection.locator('.comp', {
-      has: page.getByRole('heading', {
-        level: 3,
-        name: 'Sonner / Toast',
-        exact: true,
-      }),
-    })
+    this.forms = new KitFormsSection(page)
+    this.display = new KitDataDisplaySection(page)
+    this.nav = new KitNavigationSection(page)
+    this.overlays = new KitOverlaysSection(page)
+    this.feedback = new KitFeedbackSection(page)
   }
 
   async goto(): Promise<void> {
@@ -319,15 +59,6 @@ export class ReferenceKitPage {
       })
     })
     await this.page.goto(kitUrl)
-  }
-
-  // The input card's input in the field labelled `name`. The kit's labels
-  // aren't tied to their inputs, so find the field by its label's text.
-  input(name: string): Locator {
-    return this.inputCard
-      .locator('.form-field')
-      .filter({ has: this.page.locator('label', { hasText: name }) })
-      .locator('input')
   }
 
   // Swaps in other header copy, so the header can be compared pixel for

@@ -355,6 +355,13 @@ objects (`e2e/pages/`) as fixtures: `test('...', async ({ homePage }) => ...)`.
 As in the unit tests, page objects expose role-based locators and actions like
 `goto()`, and the specs do the asserting.
 
+The design system page is built from one component per section, in
+`src/pages/designSystem/` (`FormsSection`, `DataDisplaySection` and so on).
+Its page objects follow the same split. `DesignSystemPage` holds the page
+chrome and one object per section in `e2e/pages/designSystem/`, such as
+`designSystemPage.forms.buttonCard`. `ReferenceKitPage` mirrors it with the
+kit's sections in `e2e/pages/referenceKit/`.
+
 Screenshot tests use `toHaveScreenshot`; their baselines live next to the spec
 in `e2e/<spec>-snapshots/` and only match when taken in the `playwright`
 container, so regenerate them there (`docker compose exec playwright npx
@@ -363,6 +370,10 @@ playwright test --update-snapshots`, with the stack and dev server up as in
 header against the same screenshot as the reference kit's header
 (`references/fortymm-design-system/ui_kits/shadcn/index.html`, opened from
 disk with the app's copy swapped in), so the two must render identically.
+Each section has one journey test. It takes every screenshot of the section's
+cards on the app, then the same screenshots on the kit, each in its own
+`test.step`. The checks are soft, so one mismatch doesn't hide the rest. The
+header and the intro are not sections, so each keeps its own pair of tests.
 
 Every run records a trace: `web-client/test-results/<test>/trace.zip` (open
 with `npx playwright show-trace` or https://trace.playwright.dev) and an HTML
