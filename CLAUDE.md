@@ -59,6 +59,12 @@ network, and checks that `/v1/health` reaches the database.
 `web-client:ci` runs `npm ci`, lint, build and tests in the running `dev`
 container, so it needs the stack up (run it via `ci`).
 
+`web-client:routes-check` then runs a Vite build in the `dev` container, which
+regenerates `web-client/src/routeTree.gen.ts` (see Routing). It fails if git
+shows the file changed, so a route change without the regenerated tree breaks
+CI. A new route file that the committed tree doesn't list can fail earlier,
+with a type error from `tsc -b` in `web-client:ci`.
+
 `openapi:check` then regenerates `api/openapi.json` and the web-client's
 types from it in the running containers, and fails if git shows them changed,
 so a route or model change without `api:openapi` breaks CI.
@@ -198,16 +204,40 @@ container, then runs.
 
 ### Routing
 
-Routes are defined in code with TanStack Router in `web-client/src/router.tsx`
-(`createAppRouter()`); each page's component lives in `web-client/src/routes/`.
-To add a page, add its route to the route tree there.
+Routes use TanStack Router's file-based routing. Each file in
+`web-client/src/routes/` defines one route, and its path in that directory
+gives the URL (see TanStack Router's file naming conventions). The
+`@tanstack/router-plugin` Vite plugin (in `vite.config.ts`, before the React
+plugin) reads the directory and writes the route tree to
+`web-client/src/routeTree.gen.ts`. `createAppRouter()` in `src/router.tsx`
+builds the router from that tree.
 
-Pages that will need a signed-in user (such as `/`) go under
-`authenticatedRoute`, a pathless layout route with no path segment
-(`routes/AuthenticatedLayout.tsx`). It checks the API's health and shows the
-loading screen (see API client). Public pages (such as `/design-system`) go
-directly under the root route. They make no request and never show the
-loading screen.
+The plugin writes the tree when Vite starts: the dev server (which also
+watches the directory), `vite build` and Vitest. Commit
+`routeTree.gen.ts` with the route change. `tsc -b` reads it before Vite runs
+in `npm run build`. If it is stale, CI fails (see `web-client:routes-check`).
+oxlint skips it. The web-client has no formatter.
+
+`autoCodeSplitting` puts each route's component in its own JS chunk. The
+router loads a route's chunk before it shows the route. A route file holds
+only the route definition. The components it shows live outside
+`src/routes/`, because the plugin treats every file there as a route:
+`src/pages/` holds the page and layout components and their tests. Import the
+component in the route file and don't export it from there, or it stays in
+the entry chunk.
+
+To add a page, add its component to `src/pages/` and a route file that shows
+it to `src/routes/`.
+
+- `__root.tsx`: the root route, with component `Root` (`src/pages/Root.tsx`),
+  and the router context type (`api` and `queryClient`).
+- `_authenticated.tsx`: a pathless layout route with no path segment, with
+  component `AuthenticatedLayout` (`src/pages/AuthenticatedLayout.tsx`).
+  Pages that will need a signed-in user (such as `/`, which is
+  `_authenticated/index.tsx`) go in `_authenticated/`. The layout checks the
+  API's health and shows the loading screen (see API client).
+- `design-system.tsx`: a public page. Public pages go directly in
+  `src/routes/`. They make no request and never show the loading screen.
 
 ### API client
 
@@ -222,9 +252,12 @@ Components fetch through TanStack Query. `src/api/queries.ts` holds the query
 options, one function per request, each taking the typed client, e.g.
 `useSuspenseQuery(healthQuery(api))`. Each `queryFn` calls the client and
 throws when the response has no data. `createAppRouter()` puts the client in
-the router context as `api` and wraps the router in a `QueryClientProvider`.
-On a full page load, `AuthenticatedLayout`
-(`src/routes/AuthenticatedLayout.tsx`) suspends until `/v1/health` answers.
+the router context as `api`, with the `QueryClient` as `queryClient`, and
+wraps the router in a `QueryClientProvider`. On a full page load, the
+`_authenticated` route's loader starts the health check without waiting for
+it. The loader stays in the entry chunk, so the request runs while the page's
+chunk downloads. `AuthenticatedLayout` (`src/pages/AuthenticatedLayout.tsx`)
+suspends until `/v1/health` answers.
 `LoadingScreen` covers it if that takes more than `SHOW_AFTER_MS` (300ms), so
 a fast load shows the page with no loading screen. Once shown, the loading
 screen stays up for at least `MIN_SHOWN_MS` (900ms, one bounce). Then the page
@@ -260,8 +293,10 @@ API client with base URL `API_BASE_URL` (`http://localhost/api`), because
 Node's `Request` rejects a relative URL. It waits for the health check, so the
 page is on screen when `render()` resolves. To test the loading screen, hold
 the health response with `holdHealth()` from `src/test/server.ts` (see
-`src/routes/AuthenticatedLayout.test.tsx`). `DesignSystemPage.render()` never
-waits for health, because the page doesn't check it.
+`src/pages/AuthenticatedLayout.test.tsx`). `DesignSystemPage.render()` never
+waits for health, because the page doesn't check it. `renderRoute` calls
+`router.load()`, which also loads the route's chunk, so no page object waits
+for a chunk.
 
 ### End-to-end tests
 
@@ -326,7 +361,7 @@ The design system's styles apply to the whole app; `main.tsx` imports them:
 - `src/styles/base.css`: the reset, type styles (also applied to `h1`-`h4`,
   `p` and `code`) and brand utilities from the same file, then the page
   chrome from the reference shadcn/ui kit: `.page` (the root route's
-  wrapper, `src/routes/Root.tsx`) and `.page-header`
+  wrapper, `src/pages/Root.tsx`) and `.page-header`
   (`src/components/PageHeader.tsx`, the title and subtitle every page starts
   with).
 

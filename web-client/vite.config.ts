@@ -1,10 +1,16 @@
+import { tanstackRouter } from '@tanstack/router-plugin/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import { configDefaults } from 'vitest/config'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    // Generates src/routeTree.gen.ts from src/routes/ and gives each route's
+    // component its own chunk. It has to run before the React plugin.
+    tanstackRouter({ target: 'react', autoCodeSplitting: true }),
+    react(),
+  ],
   server: {
     // Listen on all interfaces so the dev server is reachable from outside
     // the Docker Compose container.
