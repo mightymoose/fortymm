@@ -9,9 +9,18 @@ from fastapi.routing import APIRoute
 from sqlalchemy.orm import sessionmaker
 
 from fortymm_api import v1
+from fortymm_api.auth import NoValidSession
 from fortymm_api.database import create_database_engine, migrate
 
 WORKER_SECRET_HEADER = "X-FortyMM-Worker-Secret"
+WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+NO_SESSION = "The request has no valid session"
+
+
+def error_response(status: int, title: str) -> JSONResponse:
+    return JSONResponse(
+        {"errors": [{"status": str(status), "title": title}]}, status_code=status
+    )
 
 
 def operation_id(route: APIRoute) -> str:
@@ -36,16 +45,27 @@ def require_worker_secret(app: FastAPI, secret: str) -> None:
     ) -> Response:
         sent = request.headers.get(WORKER_SECRET_HEADER, "")
         if not hmac.compare_digest(sent.encode(), secret.encode()):
-            return JSONResponse(
-                {
-                    "errors": [
-                        {
-                            "status": "403",
-                            "title": "Requests must come through the Worker",
-                        }
-                    ]
-                },
-                status_code=403,
+            return error_response(403, "Requests must come through the Worker")
+        return await call_next(request)
+
+
+def require_json(app: FastAPI) -> None:
+    """Reject a write whose body isn't declared as JSON.
+
+    A cross-site HTML form can send a POST without CORS, but not with this
+    content type. Without the check, a form on another site could make
+    POST /v1/session replace the visitor's session with a new guest's.
+    """
+
+    @app.middleware("http")
+    async def check_content_type(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        content_type = request.headers.get("Content-Type", "")
+        media_type = content_type.partition(";")[0].strip().lower()
+        if request.method in WRITE_METHODS and media_type != "application/json":
+            return error_response(
+                415, "Requests must send Content-Type: application/json"
             )
         return await call_next(request)
 
@@ -85,6 +105,12 @@ def create_app() -> FastAPI:
     )
     app.state.sessions = sessionmaker(engine) if engine is not None else None
     app.include_router(v1.router)
+    app.add_exception_handler(
+        NoValidSession, lambda _request, _error: error_response(401, NO_SESSION)
+    )
+    require_json(app)
+    # Added last so it runs first: a request without the secret learns nothing
+    # else about the API.
     if secret:
         require_worker_secret(app, secret)
     return app
