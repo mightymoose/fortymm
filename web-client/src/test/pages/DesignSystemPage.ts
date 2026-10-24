@@ -624,4 +624,17 @@ export class DesignSystemPage {
   get commandList(): HTMLElement {
     return within(this.commandCard).getByRole('listbox', { name: 'Command' })
   }
+
+  get feedbackSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Feedback' })
+  }
+
+  get feedbackSectionHeading(): HTMLElement {
+    return within(this.feedbackSection).getByRole('heading', { level: 2 })
+  }
+
+  // The first paragraph: the cards in the section have paragraphs too.
+  get feedbackSectionLead(): HTMLElement {
+    return within(this.feedbackSection).getAllByRole('paragraph')[0]
+  }
 }

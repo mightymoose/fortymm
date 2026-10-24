@@ -750,6 +750,11 @@ export function DesignSystem() {
           </div>
         </ComponentCard>
       </Section>
+      <Section
+        id="feedback"
+        title="Feedback"
+        lead="Alerts and toasts. The app talking back."
+      />
     </>
   )
 }

@@ -821,6 +821,22 @@ describe('DesignSystem', () => {
     ).toBeTruthy()
   })
 
+  it('has a Feedback section after Overlays, with a lead line', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.feedbackSectionHeading).toHaveTextContent(
+      'Feedback',
+    )
+    expect(designSystemPage.feedbackSectionLead).toHaveTextContent(
+      'Alerts and toasts. The app talking back.',
+    )
+    expect(
+      designSystemPage.overlaysSection.compareDocumentPosition(
+        designSystemPage.feedbackSection,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
   it('has a Dialog · Alert Dialog card first in the Overlays section', async () => {
     const designSystemPage = await DesignSystemPage.render()
 

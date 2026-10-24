@@ -52,11 +52,11 @@ test.describe('header', () => {
   })
 })
 
-// The intro, the Forms & Input, Data Display, Navigation and Overlays
-// sections and their component cards use the reference kit's own copy, so
-// they're compared with the kit as is. The kit's sections go on to more
-// cards than the app has yet, so each section's heading, lead and cards are
-// compared one by one.
+// The intro, the Forms & Input, Data Display, Navigation, Overlays and
+// Feedback sections and their component cards use the reference kit's own
+// copy, so they're compared with the kit as is. The kit's sections go on to
+// more cards than the app has yet, so each section's heading, lead and cards
+// are compared one by one.
 test.describe('intro', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
@@ -2834,6 +2834,30 @@ test.describe('Command', () => {
     await expect(
       designSystemPage.commandOption('Log a match'),
     ).toHaveAttribute('aria-selected', 'false')
+  })
+})
+
+test.describe('Feedback section', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.feedbackSectionHeading).toHaveScreenshot(
+      'feedback-heading.png',
+    )
+    await expect(designSystemPage.feedbackSectionLead).toHaveScreenshot(
+      'feedback-lead.png',
+    )
+  })
+
+  test('matches the reference kit section', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.feedbackSectionHeading).toHaveScreenshot(
+      'feedback-heading.png',
+    )
+    await expect(referenceKitPage.feedbackSectionLead).toHaveScreenshot(
+      'feedback-lead.png',
+    )
   })
 })
 

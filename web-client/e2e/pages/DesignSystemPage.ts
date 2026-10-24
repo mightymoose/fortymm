@@ -100,6 +100,9 @@ export class DesignSystemPage {
   readonly commandBox: Locator
   readonly commandInput: Locator
   readonly commandList: Locator
+  readonly feedbackSection: Locator
+  readonly feedbackSectionHeading: Locator
+  readonly feedbackSectionLead: Locator
   constructor(page: Page) {
     this.page = page
     this.loadingScreen = page.getByRole('status', { name: 'Loading FortyMM' })
@@ -346,6 +349,14 @@ export class DesignSystemPage {
     this.commandList = this.commandCard.getByRole('listbox', {
       name: 'Command',
     })
+    this.feedbackSection = page.getByRole('region', { name: 'Feedback' })
+    this.feedbackSectionHeading = this.feedbackSection.getByRole('heading', {
+      level: 2,
+    })
+    // The first paragraph: the cards in the section have paragraphs too.
+    this.feedbackSectionLead = this.feedbackSection
+      .getByRole('paragraph')
+      .first()
   }
 
   // A component card's title, in its header.

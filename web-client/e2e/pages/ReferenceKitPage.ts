@@ -60,6 +60,8 @@ export class ReferenceKitPage {
   readonly hoverCardCard: Locator
   readonly menuCard: Locator
   readonly commandCard: Locator
+  readonly feedbackSectionHeading: Locator
+  readonly feedbackSectionLead: Locator
   constructor(page: Page) {
     this.page = page
     this.header = page.getByRole('banner')
@@ -277,6 +279,11 @@ export class ReferenceKitPage {
         exact: true,
       }),
     })
+    const feedbackSection = page.locator('#feedback')
+    this.feedbackSectionHeading = feedbackSection.getByRole('heading', {
+      level: 2,
+    })
+    this.feedbackSectionLead = feedbackSection.getByRole('paragraph').first()
   }
 
   async goto(): Promise<void> {
