@@ -182,7 +182,7 @@ run = "docker compose exec -T -w /app/web-client dev /app/bin/docker-entrypoint 
 description = "Regenerate the web-client's route tree in the running dev container and fail if it differs from what's committed (start the stack with `mise run ci`)"
 # Expects node_modules installed (web-client:ci runs `npm ci` first). The
 # TanStack Router plugin writes the route tree when Vite builds, so this runs
-# a build with the same config, into a directory nothing else uses.
+# a build with the same config.
 run = """
 file=web-client/src/routeTree.gen.ts
 docker compose exec -T -w /app/web-client dev /app/bin/docker-entrypoint \

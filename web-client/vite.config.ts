@@ -6,8 +6,7 @@ import { configDefaults } from 'vitest/config'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
-    // Generates src/routeTree.gen.ts from src/routes/ and gives each route's
-    // component its own chunk. It has to run before the React plugin.
+    // It has to run before the React plugin.
     tanstackRouter({ target: 'react', autoCodeSplitting: true }),
     react(),
   ],
