@@ -321,6 +321,144 @@ test('the Fields and choices section matches its screenshots and the gallery', a
   await test.step('gallery', () => fieldsScreenshots(referenceKitPage))
 })
 
+// The section has no examples, so each control's cell is checked in the
+// section opened on its own. The section opens again before each control's
+// clicks, because Chromium shows no focus ring for a scripted focus after a
+// click.
+async function selectionScreenshots(gallery: GalleryPage): Promise<void> {
+  const selection = gallery.selection
+  const { page } = gallery
+  await gallery.goto(selection.testId)
+  await screenshotStep('heading', selection.heading, 'selection-heading.png')
+  await screenshotStep('lead', selection.lead, 'selection-lead.png')
+  await screenshotStep('Tabs', selection.tabsCell, 'selection-tabs.png')
+  await screenshotStep(
+    'Segmented control',
+    selection.segmentedCell,
+    'selection-segmented-control.png',
+  )
+  await screenshotStep('Filter chips', selection.chipsCell, 'selection-filter-chips.png')
+  await screenshotStep('Switch', selection.switchCell, 'selection-switch.png')
+
+  await hoveredScreenshotStep(
+    'Schedule tab, hovered',
+    selection.tab('Schedule'),
+    'selection-tab-hovered.png',
+  )
+  await page.mouse.move(0, 0)
+  await focusedScreenshotStep(
+    'Overview tab, selected and focused',
+    selection.tab('Overview'),
+    'selection-tab-focused.png',
+  )
+  await page.keyboard.press('ArrowRight')
+  await screenshotStep(
+    'Tabs, Schedule picked with →',
+    selection.tabsCell,
+    'selection-tabs-schedule-by-keyboard.png',
+  )
+  await gallery.goto(selection.testId)
+  await selection.tab('Standings').click()
+  await page.mouse.move(0, 0)
+  await screenshotStep(
+    'Tabs, Standings clicked',
+    selection.tabsCell,
+    'selection-tabs-standings-clicked.png',
+  )
+
+  await gallery.goto(selection.testId)
+  await hoveredScreenshotStep(
+    'List option, hovered',
+    selection.option('List'),
+    'selection-segmented-option-hovered.png',
+  )
+  await page.mouse.move(0, 0)
+  await focusedScreenshotStep(
+    'Timeline option, on and focused',
+    selection.option('Timeline'),
+    'selection-segmented-option-focused.png',
+  )
+  await page.keyboard.press('End')
+  await screenshotStep(
+    'Segmented control, By player picked with End',
+    selection.segmentedCell,
+    'selection-segmented-control-by-player-by-keyboard.png',
+  )
+  await gallery.goto(selection.testId)
+  await selection.option('List').click()
+  await page.mouse.move(0, 0)
+  await screenshotStep(
+    'Segmented control, List clicked',
+    selection.segmentedCell,
+    'selection-segmented-control-list-clicked.png',
+  )
+
+  await gallery.goto(selection.testId)
+  await hoveredScreenshotStep(
+    'Under 18 chip, hovered',
+    selection.chip('Under 18'),
+    'selection-chip-hovered.png',
+  )
+  await page.mouse.move(0, 0)
+  await focusedScreenshotStep(
+    'All events chip, on and focused',
+    selection.chip('All events'),
+    'selection-chip-focused.png',
+  )
+  await page.keyboard.press('Tab')
+  await page.keyboard.press('Space')
+  await screenshotStep(
+    'Filter chips, Open singles turned on with Space',
+    selection.chipsCell,
+    'selection-filter-chips-open-singles-by-keyboard.png',
+  )
+  await gallery.goto(selection.testId)
+  await selection.chip('Open singles').click()
+  await selection.chip('Under 18').click()
+  await page.mouse.move(0, 0)
+  await expect(selection.showing).toHaveText('Showing: Open singles, Under 18')
+  await screenshotStep(
+    'Filter chips, Open singles and Under 18 clicked',
+    selection.chipsCell,
+    'selection-filter-chips-two-clicked.png',
+  )
+
+  await gallery.goto(selection.testId)
+  await hoveredScreenshotStep(
+    'Call players automatically, hovered',
+    selection.callPlayers,
+    'selection-switch-hovered.png',
+  )
+  await page.mouse.move(0, 0)
+  await focusedScreenshotStep(
+    'Call players automatically, focused',
+    selection.callPlayers,
+    'selection-switch-focused.png',
+  )
+  await page.keyboard.press('Space')
+  await screenshotStep(
+    'Switch, turned off with Space',
+    selection.switchCell,
+    'selection-switch-off-by-keyboard.png',
+  )
+  await gallery.goto(selection.testId)
+  await selection.callPlayers.click()
+  await page.mouse.move(0, 0)
+  await screenshotStep(
+    'Switch, turned off by click',
+    selection.switchCell,
+    'selection-switch-off-clicked.png',
+  )
+}
+
+test('the Selection section matches its screenshots and the gallery', async ({
+  designSystemPage,
+  referenceKitPage,
+}) => {
+  await test.step('app', () => selectionScreenshots(designSystemPage))
+  await test.step('gallery', () => selectionScreenshots(referenceKitPage))
+})
+
 async function feedbackScreenshots(gallery: GalleryPage): Promise<void> {
   const feedback = gallery.feedback
   await gallery.goto(feedback.testId)
@@ -835,6 +973,113 @@ for (const site of ['app', 'gallery'] as const) {
 
       await expect(day).toHaveAttribute('aria-selected', 'true')
       await expect(day).toBeFocused()
+    })
+  })
+}
+
+// The selection controls' keyboard models in a real browser. Each test runs
+// on the app and on the gallery, so both behave alike.
+for (const site of ['app', 'gallery'] as const) {
+  test.describe(`Selection on the ${site}`, () => {
+    let gallery: GalleryPage
+    test.beforeEach(({ designSystemPage, referenceKitPage }) => {
+      gallery = site === 'app' ? designSystemPage : referenceKitPage
+    })
+
+    test('Tab stops once in the tabs and the segmented control, on the option that is on', async ({
+      page,
+    }) => {
+      await gallery.goto('section-selection')
+      const selection = gallery.selection
+      await selection.tab('Schedule').click()
+      await selection.option('By player').click()
+      await page.getByRole('heading', { level: 2, name: 'Selection' }).click()
+
+      await page.keyboard.press('Tab')
+      await expect(selection.tab('Schedule')).toBeFocused()
+      await page.keyboard.press('Tab')
+      await expect(selection.option('By player')).toBeFocused()
+      await page.keyboard.press('Tab')
+      await expect(selection.chip('All events')).toBeFocused()
+      await page.keyboard.press('Tab')
+      await expect(selection.chip('Open singles')).toBeFocused()
+    })
+
+    test('the arrow keys, Home and End move between tabs and show their panels', async ({
+      page,
+    }) => {
+      await gallery.goto('section-selection')
+      const selection = gallery.selection
+
+      await selection.tab('Overview').focus()
+      for (const [key, name, panel] of [
+        ['ArrowLeft', 'Standings', 'Groups A–D, top two advance.'],
+        ['ArrowRight', 'Overview', '32 players · 4 tables · expected finish 18:45'],
+        ['ArrowDown', 'Schedule', '14 of 31 matches played.'],
+        ['ArrowUp', 'Overview', '32 players · 4 tables · expected finish 18:45'],
+        ['End', 'Standings', 'Groups A–D, top two advance.'],
+        ['Home', 'Overview', '32 players · 4 tables · expected finish 18:45'],
+      ]) {
+        await page.keyboard.press(key)
+        await expect(selection.tab(name)).toBeFocused()
+        await expect(selection.tab(name)).toHaveAttribute('aria-selected', 'true')
+        await expect(selection.tabPanel).toHaveText(panel)
+      }
+    })
+
+    test('the arrow keys, Home and End move the segmented control', async ({ page }) => {
+      await gallery.goto('section-selection')
+      const selection = gallery.selection
+
+      await selection.option('Timeline').focus()
+      for (const [key, name] of [
+        ['ArrowRight', 'List'],
+        ['ArrowDown', 'By player'],
+        ['ArrowRight', 'Timeline'],
+        ['ArrowUp', 'By player'],
+        ['Home', 'Timeline'],
+        ['End', 'By player'],
+      ]) {
+        await page.keyboard.press(key)
+        await expect(selection.option(name)).toBeFocused()
+        await expect(selection.option(name)).toBeChecked()
+      }
+      await expect(selection.segmentedCell.getByRole('radio', { checked: true })).toHaveCount(1)
+    })
+
+    test('All events clears the chips and comes back when none are on', async () => {
+      await gallery.goto('section-selection')
+      const selection = gallery.selection
+      const allEvents = selection.chip('All events')
+
+      await selection.chip('Doubles').click()
+      await selection.chip('Under 18').click()
+      await expect(allEvents).toHaveAttribute('aria-pressed', 'false')
+      await expect(selection.showing).toHaveText('Showing: Under 18, Doubles')
+
+      await allEvents.click()
+      for (const name of ['Open singles', 'Under 18', 'Doubles']) {
+        await expect(selection.chip(name)).toHaveAttribute('aria-pressed', 'false')
+      }
+      await expect(allEvents).toHaveAttribute('aria-pressed', 'true')
+      await expect(selection.showing).toHaveText('Showing: All events')
+
+      await selection.chip('Open singles').click()
+      await expect(selection.showing).toHaveText('Showing: Open singles')
+      await selection.chip('Open singles').click()
+      await expect(allEvents).toHaveAttribute('aria-pressed', 'true')
+      await expect(selection.showing).toHaveText('Showing: All events')
+    })
+
+    test('Space and Enter turn the switch over', async ({ page }) => {
+      await gallery.goto('section-selection')
+      const { callPlayers } = gallery.selection
+
+      await callPlayers.focus()
+      await page.keyboard.press('Space')
+      await expect(callPlayers).toHaveAttribute('aria-checked', 'false')
+      await page.keyboard.press('Enter')
+      await expect(callPlayers).toHaveAttribute('aria-checked', 'true')
     })
   })
 }

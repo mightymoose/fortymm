@@ -3,6 +3,7 @@ import { ButtonsSection } from './designSystem/ButtonsSection.ts'
 import { FeedbackSection } from './designSystem/FeedbackSection.ts'
 import { FieldsSection } from './designSystem/FieldsSection.ts'
 import { OverlaysSection } from './designSystem/OverlaysSection.ts'
+import { SelectionSection } from './designSystem/SelectionSection.ts'
 
 // The design system gallery, as the app's /design-system or the reference
 // draws it: the page chrome, plus one object per section for its examples.
@@ -13,6 +14,7 @@ export abstract class GalleryPage {
   readonly intro: Locator
   readonly buttons: ButtonsSection
   readonly fields: FieldsSection
+  readonly selection: SelectionSection
   readonly feedback: FeedbackSection
   readonly overlays: OverlaysSection
   // Where raised toasts show, bottom centre, outside every section. Found
@@ -31,6 +33,7 @@ export abstract class GalleryPage {
     this.intro = page.getByRole('paragraph').first()
     this.buttons = new ButtonsSection(page)
     this.fields = new FieldsSection(page)
+    this.selection = new SelectionSection(page)
     this.feedback = new FeedbackSection(page)
     this.overlays = new OverlaysSection(page)
     this.toasts = page.locator('.fm-toast-region')

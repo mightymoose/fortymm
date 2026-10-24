@@ -53,6 +53,16 @@ export class DesignSystemPage {
     return within(this.fieldsSection).getByRole('combobox', { name: 'Opponent' })
   }
 
+  get selectionSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Selection' })
+  }
+
+  // The Selection section's tab, radio, switch or chip button named `name`,
+  // e.g. the tab "Schedule".
+  selectionControl(role: 'tab' | 'radio' | 'switch' | 'button', name: string): HTMLElement {
+    return within(this.selectionSection).getByRole(role, { name })
+  }
+
   get feedbackSection(): HTMLElement {
     return screen.getByRole('region', { name: 'Feedback' })
   }

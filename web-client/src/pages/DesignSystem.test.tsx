@@ -220,6 +220,65 @@ describe('Fields and choices', () => {
   })
 })
 
+describe('Selection', () => {
+  it('shows the panel of the tab picked by click or arrow key', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const section = designSystemPage.selectionSection
+    expect(within(section).getByRole('tabpanel')).toHaveTextContent(
+      '32 players · 4 tables · expected finish 18:45',
+    )
+
+    await user.click(designSystemPage.selectionControl('tab', 'Standings'))
+    expect(within(section).getByRole('tabpanel')).toHaveTextContent(
+      'Groups A–D, top two advance.',
+    )
+    await user.keyboard('{ArrowLeft}')
+
+    expect(designSystemPage.selectionControl('tab', 'Schedule')).toHaveFocus()
+    expect(within(section).getByRole('tabpanel', { name: 'Schedule' })).toHaveTextContent(
+      '14 of 31 matches played.',
+    )
+  })
+
+  it('changes the schedule view', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+
+    await user.click(designSystemPage.selectionControl('radio', 'By player'))
+
+    expect(designSystemPage.selectionControl('radio', 'By player')).toBeChecked()
+    expect(designSystemPage.selectionControl('radio', 'Timeline')).not.toBeChecked()
+  })
+
+  it('says which events the filter chips show', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const section = designSystemPage.selectionSection
+    expect(within(section).getByText(/^Showing:/)).toHaveTextContent('Showing: All events')
+
+    await user.click(designSystemPage.selectionControl('button', 'Under 18'))
+    await user.click(designSystemPage.selectionControl('button', 'Open singles'))
+    expect(within(section).getByText(/^Showing:/)).toHaveTextContent(
+      'Showing: Open singles, Under 18',
+    )
+
+    await user.click(designSystemPage.selectionControl('button', 'All events'))
+    expect(within(section).getByText(/^Showing:/)).toHaveTextContent('Showing: All events')
+  })
+
+  it('turns calling players automatically off', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const calling = designSystemPage.selectionControl('switch', 'Call players automatically')
+    expect(calling).toBeChecked()
+
+    await user.click(calling)
+
+    expect(calling).not.toBeChecked()
+  })
+})
+
 describe('Feedback', () => {
   afterEach(() => {
     vi.useRealTimers()
@@ -406,7 +465,7 @@ describe('Overlays', () => {
       within(designSystemPage.paletteGroup('Go to'))
         .getAllByRole('option')
         .map((option) => option.textContent),
-    ).toEqual(['Buttons', 'Fields, dates and choices', 'Feedback', 'Overlays'])
+    ).toEqual(['Buttons', 'Fields, dates and choices', 'Selection', 'Feedback', 'Overlays'])
   })
 
   it('goes to a section from the palette', async () => {

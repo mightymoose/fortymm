@@ -5,6 +5,7 @@ import { ButtonsSection } from './designSystem/ButtonsSection'
 import { FeedbackSection } from './designSystem/FeedbackSection'
 import { FieldsSection } from './designSystem/FieldsSection'
 import { OverlaysSection, WithdrawDialog } from './designSystem/OverlaysSection'
+import { SelectionSection } from './designSystem/SelectionSection'
 
 // The app's copy of the design system's component gallery
 // (references/design-system/ui_kits/components/index.html), built from the
@@ -30,6 +31,7 @@ export function DesignSystem() {
       </header>
       <ButtonsSection onWithdraw={openWithdrawDialog} />
       <FieldsSection opponent={opponent} />
+      <SelectionSection />
       <FeedbackSection />
       <OverlaysSection onWithdraw={openWithdrawDialog} onFindPlayer={findPlayer} />
       <WithdrawDialog ref={withdrawDialog} />
