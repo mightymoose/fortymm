@@ -2,22 +2,8 @@
    references/fortymm-design-system/colors_and_type.css. Keep them in sync. */
 
 @import '../assets/fonts/space-grotesk.css';
-
-@font-face {
-  font-family: 'Bebas Neue';
-  src: url('../assets/fonts/BebasNeue-Regular.ttf') format('truetype');
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
-
-@font-face {
-  font-family: 'JetBrains Mono';
-  src: url('../assets/fonts/JetBrainsMono-VariableFont_wght.ttf') format('truetype-variations');
-  font-weight: 100 800;
-  font-style: normal;
-  font-display: swap;
-}
+@import '../assets/fonts/bebas-neue.css';
+@import '../assets/fonts/jetbrains-mono.css';
 
 :root {
   /* ---------- Palette: ink (backgrounds) ---------- */
