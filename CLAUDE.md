@@ -108,10 +108,11 @@ API's URL.
 ## References
 
 `references/` holds reference material that isn't built or deployed (see
-`references/README.md`). `references/deprecated/fortymm-design-system/` is
-the deprecated FortyMM design system. The app moves to the new design system
-step by step, and until then it still matches the deprecated one. Read its
-`README.md` and `colors_and_type.css` before designing or styling UI.
+`references/README.md`). `references/design-system/` is the FortyMM design
+system (v2.1), and the app matches it. Read its `README.md` and
+`colors_and_type.css` before designing or styling UI.
+`references/deprecated/fortymm-design-system/` is the old design system.
+Don't build from it.
 
 ## api
 
@@ -356,25 +357,43 @@ objects (`e2e/pages/`) as fixtures: `test('...', async ({ homePage }) => ...)`.
 As in the unit tests, page objects expose role-based locators and actions like
 `goto()`, and the specs do the asserting.
 
-The design system page is built from one component per section, in
-`src/pages/designSystem/` (`FormsSection`, `DataDisplaySection` and so on).
-Its page objects follow the same split. `DesignSystemPage` holds the page
-chrome and one object per section in `e2e/pages/designSystem/`, such as
-`designSystemPage.forms.buttonCard`. `ReferenceKitPage` mirrors it with the
-kit's sections in `e2e/pages/referenceKit/`.
+The design system page is a copy of the reference's component gallery
+(`references/design-system/ui_kits/components/index.html`). It has one
+component per gallery section, in `src/pages/designSystem/`
+(`ButtonsSection`, `FieldsSection` and so on). Each section and example
+carries the gallery's `data-testid` (`section-actions`, `ex-variants`).
+
+The app also has the gallery's screenshot test mode (`src/testMode.ts`, see
+the gallery's `TESTING.md`). `?test` turns off transitions, animations and
+the text caret. `?test&only=<testid>` shows one element alone, flush top-left
+with 24px padding. `<html data-fm-ready="true">` marks the page ready. The
+mode's rules are in `kit.css`. Components read `isTestMode()` for the
+mode's behaviour, such as toasts that stay until dismissed.
+
+So one set of page objects serves both pages. `GalleryPage` holds the page
+chrome, `goto(only?)`, and one object per section in
+`e2e/pages/designSystem/`, found by test id. `DesignSystemPage` opens the
+app's page, and `ReferenceKitPage` opens the gallery from disk.
 
 Screenshot tests use `toHaveScreenshot`; their baselines live next to the spec
 in `e2e/<spec>-snapshots/` and only match when taken in the `playwright`
 container, so regenerate them there (`docker compose exec playwright npx
 playwright test --update-snapshots`, with the stack and dev server up as in
-`web-client:e2e`). `design-system.spec.ts` checks the design system page's
-header against the same screenshot as the reference kit's header
-(`references/deprecated/fortymm-design-system/ui_kits/shadcn/index.html`,
-opened from disk with the app's copy swapped in), so the two must render identically.
-Each section has one journey test. It takes every screenshot of the section's
-cards on the app, then the same screenshots on the kit, each in its own
-`test.step`. The checks are soft, so one mismatch doesn't hide the rest. The
-header and the intro are not sections, so each keeps its own pair of tests.
+`web-client:e2e`). `design-system.spec.ts` compares the app's page with the
+gallery. Each section has one journey test. The journey opens each section
+and example with `goto('<testid>')` and takes its screenshots on the app,
+then the same screenshots on the gallery, each in its own `test.step`. The
+two pages share each png, so they must render identically. The checks are
+soft, so one mismatch doesn't hide the rest. The journey reaches hover,
+focus and open states through the real UI on both pages. The header has its
+own pair of tests, with the app's title swapped into the gallery's.
+
+An update run writes the png from whichever page it checks last, and it
+never fails. After `--update-snapshots`, run the suite again without the
+flag. Only that run proves that the app matches the gallery.
+
+`e2e/reference-styles.spec.ts` fails if `src/styles/` stops matching the
+reference (see Styles).
 
 Every run records a trace: `web-client/test-results/<test>/trace.zip` (open
 with `npx playwright show-trace` or https://trace.playwright.dev) and an HTML
@@ -413,15 +432,20 @@ run's, and CI uploads them in the same `playwright-traces` artifact.
 
 The design system's styles apply to the whole app; `main.tsx` imports them:
 
-- `src/styles/tokens.css`: the tokens (CSS variables) from
-  `references/deprecated/fortymm-design-system/colors_and_type.css`, plus the
-  self-hosted fonts in `src/assets/fonts/`.
-- `src/styles/base.css`: the reset, type styles (also applied to `h1`-`h4`,
-  `p` and `code`) and brand utilities from the same file, then the page
-  chrome from the reference shadcn/ui kit: `.page` (the root route's
-  wrapper, `src/pages/Root.tsx`) and `.page-header`
-  (`src/components/PageHeader.tsx`, the title and subtitle every page starts
-  with).
+- `src/styles/tokens.css`: the `:root` tokens (CSS variables) of
+  `references/design-system/colors_and_type.css`, plus the self-hosted fonts
+  in `src/assets/fonts/`.
+- `src/styles/base.css`: the base, type roles, status markers and motion of
+  the same file. Then the app's own chrome: `.page-header`
+  (`src/components/PageHeader.tsx`, Home's title) and the loading screen.
+- `src/styles/kit.css`: the component classes (`fm-*`) of
+  `references/design-system/ui_kits/components/kit.css`.
+- `src/styles/page.css`: the gallery's page chrome (`.doc-*`), with `.page`
+  (the root route's wrapper, `src/pages/Root.tsx`) for its `.doc`.
+
+The reference's parts of these files are copies. Don't edit them.
+`e2e/reference-styles.spec.ts` fails when a copy differs from the reference.
+If the reference changes, copy the change in.
 
 Each font is split into woff2 files by `unicode-range`, so a page downloads
 only the files its text uses. `space-grotesk.css` comes from Fontsource.

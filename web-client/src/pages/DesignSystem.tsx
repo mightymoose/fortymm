@@ -1,5 +1,6 @@
 import { useRef } from 'react'
 import type { ComboboxHandle } from '../components/Combobox'
+import { Icon } from '../components/Icon'
 import { useTestMode } from '../testMode'
 import { ButtonsSection } from './designSystem/ButtonsSection'
 import { ContainersSection } from './designSystem/ContainersSection'
@@ -8,6 +9,12 @@ import { FieldsSection } from './designSystem/FieldsSection'
 import { MatchSection } from './designSystem/MatchSection'
 import { MoreSection } from './designSystem/MoreSection'
 import { OverlaysSection, WithdrawDialog } from './designSystem/OverlaysSection'
+import {
+  beforeAndAfterUrl,
+  scoringScreenUrl,
+  stateMatrixUrl,
+  tournamentScreenUrl,
+} from './designSystem/referenceLinks'
 import { RolesSection } from './designSystem/RolesSection'
 import { SelectionSection } from './designSystem/SelectionSection'
 
@@ -31,6 +38,44 @@ export function DesignSystem() {
           shape for its job: cards hold what stays, notices sit in the text,
           alerts carry a fix, toasts float briefly, tooltips add detail.
           Orange marks actions and selection only.
+        </p>
+        <nav className="doc-toc" aria-label="Sections">
+          <a href="#roles">Roles</a>
+          <a href="#actions">Buttons</a>
+          <a href="#forms">Fields, dates and choices</a>
+          <a href="#selection">Selection</a>
+          <a href="#containers">Containers</a>
+          <a href="#feedback">Feedback</a>
+          <a href="#overlays">Overlays</a>
+          <a href="#match">Match components</a>
+          <a href="#more">More</a>
+        </nav>
+        <p className="fm-notice" style={{ maxWidth: 760 }}>
+          <Icon name="info" />
+          <span>
+            Examples work unless marked <b>Visual only</b>. Nothing is sent
+            anywhere: actions change only this page, and every Undo really
+            reverses that change. Buttons that would need a server say “isn’t
+            wired up in this demo” when pressed.
+          </span>
+        </p>
+        <div className="doc-links">
+          <a className="fm-btn fm-btn--secondary fm-btn--sm" href={stateMatrixUrl}>
+            State matrix
+          </a>
+          <a className="fm-btn fm-btn--secondary fm-btn--sm" href={tournamentScreenUrl}>
+            Tournament screen (desktop)
+          </a>
+          <a className="fm-btn fm-btn--secondary fm-btn--sm" href={scoringScreenUrl}>
+            Player screens (mobile)
+          </a>
+          <a className="fm-btn fm-btn--secondary fm-btn--sm" href={beforeAndAfterUrl}>
+            Before and after
+          </a>
+        </div>
+        <p className="fm-help">
+          The iOS, Android, web admin, marketing and spectator kits are{' '}
+          <b>legacy v2</b> and don’t use these components. Don’t copy from them.
         </p>
       </header>
       <RolesSection />

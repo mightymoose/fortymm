@@ -89,19 +89,19 @@ test('shows no loading screen and checks no health', async ({
   expect(healthRequests).toEqual([])
 })
 
-// Each pair of tests below compares the app and the reference gallery with
-// the same screenshot, so the two must render identically. Update a
-// screenshot with `npx playwright test --update-snapshots` only when the
-// reference itself changes, then run again without the flag: the update
-// writes whichever page it checks last and never fails.
-test.describe('title', () => {
+// The header is compared with the gallery's with the app's title swapped
+// in, so the two must render identically. Update the screenshot with
+// `npx playwright test --update-snapshots` only when the reference itself
+// changes, then run again without the flag: the update writes whichever page
+// it checks last and never fails.
+test.describe('header', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
 
-    await expect(designSystemPage.title).toHaveScreenshot('title.png')
+    await expect(designSystemPage.header).toHaveScreenshot('header.png')
   })
 
-  test("matches the gallery's title with the app's text", async ({
+  test("matches the gallery's header with the app's title", async ({
     designSystemPage,
     referenceKitPage,
   }) => {
@@ -111,24 +111,20 @@ test.describe('title', () => {
     await referenceKitPage.goto()
     await referenceKitPage.setTitleText(title)
 
-    await expect(referenceKitPage.title).toHaveScreenshot('title.png')
+    await expect(referenceKitPage.header).toHaveScreenshot('header.png')
   })
 })
 
-// The intro uses the gallery's own copy, so it's compared with the gallery
-// as is.
-test.describe('intro', () => {
-  test('matches the screenshot', async ({ designSystemPage }) => {
-    await designSystemPage.goto()
-
-    await expect(designSystemPage.intro).toHaveScreenshot('intro.png')
+test('the section links go to every section', async ({ designSystemPage }) => {
+  await designSystemPage.goto()
+  const links = designSystemPage.header.getByRole('navigation', {
+    name: 'Sections',
   })
 
-  test("matches the gallery's intro", async ({ referenceKitPage }) => {
-    await referenceKitPage.goto()
-
-    await expect(referenceKitPage.intro).toHaveScreenshot('intro.png')
-  })
+  for (const link of await links.getByRole('link').all()) {
+    const id = (await link.getAttribute('href'))!.slice(1)
+    await expect(designSystemPage.page.locator(`#${id}`)).toHaveCount(1)
+  }
 })
 
 // Each section's journey takes the same screenshots on the app and then on

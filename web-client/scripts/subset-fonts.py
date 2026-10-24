@@ -19,7 +19,7 @@ from fontTools import subset
 from fontTools.ttLib import TTFont
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE_DIR = ROOT / "references/deprecated/fortymm-design-system/fonts"
+SOURCE_DIR = ROOT / "references/design-system/fonts"
 OUT_DIR = ROOT / "web-client/src/assets/fonts"
 
 

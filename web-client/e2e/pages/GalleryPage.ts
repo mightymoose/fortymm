@@ -14,8 +14,8 @@ import { SelectionSection } from './designSystem/SelectionSection.ts'
 // Both pages open in the reference's test mode (see its TESTING.md).
 export abstract class GalleryPage {
   readonly page: Page
+  readonly header: Locator
   readonly title: Locator
-  readonly intro: Locator
   readonly roles: RolesSection
   readonly buttons: ButtonsSection
   readonly fields: FieldsSection
@@ -36,9 +36,8 @@ export abstract class GalleryPage {
 
   constructor(page: Page) {
     this.page = page
+    this.header = page.locator('header.doc-head')
     this.title = page.getByRole('heading', { level: 1 })
-    // The paragraph right after the title.
-    this.intro = page.getByRole('paragraph').first()
     this.roles = new RolesSection(page)
     this.buttons = new ButtonsSection(page)
     this.fields = new FieldsSection(page)
