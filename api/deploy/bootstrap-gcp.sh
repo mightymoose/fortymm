@@ -153,6 +153,23 @@ for role in roles/run.admin roles/artifactregistry.writer; do
   gc projects add-iam-policy-binding "$project" \
     --member "serviceAccount:$deployer_sa" --role "$role" --condition None >/dev/null
 done
+# cloud-run-deploy creates each Preview's database and api:preview-delete
+# drops it. A custom role, because roles/cloudsql.editor can also change and
+# restart the instance. instances.get lets gcloud wait for the operation.
+preview_db_role=previewDatabases
+preview_db_permissions=cloudsql.databases.create,cloudsql.databases.delete,cloudsql.databases.get,cloudsql.databases.list,cloudsql.instances.get
+if deleted=$(gc iam roles describe "$preview_db_role" --format 'value(deleted)' 2>/dev/null); then
+  # A deleted role still answers describe, and create can't reuse its ID
+  # for weeks, so bring it back.
+  [ "$deleted" != True ] || gc iam roles undelete "$preview_db_role" >/dev/null
+  gc iam roles update "$preview_db_role" --permissions "$preview_db_permissions" >/dev/null
+else
+  gc iam roles create "$preview_db_role" --title "FortyMM Preview databases" \
+    --permissions "$preview_db_permissions" --stage GA >/dev/null
+fi
+gc projects add-iam-policy-binding "$project" \
+  --member "serviceAccount:$deployer_sa" --role "projects/$project/roles/$preview_db_role" \
+  --condition None >/dev/null
 # Moving the `production` tag to a new image deletes it from the old one,
 # which roles/artifactregistry.writer can't do.
 gc artifacts repositories add-iam-policy-binding "$registry_repo" --location "$region" \
@@ -198,14 +215,16 @@ while :; do
   sleep 30
 done
 
-echo "Creating the databases and their users..."
-# Production and the Previews share the instance, each with its own
-# database, user and password secret, read only by its runtime account.
-for db in "fortymm api api-database-password $runtime_sa" \
-  "fortymm_preview api_preview api-preview-database-password $preview_runtime_sa"; do
-  read -r db_name db_user db_secret db_sa <<<"$db"
-  gc sql databases describe "$db_name" --instance "$sql_instance" >/dev/null 2>&1 ||
-    gc sql databases create "$db_name" --instance "$sql_instance" >/dev/null
+echo "Creating the production database and the database users..."
+# Each Preview gets its own database from api/deploy/preview-database on its
+# first deploy, so only production's is made here.
+gc sql databases describe fortymm --instance "$sql_instance" >/dev/null 2>&1 ||
+  gc sql databases create fortymm --instance "$sql_instance" >/dev/null
+# Production and the Previews each have their own user and password secret,
+# read only by their runtime account.
+for db in "api api-database-password $runtime_sa" \
+  "api_preview api-preview-database-password $preview_runtime_sa"; do
+  read -r db_user db_secret db_sa <<<"$db"
   # Never regenerate an existing password: the running API reads it. tr drops
   # openssl's newline, which Cloud Run would keep in PGPASSWORD.
   gc secrets describe "$db_secret" >/dev/null 2>&1 ||
@@ -278,12 +297,12 @@ https://api-$project_number.$region.run.app.
 The Worker secret is in Secret Manager as $worker_secret. CI gives it to the
 API and the Worker, so it never needs to be copied by hand.
 
-The Cloud SQL instance $sql_instance holds the databases fortymm (production,
-user api) and fortymm_preview (every Preview, user api_preview). Their
-passwords are in Secret Manager as api-database-password and
-api-preview-database-password. A db-f1-micro instance with 10 GB of SSD costs
-about \$9-10 a month and never scales to zero, so expect the \$10 budget
-alert most months.
+The Cloud SQL instance $sql_instance holds the database fortymm (production,
+user api). Each Preview gets its own database, fortymm_preview_<name>, on its
+first deploy (user api_preview). The passwords are in Secret Manager as
+api-database-password and api-preview-database-password. A db-f1-micro
+instance with 10 GB of SSD costs about \$9-10 a month and never scales to
+zero, so expect the \$10 budget alert most months.
 
 The budget "$budget_name" emails the billing account's admins and users when
 the month's spend passes \$10 and \$25.
