@@ -3,6 +3,8 @@
 from collections.abc import Iterator
 from typing import Annotated
 
+from alembic import command
+from alembic.config import Config
 from fastapi import Depends, Request
 from sqlalchemy import Engine, create_engine, make_url
 from sqlalchemy.orm import Session, sessionmaker
@@ -14,6 +16,18 @@ def create_database_engine(database_url: str) -> Engine:
     # At most 4 connections: db-f1-micro allows 25, shared by up to 3
     # production instances and the Preview revisions.
     return create_engine(url, pool_size=1, max_overflow=3)
+
+
+def migrate(engine: Engine) -> None:
+    """Apply the migrations the database lacks, as `alembic upgrade head` does.
+
+    Reads alembic.ini from the working directory: api/ in dev and the tests,
+    /app in the production image.
+    """
+    config = Config("alembic.ini")
+    with engine.connect() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "head")
 
 
 def get_session(request: Request) -> Iterator[Session]:

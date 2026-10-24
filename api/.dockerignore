@@ -1,8 +1,10 @@
 # The production image (api/Dockerfile) needs only pyproject.toml, uv.lock,
-# README.md and src/.
+# README.md and src/, plus alembic.ini and migrations/ for its startup migration.
 *
 !pyproject.toml
 !uv.lock
 !README.md
 !src/
+!alembic.ini
+!migrations/
 **/__pycache__

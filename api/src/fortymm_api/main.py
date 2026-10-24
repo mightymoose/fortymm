@@ -9,7 +9,7 @@ from fastapi.routing import APIRoute
 from sqlalchemy.orm import sessionmaker
 
 from fortymm_api import v1
-from fortymm_api.database import create_database_engine
+from fortymm_api.database import create_database_engine, migrate
 
 WORKER_SECRET_HEADER = "X-FortyMM-Worker-Secret"
 
@@ -66,11 +66,16 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if engine is None:
+            yield
+            return
+        # Before serving, so no request sees an old schema. A database that
+        # can't be reached stops the API from starting.
+        migrate(engine)
         try:
             yield
         finally:
-            if engine is not None:
-                engine.dispose()
+            engine.dispose()
 
     app = FastAPI(
         title="FortyMM API",

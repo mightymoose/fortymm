@@ -35,6 +35,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 FROM python:${PYTHON_VERSION}-slim-trixie
 RUN useradd --system --uid 10001 --no-create-home app
 COPY --from=build /app/.venv /app/.venv
+# The API migrates at startup with alembic.ini from its working directory.
+WORKDIR /app
+COPY alembic.ini ./
+COPY migrations ./migrations
 ENV PATH=/app/.venv/bin:$PATH \
     PYTHONUNBUFFERED=1 \
     PORT=8080
