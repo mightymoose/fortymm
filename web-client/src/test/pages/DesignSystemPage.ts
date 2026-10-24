@@ -650,4 +650,31 @@ export class DesignSystemPage {
   get alerts(): HTMLElement[] {
     return within(this.alertCard).getAllByRole('alert')
   }
+
+  get toastCard(): HTMLElement {
+    return within(this.feedbackSection).getByRole('article', {
+      name: 'Sonner / Toast',
+    })
+  }
+
+  get toastCardHeading(): HTMLElement {
+    return within(this.toastCard).getByRole('heading', { level: 3 })
+  }
+
+  // The toast card's toasts, in order.
+  get toasts(): HTMLElement[] {
+    return within(this.toastCard).queryAllByRole('status')
+  }
+
+  // The close button of the toast titled `title`.
+  toastDismissButton(title: string): HTMLElement {
+    return within(this.toastCard).getByRole('button', {
+      name: `Dismiss "${title}"`,
+    })
+  }
+
+  // The toast card's action button named `name`, e.g. "Reload".
+  toastActionButton(name: string): HTMLElement {
+    return within(this.toastCard).getByRole('button', { name })
+  }
 }

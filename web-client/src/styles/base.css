@@ -2610,6 +2610,109 @@ h4, .h4 {
   color: var(--serve-500);
 }
 
+/* =========================================================================
+   Toast (the reference kit's Sonner: .sonner, .sonner-body, .ti, .td,
+   .sonner-actions, .sonner-action, .sonner-close and its variants): a
+   .toast holding a .toast-body (a .toast-title over a .toast-description),
+   an optional .toast-actions row and the .toast-close button. The kit's
+   .sonner-info, .sonner-success and .sonner-error are .toast--info and so
+   on. The buttons take the .button focus outline, keyboard focus only. The
+   kit gives them none.
+   ========================================================================= */
+.toast {
+  position: relative;
+  background: var(--ink-800);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  padding: 14px 16px;
+  box-shadow: var(--shadow-lg);
+  width: 380px;
+  /* Where the card is narrower (e.g. on a phone), the toast narrows to
+     fit. */
+  max-width: 100%;
+}
+
+.toast-body {
+  padding-right: 28px;
+}
+
+.toast-title {
+  font: 500 14px var(--font-ui);
+  margin: 0 0 2px;
+  color: var(--fg-1);
+}
+
+.toast-description {
+  font-size: 12px;
+  color: var(--fg-3);
+  margin: 0;
+}
+
+.toast-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.toast-action {
+  background: var(--fg-1);
+  color: var(--ink-900);
+  border: 0;
+  border-radius: var(--r-sm);
+  padding: 6px 12px;
+  font: 500 12px var(--font-ui);
+  cursor: pointer;
+}
+
+.toast-action:hover {
+  background: var(--fg-2);
+}
+
+.toast-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: var(--fg-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  line-height: 1;
+  transition: background 120ms, color 120ms;
+}
+
+.toast-close:hover {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+
+.toast-action:focus-visible, .toast-close:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+.toast--success {
+  border-left: 3px solid var(--serve-500);
+}
+
+.toast--error {
+  border-left: 3px solid var(--loss);
+}
+
+.toast--info {
+  border-left: 3px solid var(--info);
+}
+
+/* The Sonner / Toast card's .col, with the kit's inline width. */
+.toast-demo {
+  max-width: 440px;
+}
+
 /* A .slider-field whose header is only its label, styled as a
    .field-label, as the kit draws a bare .label over its Sheet's slider.
    The readout is still there for assistive tech, hidden (below). */

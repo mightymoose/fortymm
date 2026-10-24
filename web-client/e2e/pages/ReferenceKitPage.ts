@@ -63,6 +63,7 @@ export class ReferenceKitPage {
   readonly feedbackSectionHeading: Locator
   readonly feedbackSectionLead: Locator
   readonly alertCard: Locator
+  readonly toastCard: Locator
   constructor(page: Page) {
     this.page = page
     this.header = page.getByRole('banner')
@@ -289,6 +290,13 @@ export class ReferenceKitPage {
       has: page.getByRole('heading', {
         level: 3,
         name: 'Alert',
+        exact: true,
+      }),
+    })
+    this.toastCard = feedbackSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Sonner / Toast',
         exact: true,
       }),
     })

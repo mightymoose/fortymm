@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Accordion, type AccordionItem } from '../components/Accordion'
 import { Alert } from '../components/Alert'
 import { AspectRatio } from '../components/AspectRatio'
@@ -37,6 +38,7 @@ import { Switch } from '../components/Switch'
 import { type Column, Table } from '../components/Table'
 import { type Tab, Tabs } from '../components/Tabs'
 import { Textarea } from '../components/Textarea'
+import { Toast, type ToastAction, type ToastVariant } from '../components/Toast'
 import { Tooltip } from '../components/Tooltip'
 import { Toggle } from '../components/Toggle'
 import { ToggleGroup, ToggleGroupItem } from '../components/ToggleGroup'
@@ -254,7 +256,48 @@ const standingColumns: Column<Standing>[] = [
   },
 ]
 
+// The Sonner / Toast card's toasts. Only the first has an action.
+const toasts: {
+  id: string
+  variant: ToastVariant
+  title: string
+  description: string
+  action?: ToastAction
+}[] = [
+  {
+    id: 'update',
+    variant: 'info',
+    title: 'A new version of FortyMM is ready',
+    description: 'Reload to get the latest update.',
+    action: { label: 'Reload', onClick: () => {} },
+  },
+  {
+    id: 'logged',
+    variant: 'success',
+    title: 'Match logged',
+    description: 'Rating: 1620 (+18)',
+  },
+  {
+    id: 'save-failed',
+    variant: 'error',
+    title: "Couldn't save",
+    description: 'Try again — your changes are still in the editor.',
+  },
+  {
+    id: 'reminder',
+    variant: 'info',
+    title: 'Reminder',
+    description: "You're up next on Court 3.",
+  },
+]
+
 export function DesignSystem() {
+  const [shownToasts, setShownToasts] = useState(toasts)
+
+  function dismissToast(id: string) {
+    setShownToasts((current) => current.filter((toast) => toast.id !== id))
+  }
+
   return (
     <>
       <PageHeader title="Design System" subtitle="FortyMM · tokens · components" />
@@ -775,6 +818,23 @@ export function DesignSystem() {
             <Alert variant="success" title="Match logged" headingLevel={4}>
               Your rating moved from 1602 to 1620 (+18).
             </Alert>
+          </div>
+        </ComponentCard>
+        {/* The kit's tag names four variants but shows three, info twice.
+            Dismissing a toast removes it. Its action dismisses it too, and
+            Reload doesn't reload the page. */}
+        <ComponentCard title="Sonner / Toast" tag="4 variants">
+          <div className="col toast-demo">
+            {shownToasts.map((toast) => (
+              <Toast
+                key={toast.id}
+                variant={toast.variant}
+                title={toast.title}
+                description={toast.description}
+                action={toast.action}
+                onDismiss={() => dismissToast(toast.id)}
+              />
+            ))}
           </div>
         </ComponentCard>
       </Section>
