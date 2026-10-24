@@ -24,6 +24,8 @@ test('shows the loading screen until health answers, then fades it out over the 
   await expect(homePage.loadingScreen).toBeVisible()
   await expect(homePage.loadingScreen).toContainText('FortyMM')
   await expect(homePage.title).toBeHidden()
+  // Motion is feedback only, so nothing moves while it waits.
+  expect(await page.evaluate('document.getAnimations().length')).toBe(0)
 
   // A string, because the e2e tsconfig has no DOM types.
   const fadeEnded = page.evaluate(`new Promise((resolve) => {

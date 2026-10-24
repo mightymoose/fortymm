@@ -53,11 +53,10 @@ a:hover{color:var(--ball-200)}
 
 /* =========================================================================
    Loading screen (src/components/LoadingScreen.tsx), shown in place of the
-   page on a full page load
+   page on a full page load: the wordmark and one status line. Nothing moves
+   until the fade-out, because v2.1 motion is feedback only.
    ========================================================================= */
 .loading-screen {
-  --loading-screen-bounce: 120px;
-  --loading-screen-bounce-duration: 0.9s;
   position: fixed;
   inset: 0;
   z-index: 1000;
@@ -66,11 +65,10 @@ a:hover{color:var(--ball-200)}
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 48px 24px 96px;
+  gap: var(--s-4);
+  padding: var(--s-6);
   background: var(--bg-app);
-  color: var(--fg-1);
-  font-family: var(--font-ui);
-  overflow: hidden;
+  text-align: center;
 }
 
 /* Fades out over the page once it's ready, then LoadingScreen.tsx removes
@@ -80,176 +78,19 @@ a:hover{color:var(--ball-200)}
   pointer-events: none;
 }
 
-.loading-screen-body {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 32px;
-}
-
-.loading-screen-arena {
-  position: relative;
-  width: 160px;
-  height: 172px;
-}
-
-/* The table surface. The ball rests exactly on its top edge. */
-.loading-screen-surface {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  height: 3px;
-  border-radius: 999px;
-  background: var(--chalk-500);
-}
-
-/* Where the ball hits the surface: full and bright at contact, faint and
-   narrow at the top of the bounce. */
-.loading-screen-contact {
-  position: absolute;
-  left: 50%;
-  bottom: 0;
-  width: 64px;
-  height: 3px;
-  margin-left: -32px;
-  border-radius: 999px;
-  background: var(--ball-500);
-  animation: loading-screen-contact var(--loading-screen-bounce-duration) infinite;
-}
-
-.loading-screen-ball {
-  position: absolute;
-  left: 50%;
-  bottom: 3px;
-  width: 40px;
-  height: 40px;
-  margin-left: -20px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 34% 30%, var(--ball-400) 0 14%, var(--ball-500) 34%);
-  box-shadow: 0 0 10px rgba(255,122,26,0.35);
-  transform-origin: 50% 100%;
-  animation: loading-screen-bounce var(--loading-screen-bounce-duration) infinite;
-}
-
-.loading-screen-text {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-}
-
 .loading-screen-wordmark {
-  font-family: var(--font-display);
-  font-size: 40px;
-  line-height: 1;
+  font: 400 40px/1 var(--font-display);
   letter-spacing: 0.04em;
-  text-transform: uppercase;
   color: var(--fg-1);
 }
 
 .loading-screen-status {
-  font-family: var(--font-num);
-  font-size: 13px;
-  letter-spacing: 0.02em;
+  margin: 0;
+  max-width: 30ch;
+  font: 400 var(--text-sm)/var(--lh-normal) var(--font-ui);
   color: var(--fg-3);
-}
-
-.loading-screen-footer {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 32px;
-  text-align: center;
-  font-size: 13px;
-  color: var(--fg-3);
-}
-
-/* Gravity: the ball slows on the way up and speeds up on the way down, then
-   squashes flat on the surface for the first frames of each cycle. */
-@keyframes loading-screen-bounce {
-  0%, 100% {
-    transform: translateY(0) scale(1.18, 0.82);
-  }
-  6% {
-    transform: translateY(0) scale(1.18, 0.82);
-    animation-timing-function: var(--ease-out);
-  }
-  14% {
-    transform: translateY(-12px) scale(0.92, 1.08);
-    animation-timing-function: var(--ease-out);
-  }
-  50% {
-    transform: translateY(calc(-1 * var(--loading-screen-bounce))) scale(1, 1);
-    animation-timing-function: cubic-bezier(0.55, 0, 1, 0.45);
-  }
-  94% {
-    transform: translateY(-4px) scale(0.94, 1.06);
-  }
-}
-
-@keyframes loading-screen-contact {
-  0%, 100% {
-    transform: scaleX(1);
-    opacity: 1;
-  }
-  10% {
-    transform: scaleX(1);
-    opacity: 1;
-    animation-timing-function: var(--ease-out);
-  }
-  50% {
-    transform: scaleX(0.3);
-    opacity: 0.15;
-    animation-timing-function: cubic-bezier(0.55, 0, 1, 0.45);
-  }
 }
 
 @keyframes loading-screen-out {
   to { opacity: 0; }
-}
-
-@media (max-width: 640px) {
-  .loading-screen {
-    --loading-screen-bounce: 96px;
-    --loading-screen-bounce-duration: 0.85s;
-    padding: 48px 16px 96px;
-  }
-
-  .loading-screen-body {
-    gap: 28px;
-  }
-
-  .loading-screen-arena {
-    width: 128px;
-    height: 148px;
-  }
-
-  .loading-screen-text {
-    gap: 10px;
-  }
-
-  .loading-screen-wordmark {
-    font-size: 34px;
-  }
-
-  .loading-screen-footer {
-    bottom: 40px;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .loading-screen-ball {
-    animation: loading-screen-pulse 1.4s ease-in-out infinite;
-    transform-origin: 50% 50%;
-  }
-
-  .loading-screen-contact {
-    animation: none;
-  }
-}
-
-@keyframes loading-screen-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.6; transform: scale(0.88); }
 }
