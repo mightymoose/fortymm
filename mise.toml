@@ -95,7 +95,7 @@ docker compose run --rm --no-deps -T api uv run --locked pytest
 """
 
 [tasks."api:revision"]
-description = "Draft a migration in api/migrations/versions/ from the models' changes (autogenerate); a person reviews every draft before it's committed"
+description = "Draft a migration in api/migrations/versions/ from the models' changes (autogenerate). A person reviews every draft before they commit it."
 usage = 'arg "<message>" help="What the migration does, e.g. add accounts"'
 # Upgrades first, because autogenerate compares the models with the database.
 run = '''

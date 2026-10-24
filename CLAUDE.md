@@ -144,9 +144,9 @@ through FastAPI's `TestClient`).
   `Session` stays SQLAlchemy's. Use `relationship()` from `models.py`. It
   defaults to `lazy="raise"`, so a lazy load fails and every load shows in
   its query. Code uses the mapped classes directly. The one extra type will
-  be `CurrentAccount = GuestAccount | VerifiedAccount`. The session
-  dependency reads the request's account into it, because a nullable
-  `email` can't tell a guest from a verified account.
+  be `CurrentAccount = GuestAccount | VerifiedAccount`. The dependency that
+  reads the request's `AuthSession` loads the account into it, because a
+  nullable `email` can't tell a guest from a verified account.
 - `/v1/health` runs `SELECT 1` and returns `{"data": {"database": "ok"}}`.
   The healthchecks, `api:smoke`, the 403 check and the post-deploy suite use
   it.
@@ -188,7 +188,7 @@ production image.
   `op.execute(...)`.
 - `api:revision` drafts a revision with autogenerate from the models'
   changes. A person reviews every draft before commit. ruff fixes and
-  formats the draft, so it passes `api:ci`.
+  formats the draft, so it passes the ruff checks in `api:ci`.
 - `api:ci` runs `alembic check`, which fails when a model changes without a
   revision.
 
