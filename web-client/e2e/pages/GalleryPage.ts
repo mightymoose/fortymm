@@ -1,5 +1,6 @@
 import type { Locator, Page } from '@playwright/test'
 import { ButtonsSection } from './designSystem/ButtonsSection.ts'
+import { FeedbackSection } from './designSystem/FeedbackSection.ts'
 
 // The design system gallery, as the app's /design-system or the reference
 // draws it: the page chrome, plus one object per section for its examples.
@@ -9,6 +10,10 @@ export abstract class GalleryPage {
   readonly title: Locator
   readonly intro: Locator
   readonly buttons: ButtonsSection
+  readonly feedback: FeedbackSection
+  // Where raised toasts show, bottom centre, outside every section. Found
+  // by its class, because the gallery's region has no name to find it by.
+  readonly toasts: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -16,6 +21,20 @@ export abstract class GalleryPage {
     // The paragraph right after the title.
     this.intro = page.getByRole('paragraph').first()
     this.buttons = new ButtonsSection(page)
+    this.feedback = new FeedbackSection(page)
+    this.toasts = page.locator('.fm-toast-region')
+  }
+
+  // The button named `name` on a raised toast, e.g. "Undo".
+  toastButton(name: string): Locator {
+    return this.toasts.getByRole('button', { name, exact: true })
+  }
+
+  // Clicks `trigger` and waits until the toast it raises, `message`, shows.
+  // Toasts stay until dismissed in test mode.
+  async raiseToast(trigger: Locator, message: string): Promise<void> {
+    await trigger.click()
+    await this.toasts.getByText(message, { exact: true }).waitFor()
   }
 
   // The page's URL with `query` added.

@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from 'react'
+import { useId, type CSSProperties, type ReactNode } from 'react'
 
 // One section of the design system page, as the reference gallery draws its
 // `.doc-cat`: a heading, a lead line, then its examples.
@@ -30,16 +30,19 @@ export function GallerySection({
 
 // One example in a section, as the gallery draws its `.doc-ex`: a title and
 // a description beside the demo. `testId` is the gallery's, e.g.
-// `ex-variants`.
+// `ex-variants`. `stageStyle` copies an inline style the gallery puts on an
+// example's `.doc-stage`.
 export function Example({
   testId,
   title,
   description,
+  stageStyle,
   children,
 }: {
   testId: string
   title: string
   description?: ReactNode
+  stageStyle?: CSSProperties
   children: ReactNode
 }) {
   const titleId = useId()
@@ -49,7 +52,9 @@ export function Example({
         <h3 id={titleId}>{title}</h3>
         {description && <p>{description}</p>}
       </header>
-      <div className="doc-stage">{children}</div>
+      <div className="doc-stage" style={stageStyle}>
+        {children}
+      </div>
     </article>
   )
 }

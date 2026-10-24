@@ -1,5 +1,6 @@
 import { useTestMode } from '../testMode'
 import { ButtonsSection } from './designSystem/ButtonsSection'
+import { FeedbackSection } from './designSystem/FeedbackSection'
 
 // The app's copy of the design system's component gallery
 // (references/design-system/ui_kits/components/index.html), built from the
@@ -20,6 +21,7 @@ export function DesignSystem() {
         </p>
       </header>
       <ButtonsSection />
+      <FeedbackSection />
     </>
   )
 }

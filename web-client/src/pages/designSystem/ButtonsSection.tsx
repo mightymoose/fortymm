@@ -1,45 +1,19 @@
-import { useEffect, useId, useState } from 'react'
+import { useId } from 'react'
 import { Button } from '../../components/Button'
 import { Icon } from '../../components/Icon'
+import { useToast } from '../../components/toastContext'
+import { BusyDemoButton } from './BusyDemoButton'
 import { Example, GallerySection } from './GallerySection'
-
-// How long a demo button stays busy, as in the reference gallery.
-export const BUSY_MS = 1400
 
 // The reference's state matrix, which the app doesn't copy.
 const stateMatrixUrl =
   'https://github.com/mightymoose/fortymm/blob/main/references/design-system/ui_kits/components/states.html'
 
-// A button that shows `busyLabel` for BUSY_MS after a click, as if it were
-// saving. Nothing is sent anywhere.
-function BusyDemoButton({
-  variant,
-  label,
-  busyLabel,
-}: {
-  variant: 'primary' | 'secondary'
-  label: string
-  busyLabel: string
-}) {
-  const [busy, setBusy] = useState(false)
-
-  useEffect(() => {
-    if (!busy) return
-    const id = setTimeout(() => setBusy(false), BUSY_MS)
-    return () => clearTimeout(id)
-  }, [busy])
-
-  return (
-    <Button variant={variant} busy={busy} onClick={() => setBusy(true)}>
-      {busy ? busyLabel : label}
-    </Button>
-  )
-}
-
 // The design system page's Buttons section: the reference gallery's
 // `section-actions`.
 export function ButtonsSection() {
   const reasonId = useId()
+  const showToast = useToast()
   return (
     <GallerySection
       id="actions"
@@ -85,6 +59,7 @@ export function ButtonsSection() {
             variant="primary"
             label="Save result"
             busyLabel="Saving…"
+            onDone={() => showToast('Result saved. Okafor-Adeyemi ▲ +9')}
           />
           <BusyDemoButton
             variant="secondary"

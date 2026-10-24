@@ -15,6 +15,19 @@ async function screenshotStep(
   })
 }
 
+// Checks the whole viewport against the screenshot `name`, as
+// screenshotStep() does, for a raised toast: it sits bottom centre, outside
+// the example that raised it, and its shadow reaches past its edges.
+async function pageScreenshotStep(
+  title: string,
+  gallery: GalleryPage,
+  name: string,
+): Promise<void> {
+  await test.step(title, async () => {
+    await expect.soft(gallery.page).toHaveScreenshot(name)
+  })
+}
+
 // Focuses `control` and checks it and its focus ring, which reaches 4px
 // past its edges, against the screenshot `name`, as screenshotStep() does.
 async function focusedScreenshotStep(
@@ -158,6 +171,17 @@ async function buttonsScreenshots(gallery: GalleryPage): Promise<void> {
     buttons.button('Call to table'),
     'button-primary-focused.png',
   )
+
+  await gallery.goto('ex-loading-and-disabled')
+  await gallery.raiseToast(
+    buttons.button('Save result'),
+    'Result saved. Okafor-Adeyemi ▲ +9',
+  )
+  await pageScreenshotStep(
+    'Save result, saved',
+    gallery,
+    'buttons-save-result-toast.png',
+  )
 }
 
 test('the Buttons section matches its screenshots and the gallery', async ({
@@ -166,4 +190,86 @@ test('the Buttons section matches its screenshots and the gallery', async ({
 }) => {
   await test.step('app', () => buttonsScreenshots(designSystemPage))
   await test.step('gallery', () => buttonsScreenshots(referenceKitPage))
+})
+
+async function feedbackScreenshots(gallery: GalleryPage): Promise<void> {
+  const feedback = gallery.feedback
+  await gallery.goto(feedback.testId)
+  await screenshotStep('heading', feedback.heading, 'feedback-heading.png')
+  await screenshotStep('lead', feedback.lead, 'feedback-lead.png')
+
+  await gallery.goto('ex-inline-notice')
+  await screenshotStep(
+    'Inline notice',
+    feedback.inlineNotice,
+    'feedback-inline-notice.png',
+  )
+
+  await gallery.goto('ex-status-set')
+  await screenshotStep('Status set', feedback.statusSet, 'feedback-status-set.png')
+
+  await gallery.goto('ex-toast')
+  await screenshotStep('Toast', feedback.toast, 'feedback-toast.png')
+  await gallery.raiseToast(
+    feedback.button('Call Chen vs Ali'),
+    'Chen vs Ali called to Table 1',
+  )
+  await pageScreenshotStep(
+    'Call Chen vs Ali, toast raised',
+    gallery,
+    'feedback-toast-raised.png',
+  )
+  await hoveredScreenshotStep(
+    'Undo, hovered',
+    gallery.toastButton('Undo'),
+    'feedback-toast-undo-hovered.png',
+  )
+  await hoveredScreenshotStep(
+    'Dismiss, hovered',
+    gallery.toastButton('Dismiss'),
+    'feedback-toast-dismiss-hovered.png',
+  )
+  await gallery.toastButton('Undo').click()
+  await expect(gallery.toasts).toBeEmpty()
+  await screenshotStep('Toast, undone', feedback.toast, 'feedback-toast-undone.png')
+  await gallery.raiseToast(feedback.button('Mark Table 4 free'), 'Table 4 marked free')
+  await pageScreenshotStep(
+    'Mark Table 4 free, toast raised',
+    gallery,
+    'feedback-toast-no-undo-raised.png',
+  )
+
+  await gallery.goto('ex-warning-and-error')
+  await screenshotStep(
+    'Warning and error',
+    feedback.warningAndError,
+    'feedback-warning-and-error.png',
+  )
+  await gallery.raiseToast(
+    feedback.button('Choose another time'),
+    '“Choose another time” isn’t wired up in this demo',
+  )
+  await pageScreenshotStep(
+    'Choose another time, demo toast raised',
+    gallery,
+    'feedback-demo-toast-raised.png',
+  )
+  await gallery.toastButton('Dismiss').click()
+  await gallery.raiseToast(
+    feedback.button('Move doubles to 12:40'),
+    'Doubles moved to 12:40',
+  )
+  await screenshotStep(
+    'Warning and error, resolved',
+    feedback.warningAndError,
+    'feedback-warning-and-error-resolved.png',
+  )
+}
+
+test('the Feedback section matches its screenshots and the gallery', async ({
+  designSystemPage,
+  referenceKitPage,
+}) => {
+  await test.step('app', () => feedbackScreenshots(designSystemPage))
+  await test.step('gallery', () => feedbackScreenshots(referenceKitPage))
 })

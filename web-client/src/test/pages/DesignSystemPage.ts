@@ -37,4 +37,28 @@ export class DesignSystemPage {
   button(name: string): HTMLElement {
     return within(this.buttonsSection).getByRole('button', { name })
   }
+
+  get feedbackSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Feedback' })
+  }
+
+  // The Feedback section's button named `name`, e.g. "Mark Table 4 free".
+  feedbackButton(name: string): HTMLElement {
+    return within(this.feedbackSection).getByRole('button', { name })
+  }
+
+  // The Feedback section's example titled `title`, e.g. "Warning and error".
+  feedbackExample(title: string): HTMLElement {
+    return within(this.feedbackSection).getByRole('article', { name: title })
+  }
+
+  // Where the app's toasts show, bottom centre.
+  get toastRegion(): HTMLElement {
+    return screen.getByRole('status', { name: 'Notifications' })
+  }
+
+  // The button named `name` on the shown toast, e.g. "Undo".
+  toastButton(name: string): HTMLElement {
+    return within(this.toastRegion).getByRole('button', { name })
+  }
 }
