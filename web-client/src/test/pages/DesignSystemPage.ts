@@ -606,4 +606,22 @@ export class DesignSystemPage {
   menu(name: string): HTMLElement {
     return within(this.menuCard).getByRole('menu', { name })
   }
+
+  get commandCard(): HTMLElement {
+    return within(this.overlaysSection).getByRole('article', {
+      name: 'Command',
+    })
+  }
+
+  get commandCardHeading(): HTMLElement {
+    return within(this.commandCard).getByRole('heading', { level: 3 })
+  }
+
+  get commandInput(): HTMLElement {
+    return within(this.commandCard).getByRole('combobox', { name: 'Command' })
+  }
+
+  get commandList(): HTMLElement {
+    return within(this.commandCard).getByRole('listbox', { name: 'Command' })
+  }
 }

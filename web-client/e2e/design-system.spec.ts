@@ -2749,6 +2749,94 @@ test.describe('Dropdown Menu · Context Menu', () => {
   })
 })
 
+// Nothing is hovered or focused first, so the palette shows its first
+// command active, as in the kit, with no focus ring.
+test.describe('Command card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.commandCard).toHaveScreenshot(
+      'command-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.commandCard).toHaveScreenshot(
+      'command-card.png',
+    )
+  })
+})
+
+// The kit's palette is static, so the tests below other than the first
+// command's highlight are the app's alone.
+test.describe('Command', () => {
+  const none = 'rgba(0, 0, 0, 0)'
+  const hover = 'rgba(255, 255, 255, 0.04)'
+
+  test.beforeEach(async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+  })
+
+  // The screenshot can't see the highlight: --bg-hover is white at 4%,
+  // under its color threshold.
+  test('the first command shows active', async ({ designSystemPage }) => {
+    const log = designSystemPage.commandOption('Log a match')
+    await expect(log).toHaveAttribute('aria-selected', 'true')
+    await expect(log).toHaveCSS('background-color', hover)
+    await expect(
+      designSystemPage.commandOption('Find a player'),
+    ).toHaveCSS('background-color', none)
+    await expect(designSystemPage.commandInput).toHaveAttribute(
+      'aria-activedescendant',
+      (await log.getAttribute('id'))!,
+    )
+  })
+
+  // Natively the arrows move the caret, and the page doesn't scroll.
+  test("the arrow keys move the active command, and the focus doesn't leave the input", async ({
+    designSystemPage,
+    page,
+  }) => {
+    const input = designSystemPage.commandInput
+    await input.focus()
+
+    for (const [key, name] of [
+      ['ArrowDown', 'Find a player'],
+      ['ArrowUp', 'Log a match'],
+      ['ArrowUp', 'April Spring Open · yesterday'],
+      ['ArrowDown', 'Log a match'],
+    ]) {
+      await page.keyboard.press(key)
+      const option = designSystemPage.commandOption(name)
+      await expect(option, key).toHaveAttribute('aria-selected', 'true')
+      await expect(option, key).toHaveCSS('background-color', hover)
+      await expect(input, key).toHaveAttribute(
+        'aria-activedescendant',
+        (await option.getAttribute('id'))!,
+      )
+      await expect(input, key).toBeFocused()
+    }
+    await expect(
+      designSystemPage.commandList.getByRole('option', { selected: true }),
+    ).toHaveCount(1)
+  })
+
+  test('the pointer moves the active command', async ({
+    designSystemPage,
+  }) => {
+    const find = designSystemPage.commandOption('Find a player')
+
+    await find.hover()
+
+    await expect(find).toHaveAttribute('aria-selected', 'true')
+    await expect(
+      designSystemPage.commandOption('Log a match'),
+    ).toHaveAttribute('aria-selected', 'false')
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -3423,6 +3511,34 @@ test.describe('on a phone', () => {
       expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width - 33)
     }
     expect(context.y).toBeGreaterThan(dropdown.y + dropdown.height)
+  })
+
+  // The palette is wider than its frame's content, so it narrows to fit,
+  // and its longer rows wrap.
+  test('the command card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.commandCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.commandCard.boundingBox())!
+    const box = (await designSystemPage.commandBox.boundingBox())!
+    // Inside the card's 1px border and 32px padding on each side.
+    expect(box.x).toBeGreaterThanOrEqual(card.x + 33)
+    expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width - 33)
+    // The labels wrap, but each shortcut stays on one line.
+    const first = (await designSystemPage
+      .commandOption('Log a match')
+      .locator('kbd')
+      .boundingBox())!
+    for (const kbd of await designSystemPage.commandList.locator('kbd').all()) {
+      expect((await kbd.boundingBox())!.height).toBe(first.height)
+    }
   })
 })
 

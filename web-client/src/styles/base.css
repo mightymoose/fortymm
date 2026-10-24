@@ -2522,6 +2522,28 @@ h4, .h4 {
   }
 }
 
+/* =========================================================================
+   Command (the reference kit's Command, with its .cmd-list .menu-label): the
+   .cmd box, .cmd-input row and .cmd-list (above, shared with the Combobox)
+   holding groups, each a .menu-label (above, shared with the Menu) over its
+   .menu-item options. The active option is the kit's inline highlight, the
+   .menu-item[aria-selected="true"] rule above.
+   ========================================================================= */
+.cmd-list .menu-label {
+  padding-top: 8px;
+}
+
+/* Where a row is narrow (e.g. on a phone), its label wraps, but its
+   shortcut stays on one line. */
+.cmd-list .kbd {
+  white-space: nowrap;
+}
+
+/* The kit's frame for its palette, with its inline minimum height. */
+.mock-bg--command {
+  min-height: 340px;
+}
+
 /* A .slider-field whose header is only its label, styled as a
    .field-label, as the kit draws a bare .label over its Sheet's slider.
    The readout is still there for assistive tech, hidden (below). */

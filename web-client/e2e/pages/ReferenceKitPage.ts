@@ -59,6 +59,7 @@ export class ReferenceKitPage {
   readonly tooltipCard: Locator
   readonly hoverCardCard: Locator
   readonly menuCard: Locator
+  readonly commandCard: Locator
   constructor(page: Page) {
     this.page = page
     this.header = page.getByRole('banner')
@@ -266,6 +267,13 @@ export class ReferenceKitPage {
       has: page.getByRole('heading', {
         level: 3,
         name: 'Dropdown Menu · Context Menu',
+        exact: true,
+      }),
+    })
+    this.commandCard = overlaysSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Command',
         exact: true,
       }),
     })

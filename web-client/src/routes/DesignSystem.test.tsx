@@ -1052,6 +1052,50 @@ describe('DesignSystem', () => {
     ).toEqual(['Reschedule…', 'Print bracket'])
   })
 
+  it('has a Command card after the Dropdown Menu · Context Menu card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.commandCardHeading).toHaveTextContent('Command')
+    expect(designSystemPage.commandCard).toHaveTextContent('cmd+k palette')
+    expect(
+      designSystemPage.menuCard.compareDocumentPosition(
+        designSystemPage.commandCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's palette, open on Log a match", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const input = designSystemPage.commandInput
+    expect(designSystemPage.commandCard).toHaveTextContent('Command (⌘K)')
+    expect(input).toHaveValue('')
+    expect(input).toHaveAttribute('placeholder', 'Type a command or search…')
+    const list = within(designSystemPage.commandList)
+    expect(
+      list
+        .getAllByRole('group')
+        .map((group) => [
+          group.textContent?.match(/^(Suggestions|Recent)/)?.[0],
+          within(group)
+            .getAllByRole('option')
+            .map((option) => option.textContent),
+        ]),
+    ).toEqual([
+      [
+        'Suggestions',
+        ['Log a match⌘ L', 'Find a player⌘ P', 'Open tournament admin⌘ T'],
+      ],
+      [
+        'Recent',
+        ['Nguyen vs. Okafor · 2h ago', 'April Spring Open · yesterday'],
+      ],
+    ])
+    const active = list.getByRole('option', { selected: true })
+    expect(active).toHaveAccessibleName('Log a match')
+    expect(input).toHaveAttribute('aria-activedescendant', active.id)
+  })
+
   it.each([
     {
       title: 'April Spring Open',

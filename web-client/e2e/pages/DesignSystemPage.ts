@@ -96,6 +96,10 @@ export class DesignSystemPage {
   readonly menuCard: Locator
   readonly dropdownMenu: Locator
   readonly contextMenu: Locator
+  readonly commandCard: Locator
+  readonly commandBox: Locator
+  readonly commandInput: Locator
+  readonly commandList: Locator
   constructor(page: Page) {
     this.page = page
     this.loadingScreen = page.getByRole('status', { name: 'Loading FortyMM' })
@@ -331,6 +335,17 @@ export class DesignSystemPage {
       name: 'Match actions',
     })
     this.contextMenu = this.menuCard.getByRole('menu', { name: 'Bracket' })
+    this.commandCard = this.overlaysSection.getByRole('article', {
+      name: 'Command',
+      exact: true,
+    })
+    this.commandBox = this.commandCard.locator('.cmd')
+    this.commandInput = this.commandCard.getByRole('combobox', {
+      name: 'Command',
+    })
+    this.commandList = this.commandCard.getByRole('listbox', {
+      name: 'Command',
+    })
   }
 
   // A component card's title, in its header.
@@ -543,6 +558,11 @@ export class DesignSystemPage {
   // The dropdown menu's item named `name`, e.g. "Rematch".
   dropdownItem(name: string): Locator {
     return this.dropdownMenu.getByRole('menuitem', { name, exact: true })
+  }
+
+  // The command palette's option named `name`, e.g. "Log a match".
+  commandOption(name: string): Locator {
+    return this.commandList.getByRole('option', { name, exact: true })
   }
 
   // Clicks the middle of the text `name` in `card` with a plain mouse click.

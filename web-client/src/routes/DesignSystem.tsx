@@ -8,6 +8,7 @@ import { Button } from '../components/Button'
 import { Card } from '../components/Card'
 import { Checkbox } from '../components/Checkbox'
 import { Combobox, type ComboboxOption } from '../components/Combobox'
+import { Command, type CommandGroup } from '../components/Command'
 import { ComponentCard } from '../components/ComponentCard'
 import { DatePicker } from '../components/DatePicker'
 import { Dialog } from '../components/Dialog'
@@ -149,6 +150,37 @@ const bracketActions: MenuEntry[] = [
   { kind: 'separator' },
   { kind: 'item', label: 'Reschedule…' },
   { kind: 'item', label: 'Print bracket' },
+]
+
+// The Command card's palette.
+const commands: CommandGroup[] = [
+  {
+    heading: 'Suggestions',
+    items: [
+      {
+        id: 'log-match',
+        label: 'Log a match',
+        shortcut: { label: '⌘ L', keys: 'Meta+L' },
+      },
+      {
+        id: 'find-player',
+        label: 'Find a player',
+        shortcut: { label: '⌘ P', keys: 'Meta+P' },
+      },
+      {
+        id: 'tournament-admin',
+        label: 'Open tournament admin',
+        shortcut: { label: '⌘ T', keys: 'Meta+T' },
+      },
+    ],
+  },
+  {
+    heading: 'Recent',
+    items: [
+      { id: 'nguyen-okafor', label: 'Nguyen vs. Okafor · 2h ago' },
+      { id: 'april-spring-open', label: 'April Spring Open · yesterday' },
+    ],
+  },
 ]
 
 type Standing = {
@@ -705,6 +737,16 @@ export function DesignSystem() {
               <span className="mock-label">Context (right-click)</span>
               <Menu label="Bracket" entries={bracketActions} />
             </div>
+          </div>
+        </ComponentCard>
+        <ComponentCard title="Command" tag="cmd+k palette">
+          <div className="mock-bg mock-bg--command">
+            <span className="mock-label">Command (⌘K)</span>
+            <Command
+              label="Command"
+              placeholder="Type a command or search…"
+              groups={commands}
+            />
           </div>
         </ComponentCard>
       </Section>
