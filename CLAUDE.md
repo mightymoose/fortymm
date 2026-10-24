@@ -140,6 +140,9 @@ through FastAPI's `TestClient`).
 - `services/`: the business logic, one module per area, such as
   `services/sessions.py`. A service takes an ORM `Session` and plain values,
   and returns domain types. It never sees a request, a response or a cookie.
+  `tests/services/` tests each rule by calling the service directly, on a
+  `migrated_database`. A route's tests check only its HTTP work, such as
+  the status, the headers, the cookie and the body's shape.
   [.claude/rules/business-logic-in-services.md](.claude/rules/business-logic-in-services.md)
   says why.
 - `database.py`: the Postgres connections, through SQLAlchemy 2.0 and the

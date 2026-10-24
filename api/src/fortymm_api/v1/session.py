@@ -4,8 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Response
 from pydantic import BaseModel
 
-from fortymm_api.accounts import GuestAccount
-from fortymm_api.auth import SESSION_COOKIE, SESSION_MAX_AGE, SessionToken
+from fortymm_api.auth import SessionToken, set_session_cookie
 from fortymm_api.database import DatabaseSession
 from fortymm_api.services import sessions
 
@@ -37,18 +36,6 @@ def start_session(
     """
     started = sessions.start_session(session, token)
     response.headers["Cache-Control"] = "no-store"
-    response.set_cookie(
-        SESSION_COOKIE,
-        started.token,
-        max_age=SESSION_MAX_AGE,
-        path="/",
-        secure=True,
-        httponly=True,
-        samesite="lax",
-    )
-    kind: Literal["guest", "verified"] = (
-        "guest" if isinstance(started.account, GuestAccount) else "verified"
-    )
-    return SessionResponse(
-        data=SessionData(account=SessionAccount(id=started.account.id, kind=kind))
-    )
+    set_session_cookie(response, started.token)
+    account = SessionAccount(id=started.account.id, kind=started.account.kind)
+    return SessionResponse(data=SessionData(account=account))

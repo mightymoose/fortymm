@@ -1,7 +1,7 @@
 """The kinds of account a valid session can belong to."""
 
 from dataclasses import dataclass
-from typing import NewType
+from typing import ClassVar, Literal, NewType
 from uuid import UUID
 
 AccountId = NewType("AccountId", UUID)
@@ -11,11 +11,13 @@ Email = NewType("Email", str)  # lowercase
 
 @dataclass(frozen=True)
 class GuestAccount:
+    kind: ClassVar[Literal["guest"]] = "guest"
     id: AccountId
 
 
 @dataclass(frozen=True)
 class VerifiedAccount:
+    kind: ClassVar[Literal["verified"]] = "verified"
     id: AccountId
     email: Email
 

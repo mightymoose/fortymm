@@ -2,7 +2,7 @@
 
 from typing import Annotated
 
-from fastapi import Depends
+from fastapi import Depends, Response
 from fastapi.security import APIKeyCookie
 
 from fortymm_api.accounts import CurrentAccount
@@ -16,6 +16,18 @@ session_cookie = APIKeyCookie(
     name=SESSION_COOKIE, scheme_name="session", auto_error=False
 )
 SessionToken = Annotated[str | None, Depends(session_cookie)]
+
+
+def set_session_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        max_age=SESSION_MAX_AGE,
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
 
 
 class NoValidSession(Exception):
