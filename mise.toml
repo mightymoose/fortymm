@@ -19,6 +19,7 @@ trap 'docker compose rm --force --stop >/dev/null 2>&1' EXIT INT TERM
 ./bin/mise run api:ci
 ./bin/mise run api:smoke
 ./bin/mise run web-client:ci
+./bin/mise run web-client:routes-check
 ./bin/mise run openapi:check
 ./bin/mise run openapi:breaking
 ./bin/mise run web-client:e2e
@@ -176,6 +177,23 @@ run = "gcloud run services describe api --project \"$GCP_PROJECT\" --region \"$G
 description = "Install, lint, build and test the web-client inside the running dev container (start it with `mise run ci`)"
 # exec bypasses the image entrypoint, so call it to get the container's tools on PATH.
 run = "docker compose exec -T -w /app/web-client dev /app/bin/docker-entrypoint sh -c 'npm ci && npm run lint && npm run build && npm test'"
+
+[tasks."web-client:routes-check"]
+description = "Regenerate the web-client's route tree in the running dev container and fail if it differs from what's committed (start the stack with `mise run ci`)"
+# Expects node_modules installed (web-client:ci runs `npm ci` first). The
+# TanStack Router plugin writes the route tree when Vite builds, so this runs
+# a build with the same config.
+run = """
+file=web-client/src/routeTree.gen.ts
+docker compose exec -T -w /app/web-client dev /app/bin/docker-entrypoint \
+  npx vite build --outDir /tmp/routes-check --emptyOutDir --logLevel warn
+# --porcelain also lists the file if it's new or deleted, not just changed.
+if [ -n "$(git status --porcelain -- $file)" ]; then
+  git --no-pager diff -- $file
+  echo "$file is out of date: run npm run build in web-client (or start the dev server) and commit the result." >&2
+  exit 1
+fi
+"""
 
 [tasks."web-client:e2e"]
 description = "Start the dev server in the running dev container and run the Playwright suite against it (start the stack with `mise run ci`)"
