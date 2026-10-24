@@ -805,6 +805,297 @@ describe('DesignSystem', () => {
     ).toEqual([items[0]])
   })
 
+  it('has an Overlays section after Navigation, with a lead line', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.overlaysSectionHeading).toHaveTextContent(
+      'Overlays',
+    )
+    expect(designSystemPage.overlaysSectionLead).toHaveTextContent(
+      'Dialogs, sheets, popovers, menus. Content that floats above the canvas. All shown in their open state.',
+    )
+    expect(
+      designSystemPage.navSection.compareDocumentPosition(
+        designSystemPage.overlaysSection,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('has a Dialog · Alert Dialog card first in the Overlays section', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.dialogCardHeading).toHaveTextContent(
+      'Dialog · Alert Dialog',
+    )
+    expect(designSystemPage.dialogCard).toHaveTextContent('modal')
+    expect(
+      within(designSystemPage.overlaysSection).getAllByRole('article')[0],
+    ).toBe(designSystemPage.dialogCard)
+  })
+
+  it("shows the reference's dialog and alert dialog, open", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const { dialog, alertDialog } = designSystemPage
+    expect(dialog).toHaveAccessibleName('Forfeit this match?')
+    expect(dialog).toHaveAccessibleDescription(
+      "Your opponent will be awarded the win and your rating will be adjusted accordingly. This can't be undone.",
+    )
+    expect(
+      within(dialog).getByRole('checkbox', {
+        name: 'Send a note to my opponent',
+      }),
+    ).not.toBeChecked()
+    expect(
+      within(dialog)
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual(['Cancel', 'Forfeit'])
+    expect(alertDialog).toHaveAccessibleName('Delete account')
+    expect(alertDialog).toHaveAccessibleDescription(
+      'All match history, ratings, and tournament records will be permanently deleted.',
+    )
+    expect(
+      within(alertDialog)
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual(['Keep account', 'Delete'])
+    expect(
+      Array.from(
+        designSystemPage.dialogCard.querySelectorAll('.mock-label'),
+        (label) => label.textContent,
+      ),
+    ).toEqual(['Dialog', 'Alert Dialog'])
+  })
+
+  it('has a Sheet card after the Dialog · Alert Dialog card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.sheetCardHeading).toHaveTextContent('Sheet')
+    expect(designSystemPage.sheetCard).toHaveTextContent('side panel')
+    expect(
+      designSystemPage.dialogCard.compareDocumentPosition(
+        designSystemPage.sheetCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's Filters sheet, open", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const sheet = designSystemPage.sheet
+    expect(designSystemPage.sheetCard).toHaveTextContent('Sheet (right)')
+    expect(sheet).toHaveAccessibleName('Filters')
+    expect(sheet).toHaveAccessibleDescription('Narrow the player list.')
+    expect(within(sheet).getByRole('combobox', { name: 'Club' })).toHaveValue(
+      'Brooklyn TT',
+    )
+    expect(
+      within(sheet).getByRole('slider', { name: 'Rating range minimum' }),
+    ).toHaveValue('1300')
+    expect(
+      within(sheet).getByRole('slider', { name: 'Rating range maximum' }),
+    ).toHaveValue('2200')
+    expect(
+      within(sheet).getByRole('button', { name: 'Apply filters' }),
+    ).toBeInTheDocument()
+  })
+
+  it('has a Drawer card after the Sheet card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.drawerCardHeading).toHaveTextContent('Drawer')
+    expect(designSystemPage.drawerCard).toHaveTextContent('mobile bottom sheet')
+    expect(
+      designSystemPage.sheetCard.compareDocumentPosition(
+        designSystemPage.drawerCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's Quick log drawer, open", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const drawer = designSystemPage.drawer
+    expect(designSystemPage.drawerCard).toHaveTextContent('Drawer (bottom)')
+    expect(drawer).toHaveAccessibleName('Quick log')
+    expect(drawer).toHaveAccessibleDescription(
+      'Tap to record a finished match.',
+    )
+    expect(
+      within(drawer).getByRole('button', { name: 'Pick opponent' }),
+    ).toBeInTheDocument()
+  })
+
+  it('has a Popover card after the Drawer card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.popoverCardHeading).toHaveTextContent('Popover')
+    expect(designSystemPage.popoverCard).toHaveTextContent('contextual content')
+    expect(
+      designSystemPage.drawerCard.compareDocumentPosition(
+        designSystemPage.popoverCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's Skill rating popover, open", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.popover).toHaveAccessibleName('Skill rating')
+    expect(designSystemPage.popover).toHaveAccessibleDescription(
+      'Your rating is calculated using a Glicko-2 system with a 0.06 volatility cap. Updates after every match.',
+    )
+  })
+
+  it('has a Tooltip card after the Popover card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.tooltipCardHeading).toHaveTextContent('Tooltip')
+    expect(designSystemPage.tooltipCard).toHaveTextContent('on hover')
+    expect(
+      designSystemPage.popoverCard.compareDocumentPosition(
+        designSystemPage.tooltipCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's two tooltips, each describing its trigger", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const card = within(designSystemPage.tooltipCard)
+    expect(
+      card.getAllByRole('tooltip').map((tooltip) => tooltip.textContent),
+    ).toEqual(['Refresh standings', 'Highest rated player in this bracket'])
+    expect(
+      card.getByRole('button', {
+        name: 'Refresh',
+        description: 'Refresh standings',
+      }),
+    ).toHaveTextContent('↻')
+    expect(card.getByText('Seed 1')).toHaveAccessibleDescription(
+      'Highest rated player in this bracket',
+    )
+  })
+
+  it('has a Hover Card card after the Tooltip card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.hoverCardCardHeading).toHaveTextContent(
+      'Hover Card',
+    )
+    expect(designSystemPage.hoverCardCard).toHaveTextContent('player preview')
+    expect(
+      designSystemPage.tooltipCard.compareDocumentPosition(
+        designSystemPage.hoverCardCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's preview of Tien Nguyen, open", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const card = designSystemPage.hoverCard
+    expect(card).toHaveAccessibleName('Tien Nguyen')
+    expect(card).toHaveTextContent(
+      'Tien NguyenBrooklyn TT · Joined 2024Rating 1620W-L 14–3',
+    )
+    expect(within(card).getByRole('img', { name: 'Tien Nguyen' })).toHaveClass(
+      'avatar--blue',
+    )
+  })
+
+  it('has a Dropdown Menu · Context Menu card after the Hover Card card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.menuCardHeading).toHaveTextContent(
+      'Dropdown Menu · Context Menu',
+    )
+    expect(designSystemPage.menuCard).toHaveTextContent(
+      'right-click + chevron',
+    )
+    expect(
+      designSystemPage.hoverCardCard.compareDocumentPosition(
+        designSystemPage.menuCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's dropdown and context menus, open", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const dropdown = designSystemPage.menu('Match actions')
+    expect(dropdown).toHaveTextContent(/^Match actions/)
+    expect(
+      within(dropdown)
+        .getAllByRole('menuitem')
+        .map((item) => [item.textContent, item.ariaKeyShortcuts]),
+    ).toEqual([
+      ['Rematch⌘ R', 'Meta+R'],
+      ['Share match link⌘ ↑ S', 'Meta+Shift+S'],
+      ['Edit score', null],
+      ['Forfeit', null],
+    ])
+    const context = designSystemPage.menu('Bracket')
+    expect(
+      within(context)
+        .getAllByRole('menuitemcheckbox')
+        .map((item) => [item.textContent, item.ariaChecked]),
+    ).toEqual([
+      ['✓ Show seeds', 'true'],
+      ['\u00a0\u00a0Show ratings', 'false'],
+    ])
+    expect(
+      within(context)
+        .getAllByRole('menuitem')
+        .map((item) => item.textContent),
+    ).toEqual(['Reschedule…', 'Print bracket'])
+  })
+
+  it('has a Command card after the Dropdown Menu · Context Menu card', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.commandCardHeading).toHaveTextContent('Command')
+    expect(designSystemPage.commandCard).toHaveTextContent('cmd+k palette')
+    expect(
+      designSystemPage.menuCard.compareDocumentPosition(
+        designSystemPage.commandCard,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it("shows the reference's palette, open on Log a match", async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const input = designSystemPage.commandInput
+    expect(designSystemPage.commandCard).toHaveTextContent('Command (⌘K)')
+    expect(input).toHaveValue('')
+    expect(input).toHaveAttribute('placeholder', 'Type a command or search…')
+    const list = within(designSystemPage.commandList)
+    expect(
+      list
+        .getAllByRole('group')
+        .map((group) => [
+          group.textContent?.match(/^(Suggestions|Recent)/)?.[0],
+          within(group)
+            .getAllByRole('option')
+            .map((option) => option.textContent),
+        ]),
+    ).toEqual([
+      [
+        'Suggestions',
+        ['Log a match⌘ L', 'Find a player⌘ P', 'Open tournament admin⌘ T'],
+      ],
+      [
+        'Recent',
+        ['Nguyen vs. Okafor · 2h ago', 'April Spring Open · yesterday'],
+      ],
+    ])
+    const active = list.getByRole('option', { selected: true })
+    expect(active).toHaveAccessibleName('Log a match')
+    expect(input).toHaveAttribute('aria-activedescendant', active.id)
+  })
+
   it.each([
     {
       title: 'April Spring Open',

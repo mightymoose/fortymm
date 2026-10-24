@@ -52,10 +52,11 @@ test.describe('header', () => {
   })
 })
 
-// The intro, the Forms & Input, Data Display and Navigation sections and
-// their component cards use the reference kit's own copy, so they're compared
-// with the kit as is. The kit's sections go on to more cards than the app has
-// yet, so each section's heading, lead and cards are compared one by one.
+// The intro, the Forms & Input, Data Display, Navigation and Overlays
+// sections and their component cards use the reference kit's own copy, so
+// they're compared with the kit as is. The kit's sections go on to more
+// cards than the app has yet, so each section's heading, lead and cards are
+// compared one by one.
 test.describe('intro', () => {
   test('matches the screenshot', async ({ designSystemPage }) => {
     await designSystemPage.goto()
@@ -2469,6 +2470,373 @@ test.describe('Menubar', () => {
   })
 })
 
+test.describe('Overlays section', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.overlaysSectionHeading).toHaveScreenshot(
+      'overlays-heading.png',
+    )
+    await expect(designSystemPage.overlaysSectionLead).toHaveScreenshot(
+      'overlays-lead.png',
+    )
+  })
+
+  test('matches the reference kit section', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.overlaysSectionHeading).toHaveScreenshot(
+      'overlays-heading.png',
+    )
+    await expect(referenceKitPage.overlaysSectionLead).toHaveScreenshot(
+      'overlays-lead.png',
+    )
+  })
+})
+
+// Nothing is hovered or focused first, so the buttons and the checkbox show
+// their resting styles.
+test.describe('Dialog · Alert Dialog card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.dialogCard).toHaveScreenshot(
+      'dialog-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.dialogCard).toHaveScreenshot(
+      'dialog-card.png',
+    )
+  })
+})
+
+// The kit's dialogs are static, so this is the app's alone.
+test('Tab goes through each dialog in order, showing the outline', async ({
+  designSystemPage,
+  page,
+}) => {
+  const orange = 'rgb(255, 122, 26)'
+  await designSystemPage.goto()
+  const checkbox = designSystemPage.dialog.getByRole('checkbox')
+  await checkbox.focus()
+
+  for (const [dialog, name] of [
+    [designSystemPage.dialog, 'Cancel'],
+    [designSystemPage.dialog, 'Forfeit'],
+    [designSystemPage.alertDialog, 'Keep account'],
+    [designSystemPage.alertDialog, 'Delete'],
+  ] as const) {
+    await page.keyboard.press('Tab')
+    const button = dialog.getByRole('button', { name, exact: true })
+    await expect(button, name).toBeFocused()
+    await expect(button, name).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(button, name).toHaveCSS('outline-offset', '2px')
+  }
+})
+
+// Nothing is hovered or focused first, so the controls show their resting
+// styles.
+test.describe('Sheet card', () => {
+  // The select's chevron rounds a few edge pixels differently on the two
+  // pages, as on the Select card (see there): 2 of them here, both on the
+  // chevron. The smallest real change, the chevron moved 1px, is 19.
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.sheetCard).toHaveScreenshot(
+      'sheet-card.png',
+      { maxDiffPixels: 15 },
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.sheetCard).toHaveScreenshot(
+      'sheet-card.png',
+    )
+  })
+})
+
+// Nothing is hovered or focused first, so the button shows its resting
+// style.
+test.describe('Drawer card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.drawerCard).toHaveScreenshot(
+      'drawer-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.drawerCard).toHaveScreenshot(
+      'drawer-card.png',
+    )
+  })
+})
+
+test.describe('Popover card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.popoverCard).toHaveScreenshot(
+      'popover-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.popoverCard).toHaveScreenshot(
+      'popover-card.png',
+    )
+  })
+})
+
+// Nothing is hovered or focused first, so the triggers show their resting
+// styles.
+test.describe('Tooltip card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.tooltipCard).toHaveScreenshot(
+      'tooltip-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.tooltipCard).toHaveScreenshot(
+      'tooltip-card.png',
+    )
+  })
+})
+
+// Each bubble is out of the layout, so the screenshot only sees it if it
+// stays inside the card. It sits centered above its trigger, inside the
+// frame.
+test('each tooltip sits above its trigger, inside the frame', async ({
+  designSystemPage,
+}) => {
+  await designSystemPage.goto()
+  const frame = (await designSystemPage.tooltipFrame.boundingBox())!
+
+  for (const [trigger, text] of [
+    [designSystemPage.refreshButton, 'Refresh standings'],
+    [designSystemPage.seedBadge, 'Highest rated player in this bracket'],
+  ] as const) {
+    const box = (await trigger.boundingBox())!
+    const bubble = (await designSystemPage.tooltip(text).boundingBox())!
+    expect(bubble.x + bubble.width / 2, text).toBeCloseTo(
+      box.x + box.width / 2,
+      0,
+    )
+    expect(bubble.y + bubble.height, text).toBeLessThanOrEqual(box.y - 8)
+    expect(bubble.y, text).toBeGreaterThan(frame.y)
+    expect(bubble.x, text).toBeGreaterThan(frame.x)
+    expect(bubble.x + bubble.width, text).toBeLessThan(frame.x + frame.width)
+  }
+})
+
+test.describe('Hover Card card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.hoverCardCard).toHaveScreenshot(
+      'hover-card-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.hoverCardCard).toHaveScreenshot(
+      'hover-card-card.png',
+    )
+  })
+})
+
+// Nothing is hovered or focused first, so the items show their resting
+// styles.
+test.describe('Dropdown Menu · Context Menu card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.menuCard).toHaveScreenshot('menu-card.png')
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.menuCard).toHaveScreenshot('menu-card.png')
+  })
+})
+
+// The kit's menus are static, with no focus style, so the tests below other
+// than the hover are the app's alone.
+test.describe('Dropdown Menu · Context Menu', () => {
+  const orange = 'rgb(255, 122, 26)'
+
+  test.beforeEach(async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+  })
+
+  // The screenshot can't see the hover: --bg-hover is white at 4%, under
+  // its color threshold.
+  test('hovering an item lightens it', async ({ designSystemPage }) => {
+    const item = designSystemPage.dropdownItem('Edit score')
+    await expect(item).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)')
+
+    await item.hover()
+
+    await expect(item).toHaveCSS(
+      'background-color',
+      'rgba(255, 255, 255, 0.04)',
+    )
+  })
+
+  // Natively the arrows, Home and End scroll the page.
+  test("the arrow keys, Home and End move the focus, and don't scroll the page", async ({
+    designSystemPage,
+    page,
+  }) => {
+    const rematch = designSystemPage.dropdownItem('Rematch')
+    await rematch.evaluate((item) => item.scrollIntoView({ block: 'center' }))
+    await rematch.focus()
+    const top = await page.locator('html').evaluate((html) => html.scrollTop)
+
+    for (const [key, name] of [
+      ['ArrowDown', 'Share match link'],
+      ['End', 'Forfeit'],
+      ['ArrowDown', 'Rematch'],
+      ['ArrowUp', 'Forfeit'],
+      ['Home', 'Rematch'],
+    ]) {
+      await page.keyboard.press(key)
+      await expect(designSystemPage.dropdownItem(name), key).toBeFocused()
+      expect(
+        await page.locator('html').evaluate((html) => html.scrollTop),
+        key,
+      ).toBe(top)
+    }
+  })
+
+  test('keyboard focus shows the outline, a click none', async ({
+    designSystemPage,
+    page,
+  }) => {
+    const rematch = designSystemPage.dropdownItem('Rematch')
+    const share = designSystemPage.dropdownItem('Share match link')
+    await rematch.focus()
+
+    await page.keyboard.press('ArrowDown')
+    await expect(share).toBeFocused()
+    await expect(share).toHaveCSS('outline', `${orange} solid 2px`)
+    await expect(share).toHaveCSS('outline-offset', '2px')
+
+    const forfeit = designSystemPage.dropdownItem('Forfeit')
+    await forfeit.click()
+    await expect(forfeit).toBeFocused()
+    await expect(forfeit).toHaveCSS('outline-style', 'none')
+  })
+})
+
+// Nothing is hovered or focused first, so the palette shows its first
+// command active, as in the kit, with no focus ring.
+test.describe('Command card', () => {
+  test('matches the screenshot', async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+
+    await expect(designSystemPage.commandCard).toHaveScreenshot(
+      'command-card.png',
+    )
+  })
+
+  test('matches the reference kit card', async ({ referenceKitPage }) => {
+    await referenceKitPage.goto()
+
+    await expect(referenceKitPage.commandCard).toHaveScreenshot(
+      'command-card.png',
+    )
+  })
+})
+
+// The kit's palette is static, so the tests below other than the first
+// command's highlight are the app's alone.
+test.describe('Command', () => {
+  const none = 'rgba(0, 0, 0, 0)'
+  const hover = 'rgba(255, 255, 255, 0.04)'
+
+  test.beforeEach(async ({ designSystemPage }) => {
+    await designSystemPage.goto()
+  })
+
+  // The screenshot can't see the highlight: --bg-hover is white at 4%,
+  // under its color threshold.
+  test('the first command shows active', async ({ designSystemPage }) => {
+    const log = designSystemPage.commandOption('Log a match')
+    await expect(log).toHaveAttribute('aria-selected', 'true')
+    await expect(log).toHaveCSS('background-color', hover)
+    await expect(
+      designSystemPage.commandOption('Find a player'),
+    ).toHaveCSS('background-color', none)
+    await expect(designSystemPage.commandInput).toHaveAttribute(
+      'aria-activedescendant',
+      (await log.getAttribute('id'))!,
+    )
+  })
+
+  // Natively the arrows move the caret, and the page doesn't scroll.
+  test("the arrow keys move the active command, and the focus doesn't leave the input", async ({
+    designSystemPage,
+    page,
+  }) => {
+    const input = designSystemPage.commandInput
+    await input.focus()
+
+    for (const [key, name] of [
+      ['ArrowDown', 'Find a player'],
+      ['ArrowUp', 'Log a match'],
+      ['ArrowUp', 'April Spring Open · yesterday'],
+      ['ArrowDown', 'Log a match'],
+    ]) {
+      await page.keyboard.press(key)
+      const option = designSystemPage.commandOption(name)
+      await expect(option, key).toHaveAttribute('aria-selected', 'true')
+      await expect(option, key).toHaveCSS('background-color', hover)
+      await expect(input, key).toHaveAttribute(
+        'aria-activedescendant',
+        (await option.getAttribute('id'))!,
+      )
+      await expect(input, key).toBeFocused()
+    }
+    await expect(
+      designSystemPage.commandList.getByRole('option', { selected: true }),
+    ).toHaveCount(1)
+  })
+
+  test('the pointer moves the active command', async ({
+    designSystemPage,
+  }) => {
+    const find = designSystemPage.commandOption('Find a player')
+
+    await find.hover()
+
+    await expect(find).toHaveAttribute('aria-selected', 'true')
+    await expect(
+      designSystemPage.commandOption('Log a match'),
+    ).toHaveAttribute('aria-selected', 'false')
+  })
+})
+
 // The kit's cells are static, so this is the app's alone: focusing the input
 // moves the active cell to the next empty one, where the next character goes.
 test('focusing the Input OTP activates the next empty cell', async ({
@@ -2952,6 +3320,224 @@ test.describe('on a phone', () => {
       expect(box.width).toBeCloseTo(card.width - 66, 0)
       expect(box.y).toBeGreaterThanOrEqual(previousBottom)
       previousBottom = box.y + box.height
+    }
+  })
+
+  // The dialogs are wider than the card's content, so the frames stack, each
+  // dialog narrows to fit inside its frame and its buttons wrap.
+  test('the dialog card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.dialogCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.dialogCard.boundingBox())!
+    const dialog = (await designSystemPage.dialog.boundingBox())!
+    const alert = (await designSystemPage.alertDialog.boundingBox())!
+    for (const [locator, box] of [
+      [designSystemPage.dialog, dialog],
+      [designSystemPage.alertDialog, alert],
+    ] as const) {
+      // Inside the card's 1px border and 32px padding on each side.
+      expect(box.x).toBeGreaterThanOrEqual(card.x + 33)
+      expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width - 33)
+      // The buttons wrap inside the dialog's 24px padding.
+      for (const button of await locator.getByRole('button').all()) {
+        const { x, width } = (await button.boundingBox())!
+        expect(x).toBeGreaterThanOrEqual(box.x + 24)
+        expect(x + width).toBeLessThanOrEqual(box.x + box.width - 24)
+      }
+    }
+    expect(alert.y).toBeGreaterThan(dialog.y + dialog.height)
+  })
+
+  // The sheet is wider than the card's content, so it narrows to fit inside
+  // its frame, below the frame's label.
+  test('the sheet card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.sheetCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.sheetCard.boundingBox())!
+    const sheet = (await designSystemPage.sheet.boundingBox())!
+    // Inside the card's 1px border and 32px padding on each side.
+    expect(sheet.x).toBeGreaterThanOrEqual(card.x + 33)
+    expect(sheet.x + sheet.width).toBeLessThanOrEqual(card.x + card.width - 33)
+    const label = (await designSystemPage.sheetCard
+      .getByText('Sheet (right)')
+      .boundingBox())!
+    expect(sheet.y).toBeGreaterThan(label.y + label.height)
+  })
+
+  // The drawer is wider than the card's content, so it narrows to fit inside
+  // its frame, still on the frame's bottom edge.
+  test('the drawer card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.drawerCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.drawerCard.boundingBox())!
+    const drawer = (await designSystemPage.drawer.boundingBox())!
+    // Inside the card's 1px border and 32px padding on each side, and on the
+    // frame's bottom edge, above the card's 32px padding.
+    expect(drawer.x).toBeGreaterThanOrEqual(card.x + 33)
+    expect(drawer.x + drawer.width).toBeLessThanOrEqual(
+      card.x + card.width - 33,
+    )
+    expect(drawer.y + drawer.height).toBeCloseTo(
+      card.y + card.height - 33 - 1,
+      0,
+    )
+  })
+
+  // The popover is wider than its frame's content, so it narrows to fit.
+  test('the popover card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.popoverCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.popoverCard.boundingBox())!
+    const popover = (await designSystemPage.popover.boundingBox())!
+    // Inside the card's 1px border and 32px padding on each side.
+    expect(popover.x).toBeGreaterThanOrEqual(card.x + 33)
+    expect(popover.x + popover.width).toBeLessThanOrEqual(
+      card.x + card.width - 33,
+    )
+  })
+
+  // The badge's bubble is wider than the frame's room beside the button, so
+  // the triggers stack, each with its bubble above it, inside the card and
+  // below the frame's label.
+  test('the tooltip card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.tooltipCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.tooltipCard.boundingBox())!
+    for (const text of [
+      'Refresh standings',
+      'Highest rated player in this bracket',
+    ]) {
+      const bubble = (await designSystemPage.tooltip(text).boundingBox())!
+      // Inside the card's 1px border and 32px padding on each side.
+      expect(bubble.x, text).toBeGreaterThanOrEqual(card.x + 33)
+      expect(bubble.x + bubble.width, text).toBeLessThanOrEqual(
+        card.x + card.width - 33,
+      )
+    }
+    const label = (await designSystemPage.tooltipFrame
+      .locator('.mock-label')
+      .boundingBox())!
+    const refresh = (await designSystemPage
+      .tooltip('Refresh standings')
+      .boundingBox())!
+    const button = (await designSystemPage.refreshButton.boundingBox())!
+    const seed = (await designSystemPage
+      .tooltip('Highest rated player in this bracket')
+      .boundingBox())!
+    expect(refresh.y).toBeGreaterThan(label.y + label.height)
+    expect(seed.y).toBeGreaterThan(button.y + button.height)
+  })
+
+  // The hover card is wider than its frame's content, so it narrows to fit.
+  test('the hover card card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.hoverCardCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.hoverCardCard.boundingBox())!
+    const hoverCard = (await designSystemPage.hoverCard.boundingBox())!
+    // Inside the card's 1px border and 32px padding on each side.
+    expect(hoverCard.x).toBeGreaterThanOrEqual(card.x + 33)
+    expect(hoverCard.x + hoverCard.width).toBeLessThanOrEqual(
+      card.x + card.width - 33,
+    )
+  })
+
+  // The menus and their room are wider than the card's content, so the
+  // frames stack and each menu fills its frame's width.
+  test('the menu card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.menuCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.menuCard.boundingBox())!
+    const dropdown = (await designSystemPage.dropdownMenu.boundingBox())!
+    const context = (await designSystemPage.contextMenu.boundingBox())!
+    for (const box of [dropdown, context]) {
+      // Inside the card's 1px border and 32px padding on each side.
+      expect(box.x).toBeGreaterThanOrEqual(card.x + 33)
+      expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width - 33)
+    }
+    expect(context.y).toBeGreaterThan(dropdown.y + dropdown.height)
+  })
+
+  // The palette is wider than its frame's content, so it narrows to fit,
+  // and its longer rows wrap.
+  test('the command card fits', async ({ designSystemPage, page }) => {
+    await designSystemPage.goto()
+
+    for (const element of [
+      designSystemPage.commandCard,
+      page.locator('html'),
+    ]) {
+      expect(
+        await element.evaluate((e) => e.scrollWidth - e.clientWidth),
+      ).toBe(0)
+    }
+    const card = (await designSystemPage.commandCard.boundingBox())!
+    const box = (await designSystemPage.commandBox.boundingBox())!
+    // Inside the card's 1px border and 32px padding on each side.
+    expect(box.x).toBeGreaterThanOrEqual(card.x + 33)
+    expect(box.x + box.width).toBeLessThanOrEqual(card.x + card.width - 33)
+    // The labels wrap, but each shortcut stays on one line.
+    const first = (await designSystemPage
+      .commandOption('Log a match')
+      .locator('kbd')
+      .boundingBox())!
+    for (const kbd of await designSystemPage.commandList.locator('kbd').all()) {
+      expect((await kbd.boundingBox())!.height).toBe(first.height)
     }
   })
 })

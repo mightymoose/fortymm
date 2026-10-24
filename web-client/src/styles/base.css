@@ -2136,10 +2136,439 @@ h4, .h4 {
 }
 
 /* =========================================================================
-   Utility: hidden on screen, still read by assistive tech (e.g. a label the
-   design shows no room for).
+   Dialog (the reference kit's .dialog, its h2, .desc and .actions): a
+   .dialog holding a .dialog-title, a .dialog-description, the body and the
+   .dialog-actions row. The kit's title is an h2. Here it's an h4 under the
+   card's h3, so the class sets every font property the h4 rule does.
+   .dialog--alert is the kit's Alert Dialog, with its inline width and its
+   title's inline row of the icon and the text.
    ========================================================================= */
-.visually-hidden {
+.dialog {
+  background: var(--ink-800);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-lg);
+  padding: 24px;
+  box-shadow: var(--shadow-lg);
+  width: 420px;
+  /* Where the frame is narrower (e.g. on a phone), the dialog narrows to
+     fit. */
+  max-width: 100%;
+}
+
+.dialog-title {
+  margin: 0 0 6px;
+  font: 600 18px var(--font-ui);
+}
+
+.dialog-description {
+  margin: 0 0 20px;
+  font-size: 14px;
+  color: var(--fg-3);
+  line-height: 1.5;
+}
+
+.dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 24px;
+}
+
+.dialog--alert {
+  width: 380px;
+}
+
+.dialog--alert .dialog-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* The kit is only laid out for desktop. On a phone, a dialog is narrower
+   than its buttons' row, so the buttons wrap onto more lines. */
+@media (max-width: 640px) {
+  .dialog-actions {
+    flex-wrap: wrap;
+  }
+}
+
+/* In a .grid-2 column, a frame may narrow below its dialog's width, so the
+   dialog narrows to fit (e.g. on a phone). */
+.grid-2 > .mock-bg {
+  min-width: 0;
+}
+
+/* The kit's frames set their minimum height inline, by what they show. */
+.mock-bg--dialog {
+  min-height: 280px;
+}
+
+/* =========================================================================
+   Sheet (the reference kit's .sheet-mock): a Dialog's .sheet variant, the
+   panel along the right edge of the frame. The kit sets its title's and
+   description's styles inline. Here they're the .dialog-title and
+   .dialog-description under .sheet.
+   ========================================================================= */
+.sheet {
+  width: 320px;
+  /* Where the frame is narrower (e.g. on a phone), the sheet narrows to
+     fit. */
+  max-width: 100%;
+  background: var(--ink-800);
+  border-left: 1px solid var(--border-subtle);
+  padding: 24px;
+  box-shadow: var(--shadow-lg);
+}
+
+.sheet .dialog-title, .drawer .dialog-title {
+  margin: 0 0 6px;
+  font: 600 16px var(--font-ui);
+}
+
+.sheet .dialog-description {
+  margin: 0 0 20px;
+  font-size: 13px;
+  color: var(--fg-3);
+}
+
+/* The kit's frame for its sheet, set inline: the sheet stands against the
+   frame's right edge, top to bottom. */
+.mock-bg--sheet {
+  justify-content: flex-end;
+  padding: 0;
+}
+
+/* The kit is only laid out for desktop. On a phone, the sheet fills the
+   frame's width, so the frame keeps its room above the sheet, clear of its
+   label. */
+@media (max-width: 640px) {
+  .mock-bg--sheet {
+    padding-top: 40px;
+  }
+}
+
+/* =========================================================================
+   Drawer (the reference kit's .drawer-mock and .grabber): a Dialog's .drawer
+   variant, the panel along the bottom edge of the frame. The kit's grabber
+   is an empty div. Here it's the drawer's ::before, as it only decorates.
+   Its title takes the .sheet's styles (above). The kit sets its title's and
+   description's styles inline.
+   ========================================================================= */
+.drawer {
+  width: 320px;
+  /* Where the frame is narrower (e.g. on a phone), the drawer narrows to
+     fit. */
+  max-width: 100%;
+  background: var(--ink-800);
+  border-top: 1px solid var(--border-subtle);
+  padding: 24px;
+  border-radius: 16px 16px 0 0;
+}
+
+.drawer::before {
+  content: '';
+  display: block;
+  width: 40px;
+  height: 4px;
+  background: var(--ink-500);
+  border-radius: 999px;
+  margin: 0 auto 16px;
+}
+
+.drawer .dialog-description {
+  margin: 0 0 16px;
+  font-size: 13px;
+  color: var(--fg-3);
+}
+
+/* The kit's frame for its drawer, set inline: the drawer stands on the
+   frame's bottom edge. */
+.mock-bg--drawer {
+  align-items: flex-end;
+  padding: 0;
+}
+
+/* =========================================================================
+   Popover (the reference kit's .popover, its h4 and p): a Dialog's .popover
+   variant. The kit's title is an h4 too, but the class sets every font
+   property the h4 rule does, as on the .dialog.
+   ========================================================================= */
+.popover {
+  background: var(--ink-800);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  padding: 16px;
+  box-shadow: var(--shadow-lg);
+  width: 280px;
+  /* Where the frame is narrower (e.g. on a phone), the popover narrows to
+     fit. */
+  max-width: 100%;
+}
+
+.popover .dialog-title {
+  margin: 0 0 4px;
+  font: 600 14px var(--font-ui);
+}
+
+.popover .dialog-description {
+  margin: 0;
+  font-size: 13px;
+}
+
+/* The kit's frame for its popover, with its inline minimum height. */
+.mock-bg--popover {
+  min-height: 240px;
+}
+
+/* =========================================================================
+   Tooltip (the reference kit's .tip and .tip-bubble): a .tooltip holding
+   the trigger, with its .tooltip-bubble above it, pointing down at it.
+   .tooltip-demo is the kit's .row of triggers, with its inline gap.
+   ========================================================================= */
+.tooltip {
+  position: relative;
+  display: inline-block;
+}
+
+.tooltip-bubble {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink-700);
+  color: var(--fg-1);
+  font: 500 12px var(--font-ui);
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  white-space: nowrap;
+  box-shadow: var(--shadow-md);
+  border: 1px solid var(--border-subtle);
+}
+
+.tooltip-bubble::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 4px solid transparent;
+  border-top-color: var(--ink-700);
+}
+
+.tooltip-demo {
+  gap: 64px;
+}
+
+/* The kit's frame for its tooltips, with its inline minimum height. */
+.mock-bg--tooltip {
+  min-height: 120px;
+}
+
+/* The kit is only laid out for desktop. On a phone, the badge's bubble is
+   wider than the frame's room beside the button. So the triggers stack,
+   with room for each bubble above, below the frame's label, and a long
+   bubble wraps. */
+@media (max-width: 640px) {
+  .mock-bg--tooltip {
+    padding-top: 72px;
+  }
+
+  .tooltip-demo {
+    flex-direction: column;
+    gap: 72px;
+  }
+
+  .tooltip-bubble {
+    white-space: normal;
+    width: max-content;
+    max-width: 160px;
+    text-align: center;
+  }
+}
+
+/* =========================================================================
+   Hover card (the reference kit's .hover-card): a player preview. The kit
+   sets the styles of its rows, name, club line and stats inline. Here
+   they're .hover-card-header, .hover-card-name, .hover-card-meta and
+   .hover-card-stats. The kit's stats are spans. Here they're a <dl>, each
+   term and value inline, reset to match.
+   ========================================================================= */
+.hover-card {
+  background: var(--ink-800);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  padding: 16px;
+  width: 280px;
+  /* Where the frame is narrower (e.g. on a phone), the card narrows to
+     fit. */
+  max-width: 100%;
+  box-shadow: var(--shadow-lg);
+}
+
+.hover-card-header {
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.hover-card-name {
+  margin: 0 0 2px;
+  font: 600 14px var(--font-ui);
+}
+
+.hover-card-meta {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-3);
+}
+
+.hover-card-stats {
+  margin: 0;
+  gap: 16px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.hover-card-stats dt, .hover-card-stats dd {
+  display: inline;
+  margin: 0;
+}
+
+.hover-card-stats dt {
+  color: var(--fg-3);
+}
+
+.hover-card-rating {
+  color: var(--ball-500);
+}
+
+/* =========================================================================
+   Menu (the reference kit's .menu, .menu-item:hover, .menu-item.dest,
+   .menu-sep, .menu-label and .menu-item .kbd): a .menu of .menu-item rows
+   (above, shared with the Combobox), .menu-label and .menu-sep. The hover
+   is the menu's alone, as the Combobox's options don't take it.
+   .menu-item--destructive is the kit's .dest. .kbd, a shortcut, is the
+   kit's .menu-item .kbd, for any <kbd>. .menu-check leads a checkbox item
+   with the kit's ✓ or two spaces. The items take the .button focus
+   outline, keyboard focus only. The kit gives them none.
+   ========================================================================= */
+.menu {
+  background: var(--ink-800);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--r-md);
+  padding: 4px;
+  min-width: 200px;
+  box-shadow: var(--shadow-lg);
+}
+
+.menu .menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.menu .menu-item:focus-visible {
+  outline: 2px solid var(--ball-500);
+  outline-offset: 2px;
+}
+
+.menu-item--destructive {
+  color: var(--loss);
+}
+
+.menu-sep {
+  height: 1px;
+  background: var(--border-subtle);
+  margin: 4px -4px;
+}
+
+.menu-label {
+  padding: 6px 10px;
+  font: 500 11px var(--font-ui);
+  color: var(--fg-3);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.kbd {
+  font: 500 11px var(--font-mono);
+  color: var(--fg-3);
+  padding: 2px 5px;
+  background: var(--ink-700);
+  border-radius: var(--r-xs);
+}
+
+/* The kit's frame for its menus, set inline: the menu in the frame's top
+   left corner, with room around it. */
+.mock-bg--menu {
+  min-height: 320px;
+  justify-content: flex-start;
+  align-items: flex-start;
+}
+
+.mock-bg--menu > .menu {
+  margin: 32px;
+}
+
+/* The kit is only laid out for desktop. On a phone, the menu and its room
+   are wider than the frame, so the menu fills the frame's width, and the
+   frame is only as tall as the menu. */
+@media (max-width: 640px) {
+  .mock-bg--menu {
+    min-height: auto;
+  }
+
+  .mock-bg--menu > .menu {
+    margin: 0;
+    min-width: 0;
+    width: 100%;
+  }
+}
+
+/* =========================================================================
+   Command (the reference kit's Command, with its .cmd-list .menu-label): the
+   .cmd box, .cmd-input row and .cmd-list (above, shared with the Combobox)
+   holding groups, each a .menu-label (above, shared with the Menu) over its
+   .menu-item options. The active option is the kit's inline highlight, the
+   .menu-item[aria-selected="true"] rule above.
+   ========================================================================= */
+.cmd-list .menu-label {
+  padding-top: 8px;
+}
+
+/* Where a row is narrow (e.g. on a phone), its label wraps, but its
+   shortcut stays on one line. */
+.cmd-list .kbd {
+  white-space: nowrap;
+}
+
+/* The kit's frame for its palette, with its inline minimum height. */
+.mock-bg--command {
+  min-height: 340px;
+}
+
+/* A .slider-field whose header is only its label, styled as a
+   .field-label, as the kit draws a bare .label over its Sheet's slider.
+   The readout is still there for assistive tech, hidden (below). */
+.slider-field--plain .slider-header {
+  margin-bottom: 6px;
+}
+
+.slider-field--plain .slider-label {
+  font: 500 13px var(--font-ui);
+  color: var(--fg-2);
+  letter-spacing: -0.005em;
+}
+
+/* A .button as wide as its container, as the kit sets inline on its
+   Sheet's and Drawer's buttons. */
+.button-wide {
+  width: 100%;
+}
+
+/* =========================================================================
+   Utility: hidden on screen, still read by assistive tech (e.g. a label the
+   design shows no room for). A .slider-field--plain's readout is hidden the
+   same way.
+   ========================================================================= */
+.visually-hidden, .slider-field--plain .slider-value {
   position: absolute;
   width: 1px;
   height: 1px;

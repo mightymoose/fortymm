@@ -49,7 +49,17 @@ export class ReferenceKitPage {
   readonly paginationCard: Locator
   readonly navMenuCard: Locator
   readonly menubarCard: Locator
+  readonly overlaysSectionHeading: Locator
+  readonly overlaysSectionLead: Locator
 
+  readonly dialogCard: Locator
+  readonly sheetCard: Locator
+  readonly drawerCard: Locator
+  readonly popoverCard: Locator
+  readonly tooltipCard: Locator
+  readonly hoverCardCard: Locator
+  readonly menuCard: Locator
+  readonly commandCard: Locator
   constructor(page: Page) {
     this.page = page
     this.header = page.getByRole('banner')
@@ -211,6 +221,59 @@ export class ReferenceKitPage {
       has: page.getByRole('heading', {
         level: 3,
         name: 'Menubar',
+        exact: true,
+      }),
+    })
+    const overlaysSection = page.locator('#overlays')
+    this.overlaysSectionHeading = overlaysSection.getByRole('heading', {
+      level: 2,
+    })
+    this.overlaysSectionLead = overlaysSection.getByRole('paragraph').first()
+    this.dialogCard = overlaysSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Dialog · Alert Dialog',
+        exact: true,
+      }),
+    })
+    this.sheetCard = overlaysSection.locator('.comp', {
+      has: page.getByRole('heading', { level: 3, name: 'Sheet', exact: true }),
+    })
+    this.drawerCard = overlaysSection.locator('.comp', {
+      has: page.getByRole('heading', { level: 3, name: 'Drawer', exact: true }),
+    })
+    this.popoverCard = overlaysSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Popover',
+        exact: true,
+      }),
+    })
+    this.tooltipCard = overlaysSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Tooltip',
+        exact: true,
+      }),
+    })
+    this.hoverCardCard = overlaysSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Hover Card',
+        exact: true,
+      }),
+    })
+    this.menuCard = overlaysSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Dropdown Menu · Context Menu',
+        exact: true,
+      }),
+    })
+    this.commandCard = overlaysSection.locator('.comp', {
+      has: page.getByRole('heading', {
+        level: 3,
+        name: 'Command',
         exact: true,
       }),
     })

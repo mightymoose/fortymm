@@ -498,4 +498,130 @@ export class DesignSystemPage {
   get menubarItems(): HTMLElement[] {
     return within(this.menubarCard).getAllByRole('menuitem')
   }
+
+  get overlaysSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Overlays' })
+  }
+
+  get overlaysSectionHeading(): HTMLElement {
+    return within(this.overlaysSection).getByRole('heading', { level: 2 })
+  }
+
+  // The first paragraph: the cards in the section have paragraphs too.
+  get overlaysSectionLead(): HTMLElement {
+    return within(this.overlaysSection).getAllByRole('paragraph')[0]
+  }
+
+  get dialogCard(): HTMLElement {
+    return within(this.overlaysSection).getByRole('article', {
+      name: 'Dialog · Alert Dialog',
+    })
+  }
+
+  get dialogCardHeading(): HTMLElement {
+    return within(this.dialogCard).getByRole('heading', { level: 3 })
+  }
+
+  get dialog(): HTMLElement {
+    return within(this.dialogCard).getByRole('dialog')
+  }
+
+  get alertDialog(): HTMLElement {
+    return within(this.dialogCard).getByRole('alertdialog')
+  }
+
+  get sheetCard(): HTMLElement {
+    return within(this.overlaysSection).getByRole('article', { name: 'Sheet' })
+  }
+
+  get sheetCardHeading(): HTMLElement {
+    return within(this.sheetCard).getByRole('heading', { level: 3 })
+  }
+
+  get sheet(): HTMLElement {
+    return within(this.sheetCard).getByRole('dialog')
+  }
+
+  get drawerCard(): HTMLElement {
+    return within(this.overlaysSection).getByRole('article', { name: 'Drawer' })
+  }
+
+  get drawerCardHeading(): HTMLElement {
+    return within(this.drawerCard).getByRole('heading', { level: 3 })
+  }
+
+  get drawer(): HTMLElement {
+    return within(this.drawerCard).getByRole('dialog')
+  }
+
+  get popoverCard(): HTMLElement {
+    return within(this.overlaysSection).getByRole('article', {
+      name: 'Popover',
+    })
+  }
+
+  get popoverCardHeading(): HTMLElement {
+    return within(this.popoverCard).getByRole('heading', { level: 3 })
+  }
+
+  get popover(): HTMLElement {
+    return within(this.popoverCard).getByRole('dialog')
+  }
+
+  get tooltipCard(): HTMLElement {
+    return within(this.overlaysSection).getByRole('article', {
+      name: 'Tooltip',
+    })
+  }
+
+  get tooltipCardHeading(): HTMLElement {
+    return within(this.tooltipCard).getByRole('heading', { level: 3 })
+  }
+
+  get hoverCardCard(): HTMLElement {
+    return within(this.overlaysSection).getByRole('article', {
+      name: 'Hover Card',
+    })
+  }
+
+  get hoverCardCardHeading(): HTMLElement {
+    return within(this.hoverCardCard).getByRole('heading', { level: 3 })
+  }
+
+  get hoverCard(): HTMLElement {
+    return within(this.hoverCardCard).getByRole('group')
+  }
+
+  get menuCard(): HTMLElement {
+    return within(this.overlaysSection).getByRole('article', {
+      name: 'Dropdown Menu · Context Menu',
+    })
+  }
+
+  get menuCardHeading(): HTMLElement {
+    return within(this.menuCard).getByRole('heading', { level: 3 })
+  }
+
+  // The menu card's menu named `name`, e.g. "Match actions".
+  menu(name: string): HTMLElement {
+    return within(this.menuCard).getByRole('menu', { name })
+  }
+
+  get commandCard(): HTMLElement {
+    return within(this.overlaysSection).getByRole('article', {
+      name: 'Command',
+    })
+  }
+
+  get commandCardHeading(): HTMLElement {
+    return within(this.commandCard).getByRole('heading', { level: 3 })
+  }
+
+  get commandInput(): HTMLElement {
+    return within(this.commandCard).getByRole('combobox', { name: 'Command' })
+  }
+
+  get commandList(): HTMLElement {
+    return within(this.commandCard).getByRole('listbox', { name: 'Command' })
+  }
 }

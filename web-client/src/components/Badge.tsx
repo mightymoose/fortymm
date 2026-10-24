@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { ComponentProps } from 'react'
 
 export type BadgeVariant =
   | 'default'
@@ -17,16 +17,17 @@ const variantClasses: Record<BadgeVariant, string> = {
 
 // A short label (a seed, a status, a match type) in one of the design
 // system's variants, styled by `.badge` in styles/base.css. A live badge
-// starts with the pulsing live dot.
+// starts with the pulsing live dot. Other props go to the <span> as is, e.g.
+// aria-describedby for a tooltip.
 export function Badge({
   variant = 'default',
   children,
-}: {
+  ...props
+}: Omit<ComponentProps<'span'>, 'className'> & {
   variant?: BadgeVariant
-  children: ReactNode
 }) {
   return (
-    <span className={`badge ${variantClasses[variant]}`}>
+    <span {...props} className={`badge ${variantClasses[variant]}`}>
       {variant === 'live' && (
         <span className="ball-dot ball-dot--live" aria-hidden="true" />
       )}
