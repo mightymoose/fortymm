@@ -1,0 +1,40 @@
+/* Layout for the log in mockups (src/pages/login/). */
+.login{display:flex;flex-direction:column;gap:var(--s-12)}
+.login-options{display:flex;flex-wrap:wrap;gap:var(--s-2) var(--s-4);font:500 var(--text-sm) var(--font-ui);color:var(--fg-3)}
+.login-options a{color:var(--fg-2);text-decoration:none}
+.login-options a:hover{color:var(--fg-1);text-decoration:underline}
+.login-options a[aria-current=page]{color:var(--fg-1);font-weight:600}
+
+.login-column{display:flex;flex-direction:column;gap:var(--s-6);width:100%;max-width:400px;margin:0 auto}
+.login-column--start{margin:0}
+.login-column--phone{max-width:360px}
+
+.login-wordmark{display:inline-flex;align-items:center;gap:10px;font:400 32px/1 var(--font-display);letter-spacing:0.02em;text-transform:uppercase;color:var(--fg-1)}
+.login-wordmark__ball{width:22px;height:22px;border-radius:50%;background:var(--accent)}
+
+.login-head{display:flex;flex-direction:column;gap:var(--s-2)}
+.page .login-head h1{font:700 var(--text-2xl)/var(--lh-tight) var(--font-ui);letter-spacing:-0.01em}
+.login-head p{margin:0;color:var(--fg-2)}
+
+.login-form{display:flex;flex-direction:column;gap:var(--s-5)}
+.login-email{font-weight:600;color:var(--fg-1);overflow-wrap:anywhere}
+.login-row{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(--s-3)}
+
+.login-split{display:grid;grid-template-columns:minmax(0,400px) minmax(0,1fr);gap:var(--s-16);align-items:start}
+.login-preview{display:flex;flex-direction:column;gap:var(--s-4);padding:var(--s-6);border-radius:var(--r-md);background:var(--bg-panel)}
+.login-preview__head{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:var(--s-2)}
+.login-preview h2{margin:0;font:600 var(--text-lg)/var(--lh-snug) var(--font-ui);color:var(--fg-1)}
+.login-preview__rating{margin-right:var(--s-1);color:var(--fg-1)}
+.login-preview>p{margin:0}
+.login-matches{list-style:none;margin:0;padding:0}
+.login-matches li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px var(--s-4);padding:var(--s-3) 0;border-top:1px solid var(--border-subtle)}
+.login-matches__names{display:flex;flex-direction:column;color:var(--loser)}
+.login-matches__names b{font-weight:600;color:var(--winner)}
+.login-matches__games{grid-row:span 2;align-self:center;font-size:var(--text-lg);color:var(--fg-1)}
+
+.login-bar{display:flex;align-items:center;justify-content:space-between;min-height:40px}
+.login-column--phone .fm-code .fm-input{width:46px;height:64px;font-size:28px}
+
+@media (max-width:760px){
+  .login-split{grid-template-columns:minmax(0,1fr);gap:var(--s-12)}
+}

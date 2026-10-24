@@ -11,6 +11,10 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as DesignSystemRouteImport } from './routes/design-system'
+import { Route as Login1RouteImport } from './routes/login1'
+import { Route as Login2RouteImport } from './routes/login2'
+import { Route as Login3RouteImport } from './routes/login3'
+import { Route as Login4RouteImport } from './routes/login4'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
 
 const AuthenticatedRoute = AuthenticatedRouteImport.update({
@@ -22,6 +26,26 @@ const DesignSystemRoute = DesignSystemRouteImport.update({
   path: '/design-system',
   getParentRoute: () => rootRouteImport,
 } as any)
+const Login1Route = Login1RouteImport.update({
+  id: '/login1',
+  path: '/login1',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const Login2Route = Login2RouteImport.update({
+  id: '/login2',
+  path: '/login2',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const Login3Route = Login3RouteImport.update({
+  id: '/login3',
+  path: '/login3',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const Login4Route = Login4RouteImport.update({
+  id: '/login4',
+  path: '/login4',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -31,28 +55,53 @@ const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedIndexRoute
   '/design-system': typeof DesignSystemRoute
+  '/login1': typeof Login1Route
+  '/login2': typeof Login2Route
+  '/login3': typeof Login3Route
+  '/login4': typeof Login4Route
 }
 export interface FileRoutesByTo {
   '/design-system': typeof DesignSystemRoute
+  '/login1': typeof Login1Route
+  '/login2': typeof Login2Route
+  '/login3': typeof Login3Route
+  '/login4': typeof Login4Route
   '/': typeof AuthenticatedIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/design-system': typeof DesignSystemRoute
+  '/login1': typeof Login1Route
+  '/login2': typeof Login2Route
+  '/login3': typeof Login3Route
+  '/login4': typeof Login4Route
   '/_authenticated/': typeof AuthenticatedIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/design-system'
+  fullPaths:
+    '/' | '/design-system' | '/login1' | '/login2' | '/login3' | '/login4'
   fileRoutesByTo: FileRoutesByTo
-  to: '/design-system' | '/'
-  id: '__root__' | '/_authenticated' | '/design-system' | '/_authenticated/'
+  to: '/design-system' | '/login1' | '/login2' | '/login3' | '/login4' | '/'
+  id:
+    | '__root__'
+    | '/_authenticated'
+    | '/design-system'
+    | '/login1'
+    | '/login2'
+    | '/login3'
+    | '/login4'
+    | '/_authenticated/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   DesignSystemRoute: typeof DesignSystemRoute
+  Login1Route: typeof Login1Route
+  Login2Route: typeof Login2Route
+  Login3Route: typeof Login3Route
+  Login4Route: typeof Login4Route
 }
 
 declare module '@tanstack/react-router' {
@@ -69,6 +118,34 @@ declare module '@tanstack/react-router' {
       path: '/design-system'
       fullPath: '/design-system'
       preLoaderRoute: typeof DesignSystemRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login1': {
+      id: '/login1'
+      path: '/login1'
+      fullPath: '/login1'
+      preLoaderRoute: typeof Login1RouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login2': {
+      id: '/login2'
+      path: '/login2'
+      fullPath: '/login2'
+      preLoaderRoute: typeof Login2RouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login3': {
+      id: '/login3'
+      path: '/login3'
+      fullPath: '/login3'
+      preLoaderRoute: typeof Login3RouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login4': {
+      id: '/login4'
+      path: '/login4'
+      fullPath: '/login4'
+      preLoaderRoute: typeof Login4RouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_authenticated/': {
@@ -96,6 +173,10 @@ const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   DesignSystemRoute: DesignSystemRoute,
+  Login1Route: Login1Route,
+  Login2Route: Login2Route,
+  Login3Route: Login3Route,
+  Login4Route: Login4Route,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
