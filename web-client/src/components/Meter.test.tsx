@@ -10,4 +10,18 @@ describe('Meter', () => {
     expect(meter).toHaveAttribute('aria-valuenow', '7')
     expect(meter).toHaveAttribute('aria-valuemax', '15')
   })
+
+  it('fills exactly value of max', () => {
+    render(<Meter label="Round of 16 progress" value={5} max={8} />)
+
+    const fill = screen.getByRole('progressbar').firstElementChild as HTMLElement
+    expect(fill.style.width).toBe('62.5%')
+  })
+
+  it('fills to the percent it is given', () => {
+    render(<Meter label="Rest elapsed" value={7} max={15} percent={47} rest />)
+
+    const fill = screen.getByRole('progressbar').firstElementChild as HTMLElement
+    expect(fill.style.width).toBe('47%')
+  })
 })

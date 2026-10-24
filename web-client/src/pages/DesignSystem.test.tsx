@@ -558,6 +558,20 @@ describe('Overlays', () => {
     expect(tables[2]).toBeDisabled()
   })
 
+  it('shows the match actions menu, its destructive command last', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    const menu = within(designSystemPage.overlaysSection).getByRole('menu', {
+      name: 'Match actions',
+    })
+    expect(within(menu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'Edit match',
+      'Move to another table',
+      'Print score sheet⌘P',
+      'Remove from schedule',
+    ])
+  })
+
   it('opens the command palette from its button', async () => {
     const user = userEvent.setup()
     const designSystemPage = await DesignSystemPage.render()
@@ -585,6 +599,7 @@ describe('Overlays', () => {
       'Feedback',
       'Overlays',
       'Match components',
+      'More components',
     ])
   })
 
@@ -721,5 +736,103 @@ describe('Match components', () => {
     const meter = rest.getByRole('progressbar', { name: 'Rest elapsed' })
     expect(meter).toHaveAttribute('aria-valuenow', '7')
     expect(meter).toHaveAttribute('aria-valuemax', '15')
+  })
+})
+
+describe('More components', () => {
+  it('shows the players’ numbers and signed rating changes in the data table', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const table = within(designSystemPage.moreExample('Data table')).getByRole('table')
+
+    expect(
+      within(table)
+        .getAllByRole('row')
+        .map((row) => [...(row as HTMLTableRowElement).cells].map((cell) => cell.textContent)),
+    ).toEqual([
+      ['Player', 'Club', 'Played', 'Rating', 'Change'],
+      ['Nguyen, Thanh', 'Riverside TT', '42', '2,145', '▲ +12'],
+      ['Wójcik-Szymańska, Agnieszka', 'Northside', '37', '2,088', '▲ +4'],
+      ['Okafor-Adeyemi, Daniel', 'Eastgate', '51', '1,987', '▼ −12'],
+    ])
+  })
+
+  it('shows the Round of 16 as 5 of 8 played', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const example = within(designSystemPage.moreExample('Tags, avatar, progress'))
+
+    const progress = example.getByRole('progressbar', { name: 'Round of 16 progress' })
+    expect(progress).toHaveAttribute('aria-valuenow', '5')
+    expect(progress).toHaveAttribute('aria-valuemax', '8')
+  })
+
+  it('links its navigation to the section itself, since the pages it names don’t exist', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const example = within(designSystemPage.moreExample('Navigation'))
+
+    const links = example.getAllByRole('link')
+    expect(links.map((link) => link.textContent)).toEqual([
+      'Spring Open',
+      'Open singles',
+      'Tables & schedule',
+      'Draws',
+      'Players',
+      'Results',
+    ])
+    for (const link of links) expect(link).toHaveAttribute('href', '#more')
+    expect(
+      within(example.getByRole('navigation', { name: 'Breadcrumb' })).getByText('Round of 16'),
+    ).toHaveAttribute('aria-current', 'page')
+    expect(example.getByRole('link', { name: 'Tables & schedule' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+  })
+
+  it('says which menubar command was chosen, and nothing else happens', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const example = within(designSystemPage.moreExample('Menubar'))
+    expect(example.getByText('Demo: choosing a command only shows its name here.')).toBeVisible()
+
+    await user.click(example.getByRole('menuitem', { name: 'Tournament' }))
+    await user.click(example.getByRole('menuitem', { name: /^Print entry list/ }))
+
+    expect(
+      example.getByText('Chose Tournament → Print entry list⌘P. (Demo: nothing else happens.)'),
+    ).toBeVisible()
+    expect(example.queryByRole('menu')).toBeNull()
+  })
+
+  it('shows this morning’s five finished matches in the carousel', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+    const example = within(designSystemPage.moreExample('Carousel'))
+
+    expect(example.getByRole('region', { name: 'Finished this morning' })).toBeVisible()
+    expect(
+      example.getAllByRole('group').map((slide) => [
+        slide.getAttribute('aria-label'),
+        within(slide).getByRole('article').getAttribute('aria-label'),
+        slide.querySelector('.fm-match__scores')!.textContent,
+      ]),
+    ).toEqual([
+      ['1 of 5', 'Nguyen, Thanh vs Silva, Rafael', '11–7, 9–11, 11–8, 11–6'],
+      ['2 of 5', 'Lindqvist, Erik vs Haddad, Youssef', '11–5, 11–8, 11–4'],
+      ['3 of 5', 'Moreau, Élodie vs Kim, Hyun-woo', '11–9, 7–11, 11–13, 11–8, 12–10'],
+      ['4 of 5', 'Patel, Meera vs Dubois, Camille', '11–6, 11–9, 8–11, 11–7'],
+      ['5 of 5', 'Haddad, Youssef vs Ali, Rashid', '9–11, 11–7, 11–13, 11–9, 11–8'],
+    ])
+  })
+
+  it('starts the accordion with the first answer open and the second closed', async () => {
+    const user = userEvent.setup()
+    const designSystemPage = await DesignSystemPage.render()
+    const example = within(designSystemPage.moreExample('Accordion'))
+    const [first, second] = example.getAllByRole('group')
+    expect(first).toHaveAttribute('open')
+    expect(second).not.toHaveAttribute('open')
+
+    await user.click(example.getByText('Scheduling details'))
+
+    expect(second).toHaveAttribute('open')
   })
 })

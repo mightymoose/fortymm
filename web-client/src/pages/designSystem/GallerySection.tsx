@@ -1,7 +1,7 @@
 import { useId, type CSSProperties, type ReactNode } from 'react'
 
 // One section of the design system page, as the reference gallery draws its
-// `.doc-cat`: a heading, a lead line, then its examples.
+// `.doc-cat`: a heading, a lead line if it has one, then its examples.
 export function GallerySection({
   id,
   title,
@@ -10,7 +10,7 @@ export function GallerySection({
 }: {
   id: string
   title: string
-  lead: ReactNode
+  lead?: ReactNode
   children: ReactNode
 }) {
   const headingId = useId()
@@ -22,7 +22,7 @@ export function GallerySection({
       data-testid={`section-${id}`}
     >
       <h2 id={headingId}>{title}</h2>
-      <p>{lead}</p>
+      {lead && <p>{lead}</p>}
       {children}
     </section>
   )
@@ -32,7 +32,7 @@ export function GallerySection({
 // a description beside the demo. `testId` is the gallery's, e.g.
 // `ex-variants`. `style`, `headerStyle` and `stageStyle` copy an inline
 // style the gallery puts on an example's `.doc-ex`, its `<header>` or its
-// `.doc-stage`.
+// `.doc-stage`, and `stageClassName` a class it adds to the `.doc-stage`.
 export function Example({
   testId,
   title,
@@ -40,6 +40,7 @@ export function Example({
   style,
   headerStyle,
   stageStyle,
+  stageClassName,
   children,
 }: {
   testId: string
@@ -48,6 +49,7 @@ export function Example({
   style?: CSSProperties
   headerStyle?: CSSProperties
   stageStyle?: CSSProperties
+  stageClassName?: string
   children: ReactNode
 }) {
   const titleId = useId()
@@ -57,7 +59,10 @@ export function Example({
         <h3 id={titleId}>{title}</h3>
         {description && <p>{description}</p>}
       </header>
-      <div className="doc-stage" style={stageStyle}>
+      <div
+        className={stageClassName ? `doc-stage ${stageClassName}` : 'doc-stage'}
+        style={stageStyle}
+      >
         {children}
       </div>
     </article>

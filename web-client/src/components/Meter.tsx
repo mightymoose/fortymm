@@ -1,15 +1,18 @@
 // How far along something is, styled by `.fm-meter` in styles/kit.css: a
-// progress bar named `label`, `value` of `max`. `rest` colours it as rest
-// time, with `.fm-meter--rest`.
+// progress bar named `label`, `value` of `max`. `percent` sets how much of
+// it is filled, where a page rounds it, and is `value` of `max` exactly
+// otherwise. `rest` colours it as rest time, with `.fm-meter--rest`.
 export function Meter({
   label,
   value,
   max,
+  percent = (value / max) * 100,
   rest = false,
 }: {
   label: string
   value: number
   max: number
+  percent?: number
   rest?: boolean
 }) {
   return (
@@ -20,8 +23,7 @@ export function Meter({
       aria-valuenow={value}
       aria-valuemax={max}
     >
-      {/* A whole percent: the reference draws 7 of 15 as 47%. */}
-      <i style={{ width: `${Math.round((value / max) * 100)}%` }}></i>
+      <i style={{ width: `${percent}%` }}></i>
     </div>
   )
 }

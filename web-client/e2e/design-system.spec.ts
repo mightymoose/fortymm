@@ -880,6 +880,92 @@ test('the Match components section matches its screenshots and the gallery', asy
   await test.step('gallery', () => matchScreenshots(referenceKitPage))
 })
 
+async function moreScreenshots(gallery: GalleryPage): Promise<void> {
+  const more = gallery.more
+  const page = gallery.page
+  // The section has no lead line, so only its heading is checked.
+  await gallery.goto(more.testId)
+  await screenshotStep('heading', more.heading, 'more-heading.png')
+
+  await gallery.goto('ex-data-table')
+  await screenshotStep('Data table', more.dataTable, 'more-data-table.png')
+
+  await gallery.goto('ex-tags-avatar-progress')
+  await screenshotStep(
+    'Tags, avatar, progress',
+    more.tagsAvatarProgress,
+    'more-tags-avatar-progress.png',
+  )
+
+  await gallery.goto('ex-navigation')
+  await screenshotStep('Navigation', more.navigation, 'more-navigation.png')
+  await hoveredScreenshotStep(
+    'Spring Open, hovered',
+    more.link('Spring Open'),
+    'more-navigation-crumb-hovered.png',
+  )
+  await hoveredScreenshotStep('Draws, hovered', more.link('Draws'), 'more-navigation-nav-hovered.png')
+  await hoveredScreenshotStep('Page 2, hovered', more.button('2'), 'more-navigation-page-hovered.png')
+  await page.mouse.move(0, 0)
+
+  await gallery.goto('ex-menubar')
+  await screenshotStep('Menubar', more.menubar, 'more-menubar.png')
+  await hoveredScreenshotStep(
+    'Tournament, hovered',
+    more.menuButton('Tournament'),
+    'more-menubar-top-hovered.png',
+  )
+  await page.mouse.move(0, 0)
+  await page.keyboard.press('Tab')
+  await expect(more.menuButton('Tournament')).toBeFocused()
+  await focusedScreenshotStep(
+    'Tournament, focused',
+    more.menuButton('Tournament'),
+    'more-menubar-top-focused.png',
+  )
+  await page.keyboard.press('ArrowRight')
+  await page.keyboard.press('ArrowDown')
+  await expect(more.command('Add a break')).toBeFocused()
+  await pageScreenshotStep(
+    'Schedule, opened with → and ↓',
+    gallery,
+    'more-menubar-schedule-open.png',
+  )
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('Enter')
+  await expect(more.chosen).toHaveText(
+    'Chose Schedule → Re-plan from now. (Demo: nothing else happens.)',
+  )
+  await screenshotStep('Menubar, Re-plan from now chosen', more.menubar, 'more-menubar-chosen.png')
+
+  await gallery.goto('ex-carousel')
+  await expect(more.carouselPosition).toHaveText('1–3 of 5')
+  await screenshotStep('Carousel', more.carousel, 'more-carousel.png')
+  await more.button('Next results').click()
+  await page.mouse.move(0, 0)
+  await expect(more.carouselPosition).toHaveText('2–4 of 5')
+  await screenshotStep('Carousel, one card on', more.carousel, 'more-carousel-next.png')
+
+  await gallery.goto('ex-accordion')
+  await screenshotStep('Accordion', more.accordion, 'more-accordion.png')
+  await more.summary('How are matches scheduled?').click()
+  await more.summary('Scheduling details').click()
+  await page.mouse.move(0, 0)
+  await screenshotStep(
+    'Accordion, the first closed and the second open',
+    more.accordion,
+    'more-accordion-swapped.png',
+  )
+}
+
+test('the More components section matches its screenshots and the gallery', async ({
+  designSystemPage,
+  referenceKitPage,
+}) => {
+  await test.step('app', () => moreScreenshots(designSystemPage))
+  await test.step('gallery', () => moreScreenshots(referenceKitPage))
+})
+
 // The overlays' behaviour, which jsdom can't show: the top layer, focus,
 // :focus-visible and layout. Each test runs on the app and on the gallery,
 // so both behave alike.
@@ -1613,6 +1699,135 @@ for (const site of ['app', 'gallery'] as const) {
         expect(scrollWidth).toBeLessThanOrEqual(clientWidth)
         expect(height).toBeGreaterThan(lineHeight * 1.5)
       }
+    })
+  })
+}
+
+// The menubar's and the carousel's behaviour in a real browser: focus, the
+// keys, and the track's scrolling. Each test runs on the app and on the
+// gallery, so both behave alike.
+for (const site of ['app', 'gallery'] as const) {
+  test.describe(`More components on the ${site}`, () => {
+    let gallery: GalleryPage
+    test.beforeEach(({ designSystemPage, referenceKitPage }) => {
+      gallery = site === 'app' ? designSystemPage : referenceKitPage
+    })
+
+    test('← and → move along the menubar, and ↓, ↑ or Enter opens a menu', async ({ page }) => {
+      await gallery.goto('ex-menubar')
+      const more = gallery.more
+
+      await page.keyboard.press('Tab')
+      await expect(more.menuButton('Tournament')).toBeFocused()
+      await page.keyboard.press('ArrowLeft')
+      await expect(more.menuButton('Results')).toBeFocused()
+      await expect(more.menu('Results')).toBeHidden()
+      await page.keyboard.press('ArrowRight')
+      await expect(more.menuButton('Tournament')).toBeFocused()
+
+      await page.keyboard.press('Enter')
+      await expect(more.menu('Tournament')).toBeVisible()
+      await expect(more.menuButton('Tournament')).toHaveAttribute('aria-expanded', 'true')
+      await expect(more.command('Edit details')).toBeFocused()
+      await page.keyboard.press('ArrowUp')
+      await expect(more.command('Print entry list ⌘P')).toBeFocused()
+
+      await page.keyboard.press('ArrowRight')
+      await expect(more.menu('Tournament')).toBeHidden()
+      await expect(more.command('Add a break')).toBeFocused()
+
+      await page.keyboard.press('Escape')
+      await expect(more.menu('Schedule')).toBeHidden()
+      await expect(more.menuButton('Schedule')).toBeFocused()
+      await expect(more.menuButton('Schedule')).toHaveAttribute('aria-expanded', 'false')
+
+      await page.keyboard.press('ArrowUp')
+      await expect(more.command('Change minimum rest')).toBeFocused()
+    })
+
+    test('the menubar is one tab stop, and it remembers the menu last on', async ({ page }) => {
+      await gallery.goto('ex-menubar')
+      const more = gallery.more
+      await page.keyboard.press('Tab')
+      await page.keyboard.press('ArrowRight')
+
+      await page.keyboard.press('Shift+Tab')
+      await expect(more.menuButton('Schedule')).not.toBeFocused()
+      await page.keyboard.press('Tab')
+
+      await expect(more.menuButton('Schedule')).toBeFocused()
+    })
+
+    test('choosing a command closes its menu and says which it was', async () => {
+      await gallery.goto('ex-menubar')
+      const more = gallery.more
+
+      await more.menuButton('Results').click()
+      await more.command('Publish to spectators').click()
+
+      await expect(more.menu('Results')).toBeHidden()
+      await expect(more.chosen).toHaveText(
+        'Chose Results → Publish to spectators. (Demo: nothing else happens.)',
+      )
+    })
+
+    test('a click outside the menubar closes its open menu', async ({ page }) => {
+      await gallery.goto('ex-menubar')
+      const more = gallery.more
+      await more.menuButton('Results').click()
+      await expect(more.menu('Results')).toBeVisible()
+
+      await page.mouse.click(5, 300)
+
+      await expect(more.menu('Results')).toBeHidden()
+    })
+
+    test('the carousel’s buttons step one card, and stop at each end', async () => {
+      await gallery.goto('ex-carousel')
+      const more = gallery.more
+      const previous = more.button('Previous results')
+      const next = more.button('Next results')
+      await expect(previous).toBeDisabled()
+
+      await next.click()
+      await expect(more.carouselPosition).toHaveText('2–4 of 5')
+      await expect(previous).toBeEnabled()
+      // Three and a bit cards show, so the last step only scrolls to the
+      // end, and the count still starts at the second card.
+      await next.click()
+      await expect(next).toBeDisabled()
+      await expect(more.carouselPosition).toHaveText('2–4 of 5')
+
+      await previous.click()
+      await expect(more.carouselPosition).toHaveText('1–3 of 5')
+      await expect(previous).toBeDisabled()
+      await expect(next).toBeEnabled()
+    })
+
+    test('the carousel’s track scrolls with the arrow keys once it has focus', async ({ page }) => {
+      await gallery.goto('ex-carousel')
+      const more = gallery.more
+
+      await more.carouselTrack.focus()
+      await page.keyboard.press('ArrowRight')
+
+      await expect(more.carouselPosition).toHaveText('2–4 of 5')
+      await expect(more.button('Previous results')).toBeEnabled()
+      await page.keyboard.press('ArrowLeft')
+      await expect(more.carouselPosition).toHaveText('1–3 of 5')
+    })
+
+    test('an accordion item opens and closes from its summary', async () => {
+      await gallery.goto('ex-accordion')
+      const more = gallery.more
+      const details = more.accordion.getByText('1,248 variables · 12 rules · solved in 234 ms')
+      await expect(details).toBeHidden()
+
+      await more.summary('Scheduling details').click()
+      await expect(details).toBeVisible()
+
+      await more.summary('Scheduling details').click()
+      await expect(details).toBeHidden()
     })
   })
 }

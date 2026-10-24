@@ -115,6 +115,15 @@ export class DesignSystemPage {
     return within(this.matchSection).getByRole('article', { name: title })
   }
 
+  get moreSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'More components' })
+  }
+
+  // The More components section's example titled `title`, e.g. "Menubar".
+  moreExample(title: string): HTMLElement {
+    return within(this.moreSection).getByRole('article', { name: title })
+  }
+
   // The open dialog or sheet named `name`, e.g. "Patel vs Wójcik-Szymańska".
   dialog(name: string): HTMLElement {
     return screen.getByRole('dialog', { name })

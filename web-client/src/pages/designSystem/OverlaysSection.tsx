@@ -7,6 +7,7 @@ import {
 } from '../../components/CommandPalette'
 import { Dialog } from '../../components/Dialog'
 import { Icon } from '../../components/Icon'
+import { Menu, type MenuItems } from '../../components/Menu'
 import { closeDialog } from '../../components/closeDialog'
 import { Sheet } from '../../components/Sheet'
 import { useToast } from '../../components/toastContext'
@@ -31,6 +32,15 @@ const gallerySections = [
   ['match', 'Match components'],
   ['more', 'More components'],
 ] as const
+
+// The Menu example's commands.
+const matchActions: MenuItems = [
+  { label: 'Edit match' },
+  { label: 'Move to another table' },
+  { label: 'Print score sheet', shortcut: '⌘P' },
+  'divider',
+  { label: 'Remove from schedule', danger: true },
+]
 
 // The tables the move sheet offers. Table 4 can't take a match while its
 // scorer is offline.
@@ -221,26 +231,11 @@ export function OverlaysSection({
         title="Menu"
         description="Destructive items last, in red, after a divider."
       >
-        <div
-          className="fm-overlay fm-menu"
-          role="menu"
-          aria-label="Match actions"
+        <Menu
+          label="Match actions"
+          items={matchActions}
           style={{ alignSelf: 'flex-start' }}
-        >
-          <button type="button" className="fm-menu__item" role="menuitem">
-            Edit match
-          </button>
-          <button type="button" className="fm-menu__item" role="menuitem">
-            Move to another table
-          </button>
-          <button type="button" className="fm-menu__item" role="menuitem">
-            Print score sheet<small>⌘P</small>
-          </button>
-          <hr />
-          <button type="button" className="fm-menu__item fm-menu__item--danger" role="menuitem">
-            Remove from schedule
-          </button>
-        </div>
+        />
         <p className="doc-vo">Visual only</p>
       </Example>
       <Example

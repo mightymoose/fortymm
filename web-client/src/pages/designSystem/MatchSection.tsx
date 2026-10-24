@@ -20,6 +20,9 @@ const freeSlot = day.slots.find((slot): slot is FreeSlot => slot.id === 'b2')!
 // time now.
 const rest = { until: '11:55', length: 15 }
 const restLeft = minutes(rest.until) - minutes(day.now)
+// The rest elapsed. The gallery fills its meter to a whole percent of it:
+// 7 of 15 is 47%.
+const restElapsed = rest.length - restLeft
 
 // The Schedule blocks example: a block per state, a single-select group of
 // pressed buttons with none pressed to start with.
@@ -113,7 +116,13 @@ export function MatchSection() {
             <RestIndicator until={rest.until} />
             <span className="fm-help num">{restLeft} min left</span>
           </div>
-          <Meter label="Rest elapsed" value={rest.length - restLeft} max={rest.length} rest />
+          <Meter
+            label="Rest elapsed"
+            value={restElapsed}
+            max={rest.length}
+            percent={Math.round((restElapsed / rest.length) * 100)}
+            rest
+          />
         </div>
       </Example>
     </GallerySection>
