@@ -512,6 +512,9 @@ The reference's parts of these files are copies. Don't edit them.
 `e2e/reference-styles.spec.ts` fails when a copy differs from the reference.
 If the reference changes, copy the change in.
 
+`public/favicon.svg` is the reference's `assets/logo-mark.svg` without its
+C2PA manifest. The same spec fails if the two differ.
+
 Each font is split into woff2 files by `unicode-range`, so a page downloads
 only the files its text uses. `space-grotesk.css` comes from Fontsource.
 `web-client/scripts/subset-fonts.py` writes `bebas-neue.css`,
