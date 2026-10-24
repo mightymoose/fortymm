@@ -111,8 +111,6 @@ API's URL.
 `references/README.md`). `references/design-system/` is the FortyMM design
 system (v2.1), and the app matches it. Read its `README.md` and
 `colors_and_type.css` before designing or styling UI.
-`references/deprecated/fortymm-design-system/` is the old design system.
-Don't build from it.
 
 ## api
 
