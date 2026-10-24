@@ -1,4 +1,83 @@
+import type { Locator } from '@playwright/test'
 import { expect, test } from './fixtures.ts'
+import type { ButtonsSection } from './pages/designSystem/ButtonsSection.ts'
+import type { KitButtonsSection } from './pages/referenceKit/KitButtonsSection.ts'
+
+// Shows `target` alone, flush top-left with 24px padding, as the gallery's
+// `?only=<testid>` test mode does (see its TESTING.md). The mode's rules are
+// in kit.css, which the app has too, so this works the same on both pages.
+// Each example then starts on a whole pixel on both, whatever comes before
+// it on the page.
+async function isolate(target: Locator): Promise<void> {
+  // Show the whole page again first: a hidden target has no role to be
+  // found by.
+  await target
+    .page()
+    .locator('html')
+    .evaluate((html) => {
+      html.classList.remove('fm-only')
+      for (const marked of html.querySelectorAll('[data-fm-only], [data-fm-path]')) {
+        marked.removeAttribute('data-fm-only')
+        marked.removeAttribute('data-fm-path')
+      }
+    })
+  await target.evaluate((el) => {
+    const body = el.ownerDocument.body
+    el.ownerDocument.documentElement.classList.add('fm-only')
+    el.setAttribute('data-fm-only', '')
+    for (let up = el.parentElement; up && up !== body; up = up.parentElement) {
+      up.setAttribute('data-fm-path', '')
+    }
+  })
+}
+
+// Checks `target` against the screenshot `name` in a step of its own. The
+// check is soft, so a mismatch fails the journey but the journey still takes
+// its later screenshots.
+async function screenshotStep(
+  title: string,
+  target: Locator,
+  name: string,
+): Promise<void> {
+  await test.step(title, async () => {
+    await expect.soft(target).toHaveScreenshot(name)
+  })
+}
+
+// Focuses `control` and checks it and its focus ring, which reaches 4px
+// past its edges, against the screenshot `name`, as screenshotStep() does.
+async function focusedScreenshotStep(
+  title: string,
+  control: Locator,
+  name: string,
+): Promise<void> {
+  await test.step(title, async () => {
+    await control.focus()
+    const box = (await control.boundingBox())!
+    const ring = 4
+    await expect.soft(control.page()).toHaveScreenshot(name, {
+      clip: {
+        x: box.x - ring,
+        y: box.y - ring,
+        width: box.width + 2 * ring,
+        height: box.height + 2 * ring,
+      },
+    })
+  })
+}
+
+// Hovers `control` and checks it against the screenshot `name`, as
+// screenshotStep() does.
+async function hoveredScreenshotStep(
+  title: string,
+  control: Locator,
+  name: string,
+): Promise<void> {
+  await test.step(title, async () => {
+    await control.hover()
+    await expect.soft(control).toHaveScreenshot(name)
+  })
+}
 
 test('shows the Design System title', async ({ designSystemPage }) => {
   await designSystemPage.goto()
@@ -65,4 +144,57 @@ test.describe('intro', () => {
 
     await expect(referenceKitPage.intro).toHaveScreenshot('intro.png')
   })
+})
+
+// Each section's journey takes the same screenshots on the app and then on
+// the gallery, so each pair must render identically. The resting
+// screenshots come first, before anything is hovered or focused.
+async function buttonsScreenshots(
+  buttons: ButtonsSection | KitButtonsSection,
+): Promise<void> {
+  await isolate(buttons.region)
+  await screenshotStep('heading', buttons.heading, 'buttons-heading.png')
+  await screenshotStep('lead', buttons.lead, 'buttons-lead.png')
+  await isolate(buttons.variants)
+  await screenshotStep('Variants', buttons.variants, 'buttons-variants.png')
+  await isolate(buttons.loadingAndDisabled)
+  await screenshotStep(
+    'Loading and disabled',
+    buttons.loadingAndDisabled,
+    'buttons-loading-and-disabled.png',
+  )
+  await hoveredScreenshotStep(
+    'Start match, hovered',
+    buttons.button('Start match'),
+    'button-disabled-hovered.png',
+  )
+  await isolate(buttons.variants)
+  for (const [name, file] of [
+    ['Call to table', 'primary'],
+    ['Reschedule', 'secondary'],
+    ['Print score sheet', 'ghost'],
+    ['Withdraw player…', 'danger'],
+  ]) {
+    await hoveredScreenshotStep(
+      `${name}, hovered`,
+      buttons.button(name),
+      `button-${file}-hovered.png`,
+    )
+  }
+  await focusedScreenshotStep(
+    'Call to table, focused',
+    buttons.button('Call to table'),
+    'button-primary-focused.png',
+  )
+}
+
+test('the Buttons section matches its screenshots and the gallery', async ({
+  designSystemPage,
+  referenceKitPage,
+}) => {
+  await designSystemPage.goto()
+  await test.step('app', () => buttonsScreenshots(designSystemPage.buttons))
+
+  await referenceKitPage.goto()
+  await test.step('gallery', () => buttonsScreenshots(referenceKitPage.buttons))
 })

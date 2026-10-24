@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url'
 import type { Locator, Page } from '@playwright/test'
+import { KitButtonsSection } from './referenceKit/KitButtonsSection.ts'
 
 // The design system's component gallery, opened straight from references/
 // in its test mode (see its TESTING.md): no transitions or animations, no
@@ -16,12 +17,14 @@ export class ReferenceKitPage {
   readonly page: Page
   readonly title: Locator
   readonly intro: Locator
+  readonly buttons: KitButtonsSection
 
   constructor(page: Page) {
     this.page = page
     this.title = page.getByRole('heading', { level: 1 })
     // The paragraph right after the title.
     this.intro = page.getByRole('paragraph').first()
+    this.buttons = new KitButtonsSection(page)
   }
 
   async goto(): Promise<void> {

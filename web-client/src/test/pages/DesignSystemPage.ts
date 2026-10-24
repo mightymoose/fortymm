@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react'
+import { screen, within } from '@testing-library/react'
 import { renderRoute } from '../renderRoute'
 
 // Page object for the design system page in unit tests. Elements are looked
@@ -27,5 +27,14 @@ export class DesignSystemPage {
   // The paragraph right after the page's title.
   get intro(): HTMLElement {
     return screen.getAllByRole('paragraph')[0]
+  }
+
+  get buttonsSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Buttons' })
+  }
+
+  // The Buttons section's button named `name`, e.g. "Save result".
+  button(name: string): HTMLElement {
+    return within(this.buttonsSection).getByRole('button', { name })
   }
 }
