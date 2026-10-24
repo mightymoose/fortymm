@@ -29,6 +29,15 @@ export class DesignSystemPage {
     return screen.getAllByRole('paragraph')[0]
   }
 
+  get rolesSection(): HTMLElement {
+    return screen.getByRole('region', { name: 'Roles at a glance' })
+  }
+
+  // The Roles at a glance section's button named `name`, e.g. "Retry now".
+  rolesButton(name: string): HTMLElement {
+    return within(this.rolesSection).getByRole('button', { name })
+  }
+
   get buttonsSection(): HTMLElement {
     return screen.getByRole('region', { name: 'Buttons' })
   }

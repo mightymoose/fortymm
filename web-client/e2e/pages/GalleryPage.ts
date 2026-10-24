@@ -6,6 +6,7 @@ import { FieldsSection } from './designSystem/FieldsSection.ts'
 import { MatchSection } from './designSystem/MatchSection.ts'
 import { MoreSection } from './designSystem/MoreSection.ts'
 import { OverlaysSection } from './designSystem/OverlaysSection.ts'
+import { RolesSection } from './designSystem/RolesSection.ts'
 import { SelectionSection } from './designSystem/SelectionSection.ts'
 
 // The design system gallery, as the app's /design-system or the reference
@@ -15,6 +16,7 @@ export abstract class GalleryPage {
   readonly page: Page
   readonly title: Locator
   readonly intro: Locator
+  readonly roles: RolesSection
   readonly buttons: ButtonsSection
   readonly fields: FieldsSection
   readonly selection: SelectionSection
@@ -37,6 +39,7 @@ export abstract class GalleryPage {
     this.title = page.getByRole('heading', { level: 1 })
     // The paragraph right after the title.
     this.intro = page.getByRole('paragraph').first()
+    this.roles = new RolesSection(page)
     this.buttons = new ButtonsSection(page)
     this.fields = new FieldsSection(page)
     this.selection = new SelectionSection(page)

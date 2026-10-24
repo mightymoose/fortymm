@@ -8,6 +8,7 @@ import { FieldsSection } from './designSystem/FieldsSection'
 import { MatchSection } from './designSystem/MatchSection'
 import { MoreSection } from './designSystem/MoreSection'
 import { OverlaysSection, WithdrawDialog } from './designSystem/OverlaysSection'
+import { RolesSection } from './designSystem/RolesSection'
 import { SelectionSection } from './designSystem/SelectionSection'
 
 // The app's copy of the design system's component gallery
@@ -32,6 +33,7 @@ export function DesignSystem() {
           Orange marks actions and selection only.
         </p>
       </header>
+      <RolesSection />
       <ButtonsSection onWithdraw={openWithdrawDialog} />
       <FieldsSection opponent={opponent} />
       <SelectionSection />

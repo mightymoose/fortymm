@@ -27,6 +27,12 @@ describe('Toast', () => {
     expect(onUndo).toHaveBeenCalledOnce()
   })
 
+  it('offers Dismiss only when it can be dismissed', () => {
+    render(<Toast message="Table 4 marked free" />)
+
+    expect(screen.queryByRole('button', { name: 'Dismiss' })).not.toBeInTheDocument()
+  })
+
   it('runs onDismiss on Dismiss', async () => {
     const onDismiss = vi.fn()
     render(<Toast message="Table 4 marked free" onDismiss={onDismiss} />)

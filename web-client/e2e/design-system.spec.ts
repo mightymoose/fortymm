@@ -135,6 +135,51 @@ test.describe('intro', () => {
 // the gallery, so each pair must render identically. It opens each section
 // and example on its own with `only`, then takes its resting screenshot
 // before anything is hovered or focused.
+async function rolesScreenshots(gallery: GalleryPage): Promise<void> {
+  const roles = gallery.roles
+  await gallery.goto(roles.testId)
+  await screenshotStep('heading', roles.heading, 'roles-heading.png')
+  await screenshotStep('lead', roles.lead, 'roles-lead.png')
+
+  for (const [title, role, file] of [
+    ['Card', roles.card, 'card'],
+    ['Inline notice', roles.noticeExamples, 'notice-examples'],
+    ['Toast', roles.toast, 'toast'],
+    ['Tooltip', roles.tooltip, 'tooltip'],
+    ['Warning', roles.warning, 'warning'],
+    ['Error', roles.error, 'error'],
+  ] as const) {
+    await gallery.goto(`role-${file}`)
+    await screenshotStep(title, role, `roles-${file}.png`)
+  }
+}
+
+test('the Roles at a glance section matches its screenshots and the gallery', async ({
+  designSystemPage,
+  referenceKitPage,
+}) => {
+  await test.step('app', () => rolesScreenshots(designSystemPage))
+  await test.step('gallery', () => rolesScreenshots(referenceKitPage))
+})
+
+// Retry now is the overview's one live button, on the app and the gallery.
+for (const site of ['app', 'gallery'] as const) {
+  test(`Retry now shows Retrying… and then its label again on the ${site}`, async ({
+    designSystemPage,
+    referenceKitPage,
+  }) => {
+    const gallery = site === 'app' ? designSystemPage : referenceKitPage
+    await gallery.goto('role-error')
+    const retry = gallery.roles.button('Retry now')
+
+    await retry.click()
+
+    await expect(gallery.roles.button('Retrying…')).toHaveAttribute('aria-busy', 'true')
+    await expect(retry).toBeVisible()
+    await expect(gallery.toasts.getByRole('button')).toHaveCount(0)
+  })
+}
+
 async function buttonsScreenshots(gallery: GalleryPage): Promise<void> {
   const buttons = gallery.buttons
   await gallery.goto(buttons.testId)

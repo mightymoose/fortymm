@@ -20,6 +20,48 @@ describe('DesignSystem', () => {
     )
   })
 
+  describe('Roles at a glance', () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('comes first, before Buttons', async () => {
+      const designSystemPage = await DesignSystemPage.render()
+
+      expect(
+        designSystemPage.rolesSection.compareDocumentPosition(designSystemPage.buttonsSection),
+      ).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    })
+
+    it('shows Retrying… while Retry now retries, then its label again', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true })
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+      const designSystemPage = await DesignSystemPage.render()
+      const button = designSystemPage.rolesButton('Retry now')
+
+      await user.click(button)
+
+      expect(button).toHaveAccessibleName('Retrying…')
+      expect(button).toHaveAttribute('aria-busy', 'true')
+      act(() => vi.advanceTimersByTime(BUSY_MS))
+      expect(button).toHaveAccessibleName('Retry now')
+      expect(designSystemPage.toastRegion).toBeEmptyDOMElement()
+    })
+
+    it.each(["I'm at the table", 'Directions', 'Move to 12:05', 'Keep 11:50', 'Undo'])(
+      'does nothing on %s, which is visual only',
+      async (name) => {
+        const user = userEvent.setup()
+        const designSystemPage = await DesignSystemPage.render()
+
+        await user.click(designSystemPage.rolesButton(name))
+
+        expect(designSystemPage.toastRegion).toBeEmptyDOMElement()
+        expect(designSystemPage.rolesButton(name)).toBeInTheDocument()
+      },
+    )
+  })
+
   describe('Buttons', () => {
     afterEach(() => {
       vi.useRealTimers()
@@ -592,6 +634,7 @@ describe('Overlays', () => {
         .getAllByRole('option')
         .map((option) => option.textContent),
     ).toEqual([
+      'Roles at a glance',
       'Buttons',
       'Fields, dates and choices',
       'Selection',

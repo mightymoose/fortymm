@@ -1,9 +1,10 @@
-import type { ComponentProps } from 'react'
+import type { ComponentProps, ReactNode } from 'react'
 import { Icon } from './Icon'
 import type { ToastIcon } from './toastContext'
 
 // One toast, styled by `.fm-toast` in styles/kit.css: an icon, the message,
-// Undo when `onUndo` is given, and Dismiss. It only draws the toast.
+// Undo when `onUndo` is given, and Dismiss when `onDismiss` is. It only
+// draws the toast.
 // ToastProvider shows it in the toast region and times it out.
 export function Toast({
   message,
@@ -13,10 +14,10 @@ export function Toast({
   className,
   ...props
 }: ComponentProps<'div'> & {
-  message: string
+  message: ReactNode
   icon?: ToastIcon
   onUndo?: () => void
-  onDismiss: () => void
+  onDismiss?: () => void
 }) {
   const classes = ['fm-toast']
   if (icon !== 'check') classes.push('fm-toast--info')
@@ -32,14 +33,16 @@ export function Toast({
           Undo
         </button>
       )}
-      <button
-        type="button"
-        className="fm-btn fm-btn--sm fm-toast__close"
-        aria-label="Dismiss"
-        onClick={onDismiss}
-      >
-        <Icon name="x" className="fm-ic--sm" />
-      </button>
+      {onDismiss && (
+        <button
+          type="button"
+          className="fm-btn fm-btn--sm fm-toast__close"
+          aria-label="Dismiss"
+          onClick={onDismiss}
+        >
+          <Icon name="x" className="fm-ic--sm" />
+        </button>
+      )}
     </div>
   )
 }
