@@ -30,7 +30,7 @@ export function DesignSystem() {
   const opponent = useRef<ComboboxHandle>(null)
   const findPlayer = (name: string) => opponent.current?.search(name)
   return (
-    <>
+    <div className="page">
       <header className="doc-head">
         <h1>Design System</h1>
         <p>
@@ -88,6 +88,6 @@ export function DesignSystem() {
       <MatchSection />
       <MoreSection />
       <WithdrawDialog ref={withdrawDialog} />
-    </>
+    </div>
   )
 }

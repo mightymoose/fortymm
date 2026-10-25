@@ -1,5 +1,5 @@
 import { screen, within } from '@testing-library/react'
-import { renderRoute } from '../renderRoute'
+import { navigate, renderRoute, type AppRouter } from '../renderRoute'
 
 // Page object for the design system page in unit tests. Elements are looked
 // up through `screen` on every access, so they always reflect the current
@@ -7,8 +7,18 @@ import { renderRoute } from '../renderRoute'
 export class DesignSystemPage {
   // The page doesn't check the API's health, so this doesn't wait for it.
   static async render(): Promise<DesignSystemPage> {
-    await renderRoute('/design-system', { waitForHealth: false })
-    return new DesignSystemPage()
+    return new DesignSystemPage(await renderRoute('/design-system', { waitForHealth: false }))
+  }
+
+  private readonly router: AppRouter
+
+  constructor(router: AppRouter) {
+    this.router = router
+  }
+
+  // Goes to another page in the same app, as a link would.
+  navigate(to: '/' | '/design-system'): Promise<void> {
+    return navigate(this.router, to)
   }
 
   // The loading screen, or null while it isn't shown.
@@ -16,8 +26,9 @@ export class DesignSystemPage {
     return screen.queryByRole('status', { name: 'Loading FortyMM' })
   }
 
-  get homeLink(): HTMLElement {
-    return screen.getByRole('link', { name: 'Home' })
+  // The authenticated pages' sidebar, which this page doesn't have, or null.
+  get sidebar(): HTMLElement | null {
+    return screen.queryByRole('navigation', { name: 'Main' })
   }
 
   get title(): HTMLElement {
