@@ -11,7 +11,7 @@ test('a guest with a new email keeps its account (VerifyInPlace)', async ({ sign
 
   const returned = await signInPage.signIn(ann)
 
-  expect(returned.search).toBe('')
+  expect(returned.search).toBe('?signed_in=1')
   const account = await signInPage.account()
   expect(account).toMatchObject({ id: guest.id, kind: 'verified', email: ann.email })
 })
@@ -25,7 +25,7 @@ test('the account that owns the identity stays signed in (AlreadySignedIn)', asy
 
   const returned = await signInPage.signIn(ann)
 
-  expect(returned.search).toBe('')
+  expect(returned.search).toBe('?signed_in=1')
   expect(await signInPage.account()).toMatchObject({
     id: before.id,
     kind: 'verified',
@@ -43,7 +43,7 @@ test('a guest signing in to another account joins it (AdoptGuest)', async ({ sig
 
   const returned = await signInPage.signIn(bob)
 
-  expect(returned.search).toBe('')
+  expect(returned.search).toBe('?signed_in=1')
   expect(await signInPage.account()).toMatchObject({
     id: bobs.id,
     kind: 'verified',
@@ -64,7 +64,7 @@ test('a verified account signing in as another switches to it (SwitchAccount)', 
 
   const returned = await signInPage.signIn(bob)
 
-  expect(returned.search).toBe('')
+  expect(returned.search).toBe('?signed_in=1')
   const account = await signInPage.account()
   expect(account).toMatchObject({ id: bobs.id, kind: 'verified', email: bob.email })
   expect(account.id).not.toBe(anns.id)
@@ -80,7 +80,7 @@ test('a verified account with a new email reaches a new account (CreateAccount)'
 
   const returned = await signInPage.signIn(annAtWork)
 
-  expect(returned.search).toBe('')
+  expect(returned.search).toBe('?signed_in=1')
   const account = await signInPage.account()
   expect(account).toMatchObject({ kind: 'verified', email: annAtWork.email })
   expect(account.id).not.toBe(anns.id)

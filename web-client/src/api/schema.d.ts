@@ -89,9 +89,10 @@ export interface paths {
          * Callback
          * @description Finish a sign-in, then send the visitor back to its `return_to`.
          *
-         *     A failed sign-in adds `sign_in_error` to that path's query: `cancelled`,
-         *     `email_not_verified`, `expired` or `failed`. A callback whose `state`
-         *     matches no login attempt, such as a replay, goes to `/`.
+         *     A successful sign-in adds `signed_in=1` to that path's query. A failed
+         *     sign-in adds `sign_in_error` instead: `cancelled`, `email_not_verified`,
+         *     `expired` or `failed`. A callback whose `state` matches no login attempt,
+         *     such as a replay, goes to `/`.
          */
         get: operations["callback"];
         put?: never;
