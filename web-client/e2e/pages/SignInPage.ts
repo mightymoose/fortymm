@@ -5,7 +5,7 @@ import type { components } from '../../src/api/schema.d.ts'
 type SessionAccount = components['schemas']['SessionAccount']
 
 // A public page, so landing on it starts no session of its own.
-const RETURN_TO = '/design-system'
+const PUBLIC_PAGE = '/design-system'
 
 // Someone the mock provider signs in, with a verified email.
 export type Person = { sub: string; email: string }
@@ -34,13 +34,16 @@ export class SignInPage {
   }
 
   // Signs in as `person`, and returns the URL the callback sent the browser
-  // back to.
-  async signIn(person: Person): Promise<URL> {
-    await this.page.goto(`/api/v1/auth/login?return_to=${RETURN_TO}`)
+  // back to. `returnTo: '/'` lands on Home, which resumes the session.
+  async signIn(
+    person: Person,
+    { returnTo = PUBLIC_PAGE }: { returnTo?: '/' | typeof PUBLIC_PAGE } = {},
+  ): Promise<URL> {
+    await this.page.goto(`/api/v1/auth/login?return_to=${returnTo}`)
     await this.subject.fill(person.sub)
     await this.claims.fill(JSON.stringify({ email: person.email, email_verified: true }))
     await this.submit.click()
-    await this.page.waitForURL((url) => url.pathname === RETURN_TO)
+    await this.page.waitForURL((url) => url.pathname === returnTo)
     return new URL(this.page.url())
   }
 
