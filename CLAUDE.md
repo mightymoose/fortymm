@@ -376,7 +376,7 @@ chunk downloads. `AuthenticatedLayout` (`src/pages/AuthenticatedLayout.tsx`)
 suspends until `/v1/health` answers.
 `LoadingScreen` covers it if that takes more than `SHOW_AFTER_MS` (300ms), so
 a fast load shows the page with no loading screen. Once shown, the loading
-screen stays up for at least `MIN_SHOWN_MS` (900ms, one bounce). Then the page
+screen stays up for at least `MIN_SHOWN_MS` (900ms). Then the page
 renders under it, and it fades out (`.loading-screen-leaving`) and removes
 itself when the fade ends. jsdom runs no CSS animations, so the `HomePage`
 page object ends the fade itself. `healthQuery` never goes stale, so health

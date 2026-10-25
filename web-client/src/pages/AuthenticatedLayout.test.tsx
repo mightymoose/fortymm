@@ -1,7 +1,13 @@
 import { act, screen } from '@testing-library/react'
 import { HttpResponse } from 'msw'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { MIN_SHOWN_MS, SHOW_AFTER_MS } from '../components/LoadingScreen'
+import {
+  MIN_SHOWN_MS,
+  SHOW_AFTER_MS,
+  SLOW_AFTER_MS,
+  SLOW_STATUS,
+  STATUS,
+} from '../components/LoadingScreen'
 import { HomePage } from '../test/pages/HomePage'
 import { healthyResponse, holdHealth } from '../test/server'
 
@@ -62,21 +68,21 @@ describe('AuthenticatedLayout', () => {
     await advance(SHOW_AFTER_MS)
 
     expect(homePage.loadingScreen).toHaveTextContent('FortyMM')
-    expect(homePage.loadingScreen).toHaveTextContent('Warming up…')
+    expect(homePage.loadingScreen).toHaveTextContent(STATUS)
     expect(homePage.queryTitle).not.toBeInTheDocument()
   })
 
-  it('moves the status line on after 1800ms', async () => {
+  it('says why a slow load is slow', async () => {
     holdHealth()
     const homePage = await visitHome()
     await advance(SHOW_AFTER_MS)
 
-    await advance(1800)
+    await advance(SLOW_AFTER_MS)
 
-    expect(homePage.loadingScreen).toHaveTextContent('Setting the net…')
+    expect(homePage.loadingScreen).toHaveTextContent(SLOW_STATUS)
   })
 
-  it('keeps the loading screen up for a bounce, over the page, before it fades', async () => {
+  it('keeps the loading screen up for its minimum, over the page, before it fades', async () => {
     const health = holdHealth()
     const homePage = await visitHome()
     await advance(SHOW_AFTER_MS)
@@ -93,7 +99,7 @@ describe('AuthenticatedLayout', () => {
     expect(homePage.loadingScreenFading).toBe(true)
   })
 
-  it('fades the loading screen as soon as health answers after a bounce', async () => {
+  it('fades the loading screen as soon as health answers after its minimum', async () => {
     const health = holdHealth()
     const homePage = await visitHome()
     await advance(SHOW_AFTER_MS)
