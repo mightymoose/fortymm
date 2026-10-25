@@ -12,6 +12,9 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as DesignSystemRouteImport } from './routes/design-system'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
+import { Route as AuthenticatedAdopt1RouteImport } from './routes/_authenticated/adopt1'
+import { Route as AuthenticatedAdopt2RouteImport } from './routes/_authenticated/adopt2'
+import { Route as AuthenticatedAdopt3RouteImport } from './routes/_authenticated/adopt3'
 
 const AuthenticatedRoute = AuthenticatedRouteImport.update({
   id: '/_authenticated',
@@ -27,27 +30,58 @@ const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedAdopt1Route = AuthenticatedAdopt1RouteImport.update({
+  id: '/adopt1',
+  path: '/adopt1',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedAdopt2Route = AuthenticatedAdopt2RouteImport.update({
+  id: '/adopt2',
+  path: '/adopt2',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedAdopt3Route = AuthenticatedAdopt3RouteImport.update({
+  id: '/adopt3',
+  path: '/adopt3',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedIndexRoute
   '/design-system': typeof DesignSystemRoute
+  '/adopt1': typeof AuthenticatedAdopt1Route
+  '/adopt2': typeof AuthenticatedAdopt2Route
+  '/adopt3': typeof AuthenticatedAdopt3Route
 }
 export interface FileRoutesByTo {
   '/design-system': typeof DesignSystemRoute
+  '/adopt1': typeof AuthenticatedAdopt1Route
+  '/adopt2': typeof AuthenticatedAdopt2Route
+  '/adopt3': typeof AuthenticatedAdopt3Route
   '/': typeof AuthenticatedIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/design-system': typeof DesignSystemRoute
+  '/_authenticated/adopt1': typeof AuthenticatedAdopt1Route
+  '/_authenticated/adopt2': typeof AuthenticatedAdopt2Route
+  '/_authenticated/adopt3': typeof AuthenticatedAdopt3Route
   '/_authenticated/': typeof AuthenticatedIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/design-system'
+  fullPaths: '/' | '/design-system' | '/adopt1' | '/adopt2' | '/adopt3'
   fileRoutesByTo: FileRoutesByTo
-  to: '/design-system' | '/'
-  id: '__root__' | '/_authenticated' | '/design-system' | '/_authenticated/'
+  to: '/design-system' | '/adopt1' | '/adopt2' | '/adopt3' | '/'
+  id:
+    | '__root__'
+    | '/_authenticated'
+    | '/design-system'
+    | '/_authenticated/adopt1'
+    | '/_authenticated/adopt2'
+    | '/_authenticated/adopt3'
+    | '/_authenticated/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -78,14 +112,41 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/adopt1': {
+      id: '/_authenticated/adopt1'
+      path: '/adopt1'
+      fullPath: '/adopt1'
+      preLoaderRoute: typeof AuthenticatedAdopt1RouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/adopt2': {
+      id: '/_authenticated/adopt2'
+      path: '/adopt2'
+      fullPath: '/adopt2'
+      preLoaderRoute: typeof AuthenticatedAdopt2RouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/adopt3': {
+      id: '/_authenticated/adopt3'
+      path: '/adopt3'
+      fullPath: '/adopt3'
+      preLoaderRoute: typeof AuthenticatedAdopt3RouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
   }
 }
 
 interface AuthenticatedRouteChildren {
+  AuthenticatedAdopt1Route: typeof AuthenticatedAdopt1Route
+  AuthenticatedAdopt2Route: typeof AuthenticatedAdopt2Route
+  AuthenticatedAdopt3Route: typeof AuthenticatedAdopt3Route
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
+  AuthenticatedAdopt1Route: AuthenticatedAdopt1Route,
+  AuthenticatedAdopt2Route: AuthenticatedAdopt2Route,
+  AuthenticatedAdopt3Route: AuthenticatedAdopt3Route,
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
 }
 
