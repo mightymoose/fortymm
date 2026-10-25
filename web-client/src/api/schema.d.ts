@@ -39,7 +39,9 @@ export interface paths {
          *
          *     A valid session gets a later expiry and a fresh cookie. With no cookie, or
          *     a cookie for an expired, unknown or adopted session, the visitor gets a
-         *     new guest account. The API deletes the session that cookie named.
+         *     new guest account. The API deletes the session that cookie named. A
+         *     client network can start 30 guest accounts a minute. Past that, the API
+         *     answers 429.
          */
         post: operations["start_session"];
         delete?: never;
@@ -131,6 +133,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["SessionResponse"];
                 };
+            };
+            /** @description The client's network started too many guest accounts. Retry-After gives the seconds until it can start more. */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

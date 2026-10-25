@@ -11,6 +11,11 @@ from fortymm_api.services import sessions
 
 router = APIRouter(tags=["session"])
 
+GUEST_LIMIT_DESCRIPTION = (
+    "The client's network started too many guest accounts. "
+    "Retry-After gives the seconds until it can start more."
+)
+
 
 class SessionAccount(BaseModel):
     id: UUID
@@ -37,7 +42,7 @@ def client_address(request: Request) -> sessions.ClientAddress:
     return ip_address(request.client.host)
 
 
-@router.post("/session")
+@router.post("/session", responses={429: {"description": GUEST_LIMIT_DESCRIPTION}})
 def start_session(
     session: DatabaseSession,
     token: SessionToken,
@@ -48,7 +53,9 @@ def start_session(
 
     A valid session gets a later expiry and a fresh cookie. With no cookie, or
     a cookie for an expired, unknown or adopted session, the visitor gets a
-    new guest account. The API deletes the session that cookie named.
+    new guest account. The API deletes the session that cookie named. A
+    client network can start 30 guest accounts a minute. Past that, the API
+    answers 429.
     """
     started = sessions.start_session(session, token, client_address(request))
     response.headers["Cache-Control"] = "no-store"

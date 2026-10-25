@@ -33,7 +33,7 @@
           "session"
         ],
         "summary": "Start Session",
-        "description": "Resume the visitor's session, or start a guest account and its session.\n\nA valid session gets a later expiry and a fresh cookie. With no cookie, or\na cookie for an expired, unknown or adopted session, the visitor gets a\nnew guest account. The API deletes the session that cookie named.",
+        "description": "Resume the visitor's session, or start a guest account and its session.\n\nA valid session gets a later expiry and a fresh cookie. With no cookie, or\na cookie for an expired, unknown or adopted session, the visitor gets a\nnew guest account. The API deletes the session that cookie named. A\nclient network can start 30 guest accounts a minute. Past that, the API\nanswers 429.",
         "operationId": "start_session",
         "responses": {
           "200": {
@@ -45,6 +45,9 @@
                 }
               }
             }
+          },
+          "429": {
+            "description": "The client's network started too many guest accounts. Retry-After gives the seconds until it can start more."
           }
         },
         "security": [

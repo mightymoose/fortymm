@@ -16,6 +16,7 @@ from fortymm_api.services.sessions import (
     GuestAccountLimitReached,
     StartedSession,
     authenticate,
+    client_network,
     start_session,
 )
 
@@ -96,6 +97,31 @@ def seed_count(
         ends_in=ends_in,
         started=started,
     )
+
+
+def started_in_window(database: Engine, network: str) -> int | None:
+    """The network's count, or None once its window has ended or been pruned."""
+    with database.connect() as connection:
+        started: int | None = connection.scalar(
+            text(
+                "SELECT started FROM guest_account_counts"
+                " WHERE network = CAST(:network AS cidr) AND window_ends_at > now()"
+            ),
+            {"network": network},
+        )
+        return started
+
+
+def has_count(database: Engine, network: str) -> bool:
+    with database.connect() as connection:
+        found: bool = connection.scalar(
+            text(
+                "SELECT EXISTS (SELECT FROM guest_account_counts"
+                " WHERE network = CAST(:network AS cidr))"
+            ),
+            {"network": network},
+        )
+        return found
 
 
 def lasts_about_400_days(expiry: datetime | None) -> bool:
@@ -311,3 +337,73 @@ def test_a_second_start_from_one_network_waits_for_the_first(
         first.close()
 
     assert count(migrated_database, "accounts") == 1
+
+
+def test_starts_a_new_window_after_the_old_one_ends(
+    migrated_database: Engine,
+) -> None:
+    seed_count(migrated_database, "203.0.113.7/32", 30, ends_in="-1 second")
+
+    start(migrated_database)
+
+    assert started_in_window(migrated_database, "203.0.113.7/32") == 1
+
+
+def test_never_counts_a_resume(migrated_database: Engine) -> None:
+    first = start(migrated_database)
+    run(migrated_database, "UPDATE guest_account_counts SET started = 30")
+
+    resumed = start(migrated_database, first.token)
+
+    assert resumed == first
+    assert started_in_window(migrated_database, "203.0.113.7/32") == 30
+
+
+def test_counts_a_start_that_replaces_an_unknown_cookie(
+    migrated_database: Engine,
+) -> None:
+    seed_count(migrated_database, "203.0.113.7/32", 30)
+
+    with pytest.raises(GuestAccountLimitReached):
+        start(migrated_database, secrets.token_urlsafe(32))
+
+
+def test_gives_the_time_until_the_window_ends(migrated_database: Engine) -> None:
+    seed_count(migrated_database, "203.0.113.7/32", 30, ends_in="40 seconds")
+
+    with pytest.raises(GuestAccountLimitReached) as refused:
+        start(migrated_database)
+
+    assert 39 <= refused.value.retry_after.total_seconds() <= 40
+
+
+def test_shares_one_count_across_an_ipv6_64(migrated_database: Engine) -> None:
+    seed_count(migrated_database, "2001:db8:1:2::/64", 30)
+
+    with pytest.raises(GuestAccountLimitReached):
+        start(migrated_database, address=ip_address("2001:db8:1:2::ffff"))
+    start(migrated_database, address=ip_address("2001:db8:1:3::1"))
+
+    assert count(migrated_database, "accounts") == 1
+
+
+@pytest.mark.parametrize(
+    ("address", "network"),
+    [
+        ("203.0.113.7", "203.0.113.7/32"),
+        ("2001:db8:1:2:3:4:5:6", "2001:db8:1:2::/64"),
+        ("::ffff:203.0.113.7", "203.0.113.7/32"),
+    ],
+)
+def test_counts_each_address_as_its_network(address: str, network: str) -> None:
+    assert str(client_network(ip_address(address))) == network
+
+
+def test_a_guest_start_deletes_ended_windows(migrated_database: Engine) -> None:
+    seed_count(migrated_database, "198.51.100.1/32", 5, ends_in="-1 second")
+    seed_count(migrated_database, "198.51.100.2/32", 5)
+
+    start(migrated_database)
+
+    assert not has_count(migrated_database, "198.51.100.1/32")
+    assert started_in_window(migrated_database, "198.51.100.2/32") == 5

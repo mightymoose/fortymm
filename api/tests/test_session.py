@@ -8,7 +8,7 @@ import httpx2 as httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine
+from sqlalchemy import Engine, text
 
 from fortymm_api.auth import RequestAccount
 from fortymm_api.main import create_app
@@ -36,6 +36,17 @@ def client(
         app, base_url="https://testserver", client=("203.0.113.7", 50000)
     ) as client:
         yield client
+
+
+def spend_guest_budget(database: Engine, network: str) -> None:
+    with database.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO guest_account_counts (network, window_ends_at, started)"
+                " VALUES (CAST(:network AS cidr), now() + interval '1 minute', 30)"
+            ),
+            {"network": network},
+        )
 
 
 def add_routes(app: FastAPI) -> None:
@@ -83,6 +94,36 @@ def test_reads_the_cookie_and_sets_it_again(client: TestClient) -> None:
     assert response.headers["Cache-Control"] == "no-store"
     assert account_id(response) == account_id(first)
     assert session_cookie(response) == session_cookie(first)
+
+
+def test_answers_429_when_the_network_has_started_too_many_guests(
+    client: TestClient, migrated_database: Engine
+) -> None:
+    spend_guest_budget(migrated_database, "203.0.113.7/32")
+
+    response = start_session(client)
+
+    assert response.status_code == 429
+    assert 1 <= int(response.headers["Retry-After"]) <= 60
+    assert response.json() == {
+        "errors": [
+            {"status": "429", "title": "Too many new guest accounts from this network"}
+        ]
+    }
+    assert "Set-Cookie" not in response.headers
+
+
+def test_keys_the_limit_by_the_requests_client_address(
+    client: TestClient, migrated_database: Engine
+) -> None:
+    spend_guest_budget(migrated_database, "203.0.113.7/32")
+
+    with TestClient(
+        create_app(), base_url="https://testserver", client=("198.51.100.1", 50000)
+    ) as other:
+        response = start_session(other)
+
+    assert response.status_code == 200
 
 
 def test_rejects_a_request_that_does_not_send_json(client: TestClient) -> None:
