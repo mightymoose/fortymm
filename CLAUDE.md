@@ -571,7 +571,11 @@ fails the test. A test overrides a handler with `server.use()`, and the
 override resets after the test. Type each mock body with the schema's type,
 e.g. `components['schemas']['SessionResponse']`. The default handler answers
 `POST /v1/session` with `sessionResponse`, a guest account whose player is
-`excited egret 387`.
+`excited egret 387`. Another default
+handler answers `GET /v1/account/players` with no players.
+`mockVerifiedAccount()` signs the mock API in as a verified account with
+the players it gets. It answers "Is this you?" as the API does, and
+returns the answers it got.
 
 `renderRoute` gives each render its own `QueryClient` with retries off and an
 API client with base URL `API_BASE_URL` (`http://localhost/api`), because
