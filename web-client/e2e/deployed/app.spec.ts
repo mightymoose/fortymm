@@ -17,7 +17,7 @@ const session: components['schemas']['SessionResponse'] = {
 
 // A page load starts a guest account. These specs check the Worker and the
 // assets, not the session, so they answer it here and make no account. Then
-// the session-limit project still has this client's whole budget.
+// the session-limit project still has most of this client's budget.
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/v1/session', (route) => route.fulfill({ json: session }))
 })

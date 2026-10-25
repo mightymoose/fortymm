@@ -246,6 +246,19 @@ for db in "api api-database-password $runtime_sa" \
 done
 unset password
 
+echo "Creating the Auth0 client secrets..."
+# Each holds an Auth0 application's client secret. api/deploy/setup-auth0
+# adds the value, so the secrets start with no version. Production and the
+# Previews each read only their own, like the database passwords.
+for auth0 in "auth0-client-secret $runtime_sa" \
+  "auth0-preview-client-secret $preview_runtime_sa"; do
+  read -r auth0_secret auth0_sa <<<"$auth0"
+  gc secrets describe "$auth0_secret" >/dev/null 2>&1 ||
+    gc secrets create "$auth0_secret" --replication-policy automatic >/dev/null
+  gc secrets add-iam-policy-binding "$auth0_secret" \
+    --member "serviceAccount:$auth0_sa" --role roles/secretmanager.secretAccessor >/dev/null
+done
+
 echo "Creating the Workload Identity pool and provider for $github_repo..."
 gc iam workload-identity-pools describe "$pool" --location global >/dev/null 2>&1 ||
   gc iam workload-identity-pools create "$pool" --location global --display-name "GitHub Actions"
@@ -303,6 +316,10 @@ first deploy (user api_preview). The passwords are in Secret Manager as
 api-database-password and api-preview-database-password. A db-f1-micro
 instance with 10 GB of SSD costs about \$9-10 a month and never scales to
 zero, so expect the \$10 budget alert most months.
+
+The Auth0 client secrets auth0-client-secret and auth0-preview-client-secret
+have no value until api/deploy/setup-auth0 adds it. Run that next, because
+the API doesn't start on Cloud Run without them.
 
 The budget "$budget_name" emails the billing account's admins and users when
 the month's spend passes \$10 and \$25.

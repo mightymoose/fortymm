@@ -271,7 +271,7 @@ account has no `email`. A verified account has one, always lowercase.
 
 Sign-in uses Auth0. Local dev and the tests use a mock OpenID Connect
 provider, because Auth0 doesn't accept a random dev port in a callback URL.
-#69 wires the real tenant.
+Production and the Previews use the real tenant (see Auth0 under Deploy).
 
 - The `oidc` Compose service runs navikt's mock-oauth2-server. Its issuer is
   `http://oidc:8080/default`. Its sign-in page signs in any `sub` with the
@@ -280,7 +280,8 @@ provider, because Auth0 doesn't accept a random dev port in a callback URL.
 - The API reads `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` and `AUTH0_CLIENT_SECRET`.
   `AUTH0_DOMAIN` is Auth0's host, or a base URL with a scheme, such as the
   mock's. Compose points it at the mock. Without `AUTH0_DOMAIN`, the sign-in
-  routes answer 503. Cloud Run doesn't set it yet.
+  routes answer 503. On Cloud Run, `create_app()` raises if any of the three
+  is missing.
 - `identity_provider.py` talks to the provider. It finds the endpoints in
   the provider's discovery document, exchanges the code with PKCE and
   verifies the ID token against the provider's JWKS, with the nonce. It
@@ -607,7 +608,10 @@ are wired together: `/api/v1/health` reaches the database through the API,
 `/api/openapi.json` and `/api/docs` come from the API, an unknown `/api/*` path
 gets the API's JSON 404 rather than the SPA's `index.html` (so
 `run_worker_first` works), and `/` and `/design-system` load the app (so the
-assets and the SPA fallback work). The
+assets and the SPA fallback work). On a Preview, `sign-in.spec.ts` checks
+that `GET /api/v1/auth/login` answers 302 to the Auth0 tenant's
+`/authorize`, with the Preview's client ID and callback URL. It reads them
+from `api/deploy/auth0.env`. It doesn't sign in. The
 main config ignores it; `web-client/playwright.deployed.config.ts` runs it,
 with `baseURL` from `PLAYWRIGHT_BASE_URL` (it fails fast without one) and no
 screenshot tests. Its `ready` project retries `/api/v1/health` for up to a
@@ -623,7 +627,9 @@ production keeps every account. So a production run checks only `/api/v1/health`
 Preview, `app.spec.ts` answers `POST /api/v1/session` itself with
 `page.route()`, so its page loads make no account. The stub is in that spec,
 not in `e2e/fixtures.ts`, because the main suite needs the real endpoint.
-Only `session-limit.spec.ts` starts real guest accounts.
+Only `sign-in.spec.ts` and `session-limit.spec.ts` start real guest
+accounts. `sign-in.spec.ts` starts one, so `session-limit` gets 29 before
+the 429.
 
 ```sh
 DEPLOY_URL=https://fortymm.com ./bin/mise run web-client:e2e-deployed
@@ -833,7 +839,7 @@ image, push it to Artifact Registry as
 `gcloud run deploy` through `api/deploy/cloud-run-deploy`, which holds the
 service settings: min instances 0 (scale to zero), max 3 (1 for Previews),
 1 CPU, 256 MiB, unauthenticated access, with the Worker secret as
-`WORKER_SECRET` and the Cloud SQL database (see below). Production runs as
+`WORKER_SECRET`, the Cloud SQL database and Auth0 (see below). Production runs as
 the `api-runtime` service account, and Previews as `api-preview-runtime`.
 They need `gcloud` logged in as an account that can deploy, and Docker.
 
@@ -929,7 +935,8 @@ images older than 30 days except the 10 newest and the one tagged
 
 The one-time GCP setup (enabling the APIs, the Artifact Registry repository,
 the service accounts and their roles, the Worker secret, the Cloud SQL
-instance with its databases, users and password secrets, the Workload
+instance with its databases, users and password secrets, the two Auth0
+client secrets with no value, the Workload
 Identity pool and provider for `mightymoose/fortymm`, the budget) is
 `api/deploy/bootstrap-gcp.sh`, run once by a project owner; it prints the
 variables to set. `api/deploy/README.md` describes it step by step.
@@ -938,3 +945,29 @@ The budget `FortyMM (fortymm)` covers the project's monthly spend. Google
 Cloud emails the billing account's admins and users when the spend passes
 $10 and $25. The Cloud SQL instance alone costs about $9-10 a month, so the
 $10 alert will likely fire most months.
+
+#### Auth0
+
+Production and the Previews sign in through one Auth0 tenant, with two
+applications of type Regular Web Application. The tenant has only the
+email code and Google connections, because the API links logins by verified
+email (see Sign-in).
+
+| Target | Auth0 application | Allowed callback URLs | Client secret |
+| --- | --- | --- | --- |
+| `api` | `fortymm` | `https://fortymm.com/api/v1/auth/callback` | `auth0-client-secret` |
+| `api-preview` | `fortymm-preview` | `https://*-fortymm.mightymoose.workers.dev/api/v1/auth/callback` | `auth0-preview-client-secret` |
+
+Each application's allowed logout URL is its origin with `/`.
+`api/deploy/auth0.env` holds `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` and
+`AUTH0_PREVIEW_CLIENT_ID`. These values are public, so the file is
+committed. `cloud-run-deploy` reads it before it pushes the image, and fails
+without it. It sets `AUTH0_DOMAIN` and the target's `AUTH0_CLIENT_ID`. It
+mounts the target's client secret as `AUTH0_CLIENT_SECRET` at `latest`, so a
+cold start reads a rotated secret. Only the matching runtime service account
+can read each client secret.
+
+`api/deploy/setup-auth0` is a wizard that a person runs once, after
+`bootstrap-gcp.sh`. It walks them through the Auth0 dashboard and the Google
+Cloud console. It adds each client secret to Secret Manager and writes
+`auth0.env`. `api/deploy/README.md` describes it.

@@ -21,6 +21,7 @@ WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 NO_SESSION = "The request has no valid session"
 TOO_MANY_GUEST_ACCOUNTS = "Too many new guest accounts from this network"
 SIGN_IN_UNAVAILABLE = "Sign-in isn't set up on this server"
+AUTH0_SETTINGS = ("AUTH0_DOMAIN", "AUTH0_CLIENT_ID", "AUTH0_CLIENT_SECRET")
 
 
 def error_response(status: int, title: str) -> JSONResponse:
@@ -88,8 +89,8 @@ def require_json(app: FastAPI) -> None:
 def identity_provider_from_env() -> IdentityProvider | None:
     """The provider that AUTH0_DOMAIN names, or None if it's unset.
 
-    Until the Auth0 tenant exists (#69), only dev and the tests set it, and
-    the sign-in routes answer 503 elsewhere.
+    Cloud Run always sets it. Off Cloud Run, the sign-in routes answer 503
+    without it.
     """
     domain = os.environ.get("AUTH0_DOMAIN", "")
     if not domain:
@@ -113,6 +114,10 @@ def create_app() -> FastAPI:
     # without one.
     if os.environ.get("K_SERVICE") and not database_url:
         raise RuntimeError("DATABASE_URL must be set when running on Cloud Run")
+    missing = [name for name in AUTH0_SETTINGS if not os.environ.get(name)]
+    if os.environ.get("K_SERVICE") and missing:
+        names = ", ".join(missing)
+        raise RuntimeError(f"{names} must be set when running on Cloud Run")
 
     engine = create_database_engine(database_url) if database_url else None
 
