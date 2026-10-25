@@ -57,6 +57,10 @@ starts after the `postgres` service is healthy (`pg_isready`). To add a project'
 the models and the migrations disagree. `api:smoke` then builds the API's production
 image (`api:build`), runs it with `PORT` set on the `postgres` service's
 network, and checks that `/v1/health` reaches the database.
+It then sends 31 `POST /v1/session` from one IPv6 `X-Forwarded-For` address
+and expects a 429. Then it sends one from another IPv6 /64 and one from an
+IPv4 address, and expects a 200 for each. So it fails if the production
+image stops keying the guest account limit by the client's address.
 
 `web-client:ci` runs `npm ci`, lint, build and tests in the running `dev`
 container, so it needs the stack up (run it via `ci`).
@@ -163,7 +167,8 @@ through FastAPI's `TestClient`).
   the NewTypes `AccountId`, `PlayerId` and `Email` from `accounts.py`.
   SQLAlchemy can't see through a NewType, so `Base.type_annotation_map`
   gives each one its column type. The tables are `accounts`, `players`,
-  `player_managers` and `sessions` (see Accounts and sessions).
+  `player_managers`, `sessions` and `guest_account_counts` (see Accounts
+  and sessions).
 - `/v1/health` runs `SELECT 1` and returns `{"data": {"database": "ok"}}`.
   The healthchecks, `api:smoke`, the 403 check and the post-deploy suite use
   it.
@@ -214,6 +219,17 @@ account has no `email`. A verified account has one, always lowercase.
   guest account and a session. It deletes the session row that the old
   cookie matched, and keeps that row's account. Every response sets `Cache-Control: no-store`. The body is
   `{"data": {"account": {"id": "...", "kind": "guest"}}}`, or `"verified"`.
+- `start_session()` limits guest accounts per client network. A network can
+  start 30 guest accounts per window of one minute (`GUEST_ACCOUNT_LIMIT`,
+  `GUEST_ACCOUNT_WINDOW`). The 31st gets `GuestAccountLimitReached`, and
+  `create_app()` answers 429 with `Retry-After`. A resume never counts. An
+  IPv4 address is one network. An IPv6 address counts as its /64. The counts
+  live in `guest_account_counts`, so every API instance shares them. Each
+  counted start deletes up to 100 rows whose windows ended. So a row lasts
+  until the first guest start, from any network, after its window ends. The route reads
+  the client address from `request.client`. In production, uvicorn's
+  `--proxy-headers` sets it from the `X-Forwarded-For` that the Worker
+  writes.
 - The cookie is `__Host-fortymm_session`: 32 random bytes in base64url, with
   `Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=34560000` (400 days).
   `sessions.expires_at` also ends 400 days after the last `POST
@@ -487,6 +503,10 @@ screenshot tests. Its `ready` project retries `/api/v1/health` for up to a
 minute (Cloud Run cold starts, Preview propagation) before the other specs
 run. Against production (`fortymm.com` or `www.fortymm.com`), the config runs
 only the `ready` project.
+Against a Preview, the `session-limit` project runs last. It makes guest
+accounts with a new connection each until the API answers 429, so it checks
+the guest account limit through the Worker. It has no retries, because a
+retry in the same minute finds the budget spent.
 The app's pages will make a guest account on load, and production keeps every
 account. So a production run checks only `/api/v1/health`.
 
@@ -571,8 +591,10 @@ web-client and forwards `/api/*` to the API on Google Cloud Run, so the app's `/
 The API's `*.run.app` URLs are public, so the Worker proves each request came
 through it. It sends the Worker secret in the `X-FortyMM-Worker-Secret`
 header, and the API answers 403 to any request without it. The Worker also
-limits each client IP to 100 `/api/*` requests a minute and answers 429 above
-that. The Worker secret section below describes where the value lives.
+answers 429 to a client IP that sends more than about 100 `/api/*` requests
+a minute to one Cloudflare machine. A client that opens a new connection per
+request reaches many machines, so this limit doesn't stop it (#88). The API
+limits guest accounts itself (see Accounts and sessions). The Worker secret section below describes where the value lives.
 
 ```sh
 ./bin/mise run api:deploy           # build, push and deploy the API; prints its URL last
@@ -632,10 +654,15 @@ query and body and setting `X-Forwarded-Host`, `X-Forwarded-Proto` and
 `X-FortyMM-Worker-Secret` from `WORKER_SECRET`, and removes a client's own
 copy when `WORKER_SECRET` is empty. Before it forwards a request, the
 `API_RATE_LIMIT` binding (`ratelimits` in `wrangler.jsonc`) counts it against
-the client's `CF-Connecting-IP`. Above 100 requests a minute, the Worker
-answers 429 with `Retry-After: 60`. Cloudflare counts each location
-separately, so the limit is approximate. Previews get only the bindings under
-`previews` in `wrangler.jsonc`, so that block repeats the rate limit.
+the client's `CF-Connecting-IP`. Above about 100 requests a minute, the
+Worker answers 429 with `Retry-After: 60`. Each Cloudflare machine keeps its
+own count and shares it in the background, so the limit is approximate. A
+client on one keep-alive connection gets 429 after about 100 requests. A
+client that opens a new connection per request was never limited in
+production or a Preview (#88). Previews get only the bindings under
+`previews` in `wrangler.jsonc`, so that block repeats the rate limit. If
+`CF-Connecting-IP` is missing, the Worker deletes the client's own
+`X-Forwarded-For`, because the API keys guest accounts by it.
 Everything else goes to the static assets in `dist/` (the `ASSETS` binding).
 `assets.run_worker_first: true` runs the Worker before the assets for every
 path, so the host redirect below also covers `/`. When the Worker passes a
