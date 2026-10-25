@@ -111,8 +111,6 @@ API's URL.
 `references/README.md`). `references/design-system/` is the FortyMM design
 system (v2.1), and the app matches it. Read its `README.md` and
 `colors_and_type.css` before designing or styling UI.
-`references/deprecated/fortymm-design-system/` is the old design system.
-Don't build from it.
 
 ## api
 
@@ -342,14 +340,20 @@ To add a page, add its component to `src/pages/` and a route file that shows
 it to `src/routes/`.
 
 - `__root.tsx`: the root route, with component `Root` (`src/pages/Root.tsx`),
-  and the router context type (`api` and `queryClient`).
+  and the router context type (`api` and `queryClient`). `Root` gives every
+  page toasts and tooltips, and no frame.
 - `_authenticated.tsx`: a pathless layout route with no path segment, with
   component `AuthenticatedLayout` (`src/pages/AuthenticatedLayout.tsx`).
   Pages that will need a signed-in user (such as `/`, which is
   `_authenticated/index.tsx`) go in `_authenticated/`. The layout checks the
-  API's health and shows the loading screen (see API client).
+  API's health and shows the loading screen (see API client). It puts the
+  page in `AppShell` (`src/pages/AppShell.tsx`): a topbar over a sidebar of
+  the authenticated pages, which folds to its icons and remembers it in
+  `localStorage`. Below 900px the sidebar is a tab bar along the bottom. To
+  add a page to the sidebar, add its link in `AppShell`.
 - `design-system.tsx`: a public page. Public pages go directly in
   `src/routes/`. They make no request and never show the loading screen.
+  The design system page has no `AppShell`, and no page links to it.
 
 ### API client
 
@@ -372,7 +376,7 @@ chunk downloads. `AuthenticatedLayout` (`src/pages/AuthenticatedLayout.tsx`)
 suspends until `/v1/health` answers.
 `LoadingScreen` covers it if that takes more than `SHOW_AFTER_MS` (300ms), so
 a fast load shows the page with no loading screen. Once shown, the loading
-screen stays up for at least `MIN_SHOWN_MS` (900ms, one bounce). Then the page
+screen stays up for at least `MIN_SHOWN_MS` (900ms). Then the page
 renders under it, and it fades out (`.loading-screen-leaving`) and removes
 itself when the fade ends. jsdom runs no CSS animations, so the `HomePage`
 page object ends the fade itself. `healthQuery` never goes stale, so health
@@ -392,7 +396,9 @@ Tests go through page objects in `web-client/src/test/pages/`. A static async
 `src/test/renderRoute.tsx`, using a memory history) and returns the object,
 whose getters query `screen` on each access (e.g.
 `(await HomePage.render()).title`). Page objects expose elements located by
-accessible role; assertions stay in the tests.
+accessible role; assertions stay in the tests. The design system page has no
+link to it, so `navigate()` on a page object goes to another page through the
+router, as a link would.
 
 Unit tests mock the API with MSW. `src/test/server.ts` holds the mock server
 and its default handlers, and `setupTests.ts` starts it. An unhandled request
@@ -504,15 +510,20 @@ The design system's styles apply to the whole app; `main.tsx` imports them:
   in `src/assets/fonts/`.
 - `src/styles/base.css`: the base, type roles, status markers and motion of
   the same file. Then the app's own chrome: `.page-header`
-  (`src/components/PageHeader.tsx`, Home's title) and the loading screen.
+  (`src/components/PageHeader.tsx`, Home's title), the loading screen and
+  `.app-shell` (`src/pages/AppShell.tsx`).
 - `src/styles/kit.css`: the component classes (`fm-*`) of
   `references/design-system/ui_kits/components/kit.css`.
 - `src/styles/page.css`: the gallery's page chrome (`.doc-*`), with `.page`
-  (the root route's wrapper, `src/pages/Root.tsx`) for its `.doc`.
+  (the page's wrapper in `AppShell` and in `src/pages/DesignSystem.tsx`) for
+  its `.doc`.
 
 The reference's parts of these files are copies. Don't edit them.
 `e2e/reference-styles.spec.ts` fails when a copy differs from the reference.
 If the reference changes, copy the change in.
+
+`public/favicon.svg` is the reference's `assets/logo-mark.svg` without its
+C2PA manifest. The same spec fails if the two differ.
 
 Each font is split into woff2 files by `unicode-range`, so a page downloads
 only the files its text uses. `space-grotesk.css` comes from Fontsource.

@@ -94,3 +94,174 @@ a:hover{color:var(--ball-200)}
 @keyframes loading-screen-out {
   to { opacity: 0; }
 }
+
+/* =========================================================================
+   The authenticated pages' frame (src/pages/AppShell.tsx): a topbar over a
+   sidebar that folds to its icons, and below 900px a tab bar along the
+   bottom. The bar is --bg-panel and the page is --bg-app. Orange marks only
+   the open page.
+   ========================================================================= */
+.app-shell {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  grid-template-columns: 220px minmax(0, 1fr);
+  min-height: 100dvh;
+  background: var(--bg-app);
+  transition: grid-template-columns var(--dur-change) var(--ease-out);
+}
+
+.app-shell[data-folded='true'] {
+  grid-template-columns: 72px minmax(0, 1fr);
+}
+
+.app-top {
+  grid-column: 1 / -1;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 64px;
+  padding: var(--s-3) var(--s-4);
+  background: var(--bg-panel);
+}
+
+.app-wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: var(--s-1) var(--s-3);
+}
+
+.app-wordmark__ball {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--ball-500);
+}
+
+.app-wordmark__name {
+  font: 400 28px/1 var(--font-display);
+  letter-spacing: 0.02em;
+  color: var(--fg-1);
+}
+
+.app-nav {
+  position: sticky;
+  top: 64px;
+  box-sizing: border-box;
+  height: calc(100dvh - 64px);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--s-4) var(--s-3);
+}
+
+.app-shell[data-folded='true'] .app-nav {
+  align-items: center;
+}
+
+.app-link {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  min-height: 40px;
+  padding: 0 var(--s-3);
+  border-radius: var(--r-md);
+  font: 500 15px var(--font-ui);
+  color: var(--fg-2);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color var(--dur-change) var(--ease-out);
+}
+
+.app-link .fm-ic {
+  color: var(--fg-3);
+}
+
+.app-link:hover {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+
+.app-link[aria-current='page'] {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.app-link[aria-current='page'] .fm-ic {
+  color: inherit;
+}
+
+.app-link:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.app-shell[data-folded='true'] .app-link {
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+}
+
+.app-shell[data-folded='true'] .app-link__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.app-main {
+  min-width: 0;
+}
+
+@media (max-width: 899px) {
+  .app-shell,
+  .app-shell[data-folded='true'] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-wide-only {
+    display: none;
+  }
+
+  .app-nav,
+  .app-shell[data-folded='true'] .app-nav {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 20;
+    height: auto;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    align-items: stretch;
+    gap: 0;
+    padding: var(--s-1) var(--s-1) calc(var(--s-1) + env(safe-area-inset-bottom));
+    background: var(--bg-panel);
+  }
+
+  .app-link,
+  .app-shell[data-folded='true'] .app-link {
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    width: auto;
+    height: auto;
+    min-height: 56px;
+    padding: var(--s-1) 0;
+    font-size: var(--text-xs);
+  }
+
+  .app-shell[data-folded='true'] .app-link__label {
+    position: static;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip: auto;
+  }
+}

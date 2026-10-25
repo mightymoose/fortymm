@@ -1,22 +1,36 @@
-import { screen } from '@testing-library/react'
+import { cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { HomePage } from '../test/pages/HomePage'
 
 describe('Home', () => {
+  afterEach(() => {
+    localStorage.clear()
+  })
+
   it('shows the FortyMM title', async () => {
     const homePage = await HomePage.render()
 
     expect(homePage.title).toHaveTextContent('FortyMM')
   })
 
-  it('links to the design system page', async () => {
+  it('shows Home as the open page in the sidebar, with no link to the design system', async () => {
     const homePage = await HomePage.render()
 
-    await userEvent.click(homePage.designSystemLink)
+    expect(homePage.homeLink).toHaveAttribute('aria-current', 'page')
+    expect(homePage.designSystemLink).not.toBeInTheDocument()
+  })
 
-    expect(
-      await screen.findByRole('heading', { level: 1, name: 'Design System' }),
-    ).toBeInTheDocument()
+  it('folds the sidebar to its icons and remembers it on the next visit', async () => {
+    const homePage = await HomePage.render()
+    expect(homePage.sidebarLabelsButton).toHaveAttribute('aria-expanded', 'true')
+
+    await userEvent.click(homePage.sidebarLabelsButton)
+    expect(homePage.sidebarLabelsButton).toHaveAttribute('aria-expanded', 'false')
+    expect(homePage.homeLink).toBeInTheDocument()
+
+    cleanup()
+    const nextVisit = await HomePage.render()
+    expect(nextVisit.sidebarLabelsButton).toHaveAttribute('aria-expanded', 'false')
   })
 })

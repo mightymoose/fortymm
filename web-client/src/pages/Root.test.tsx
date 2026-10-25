@@ -1,5 +1,4 @@
 import { act, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { HttpResponse } from 'msw'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MIN_SHOWN_MS, SHOW_AFTER_MS } from '../components/LoadingScreen'
@@ -36,21 +35,27 @@ describe('Root', () => {
     const designSystemPage = await DesignSystemPage.render()
     vi.useRealTimers()
 
-    await userEvent.click(designSystemPage.homeLink)
+    await designSystemPage.navigate('/')
     await vi.waitFor(() => expect(health.requests).toHaveLength(1))
     await health.respond(HttpResponse.json(healthyResponse))
     expect(
       await screen.findByRole('heading', { level: 1, name: 'FortyMM' }),
     ).toBeInTheDocument()
 
-    await userEvent.click(screen.getByRole('link', { name: 'Design System' }))
+    await designSystemPage.navigate('/design-system')
     await screen.findByRole('heading', { level: 1, name: 'Design System' })
-    await userEvent.click(designSystemPage.homeLink)
+    await designSystemPage.navigate('/')
 
     expect(
       await screen.findByRole('heading', { level: 1, name: 'FortyMM' }),
     ).toBeInTheDocument()
     expect(designSystemPage.loadingScreen).not.toBeInTheDocument()
     expect(health.requests).toHaveLength(1)
+  })
+
+  it('shows the design system page without the sidebar', async () => {
+    const designSystemPage = await DesignSystemPage.render()
+
+    expect(designSystemPage.sidebar).not.toBeInTheDocument()
   })
 })

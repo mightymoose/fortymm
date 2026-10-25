@@ -54,3 +54,11 @@ test.describe('the app styles', () => {
     expect(read(`${styles}page.css`)).toContain(chrome)
   })
 })
+
+test("the favicon is the reference's logo mark, without its C2PA manifest", () => {
+  const mark = read(`${reference}assets/logo-mark.svg`)
+    .replace(/ xmlns:c2pa="[^"]*"/, '')
+    .replace(/<metadata>.*<\/metadata>/s, '')
+
+  expect(read('../public/favicon.svg')).toBe(mark)
+})
