@@ -69,6 +69,11 @@ export class HomePage {
     return screen.queryByRole('link', { name: 'Design System' })
   }
 
+  // The topbar's avatar of the player named `displayName`, or null.
+  avatar(displayName: string): HTMLElement | null {
+    return screen.queryByRole('img', { name: displayName })
+  }
+
   // The button that shows and hides the sidebar's labels.
   get sidebarLabelsButton(): HTMLElement {
     return screen.getByRole('button', { name: 'Sidebar labels' })

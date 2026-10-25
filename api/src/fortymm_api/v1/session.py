@@ -17,9 +17,15 @@ GUEST_LIMIT_DESCRIPTION = (
 )
 
 
+class SessionPlayer(BaseModel):
+    id: UUID
+    display_name: str
+
+
 class SessionAccount(BaseModel):
     id: UUID
     kind: Literal["guest", "verified"]
+    player: SessionPlayer
 
 
 class SessionData(BaseModel):
@@ -56,9 +62,17 @@ def start_session(
     new guest account. The API deletes the session that cookie named. A
     client network can start 30 guest accounts a minute. Past that, the API
     answers 429.
+
+    The account's player is the one it plays as. A new guest account's player
+    gets a default display name, such as `excited egret 387`.
     """
     started = sessions.start_session(session, token, client_address(request))
     response.headers["Cache-Control"] = "no-store"
     set_session_cookie(response, started.token)
-    account = SessionAccount(id=started.account.id, kind=started.account.kind)
+    player = SessionPlayer(
+        id=started.player.id, display_name=started.player.display_name
+    )
+    account = SessionAccount(
+        id=started.account.id, kind=started.account.kind, player=player
+    )
     return SessionResponse(data=SessionData(account=account))

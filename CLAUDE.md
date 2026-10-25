@@ -207,6 +207,15 @@ account has no `email`. A verified account has one, always lowercase.
   `player_managers`. Each row has `relationship` `self` or `managed`. An
   account has at most one `self` player, and a player at most one `self`
   account.
+- `start_session()` gives every account it returns a `self` player
+  (`SelfPlayer` in `accounts.py`). A new guest account gets a new player
+  with a default display name, such as `excited egret 387`. A resumed
+  account that has no `self` player gets one too.
+- `services/display_names.py` makes the default names: an animal, an
+  adjective with the same first letter, and a number from 100 to 999. The
+  adjectives are kind or neutral. `lower(display_name)` is unique, so the
+  insert skips a taken name with `ON CONFLICT DO NOTHING` and tries another,
+  up to 10 times. Its test fails if an animal's initial has no adjective.
 - `ownership.py`: `OWNERSHIP_RULES` says what adoption and player merge do
   to each foreign key to `accounts` or `players`. `tests/test_ownership.py`
   reads every such foreign key from `information_schema`. It fails if one
@@ -217,8 +226,10 @@ account has no `email`. A verified account has one, always lowercase.
   `sessions.expires_at` to 400 days from now and sets the same cookie
   again. With no cookie, or an unknown, expired or adopted one, it makes a
   guest account and a session. It deletes the session row that the old
-  cookie matched, and keeps that row's account. Every response sets `Cache-Control: no-store`. The body is
-  `{"data": {"account": {"id": "...", "kind": "guest"}}}`, or `"verified"`.
+  cookie matched, and keeps that row's account. Every response sets
+  `Cache-Control: no-store`. The body is `{"data": {"account": {"id":
+  "...", "kind": "guest", "player": {"id": "...", "display_name": "excited
+  egret 387"}}}}`. The kind can also be `"verified"`.
 - `start_session()` limits guest accounts per client network. A network can
   start 30 guest accounts per window of one minute (`GUEST_ACCOUNT_LIMIT`,
   `GUEST_ACCOUNT_WINDOW`). The 31st gets `GuestAccountLimitReached`, and
@@ -361,12 +372,16 @@ it to `src/routes/`.
 - `_authenticated.tsx`: a pathless layout route with no path segment, with
   component `AuthenticatedLayout` (`src/pages/AuthenticatedLayout.tsx`).
   Pages that will need a signed-in user (such as `/`, which is
-  `_authenticated/index.tsx`) go in `_authenticated/`. The layout checks the
-  API's health and shows the loading screen (see API client). It puts the
+  `_authenticated/index.tsx`) go in `_authenticated/`. The layout starts
+  the session and shows the loading screen (see API client). It puts the
   page in `AppShell` (`src/pages/AppShell.tsx`): a topbar over a sidebar of
   the authenticated pages, which folds to its icons and remembers it in
   `localStorage`. Below 900px the sidebar is a tab bar along the bottom. To
-  add a page to the sidebar, add its link in `AppShell`.
+  add a page to the sidebar, add its link in `AppShell`. The topbar's right
+  end shows `PlayerAvatar` (`src/components/PlayerAvatar.tsx`), the
+  initials of the player's display name. Its accessible name and tooltip
+  are the full name. It reads the session without suspending, so it never
+  holds up the loading screen.
 - `design-system.tsx`: a public page. Public pages go directly in
   `src/routes/`. They make no request and never show the loading screen.
   The design system page has no `AppShell`, and no page links to it.
@@ -375,30 +390,42 @@ it to `src/routes/`.
 
 `src/api/client.ts` exports `api`, an openapi-fetch client typed by the
 generated schema, with base URL `/api`: `const { data, error } = await
-api.GET('/v1/health')`. `createApiClient()` builds one with other options (e.g.
+api.POST('/v1/session', { headers: { 'Content-Type': 'application/json' } })`.
+openapi-fetch sends no `Content-Type` for a request with no body. The API
+answers 415 to such a `POST`, so a bodyless `POST` sets it itself. `createApiClient()` builds one with other options (e.g.
 an absolute base URL in tests). In production the Cloudflare Worker forwards `/api/*`
 the same way (see Deploy). The dev server's proxy target defaults to
 `http://api:8000` and can be overridden with `API_PROXY_TARGET`.
 
 Components fetch through TanStack Query. `src/api/queries.ts` holds the query
 options, one function per request, each taking the typed client, e.g.
-`useSuspenseQuery(healthQuery(api))`. Each `queryFn` calls the client and
-throws when the response has no data. `createAppRouter()` puts the client in
-the router context as `api`, with the `QueryClient` as `queryClient`, and
-wraps the router in a `QueryClientProvider`. On a full page load, the
-`_authenticated` route's loader starts the health check without waiting for
+`useSuspenseQuery(sessionQuery(api))`. Each `queryFn` calls the client and
+throws an `ApiError` with the status when the response has no data.
+`createQueryClient()` makes the app's `QueryClient`. It retries a query only
+after a network error or a 5xx, which can pass. A 4xx comes back the same.
+A retry after a lost `POST /v1/session` response can leave one unused guest
+account, which is an accepted cost. `createAppRouter()` puts the client in the router context as `api`,
+with the `QueryClient` as `queryClient`, and wraps the router in a
+`QueryClientProvider`.
+
+`sessionQuery` sends `POST /v1/session` and returns the account, with its
+player. Pages read the account from it. It passes no abort `signal`. An
+aborted request still starts a guest account on the API, but the browser
+drops its cookie, so the query would start another one. On a full page load,
+the `_authenticated` route's loader starts the session without waiting for
 it. The loader stays in the entry chunk, so the request runs while the page's
 chunk downloads. `AuthenticatedLayout` (`src/pages/AuthenticatedLayout.tsx`)
-suspends until `/v1/health` answers.
+suspends until the session answers.
 `LoadingScreen` covers it if that takes more than `SHOW_AFTER_MS` (300ms), so
 a fast load shows the page with no loading screen. Once shown, the loading
 screen stays up for at least `MIN_SHOWN_MS` (900ms). Then the page
 renders under it, and it fades out (`.loading-screen-leaving`) and removes
 itself when the fade ends. jsdom runs no CSS animations, so the `HomePage`
-page object ends the fade itself. `healthQuery` never goes stale, so health
-is checked once per page load, and coming back to an authenticated page
-doesn't show the loading screen again. If health fails after the default
-retries, the router's default error component shows.
+page object ends the fade itself. `sessionQuery` never goes stale, so the
+session starts once per page load, and coming back to an authenticated page
+doesn't show the loading screen again. If the session fails after the
+retries, the router's default error component shows. The web-client no
+longer calls `/v1/health`.
 
 ### Tests
 
@@ -420,15 +447,18 @@ Unit tests mock the API with MSW. `src/test/server.ts` holds the mock server
 and its default handlers, and `setupTests.ts` starts it. An unhandled request
 fails the test. A test overrides a handler with `server.use()`, and the
 override resets after the test. Type each mock body with the schema's type,
-e.g. `components['schemas']['HealthResponse']`.
+e.g. `components['schemas']['SessionResponse']`. The default handler answers
+`POST /v1/session` with `sessionResponse`, a guest account whose player is
+`excited egret 387`.
 
 `renderRoute` gives each render its own `QueryClient` with retries off and an
 API client with base URL `API_BASE_URL` (`http://localhost/api`), because
-Node's `Request` rejects a relative URL. It waits for the health check, so the
+Node's `Request` rejects a relative URL. It waits for the session, so the
 page is on screen when `render()` resolves. To test the loading screen, hold
-the health response with `holdHealth()` from `src/test/server.ts` (see
+the session response with `holdSession()` from `src/test/server.ts` (see
 `src/pages/AuthenticatedLayout.test.tsx`). `DesignSystemPage.render()` never
-waits for health, because the page doesn't check it. `renderRoute` calls
+waits for the session, because the page doesn't start one.
+`src/api/queries.test.ts` checks the retry rule through `createQueryClient()`. `renderRoute` calls
 `router.load()`, which also loads the route's chunk, so no page object waits
 for a chunk.
 
@@ -445,6 +475,12 @@ Specs import `test` and `expect` from `e2e/fixtures.ts`, which provides page
 objects (`e2e/pages/`) as fixtures: `test('...', async ({ homePage }) => ...)`.
 As in the unit tests, page objects expose role-based locators and actions like
 `goto()`, and the specs do the asserting.
+
+`e2e/session.spec.ts` runs against the real API. It checks that a page load
+sends one `POST /v1/session`, that a reload keeps the account, and that a new
+browser context gets another. So it also checks that Chromium keeps the
+`__Host-` cookie, which is `Secure`, over `http://localhost`. `home.spec.ts`
+holds the session request with `page.route()` to show the loading screen.
 
 The design system page is a copy of the reference's component gallery
 (`references/design-system/ui_kits/components/index.html`). It has one
@@ -507,8 +543,12 @@ Against a Preview, the `session-limit` project runs last. It makes guest
 accounts with a new connection each until the API answers 429, so it checks
 the guest account limit through the Worker. It has no retries, because a
 retry in the same minute finds the budget spent.
-The app's pages will make a guest account on load, and production keeps every
-account. So a production run checks only `/api/v1/health`.
+A page load of `/` without a session cookie starts a guest account, and
+production keeps every account. So a production run checks only `/api/v1/health`. Against a
+Preview, `app.spec.ts` answers `POST /api/v1/session` itself with
+`page.route()`, so its page loads make no account. The stub is in that spec,
+not in `e2e/fixtures.ts`, because the main suite needs the real endpoint.
+Only `session-limit.spec.ts` starts real guest accounts.
 
 ```sh
 DEPLOY_URL=https://fortymm.com ./bin/mise run web-client:e2e-deployed

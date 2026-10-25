@@ -3,7 +3,7 @@ import { HttpResponse } from 'msw'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MIN_SHOWN_MS, SHOW_AFTER_MS } from '../components/LoadingScreen'
 import { DesignSystemPage } from '../test/pages/DesignSystemPage'
-import { healthyResponse, holdHealth } from '../test/server'
+import { sessionResponse, holdSession } from '../test/server'
 
 describe('Root', () => {
   beforeEach(() => {
@@ -17,8 +17,8 @@ describe('Root', () => {
     vi.useRealTimers()
   })
 
-  it('shows the design system page without checking health or showing the loading screen', async () => {
-    const health = holdHealth()
+  it('shows the design system page without starting a session or showing the loading screen', async () => {
+    const session = holdSession()
     const designSystemPage = await DesignSystemPage.render()
 
     await act(async () => {
@@ -27,17 +27,17 @@ describe('Root', () => {
 
     expect(designSystemPage.title).toHaveTextContent('Design System')
     expect(designSystemPage.loadingScreen).not.toBeInTheDocument()
-    expect(health.requests).toHaveLength(0)
+    expect(session.requests).toHaveLength(0)
   })
 
-  it('checks health once, on the first visit to an authenticated page', async () => {
-    const health = holdHealth()
+  it('starts the session once, on the first visit to an authenticated page', async () => {
+    const session = holdSession()
     const designSystemPage = await DesignSystemPage.render()
     vi.useRealTimers()
 
     await designSystemPage.navigate('/')
-    await vi.waitFor(() => expect(health.requests).toHaveLength(1))
-    await health.respond(HttpResponse.json(healthyResponse))
+    await vi.waitFor(() => expect(session.requests).toHaveLength(1))
+    await session.respond(HttpResponse.json(sessionResponse))
     expect(
       await screen.findByRole('heading', { level: 1, name: 'FortyMM' }),
     ).toBeInTheDocument()
@@ -50,7 +50,7 @@ describe('Root', () => {
       await screen.findByRole('heading', { level: 1, name: 'FortyMM' }),
     ).toBeInTheDocument()
     expect(designSystemPage.loadingScreen).not.toBeInTheDocument()
-    expect(health.requests).toHaveLength(1)
+    expect(session.requests).toHaveLength(1)
   })
 
   it('shows the design system page without the sidebar', async () => {

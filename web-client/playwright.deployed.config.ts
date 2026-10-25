@@ -11,8 +11,10 @@ if (!baseURL) {
   )
 }
 
-// The app's pages will make a guest account on load, and production keeps
-// every account. So production gets only the health check.
+// Production keeps every account, and a check there must write nothing. So
+// production gets only the health check. Against a Preview, app.spec.ts
+// answers the session itself, so its page loads make no account. Only
+// session-limit.spec.ts starts real ones.
 const PRODUCTION_HOSTS = ['fortymm.com', 'www.fortymm.com']
 const production = PRODUCTION_HOSTS.includes(new URL(baseURL).hostname)
 

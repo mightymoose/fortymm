@@ -7,24 +7,33 @@ import type { components } from '../api/schema'
 // relative `/api`.
 export const API_BASE_URL = 'http://localhost/api'
 
-export const healthyResponse: components['schemas']['HealthResponse'] = {
-  data: { database: 'ok' },
+export const sessionResponse: components['schemas']['SessionResponse'] = {
+  data: {
+    account: {
+      id: '0b9e3c1e-58f4-4c84-9a59-2d0b6f3f6a10',
+      kind: 'guest',
+      player: {
+        id: 'c4a8f6a2-1f0e-4a63-8d2e-7f5b9e1c3d42',
+        display_name: 'excited egret 387',
+      },
+    },
+  },
 }
 
 // The mock API for unit tests, started in setupTests.ts. Tests override a
 // handler for themselves with `server.use()`.
 export const server = setupServer(
-  http.get(`${API_BASE_URL}/v1/health`, () =>
-    HttpResponse.json(healthyResponse),
+  http.post(`${API_BASE_URL}/v1/session`, () =>
+    HttpResponse.json(sessionResponse),
   ),
 )
 
-// Holds the mock API's health responses until the test sends them.
-export function holdHealth() {
+// Holds the mock API's session responses until the test sends them.
+export function holdSession() {
   const requests: Request[] = []
   const pending: ((response: Response) => void)[] = []
   server.use(
-    http.get(`${API_BASE_URL}/v1/health`, ({ request }) => {
+    http.post(`${API_BASE_URL}/v1/session`, ({ request }) => {
       requests.push(request)
       return new Promise<Response>((resolve) => pending.push(resolve))
     }),

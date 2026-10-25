@@ -33,7 +33,7 @@
           "session"
         ],
         "summary": "Start Session",
-        "description": "Resume the visitor's session, or start a guest account and its session.\n\nA valid session gets a later expiry and a fresh cookie. With no cookie, or\na cookie for an expired, unknown or adopted session, the visitor gets a\nnew guest account. The API deletes the session that cookie named. A\nclient network can start 30 guest accounts a minute. Past that, the API\nanswers 429.",
+        "description": "Resume the visitor's session, or start a guest account and its session.\n\nA valid session gets a later expiry and a fresh cookie. With no cookie, or\na cookie for an expired, unknown or adopted session, the visitor gets a\nnew guest account. The API deletes the session that cookie named. A\nclient network can start 30 guest accounts a minute. Past that, the API\nanswers 429.\n\nThe account's player is the one it plays as. A new guest account's player\ngets a default display name, such as `excited egret 387`.",
         "operationId": "start_session",
         "responses": {
           "200": {
@@ -100,12 +100,16 @@
               "verified"
             ],
             "title": "Kind"
+          },
+          "player": {
+            "$ref": "#/components/schemas/SessionPlayer"
           }
         },
         "type": "object",
         "required": [
           "id",
-          "kind"
+          "kind",
+          "player"
         ],
         "title": "SessionAccount"
       },
@@ -120,6 +124,25 @@
           "account"
         ],
         "title": "SessionData"
+      },
+      "SessionPlayer": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "display_name"
+        ],
+        "title": "SessionPlayer"
       },
       "SessionResponse": {
         "properties": {

@@ -70,14 +70,14 @@ test('shows the Design System title', async ({ designSystemPage }) => {
   await expect(designSystemPage.title).toHaveText('Design System')
 })
 
-test('shows no loading screen and checks no health', async ({
+test('shows no loading screen and starts no session', async ({
   designSystemPage,
   page,
 }) => {
-  const healthRequests: string[] = []
+  const apiRequests: string[] = []
   page.on('request', (request) => {
-    if (request.url().includes('/api/v1/health')) {
-      healthRequests.push(request.url())
+    if (new URL(request.url()).pathname.startsWith('/api/')) {
+      apiRequests.push(request.url())
     }
   })
 
@@ -86,7 +86,7 @@ test('shows no loading screen and checks no health', async ({
   await page.waitForLoadState('networkidle')
 
   await expect(designSystemPage.loadingScreen).toHaveCount(0)
-  expect(healthRequests).toEqual([])
+  expect(apiRequests).toEqual([])
 })
 
 // The header is compared with the gallery's with the app's title swapped

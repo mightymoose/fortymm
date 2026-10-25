@@ -5,9 +5,9 @@ import { navigate, renderRoute, type AppRouter } from '../renderRoute'
 // up through `screen` on every access, so they always reflect the current
 // render.
 export class DesignSystemPage {
-  // The page doesn't check the API's health, so this doesn't wait for it.
+  // The page starts no session, so this doesn't wait for one.
   static async render(): Promise<DesignSystemPage> {
-    return new DesignSystemPage(await renderRoute('/design-system', { waitForHealth: false }))
+    return new DesignSystemPage(await renderRoute('/design-system', { waitForSession: false }))
   }
 
   private readonly router: AppRouter

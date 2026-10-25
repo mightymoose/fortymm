@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRouter, type RouterHistory } from '@tanstack/react-router'
 import { api as defaultApi, type ApiClient } from './api/client'
+import { createQueryClient } from './api/queries'
 import { routeTree } from './routeTree.gen'
 
 // Builds the app's router. Tests pass a memory history to start on a given
@@ -9,7 +10,7 @@ import { routeTree } from './routeTree.gen'
 export function createAppRouter(
   history?: RouterHistory,
   {
-    queryClient = new QueryClient(),
+    queryClient = createQueryClient(),
     api = defaultApi,
   }: { queryClient?: QueryClient; api?: ApiClient } = {},
 ) {

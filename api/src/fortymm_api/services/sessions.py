@@ -2,6 +2,7 @@
 
 import hashlib
 import secrets
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from ipaddress import IPv4Address, IPv4Network, IPv6Address, IPv6Network, ip_network
@@ -10,8 +11,21 @@ from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from fortymm_api.accounts import CurrentAccount, GuestAccount, VerifiedAccount
-from fortymm_api.models import Account, AuthSession, GuestAccountCount
+from fortymm_api.accounts import (
+    AccountId,
+    CurrentAccount,
+    GuestAccount,
+    SelfPlayer,
+    VerifiedAccount,
+)
+from fortymm_api.models import (
+    Account,
+    AuthSession,
+    GuestAccountCount,
+    Player,
+    PlayerManager,
+)
+from fortymm_api.services.display_names import random_display_name
 
 # 400 days, the longest Max-Age browsers keep, so a session expires with its
 # cookie.
@@ -30,6 +44,8 @@ IPV6_CLIENT_PREFIX = 64
 # Each guest start deletes at most this many ended windows, so a start after a
 # quiet spell stays short.
 PRUNE_BATCH = 100
+# Display names are unique, so a start tries this many before it gives up.
+DISPLAY_NAME_ATTEMPTS = 10
 
 
 class GuestAccountLimitReached(Exception):
@@ -65,6 +81,7 @@ class InvalidSession:
 @dataclass(frozen=True)
 class StartedSession:
     account: CurrentAccount
+    player: SelfPlayer
     token: str
 
 
@@ -125,7 +142,11 @@ def client_network(address: ClientAddress) -> ClientNetwork:
 
 
 def start_session(
-    session: Session, token: str | None, address: ClientAddress
+    session: Session,
+    token: str | None,
+    address: ClientAddress,
+    *,
+    new_display_name: Callable[[], str] = random_display_name,
 ) -> StartedSession:
     """Resume the token's session, or start a guest account and its session.
 
@@ -134,6 +155,10 @@ def start_session(
     new guest account and token, and the session the old token named is
     deleted. Its account stays. Raises GuestAccountLimitReached before any
     write when the address's network is at the limit.
+
+    Every account it returns has a self player. A new guest account gets one
+    with a name from `new_display_name`. So does a resumed account that has
+    none yet.
     """
     found = find_session(session, token, lock=True)
     if isinstance(found, ValidSession) and token is not None:
@@ -143,7 +168,10 @@ def start_session(
             .where(Account.id == found.account.id)
             .values(last_seen_at=func.now())
         )
-        return StartedSession(found.account, token)
+        player = _self_player(session, found.account.id) or _create_self_player(
+            session, found.account.id, new_display_name
+        )
+        return StartedSession(found.account, player, token)
 
     _count_guest_account(session, client_network(address))
     if found is not None:
@@ -159,7 +187,46 @@ def start_session(
             expires_at=func.now() + SESSION_LIFETIME,
         )
     )
-    return StartedSession(GuestAccount(guest.id), token)
+    player = _create_self_player(session, guest.id, new_display_name)
+    return StartedSession(GuestAccount(guest.id), player, token)
+
+
+def _self_player(session: Session, account_id: AccountId) -> SelfPlayer | None:
+    found = session.execute(
+        select(Player.id, Player.display_name)
+        .join(PlayerManager, PlayerManager.player_id == Player.id)
+        .where(
+            PlayerManager.account_id == account_id,
+            PlayerManager.relationship == "self",
+        )
+    ).one_or_none()
+    return None if found is None else SelfPlayer(found.id, found.display_name)
+
+
+def _create_self_player(
+    session: Session, account_id: AccountId, new_display_name: Callable[[], str]
+) -> SelfPlayer:
+    """Make the account's self player, with the first free name.
+
+    ON CONFLICT DO NOTHING skips a taken name. A plain INSERT would raise and
+    abort the request's transaction.
+    """
+    for _ in range(DISPLAY_NAME_ATTEMPTS):
+        display_name = new_display_name()
+        player_id = session.scalar(
+            insert(Player)
+            .values(display_name=display_name)
+            .on_conflict_do_nothing()
+            .returning(Player.id)
+        )
+        if player_id is not None:
+            session.add(
+                PlayerManager(
+                    player_id=player_id, account_id=account_id, relationship="self"
+                )
+            )
+            return SelfPlayer(player_id, display_name)
+    raise RuntimeError(f"No free display name after {DISPLAY_NAME_ATTEMPTS} tries")
 
 
 def _count_guest_account(session: Session, network: ClientNetwork) -> None:

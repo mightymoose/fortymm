@@ -80,8 +80,15 @@ def test_answers_with_the_account_and_sets_the_cookie(client: TestClient) -> Non
 
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "no-store"
+    player = response.json()["data"]["account"]["player"]
     assert response.json() == {
-        "data": {"account": {"id": account_id(response), "kind": "guest"}}
+        "data": {
+            "account": {
+                "id": account_id(response),
+                "kind": "guest",
+                "player": {"id": player["id"], "display_name": player["display_name"]},
+            }
+        }
     }
     session_cookie(response)
 
