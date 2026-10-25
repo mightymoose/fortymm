@@ -4,6 +4,7 @@ import hashlib
 import secrets
 from dataclasses import dataclass
 from datetime import timedelta
+from ipaddress import IPv4Address, IPv6Address
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
@@ -14,6 +15,22 @@ from fortymm_api.models import Account, AuthSession
 # 400 days, the longest Max-Age browsers keep, so a session expires with its
 # cookie.
 SESSION_LIFETIME = timedelta(days=400)
+
+# A client's IP address, parsed at the HTTP boundary.
+type ClientAddress = IPv4Address | IPv6Address
+
+# A client network can start this many guest accounts per window.
+GUEST_ACCOUNT_LIMIT = 30
+GUEST_ACCOUNT_WINDOW = timedelta(minutes=1)
+
+
+class GuestAccountLimitReached(Exception):
+    """The client's network started GUEST_ACCOUNT_LIMIT guest accounts in its
+    current window. `create_app()` answers 429."""
+
+    def __init__(self, retry_after: timedelta) -> None:
+        super().__init__(retry_after)
+        self.retry_after = retry_after
 
 
 def new_token() -> str:
@@ -86,7 +103,9 @@ def authenticate(session: Session, token: str | None) -> CurrentAccount | None:
     return found.account if isinstance(found, ValidSession) else None
 
 
-def start_session(session: Session, token: str | None) -> StartedSession:
+def start_session(
+    session: Session, token: str | None, address: ClientAddress
+) -> StartedSession:
     """Resume the token's session, or start a guest account and its session.
 
     A valid session expires SESSION_LIFETIME from now and keeps its token.

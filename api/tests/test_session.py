@@ -31,7 +31,10 @@ def client(
     app = create_app()
     add_routes(app)
     # The session cookie is Secure, so the client sends it only over https.
-    with TestClient(app, base_url="https://testserver") as client:
+    # The route keys guest accounts by the client's IP address.
+    with TestClient(
+        app, base_url="https://testserver", client=("203.0.113.7", 50000)
+    ) as client:
         yield client
 
 
