@@ -257,10 +257,12 @@ account has no `email`. A verified account has one, always lowercase.
   needs the account takes a `RequestAccount` parameter. Without a valid
   session, that dependency answers 401 in the `errors` shape. Only `POST
   /v1/session` and `GET /v1/auth/login` make a guest account.
-- A service that writes as an account loads the account row with
-  `with_for_update(read=True)`, which is `SELECT ... FOR SHARE`. After the
-  lock, it checks `adopted_into` again. If it is set, the route answers 401. So a
-  write can't land on a guest account after an adoption moved its data.
+- A service that writes as an account first calls
+  `lock_account_for_write()` in `services/sessions.py`. It holds the account
+  row `FOR SHARE` until the transaction ends. After the lock, it checks
+  `adopted_into` again. If it is set, it raises `AccountAdopted`, and
+  `create_app()` answers 401 in the `errors` shape. So a write can't land on
+  a guest account after an adoption moved its data.
   `RequestAccount` takes no lock. `POST /v1/session` locks the account `FOR
   UPDATE`, because it writes `last_seen_at`.
 - `alembic check` doesn't compare a partial index's `WHERE` clause. So
@@ -301,13 +303,21 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   `resolve_login()` is a pure function that picks the outcome from the
   current account and the identity's owner. The owner is the account with
   the `sub`, or else the account with the email.
-- `VerifyInPlace`, `AlreadySignedIn`, `SwitchAccount` and `CreateAccount`
-  work. `AdoptGuest` answers `sign_in_error=failed` until adoption lands
-  (#60). Every outcome gives the browser a new session and token.
+- Every outcome gives the browser a new session and token.
   `VerifyInPlace` calls `convert_guest()` in `services/sessions.py`, which
-  deletes every session of the guest account. It also makes each of the
-  account's `player_managers` rows `managed`, with `adopted_from` set to
-  the account, for the "Is this you?" question (#63).
+  deletes every session of the guest account. It also calls
+  `hand_over_players()` in `services/adoption.py`, with the guest account
+  as the target. That makes each of the account's `player_managers` rows
+  `managed`, with `adopted_from` set to the account, for the "Is this you?"
+  question (#63).
+- `AdoptGuest` calls `adopt_guest()` in `services/adoption.py`. It locks
+  the guest account row `FOR UPDATE`. It hands the guest's players to the
+  target account, as `hand_over_players()` does. It moves every other
+  column whose `OWNERSHIP_RULES` entry is `MOVES_ON_ADOPT`, read from the
+  registry at call time. Then it calls `convert_guest()` and sets
+  `adopted_into` on the guest account. The API never deletes that row. The
+  target account's other sessions stay valid. A new `sub` that adoption
+  finds by email gets its `identities` row on the target account.
 - A sign-in takes a Postgres advisory lock on the email before it finds the
   owner. So two sign-ins with one new email take turns, and they make one
   account.
@@ -557,6 +567,14 @@ sends one `POST /v1/session`, that a reload keeps the account, and that a new
 browser context gets another. So it also checks that Chromium keeps the
 `__Host-` cookie, which is `Secure`, over `http://localhost`. `home.spec.ts`
 holds the session request with `page.route()` to show the loading screen.
+
+`e2e/sign-in.spec.ts` signs in through the dev server's `/oidc` proxy and
+the mock's sign-in page. It has one test for each outcome of
+`resolve_login()`. Each test reads the account from `POST /api/v1/session`
+with the page's cookies. The `SignInPage` page object returns to
+`/design-system`, which starts no session. Each run makes a new `sub` and
+email, because the dev database keeps its accounts. The suite starts about
+12 guest accounts, under the limit of 30 a minute.
 
 The design system page is a copy of the reference's component gallery
 (`references/design-system/ui_kits/components/index.html`). It has one
