@@ -1,4 +1,5 @@
 import { Icon, type IconName } from '../components/Icon'
+import { AdoptionReview } from './adoption/AdoptionReview'
 
 type Stage = 'ready' | 'building' | 'next' | 'later'
 
@@ -41,6 +42,8 @@ const parts: readonly { title: string; body: string; icon: IconName; stage: Stag
 // styles/base.css. Each part's stage sets its colour there.
 export function Home() {
   return (
+    <>
+    <AdoptionReview />
     <section className="roadmap">
       <div className="roadmap__intro">
         <h1 className="roadmap__title">What’s coming, and when.</h1>
@@ -70,5 +73,6 @@ export function Home() {
         ))}
       </ol>
     </section>
+    </>
   )
 }
