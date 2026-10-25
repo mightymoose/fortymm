@@ -61,7 +61,7 @@ describe('AuthenticatedLayout', () => {
     await session.respond(HttpResponse.json(sessionResponse))
     await advance(SHOW_AFTER_MS + MIN_SHOWN_MS)
 
-    expect(homePage.title).toHaveTextContent('FortyMM')
+    expect(homePage.title).toHaveTextContent('What’s coming, and when.')
     expect(homePage.loadingScreen).not.toBeInTheDocument()
   })
 
@@ -94,7 +94,7 @@ describe('AuthenticatedLayout', () => {
     await session.respond(HttpResponse.json(sessionResponse))
     await advance(MIN_SHOWN_MS - 1)
 
-    expect(homePage.title).toHaveTextContent('FortyMM')
+    expect(homePage.title).toHaveTextContent('What’s coming, and when.')
     expect(homePage.loadingScreen).toBeInTheDocument()
     expect(homePage.loadingScreenFading).toBe(false)
 
@@ -113,7 +113,7 @@ describe('AuthenticatedLayout', () => {
     await session.respond(HttpResponse.json(sessionResponse))
     await advance(1)
 
-    expect(homePage.title).toHaveTextContent('FortyMM')
+    expect(homePage.title).toHaveTextContent('What’s coming, and when.')
     expect(homePage.loadingScreenFading).toBe(true)
   })
 
@@ -127,7 +127,7 @@ describe('AuthenticatedLayout', () => {
     homePage.endLoadingScreenFade()
 
     expect(homePage.loadingScreen).not.toBeInTheDocument()
-    expect(homePage.title).toHaveTextContent('FortyMM')
+    expect(homePage.title).toHaveTextContent('What’s coming, and when.')
   })
 
   it('does not show the loading screen or start the session again on client-side navigation', async () => {
@@ -145,7 +145,7 @@ describe('AuthenticatedLayout', () => {
     ).toBeInTheDocument()
     await homePage.navigate('/')
 
-    expect(homePage.title).toHaveTextContent('FortyMM')
+    expect(homePage.title).toHaveTextContent('What’s coming, and when.')
     expect(homePage.loadingScreen).not.toBeInTheDocument()
     expect(session.requests).toHaveLength(1)
   })

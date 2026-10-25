@@ -24,7 +24,7 @@ test.beforeEach(async ({ page }) => {
 test('serves the app', async ({ homePage }) => {
   await homePage.goto()
 
-  await expect(homePage.title).toHaveText('FortyMM')
+  await expect(homePage.title).toHaveText('What’s coming, and when.')
 })
 
 // No file matches the path, so this loads through the SPA fallback.

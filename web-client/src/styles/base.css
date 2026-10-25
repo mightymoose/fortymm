@@ -35,23 +35,6 @@ a:hover{color:var(--ball-200)}
 }
 
 /* =========================================================================
-   The page header that Home starts with (src/components/PageHeader.tsx)
-   ========================================================================= */
-.page-header {
-  display: flex;
-  align-items: baseline;
-  gap: 16px;
-  margin-bottom: 56px;
-  padding-bottom: 24px;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.page-header .sub {
-  font: 400 var(--text-sm) var(--font-ui);
-  color: var(--fg-3);
-}
-
-/* =========================================================================
    Loading screen (src/components/LoadingScreen.tsx), shown in place of the
    page on a full page load: the wordmark and one status line. Nothing moves
    until the fade-out, because v2.1 motion is feedback only.
@@ -302,5 +285,149 @@ a:hover{color:var(--ball-200)}
     height: auto;
     overflow: visible;
     clip: auto;
+  }
+}
+
+/* =========================================================================
+   The roadmap on Home (src/pages/Home.tsx): an intro beside the parts
+   of FortyMM in the order they ship. Below 900px the parts go under
+   the intro.
+   ========================================================================= */
+.roadmap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--s-12);
+}
+
+.roadmap__intro {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-5);
+}
+
+.roadmap__intro .meta {
+  margin: 0;
+}
+
+.roadmap__title {
+  margin: 0;
+  max-width: 18ch;
+  font: 700 var(--text-3xl)/var(--lh-tight) var(--font-ui);
+  letter-spacing: -0.02em;
+  color: var(--fg-1);
+}
+
+.roadmap__lead {
+  margin: 0;
+  max-width: 52ch;
+  font: 400 var(--text-md)/var(--lh-normal) var(--font-ui);
+  color: var(--fg-2);
+}
+
+.roadmap__parts {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Each part hangs off a rail of markers. The part being built is blue,
+   the rest colour, which the design system keeps for timing. A part that
+   is ready is green. Parts further out step down to grey. */
+.roadmap__parts li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  gap: var(--s-4);
+  padding-bottom: var(--s-8);
+}
+
+.roadmap__parts li:last-child {
+  padding-bottom: 0;
+}
+
+.roadmap__parts li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 44px;
+  bottom: var(--s-1);
+  left: 19px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--border-subtle);
+}
+
+.roadmap__marker {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border-control);
+  border-radius: 50%;
+  background: var(--bg-panel);
+  color: var(--fg-3);
+}
+
+.roadmap__part {
+  padding-top: var(--s-2);
+}
+
+.roadmap__parts h2,
+.roadmap__parts p {
+  margin: 0;
+}
+
+.roadmap__part-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s-4);
+  margin-bottom: var(--s-1);
+}
+
+.roadmap__parts li[data-stage='building'] .roadmap__marker {
+  border-color: var(--rest);
+  background: var(--rest-soft);
+  color: var(--rest);
+}
+
+.roadmap__parts li[data-stage='building'] .fm-status {
+  color: var(--rest);
+}
+
+.roadmap__parts li[data-stage='ready'] .roadmap__marker {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.roadmap__parts li[data-stage='ready'] .fm-status {
+  color: var(--success);
+}
+
+.roadmap__parts li[data-stage='next'] .roadmap__marker {
+  border-color: var(--border-field);
+  color: var(--fg-2);
+}
+
+.roadmap__parts li[data-stage='later'] h2 {
+  color: var(--fg-2);
+}
+
+.roadmap__parts li[data-stage='later'] p,
+.roadmap__parts li[data-stage='later'] .fm-status {
+  color: var(--fg-3);
+}
+
+@media (max-width: 899px) {
+  .roadmap {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s-8);
+  }
+
+  .roadmap__title {
+    font-size: var(--text-2xl);
   }
 }

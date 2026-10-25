@@ -1,4 +1,4 @@
-import { fireEvent, screen } from '@testing-library/react'
+import { fireEvent, screen, within } from '@testing-library/react'
 import { navigate, renderRoute, type AppRouter } from '../renderRoute'
 
 // Page object for the home page in unit tests. Elements are looked up through
@@ -23,6 +23,15 @@ export class HomePage {
 
   get title(): HTMLElement {
     return screen.getByRole('heading', { level: 1 })
+  }
+
+  // Each part of FortyMM on the roadmap as its name and stage, in the order
+  // listed.
+  get parts(): { name: string; stage: string }[] {
+    return within(screen.getByRole('list')).getAllByRole('listitem').map((part) => ({
+      name: within(part).getByRole('heading', { level: 2 }).textContent ?? '',
+      stage: part.querySelector('.fm-status')?.textContent ?? '',
+    }))
   }
 
   // Waits for the page's title, e.g. once the loading screen has gone.
