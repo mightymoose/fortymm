@@ -24,6 +24,12 @@ export default defineConfig({
         target: process.env.API_PROXY_TARGET ?? 'http://api:8000',
         rewrite: (path) => path.replace(/^\/api/, ''),
       },
+      // The mock OpenID Connect provider's sign-in page (the `oidc` Compose
+      // service), which the browser can't reach by its Compose name.
+      '/oidc/': {
+        target: process.env.OIDC_PROXY_TARGET ?? 'http://oidc:8080',
+        rewrite: (path) => path.replace(/^\/oidc/, ''),
+      },
     },
   },
   test: {

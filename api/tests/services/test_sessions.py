@@ -11,7 +11,14 @@ import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from fortymm_api.accounts import AccountId, CurrentAccount, GuestAccount
+from fortymm_api.accounts import (
+    AccountId,
+    CurrentAccount,
+    Email,
+    GuestAccount,
+    SelfPlayer,
+    VerifiedAccount,
+)
 from fortymm_api.services.display_names import random_display_name
 from fortymm_api.services.sessions import (
     DISPLAY_NAME_ATTEMPTS,
@@ -439,13 +446,18 @@ def self_players(database: Engine, account_id: AccountId) -> list[tuple[str, str
         ]
 
 
+def guest_player(started: StartedSession) -> SelfPlayer:
+    assert started.player is not None
+    return started.player
+
+
 def test_names_a_guests_player_with_an_alliterative_pair_and_a_number(
     migrated_database: Engine,
 ) -> None:
     started = start(migrated_database)
 
     assert re.fullmatch(
-        r"([a-z])[a-z]* \1[a-z]* [1-9][0-9]{2}", started.player.display_name
+        r"([a-z])[a-z]* \1[a-z]* [1-9][0-9]{2}", guest_player(started).display_name
     )
 
 
@@ -455,7 +467,7 @@ def test_links_a_guest_account_to_its_player_as_self(
     started = start(migrated_database)
 
     assert self_players(migrated_database, started.account.id) == [
-        (str(started.player.id), started.player.display_name)
+        (str(guest_player(started).id), guest_player(started).display_name)
     ]
 
 
@@ -468,7 +480,7 @@ def test_tries_the_next_name_when_one_is_taken(migrated_database: Engine) -> Non
         new_display_name=names("Excited Egret 387", "brave bison 120"),
     )
 
-    assert started.player.display_name == "brave bison 120"
+    assert guest_player(started).display_name == "brave bison 120"
     assert count(migrated_database, "players") == 2
 
 
@@ -512,7 +524,7 @@ def test_a_resume_keeps_the_accounts_player(migrated_database: Engine) -> None:
     assert count(migrated_database, "players") == 1
 
 
-def test_a_resume_gives_an_account_without_a_self_player_one(
+def test_a_resume_gives_a_guest_account_without_a_self_player_one(
     migrated_database: Engine,
 ) -> None:
     first = start(migrated_database)
@@ -526,5 +538,29 @@ def test_a_resume_gives_an_account_without_a_self_player_one(
 
     assert resumed.player != first.player
     assert self_players(migrated_database, first.account.id) == [
-        (str(resumed.player.id), resumed.player.display_name)
+        (str(guest_player(resumed).id), guest_player(resumed).display_name)
     ]
+
+
+def test_a_resume_gives_a_verified_account_no_self_player(
+    migrated_database: Engine,
+) -> None:
+    first = start(migrated_database)
+    run(
+        migrated_database,
+        "UPDATE accounts SET email = 'ann@example.com' WHERE id = :id",
+        id=first.account.id,
+    )
+    run(
+        migrated_database,
+        "DELETE FROM player_managers WHERE account_id = :id",
+        id=first.account.id,
+    )
+
+    resumed = start(migrated_database, first.token)
+
+    assert resumed.account == VerifiedAccount(
+        first.account.id, Email("ann@example.com")
+    )
+    assert resumed.player is None
+    assert self_players(migrated_database, first.account.id) == []

@@ -86,6 +86,7 @@ def test_answers_with_the_account_and_sets_the_cookie(client: TestClient) -> Non
             "account": {
                 "id": account_id(response),
                 "kind": "guest",
+                "email": None,
                 "player": {"id": player["id"], "display_name": player["display_name"]},
             }
         }

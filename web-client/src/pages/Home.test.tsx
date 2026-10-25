@@ -1,8 +1,10 @@
 import { cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it } from 'vitest'
+import type { components } from '../api/schema'
 import { HomePage } from '../test/pages/HomePage'
-import { sessionResponse } from '../test/server'
+import { http, HttpResponse } from 'msw'
+import { API_BASE_URL, server, sessionResponse } from '../test/server'
 
 describe('Home', () => {
   afterEach(() => {
@@ -31,8 +33,27 @@ describe('Home', () => {
   it("shows the visitor's player as an avatar of their initials", async () => {
     const homePage = await HomePage.render()
 
-    const { display_name } = sessionResponse.data.account.player
+    const { display_name } = sessionResponse.data.account.player!
     expect(homePage.avatar(display_name)).toHaveTextContent(/^EE$/)
+  })
+
+  it('shows no avatar for an account with no player', async () => {
+    const verified: components['schemas']['SessionResponse'] = {
+      data: {
+        account: {
+          ...sessionResponse.data.account,
+          kind: 'verified',
+          email: 'ann@example.com',
+          player: null,
+        },
+      },
+    }
+    server.use(http.post(`${API_BASE_URL}/v1/session`, () => HttpResponse.json(verified)))
+
+    const homePage = await HomePage.render()
+
+    expect(homePage.title).toBeInTheDocument()
+    expect(homePage.avatar('excited egret 387')).not.toBeInTheDocument()
   })
 
   it('folds the sidebar to its icons and remembers it on the next visit', async () => {

@@ -2,8 +2,9 @@
 
 from fastapi import APIRouter
 
-from fortymm_api.v1 import health, session
+from fortymm_api.v1 import auth, health, session
 
 router = APIRouter(prefix="/v1")
 router.include_router(health.router)
 router.include_router(session.router)
+router.include_router(auth.router)

@@ -33,7 +33,7 @@
           "session"
         ],
         "summary": "Start Session",
-        "description": "Resume the visitor's session, or start a guest account and its session.\n\nA valid session gets a later expiry and a fresh cookie. With no cookie, or\na cookie for an expired, unknown or adopted session, the visitor gets a\nnew guest account. The API deletes the session that cookie named. A\nclient network can start 30 guest accounts a minute. Past that, the API\nanswers 429.\n\nThe account's player is the one it plays as. A new guest account's player\ngets a default display name, such as `excited egret 387`.",
+        "description": "Resume the visitor's session, or start a guest account and its session.\n\nA valid session gets a later expiry and a fresh cookie. With no cookie, or\na cookie for an expired, unknown or adopted session, the visitor gets a\nnew guest account. The API deletes the session that cookie named. A\nclient network can start 30 guest accounts a minute. Past that, the API\nanswers 429.\n\nThe account's player is the one it plays as. A new guest account's player\ngets a default display name, such as `excited egret 387`. A verified\naccount has its email, and can have no player.",
         "operationId": "start_session",
         "responses": {
           "200": {
@@ -56,10 +56,178 @@
           }
         ]
       }
+    },
+    "/v1/auth/login": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Login",
+        "description": "Send the visitor to the identity provider's sign-in page.\n\nA request with no valid session gets a guest account first. After\nsign-in, the callback sends the visitor to `return_to`. It must be a path\non this site, or the callback uses `/`.",
+        "operationId": "login",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "return_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Return To"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "A redirect"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/callback": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Callback",
+        "description": "Finish a sign-in, then send the visitor back to its `return_to`.\n\nA failed sign-in adds `sign_in_error` to that path's query: `cancelled`,\n`email_not_verified`, `expired` or `failed`. A callback whose `state`\nmatches no login attempt, such as a replay, goes to `/`.",
+        "operationId": "callback",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "State"
+            }
+          },
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Code"
+            }
+          },
+          {
+            "name": "error",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Error"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "A redirect"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Logout",
+        "description": "End the visitor's session and expire its cookie.\n\n`logout_url` is the identity provider's logout page. The client follows\nit, so the provider's own session ends too.",
+        "operationId": "logout",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogoutResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
     }
   },
   "components": {
     "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
       "HealthResponse": {
         "properties": {
           "data": {
@@ -86,6 +254,31 @@
         ],
         "title": "HealthStatus"
       },
+      "LogoutData": {
+        "properties": {
+          "logout_url": {
+            "type": "string",
+            "title": "Logout Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "logout_url"
+        ],
+        "title": "LogoutData"
+      },
+      "LogoutResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/LogoutData"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "LogoutResponse"
+      },
       "SessionAccount": {
         "properties": {
           "id": {
@@ -101,14 +294,33 @@
             ],
             "title": "Kind"
           },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
           "player": {
-            "$ref": "#/components/schemas/SessionPlayer"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionPlayer"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
         "required": [
           "id",
           "kind",
+          "email",
           "player"
         ],
         "title": "SessionAccount"
@@ -155,6 +367,46 @@
           "data"
         ],
         "title": "SessionResponse"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "ctx": {
+            "type": "object",
+            "title": "Context"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
       }
     },
     "securitySchemes": {

@@ -149,6 +149,41 @@ class AuthSession(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class Identity(Base):
+    """An Auth0 login, by its `sub`. Its verified email is its account's email."""
+
+    __tablename__ = "identities"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, server_default=func.gen_random_uuid()
+    )
+    auth0_sub: Mapped[str] = mapped_column(Text, unique=True)
+    account_id: Mapped[AccountId] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class LoginAttempt(Base):
+    """A sign-in sent to Auth0, waiting for its callback."""
+
+    __tablename__ = "login_attempts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        primary_key=True, server_default=func.gen_random_uuid()
+    )
+    state: Mapped[str] = mapped_column(Text, unique=True)
+    session_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("sessions.id", ondelete="CASCADE")
+    )
+    code_verifier: Mapped[str] = mapped_column(Text)
+    nonce: Mapped[str] = mapped_column(Text)
+    return_to: Mapped[str] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class GuestAccountCount(Base):
     """How many guest accounts one client network started in its current window."""
 

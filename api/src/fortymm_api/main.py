@@ -12,12 +12,15 @@ from sqlalchemy.orm import sessionmaker
 from fortymm_api import v1
 from fortymm_api.auth import NoValidSession
 from fortymm_api.database import create_database_engine, migrate
+from fortymm_api.identity_provider import IdentityProvider
 from fortymm_api.services.sessions import GuestAccountLimitReached
+from fortymm_api.v1.auth import SignInUnavailable
 
 WORKER_SECRET_HEADER = "X-FortyMM-Worker-Secret"
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 NO_SESSION = "The request has no valid session"
 TOO_MANY_GUEST_ACCOUNTS = "Too many new guest accounts from this network"
+SIGN_IN_UNAVAILABLE = "Sign-in isn't set up on this server"
 
 
 def error_response(status: int, title: str) -> JSONResponse:
@@ -82,6 +85,23 @@ def require_json(app: FastAPI) -> None:
         return await call_next(request)
 
 
+def identity_provider_from_env() -> IdentityProvider | None:
+    """The provider that AUTH0_DOMAIN names, or None if it's unset.
+
+    Until the Auth0 tenant exists (#69), only dev and the tests set it, and
+    the sign-in routes answer 503 elsewhere.
+    """
+    domain = os.environ.get("AUTH0_DOMAIN", "")
+    if not domain:
+        return None
+    return IdentityProvider(
+        domain,
+        os.environ.get("AUTH0_CLIENT_ID", ""),
+        os.environ.get("AUTH0_CLIENT_SECRET", ""),
+        os.environ.get("AUTH0_AUTHORIZE_URL") or None,
+    )
+
+
 def create_app() -> FastAPI:
     secret = os.environ.get("WORKER_SECRET", "")
     database_url = os.environ.get("DATABASE_URL", "")
@@ -116,11 +136,16 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.state.sessions = sessionmaker(engine) if engine is not None else None
+    app.state.identity_provider = identity_provider_from_env()
     app.include_router(v1.router)
     app.add_exception_handler(
         NoValidSession, lambda _request, _error: error_response(401, NO_SESSION)
     )
     app.add_exception_handler(GuestAccountLimitReached, too_many_guest_accounts)
+    app.add_exception_handler(
+        SignInUnavailable,
+        lambda _request, _error: error_response(503, SIGN_IN_UNAVAILABLE),
+    )
     require_json(app)
     # Added last so it runs first: a request without the secret learns nothing
     # else about the API.

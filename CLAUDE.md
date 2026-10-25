@@ -17,8 +17,9 @@ global `mise` install isn't required.
 ./bin/mise run list-ports   # print the host ports of everything running
 ```
 
-`up` starts the API (`api:dev`), its Postgres database and the web-client dev
-server, which proxies `/api/*` to the API. To add a service, add its task to
+`up` starts the API (`api:dev`), its Postgres database, the mock OpenID
+Connect provider (`oidc`) and the web-client dev server, which proxies
+`/api/*` to the API. To add a service, add its task to
 `depends` on `[tasks.up]` in `mise.toml` (mise runs those in parallel).
 
 Publish ports without a host side (e.g. `ports: ["5173"]` in `compose.yaml`)
@@ -167,8 +168,8 @@ through FastAPI's `TestClient`).
   the NewTypes `AccountId`, `PlayerId` and `Email` from `accounts.py`.
   SQLAlchemy can't see through a NewType, so `Base.type_annotation_map`
   gives each one its column type. The tables are `accounts`, `players`,
-  `player_managers`, `sessions` and `guest_account_counts` (see Accounts
-  and sessions).
+  `player_managers`, `sessions`, `guest_account_counts`, `identities` and
+  `login_attempts` (see Accounts and sessions, and Sign-in).
 - `/v1/health` runs `SELECT 1` and returns `{"data": {"database": "ok"}}`.
   The healthchecks, `api:smoke`, the 403 check and the post-deploy suite use
   it.
@@ -186,8 +187,8 @@ The database is the `postgres` Compose service (`postgres:18`, the same major
 version as Cloud SQL), with user, password and database all `fortymm`. Its
 data lives in the `postgres-data` volume. The `api` service gets
 `DATABASE_URL` pointing at it. Port 5432 is published on a free host port,
-which `list-ports` prints. `api:test` starts `postgres` first, and the tests
-use the real database. A test that makes tables uses the
+which `list-ports` prints. `api:test` starts `postgres` and `oidc` first, and
+the tests use the real database and the mock provider. A test that makes tables uses the
 `throwaway_database_url` fixture, a new database that the test drops after.
 Tables a test makes in `fortymm` would fail `alembic check`. The
 `migrated_database` fixture is an `Engine` for a throwaway database that the
@@ -207,10 +208,12 @@ account has no `email`. A verified account has one, always lowercase.
   `player_managers`. Each row has `relationship` `self` or `managed`. An
   account has at most one `self` player, and a player at most one `self`
   account.
-- `start_session()` gives every account it returns a `self` player
+- `start_session()` gives every guest account it returns a `self` player
   (`SelfPlayer` in `accounts.py`). A new guest account gets a new player
   with a default display name, such as `excited egret 387`. A resumed
-  account that has no `self` player gets one too.
+  guest account that has no `self` player gets one too. A verified account
+  gets none, because sign-in can leave its players waiting for the "Is this
+  you?" answer.
 - `services/display_names.py` makes the default names: an animal, an
   adjective with the same first letter, and a number from 100 to 999. The
   adjectives are kind or neutral. `lower(display_name)` is unique, so the
@@ -228,8 +231,9 @@ account has no `email`. A verified account has one, always lowercase.
   guest account and a session. It deletes the session row that the old
   cookie matched, and keeps that row's account. Every response sets
   `Cache-Control: no-store`. The body is `{"data": {"account": {"id":
-  "...", "kind": "guest", "player": {"id": "...", "display_name": "excited
-  egret 387"}}}}`. The kind can also be `"verified"`.
+  "...", "kind": "guest", "email": null, "player": {"id": "...",
+  "display_name": "excited egret 387"}}}}`. A verified account has kind
+  `"verified"` and its email. Its `player` can be `null`.
 - `start_session()` limits guest accounts per client network. A network can
   start 30 guest accounts per window of one minute (`GUEST_ACCOUNT_LIMIT`,
   `GUEST_ACCOUNT_WINDOW`). The 31st gets `GuestAccountLimitReached`, and
@@ -252,7 +256,7 @@ account has no `email`. A verified account has one, always lowercase.
 - `auth.py`: the cookie and the `RequestAccount` dependency. A route that
   needs the account takes a `RequestAccount` parameter. Without a valid
   session, that dependency answers 401 in the `errors` shape. Only `POST
-  /v1/session` makes a guest account.
+  /v1/session` and `GET /v1/auth/login` make a guest account.
 - A service that writes as an account loads the account row with
   `with_for_update(read=True)`, which is `SELECT ... FOR SHARE`. After the
   lock, it checks `adopted_into` again. If it is set, the route answers 401. So a
@@ -262,6 +266,57 @@ account has no `email`. A verified account has one, always lowercase.
 - `alembic check` doesn't compare a partial index's `WHERE` clause. So
   `tests/test_schema.py` checks each constraint, each index and the trigger
   on a `migrated_database`.
+
+### Sign-in
+
+Sign-in uses Auth0. Local dev and the tests use a mock OpenID Connect
+provider, because Auth0 doesn't accept a random dev port in a callback URL.
+#69 wires the real tenant.
+
+- The `oidc` Compose service runs navikt's mock-oauth2-server. Its issuer is
+  `http://oidc:8080/default`. Its sign-in page signs in any `sub` with the
+  claims typed into it, such as `{"email": "ann@example.com",
+  "email_verified": true}`. It has no published port.
+- The API reads `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` and `AUTH0_CLIENT_SECRET`.
+  `AUTH0_DOMAIN` is Auth0's host, or a base URL with a scheme, such as the
+  mock's. Compose points it at the mock. Without `AUTH0_DOMAIN`, the sign-in
+  routes answer 503. Cloud Run doesn't set it yet.
+- `identity_provider.py` talks to the provider. It finds the endpoints in
+  the provider's discovery document, exchanges the code with PKCE and
+  verifies the ID token against the provider's JWKS, with the nonce. It
+  lowercases the email.
+- The browser can't resolve `oidc`. So in Compose, `AUTH0_AUTHORIZE_URL` is
+  `/oidc/default/authorize`, and the web-client dev server proxies `/oidc/*`
+  to the mock. The API still reaches the mock at `http://oidc:8080`. The
+  tests unset `AUTH0_AUTHORIZE_URL` and post the mock's form directly.
+- `GET /v1/auth/login?return_to=...` (`v1/auth.py`) starts a guest account
+  if the request has no valid session. Then it stores a `login_attempts` row
+  for 10 minutes and answers 302 to the provider. A verified account also
+  gets `prompt=login`. `return_to` must start with `/`, its second character
+  must be neither `/` nor `\`, and it must hold no control character. Any
+  other value becomes `/`.
+- `GET /v1/auth/callback` runs `finish_sign_in()` in
+  `services/sign_in.py`, in one transaction. It deletes the attempt first.
+  `resolve_login()` is a pure function that picks the outcome from the
+  current account and the identity's owner. The owner is the account with
+  the `sub`, or else the account with the email.
+- `VerifyInPlace`, `AlreadySignedIn`, `SwitchAccount` and `CreateAccount`
+  work. `AdoptGuest` answers `sign_in_error=failed` until adoption lands
+  (#60). Every outcome gives the browser a new session and token.
+  `VerifyInPlace` calls `convert_guest()` in `services/sessions.py`, which
+  deletes every session of the guest account. It also makes each of the
+  account's `player_managers` rows `managed`, with `adopted_from` set to
+  the account, for the "Is this you?" question (#63).
+- A sign-in takes a Postgres advisory lock on the email before it finds the
+  owner. So two sign-ins with one new email take turns, and they make one
+  account.
+- A failed callback answers 302 to the attempt's `return_to` with
+  `sign_in_error` added to its query: `cancelled`, `email_not_verified`,
+  `expired` or `failed`. It changes no account and sets no cookie. A
+  callback whose `state` matches no attempt, such as a replay, answers 302
+  to `/` with no error.
+- `POST /v1/auth/logout` deletes the session, expires the cookie and
+  returns Auth0's `/v2/logout` URL as `data.logout_url`.
 
 ### Migrations
 

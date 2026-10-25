@@ -184,3 +184,58 @@ def test_a_network_has_one_guest_account_count(connection: Connection) -> None:
         connection.execute(insert)
 
     assert violated_constraint(error) == "pk_guest_account_counts"
+
+
+def add_identity(connection: Connection, sub: str) -> None:
+    connection.execute(
+        text("INSERT INTO identities (auth0_sub, account_id) VALUES (:sub, :id)"),
+        {"sub": sub, "id": add_account(connection)},
+    )
+
+
+def test_two_identities_cannot_share_a_sub(connection: Connection) -> None:
+    add_identity(connection, "auth0|ann")
+
+    with pytest.raises(IntegrityError) as error:
+        add_identity(connection, "auth0|ann")
+
+    assert violated_constraint(error) == "uq_identities_auth0_sub"
+
+
+def add_login_attempt(connection: Connection, state: str) -> uuid.UUID:
+    session_id: uuid.UUID = connection.scalar(
+        text(
+            "INSERT INTO sessions (token_hash, account_id, expires_at)"
+            " VALUES (:token_hash, :account_id, now() + interval '1 day')"
+            " RETURNING id"
+        ),
+        {"token_hash": uuid.uuid4().bytes, "account_id": add_account(connection)},
+    )
+    connection.execute(
+        text(
+            "INSERT INTO login_attempts"
+            " (state, session_id, code_verifier, nonce, return_to, expires_at)"
+            " VALUES (:state, :session_id, 'v', 'n', '/', now())"
+        ),
+        {"state": state, "session_id": session_id},
+    )
+    return session_id
+
+
+def test_two_login_attempts_cannot_share_a_state(connection: Connection) -> None:
+    add_login_attempt(connection, "s")
+
+    with pytest.raises(IntegrityError) as error:
+        add_login_attempt(connection, "s")
+
+    assert violated_constraint(error) == "uq_login_attempts_state"
+
+
+def test_deleting_a_session_deletes_its_login_attempts(
+    connection: Connection,
+) -> None:
+    session_id = add_login_attempt(connection, "s")
+
+    connection.execute(text("DELETE FROM sessions WHERE id = :id"), {"id": session_id})
+
+    assert connection.scalar(text("SELECT count(*) FROM login_attempts")) == 0

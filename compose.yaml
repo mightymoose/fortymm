@@ -33,6 +33,13 @@ services:
     # --root-path makes the docs at /api/docs load the schema through the proxy.
     environment:
       DATABASE_URL: postgresql://fortymm:fortymm@postgres:5432/fortymm
+      # Sign-in goes to the mock provider in the `oidc` service, not to Auth0.
+      AUTH0_DOMAIN: http://oidc:8080/default
+      AUTH0_CLIENT_ID: fortymm-dev
+      AUTH0_CLIENT_SECRET: fortymm-dev
+      # The browser can't resolve `oidc`, so it reaches the mock's sign-in page
+      # through the web-client dev server's /oidc proxy.
+      AUTH0_AUTHORIZE_URL: /oidc/default/authorize
     command:
       - uv
       - run
@@ -49,6 +56,8 @@ services:
       dev:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+      oidc:
         condition: service_healthy
     # Healthy once /v1/health answers, so `up --wait` blocks until the API serves
     # and reaches the database.
@@ -80,6 +89,24 @@ services:
     volumes:
       # postgres:18 keeps its data in a version-specific directory under this.
       - postgres-data:/var/lib/postgresql
+
+  # A mock OpenID Connect provider that stands in for Auth0 in dev and the
+  # tests, because Auth0 doesn't accept a random dev port in a callback URL.
+  # Its sign-in page signs in any `sub` with the claims typed into it, such as
+  # {"email": "a@example.com", "email_verified": true}. The issuer is
+  # http://oidc:8080/default.
+  oidc:
+    image: ghcr.io/navikt/mock-oauth2-server:6.0.4
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -q
+        - -O
+        - /dev/null
+        - http://localhost:8080/default/.well-known/openid-configuration
+      start_period: 1m
+      start_interval: 1s
 
   # Runs the web-client's Playwright suite (`mise run web-client:e2e`). The
   # image ships the browsers and their system libraries; keep its tag in sync

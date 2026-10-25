@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
 
+from fortymm_api.accounts import VerifiedAccount
 from fortymm_api.auth import SessionToken, set_session_cookie
 from fortymm_api.database import DatabaseSession
 from fortymm_api.services import sessions
@@ -25,7 +26,11 @@ class SessionPlayer(BaseModel):
 class SessionAccount(BaseModel):
     id: UUID
     kind: Literal["guest", "verified"]
-    player: SessionPlayer
+    # Null for a guest account.
+    email: str | None
+    # Null for a verified account with no self player, such as one whose
+    # players wait for the "Is this you?" answer.
+    player: SessionPlayer | None
 
 
 class SessionData(BaseModel):
@@ -64,15 +69,23 @@ def start_session(
     answers 429.
 
     The account's player is the one it plays as. A new guest account's player
-    gets a default display name, such as `excited egret 387`.
+    gets a default display name, such as `excited egret 387`. A verified
+    account has its email, and can have no player.
     """
     started = sessions.start_session(session, token, client_address(request))
     response.headers["Cache-Control"] = "no-store"
     set_session_cookie(response, started.token)
-    player = SessionPlayer(
-        id=started.player.id, display_name=started.player.display_name
+    player = (
+        None
+        if started.player is None
+        else SessionPlayer(
+            id=started.player.id, display_name=started.player.display_name
+        )
+    )
+    email = (
+        started.account.email if isinstance(started.account, VerifiedAccount) else None
     )
     account = SessionAccount(
-        id=started.account.id, kind=started.account.kind, player=player
+        id=started.account.id, kind=started.account.kind, email=email, player=player
     )
     return SessionResponse(data=SessionData(account=account))

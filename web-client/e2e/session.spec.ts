@@ -26,7 +26,8 @@ test('keeps the account across a reload, and a new browser gets another', async 
   baseURL,
 }) => {
   const first = await sessionDuring(page, () => homePage.goto())
-  await expect(homePage.avatar(first.player.display_name)).toBeVisible()
+  // A guest account always has a player.
+  await expect(homePage.avatar(first.player!.display_name)).toBeVisible()
 
   const reloaded = await sessionDuring(page, () => page.reload())
   expect(reloaded).toEqual(first)
@@ -36,7 +37,7 @@ test('keeps the account across a reload, and a new browser gets another', async 
     const other = new HomePage(await otherBrowser.newPage())
     const another = await sessionDuring(other.page, () => other.goto())
     expect(another.id).not.toBe(first.id)
-    await expect(other.avatar(another.player.display_name)).toBeVisible()
+    await expect(other.avatar(another.player!.display_name)).toBeVisible()
   } finally {
     await otherBrowser.close()
   }

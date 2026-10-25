@@ -2,6 +2,7 @@
 
 import hashlib
 import secrets
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
@@ -80,8 +81,9 @@ class InvalidSession:
 
 @dataclass(frozen=True)
 class StartedSession:
+    session_id: uuid.UUID
     account: CurrentAccount
-    player: SelfPlayer
+    player: SelfPlayer | None
     token: str
 
 
@@ -156,9 +158,10 @@ def start_session(
     deleted. Its account stays. Raises GuestAccountLimitReached before any
     write when the address's network is at the limit.
 
-    Every account it returns has a self player. A new guest account gets one
-    with a name from `new_display_name`. So does a resumed account that has
-    none yet.
+    Every guest account it returns has a self player. A new guest account
+    gets one with a name from `new_display_name`. So does a resumed guest
+    account that has none yet. A verified account gets none here, because
+    sign-in can leave it a player that waits for the "Is this you?" answer.
     """
     found = find_session(session, token, lock=True)
     if isinstance(found, ValidSession) and token is not None:
@@ -168,10 +171,10 @@ def start_session(
             .where(Account.id == found.account.id)
             .values(last_seen_at=func.now())
         )
-        player = _self_player(session, found.account.id) or _create_self_player(
-            session, found.account.id, new_display_name
-        )
-        return StartedSession(found.account, player, token)
+        player = _self_player(session, found.account.id)
+        if player is None and isinstance(found.account, GuestAccount):
+            player = _create_self_player(session, found.account.id, new_display_name)
+        return StartedSession(found.row.id, found.account, player, token)
 
     _count_guest_account(session, client_network(address))
     if found is not None:
@@ -179,16 +182,44 @@ def start_session(
     guest = Account()
     session.add(guest)
     session.flush()
-    token = new_token()
-    session.add(
-        AuthSession(
-            token_hash=hash_token(token),
-            account_id=guest.id,
-            expires_at=func.now() + SESSION_LIFETIME,
-        )
-    )
+    row, token = new_session(session, guest.id)
     player = _create_self_player(session, guest.id, new_display_name)
-    return StartedSession(GuestAccount(guest.id), player, token)
+    return StartedSession(row.id, GuestAccount(guest.id), player, token)
+
+
+def new_session(session: Session, account_id: AccountId) -> tuple[AuthSession, str]:
+    """A new session row for the account, and its token."""
+    token = new_token()
+    row = AuthSession(
+        token_hash=hash_token(token),
+        account_id=account_id,
+        expires_at=func.now() + SESSION_LIFETIME,
+    )
+    session.add(row)
+    session.flush()
+    return row, token
+
+
+def convert_guest(session: Session, guest: AccountId, into: AccountId) -> str:
+    """End the guest account's life as a guest, and give the browser that
+    signed in a session for `into`. Returns its token.
+
+    Deletes every session of the guest account, in every browser, so a copied
+    guest cookie stops working (REVOKED_ON_GUEST_CONVERSION). Never touches
+    the other sessions of `into`. Verify in place passes the guest account as
+    `into`, and adoption passes the account that adopts it.
+    """
+    session.execute(delete(AuthSession).where(AuthSession.account_id == guest))
+    _, token = new_session(session, into)
+    return token
+
+
+def end_session(session: Session, token: str | None) -> None:
+    """Delete the session the token names, if any."""
+    if token is not None:
+        session.execute(
+            delete(AuthSession).where(AuthSession.token_hash == hash_token(token))
+        )
 
 
 def _self_player(session: Session, account_id: AccountId) -> SelfPlayer | None:
