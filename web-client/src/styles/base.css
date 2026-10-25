@@ -431,3 +431,41 @@ a:hover{color:var(--ball-200)}
     font-size: var(--text-2xl);
   }
 }
+
+/* =========================================================================
+   Home (src/pages/Home.tsx): the account strip (src/pages/AccountStrip.tsx)
+   above the roadmap.
+   ========================================================================= */
+.home {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-12);
+}
+
+/* The strip sits closer to the topbar than the page's padding puts it.
+   When the text has less than 20rem beside the button, the button wraps
+   under it. */
+.sign-in-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3) var(--s-4);
+  margin-top: calc(-1 * var(--s-4));
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-md);
+  background: var(--bg-panel);
+}
+
+.sign-in-strip p {
+  flex: 1 1 20rem;
+  min-width: 0;
+  margin: 0;
+  font: 400 var(--text-base)/var(--lh-normal) var(--font-ui);
+  color: var(--fg-2);
+}
+
+.sign-in-strip b {
+  font-weight: 600;
+  color: var(--fg-1);
+}
