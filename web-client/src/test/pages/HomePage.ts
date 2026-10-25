@@ -41,12 +41,6 @@ export class HomePage {
     return screen.queryByRole('status', { name: 'Loading FortyMM' })
   }
 
-  // The router's default error message, shown in place of the page when it
-  // fails to load, or null.
-  get errorMessage(): HTMLElement | null {
-    return screen.queryByText('Something went wrong!')
-  }
-
   // Whether the loading screen has started to fade out. jsdom runs no CSS
   // animations, so the class is what tests can see.
   get loadingScreenFading(): boolean {

@@ -1,15 +1,6 @@
 import { QueryClient, queryOptions } from '@tanstack/react-query'
 import type { ApiClient } from './client'
-
-// An API response with no data, such as a 4xx or 5xx.
-export class ApiError extends Error {
-  readonly status: number
-
-  constructor(request: string, status: number) {
-    super(`${request} answered ${status}`)
-    this.status = status
-  }
-}
+import { ApiError, ApiUnreachable } from './errors'
 
 // Retries a network error or a 5xx only, which can pass. A 4xx comes back the
 // same. A retry after a lost POST /v1/session response can leave one unused
@@ -35,14 +26,15 @@ export function sessionQuery(api: ApiClient) {
     // account, but it drops the response and its cookie. The query would
     // then start another account, e.g. when StrictMode remounts the layout.
     queryFn: async () => {
+      const request = 'POST /v1/session'
       // openapi-fetch sends no Content-Type without a body, and the API
       // answers 415 to a POST that isn't JSON.
-      const { data, response } = await api.POST('/v1/session', {
-        headers: { 'Content-Type': 'application/json' },
-      })
-      if (data === undefined) {
-        throw new ApiError('POST /v1/session', response.status)
-      }
+      const { data, response } = await api
+        .POST('/v1/session', { headers: { 'Content-Type': 'application/json' } })
+        .catch((cause: unknown) => {
+          throw new ApiUnreachable(request, { cause })
+        })
+      if (data === undefined) throw new ApiError(request, response)
       return data.data.account
     },
   })

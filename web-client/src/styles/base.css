@@ -96,6 +96,41 @@ a:hover{color:var(--ball-200)}
 }
 
 /* =========================================================================
+   Error screens (src/components/ErrorScreen.tsx), shown in place of the
+   app: the loading screen's wordmark, then the problem, why, and the fixes.
+   ========================================================================= */
+.error-screen {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-4);
+  min-height: 100dvh;
+  padding: var(--s-6);
+  text-align: center;
+}
+
+.error-screen h1 {
+  margin: var(--s-4) 0 0;
+  font: 600 var(--text-xl)/var(--lh-snug) var(--font-ui);
+  color: var(--fg-1);
+}
+
+.error-screen p {
+  margin: 0;
+  max-width: 42ch;
+}
+
+.error-screen-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--s-3);
+  margin-top: var(--s-2);
+}
+
+/* =========================================================================
    The authenticated pages' frame (src/pages/AppShell.tsx): a topbar over a
    sidebar that folds to its icons, and below 900px a tab bar along the
    bottom. The bar is --bg-panel and the page is --bg-app. Orange marks only
