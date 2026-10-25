@@ -1,4 +1,8 @@
+import { useSuspenseQuery } from '@tanstack/react-query'
+import { useRouteContext, useSearch } from '@tanstack/react-router'
+import { sessionQuery } from '../api/queries'
 import { Icon, type IconName } from '../components/Icon'
+import { SignInPrompt } from './SignInPrompt'
 
 type Stage = 'ready' | 'building' | 'next' | 'later'
 
@@ -38,37 +42,47 @@ const parts: readonly { title: string; body: string; icon: IconName; stage: Stag
 ]
 
 // What we're building and what comes after, styled by `.roadmap` in
-// styles/base.css. Each part's stage sets its colour there.
+// styles/base.css. Each part's stage sets its colour there. A guest sees the
+// sign-in prompt above it.
 export function Home() {
+  const { api } = useRouteContext({ from: '__root__' })
+  const { data: account } = useSuspenseQuery(sessionQuery(api))
+  const { prompt = 'alert' } = useSearch({ from: '/_authenticated/' })
+
   return (
-    <section className="roadmap">
-      <div className="roadmap__intro">
-        <h1 className="roadmap__title">What’s coming, and when.</h1>
-        <p className="roadmap__lead">
-          We’re building FortyMM one part at a time. Here’s what we’re working on now and what
-          comes after.
-        </p>
-        <p className="meta">FortyMM is free, and we don’t show ads.</p>
-      </div>
-      <ol className="roadmap__parts">
-        {parts.map(({ title, body, icon, stage }) => (
-          <li key={title} data-stage={stage}>
-            <span className="roadmap__marker">
-              <Icon name={icon} />
-            </span>
-            <div className="roadmap__part">
-              <div className="roadmap__part-head">
-                <h2 className="h3">{title}</h2>
-                <span className="fm-status">
-                  <Icon name={stage === 'ready' ? 'check' : 'clock'} />
-                  {stageLabels[stage]}
-                </span>
+    <div className="home">
+      {account.kind === 'guest' && (
+        <SignInPrompt design={prompt} displayName={account.player?.display_name} />
+      )}
+      <section className="roadmap">
+        <div className="roadmap__intro">
+          <h1 className="roadmap__title">What’s coming, and when.</h1>
+          <p className="roadmap__lead">
+            We’re building FortyMM one part at a time. Here’s what we’re working on now and what
+            comes after.
+          </p>
+          <p className="meta">FortyMM is free, and we don’t show ads.</p>
+        </div>
+        <ol className="roadmap__parts">
+          {parts.map(({ title, body, icon, stage }) => (
+            <li key={title} data-stage={stage}>
+              <span className="roadmap__marker">
+                <Icon name={icon} />
+              </span>
+              <div className="roadmap__part">
+                <div className="roadmap__part-head">
+                  <h2 className="h3">{title}</h2>
+                  <span className="fm-status">
+                    <Icon name={stage === 'ready' ? 'check' : 'clock'} />
+                    {stageLabels[stage]}
+                  </span>
+                </div>
+                <p>{body}</p>
               </div>
-              <p>{body}</p>
-            </div>
-          </li>
-        ))}
-      </ol>
-    </section>
+            </li>
+          ))}
+        </ol>
+      </section>
+    </div>
   )
 }

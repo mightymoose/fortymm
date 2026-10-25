@@ -10,6 +10,11 @@ export class HomePage {
     return new HomePage(await renderRoute('/', options))
   }
 
+  // Renders Home with the sign-in prompt's design `design` (#61).
+  static async renderWithPrompt(design: string): Promise<HomePage> {
+    return new HomePage(await renderRoute(`/?prompt=${design}`))
+  }
+
   private readonly router: AppRouter
 
   constructor(router: AppRouter) {
@@ -60,6 +65,11 @@ export class HomePage {
   // themselves.
   endLoadingScreenFade(): void {
     fireEvent.animationEnd(this.loadingScreen!)
+  }
+
+  // The prompt's link that signs a guest in, or null.
+  get signInLink(): HTMLElement | null {
+    return screen.queryByRole('link', { name: 'Sign in' })
   }
 
   // The sidebar's link to Home, or null.

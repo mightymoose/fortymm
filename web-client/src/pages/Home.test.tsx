@@ -5,6 +5,7 @@ import type { components } from '../api/schema'
 import { HomePage } from '../test/pages/HomePage'
 import { http, HttpResponse } from 'msw'
 import { API_BASE_URL, server, sessionResponse } from '../test/server'
+import { signInPromptDesigns } from './signInPromptDesigns'
 
 describe('Home', () => {
   afterEach(() => {
@@ -37,6 +38,19 @@ describe('Home', () => {
     expect(homePage.avatar(display_name)).toHaveTextContent(/^EE$/)
   })
 
+  it('asks a guest to sign in, back to Home', async () => {
+    const homePage = await HomePage.render()
+
+    expect(homePage.signInLink).toHaveAttribute('href', '/api/v1/auth/login?return_to=/')
+  })
+
+  it.each(signInPromptDesigns)('asks a guest to sign in in the %s design', async (design) => {
+    const homePage = await HomePage.renderWithPrompt(design)
+
+    expect(homePage.signInLink).toHaveAttribute('href', '/api/v1/auth/login?return_to=/')
+    expect(homePage.title).toHaveTextContent('What’s coming, and when.')
+  })
+
   it('shows no avatar for an account with no player', async () => {
     const verified: components['schemas']['SessionResponse'] = {
       data: {
@@ -54,6 +68,7 @@ describe('Home', () => {
 
     expect(homePage.title).toBeInTheDocument()
     expect(homePage.avatar('excited egret 387')).not.toBeInTheDocument()
+    expect(homePage.signInLink).not.toBeInTheDocument()
   })
 
   it('folds the sidebar to its icons and remembers it on the next visit', async () => {

@@ -70,7 +70,7 @@ a:hover{color:var(--ball-200)}
 .loading-screen-status {
   margin: 0;
   max-width: 30ch;
-  font: 400 var(--text-sm)/var(--lh-normal) var(--font-ui);
+  font: 400 var(--text-base)/var(--lh-normal) var(--font-ui);
   color: var(--fg-3);
 }
 
@@ -430,4 +430,72 @@ a:hover{color:var(--ball-200)}
   .roadmap__title {
     font-size: var(--text-2xl);
   }
+}
+
+/* =========================================================================
+   Home (src/pages/Home.tsx): the sign-in prompt a guest sees above the
+   roadmap, in the design under review (src/pages/SignInPrompt.tsx, #61).
+   ========================================================================= */
+.home {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-12);
+}
+
+.sign-in-alert,
+.sign-in-card {
+  max-width: 640px;
+}
+
+.sign-in-card .fm-card__foot .meta {
+  margin: 0;
+}
+
+.sign-in-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-4);
+  padding-bottom: var(--s-12);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sign-in-hero__title {
+  margin: 0;
+  font: 700 var(--text-2xl)/var(--lh-tight) var(--font-ui);
+  letter-spacing: -0.02em;
+  color: var(--fg-1);
+}
+
+.sign-in-hero__lead {
+  margin: 0;
+  max-width: 52ch;
+  font: 400 var(--text-md)/var(--lh-normal) var(--font-ui);
+  color: var(--fg-2);
+}
+
+.sign-in-hero .meta {
+  margin: 0;
+}
+
+.sign-in-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3) var(--s-4);
+  padding: var(--s-3) var(--s-4);
+  border-radius: var(--r-md);
+  background: var(--bg-panel);
+}
+
+.sign-in-strip p {
+  margin: 0;
+  font: 400 var(--text-base)/var(--lh-normal) var(--font-ui);
+  color: var(--fg-2);
+}
+
+.sign-in-strip b {
+  font-weight: 600;
+  color: var(--fg-1);
 }
