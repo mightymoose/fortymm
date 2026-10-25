@@ -8,10 +8,16 @@ describe('Home', () => {
     localStorage.clear()
   })
 
-  it('shows the FortyMM title', async () => {
+  it('lists the parts of FortyMM in the order they ship, each with its stage', async () => {
     const homePage = await HomePage.render()
 
-    expect(homePage.title).toHaveTextContent('FortyMM')
+    expect(homePage.title).toHaveTextContent('What’s coming, and when.')
+    expect(homePage.parts).toEqual([
+      { name: 'Your account', stage: 'Building now' },
+      { name: 'Leagues', stage: 'Next' },
+      { name: 'Matches', stage: 'Later' },
+      { name: 'Basic tournaments', stage: 'Later' },
+    ])
   })
 
   it('shows Home as the open page in the sidebar, with no link to the design system', async () => {

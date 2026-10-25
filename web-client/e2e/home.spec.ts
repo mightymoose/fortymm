@@ -1,9 +1,9 @@
 import { expect, test } from './fixtures.ts'
 
-test('shows the FortyMM title', async ({ homePage }) => {
+test('shows the roadmap title', async ({ homePage }) => {
   await homePage.goto()
 
-  await expect(homePage.title).toHaveText('FortyMM')
+  await expect(homePage.title).toHaveText('What’s coming, and when.')
 })
 
 test('shows the loading screen until health answers, then fades it out over the page', async ({
@@ -35,7 +35,7 @@ test('shows the loading screen until health answers, then fades it out over the 
   })`)
   releaseHealth()
 
-  await expect(homePage.title).toHaveText('FortyMM')
+  await expect(homePage.title).toHaveText('What’s coming, and when.')
   await fadeEnded
   await expect(homePage.loadingScreen).toBeHidden()
 })

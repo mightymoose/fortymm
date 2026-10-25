@@ -57,7 +57,7 @@ describe('AuthenticatedLayout', () => {
     await health.respond(HttpResponse.json(healthyResponse))
     await advance(SHOW_AFTER_MS + MIN_SHOWN_MS)
 
-    expect(homePage.title).toHaveTextContent('FortyMM')
+    expect(homePage.title).toHaveTextContent('What’s coming, and when.')
     expect(homePage.loadingScreen).not.toBeInTheDocument()
   })
 
@@ -90,7 +90,7 @@ describe('AuthenticatedLayout', () => {
     await health.respond(HttpResponse.json(healthyResponse))
     await advance(MIN_SHOWN_MS - 1)
 
-    expect(homePage.title).toHaveTextContent('FortyMM')
+    expect(homePage.title).toHaveTextContent('What’s coming, and when.')
     expect(homePage.loadingScreen).toBeInTheDocument()
     expect(homePage.loadingScreenFading).toBe(false)
 
@@ -109,7 +109,7 @@ describe('AuthenticatedLayout', () => {
     await health.respond(HttpResponse.json(healthyResponse))
     await advance(1)
 
-    expect(homePage.title).toHaveTextContent('FortyMM')
+    expect(homePage.title).toHaveTextContent('What’s coming, and when.')
     expect(homePage.loadingScreenFading).toBe(true)
   })
 
@@ -123,7 +123,7 @@ describe('AuthenticatedLayout', () => {
     homePage.endLoadingScreenFade()
 
     expect(homePage.loadingScreen).not.toBeInTheDocument()
-    expect(homePage.title).toHaveTextContent('FortyMM')
+    expect(homePage.title).toHaveTextContent('What’s coming, and when.')
   })
 
   it('does not show the loading screen or check health again on client-side navigation', async () => {
@@ -141,7 +141,7 @@ describe('AuthenticatedLayout', () => {
     ).toBeInTheDocument()
     await homePage.navigate('/')
 
-    expect(homePage.title).toHaveTextContent('FortyMM')
+    expect(homePage.title).toHaveTextContent('What’s coming, and when.')
     expect(homePage.loadingScreen).not.toBeInTheDocument()
     expect(health.requests).toHaveLength(1)
   })
