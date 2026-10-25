@@ -269,6 +269,29 @@ account has no `email`. A verified account has one, always lowercase.
   `tests/test_schema.py` checks each constraint, each index and the trigger
   on a `migrated_database`.
 
+### Is this you?
+
+A sign-in can bring players to an account with `adopted_from` set (see
+Sign-in). Each one is an open "Is this you?" question.
+`services/players.py` holds the rules, and `v1/players.py` the routes.
+
+- `GET /v1/account/players` lists the account's players, its `self`
+  player first, then by display name. Each has `relationship` and
+  `open_question`.
+- `POST /v1/account/players/{player_id}/answer` takes `{"answer": "yes"}`,
+  `"no"` or `"not_mine"`, and returns the same list after the answer.
+  `yes` makes the row `self`. `no` keeps it `managed`. `not_mine` deletes
+  the `player_managers` row. The player stays, with no manager.
+- Every answer clears `adopted_from`. A second `yes` or `no` changes
+  nothing, whatever the first answer was.
+- The API answers 409 to `yes` while the account has a `self` player,
+  because player merge comes with games. It also answers 409 to
+  `not_mine` for a question already answered. It answers 404 for a player
+  the account doesn't manage.
+- Both routes call `lock_account_for_write()`. The answer also locks every
+  `player_managers` row of the account `FOR UPDATE`. So two answers from
+  two tabs take turns, and they can't make two `self` players.
+
 ### Sign-in
 
 Sign-in uses Auth0. Local dev and the tests use a mock OpenID Connect
@@ -309,7 +332,7 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   `hand_over_players()` in `services/adoption.py`, with the guest account
   as the target. That makes each of the account's `player_managers` rows
   `managed`, with `adopted_from` set to the account, for the "Is this you?"
-  question (#63).
+  question (see Is this you?).
 - `AdoptGuest` calls `adopt_guest()` in `services/adoption.py`. It locks
   the guest account row `FOR UPDATE`. It hands the guest's players to the
   target account, as `hand_over_players()` does. It moves every other
@@ -321,6 +344,9 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
 - A sign-in takes a Postgres advisory lock on the email before it finds the
   owner. So two sign-ins with one new email take turns, and they make one
   account.
+- A successful callback answers 302 to the attempt's `return_to` with
+  `signed_in=1` added to its query. The web client opens "Is this you?"
+  only then.
 - A failed callback answers 302 to the attempt's `return_to` with
   `sign_in_error` added to its query: `cancelled`, `email_not_verified`,
   `expired` or `failed`. It changes no account and sets no cookie. A
@@ -448,6 +474,16 @@ it to `src/routes/`.
   initials of the player's display name. Its accessible name and tooltip
   are the full name. It reads the session without suspending, so it never
   holds up the loading screen.
+- Home (`src/pages/Home.tsx`) shows `AdoptionReview`
+  (`src/pages/adoption/`) above the roadmap. For a verified account, it
+  reads `GET /v1/account/players`. With open questions, it shows a
+  reminder with a "Review players" button. That opens a dialog that asks
+  "Who is <player>?" about one player at a time. The dialog opens by itself
+  when the URL has `signed_in=1`, and then the router replaces the URL
+  without it. So a reload shows only the reminder. "This is me" is off
+  while the account has its own player. An answer puts the API's list in
+  the players query. A "This is me" also puts the player in the session's
+  account, so the topbar shows it.
 - `design-system.tsx`: a public page. Public pages go directly in
   `src/routes/`. They make no request and never show the loading screen.
   The design system page has no `AppShell`, and no page links to it.
@@ -572,9 +608,14 @@ holds the session request with `page.route()` to show the loading screen.
 the mock's sign-in page. It has one test for each outcome of
 `resolve_login()`. Each test reads the account from `POST /api/v1/session`
 with the page's cookies. The `SignInPage` page object returns to
-`/design-system`, which starts no session. Each run makes a new `sub` and
-email, because the dev database keeps its accounts. The suite starts about
-12 guest accounts, under the limit of 30 a minute.
+`/design-system`, which starts no session, unless the test passes
+`returnTo: '/'`. Each run makes a new `sub` and email, because the dev
+database keeps its accounts.
+
+`e2e/adoption.spec.ts` signs in back to Home and answers "Is this you?". A
+person's first sign-in from a guest is VerifyInPlace, so the account's
+first question is about that guest's own player. The suite starts about 16
+guest accounts, under the limit of 30 a minute.
 
 The design system page is a copy of the reference's component gallery
 (`references/design-system/ui_kits/components/index.html`). It has one
