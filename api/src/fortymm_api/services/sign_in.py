@@ -24,8 +24,8 @@ from fortymm_api.models import (
     AuthSession,
     Identity,
     LoginAttempt,
-    PlayerManager,
 )
+from fortymm_api.services.adoption import hand_over_players
 from fortymm_api.services.sessions import (
     ClientAddress,
     ValidSession,
@@ -257,13 +257,7 @@ def _sign_in(
             session.execute(
                 update(Account).where(Account.id == account).values(email=email)
             )
-            # Sets up "Is this you?": a guest's self player could be a child
-            # who played on a parent's computer.
-            session.execute(
-                update(PlayerManager)
-                .where(PlayerManager.account_id == account)
-                .values(relationship="managed", adopted_from=account)
-            )
+            hand_over_players(session, account, account)
             destination = account
             new_token = convert_guest(session, account, account)
         case AlreadySignedIn(account):
