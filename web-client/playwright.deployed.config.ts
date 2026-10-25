@@ -39,9 +39,17 @@ export default defineConfig({
       : [
           {
             name: 'chromium',
-            testIgnore: 'ready.spec.ts',
+            testIgnore: ['ready.spec.ts', 'session-limit.spec.ts'],
             dependencies: ['ready'],
             use: { ...devices['Desktop Chrome'] },
+          },
+          // Last, because it spends this client's guest account budget. A
+          // retry in the same minute would find the budget spent.
+          {
+            name: 'session-limit',
+            testMatch: 'session-limit.spec.ts',
+            dependencies: ['chromium'],
+            retries: 0,
           },
         ]),
   ],
