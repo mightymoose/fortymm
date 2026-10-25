@@ -39,6 +39,21 @@ export class HomePage {
     return within(this.signInStrip!).getByRole('link', { name: 'Sign in' })
   }
 
+  // The strip that shows a verified account, or null.
+  get accountStrip(): HTMLElement | null {
+    return screen.queryByRole('complementary', { name: 'Your account' })
+  }
+
+  // The account strip's button that signs out.
+  get signOutButton(): HTMLElement {
+    return within(this.accountStrip!).getByRole('button', { name: /^Sign(ing)? out/ })
+  }
+
+  // Waits for the account strip's message that signing out failed.
+  findSignOutError(): Promise<HTMLElement> {
+    return within(this.accountStrip!).findByRole('alert')
+  }
+
   get title(): HTMLElement {
     return screen.getByRole('heading', { level: 1 })
   }

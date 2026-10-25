@@ -463,9 +463,15 @@ a:hover{color:var(--ball-200)}
   margin: 0;
   font: 400 var(--text-base)/var(--lh-normal) var(--font-ui);
   color: var(--fg-2);
+  /* A long email wraps instead of pushing the button off the page. */
+  overflow-wrap: anywhere;
 }
 
 .sign-in-strip b {
   font-weight: 600;
   color: var(--fg-1);
+}
+
+.sign-in-strip[data-error] b {
+  color: var(--danger);
 }

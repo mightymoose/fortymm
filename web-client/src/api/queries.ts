@@ -39,3 +39,17 @@ export function sessionQuery(api: ApiClient) {
     },
   })
 }
+
+// Ends the visitor's session, and returns the identity provider's logout
+// page, which the browser follows to end the provider's session too.
+export async function logout(api: ApiClient): Promise<string> {
+  const request = 'POST /v1/auth/logout'
+  // The API answers 415 to a POST that isn't JSON, as for the session.
+  const { data, response } = await api
+    .POST('/v1/auth/logout', { headers: { 'Content-Type': 'application/json' } })
+    .catch((cause: unknown) => {
+      throw new ApiUnreachable(request, { cause })
+    })
+  if (data === undefined) throw new ApiError(request, response)
+  return data.data.logout_url
+}
