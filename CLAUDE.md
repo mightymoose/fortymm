@@ -572,7 +572,9 @@ The API's `*.run.app` URLs are public, so the Worker proves each request came
 through it. It sends the Worker secret in the `X-FortyMM-Worker-Secret`
 header, and the API answers 403 to any request without it. The Worker also
 limits each client IP to 100 `/api/*` requests a minute and answers 429 above
-that. The Worker secret section below describes where the value lives.
+that. Each `POST /api/v1/session` can make a guest account, so the Worker
+limits each client IP to 30 of those a minute. The Worker secret section
+below describes where the value lives.
 
 ```sh
 ./bin/mise run api:deploy           # build, push and deploy the API; prints its URL last
@@ -633,9 +635,15 @@ query and body and setting `X-Forwarded-Host`, `X-Forwarded-Proto` and
 copy when `WORKER_SECRET` is empty. Before it forwards a request, the
 `API_RATE_LIMIT` binding (`ratelimits` in `wrangler.jsonc`) counts it against
 the client's `CF-Connecting-IP`. Above 100 requests a minute, the Worker
-answers 429 with `Retry-After: 60`. Cloudflare counts each location
-separately, so the limit is approximate. Previews get only the bindings under
-`previews` in `wrangler.jsonc`, so that block repeats the rate limit.
+answers 429 with `Retry-After: 60`. Then, for a `POST` to `/api/v1/session`,
+the `SESSION_RATE_LIMIT` binding counts it against the same IP, never the
+cookie. Above 30 requests a minute, the Worker answers the same 429. The
+Worker decodes the path's percent escapes first, as the API does, so
+`/api/v1/%73ession` also counts. Each binding has its own `namespace_id`, so
+the two limits don't share counts. Cloudflare counts each location
+separately, so the limits are approximate. Previews get only the bindings
+under `previews` in `wrangler.jsonc`. So that block repeats both rate limits,
+with their own namespaces.
 Everything else goes to the static assets in `dist/` (the `ASSETS` binding).
 `assets.run_worker_first: true` runs the Worker before the assets for every
 path, so the host redirect below also covers `/`. When the Worker passes a

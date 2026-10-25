@@ -16,6 +16,8 @@ export interface Env {
   WORKER_SECRET?: string
   // Per-client-IP limit on /api/* (the `ratelimits` binding in wrangler.jsonc).
   API_RATE_LIMIT: RateLimit
+  // Per-client-IP limit on POST /api/v1/session (the `ratelimits` binding in wrangler.jsonc).
+  SESSION_RATE_LIMIT: RateLimit
 }
 
 // The Workers rate limiting binding.
@@ -24,6 +26,7 @@ interface RateLimit {
 }
 
 const API_PREFIX = '/api'
+const SESSION_PATH = '/api/v1/session'
 const WORKER_SECRET_HEADER = 'X-FortyMM-Worker-Secret'
 const CANONICAL_ORIGIN = 'https://fortymm.com'
 // Each host has its own cookie jar, so these redirect to one host. Previews
@@ -53,12 +56,16 @@ async function proxyToApi(request: Request, url: URL, env: Env): Promise<Respons
 
   const clientIp = request.headers.get('CF-Connecting-IP')
   // Cloudflare always sets CF-Connecting-IP. Without it, the requests share one key.
-  const { success } = await env.API_RATE_LIMIT.limit({ key: clientIp ?? 'unknown' })
-  if (!success) {
-    return Response.json(
-      { errors: [{ status: '429', title: 'Too many requests' }] },
-      { status: 429, headers: { 'Retry-After': '60' } },
-    )
+  const key = clientIp ?? 'unknown'
+  if (!(await env.API_RATE_LIMIT.limit({ key })).success) {
+    return tooManyRequests()
+  }
+  if (
+    request.method === 'POST' &&
+    isSessionPath(url.pathname) &&
+    !(await env.SESSION_RATE_LIMIT.limit({ key })).success
+  ) {
+    return tooManyRequests()
   }
 
   const target = new URL(env.API_ORIGIN)
@@ -89,4 +96,21 @@ async function proxyToApi(request: Request, url: URL, env: Env): Promise<Respons
     body: hasBody ? await request.arrayBuffer() : undefined,
     redirect: 'manual',
   })
+}
+
+// The API percent-decodes the path before it routes, so /api/v1/%73ession
+// also starts a session.
+function isSessionPath(pathname: string): boolean {
+  try {
+    return decodeURIComponent(pathname) === SESSION_PATH
+  } catch {
+    return false
+  }
+}
+
+function tooManyRequests(): Response {
+  return Response.json(
+    { errors: [{ status: '429', title: 'Too many requests' }] },
+    { status: 429, headers: { 'Retry-After': '60' } },
+  )
 }
