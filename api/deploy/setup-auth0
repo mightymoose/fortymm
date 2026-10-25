@@ -203,8 +203,13 @@ PREVIEW_ORIGIN='https://*-fortymm.mightymoose.workers.dev'
 # newest version. printf adds no newline, which Cloud Run would keep.
 add_client_secret() {
   local secret="$1" value
-  ask_secret value "Paste the Client Secret:"
-  [[ -n "$value" ]] || { warn "no secret pasted, so $secret is unchanged"; return; }
+  while :; do
+    ask_secret value "Paste the Client Secret:"
+    # Auth0's client secrets are 64 characters. The input is hidden, so a
+    # wrong clipboard is otherwise invisible until a sign-in fails.
+    (( ${#value} >= 64 )) && break
+    warn "that is ${#value} characters, and an Auth0 client secret is 64. Copy it again."
+  done
   printf '%s' "$value" |
     gcloud secrets versions add "$secret" --project "$project" --data-file=- >/dev/null
   printf '  %s✓ added%s a version to %s\n' "$GREEN" "$RESET" "$secret"
@@ -250,9 +255,9 @@ pause
 
 stage "Create the tenant"
 open_url "https://manage.auth0.com/"
-step "Sign up or log in. Open the tenant menu at the top left, then Create tenant."
-step "Name it ${BOLD}fortymm${RESET}, pick the ${BOLD}US${RESET} region and the ${BOLD}Production${RESET} environment tag."
-step "The tenant's domain shows under Settings, such as fortymm.us.auth0.com."
+step "Sign up or log in. Sign-up makes a tenant, such as dev-abc123.us.auth0.com."
+note "  Use that tenant. The free plan charges for a second one."
+step "Open Applications > Applications > Default App. Its Domain field is the tenant's domain."
 ask AUTH0_DOMAIN "Paste the tenant's domain:"
 AUTH0_DOMAIN=${AUTH0_DOMAIN#https://}
 AUTH0_DOMAIN=${AUTH0_DOMAIN%/}

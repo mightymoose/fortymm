@@ -135,7 +135,8 @@ api/deploy/setup-auth0 fortymm
 ```
 
 It walks you through the Auth0 dashboard and the Google Cloud console. It
-creates the tenant, a Google OAuth client for the Google connection, both
+uses the tenant that Auth0 sign-up makes, because the free plan charges for
+a second one. It sets up a Google OAuth client for the Google connection, both
 applications and their connections. It deletes the password connection. It
 adds each client secret to Secret Manager with gcloud, and never writes it to
 a file. It writes `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` and
