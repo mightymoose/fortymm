@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
+from fortymm_api.auth import RequestAccount
 from fortymm_api.main import create_app
 
 COOKIE = "__Host-fortymm_session"
@@ -214,6 +215,31 @@ def test_a_verified_account_with_a_new_email_reaches_a_new_account(
     account = start_session(browser)
     assert account["id"] != ann["id"]
     assert account["email"] == "ann@work.example"
+
+
+def test_a_guest_signing_in_to_another_account_joins_it(
+    app: FastAPI, new_browser: Browser
+) -> None:
+    @app.get("/whoami")
+    def whoami(account: RequestAccount) -> dict[str, str]:
+        return {"id": str(account.id)}
+
+    bobs_laptop, guest_browser = new_browser(), new_browser()
+    bob = signed_in(bobs_laptop, "auth0|bob", "bob@example.com")
+    guest = start_session(guest_browser)
+    guest_token = token(guest_browser)
+
+    response = sign_in(guest_browser, "auth0|bob", "bob@example.com")
+
+    assert response.status_code == 302
+    assert response.headers["Location"] == "/games?tab=open"
+    assert token(guest_browser) not in (None, guest_token)
+    assert start_session(guest_browser)["id"] == bob["id"]
+    stale_tab = new_browser()
+    stale_tab.cookies.set(COOKIE, guest_token or "", domain="testserver")
+    assert stale_tab.get("/whoami").status_code == 401
+    assert start_session(stale_tab)["id"] not in (guest["id"], bob["id"])
+    assert start_session(stale_tab)["kind"] == "guest"
 
 
 def test_a_replayed_callback_goes_home_and_changes_nothing(

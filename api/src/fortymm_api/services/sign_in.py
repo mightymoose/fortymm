@@ -24,8 +24,8 @@ from fortymm_api.models import (
     AuthSession,
     Identity,
     LoginAttempt,
-    PlayerManager,
 )
+from fortymm_api.services.adoption import adopt_guest, hand_over_players
 from fortymm_api.services.sessions import (
     ClientAddress,
     ValidSession,
@@ -228,17 +228,13 @@ def finish_sign_in(
     if not id_token.email_verified or id_token.email is None:
         return failed(SignInError.EMAIL_NOT_VERIFIED)
 
-    signed_in_token = _sign_in(session, current, id_token.sub, id_token.email)
-    if signed_in_token is None:
-        return failed(SignInError.FAILED)
-    return SignedIn(attempt.return_to, signed_in_token)
+    return SignedIn(
+        attempt.return_to, _sign_in(session, current, id_token.sub, id_token.email)
+    )
 
 
-def _sign_in(
-    session: Session, current: ValidSession, sub: str, email: Email
-) -> str | None:
-    """Apply the login's outcome. Returns the new session's token, or None for
-    an outcome the API can't apply yet.
+def _sign_in(session: Session, current: ValidSession, sub: str, email: Email) -> str:
+    """Apply the login's outcome. Returns the new session's token.
 
     The advisory lock makes sign-ins with one email take turns. So when two
     browsers verify one new email at once, the second finds the account the
@@ -257,13 +253,7 @@ def _sign_in(
             session.execute(
                 update(Account).where(Account.id == account).values(email=email)
             )
-            # Sets up "Is this you?": a guest's self player could be a child
-            # who played on a parent's computer.
-            session.execute(
-                update(PlayerManager)
-                .where(PlayerManager.account_id == account)
-                .values(relationship="managed", adopted_from=account)
-            )
+            hand_over_players(session, account, account)
             destination = account
             new_token = convert_guest(session, account, account)
         case AlreadySignedIn(account):
@@ -278,9 +268,9 @@ def _sign_in(
             session.flush()
             destination = created.id
             new_token = _replace_session(session, current.row, created.id)
-        case AdoptGuest():
-            # Waits for adoption (#60).
-            return None
+        case AdoptGuest(guest, into):
+            destination = into
+            new_token = adopt_guest(session, guest, into)
 
     if sub_is_new:
         session.add(Identity(auth0_sub=sub, account_id=destination))
