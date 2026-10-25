@@ -12,6 +12,10 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as DesignSystemRouteImport } from './routes/design-system'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
+import { Route as AuthenticatedPlayersIndexRouteImport } from './routes/_authenticated/players/index'
+import { Route as AuthenticatedPlayersVariantRouteRouteImport } from './routes/_authenticated/players/$variant/route'
+import { Route as AuthenticatedPlayersVariantIndexRouteImport } from './routes/_authenticated/players/$variant/index'
+import { Route as AuthenticatedPlayersVariantPlayerIdRouteImport } from './routes/_authenticated/players/$variant/$playerId'
 
 const AuthenticatedRoute = AuthenticatedRouteImport.update({
   id: '/_authenticated',
@@ -27,27 +31,81 @@ const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AuthenticatedRoute,
 } as any)
+const AuthenticatedPlayersIndexRoute =
+  AuthenticatedPlayersIndexRouteImport.update({
+    id: '/players/',
+    path: '/players/',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedPlayersVariantRouteRoute =
+  AuthenticatedPlayersVariantRouteRouteImport.update({
+    id: '/players/$variant',
+    path: '/players/$variant',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedPlayersVariantIndexRoute =
+  AuthenticatedPlayersVariantIndexRouteImport.update({
+    id: '/',
+    path: '/',
+    getParentRoute: () => AuthenticatedPlayersVariantRouteRoute,
+  } as any)
+const AuthenticatedPlayersVariantPlayerIdRoute =
+  AuthenticatedPlayersVariantPlayerIdRouteImport.update({
+    id: '/$playerId',
+    path: '/$playerId',
+    getParentRoute: () => AuthenticatedPlayersVariantRouteRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedIndexRoute
   '/design-system': typeof DesignSystemRoute
+  '/players/$variant': typeof AuthenticatedPlayersVariantRouteRouteWithChildren
+  '/players/': typeof AuthenticatedPlayersIndexRoute
+  '/players/$variant/$playerId': typeof AuthenticatedPlayersVariantPlayerIdRoute
+  '/players/$variant/': typeof AuthenticatedPlayersVariantIndexRoute
 }
 export interface FileRoutesByTo {
   '/design-system': typeof DesignSystemRoute
   '/': typeof AuthenticatedIndexRoute
+  '/players': typeof AuthenticatedPlayersIndexRoute
+  '/players/$variant/$playerId': typeof AuthenticatedPlayersVariantPlayerIdRoute
+  '/players/$variant': typeof AuthenticatedPlayersVariantIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/design-system': typeof DesignSystemRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
+  '/_authenticated/players/$variant': typeof AuthenticatedPlayersVariantRouteRouteWithChildren
+  '/_authenticated/players/': typeof AuthenticatedPlayersIndexRoute
+  '/_authenticated/players/$variant/$playerId': typeof AuthenticatedPlayersVariantPlayerIdRoute
+  '/_authenticated/players/$variant/': typeof AuthenticatedPlayersVariantIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/design-system'
+  fullPaths:
+    | '/'
+    | '/design-system'
+    | '/players/$variant'
+    | '/players/'
+    | '/players/$variant/$playerId'
+    | '/players/$variant/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/design-system' | '/'
-  id: '__root__' | '/_authenticated' | '/design-system' | '/_authenticated/'
+  to:
+    | '/design-system'
+    | '/'
+    | '/players'
+    | '/players/$variant/$playerId'
+    | '/players/$variant'
+  id:
+    | '__root__'
+    | '/_authenticated'
+    | '/design-system'
+    | '/_authenticated/'
+    | '/_authenticated/players/$variant'
+    | '/_authenticated/players/'
+    | '/_authenticated/players/$variant/$playerId'
+    | '/_authenticated/players/$variant/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -78,15 +136,66 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedIndexRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/players/': {
+      id: '/_authenticated/players/'
+      path: '/players'
+      fullPath: '/players/'
+      preLoaderRoute: typeof AuthenticatedPlayersIndexRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/players/$variant': {
+      id: '/_authenticated/players/$variant'
+      path: '/players/$variant'
+      fullPath: '/players/$variant'
+      preLoaderRoute: typeof AuthenticatedPlayersVariantRouteRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/players/$variant/': {
+      id: '/_authenticated/players/$variant/'
+      path: '/'
+      fullPath: '/players/$variant/'
+      preLoaderRoute: typeof AuthenticatedPlayersVariantIndexRouteImport
+      parentRoute: typeof AuthenticatedPlayersVariantRouteRoute
+    }
+    '/_authenticated/players/$variant/$playerId': {
+      id: '/_authenticated/players/$variant/$playerId'
+      path: '/$playerId'
+      fullPath: '/players/$variant/$playerId'
+      preLoaderRoute: typeof AuthenticatedPlayersVariantPlayerIdRouteImport
+      parentRoute: typeof AuthenticatedPlayersVariantRouteRoute
+    }
   }
 }
 
+interface AuthenticatedPlayersVariantRouteRouteChildren {
+  AuthenticatedPlayersVariantPlayerIdRoute: typeof AuthenticatedPlayersVariantPlayerIdRoute
+  AuthenticatedPlayersVariantIndexRoute: typeof AuthenticatedPlayersVariantIndexRoute
+}
+
+const AuthenticatedPlayersVariantRouteRouteChildren: AuthenticatedPlayersVariantRouteRouteChildren =
+  {
+    AuthenticatedPlayersVariantPlayerIdRoute:
+      AuthenticatedPlayersVariantPlayerIdRoute,
+    AuthenticatedPlayersVariantIndexRoute:
+      AuthenticatedPlayersVariantIndexRoute,
+  }
+
+const AuthenticatedPlayersVariantRouteRouteWithChildren =
+  AuthenticatedPlayersVariantRouteRoute._addFileChildren(
+    AuthenticatedPlayersVariantRouteRouteChildren,
+  )
+
 interface AuthenticatedRouteChildren {
   AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
+  AuthenticatedPlayersVariantRouteRoute: typeof AuthenticatedPlayersVariantRouteRouteWithChildren
+  AuthenticatedPlayersIndexRoute: typeof AuthenticatedPlayersIndexRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedIndexRoute: AuthenticatedIndexRoute,
+  AuthenticatedPlayersVariantRouteRoute:
+    AuthenticatedPlayersVariantRouteRouteWithChildren,
+  AuthenticatedPlayersIndexRoute: AuthenticatedPlayersIndexRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(

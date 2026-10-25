@@ -32,6 +32,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [folded, setFolded] = useState(readFolded)
   const foldTooltip = useTooltip('Show or hide the labels')
   const homeTooltip = useTooltip('Home')
+  const playersTooltip = useTooltip('Players')
 
   function toggle() {
     saveFolded(!folded)
@@ -69,6 +70,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         >
           <Icon name="house" />
           <span className="app-link__label">Home</span>
+        </Link>
+        <Link to="/players" className="app-link" {...(folded ? playersTooltip : {})}>
+          <Icon name="user" />
+          <span className="app-link__label">Players</span>
         </Link>
       </nav>
       <main className="app-main">

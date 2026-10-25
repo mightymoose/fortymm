@@ -382,6 +382,26 @@ it to `src/routes/`.
   initials of the player's display name. Its accessible name and tooltip
   are the full name. It reads the session without suspending, so it never
   holds up the loading screen.
+- `_authenticated/players/`: five mockups of a players list and a player's
+  page, with sample data and no API. The sidebar's Players link opens the
+  index at `/players`. `/players/<mockup>` is a list and
+  `/players/<mockup>/<player id>` is a player. The `$variant/route.tsx`
+  route sends an unknown mockup to the root's not-found page. The
+  components are in `src/pages/players/`, and `variants.ts` lists the
+  mockups. Each player has a rating in each league they play in, and no
+  rating outside a league.
+  - The `?state=` search param picks how the fake API in `mockApi.ts`
+    answers: `loading` (never answers), `empty`, `not-found`, `error`,
+    `unreachable` or `rate-limited`. Without it, the API answers with the
+    sample players after 300ms. The bar over each mockup links to each
+    state.
+  - The mock queries never retry, so an error shows at once.
+    `LoadFailure` reads the error with `classifyFailure()` from
+    `src/api/errors.ts`, which the root error page also uses.
+  - An unknown player id is a 404 from the fake API. The page then shows
+    the player 404 inside `AppShell`, not the root's not-found page.
+  - Skeletons are flat `.fm-skeleton` blocks. The design system has no
+    shimmer.
 - `design-system.tsx`: a public page. Public pages go directly in
   `src/routes/`. They make no request and never show the loading screen.
   The design system page has no `AppShell`, and no page links to it.
@@ -590,8 +610,9 @@ The design system's styles apply to the whole app; `main.tsx` imports them:
   in `src/assets/fonts/`.
 - `src/styles/base.css`: the base, type roles, status markers and motion of
   the same file. Then the app's own styles: the loading screen,
-  `.app-shell` (`src/pages/AppShell.tsx`) and `.roadmap`, the list of what's
-  ready and what's coming that Home shows (`src/pages/Home.tsx`).
+  `.app-shell` (`src/pages/AppShell.tsx`), `.roadmap`, the list of what's
+  ready and what's coming that Home shows (`src/pages/Home.tsx`), and the
+  players mockups (`src/pages/players/`).
 - `src/styles/kit.css`: the component classes (`fm-*`) of
   `references/design-system/ui_kits/components/kit.css`.
 - `src/styles/page.css`: the gallery's page chrome (`.doc-*`), with `.page`
