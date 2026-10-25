@@ -211,10 +211,172 @@
           }
         ]
       }
+    },
+    "/v1/account/players": {
+      "get": {
+        "tags": [
+          "players"
+        ],
+        "summary": "Account Players",
+        "description": "List the players the account manages, its own player first.\n\n`open_question` is true for a player that a sign-in brought to the\naccount, until the account answers \"Is this you?\" for it.",
+        "operationId": "account_players",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountPlayersResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/account/players/{player_id}/answer": {
+      "post": {
+        "tags": [
+          "players"
+        ],
+        "summary": "Answer Question",
+        "description": "Answer \"Is this you?\" for one player, and list the account's players\nafter it.\n\n`yes` makes it the account's own player, and works only while the account\nhas none. `no` keeps it as a player the account manages. `not_mine` takes\nit off the account. The player stays, with no manager. Every answer\ncloses the question. A second `yes` or `no` changes nothing, and a second\n`not_mine` answers 409.",
+        "operationId": "answer_question",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "player_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Player Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountPlayersResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The account doesn't manage the player"
+          },
+          "409": {
+            "description": "The answer is `yes` and the account already has its own player, or the answer is `not_mine` and the question was already answered"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "AccountPlayer": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "display_name": {
+            "type": "string",
+            "title": "Display Name"
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "self",
+              "managed"
+            ],
+            "title": "Relationship"
+          },
+          "open_question": {
+            "type": "boolean",
+            "title": "Open Question"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "display_name",
+          "relationship",
+          "open_question"
+        ],
+        "title": "AccountPlayer"
+      },
+      "AccountPlayersResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/AccountPlayer"
+            },
+            "type": "array",
+            "title": "Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "AccountPlayersResponse"
+      },
+      "Answer": {
+        "type": "string",
+        "enum": [
+          "yes",
+          "no",
+          "not_mine"
+        ],
+        "title": "Answer"
+      },
+      "AnswerRequest": {
+        "properties": {
+          "answer": {
+            "$ref": "#/components/schemas/Answer"
+          }
+        },
+        "type": "object",
+        "required": [
+          "answer"
+        ],
+        "title": "AnswerRequest"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
