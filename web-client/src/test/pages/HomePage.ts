@@ -54,6 +54,24 @@ export class HomePage {
     return within(this.accountStrip!).findByRole('alert')
   }
 
+  // The message of a sign-in that came back with an error, found by its
+  // title, or null. An error is an alert. A cancelled sign-in is a status.
+  signInMessage(title: string): HTMLElement | null {
+    return (
+      screen.queryByRole('alert', { name: title }) ?? screen.queryByRole('status', { name: title })
+    )
+  }
+
+  // The sign-in message's link that starts another sign-in.
+  tryAgainLink(message: HTMLElement): HTMLElement {
+    return within(message).getByRole('link', { name: 'Try again' })
+  }
+
+  // The sign-in message's button that hides it.
+  dismissButton(message: HTMLElement): HTMLElement {
+    return within(message).getByRole('button', { name: 'Dismiss' })
+  }
+
   get title(): HTMLElement {
     return screen.getByRole('heading', { level: 1 })
   }

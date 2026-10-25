@@ -475,3 +475,12 @@ a:hover{color:var(--ball-200)}
 .sign-in-strip[data-error] b {
   color: var(--danger);
 }
+
+/* The message of a sign-in that came back with an error
+   (src/pages/SignInErrorAlert.tsx), above any authenticated page. It sits
+   as close to the topbar as the strip. Home's strip pulls up into its
+   bottom margin, so the two stay --s-8 apart. */
+.sign-in-error {
+  max-width: 640px;
+  margin: calc(-1 * var(--s-4)) 0 var(--s-12);
+}
