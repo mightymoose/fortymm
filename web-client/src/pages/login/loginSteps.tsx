@@ -26,33 +26,44 @@ export function EmailForm({
   }
 
   return (
-    <form className="login-form" noValidate onSubmit={submit}>
-      <div className="fm-field">
-        <label className="fm-label" htmlFor={`${id}-email`}>
-          Email
-        </label>
-        <input
-          className="fm-input"
-          id={`${id}-email`}
-          name="email"
-          type="email"
-          autoComplete="email"
-          placeholder="you@example.com"
-          aria-invalid={invalid || undefined}
-          aria-describedby={`${id}-help ${id}-error`}
-          onInput={() => setInvalid(false)}
-        />
-        <p className="fm-help" id={`${id}-help`}>
-          We email you a 6-digit code. No password to remember.
-        </p>
-        <FieldError id={`${id}-error`} hidden={!invalid}>
-          Enter an email address, like you@example.com.
-        </FieldError>
+    <div className="login-form">
+      <div className="login-social">
+        <DemoButton variant="secondary" size={size} className="fm-btn--block">
+          Continue with Google
+        </DemoButton>
+        <DemoButton variant="secondary" size={size} className="fm-btn--block">
+          Continue with Apple
+        </DemoButton>
       </div>
-      <Button variant="primary" size={size} type="submit" className="fm-btn--block">
-        Email me a code
-      </Button>
-    </form>
+      <p className="login-or">or</p>
+      <form className="login-form" noValidate onSubmit={submit}>
+        <div className="fm-field">
+          <label className="fm-label" htmlFor={`${id}-email`}>
+            Email
+          </label>
+          <input
+            className="fm-input"
+            id={`${id}-email`}
+            name="email"
+            type="email"
+            autoComplete="email"
+            placeholder="you@example.com"
+            aria-invalid={invalid || undefined}
+            aria-describedby={`${id}-help ${id}-error`}
+            onInput={() => setInvalid(false)}
+          />
+          <p className="fm-help" id={`${id}-help`}>
+            We email you a 6-digit code. No password to remember.
+          </p>
+          <FieldError id={`${id}-error`} hidden={!invalid}>
+            Enter an email address, like you@example.com.
+          </FieldError>
+        </div>
+        <Button variant="primary" size={size} type="submit" className="fm-btn--block">
+          Email me a code
+        </Button>
+      </form>
+    </div>
   )
 }
 

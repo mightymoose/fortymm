@@ -17,6 +17,9 @@
 .login-head p{margin:0;color:var(--fg-2)}
 
 .login-form{display:flex;flex-direction:column;gap:var(--s-5)}
+.login-social{display:flex;flex-direction:column;gap:var(--s-3)}
+.login-or{display:flex;align-items:center;gap:var(--s-3);margin:0;font:400 var(--text-sm) var(--font-ui);color:var(--fg-3)}
+.login-or::before,.login-or::after{content:"";flex:1;height:1px;background:var(--border-subtle)}
 .login-email{font-weight:600;color:var(--fg-1);overflow-wrap:anywhere}
 .login-row{display:flex;flex-wrap:wrap;justify-content:space-between;gap:var(--s-3)}
 
@@ -32,7 +35,7 @@
 .login-matches__names b{font-weight:600;color:var(--winner)}
 .login-matches__games{grid-row:span 2;align-self:center;font-size:var(--text-lg);color:var(--fg-1)}
 
-.login-bar{display:flex;align-items:center;justify-content:space-between;min-height:40px}
+.login-bar{display:flex;align-items:center;min-height:40px}
 .login-column--phone .fm-code .fm-input{width:46px;height:64px;font-size:28px}
 
 @media (max-width:760px){

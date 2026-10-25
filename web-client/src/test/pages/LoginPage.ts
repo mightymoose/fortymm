@@ -20,6 +20,10 @@ export class LoginPage {
     return screen.getByRole('textbox', { name: 'Email' })
   }
 
+  get social(): HTMLElement[] {
+    return screen.getAllByRole('button', { name: /^Continue with / })
+  }
+
   get emailError(): HTMLElement | null {
     return screen.queryByText(/Enter an email address/, { ignore: '[hidden] *' })
   }
