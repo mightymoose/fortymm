@@ -6,16 +6,16 @@ test('shows the roadmap title', async ({ homePage }) => {
   await expect(homePage.title).toHaveText('What’s coming, and when.')
 })
 
-test('shows the loading screen until health answers, then fades it out over the page', async ({
+test('shows the loading screen until the session starts, then fades it out over the page', async ({
   homePage,
   page,
 }) => {
-  let releaseHealth!: () => void
-  const healthHeld = new Promise<void>((resolve) => {
-    releaseHealth = resolve
+  let releaseSession!: () => void
+  const sessionHeld = new Promise<void>((resolve) => {
+    releaseSession = resolve
   })
-  await page.route('**/api/v1/health', async (route) => {
-    await healthHeld
+  await page.route('**/api/v1/session', async (route) => {
+    await sessionHeld
     await route.continue()
   })
 
@@ -33,7 +33,7 @@ test('shows the loading screen until health answers, then fades it out over the 
       if (event.animationName === 'loading-screen-out') resolve()
     })
   })`)
-  releaseHealth()
+  releaseSession()
 
   await expect(homePage.title).toHaveText('What’s coming, and when.')
   await fadeEnded

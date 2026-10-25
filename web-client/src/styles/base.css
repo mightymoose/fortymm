@@ -166,6 +166,10 @@ a:hover{color:var(--ball-200)}
   color: var(--fg-1);
 }
 
+.app-avatar {
+  margin-left: auto;
+}
+
 .app-nav {
   position: sticky;
   top: 64px;

@@ -5,9 +5,9 @@ import { renderRoute } from '../renderRoute'
 // when a route fails or a path matches no route.
 export class ErrorPage {
   // Renders the app at `path` and waits for its error page. The test makes
-  // the page fail first, e.g. by overriding the health check.
+  // the page fail first, e.g. by overriding the session.
   static async render(path: string): Promise<ErrorPage> {
-    await renderRoute(path, { waitForHealth: false })
+    await renderRoute(path, { waitForSession: false })
     await screen.findByRole('button', { name: /Try again|Go back/ })
     return new ErrorPage()
   }

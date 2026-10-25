@@ -1,4 +1,5 @@
 import hashlib
+import re
 import secrets
 import time
 from collections.abc import Callable
@@ -11,7 +12,9 @@ from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from fortymm_api.accounts import AccountId, CurrentAccount, GuestAccount
+from fortymm_api.services.display_names import random_display_name
 from fortymm_api.services.sessions import (
+    DISPLAY_NAME_ATTEMPTS,
     ClientAddress,
     GuestAccountLimitReached,
     StartedSession,
@@ -30,11 +33,22 @@ def in_transaction[T](database: Engine, work: Callable[[Session], T]) -> T:
 
 
 def start(
-    database: Engine, token: str | None = None, *, address: ClientAddress = ANN
+    database: Engine,
+    token: str | None = None,
+    *,
+    address: ClientAddress = ANN,
+    new_display_name: Callable[[], str] = random_display_name,
 ) -> StartedSession:
     return in_transaction(
-        database, lambda session: start_session(session, token, address)
+        database,
+        lambda session: start_session(
+            session, token, address, new_display_name=new_display_name
+        ),
     )
+
+
+def names(*display_names: str) -> Callable[[], str]:
+    return iter(display_names).__next__
 
 
 def signed_in(database: Engine, token: str | None) -> CurrentAccount | None:
@@ -407,3 +421,110 @@ def test_a_guest_start_deletes_ended_windows(migrated_database: Engine) -> None:
 
     assert not has_count(migrated_database, "198.51.100.1/32")
     assert started_in_window(migrated_database, "198.51.100.2/32") == 5
+
+
+def self_players(database: Engine, account_id: AccountId) -> list[tuple[str, str]]:
+    """The (player id, display name) of each self player the account has."""
+    with database.connect() as connection:
+        return [
+            (str(id), name)
+            for id, name in connection.execute(
+                text(
+                    "SELECT players.id, players.display_name FROM player_managers"
+                    " JOIN players ON players.id = player_managers.player_id"
+                    " WHERE account_id = :id AND relationship = 'self'"
+                ),
+                {"id": account_id},
+            )
+        ]
+
+
+def test_names_a_guests_player_with_an_alliterative_pair_and_a_number(
+    migrated_database: Engine,
+) -> None:
+    started = start(migrated_database)
+
+    assert re.fullmatch(
+        r"([a-z])[a-z]* \1[a-z]* [1-9][0-9]{2}", started.player.display_name
+    )
+
+
+def test_links_a_guest_account_to_its_player_as_self(
+    migrated_database: Engine,
+) -> None:
+    started = start(migrated_database)
+
+    assert self_players(migrated_database, started.account.id) == [
+        (str(started.player.id), started.player.display_name)
+    ]
+
+
+def test_tries_the_next_name_when_one_is_taken(migrated_database: Engine) -> None:
+    start(migrated_database, new_display_name=names("excited egret 387"))
+
+    started = start(
+        migrated_database,
+        address=ip_address("198.51.100.1"),
+        new_display_name=names("Excited Egret 387", "brave bison 120"),
+    )
+
+    assert started.player.display_name == "brave bison 120"
+    assert count(migrated_database, "players") == 2
+
+
+def test_gives_up_when_every_name_it_tries_is_taken(
+    migrated_database: Engine,
+) -> None:
+    start(migrated_database, new_display_name=names("excited egret 387"))
+    tries: list[str] = []
+
+    def taken() -> str:
+        tries.append("excited egret 387")
+        return tries[-1]
+
+    with pytest.raises(RuntimeError):
+        start(
+            migrated_database,
+            address=ip_address("198.51.100.1"),
+            new_display_name=taken,
+        )
+
+    assert len(tries) == DISPLAY_NAME_ATTEMPTS
+    assert count(migrated_database, "accounts") == 1
+
+
+def test_a_refused_start_makes_no_player(migrated_database: Engine) -> None:
+    seed_count(migrated_database, "203.0.113.7/32", 30)
+
+    with pytest.raises(GuestAccountLimitReached):
+        start(migrated_database)
+
+    assert count(migrated_database, "players") == 0
+    assert count(migrated_database, "player_managers") == 0
+
+
+def test_a_resume_keeps_the_accounts_player(migrated_database: Engine) -> None:
+    first = start(migrated_database)
+
+    resumed = start(migrated_database, first.token)
+
+    assert resumed.player == first.player
+    assert count(migrated_database, "players") == 1
+
+
+def test_a_resume_gives_an_account_without_a_self_player_one(
+    migrated_database: Engine,
+) -> None:
+    first = start(migrated_database)
+    run(
+        migrated_database,
+        "DELETE FROM player_managers WHERE account_id = :id",
+        id=first.account.id,
+    )
+
+    resumed = start(migrated_database, first.token)
+
+    assert resumed.player != first.player
+    assert self_players(migrated_database, first.account.id) == [
+        (str(resumed.player.id), resumed.player.display_name)
+    ]

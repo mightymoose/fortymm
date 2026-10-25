@@ -2,6 +2,7 @@ import { cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it } from 'vitest'
 import { HomePage } from '../test/pages/HomePage'
+import { sessionResponse } from '../test/server'
 
 describe('Home', () => {
   afterEach(() => {
@@ -25,6 +26,13 @@ describe('Home', () => {
 
     expect(homePage.homeLink).toHaveAttribute('aria-current', 'page')
     expect(homePage.designSystemLink).not.toBeInTheDocument()
+  })
+
+  it("shows the visitor's player as an avatar of their initials", async () => {
+    const homePage = await HomePage.render()
+
+    const { display_name } = sessionResponse.data.account.player
+    expect(homePage.avatar(display_name)).toHaveTextContent(/^EE$/)
   })
 
   it('folds the sidebar to its icons and remembers it on the next visit', async () => {

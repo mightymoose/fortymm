@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ErrorPage } from '../test/pages/ErrorPage'
 import { API_BASE_URL, server } from '../test/server'
 
-function healthAnswers(response: () => Response) {
-  server.use(http.get(`${API_BASE_URL}/v1/health`, response))
+function sessionAnswers(response: () => Response) {
+  server.use(http.post(`${API_BASE_URL}/v1/session`, response))
 }
 
 describe('error pages', () => {
@@ -35,8 +35,8 @@ describe('error pages', () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'What’s coming, and when.' })).toBeInTheDocument()
   })
 
-  it.each([502, 503, 504])('says it can’t reach FortyMM when health answers %i', async (status) => {
-    healthAnswers(() => HttpResponse.json({}, { status }))
+  it.each([502, 503, 504])('says it can’t reach FortyMM when the session answers %i', async (status) => {
+    sessionAnswers(() => HttpResponse.json({}, { status }))
 
     const page = await ErrorPage.render('/')
 
@@ -44,17 +44,17 @@ describe('error pages', () => {
     expect(page.sidebar).not.toBeInTheDocument()
   })
 
-  it('says it can’t reach FortyMM when health gets no response', async () => {
-    healthAnswers(() => HttpResponse.error())
+  it('says it can’t reach FortyMM when the session gets no response', async () => {
+    sessionAnswers(() => HttpResponse.error())
 
     const page = await ErrorPage.render('/')
 
     expect(page.title).toHaveTextContent('Can’t reach FortyMM')
   })
 
-  it('says when to try again when health answers 429 with Retry-After', async () => {
+  it('says when to try again when the session answers 429 with Retry-After', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(new Date(2026, 9, 25, 19, 42, 10).getTime())
-    healthAnswers(() => HttpResponse.json({}, { status: 429, headers: { 'Retry-After': '60' } }))
+    sessionAnswers(() => HttpResponse.json({}, { status: 429, headers: { 'Retry-After': '60' } }))
 
     const page = await ErrorPage.render('/')
 
@@ -65,7 +65,7 @@ describe('error pages', () => {
   })
 
   it('leaves out the time when a 429 has no Retry-After', async () => {
-    healthAnswers(() => HttpResponse.json({}, { status: 429 }))
+    sessionAnswers(() => HttpResponse.json({}, { status: 429 }))
 
     const page = await ErrorPage.render('/')
 
@@ -74,7 +74,7 @@ describe('error pages', () => {
   })
 
   it('says something went wrong for any other failure', async () => {
-    healthAnswers(() => HttpResponse.json({}, { status: 500 }))
+    sessionAnswers(() => HttpResponse.json({}, { status: 500 }))
 
     const page = await ErrorPage.render('/')
 

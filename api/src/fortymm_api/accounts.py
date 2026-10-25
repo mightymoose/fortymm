@@ -1,4 +1,4 @@
-"""The kinds of account a valid session can belong to."""
+"""The kinds of account a valid session can belong to, and its self player."""
 
 from dataclasses import dataclass
 from typing import ClassVar, Literal, NewType
@@ -20,6 +20,14 @@ class VerifiedAccount:
     kind: ClassVar[Literal["verified"]] = "verified"
     id: AccountId
     email: Email
+
+
+@dataclass(frozen=True)
+class SelfPlayer:
+    """The player an account plays as: its player_managers row is 'self'."""
+
+    id: PlayerId
+    display_name: str
 
 
 # An adopted account is neither kind: its sessions are invalid.

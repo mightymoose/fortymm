@@ -9,10 +9,10 @@ import {
   STATUS,
 } from '../components/LoadingScreen'
 import { HomePage } from '../test/pages/HomePage'
-import { healthyResponse, holdHealth } from '../test/server'
+import { sessionResponse, holdSession } from '../test/server'
 
 function visitHome(): Promise<HomePage> {
-  return HomePage.render({ waitForHealth: false })
+  return HomePage.render({ waitForSession: false })
 }
 
 // React commits a timer's state update only once the act ends, so a test
@@ -36,33 +36,37 @@ describe('AuthenticatedLayout', () => {
     vi.restoreAllMocks()
   })
 
-  it('shows neither the page nor the loading screen while health is quick to answer', async () => {
-    const health = holdHealth()
+  it('shows neither the page nor the loading screen while the session is quick to start', async () => {
+    const session = holdSession()
     const homePage = await visitHome()
 
     await advance(SHOW_AFTER_MS - 1)
 
     expect(homePage.loadingScreen).not.toBeInTheDocument()
     expect(homePage.queryTitle).not.toBeInTheDocument()
-    expect(health.requests.map((request) => request.url)).toEqual([
-      'http://localhost/api/v1/health',
-    ])
+    expect(
+      session.requests.map((request) => [
+        request.method,
+        request.url,
+        request.headers.get('Content-Type'),
+      ]),
+    ).toEqual([['POST', 'http://localhost/api/v1/session', 'application/json']])
   })
 
-  it('shows the page without the loading screen when health answers in time', async () => {
-    const health = holdHealth()
+  it('shows the page without the loading screen when the session starts in time', async () => {
+    const session = holdSession()
     const homePage = await visitHome()
     await advance(SHOW_AFTER_MS - 1)
 
-    await health.respond(HttpResponse.json(healthyResponse))
+    await session.respond(HttpResponse.json(sessionResponse))
     await advance(SHOW_AFTER_MS + MIN_SHOWN_MS)
 
     expect(homePage.title).toHaveTextContent('What’s coming, and when.')
     expect(homePage.loadingScreen).not.toBeInTheDocument()
   })
 
-  it('shows the loading screen when health is slow to answer', async () => {
-    holdHealth()
+  it('shows the loading screen when the session is slow to start', async () => {
+    holdSession()
     const homePage = await visitHome()
 
     await advance(SHOW_AFTER_MS)
@@ -73,7 +77,7 @@ describe('AuthenticatedLayout', () => {
   })
 
   it('says why a slow load is slow', async () => {
-    holdHealth()
+    holdSession()
     const homePage = await visitHome()
     await advance(SHOW_AFTER_MS)
 
@@ -83,11 +87,11 @@ describe('AuthenticatedLayout', () => {
   })
 
   it('keeps the loading screen up for its minimum, over the page, before it fades', async () => {
-    const health = holdHealth()
+    const session = holdSession()
     const homePage = await visitHome()
     await advance(SHOW_AFTER_MS)
 
-    await health.respond(HttpResponse.json(healthyResponse))
+    await session.respond(HttpResponse.json(sessionResponse))
     await advance(MIN_SHOWN_MS - 1)
 
     expect(homePage.title).toHaveTextContent('What’s coming, and when.')
@@ -99,14 +103,14 @@ describe('AuthenticatedLayout', () => {
     expect(homePage.loadingScreenFading).toBe(true)
   })
 
-  it('fades the loading screen as soon as health answers after its minimum', async () => {
-    const health = holdHealth()
+  it('fades the loading screen as soon as the session starts after its minimum', async () => {
+    const session = holdSession()
     const homePage = await visitHome()
     await advance(SHOW_AFTER_MS)
     await advance(MIN_SHOWN_MS + 2000)
     expect(homePage.loadingScreenFading).toBe(false)
 
-    await health.respond(HttpResponse.json(healthyResponse))
+    await session.respond(HttpResponse.json(sessionResponse))
     await advance(1)
 
     expect(homePage.title).toHaveTextContent('What’s coming, and when.')
@@ -114,10 +118,10 @@ describe('AuthenticatedLayout', () => {
   })
 
   it('removes the loading screen once its fade-out ends', async () => {
-    const health = holdHealth()
+    const session = holdSession()
     const homePage = await visitHome()
     await advance(SHOW_AFTER_MS)
-    await health.respond(HttpResponse.json(healthyResponse))
+    await session.respond(HttpResponse.json(sessionResponse))
     await advance(MIN_SHOWN_MS)
 
     homePage.endLoadingScreenFade()
@@ -126,11 +130,11 @@ describe('AuthenticatedLayout', () => {
     expect(homePage.title).toHaveTextContent('What’s coming, and when.')
   })
 
-  it('does not show the loading screen or check health again on client-side navigation', async () => {
-    const health = holdHealth()
+  it('does not show the loading screen or start the session again on client-side navigation', async () => {
+    const session = holdSession()
     const homePage = await visitHome()
     await advance(SHOW_AFTER_MS)
-    await health.respond(HttpResponse.json(healthyResponse))
+    await session.respond(HttpResponse.json(sessionResponse))
     await advance(MIN_SHOWN_MS)
     homePage.endLoadingScreenFade()
     vi.useRealTimers()
@@ -143,18 +147,18 @@ describe('AuthenticatedLayout', () => {
 
     expect(homePage.title).toHaveTextContent('What’s coming, and when.')
     expect(homePage.loadingScreen).not.toBeInTheDocument()
-    expect(health.requests).toHaveLength(1)
+    expect(session.requests).toHaveLength(1)
   })
 
-  it('shows the error page instead of the loading screen when health fails', async () => {
+  it('shows the error page instead of the loading screen when the session fails to start', async () => {
     // React and the router log the error the page shows.
     vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const health = holdHealth()
+    const session = holdSession()
     const homePage = await visitHome()
     await advance(SHOW_AFTER_MS)
 
-    await health.respond(
+    await session.respond(
       HttpResponse.json({ detail: 'Service Unavailable' }, { status: 503 }),
     )
     await advance(0)

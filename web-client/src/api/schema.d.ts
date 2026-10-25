@@ -42,6 +42,9 @@ export interface paths {
          *     new guest account. The API deletes the session that cookie named. A
          *     client network can start 30 guest accounts a minute. Past that, the API
          *     answers 429.
+         *
+         *     The account's player is the one it plays as. A new guest account's player
+         *     gets a default display name, such as `excited egret 387`.
          */
         post: operations["start_session"];
         delete?: never;
@@ -78,10 +81,21 @@ export interface components {
              * @enum {string}
              */
             kind: "guest" | "verified";
+            player: components["schemas"]["SessionPlayer"];
         };
         /** SessionData */
         SessionData: {
             account: components["schemas"]["SessionAccount"];
+        };
+        /** SessionPlayer */
+        SessionPlayer: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Display Name */
+            display_name: string;
         };
         /** SessionResponse */
         SessionResponse: {
