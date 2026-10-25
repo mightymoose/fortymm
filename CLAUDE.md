@@ -549,9 +549,9 @@ The design system's styles apply to the whole app; `main.tsx` imports them:
   `references/design-system/colors_and_type.css`, plus the self-hosted fonts
   in `src/assets/fonts/`.
 - `src/styles/base.css`: the base, type roles, status markers and motion of
-  the same file. Then the app's own chrome: `.page-header`
-  (`src/components/PageHeader.tsx`, Home's title), the loading screen and
-  `.app-shell` (`src/pages/AppShell.tsx`).
+  the same file. Then the app's own styles: the loading screen,
+  `.app-shell` (`src/pages/AppShell.tsx`) and `.roadmap`, the list of what's
+  ready and what's coming that Home shows (`src/pages/Home.tsx`).
 - `src/styles/kit.css`: the component classes (`fm-*`) of
   `references/design-system/ui_kits/components/kit.css`.
 - `src/styles/page.css`: the gallery's page chrome (`.doc-*`), with `.page`

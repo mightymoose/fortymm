@@ -39,7 +39,7 @@ describe('Root', () => {
     await vi.waitFor(() => expect(health.requests).toHaveLength(1))
     await health.respond(HttpResponse.json(healthyResponse))
     expect(
-      await screen.findByRole('heading', { level: 1, name: 'FortyMM' }),
+      await screen.findByRole('heading', { level: 1, name: 'What’s coming, and when.' }),
     ).toBeInTheDocument()
 
     await designSystemPage.navigate('/design-system')
@@ -47,7 +47,7 @@ describe('Root', () => {
     await designSystemPage.navigate('/')
 
     expect(
-      await screen.findByRole('heading', { level: 1, name: 'FortyMM' }),
+      await screen.findByRole('heading', { level: 1, name: 'What’s coming, and when.' }),
     ).toBeInTheDocument()
     expect(designSystemPage.loadingScreen).not.toBeInTheDocument()
     expect(health.requests).toHaveLength(1)

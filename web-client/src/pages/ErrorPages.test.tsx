@@ -32,7 +32,7 @@ describe('error pages', () => {
 
     await act(() => userEvent.click(page.homeLink))
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'FortyMM' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { level: 1, name: 'What’s coming, and when.' })).toBeInTheDocument()
   })
 
   it.each([502, 503, 504])('says it can’t reach FortyMM when health answers %i', async (status) => {
