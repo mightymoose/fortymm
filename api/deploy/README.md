@@ -14,6 +14,9 @@ sends. CLAUDE.md's Deploy section describes how it all fits together.
 - `preview-database`: creates or drops a Preview's own database (see The
   database below).
 - `bootstrap-gcp.sh`: the one-time project setup below.
+- `setup-auth0`: the one-time Auth0 setup (see Auth0 below).
+- `auth0.env`: the Auth0 tenant's domain and client IDs, which `setup-auth0`
+  writes and `cloud-run-deploy` reads.
 - `cleanup-policy.json`: the Artifact Registry cleanup policy it applies (see
   Image cleanup below).
 
@@ -80,7 +83,11 @@ It's idempotent, so re-running it is safe. It:
    which accepts GitHub Actions tokens from `mightymoose/fortymm` only, and
    lets that repository's workflows impersonate `github-deployer`, so CI needs
    no service-account key.
-7. creates the budget `FortyMM (<project>)` on the project's billing account,
+7. creates the Secret Manager secrets `auth0-client-secret` and
+   `auth0-preview-client-secret`, with no value. `setup-auth0` adds the
+   values. `api-runtime` can read only the first, and `api-preview-runtime`
+   only the second.
+8. creates the budget `FortyMM (<project>)` on the project's billing account,
    if it doesn't exist: $25 a month for this project, with alerts at 40% ($10)
    and 100% ($25). It sets no recipients, so Google Cloud emails the billing
    account's admins and users.
@@ -105,6 +112,56 @@ The services allow unauthenticated requests (`allUsers` gets
 Worker. If the project is in an organization whose policy
 restricts IAM members to its domain (`iam.allowedPolicyMemberDomains`), the
 first deploy fails until that policy allows `allUsers` for this project.
+
+## Auth0
+
+Production and the Previews sign in through one Auth0 tenant. It has two
+applications of type Regular Web Application:
+
+| Application | Allowed callback URLs | Allowed logout URLs | Client secret | Used by |
+| --- | --- | --- | --- | --- |
+| `fortymm` | `https://fortymm.com/api/v1/auth/callback` | `https://fortymm.com/` | `auth0-client-secret` | `api` |
+| `fortymm-preview` | `https://*-fortymm.mightymoose.workers.dev/api/v1/auth/callback` | `https://*-fortymm.mightymoose.workers.dev/` | `auth0-preview-client-secret` | `api-preview` |
+
+The tenant has only two connections, the email code (Passwordless Email) and
+Google. The API links a Google login and an email code login to one account
+by their verified email. That is only as safe as the weakest connection's
+email check. So review any other connection before you turn it on.
+
+After `bootstrap-gcp.sh`, run the wizard from the repo root:
+
+```sh
+api/deploy/setup-auth0 fortymm
+```
+
+It walks you through the Auth0 dashboard and the Google Cloud console. It
+uses the tenant that Auth0 sign-up makes, because the free plan charges for
+a second one. It sets up a Google OAuth client for the Google connection, both
+applications and their connections. It deletes the password connection. It
+adds each client secret to Secret Manager with gcloud, and never writes it to
+a file. It writes `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` and
+`AUTH0_PREVIEW_CLIENT_ID` to `auth0.env`. These values are public, so commit
+the file. A re-run offers the saved values as defaults.
+
+`cloud-run-deploy` reads `auth0.env` before it pushes the image, and fails if
+the file is missing. It sets `AUTH0_DOMAIN` and the target's
+`AUTH0_CLIENT_ID`, and mounts the target's client secret as
+`AUTH0_CLIENT_SECRET` at `latest`. The API doesn't start on Cloud Run without
+all three.
+
+The post-deploy suite checks that a Preview's `GET /api/v1/auth/login`
+answers 302 to the tenant's `/authorize`, with the Preview's client ID and
+callback URL. It doesn't sign in. So after a change to the tenant, sign in on
+a Preview with an email code and with Google.
+
+To rotate a client secret, rotate it in the application's settings in
+Auth0. That ends the old one. Add the new one as a version of its secret,
+then redeploy. Sign-in fails between the rotation and the redeploy.
+
+```sh
+printf '%s' '<new client secret>' |
+  gcloud secrets versions add auth0-client-secret --project fortymm --data-file=-
+```
 
 ## The database
 

@@ -18,6 +18,17 @@ if [ "${1:-}" = --tag ]; then
   tag=${2:?usage: cloud-run-deploy [--tag NAME]}
 fi
 
+# The Auth0 tenant's domain and each application's client ID. They're
+# public, and api/deploy/setup-auth0 writes them when it sets up the tenant.
+# Read before the push, so a missing file fails fast.
+auth0_config="$(dirname "$0")/auth0.env"
+if [ ! -f "$auth0_config" ]; then
+  echo "$auth0_config is missing. Run api/deploy/setup-auth0 (see api/deploy/README.md)." >&2
+  exit 1
+fi
+. "$auth0_config"
+: "${AUTH0_DOMAIN:?}" "${AUTH0_CLIENT_ID:?}" "${AUTH0_PREVIEW_CLIENT_ID:?}"
+
 registry="$GCP_REGION-docker.pkg.dev"
 image="$registry/$GCP_PROJECT/fortymm/api:$(git rev-parse HEAD)"
 gcloud auth configure-docker "$registry" --quiet >&2
@@ -44,6 +55,8 @@ if [ -z "$tag" ]; then
   db_user=api
   db_name=fortymm
   db_password=api-database-password
+  auth0_client_id=$AUTH0_CLIENT_ID
+  auth0_client_secret=auth0-client-secret
   max_instances=3
 else
   service=api-preview
@@ -51,6 +64,8 @@ else
   db_user=api_preview
   db_name=$("$(dirname "$0")/preview-database" create "$tag")
   db_password=api-preview-database-password
+  auth0_client_id=$AUTH0_PREVIEW_CLIENT_ID
+  auth0_client_secret=auth0-preview-client-secret
   max_instances=1
 fi
 instance="$GCP_PROJECT:$GCP_REGION:fortymm"
@@ -63,7 +78,10 @@ instance="$GCP_PROJECT:$GCP_REGION:fortymm"
 # --add-cloudsql-instances mounts, and libpq reads the password from
 # PGPASSWORD. The password secret uses `latest`, unlike the Worker secret: it
 # only changes together with the database user, so a cold start should read
-# the newest one. --set-secrets replaces every secret, so both go in one flag.
+# the newest one. The Auth0 client secret uses `latest` too: rotating it in
+# Auth0 ends the old one, so a cold start should read the newest. Each target
+# has its own Auth0 application, client secret and runtime account.
+# --set-secrets replaces every secret, so all of them go in one flag.
 deploy_args=(
   --image "$image"
   --service-account "$runtime@$GCP_PROJECT.iam.gserviceaccount.com"
@@ -74,8 +92,8 @@ deploy_args=(
   --max-instances "$max_instances"
   --allow-unauthenticated
   --add-cloudsql-instances "$instance"
-  --set-env-vars "DATABASE_URL=postgresql://$db_user@/$db_name?host=/cloudsql/$instance"
-  --set-secrets "WORKER_SECRET=api-worker-secret:$version,PGPASSWORD=$db_password:latest"
+  --set-env-vars "DATABASE_URL=postgresql://$db_user@/$db_name?host=/cloudsql/$instance,AUTH0_DOMAIN=$AUTH0_DOMAIN,AUTH0_CLIENT_ID=$auth0_client_id"
+  --set-secrets "WORKER_SECRET=api-worker-secret:$version,PGPASSWORD=$db_password:latest,AUTH0_CLIENT_SECRET=$auth0_client_secret:latest"
   --quiet
 )
 
