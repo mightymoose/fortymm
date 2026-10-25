@@ -146,7 +146,7 @@ describe('AuthenticatedLayout', () => {
     expect(health.requests).toHaveLength(1)
   })
 
-  it('shows an error instead of the loading screen when health fails', async () => {
+  it('shows the error page instead of the loading screen when health fails', async () => {
     // React and the router log the error the page shows.
     vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -159,8 +159,8 @@ describe('AuthenticatedLayout', () => {
     )
     await advance(0)
 
-    expect(homePage.errorMessage).toBeInTheDocument()
+    expect(homePage.queryTitle).toHaveTextContent('Can’t reach FortyMM')
     expect(homePage.loadingScreen).not.toBeInTheDocument()
-    expect(homePage.queryTitle).not.toBeInTheDocument()
+    expect(homePage.homeLink).not.toBeInTheDocument()
   })
 })

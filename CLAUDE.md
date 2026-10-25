@@ -398,7 +398,27 @@ itself when the fade ends. jsdom runs no CSS animations, so the `HomePage`
 page object ends the fade itself. `healthQuery` never goes stale, so health
 is checked once per page load, and coming back to an authenticated page
 doesn't show the loading screen again. If health fails after the default
-retries, the router's default error component shows.
+retries, the root route's error page shows (see Error pages).
+
+### Error pages
+
+The root route (`__root.tsx`) has `errorComponent: ErrorPage` and
+`notFoundComponent: NotFoundPage` (`src/pages/ErrorPages.tsx`). Other routes
+set neither, so every error and unknown path reaches the root. The page
+replaces the whole app, with no `AppShell`. Each page is an `ErrorScreen`
+(`src/components/ErrorScreen.tsx`): the loading screen's wordmark, a title,
+a sentence and the fixes. The root route is never code-split, so the pages
+are in the entry chunk and still show when the network is down.
+
+A query throws `ApiError` (`src/api/errors.ts`) when the API answers without
+data. It carries the status and the time from `Retry-After`. A query throws
+`ApiUnreachable` when no response came back. `ErrorPage` reads them:
+
+- `ApiUnreachable`, 502, 503 or 504: "Can’t reach FortyMM".
+- 429: "Wait a minute, then try again", with the time from `Retry-After`.
+- Anything else: "Something went wrong".
+
+"Try again" reloads the page.
 
 ### Tests
 
