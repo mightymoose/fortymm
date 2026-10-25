@@ -171,3 +171,16 @@ def test_two_sessions_cannot_share_a_token_hash(connection: Connection) -> None:
         add_session(connection, add_account(connection), token_hash)
 
     assert violated_constraint(error) == "uq_sessions_token_hash"
+
+
+def test_a_network_has_one_guest_account_count(connection: Connection) -> None:
+    insert = text(
+        "INSERT INTO guest_account_counts (network, window_ends_at, started)"
+        " VALUES ('203.0.113.7/32', now(), 1)"
+    )
+    connection.execute(insert)
+
+    with pytest.raises(IntegrityError) as error:
+        connection.execute(insert)
+
+    assert violated_constraint(error) == "pk_guest_account_counts"

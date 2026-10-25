@@ -2,6 +2,7 @@ import hmac
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from math import ceil
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -11,16 +12,27 @@ from sqlalchemy.orm import sessionmaker
 from fortymm_api import v1
 from fortymm_api.auth import NoValidSession
 from fortymm_api.database import create_database_engine, migrate
+from fortymm_api.services.sessions import GuestAccountLimitReached
 
 WORKER_SECRET_HEADER = "X-FortyMM-Worker-Secret"
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 NO_SESSION = "The request has no valid session"
+TOO_MANY_GUEST_ACCOUNTS = "Too many new guest accounts from this network"
 
 
 def error_response(status: int, title: str) -> JSONResponse:
     return JSONResponse(
         {"errors": [{"status": str(status), "title": title}]}, status_code=status
     )
+
+
+def too_many_guest_accounts(_request: Request, error: Exception) -> Response:
+    """429 with Retry-After in whole seconds, at least 1."""
+    assert isinstance(error, GuestAccountLimitReached)
+    response = error_response(429, TOO_MANY_GUEST_ACCOUNTS)
+    seconds = ceil(error.retry_after.total_seconds())
+    response.headers["Retry-After"] = str(max(1, seconds))
+    return response
 
 
 def operation_id(route: APIRoute) -> str:
@@ -108,6 +120,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(
         NoValidSession, lambda _request, _error: error_response(401, NO_SESSION)
     )
+    app.add_exception_handler(GuestAccountLimitReached, too_many_guest_accounts)
     require_json(app)
     # Added last so it runs first: a request without the secret learns nothing
     # else about the API.

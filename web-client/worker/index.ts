@@ -14,7 +14,8 @@ export interface Env {
   // Sent to the API as X-FortyMM-Worker-Secret, which it requires on Cloud
   // Run. Passed with `--secrets-file` (see mise.toml).
   WORKER_SECRET?: string
-  // Per-client-IP limit on /api/* (the `ratelimits` binding in wrangler.jsonc).
+  // An approximate per-client-IP limit on /api/* (the `ratelimits` binding in
+  // wrangler.jsonc). It counts per Cloudflare machine.
   API_RATE_LIMIT: RateLimit
 }
 
@@ -70,8 +71,12 @@ async function proxyToApi(request: Request, url: URL, env: Env): Promise<Respons
   headers.delete('Host')
   headers.set('X-Forwarded-Host', url.host)
   headers.set('X-Forwarded-Proto', url.protocol.replace(/:$/, ''))
+  // The API keys guest accounts by this header, so a client's own copy never
+  // reaches it.
   if (clientIp) {
     headers.set('X-Forwarded-For', clientIp)
+  } else {
+    headers.delete('X-Forwarded-For')
   }
   // Never forward a client's own copy of the header.
   if (env.WORKER_SECRET) {

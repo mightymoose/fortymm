@@ -1,17 +1,26 @@
 import hashlib
 import secrets
+import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from ipaddress import ip_address
 
+import pytest
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from fortymm_api.accounts import AccountId, CurrentAccount, GuestAccount
 from fortymm_api.services.sessions import (
+    ClientAddress,
+    GuestAccountLimitReached,
     StartedSession,
     authenticate,
+    client_network,
     start_session,
 )
+
+ANN = ip_address("203.0.113.7")
 
 
 def in_transaction[T](database: Engine, work: Callable[[Session], T]) -> T:
@@ -20,8 +29,12 @@ def in_transaction[T](database: Engine, work: Callable[[Session], T]) -> T:
         return work(session)
 
 
-def start(database: Engine, token: str | None = None) -> StartedSession:
-    return in_transaction(database, lambda session: start_session(session, token))
+def start(
+    database: Engine, token: str | None = None, *, address: ClientAddress = ANN
+) -> StartedSession:
+    return in_transaction(
+        database, lambda session: start_session(session, token, address)
+    )
 
 
 def signed_in(database: Engine, token: str | None) -> CurrentAccount | None:
@@ -69,6 +82,46 @@ def count(database: Engine, table: str) -> int:
     with database.connect() as connection:
         rows: int = connection.scalar(text(f"SELECT count(*) FROM {table}"))
         return rows
+
+
+def seed_count(
+    database: Engine, network: str, started: int, ends_in: str = "1 minute"
+) -> None:
+    """Record `started` guest accounts for the network, as another instance would."""
+    run(
+        database,
+        "INSERT INTO guest_account_counts (network, window_ends_at, started)"
+        " VALUES (CAST(:network AS cidr),"
+        " now() + CAST(:ends_in AS interval), :started)",
+        network=network,
+        ends_in=ends_in,
+        started=started,
+    )
+
+
+def started_in_window(database: Engine, network: str) -> int | None:
+    """The network's count, or None once its window has ended or been pruned."""
+    with database.connect() as connection:
+        started: int | None = connection.scalar(
+            text(
+                "SELECT started FROM guest_account_counts"
+                " WHERE network = CAST(:network AS cidr) AND window_ends_at > now()"
+            ),
+            {"network": network},
+        )
+        return started
+
+
+def has_count(database: Engine, network: str) -> bool:
+    with database.connect() as connection:
+        found: bool = connection.scalar(
+            text(
+                "SELECT EXISTS (SELECT FROM guest_account_counts"
+                " WHERE network = CAST(:network AS cidr))"
+            ),
+            {"network": network},
+        )
+        return found
 
 
 def lasts_about_400_days(expiry: datetime | None) -> bool:
@@ -217,3 +270,140 @@ def test_authenticating_starts_no_session(migrated_database: Engine) -> None:
 
     assert count(migrated_database, "accounts") == 0
     assert count(migrated_database, "sessions") == 0
+
+
+def test_refuses_the_31st_guest_account_from_one_address(
+    migrated_database: Engine,
+) -> None:
+    for _ in range(30):
+        start(migrated_database)
+
+    with pytest.raises(GuestAccountLimitReached):
+        start(migrated_database)
+
+    assert count(migrated_database, "accounts") == 30
+
+
+def test_reads_the_count_that_another_instance_wrote(
+    migrated_database: Engine,
+) -> None:
+    seed_count(migrated_database, "203.0.113.7/32", 30)
+
+    with pytest.raises(GuestAccountLimitReached):
+        start(migrated_database)
+
+    assert count(migrated_database, "accounts") == 0
+
+
+def backend_waits_for_a_lock(database: Engine, pid: int) -> bool:
+    with database.connect() as connection:
+        wait: str | None = connection.scalar(
+            text("SELECT wait_event_type FROM pg_stat_activity WHERE pid = :pid"),
+            {"pid": pid},
+        )
+        return wait == "Lock"
+
+
+def test_a_second_start_from_one_network_waits_for_the_first(
+    migrated_database: Engine,
+) -> None:
+    seed_count(migrated_database, "203.0.113.7/32", 29)
+    sessions = sessionmaker(migrated_database)
+    pids: list[int] = []
+
+    def second_start() -> StartedSession:
+        with sessions.begin() as session:
+            pids.append(session.scalar(text("SELECT pg_backend_pid()")))
+            return start_session(session, None, ANN)
+
+    first = sessions()
+    try:
+        first.begin()
+        start_session(first, None, ANN)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            second = executor.submit(second_start)
+            deadline = time.monotonic() + 10
+            while not (pids and backend_waits_for_a_lock(migrated_database, pids[0])):
+                assert not second.done(), "the second start never waited for the first"
+                assert time.monotonic() < deadline, (
+                    "the second start was not waiting after 10 seconds"
+                )
+                time.sleep(0.05)
+            first.commit()
+
+            with pytest.raises(GuestAccountLimitReached):
+                second.result(timeout=10)
+    finally:
+        first.close()
+
+    assert count(migrated_database, "accounts") == 1
+
+
+def test_starts_a_new_window_after_the_old_one_ends(
+    migrated_database: Engine,
+) -> None:
+    seed_count(migrated_database, "203.0.113.7/32", 30, ends_in="-1 second")
+
+    start(migrated_database)
+
+    assert started_in_window(migrated_database, "203.0.113.7/32") == 1
+
+
+def test_never_counts_a_resume(migrated_database: Engine) -> None:
+    first = start(migrated_database)
+    run(migrated_database, "UPDATE guest_account_counts SET started = 30")
+
+    resumed = start(migrated_database, first.token)
+
+    assert resumed == first
+    assert started_in_window(migrated_database, "203.0.113.7/32") == 30
+
+
+def test_counts_a_start_that_replaces_an_unknown_cookie(
+    migrated_database: Engine,
+) -> None:
+    seed_count(migrated_database, "203.0.113.7/32", 30)
+
+    with pytest.raises(GuestAccountLimitReached):
+        start(migrated_database, secrets.token_urlsafe(32))
+
+
+def test_gives_the_time_until_the_window_ends(migrated_database: Engine) -> None:
+    seed_count(migrated_database, "203.0.113.7/32", 30, ends_in="40 seconds")
+
+    with pytest.raises(GuestAccountLimitReached) as refused:
+        start(migrated_database)
+
+    assert 39 <= refused.value.retry_after.total_seconds() <= 40
+
+
+def test_shares_one_count_across_an_ipv6_64(migrated_database: Engine) -> None:
+    seed_count(migrated_database, "2001:db8:1:2::/64", 30)
+
+    with pytest.raises(GuestAccountLimitReached):
+        start(migrated_database, address=ip_address("2001:db8:1:2::ffff"))
+    start(migrated_database, address=ip_address("2001:db8:1:3::1"))
+
+    assert count(migrated_database, "accounts") == 1
+
+
+@pytest.mark.parametrize(
+    ("address", "network"),
+    [
+        ("203.0.113.7", "203.0.113.7/32"),
+        ("2001:db8:1:2:3:4:5:6", "2001:db8:1:2::/64"),
+        ("::ffff:203.0.113.7", "203.0.113.7/32"),
+    ],
+)
+def test_counts_each_address_as_its_network(address: str, network: str) -> None:
+    assert str(client_network(ip_address(address))) == network
+
+
+def test_a_guest_start_deletes_ended_windows(migrated_database: Engine) -> None:
+    seed_count(migrated_database, "198.51.100.1/32", 5, ends_in="-1 second")
+    seed_count(migrated_database, "198.51.100.2/32", 5)
+
+    start(migrated_database)
+
+    assert not has_count(migrated_database, "198.51.100.1/32")
+    assert started_in_window(migrated_database, "198.51.100.2/32") == 5

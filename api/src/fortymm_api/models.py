@@ -19,6 +19,7 @@ from sqlalchemy import (
     orm,
     text,
 )
+from sqlalchemy.dialects.postgresql import CIDR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from fortymm_api.accounts import AccountId, Email, PlayerId
@@ -146,3 +147,17 @@ class AuthSession(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class GuestAccountCount(Base):
+    """How many guest accounts one client network started in its current window."""
+
+    __tablename__ = "guest_account_counts"
+
+    # The service writes str(ClientNetwork). Nothing reads it back into Python.
+    network: Mapped[str] = mapped_column(CIDR, primary_key=True)
+    # Indexed, so the prune finds ended windows without a scan.
+    window_ends_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    started: Mapped[int]
