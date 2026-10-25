@@ -1,5 +1,4 @@
 import { act, screen } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { HttpResponse } from 'msw'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MIN_SHOWN_MS, SHOW_AFTER_MS } from '../components/LoadingScreen'
@@ -130,11 +129,13 @@ describe('AuthenticatedLayout', () => {
     homePage.endLoadingScreenFade()
     vi.useRealTimers()
 
-    await userEvent.click(homePage.designSystemLink)
-
+    await homePage.navigate('/design-system')
     expect(
       await screen.findByRole('heading', { level: 1, name: 'Design System' }),
     ).toBeInTheDocument()
+    await homePage.navigate('/')
+
+    expect(homePage.title).toHaveTextContent('FortyMM')
     expect(homePage.loadingScreen).not.toBeInTheDocument()
     expect(health.requests).toHaveLength(1)
   })

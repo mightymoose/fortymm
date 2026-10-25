@@ -1,5 +1,5 @@
 import { fireEvent, screen } from '@testing-library/react'
-import { renderRoute } from '../renderRoute'
+import { navigate, renderRoute, type AppRouter } from '../renderRoute'
 
 // Page object for the home page in unit tests. Elements are looked up through
 // `screen` on every access, so they always reflect the current render.
@@ -7,8 +7,18 @@ export class HomePage {
   static async render(
     options?: Parameters<typeof renderRoute>[1],
   ): Promise<HomePage> {
-    await renderRoute('/', options)
-    return new HomePage()
+    return new HomePage(await renderRoute('/', options))
+  }
+
+  private readonly router: AppRouter
+
+  constructor(router: AppRouter) {
+    this.router = router
+  }
+
+  // Goes to another page in the same app, as a link would.
+  navigate(to: '/' | '/design-system'): Promise<void> {
+    return navigate(this.router, to)
   }
 
   get title(): HTMLElement {
@@ -49,7 +59,18 @@ export class HomePage {
     fireEvent.animationEnd(this.loadingScreen!)
   }
 
-  get designSystemLink(): HTMLElement {
-    return screen.getByRole('link', { name: 'Design System' })
+  // The sidebar's link to Home, or null.
+  get homeLink(): HTMLElement | null {
+    return screen.queryByRole('link', { name: 'Home' })
+  }
+
+  // A link to the design system page. The app has none, so this is null.
+  get designSystemLink(): HTMLElement | null {
+    return screen.queryByRole('link', { name: 'Design System' })
+  }
+
+  // The button that shows and hides the sidebar's labels.
+  get sidebarLabelsButton(): HTMLElement {
+    return screen.getByRole('button', { name: 'Sidebar labels' })
   }
 }
