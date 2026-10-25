@@ -15,15 +15,16 @@ function initials(displayName: string): string {
 }
 
 // The visitor's player, as an avatar of their display name's initials. It
-// shows nothing until the session has started. It doesn't suspend, so the
+// shows nothing until the session has started, or for an account with no
+// player. It doesn't suspend, so the
 // loading screen times only the page.
 export function PlayerAvatar() {
   const { api } = useRouteContext({ from: '__root__' })
   const { data: account } = useQuery(sessionQuery(api))
-  const displayName = account?.player.display_name ?? ''
+  const displayName = account?.player?.display_name ?? ''
   const tooltip = useTooltip(displayName)
 
-  if (!account) return null
+  if (!account?.player) return null
   return (
     <span className="fm-avatar app-avatar" role="img" aria-label={displayName} {...tooltip}>
       {initials(displayName)}

@@ -12,6 +12,7 @@ class OwnershipRule(StrEnum):
     REVOKED_ON_GUEST_CONVERSION = "revoked_on_guest_conversion"
     STAYS_ON_PLAYER_MERGE = "stays_on_player_merge"
     SET_BY_PLAYER_MERGE = "set_by_player_merge"
+    GUEST_HAS_NONE = "guest_has_none"
 
 
 OWNERSHIP_RULES: dict[tuple[str, str], OwnershipRule] = {
@@ -19,6 +20,7 @@ OWNERSHIP_RULES: dict[tuple[str, str], OwnershipRule] = {
     ("player_managers", "player_id"): OwnershipRule.STAYS_ON_PLAYER_MERGE,
     ("player_managers", "adopted_from"): OwnershipRule.NAMES_ADOPTION_SOURCE,
     ("sessions", "account_id"): OwnershipRule.REVOKED_ON_GUEST_CONVERSION,
+    ("identities", "account_id"): OwnershipRule.GUEST_HAS_NONE,
     ("players", "merged_into"): OwnershipRule.SET_BY_PLAYER_MERGE,
     ("accounts", "adopted_into"): OwnershipRule.SET_BY_ADOPT,
 }

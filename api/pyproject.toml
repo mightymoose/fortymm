@@ -9,6 +9,7 @@ dependencies = [
     "fastapi>=0.159.1",
     "psycopg[binary]>=3.3.6",
     "pydantic>=2.14.1",
+    "pyjwt[crypto]>=2.10",
     "sqlalchemy>=2.1.6",
     "uvicorn[standard]>=0.54.0",
 ]

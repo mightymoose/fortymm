@@ -30,6 +30,14 @@ def set_session_cookie(response: Response, token: str) -> None:
     )
 
 
+def delete_session_cookie(response: Response) -> None:
+    """Expire the cookie. A browser keeps a __Host- cookie unless the expired
+    one has the same attributes."""
+    response.delete_cookie(
+        SESSION_COOKIE, path="/", secure=True, httponly=True, samesite="lax"
+    )
+
+
 class NoValidSession(Exception):
     """The request has no valid session. `create_app()` answers 401."""
 

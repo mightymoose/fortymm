@@ -44,9 +44,81 @@ export interface paths {
          *     answers 429.
          *
          *     The account's player is the one it plays as. A new guest account's player
-         *     gets a default display name, such as `excited egret 387`.
+         *     gets a default display name, such as `excited egret 387`. A verified
+         *     account has its email, and can have no player.
          */
         post: operations["start_session"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Login
+         * @description Send the visitor to the identity provider's sign-in page.
+         *
+         *     A request with no valid session gets a guest account first. After
+         *     sign-in, the callback sends the visitor to `return_to`. It must be a path
+         *     on this site, or the callback uses `/`.
+         */
+        get: operations["login"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/auth/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Callback
+         * @description Finish a sign-in, then send the visitor back to its `return_to`.
+         *
+         *     A failed sign-in adds `sign_in_error` to that path's query: `cancelled`,
+         *     `email_not_verified`, `expired` or `failed`. A callback whose `state`
+         *     matches no login attempt, such as a replay, goes to `/`.
+         */
+        get: operations["callback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Logout
+         * @description End the visitor's session and expire its cookie.
+         *
+         *     `logout_url` is the identity provider's logout page. The client follows
+         *     it, so the provider's own session ends too.
+         */
+        post: operations["logout"];
         delete?: never;
         options?: never;
         head?: never;
@@ -57,6 +129,11 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** HTTPValidationError */
+        HTTPValidationError: {
+            /** Detail */
+            detail?: components["schemas"]["ValidationError"][];
+        };
         /** HealthResponse */
         HealthResponse: {
             data: components["schemas"]["HealthStatus"];
@@ -68,6 +145,15 @@ export interface components {
              * @constant
              */
             database: "ok";
+        };
+        /** LogoutData */
+        LogoutData: {
+            /** Logout Url */
+            logout_url: string;
+        };
+        /** LogoutResponse */
+        LogoutResponse: {
+            data: components["schemas"]["LogoutData"];
         };
         /** SessionAccount */
         SessionAccount: {
@@ -81,7 +167,9 @@ export interface components {
              * @enum {string}
              */
             kind: "guest" | "verified";
-            player: components["schemas"]["SessionPlayer"];
+            /** Email */
+            email: string | null;
+            player: components["schemas"]["SessionPlayer"] | null;
         };
         /** SessionData */
         SessionData: {
@@ -100,6 +188,19 @@ export interface components {
         /** SessionResponse */
         SessionResponse: {
             data: components["schemas"]["SessionData"];
+        };
+        /** ValidationError */
+        ValidationError: {
+            /** Location */
+            loc: (string | number)[];
+            /** Message */
+            msg: string;
+            /** Error Type */
+            type: string;
+            /** Input */
+            input?: unknown;
+            /** Context */
+            ctx?: Record<string, never>;
         };
     };
     responses: never;
@@ -154,6 +255,86 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    login: {
+        parameters: {
+            query?: {
+                return_to?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A redirect */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    callback: {
+        parameters: {
+            query?: {
+                state?: string | null;
+                code?: string | null;
+                error?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A redirect */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogoutResponse"];
+                };
             };
         };
     };

@@ -6,6 +6,7 @@ const session: components['schemas']['SessionResponse'] = {
     account: {
       id: '0b9e3c1e-58f4-4c84-9a59-2d0b6f3f6a10',
       kind: 'guest',
+      email: null,
       player: {
         id: 'c4a8f6a2-1f0e-4a63-8d2e-7f5b9e1c3d42',
         display_name: 'excited egret 387',

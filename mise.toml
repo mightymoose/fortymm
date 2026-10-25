@@ -88,9 +88,9 @@ run = "docker compose exec -T api /app/bin/docker-entrypoint sh -c 'uv sync --lo
 [tasks."api:test"]
 description = "Run the API's tests inside the api container"
 run = """
-# --no-deps keeps run from starting dev. The tests need only the database, so
-# start it first.
-docker compose up -d --wait postgres
+# --no-deps keeps run from starting dev. The tests need only the database and
+# the mock OpenID Connect provider, so start them first.
+docker compose up -d --wait postgres oidc
 docker compose run --rm --no-deps -T api uv run --locked pytest
 """
 
