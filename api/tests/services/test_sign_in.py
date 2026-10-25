@@ -1,7 +1,7 @@
 import time
 import uuid
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from ipaddress import ip_address
 
 import pytest
@@ -17,7 +17,13 @@ from fortymm_api.accounts import (
 )
 from fortymm_api.identity_provider import ExchangeFailed, IdToken
 from fortymm_api.ownership import OWNERSHIP_RULES, OwnershipRule
-from fortymm_api.services.sessions import authenticate, new_session, start_session
+from fortymm_api.services.sessions import (
+    AccountAdopted,
+    authenticate,
+    lock_account_for_write,
+    new_session,
+    start_session,
+)
 from fortymm_api.services.sign_in import (
     AdoptGuest,
     AlreadySignedIn,
@@ -529,45 +535,61 @@ def backend_waits_for_a_lock(database: Engine, pid: int) -> bool:
         return wait == "Lock"
 
 
+def wait_behind[H, W](
+    database: Engine,
+    holder: Callable[[Session], H],
+    waiter: Callable[[Session], W],
+) -> tuple[H, Future[W]]:
+    """Run `holder` in an open transaction, then `waiter` in another one on
+    another thread. Commits the holder once the waiter waits for a lock.
+    Returns the holder's result and the waiter's finished future."""
+    sessions = sessionmaker(database)
+    pids: list[int] = []
+
+    def run_waiter() -> W:
+        with sessions.begin() as session:
+            pids.append(session.scalar(text("SELECT pg_backend_pid()")))
+            return waiter(session)
+
+    held = sessions()
+    try:
+        held.begin()
+        held_result = holder(held)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(run_waiter)
+            deadline = time.monotonic() + 10
+            while not (pids and backend_waits_for_a_lock(database, pids[0])):
+                assert not future.done(), "the waiter never waited"
+                assert time.monotonic() < deadline, "the waiter never waited"
+                time.sleep(0.05)
+            held.commit()
+            wait([future], timeout=10)
+    finally:
+        held.close()
+    return held_result, future
+
+
+def finish_with(
+    attempt: LoginStarted, exchange: ExchangeCode
+) -> Callable[[Session], SignedIn | SignInFailed | Replayed]:
+    return lambda session: finish_sign_in(
+        session, attempt.token, Callback(attempt.state, "code", None), exchange
+    )
+
+
 def test_two_sign_ins_with_one_new_email_make_one_account(
     migrated_database: Engine,
 ) -> None:
     first_attempt = begin(migrated_database, guest_token(migrated_database))
     second_attempt = begin(migrated_database, guest_token(migrated_database))
-    sessions = sessionmaker(migrated_database)
-    pids: list[int] = []
 
-    def second_sign_in() -> SignedIn | SignInFailed | Replayed:
-        with sessions.begin() as session:
-            pids.append(session.scalar(text("SELECT pg_backend_pid()")))
-            return finish_sign_in(
-                session,
-                second_attempt.token,
-                Callback(second_attempt.state, "code", None),
-                identity("google|ann", "ann@example.com"),
-            )
+    first_result, second = wait_behind(
+        migrated_database,
+        finish_with(first_attempt, identity("email|ann", "ann@example.com")),
+        finish_with(second_attempt, identity("google|ann", "ann@example.com")),
+    )
 
-    first = sessions()
-    try:
-        first.begin()
-        first_result = finish_sign_in(
-            first,
-            first_attempt.token,
-            Callback(first_attempt.state, "code", None),
-            identity("email|ann", "ann@example.com"),
-        )
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            second = executor.submit(second_sign_in)
-            deadline = time.monotonic() + 10
-            while not (pids and backend_waits_for_a_lock(migrated_database, pids[0])):
-                assert not second.done(), "the second sign-in never waited"
-                assert time.monotonic() < deadline, "the second sign-in never waited"
-                time.sleep(0.05)
-            first.commit()
-            second_result = second.result(timeout=10)
-    finally:
-        first.close()
-
+    second_result = second.result()
     assert isinstance(first_result, SignedIn)
     # The second browser is a guest, and the email now has an account, so the
     # account adopts it.
@@ -582,3 +604,55 @@ def test_two_sign_ins_with_one_new_email_make_one_account(
         )
         == 1
     )
+
+
+def create_player(guest: AccountId) -> Callable[[Session], None]:
+    """A write as the guest account, as a route that creates a player makes."""
+
+    def create(session: Session) -> None:
+        lock_account_for_write(session, guest)
+        add_managed_player(session, guest, "made during adoption")
+
+    return create
+
+
+def players(database: Engine) -> int:
+    return count(database, "SELECT count(*) FROM players")
+
+
+def test_a_player_made_before_adoption_moves_to_the_account(
+    migrated_database: Engine,
+) -> None:
+    _, bob = bob_signed_in(migrated_database)
+    attempt = begin(migrated_database, guest_token(migrated_database))
+    guest = account_of(migrated_database, attempt.token).id
+
+    _, adoption = wait_behind(
+        migrated_database, create_player(guest), finish_with(attempt, BOB)
+    )
+
+    assert isinstance(adoption.result(), SignedIn)
+    assert managed_by(migrated_database, guest) == 0
+    assert managers_of_players_from(migrated_database, guest) == [
+        (bob, "managed"),
+        (bob, "managed"),
+    ]
+
+
+def test_a_write_that_waits_for_adoption_is_refused(
+    migrated_database: Engine,
+) -> None:
+    _, bob = bob_signed_in(migrated_database)
+    attempt = begin(migrated_database, guest_token(migrated_database))
+    guest = account_of(migrated_database, attempt.token).id
+    before = players(migrated_database)
+
+    adoption, create = wait_behind(
+        migrated_database, finish_with(attempt, BOB), create_player(guest)
+    )
+
+    assert isinstance(adoption, SignedIn)
+    assert isinstance(create.exception(), AccountAdopted)
+    assert players(migrated_database) == before
+    assert managed_by(migrated_database, guest) == 0
+    assert managers_of_players_from(migrated_database, guest) == [(bob, "managed")]

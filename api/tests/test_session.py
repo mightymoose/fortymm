@@ -12,6 +12,7 @@ from sqlalchemy import Engine, text
 
 from fortymm_api.auth import RequestAccount
 from fortymm_api.main import create_app
+from fortymm_api.services.sessions import AccountAdopted
 
 COOKIE = "__Host-fortymm_session"
 MAX_AGE = 34560000
@@ -53,6 +54,10 @@ def add_routes(app: FastAPI) -> None:
     @app.get("/whoami")
     def whoami(account: RequestAccount) -> dict[str, str]:
         return {"id": str(account.id), "kind": account.kind}
+
+    @app.post("/write-as-an-adopted-account")
+    def write_as_an_adopted_account() -> None:
+        raise AccountAdopted
 
 
 def start_session(client: TestClient) -> httpx.Response:
@@ -165,6 +170,13 @@ def test_the_dependency_answers_401_for_an_invalid_session(
     client.cookies.set(COOKIE, secrets.token_urlsafe(32))
 
     response = client.get("/whoami")
+
+    assert response.status_code == 401
+    assert response.json() == NO_SESSION
+
+
+def test_a_write_as_an_adopted_account_answers_401(client: TestClient) -> None:
+    response = client.post("/write-as-an-adopted-account", headers=JSON)
 
     assert response.status_code == 401
     assert response.json() == NO_SESSION

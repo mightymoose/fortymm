@@ -58,6 +58,11 @@ class GuestAccountLimitReached(Exception):
         self.retry_after = retry_after
 
 
+class AccountAdopted(Exception):
+    """The account was adopted, so a write as it must not land. `create_app()`
+    answers 401."""
+
+
 def new_token() -> str:
     return secrets.token_urlsafe(32)
 
@@ -122,6 +127,25 @@ def find_session(
     if kind is None or not unexpired:
         return InvalidSession(row)
     return ValidSession(row, kind)
+
+
+def lock_account_for_write(session: Session, account: AccountId) -> None:
+    """Hold the account row FOR SHARE until the transaction ends, or raise
+    AccountAdopted. A service that writes as an account calls it first.
+
+    Adoption takes the row FOR UPDATE, so the two take turns. A write that
+    waited reads adopted_into after the lock, so it can't land on an account
+    whose data adoption already moved.
+    """
+    # A scalar, not the entity: the ORM keeps a loaded Account's old
+    # attributes, but this needs the row as the lock found it.
+    adopted_into = session.scalar(
+        select(Account.adopted_into)
+        .where(Account.id == account)
+        .with_for_update(read=True)
+    )
+    if adopted_into is not None:
+        raise AccountAdopted
 
 
 def authenticate(session: Session, token: str | None) -> CurrentAccount | None:

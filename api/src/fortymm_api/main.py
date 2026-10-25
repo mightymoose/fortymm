@@ -13,7 +13,7 @@ from fortymm_api import v1
 from fortymm_api.auth import NoValidSession
 from fortymm_api.database import create_database_engine, migrate
 from fortymm_api.identity_provider import IdentityProvider
-from fortymm_api.services.sessions import GuestAccountLimitReached
+from fortymm_api.services.sessions import AccountAdopted, GuestAccountLimitReached
 from fortymm_api.v1.auth import SignInUnavailable
 
 WORKER_SECRET_HEADER = "X-FortyMM-Worker-Secret"
@@ -145,6 +145,9 @@ def create_app() -> FastAPI:
     app.include_router(v1.router)
     app.add_exception_handler(
         NoValidSession, lambda _request, _error: error_response(401, NO_SESSION)
+    )
+    app.add_exception_handler(
+        AccountAdopted, lambda _request, _error: error_response(401, NO_SESSION)
     )
     app.add_exception_handler(GuestAccountLimitReached, too_many_guest_accounts)
     app.add_exception_handler(
