@@ -95,7 +95,7 @@ export function SignInPrompt({
       return (
         <aside className="sign-in-strip" aria-label="Sign in">
           <p>
-            <b>Playing as a guest.</b> Sign in to keep your results on any device.
+            <b>Playing as a guest.</b> Sign in to use this account on any device.
           </p>
           <a className="fm-btn fm-btn--primary fm-btn--sm" href={signInHref}>
             Sign in
