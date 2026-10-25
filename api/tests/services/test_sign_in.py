@@ -16,6 +16,7 @@ from fortymm_api.accounts import (
     VerifiedAccount,
 )
 from fortymm_api.identity_provider import ExchangeFailed, IdToken
+from fortymm_api.ownership import OWNERSHIP_RULES, OwnershipRule
 from fortymm_api.services.sessions import authenticate, new_session, start_session
 from fortymm_api.services.sign_in import (
     AdoptGuest,
@@ -281,19 +282,180 @@ def test_two_identities_for_one_email_reach_one_account(
     )
 
 
-def test_a_guest_signing_in_to_another_account_waits_for_adoption(
+BOB = identity("email|bob", "bob@example.com")
+
+
+def bob_signed_in(database: Engine) -> tuple[str, AccountId]:
+    """Bob's verified account, and the token of the browser he signed in on."""
+    token = sign_in(database, guest_token(database), BOB)
+    return token, account_of(database, token).id
+
+
+def add_managed_player(session: Session, account: AccountId, name: str) -> None:
+    session.execute(
+        text(
+            "WITH player AS ("
+            "  INSERT INTO players (display_name) VALUES (:name) RETURNING id"
+            ") INSERT INTO player_managers (player_id, account_id, relationship)"
+            " SELECT id, :account, 'managed' FROM player"
+        ),
+        {"name": name, "account": account},
+    )
+
+
+def managers_of_players_from(
+    database: Engine, guest: AccountId
+) -> list[tuple[AccountId, str]]:
+    with database.connect() as connection:
+        rows = connection.execute(
+            text(
+                "SELECT account_id, relationship FROM player_managers"
+                " WHERE adopted_from = :guest"
+            ),
+            {"guest": guest},
+        ).all()
+    return [(row.account_id, row.relationship) for row in rows]
+
+
+def managed_by(database: Engine, account: AccountId) -> int:
+    return count(
+        database,
+        "SELECT count(*) FROM player_managers WHERE account_id = :id",
+        id=account,
+    )
+
+
+def test_adoption_hands_the_guests_players_and_browser_to_the_account(
     migrated_database: Engine,
 ) -> None:
-    bob = identity("b|1", "bob@example.com")
-    sign_in(migrated_database, guest_token(migrated_database), bob)
+    _, bob = bob_signed_in(migrated_database)
+    first_browser = guest_token(migrated_database)
+    guest = account_of(migrated_database, first_browser).id
+    _, second_browser = in_transaction(
+        migrated_database, lambda session: new_session(session, guest)
+    )
+    in_transaction(
+        migrated_database,
+        lambda session: add_managed_player(session, guest, "guest's friend"),
+    )
+
+    new_token = sign_in(migrated_database, first_browser, BOB)
+
+    assert account_of(migrated_database, new_token).id == bob
+    assert signed_in(migrated_database, first_browser) is None
+    assert signed_in(migrated_database, second_browser) is None
+    assert managers_of_players_from(migrated_database, guest) == [
+        (bob, "managed"),
+        (bob, "managed"),
+    ]
+    assert managed_by(migrated_database, guest) == 0
+
+
+def test_adoption_keeps_the_accounts_other_sessions(
+    migrated_database: Engine,
+) -> None:
+    bobs_laptop, bob = bob_signed_in(migrated_database)
+
+    sign_in(migrated_database, guest_token(migrated_database), BOB)
+
+    assert account_of(migrated_database, bobs_laptop).id == bob
+
+
+def test_adoption_keeps_the_guest_account_and_names_its_new_owner(
+    migrated_database: Engine,
+) -> None:
+    _, bob = bob_signed_in(migrated_database)
     token = guest_token(migrated_database)
-    guest = account_of(migrated_database, token)
-    started = begin(migrated_database, token)
+    guest = account_of(migrated_database, token).id
 
-    result = finish(migrated_database, started.token, started.state, bob)
+    sign_in(migrated_database, token, BOB)
 
-    assert result == SignInFailed("/games", SignInError.FAILED)
-    assert account_of(migrated_database, token) == guest
+    assert (
+        count(
+            migrated_database,
+            "SELECT count(*) FROM accounts WHERE id = :id AND adopted_into = :bob",
+            id=guest,
+            bob=bob,
+        )
+        == 1
+    )
+
+
+def test_a_new_identity_that_adopts_a_guest_belongs_to_the_account(
+    migrated_database: Engine,
+) -> None:
+    _, bob = bob_signed_in(migrated_database)
+    token = guest_token(migrated_database)
+    guest = account_of(migrated_database, token).id
+
+    new_token = sign_in(
+        migrated_database, token, identity("google|bob", "bob@example.com")
+    )
+
+    assert account_of(migrated_database, new_token).id == bob
+    identities = "SELECT count(*) FROM identities WHERE account_id = :id"
+    assert count(migrated_database, identities, id=bob) == 2
+    assert count(migrated_database, identities, id=guest) == 0
+
+
+def test_adoption_moves_the_rows_of_every_table_whose_rule_says_so(
+    migrated_database: Engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with migrated_database.begin() as connection:
+        connection.execute(
+            text(
+                "CREATE TABLE notes ("
+                "  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),"
+                "  author_id uuid REFERENCES accounts (id)"
+                ")"
+            )
+        )
+    monkeypatch.setitem(
+        OWNERSHIP_RULES, ("notes", "author_id"), OwnershipRule.MOVES_ON_ADOPT
+    )
+    _, bob = bob_signed_in(migrated_database)
+    token = guest_token(migrated_database)
+    guest = account_of(migrated_database, token).id
+    with migrated_database.begin() as connection:
+        connection.execute(
+            text("INSERT INTO notes (author_id) VALUES (:id), (:id)"), {"id": guest}
+        )
+
+    sign_in(migrated_database, token, BOB)
+
+    notes = "SELECT count(*) FROM notes WHERE author_id = :id"
+    assert count(migrated_database, notes, id=bob) == 2
+    assert count(migrated_database, notes, id=guest) == 0
+
+
+def accounts_and_managers(database: Engine) -> list[tuple[object, ...]]:
+    with database.connect() as connection:
+        return [
+            tuple(row)
+            for row in connection.execute(
+                text(
+                    "SELECT a.id, a.email, a.adopted_into, m.player_id,"
+                    " m.relationship, m.adopted_from"
+                    " FROM accounts a"
+                    " LEFT JOIN player_managers m ON m.account_id = a.id"
+                    " ORDER BY a.id, m.player_id"
+                )
+            )
+        ]
+
+
+def test_a_replayed_adoption_changes_nothing(migrated_database: Engine) -> None:
+    _, bob = bob_signed_in(migrated_database)
+    started = begin(migrated_database, guest_token(migrated_database))
+    first = finish(migrated_database, started.token, started.state, BOB)
+    assert isinstance(first, SignedIn)
+    before = accounts_and_managers(migrated_database)
+
+    replay = finish(migrated_database, first.token, started.state, BOB)
+
+    assert replay == Replayed()
+    assert accounts_and_managers(migrated_database) == before
+    assert account_of(migrated_database, first.token).id == bob
 
 
 def refused(code: str, code_verifier: str, nonce: str) -> IdToken:
@@ -407,9 +569,12 @@ def test_two_sign_ins_with_one_new_email_make_one_account(
         first.close()
 
     assert isinstance(first_result, SignedIn)
-    # The second browser is a guest, and the email now has an account, so it
-    # waits for adoption.
-    assert second_result == SignInFailed("/games", SignInError.FAILED)
+    # The second browser is a guest, and the email now has an account, so the
+    # account adopts it.
+    assert isinstance(second_result, SignedIn)
+    assert account_of(migrated_database, second_result.token) == account_of(
+        migrated_database, first_result.token
+    )
     assert (
         count(
             migrated_database,
