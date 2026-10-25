@@ -56,6 +56,21 @@ describe('worker', () => {
     expect(request.headers.get('X-Forwarded-For')).toBe('203.0.113.7')
   })
 
+  it("removes a client's own X-Forwarded-For when CF-Connecting-IP is missing", async () => {
+    const upstream = stubUpstream()
+    const { env } = makeEnv()
+
+    await worker.fetch(
+      new Request('https://fortymm.com/api/v1/session', {
+        method: 'POST',
+        headers: { 'X-Forwarded-For': '198.51.100.9' },
+      }),
+      env,
+    )
+
+    expect(forwarded(upstream).headers.has('X-Forwarded-For')).toBe(false)
+  })
+
   it('forwards the method, headers and body', async () => {
     const upstream = stubUpstream()
     const { env } = makeEnv()
