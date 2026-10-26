@@ -170,7 +170,8 @@ def test_a_guest_with_a_new_email_becomes_verified(browser: TestClient) -> None:
     assert account["id"] == guest["id"]
     assert account["kind"] == "verified"
     assert account["email"] == "ann@example.com"
-    assert account["player"] is None
+    # The guest's player waits for "Is this you?", so the account gets a new one.
+    assert account["player"]["id"] != guest["player"]["id"]
 
 
 def test_a_verified_account_signing_in_again_gets_a_new_token(

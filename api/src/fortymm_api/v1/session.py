@@ -28,9 +28,7 @@ class SessionAccount(BaseModel):
     kind: Literal["guest", "verified"]
     # Null for a guest account.
     email: str | None
-    # Null for a verified account with no self player, such as one whose
-    # players wait for the "Is this you?" answer.
-    player: SessionPlayer | None
+    player: SessionPlayer
 
 
 class SessionData(BaseModel):
@@ -68,19 +66,15 @@ def start_session(
     client network can start 30 guest accounts a minute. Past that, the API
     answers 429.
 
-    The account's player is the one it plays as. A new guest account's player
-    gets a default display name, such as `excited egret 387`. A verified
-    account has its email, and can have no player.
+    The account's player is the one it plays as. Every account has one. A
+    new player gets a default display name, such as `excited egret 387`. A
+    verified account has its email.
     """
     started = sessions.start_session(session, token, client_address(request))
     response.headers["Cache-Control"] = "no-store"
     set_session_cookie(response, started.token)
-    player = (
-        None
-        if started.player is None
-        else SessionPlayer(
-            id=started.player.id, display_name=started.player.display_name
-        )
+    player = SessionPlayer(
+        id=started.player.id, display_name=started.player.display_name
     )
     email = (
         started.account.email if isinstance(started.account, VerifiedAccount) else None

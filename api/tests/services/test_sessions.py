@@ -16,7 +16,6 @@ from fortymm_api.accounts import (
     CurrentAccount,
     Email,
     GuestAccount,
-    SelfPlayer,
     VerifiedAccount,
 )
 from fortymm_api.services.display_names import random_display_name
@@ -446,18 +445,13 @@ def self_players(database: Engine, account_id: AccountId) -> list[tuple[str, str
         ]
 
 
-def guest_player(started: StartedSession) -> SelfPlayer:
-    assert started.player is not None
-    return started.player
-
-
 def test_names_a_guests_player_with_an_alliterative_pair_and_a_number(
     migrated_database: Engine,
 ) -> None:
     started = start(migrated_database)
 
     assert re.fullmatch(
-        r"([a-z])[a-z]* \1[a-z]* [1-9][0-9]{2}", guest_player(started).display_name
+        r"([a-z])[a-z]* \1[a-z]* [1-9][0-9]{2}", started.player.display_name
     )
 
 
@@ -467,7 +461,7 @@ def test_links_a_guest_account_to_its_player_as_self(
     started = start(migrated_database)
 
     assert self_players(migrated_database, started.account.id) == [
-        (str(guest_player(started).id), guest_player(started).display_name)
+        (str(started.player.id), started.player.display_name)
     ]
 
 
@@ -480,7 +474,7 @@ def test_tries_the_next_name_when_one_is_taken(migrated_database: Engine) -> Non
         new_display_name=names("Excited Egret 387", "brave bison 120"),
     )
 
-    assert guest_player(started).display_name == "brave bison 120"
+    assert started.player.display_name == "brave bison 120"
     assert count(migrated_database, "players") == 2
 
 
@@ -538,11 +532,11 @@ def test_a_resume_gives_a_guest_account_without_a_self_player_one(
 
     assert resumed.player != first.player
     assert self_players(migrated_database, first.account.id) == [
-        (str(guest_player(resumed).id), guest_player(resumed).display_name)
+        (str(resumed.player.id), resumed.player.display_name)
     ]
 
 
-def test_a_resume_gives_a_verified_account_no_self_player(
+def test_a_resume_gives_a_verified_account_without_a_self_player_one(
     migrated_database: Engine,
 ) -> None:
     first = start(migrated_database)
@@ -553,7 +547,7 @@ def test_a_resume_gives_a_verified_account_no_self_player(
     )
     run(
         migrated_database,
-        "DELETE FROM player_managers WHERE account_id = :id",
+        "UPDATE player_managers SET relationship = 'managed' WHERE account_id = :id",
         id=first.account.id,
     )
 
@@ -562,5 +556,7 @@ def test_a_resume_gives_a_verified_account_no_self_player(
     assert resumed.account == VerifiedAccount(
         first.account.id, Email("ann@example.com")
     )
-    assert resumed.player is None
-    assert self_players(migrated_database, first.account.id) == []
+    assert resumed.player != first.player
+    assert self_players(migrated_database, first.account.id) == [
+        (str(resumed.player.id), resumed.player.display_name)
+    ]

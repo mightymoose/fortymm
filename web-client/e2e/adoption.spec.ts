@@ -14,7 +14,7 @@ test('a new email asks about the guest’s own player (VerifyInPlace)', async ({
 
   await signInPage.signIn(newPerson('ann'), { returnTo: '/' })
 
-  await expect(homePage.reviewTitle).toHaveText(`Who is ${guest.player!.display_name}?`)
+  await expect(homePage.reviewTitle).toHaveText(`Who is ${guest.player.display_name}?`)
   await homePage.review.getByRole('button', { name: 'Review later' }).click()
   await expect(homePage.reminder).toHaveText('1 player to review')
 
@@ -33,7 +33,7 @@ test('each sign-in from a guest asks about its player, and answers stay answered
   // A new person's first sign-in from a guest keeps that guest account, so
   // its own player is the first question.
   await homePage.goto()
-  const first = (await signInPage.account()).player!.display_name
+  const first = (await signInPage.account()).player.display_name
   await signInPage.signIn(ann, { returnTo: '/' })
   await expect(homePage.reviewTitle).toHaveText(`Who is ${first}?`)
   await homePage.answer('This is me')
@@ -42,13 +42,12 @@ test('each sign-in from a guest asks about its player, and answers stay answered
 
   await signInPage.forgetSession()
   await homePage.goto()
-  const second = (await signInPage.account()).player!.display_name
+  const second = (await signInPage.account()).player.display_name
   await signInPage.signIn(ann, { returnTo: '/' })
   await expect(homePage.reviewTitle).toHaveText(`Who is ${second}?`)
-  await expect(homePage.choice('This is me')).toBeDisabled()
-  await expect(homePage.review).toContainText(`You already play as ${first}.`)
-  await homePage.answer('I manage this player')
-  await expect(homePage.page.getByText(`You manage ${second}.`)).toBeVisible()
+  await homePage.answer('This is me')
+  await expect(homePage.page.getByText(`${second} merged into ${first}, your player.`)).toBeVisible()
+  await expect(homePage.avatar(first)).toBeVisible()
 
   await homePage.page.reload()
   await homePage.title.waitFor()
@@ -57,7 +56,7 @@ test('each sign-in from a guest asks about its player, and answers stay answered
 
   await signInPage.forgetSession()
   await homePage.goto()
-  const third = (await signInPage.account()).player!.display_name
+  const third = (await signInPage.account()).player.display_name
   await signInPage.signIn(ann, { returnTo: '/' })
   await expect(homePage.reviewTitle).toHaveText(`Who is ${third}?`)
   await homePage.answer('Remove from my account')
@@ -69,5 +68,5 @@ test('each sign-in from a guest asks about its player, and answers stay answered
   await expect(homePage.reminder).toBeHidden()
   const account = await signInPage.account()
   expect(account).toMatchObject({ kind: 'verified', email: ann.email })
-  expect(account.player?.display_name).toBe(first)
+  expect(account.player.display_name).toBe(first)
 })

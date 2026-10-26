@@ -114,6 +114,32 @@ def test_display_names_are_unique_whatever_their_case(
     assert violated_constraint(error) == "unique_display_name"
 
 
+def test_a_merged_player_gives_up_its_display_name(connection: Connection) -> None:
+    survivor = add_player(connection, "Ann")
+    merged = add_player(connection, "Bob")
+    connection.execute(
+        text("UPDATE players SET merged_into = :survivor WHERE id = :merged"),
+        {"survivor": survivor, "merged": merged},
+    )
+
+    add_player(connection, "bob")
+
+
+def test_unique_display_name_skips_merged_players(connection: Connection) -> None:
+    # alembic check doesn't compare an index's WHERE clause.
+    indexdef = connection.scalar(
+        text(
+            "SELECT indexdef FROM pg_indexes"
+            " WHERE tablename = 'players' AND indexname = 'unique_display_name'"
+        )
+    )
+
+    assert indexdef == (
+        "CREATE UNIQUE INDEX unique_display_name ON public.players"
+        " USING btree (lower(display_name)) WHERE (merged_into IS NULL)"
+    )
+
+
 def test_an_account_has_at_most_one_self_player(connection: Connection) -> None:
     account = add_account(connection)
     add_manager(connection, add_player(connection, "Ann"), account)

@@ -33,7 +33,7 @@
           "session"
         ],
         "summary": "Start Session",
-        "description": "Resume the visitor's session, or start a guest account and its session.\n\nA valid session gets a later expiry and a fresh cookie. With no cookie, or\na cookie for an expired, unknown or adopted session, the visitor gets a\nnew guest account. The API deletes the session that cookie named. A\nclient network can start 30 guest accounts a minute. Past that, the API\nanswers 429.\n\nThe account's player is the one it plays as. A new guest account's player\ngets a default display name, such as `excited egret 387`. A verified\naccount has its email, and can have no player.",
+        "description": "Resume the visitor's session, or start a guest account and its session.\n\nA valid session gets a later expiry and a fresh cookie. With no cookie, or\na cookie for an expired, unknown or adopted session, the visitor gets a\nnew guest account. The API deletes the session that cookie named. A\nclient network can start 30 guest accounts a minute. Past that, the API\nanswers 429.\n\nThe account's player is the one it plays as. Every account has one. A\nnew player gets a default display name, such as `excited egret 387`. A\nverified account has its email.",
         "operationId": "start_session",
         "responses": {
           "200": {
@@ -218,7 +218,7 @@
           "players"
         ],
         "summary": "Account Players",
-        "description": "List the players the account manages, its own player first.\n\n`open_question` is true for a player that a sign-in brought to the\naccount, until the account answers \"Is this you?\" for it.",
+        "description": "List the players the account manages, its own player first. A merged\nplayer isn't listed.\n\n`open_question` is true for a player that a sign-in brought to the\naccount, until the account answers \"Is this you?\" for it.",
         "operationId": "account_players",
         "responses": {
           "200": {
@@ -245,7 +245,7 @@
           "players"
         ],
         "summary": "Answer Question",
-        "description": "Answer \"Is this you?\" for one player, and list the account's players\nafter it.\n\n`yes` makes it the account's own player, and works only while the account\nhas none. `no` keeps it as a player the account manages. `not_mine` takes\nit off the account. The player stays, with no manager. Every answer\ncloses the question. A second `yes` or `no` changes nothing, and a second\n`not_mine` answers 409.",
+        "description": "Answer \"Is this you?\" for one player, and list the account's players\nafter it.\n\n`yes` makes it the account's own player. If the account already has one,\nthe two players merge. The player created first survives, and the other\nleaves the list. `no` keeps it as a player the account manages. `not_mine` takes\nit off the account. The player stays, with no manager. Every answer\ncloses the question. A second `yes` or `no` changes nothing, and a second\n`not_mine` answers 409.",
         "operationId": "answer_question",
         "security": [
           {
@@ -289,7 +289,7 @@
             "description": "The account doesn't manage the player"
           },
           "409": {
-            "description": "The answer is `yes` and the account already has its own player, or the answer is `not_mine` and the question was already answered"
+            "description": "The answer is `not_mine` and the question was already answered"
           },
           "422": {
             "description": "Validation Error",
@@ -468,14 +468,7 @@
             "title": "Email"
           },
           "player": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/SessionPlayer"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/components/schemas/SessionPlayer"
           }
         },
         "type": "object",

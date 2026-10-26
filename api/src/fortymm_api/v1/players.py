@@ -16,8 +16,7 @@ ANSWER_ERRORS: dict[int | str, dict[str, Any]] = {
     404: {"description": "The account doesn't manage the player"},
     409: {
         "description": (
-            "The answer is `yes` and the account already has its own player, or "
-            "the answer is `not_mine` and the question was already answered"
+            "The answer is `not_mine` and the question was already answered"
         )
     },
 }
@@ -59,7 +58,8 @@ def players_response(found: list[players.AccountPlayer]) -> AccountPlayersRespon
 def account_players(
     session: DatabaseSession, account: RequestAccount
 ) -> AccountPlayersResponse:
-    """List the players the account manages, its own player first.
+    """List the players the account manages, its own player first. A merged
+    player isn't listed.
 
     `open_question` is true for a player that a sign-in brought to the
     account, until the account answers "Is this you?" for it.
@@ -77,8 +77,9 @@ def answer_question(
     """Answer "Is this you?" for one player, and list the account's players
     after it.
 
-    `yes` makes it the account's own player, and works only while the account
-    has none. `no` keeps it as a player the account manages. `not_mine` takes
+    `yes` makes it the account's own player. If the account already has one,
+    the two players merge. The player created first survives, and the other
+    leaves the list. `no` keeps it as a player the account manages. `not_mine` takes
     it off the account. The player stays, with no manager. Every answer
     closes the question. A second `yes` or `no` changes nothing, and a second
     `not_mine` answers 409.

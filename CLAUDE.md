@@ -208,17 +208,20 @@ account has no `email`. A verified account has one, always lowercase.
   `player_managers`. Each row has `relationship` `self` or `managed`. An
   account has at most one `self` player, and a player at most one `self`
   account.
-- `start_session()` gives every guest account it returns a `self` player
+- `start_session()` gives every account it returns a `self` player
   (`SelfPlayer` in `accounts.py`). A new guest account gets a new player
   with a default display name, such as `excited egret 387`. A resumed
-  guest account that has no `self` player gets one too. A verified account
-  gets none, because sign-in can leave its players waiting for the "Is this
-  you?" answer.
+  account that has no `self` player gets one too. That includes a verified
+  account whose players wait for the "Is this you?" answer. A "Yes" then
+  merges the two players (see Is this you?).
 - `services/display_names.py` makes the default names: an animal, an
   adjective with the same first letter, and a number from 100 to 999. The
-  adjectives are kind or neutral. `lower(display_name)` is unique, so the
-  insert skips a taken name with `ON CONFLICT DO NOTHING` and tries another,
-  up to 10 times. Its test fails if an animal's initial has no adjective.
+  adjectives are kind or neutral. `lower(display_name)` is unique among
+  players with no `merged_into` (the partial index `unique_display_name`).
+  So the insert skips a taken name with `ON CONFLICT DO NOTHING` and tries
+  another, up to 10 times. A merged player's name is free again. Its test
+  fails if an animal's initial has no adjective. `tests/test_schema.py`
+  checks the index's `WHERE` clause, because `alembic check` doesn't.
 - `ownership.py`: `OWNERSHIP_RULES` says what adoption and player merge do
   to each foreign key to `accounts` or `players`. `tests/test_ownership.py`
   reads every such foreign key from `information_schema`. It fails if one
@@ -233,7 +236,7 @@ account has no `email`. A verified account has one, always lowercase.
   `Cache-Control: no-store`. The body is `{"data": {"account": {"id":
   "...", "kind": "guest", "email": null, "player": {"id": "...",
   "display_name": "excited egret 387"}}}}`. A verified account has kind
-  `"verified"` and its email. Its `player` can be `null`.
+  `"verified"` and its email. Every account has a `player`.
 - `start_session()` limits guest accounts per client network. A network can
   start 30 guest accounts per window of one minute (`GUEST_ACCOUNT_LIMIT`,
   `GUEST_ACCOUNT_WINDOW`). The 31st gets `GuestAccountLimitReached`, and
@@ -277,20 +280,31 @@ Sign-in). Each one is an open "Is this you?" question.
 
 - `GET /v1/account/players` lists the account's players, its `self`
   player first, then by display name. Each has `relationship` and
-  `open_question`.
+  `open_question`. It leaves out merged players.
 - `POST /v1/account/players/{player_id}/answer` takes `{"answer": "yes"}`,
   `"no"` or `"not_mine"`, and returns the same list after the answer.
-  `yes` makes the row `self`. `no` keeps it `managed`. `not_mine` deletes
-  the `player_managers` row. The player stays, with no manager.
+  `yes` makes the row `self`. If the account already has a `self` player,
+  `yes` merges the two players instead (see below). `no` keeps it
+  `managed`. `not_mine` deletes the `player_managers` row. The player
+  stays, with no manager.
 - Every answer clears `adopted_from`. A second `yes` or `no` changes
   nothing, whatever the first answer was.
-- The API answers 409 to `yes` while the account has a `self` player,
-  because player merge comes with games. It also answers 409 to
-  `not_mine` for a question already answered. It answers 404 for a player
-  the account doesn't manage.
+- The API answers 409 to `not_mine` for a question already answered. It
+  answers 404 for a player the account doesn't manage, or a merged player.
 - Both routes call `lock_account_for_write()`. The answer also locks every
   `player_managers` row of the account `FOR UPDATE`. So two answers from
-  two tabs take turns, and they can't make two `self` players.
+  two tabs take turns, and the second `yes` merges with the first one's
+  player.
+- `merge_into_self()` in `services/player_merge.py` merges a player and
+  the account's `self` player. The original player survives. It is the one
+  created first (`players.created_at`, then `id`). It keeps its id and
+  display name, and its row becomes `self`. The other player gets
+  `merged_into` set to the survivor and gives up its display name. Its row
+  stays, as `managed` (`STAYS_ON_PLAYER_MERGE`). The merge also points
+  every player already merged into the merged player at the survivor. So
+  `merged_into` always names a player that isn't merged.
+- A view that combines a player with the players merged into it comes
+  with games.
 
 ### Sign-in
 
@@ -499,10 +513,12 @@ it to `src/routes/`.
   reminder with a "Review players" button. That opens a dialog that asks
   "Who is <player>?" about one player at a time. The dialog opens by itself
   when the URL has `signed_in=1`, and then the router replaces the URL
-  without it. So a reload shows only the reminder. "This is me" is off
-  while the account has its own player. An answer puts the API's list in
-  the players query. A "This is me" also puts the player in the session's
-  account, so the topbar shows it.
+  without it. So a reload shows only the reminder. An answer puts the
+  API's list in the players query. A "This is me" also puts the list's
+  `self` player in the session's account, so the topbar shows it. When
+  "This is me" merged the player into an older one, the confirmation names
+  both, such as "brave badger 214 merged into excited egret 387, your
+  player."
 - `design-system.tsx`: a public page. Public pages go directly in
   `src/routes/`. They make no request and never show the loading screen.
   The design system page has no `AppShell`, and no page links to it.
@@ -600,8 +616,9 @@ e.g. `components['schemas']['SessionResponse']`. The default handler answers
 `excited egret 387`. Another default handler answers `POST /v1/auth/logout`
 with `logoutResponse`, and another answers `GET /v1/account/players` with
 no players. `mockVerifiedAccount()` signs the mock API in as a verified
-account with the players it gets. It answers "Is this you?" as the API
-does, and returns the answers it got.
+account with the players it gets. One of them must be `self`, and their
+order is the order the API made them. It answers "Is this you?" as the API
+does, with a merge into the older player, and returns the answers it got.
 
 `HomePage.render({ path })` renders the app at another path, such as one
 with a query. `homePage.href` is the router's current path and query, so a

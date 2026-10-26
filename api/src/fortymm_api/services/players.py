@@ -2,6 +2,8 @@
 
 A question is open while the account's player_managers row for the player
 has `adopted_from` set. Sign-in sets it, through hand_over_players().
+
+A merged player is hidden: the account no longer plays as it or manages it.
 """
 
 from dataclasses import dataclass
@@ -13,13 +15,15 @@ from sqlalchemy.orm import Session
 
 from fortymm_api.accounts import AccountId, PlayerId
 from fortymm_api.models import Player, PlayerManager
+from fortymm_api.services.player_merge import merge_into_self
 from fortymm_api.services.sessions import lock_account_for_write
 
 type Relationship = Literal["self", "managed"]
 
 
 class Answer(StrEnum):
-    # The row becomes 'self'.
+    # The row becomes 'self'. If the account has a self player, the two
+    # players merge, and the survivor's row becomes 'self'.
     YES = "yes"
     # The row stays 'managed'.
     NO = "no"
@@ -44,12 +48,6 @@ class QuestionClosed(Exception):
     `create_app()` answers 409."""
 
 
-class SelfPlayerExists(Exception):
-    """The answer is "Yes", and the account already has a self player.
-    Combining two players needs player merge, which comes with games.
-    `create_app()` answers 409."""
-
-
 def account_players(session: Session, account: AccountId) -> list[AccountPlayer]:
     """The players the account manages: its self player first, then the rest
     by display name."""
@@ -69,12 +67,13 @@ def answer_question(
     """
     lock_account_for_write(session, account)
     # FOR UPDATE on every row of the account, so answers from two tabs take
-    # turns. Two "Yes" answers can't both pass the self check.
+    # turns. A second "Yes" sees the self player that the first one made.
     rows = session.scalars(
         select(PlayerManager)
-        .where(PlayerManager.account_id == account)
+        .join(Player, Player.id == PlayerManager.player_id)
+        .where(PlayerManager.account_id == account, Player.merged_into.is_(None))
         .order_by(PlayerManager.id)
-        .with_for_update()
+        .with_for_update(of=PlayerManager)
     ).all()
     row = next((row for row in rows if row.player_id == player), None)
     if row is None:
@@ -85,9 +84,9 @@ def answer_question(
         return _players(session, account)
 
     match answer:
+        case Answer.YES if any(other.relationship == "self" for other in rows):
+            merge_into_self(session, account, player)
         case Answer.YES:
-            if any(other.relationship == "self" for other in rows):
-                raise SelfPlayerExists
             row.relationship = "self"
             row.adopted_from = None
         case Answer.NO:
@@ -107,7 +106,7 @@ def _players(session: Session, account: AccountId) -> list[AccountPlayer]:
             PlayerManager.adopted_from.is_not(None),
         )
         .join(PlayerManager, PlayerManager.player_id == Player.id)
-        .where(PlayerManager.account_id == account)
+        .where(PlayerManager.account_id == account, Player.merged_into.is_(None))
         .order_by(PlayerManager.relationship != "self", Player.display_name)
     ).all()
     return [

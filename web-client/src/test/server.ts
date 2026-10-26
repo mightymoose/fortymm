@@ -63,6 +63,8 @@ type Answer = components['schemas']['Answer']
 
 // Signs the mock API in as a verified account that manages `players`, and
 // answers "Is this you?" as the API does. Returns the answers it received.
+// One of `players` is the account's self player, and they are in the order
+// the API made them. So a "This is me" merges into the first of the two.
 // `refuse` makes it answer that status instead, as when another tab
 // answered first.
 export function mockVerifiedAccount(
@@ -71,7 +73,11 @@ export function mockVerifiedAccount(
 ) {
   let current = players
   const answers: { playerId: string; answer: Answer }[] = []
-  const self = () => current.find((player) => player.relationship === 'self')
+  const self = () => {
+    const found = current.find((player) => player.relationship === 'self')
+    if (!found) throw new Error('The account has no self player')
+    return { id: found.id, display_name: found.display_name }
+  }
   server.use(
     http.post(`${API_BASE_URL}/v1/session`, () =>
       HttpResponse.json<components['schemas']['SessionResponse']>({
@@ -80,7 +86,7 @@ export function mockVerifiedAccount(
             ...sessionResponse.data.account,
             kind: 'verified',
             email: 'ann@example.com',
-            player: self() ?? null,
+            player: self(),
           },
         },
       }),
@@ -99,12 +105,25 @@ export function mockVerifiedAccount(
             { status: refuse },
           )
         }
-        current = current.flatMap((player) => {
-          if (player.id !== params.playerId) return [player]
-          if (answer === 'not_mine') return []
-          const relationship = answer === 'yes' ? 'self' : player.relationship
-          return [{ ...player, relationship, open_question: false }]
-        })
+        const answered = current.find((player) => player.id === params.playerId)
+        const own = current.find((player) => player.relationship === 'self')
+        if (answer === 'yes' && answered?.open_question && own) {
+          // A merge. The older player survives as the self player.
+          const [survivor, merged] =
+            current.indexOf(own) < current.indexOf(answered) ? [own, answered] : [answered, own]
+          current = current.flatMap((player) => {
+            if (player === merged) return []
+            if (player !== survivor) return [player]
+            return [{ ...player, relationship: 'self', open_question: false }]
+          })
+        } else {
+          current = current.flatMap((player) => {
+            if (player.id !== params.playerId) return [player]
+            if (answer === 'not_mine') return []
+            const relationship = answer === 'yes' ? 'self' : player.relationship
+            return [{ ...player, relationship, open_question: false }]
+          })
+        }
         return HttpResponse.json<components['schemas']['AccountPlayersResponse']>({
           data: current,
         })

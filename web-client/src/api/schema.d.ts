@@ -43,9 +43,9 @@ export interface paths {
          *     client network can start 30 guest accounts a minute. Past that, the API
          *     answers 429.
          *
-         *     The account's player is the one it plays as. A new guest account's player
-         *     gets a default display name, such as `excited egret 387`. A verified
-         *     account has its email, and can have no player.
+         *     The account's player is the one it plays as. Every account has one. A
+         *     new player gets a default display name, such as `excited egret 387`. A
+         *     verified account has its email.
          */
         post: operations["start_session"];
         delete?: never;
@@ -135,7 +135,8 @@ export interface paths {
         };
         /**
          * Account Players
-         * @description List the players the account manages, its own player first.
+         * @description List the players the account manages, its own player first. A merged
+         *     player isn't listed.
          *
          *     `open_question` is true for a player that a sign-in brought to the
          *     account, until the account answers "Is this you?" for it.
@@ -163,8 +164,9 @@ export interface paths {
          * @description Answer "Is this you?" for one player, and list the account's players
          *     after it.
          *
-         *     `yes` makes it the account's own player, and works only while the account
-         *     has none. `no` keeps it as a player the account manages. `not_mine` takes
+         *     `yes` makes it the account's own player. If the account already has one,
+         *     the two players merge. The player created first survives, and the other
+         *     leaves the list. `no` keeps it as a player the account manages. `not_mine` takes
          *     it off the account. The player stays, with no manager. Every answer
          *     closes the question. A second `yes` or `no` changes nothing, and a second
          *     `not_mine` answers 409.
@@ -251,7 +253,7 @@ export interface components {
             kind: "guest" | "verified";
             /** Email */
             email: string | null;
-            player: components["schemas"]["SessionPlayer"] | null;
+            player: components["schemas"]["SessionPlayer"];
         };
         /** SessionData */
         SessionData: {
@@ -471,7 +473,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description The answer is `yes` and the account already has its own player, or the answer is `not_mine` and the question was already answered */
+            /** @description The answer is `not_mine` and the question was already answered */
             409: {
                 headers: {
                     [name: string]: unknown;

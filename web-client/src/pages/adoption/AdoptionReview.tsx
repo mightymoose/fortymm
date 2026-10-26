@@ -30,16 +30,14 @@ const choices: readonly { answer: Answer; label: string; description: string }[]
   },
 ]
 
-// Why "This is me" is off. Combining two players needs player merge, which
-// comes with games.
-function notYours(selfPlayer: string): string {
-  return `You already play as ${selfPlayer}. We can’t combine two players yet.`
-}
-
-function confirmation(answer: Answer, name: string): string {
+// `self` is the account's player after the answer. After "This is me", it
+// is the player that survived the merge, if there was one.
+function confirmation(answer: Answer, name: string, self: string | undefined): string {
   switch (answer) {
     case 'yes':
-      return `${name} is your player now.`
+      return self === undefined || self === name
+        ? `${name} is your player now.`
+        : `${name} merged into ${self}, your player.`
     case 'no':
       return `You manage ${name}.`
     case 'not_mine':
@@ -76,13 +74,12 @@ export function AdoptionReview() {
   const [picked, setPicked] = useState<Answer | null>(null)
   // The answer the dialog confirms while more players remain. A toast can't
   // do it while the dialog is open: the modal makes the page inert.
-  const [last, setLast] = useState<{ name: string; answer: Answer } | null>(null)
+  const [last, setLast] = useState<string | null>(null)
   // Whether this page load answered a question, so the notice that every
   // player is reviewed shows only after an answer.
   const [answered, setAnswered] = useState(false)
 
   const open = players?.filter((player) => player.open_question) ?? []
-  const selfPlayer = players?.find((player) => player.relationship === 'self')
   const queue = open.filter((player) => !skipped.includes(player.id))
   const current = queue[0]
   const total = answeredHere + skipped.length + queue.length
@@ -90,7 +87,7 @@ export function AdoptionReview() {
   // Focus goes to the first choice whenever a player shows, so a held Enter
   // on Continue can't answer the next player too.
   function focusFirstChoice() {
-    dialog.current?.querySelector<HTMLElement>('input[type=radio]:not(:disabled)')?.focus()
+    dialog.current?.querySelector<HTMLElement>('input[type=radio]')?.focus()
   }
 
   function showDialog() {
@@ -137,17 +134,19 @@ export function AdoptionReview() {
     answer.mutate(
       { player, answer: choice },
       {
-        onSuccess: () => {
+        onSuccess: (after) => {
+          const self = after.find((found) => found.relationship === 'self')
+          const message = confirmation(choice, player.display_name, self?.display_name)
           setAnswered(true)
           setAnsweredHere((count) => count + 1)
           if (more) {
-            setLast({ name: player.display_name, answer: choice })
+            setLast(message)
             next()
             return
           }
           setLast(null)
           dialog.current?.close()
-          showToast(confirmation(choice, player.display_name))
+          showToast(message)
         },
         onError: () => {
           // Closed first, so the toast isn't under the inert page.
@@ -192,7 +191,7 @@ export function AdoptionReview() {
         {last && (
           <p className="fm-notice fm-notice--success" role="status">
             <Icon name="check" />
-            <span>{confirmation(last.answer, last.name)}</span>
+            <span>{last}</span>
           </p>
         )}
         {current && (
@@ -209,27 +208,21 @@ export function AdoptionReview() {
             <PlayerSummary player={current} />
             <fieldset className="adopt-options">
               <legend className="fm-sr">Who is {current.display_name}?</legend>
-              {choices.map(({ answer: value, label, description }) => {
-                const off = value === 'yes' && !!selfPlayer
-                return (
-                  <label key={value} className="fm-radio adopt-option">
-                    <input
-                      type="radio"
-                      name={titleId}
-                      value={value}
-                      disabled={off}
-                      checked={picked === value}
-                      onChange={() => setPicked(value)}
-                    />
-                    <span className="adopt-option__text">
-                      <span className="adopt-option__label">{label}</span>
-                      <span className="fm-help">
-                        {off && selfPlayer ? notYours(selfPlayer.display_name) : description}
-                      </span>
-                    </span>
-                  </label>
-                )
-              })}
+              {choices.map(({ answer: value, label, description }) => (
+                <label key={value} className="fm-radio adopt-option">
+                  <input
+                    type="radio"
+                    name={titleId}
+                    value={value}
+                    checked={picked === value}
+                    onChange={() => setPicked(value)}
+                  />
+                  <span className="adopt-option__text">
+                    <span className="adopt-option__label">{label}</span>
+                    <span className="fm-help">{description}</span>
+                  </span>
+                </label>
+              ))}
             </fieldset>
           </>
         )}
