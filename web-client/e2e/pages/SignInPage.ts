@@ -40,11 +40,17 @@ export class SignInPage {
     { returnTo = PUBLIC_PAGE }: { returnTo?: '/' | typeof PUBLIC_PAGE } = {},
   ): Promise<URL> {
     await this.page.goto(`/api/v1/auth/login?return_to=${returnTo}`)
+    await this.completeSignIn(person)
+    await this.page.waitForURL((url) => url.pathname === returnTo)
+    return new URL(this.page.url())
+  }
+
+  // Fills the mock provider's sign-in page as `person` and sends it. The
+  // browser must already be on that page, e.g. after a Sign in link.
+  async completeSignIn(person: Person): Promise<void> {
     await this.subject.fill(person.sub)
     await this.claims.fill(JSON.stringify({ email: person.email, email_verified: true }))
     await this.submit.click()
-    await this.page.waitForURL((url) => url.pathname === returnTo)
-    return new URL(this.page.url())
   }
 
   // The account of the browser's session, from POST /v1/session with the

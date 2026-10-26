@@ -21,12 +21,20 @@ export const sessionResponse: components['schemas']['SessionResponse'] = {
   },
 }
 
+export const logoutResponse: components['schemas']['LogoutResponse'] = {
+  data: {
+    logout_url:
+      'https://fortymm.example/v2/logout?client_id=test&returnTo=http%3A%2F%2Flocalhost%2F',
+  },
+}
+
 // The mock API for unit tests, started in setupTests.ts. Tests override a
 // handler for themselves with `server.use()`.
 export const server = setupServer(
   http.post(`${API_BASE_URL}/v1/session`, () =>
     HttpResponse.json(sessionResponse),
   ),
+  http.post(`${API_BASE_URL}/v1/auth/logout`, () => HttpResponse.json(logoutResponse)),
   http.get(`${API_BASE_URL}/v1/account/players`, () =>
     HttpResponse.json<components['schemas']['AccountPlayersResponse']>({ data: [] }),
   ),

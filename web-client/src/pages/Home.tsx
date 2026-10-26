@@ -1,4 +1,5 @@
 import { Icon, type IconName } from '../components/Icon'
+import { AccountStrip } from './AccountStrip'
 import { AdoptionReview } from './adoption/AdoptionReview'
 
 type Stage = 'ready' | 'building' | 'next' | 'later'
@@ -14,7 +15,7 @@ const stageLabels: Record<Stage, string> = {
 const parts: readonly { title: string; body: string; icon: IconName; stage: Stage }[] = [
   {
     title: 'Your account',
-    body: 'Sign in on any device and keep your matches, leagues and rating in one place.',
+    body: 'You can sign in now. Next, your matches, leagues and rating stay with your account on every device.',
     icon: 'user',
     stage: 'building',
   },
@@ -38,12 +39,21 @@ const parts: readonly { title: string; body: string; icon: IconName; stage: Stag
   },
 ]
 
-// What we're building and what comes after, styled by `.roadmap` in
-// styles/base.css. Each part's stage sets its colour there.
+// The visitor's account and the "Is this you?" review over the roadmap.
 export function Home() {
   return (
-    <>
-    <AdoptionReview />
+    <div className="home">
+      <AccountStrip />
+      <AdoptionReview />
+      <Roadmap />
+    </div>
+  )
+}
+
+// What we're building and what comes after, styled by `.roadmap` in
+// styles/base.css. Each part's stage sets its colour there.
+function Roadmap() {
+  return (
     <section className="roadmap">
       <div className="roadmap__intro">
         <h1 className="roadmap__title">What’s coming, and when.</h1>
@@ -73,6 +83,5 @@ export function Home() {
         ))}
       </ol>
     </section>
-    </>
   )
 }

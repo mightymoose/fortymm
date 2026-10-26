@@ -4,10 +4,13 @@ import { navigate, renderRoute, type AppRouter } from '../renderRoute'
 // Page object for the home page in unit tests. Elements are looked up through
 // `screen` on every access, so they always reflect the current render.
 export class HomePage {
-  static async render(
-    options?: Parameters<typeof renderRoute>[1],
-  ): Promise<HomePage> {
-    return new HomePage(await renderRoute('/', options))
+  // Renders the app at `path`, `/` by default. Another path, such as one
+  // with a query, must still show the home page.
+  static async render({
+    path = '/',
+    ...options
+  }: { path?: string } & Parameters<typeof renderRoute>[1] = {}): Promise<HomePage> {
+    return new HomePage(await renderRoute(path, options))
   }
 
   private readonly router: AppRouter
@@ -19,6 +22,54 @@ export class HomePage {
   // Goes to another page in the same app, as a link would.
   navigate(to: '/' | '/design-system'): Promise<void> {
     return navigate(this.router, to)
+  }
+
+  // The router's current path and query, e.g. `/?tab=1`.
+  get href(): string {
+    return this.router.state.location.href
+  }
+
+  // The strip that asks a guest to sign in, or null.
+  get signInStrip(): HTMLElement | null {
+    return screen.queryByRole('complementary', { name: 'Sign in' })
+  }
+
+  // The strip's link that signs a guest in.
+  get signInLink(): HTMLElement {
+    return within(this.signInStrip!).getByRole('link', { name: 'Sign in' })
+  }
+
+  // The strip that shows a verified account, or null.
+  get accountStrip(): HTMLElement | null {
+    return screen.queryByRole('complementary', { name: 'Your account' })
+  }
+
+  // The account strip's button that signs out.
+  get signOutButton(): HTMLElement {
+    return within(this.accountStrip!).getByRole('button', { name: /^Sign(ing)? out/ })
+  }
+
+  // Waits for the account strip's message that signing out failed.
+  findSignOutError(): Promise<HTMLElement> {
+    return within(this.accountStrip!).findByRole('alert')
+  }
+
+  // The message of a sign-in that came back with an error, found by its
+  // title, or null. An error is an alert. A cancelled sign-in is a status.
+  signInMessage(title: string): HTMLElement | null {
+    return (
+      screen.queryByRole('alert', { name: title }) ?? screen.queryByRole('status', { name: title })
+    )
+  }
+
+  // The sign-in message's link that starts another sign-in.
+  tryAgainLink(message: HTMLElement): HTMLElement {
+    return within(message).getByRole('link', { name: 'Try again' })
+  }
+
+  // The sign-in message's button that hides it.
+  dismissButton(message: HTMLElement): HTMLElement {
+    return within(message).getByRole('button', { name: 'Dismiss' })
   }
 
   get title(): HTMLElement {

@@ -353,7 +353,10 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   callback whose `state` matches no attempt, such as a replay, answers 302
   to `/` with no error.
 - `POST /v1/auth/logout` deletes the session, expires the cookie and
-  returns Auth0's `/v2/logout` URL as `data.logout_url`.
+  returns Auth0's `/v2/logout` URL as `data.logout_url`. In dev, that URL
+  is the mock's `http://oidc:8080/default/v2/logout`. The browser can't
+  reach it, and the mock answers 405 there. So a dev sign-out ends on an
+  error page. Open `/` again to see the new guest account.
 
 ### Migrations
 
@@ -474,8 +477,24 @@ it to `src/routes/`.
   initials of the player's display name. Its accessible name and tooltip
   are the full name. It reads the session without suspending, so it never
   holds up the loading screen.
-- Home (`src/pages/Home.tsx`) shows `AdoptionReview`
-  (`src/pages/adoption/`) above the roadmap. For a verified account, it
+- `SignInErrorAlert` (`src/pages/SignInErrorAlert.tsx`) sits in
+  `AuthenticatedLayout`, inside `AppShell` and above the page. If the URL
+  has `sign_in_error`, it shows that code's message from `signInErrors`
+  (`src/pages/signInErrors.ts`). An unknown code shows the `failed`
+  message. It keeps the message in state and removes the param with a
+  history replace, so a reload shows nothing. `cancelled` is a neutral
+  `fm-alert` with `role="status"`. The other codes are `fm-alert--error`
+  with `role="alert"`. Its Try again link starts another sign-in.
+- Home (`src/pages/Home.tsx`) shows `AccountStrip`
+  (`src/pages/AccountStrip.tsx`), then `AdoptionReview`
+  (`src/pages/adoption/`), above the roadmap.
+- `AccountStrip`: a guest sees the Sign in link. A verified account sees
+  its email and a Sign out button. A guest gets no Sign out, because it
+  would throw the account away. Both sign-in links come from
+  `useSignInHref()` (`src/pages/useSignInHref.ts`). It is a full page load
+  of `/api/v1/auth/login` with the current path and query as `return_to`,
+  because the API answers with a 302.
+- `AdoptionReview`: for a verified account, it
   reads `GET /v1/account/players`. With open questions, it shows a
   reminder with a "Review players" button. That opens a dialog that asks
   "Who is <player>?" about one player at a time. The dialog opens by itself
@@ -529,6 +548,13 @@ doesn't show the loading screen again. If the session fails after the
 retries, the root route's error page shows (see Error pages). The web-client no
 longer calls `/v1/health`.
 
+`logout(api)` in `queries.ts` sends `POST /v1/auth/logout` and returns
+`data.logout_url`. `AccountStrip` runs it through `useMutation`. On success,
+it calls `leavePage()` (`src/leavePage.ts`), which loads the URL with
+`window.location.assign`. jsdom's `location.assign` can't be spied on, so
+tests `vi.mock` that module. If the request fails, the strip says so and
+the button offers Sign out again.
+
 ### Error pages
 
 The root route (`__root.tsx`) has `errorComponent: ErrorPage` and
@@ -571,11 +597,15 @@ fails the test. A test overrides a handler with `server.use()`, and the
 override resets after the test. Type each mock body with the schema's type,
 e.g. `components['schemas']['SessionResponse']`. The default handler answers
 `POST /v1/session` with `sessionResponse`, a guest account whose player is
-`excited egret 387`. Another default
-handler answers `GET /v1/account/players` with no players.
-`mockVerifiedAccount()` signs the mock API in as a verified account with
-the players it gets. It answers "Is this you?" as the API does, and
-returns the answers it got.
+`excited egret 387`. Another default handler answers `POST /v1/auth/logout`
+with `logoutResponse`, and another answers `GET /v1/account/players` with
+no players. `mockVerifiedAccount()` signs the mock API in as a verified
+account with the players it gets. It answers "Is this you?" as the API
+does, and returns the answers it got.
+
+`HomePage.render({ path })` renders the app at another path, such as one
+with a query. `homePage.href` is the router's current path and query, so a
+test can check what `SignInErrorAlert` left in the URL.
 
 `renderRoute` gives each render its own `QueryClient` with retries off and an
 API client with base URL `API_BASE_URL` (`http://localhost/api`), because
@@ -618,8 +648,17 @@ database keeps its accounts.
 
 `e2e/adoption.spec.ts` signs in back to Home and answers "Is this you?". A
 person's first sign-in from a guest is VerifyInPlace, so the account's
-first question is about that guest's own player. The suite starts about 16
-guest accounts, under the limit of 30 a minute.
+first question is about that guest's own player.
+
+`e2e/sign-out.spec.ts` opens `/`, follows the strip's Sign in link and
+fills the mock's form with `SignInPage.completeSignIn()`. It lands back on
+`/` as a verified account, closes "Is this you?" with Review later, signs
+out and ends on `/` as a new guest account. The mock answers 405 to the
+logout URL. So the spec answers that navigation with `page.route()`, a 302
+to its `returnTo`. The API builds `returnTo` from the browser's `Host`, so
+in the e2e suite it is `http://localhost:5173/`.
+
+The suite starts about 18 guest accounts, under the limit of 30 a minute.
 
 The design system page is a copy of the reference's component gallery
 (`references/design-system/ui_kits/components/index.html`). It has one
@@ -714,8 +753,10 @@ The design system's styles apply to the whole app; `main.tsx` imports them:
   in `src/assets/fonts/`.
 - `src/styles/base.css`: the base, type roles, status markers and motion of
   the same file. Then the app's own styles: the loading screen,
-  `.app-shell` (`src/pages/AppShell.tsx`) and `.roadmap`, the list of what's
-  ready and what's coming that Home shows (`src/pages/Home.tsx`).
+  `.app-shell` (`src/pages/AppShell.tsx`), `.roadmap`, the list of what's
+  ready and what's coming that Home shows (`src/pages/Home.tsx`),
+  `.sign-in-strip` (`AccountStrip`) and `.sign-in-error`
+  (`SignInErrorAlert`).
 - `src/styles/kit.css`: the component classes (`fm-*`) of
   `references/design-system/ui_kits/components/kit.css`.
 - `src/styles/page.css`: the gallery's page chrome (`.doc-*`), with `.page`
