@@ -30,14 +30,12 @@ const choices: readonly { answer: Answer; label: string; description: string }[]
   },
 ]
 
-// `self` is the account's player after the answer. After "This is me", it
-// is the player that survived the merge, if there was one.
-function confirmation(answer: Answer, name: string, self: string | undefined): string {
+// `survivor` is the account's older player, when "This is me" merged the
+// player into it.
+function confirmation(answer: Answer, name: string, survivor?: string): string {
   switch (answer) {
     case 'yes':
-      return self === undefined || self === name
-        ? `${name} is your player now.`
-        : `${name} merged into ${self}, your player.`
+      return survivor ? `${name} merged into ${survivor}, your player.` : `${name} is your player now.`
     case 'no':
       return `You manage ${name}.`
     case 'not_mine':
@@ -136,7 +134,8 @@ export function AdoptionReview() {
       {
         onSuccess: (after) => {
           const self = after.find((found) => found.relationship === 'self')
-          const message = confirmation(choice, player.display_name, self?.display_name)
+          const survivor = self && self.id !== player.id ? self.display_name : undefined
+          const message = confirmation(choice, player.display_name, survivor)
           setAnswered(true)
           setAnsweredHere((count) => count + 1)
           if (more) {
