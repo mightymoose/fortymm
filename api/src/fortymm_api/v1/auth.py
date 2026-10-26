@@ -49,11 +49,11 @@ def redirect(location: str) -> RedirectResponse:
     return response
 
 
-def with_sign_in_error(return_to: str, error: sign_in.SignInError) -> str:
-    """`return_to` with `sign_in_error` added to its query, which it keeps."""
+def with_query(return_to: str, name: str, value: str) -> str:
+    """`return_to` with `name=value` added to its query, which it keeps."""
     parts = urlsplit(return_to)
     query = f"{parts.query}&" if parts.query else ""
-    return urlunsplit(parts._replace(query=f"{query}sign_in_error={error}"))
+    return urlunsplit(parts._replace(query=f"{query}{name}={value}"))
 
 
 @router.get(
@@ -102,9 +102,10 @@ def callback(
 ) -> RedirectResponse:
     """Finish a sign-in, then send the visitor back to its `return_to`.
 
-    A failed sign-in adds `sign_in_error` to that path's query: `cancelled`,
-    `email_not_verified`, `expired` or `failed`. A callback whose `state`
-    matches no login attempt, such as a replay, goes to `/`.
+    A successful sign-in adds `signed_in=1` to that path's query. A failed
+    sign-in adds `sign_in_error` instead: `cancelled`, `email_not_verified`,
+    `expired` or `failed`. A callback whose `state` matches no login attempt,
+    such as a replay, goes to `/`.
     """
     redirect_uri = callback_url(request)
 
@@ -116,11 +117,11 @@ def callback(
     )
     match result:
         case sign_in.SignedIn(return_to, new_token):
-            response = redirect(return_to)
+            response = redirect(with_query(return_to, "signed_in", "1"))
             set_session_cookie(response, new_token)
             return response
         case sign_in.SignInFailed(return_to, sign_in_error):
-            return redirect(with_sign_in_error(return_to, sign_in_error))
+            return redirect(with_query(return_to, "sign_in_error", sign_in_error))
         case sign_in.Replayed():
             return redirect("/")
 

@@ -13,6 +13,11 @@ from fortymm_api import v1
 from fortymm_api.auth import NoValidSession
 from fortymm_api.database import create_database_engine, migrate
 from fortymm_api.identity_provider import IdentityProvider
+from fortymm_api.services.players import (
+    PlayerNotManaged,
+    QuestionClosed,
+    SelfPlayerExists,
+)
 from fortymm_api.services.sessions import AccountAdopted, GuestAccountLimitReached
 from fortymm_api.v1.auth import SignInUnavailable
 
@@ -21,6 +26,11 @@ WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 NO_SESSION = "The request has no valid session"
 TOO_MANY_GUEST_ACCOUNTS = "Too many new guest accounts from this network"
 SIGN_IN_UNAVAILABLE = "Sign-in isn't set up on this server"
+PLAYER_ERRORS: dict[type[Exception], tuple[int, str]] = {
+    PlayerNotManaged: (404, "You don't manage this player"),
+    QuestionClosed: (409, "This question was already answered"),
+    SelfPlayerExists: (409, "You already have your own player"),
+}
 AUTH0_SETTINGS = ("AUTH0_DOMAIN", "AUTH0_CLIENT_ID", "AUTH0_CLIENT_SECRET")
 
 
@@ -28,6 +38,11 @@ def error_response(status: int, title: str) -> JSONResponse:
     return JSONResponse(
         {"errors": [{"status": str(status), "title": title}]}, status_code=status
     )
+
+
+def answers(status: int, title: str) -> Callable[[Request, Exception], Response]:
+    """An exception handler that answers `status` in the `errors` shape."""
+    return lambda _request, _error: error_response(status, title)
 
 
 def too_many_guest_accounts(_request: Request, error: Exception) -> Response:
@@ -154,6 +169,8 @@ def create_app() -> FastAPI:
         SignInUnavailable,
         lambda _request, _error: error_response(503, SIGN_IN_UNAVAILABLE),
     )
+    for error, (status, title) in PLAYER_ERRORS.items():
+        app.add_exception_handler(error, answers(status, title))
     require_json(app)
     # Added last so it runs first: a request without the secret learns nothing
     # else about the API.
