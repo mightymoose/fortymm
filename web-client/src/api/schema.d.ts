@@ -89,9 +89,10 @@ export interface paths {
          * Callback
          * @description Finish a sign-in, then send the visitor back to its `return_to`.
          *
-         *     A failed sign-in adds `sign_in_error` to that path's query: `cancelled`,
-         *     `email_not_verified`, `expired` or `failed`. A callback whose `state`
-         *     matches no login attempt, such as a replay, goes to `/`.
+         *     A successful sign-in adds `signed_in=1` to that path's query. A failed
+         *     sign-in adds `sign_in_error` instead: `cancelled`, `email_not_verified`,
+         *     `expired` or `failed`. A callback whose `state` matches no login attempt,
+         *     such as a replay, goes to `/`.
          */
         get: operations["callback"];
         put?: never;
@@ -125,10 +126,91 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/account/players": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Account Players
+         * @description List the players the account manages, its own player first.
+         *
+         *     `open_question` is true for a player that a sign-in brought to the
+         *     account, until the account answers "Is this you?" for it.
+         */
+        get: operations["account_players"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/account/players/{player_id}/answer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Answer Question
+         * @description Answer "Is this you?" for one player, and list the account's players
+         *     after it.
+         *
+         *     `yes` makes it the account's own player, and works only while the account
+         *     has none. `no` keeps it as a player the account manages. `not_mine` takes
+         *     it off the account. The player stays, with no manager. Every answer
+         *     closes the question. A second `yes` or `no` changes nothing, and a second
+         *     `not_mine` answers 409.
+         */
+        post: operations["answer_question"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AccountPlayer */
+        AccountPlayer: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Display Name */
+            display_name: string;
+            /**
+             * Relationship
+             * @enum {string}
+             */
+            relationship: "self" | "managed";
+            /** Open Question */
+            open_question: boolean;
+        };
+        /** AccountPlayersResponse */
+        AccountPlayersResponse: {
+            /** Data */
+            data: components["schemas"]["AccountPlayer"][];
+        };
+        /**
+         * Answer
+         * @enum {string}
+         */
+        Answer: "yes" | "no" | "not_mine";
+        /** AnswerRequest */
+        AnswerRequest: {
+            answer: components["schemas"]["Answer"];
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -334,6 +416,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LogoutResponse"];
+                };
+            };
+        };
+    };
+    account_players: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountPlayersResponse"];
+                };
+            };
+        };
+    };
+    answer_question: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                player_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnswerRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccountPlayersResponse"];
+                };
+            };
+            /** @description The account doesn't manage the player */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The answer is `yes` and the account already has its own player, or the answer is `not_mine` and the question was already answered */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

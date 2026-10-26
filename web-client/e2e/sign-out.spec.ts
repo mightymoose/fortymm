@@ -22,6 +22,7 @@ test('signs in from the strip on Home, then signs out to a new guest account', a
 
   await homePage.signInLink.click()
   await signInPage.completeSignIn(ann)
+  await homePage.review.getByRole('button', { name: 'Review later' }).click()
 
   await expect(homePage.signedInAs(ann.email)).toBeVisible()
   expect(new URL(page.url()).pathname).toBe('/')

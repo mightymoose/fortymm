@@ -1,0 +1,30 @@
+/* The "Is this you?" review on Home (AdoptionReview.tsx). Home's `.home`
+   gap spaces it from the strip and the roadmap. */
+.adopt{display:flex;flex-direction:column;gap:var(--s-6)}
+.adopt>.fm-notice{align-self:flex-start}
+
+/* The dialog: the question, the player, then three equal choices. */
+.adopt-review{width:min(520px,calc(100vw - 32px))}
+.adopt-review[open]{display:flex;flex-direction:column;gap:var(--s-5)}
+.adopt-review p{margin:0}
+.adopt-review p.meta{font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
+.adopt-review__head{display:flex;flex-direction:column;gap:var(--s-1)}
+.adopt-review__head h2{margin:0}
+.adopt-review .fm-dialog__actions{align-items:center}
+.adopt-skip{margin-right:auto}
+
+.adopt-player{display:flex;flex-direction:column;gap:var(--s-3);padding:var(--s-4);border-radius:var(--r-md);background:var(--bg-app)}
+.adopt-player__who{display:flex;align-items:center;gap:var(--s-3)}
+.adopt-review .adopt-player__name{font:600 var(--text-base)/var(--lh-snug) var(--font-ui);color:var(--fg-1)}
+
+.adopt-options{display:flex;flex-direction:column;gap:var(--s-3);margin:0;padding:0;border:0}
+.adopt-option{padding:var(--s-3) var(--s-4);border:1px solid var(--border-control);border-radius:var(--r-md)}
+.adopt-option:has(input:checked){border-color:var(--accent)}
+.adopt-option:has(input:disabled){border-color:var(--border-subtle)}
+.adopt-option__text{display:flex;flex-direction:column;gap:2px}
+.adopt-option__label{font-weight:600}
+
+@media (max-width:480px){
+  .adopt-skip{flex-basis:100%}
+  .adopt-review .fm-dialog__actions .fm-btn:not(.adopt-skip){flex:1}
+}

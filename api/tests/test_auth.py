@@ -164,7 +164,7 @@ def test_a_guest_with_a_new_email_becomes_verified(browser: TestClient) -> None:
     response = sign_in(browser, "auth0|ann", "Ann@Example.com")
 
     assert response.status_code == 302
-    assert response.headers["Location"] == "/games?tab=open"
+    assert response.headers["Location"] == "/games?tab=open&signed_in=1"
     assert token(browser) not in (None, guest_token)
     account = start_session(browser)
     assert account["id"] == guest["id"]
@@ -232,7 +232,7 @@ def test_a_guest_signing_in_to_another_account_joins_it(
     response = sign_in(guest_browser, "auth0|bob", "bob@example.com")
 
     assert response.status_code == 302
-    assert response.headers["Location"] == "/games?tab=open"
+    assert response.headers["Location"] == "/games?tab=open&signed_in=1"
     assert token(guest_browser) not in (None, guest_token)
     assert start_session(guest_browser)["id"] == bob["id"]
     stale_tab = new_browser()
@@ -318,7 +318,7 @@ def test_an_unsafe_return_to_becomes_home(browser: TestClient) -> None:
         browser, "auth0|ann", "ann@example.com", return_to="//evil.example/"
     )
 
-    assert response.headers["Location"] == "/"
+    assert response.headers["Location"] == "/?signed_in=1"
 
 
 def test_logout_ends_the_session_and_expires_the_cookie(
