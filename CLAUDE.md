@@ -1075,3 +1075,11 @@ can read each client secret.
 `bootstrap-gcp.sh`. It walks them through the Auth0 dashboard and the Google
 Cloud console. It adds each client secret to Secret Manager and writes
 `auth0.env`. `api/deploy/README.md` describes it.
+
+Auth0 sends the email codes through Postmark over SMTP (Branding > Email
+Provider), from an address on `fortymm.com`. The API sends no email. The
+token is a Postmark SMTP token for the server's transactional stream, and it
+lives only in Auth0. `api/deploy/setup-email` is the wizard that sets it
+up, after `setup-auth0`. Auth0's built-in provider and its limit of 10 emails
+a minute no longer apply. Auth0's passwordless endpoints still have their own
+rate limits, and Postmark has its own.
