@@ -63,7 +63,7 @@
           "auth"
         ],
         "summary": "Login",
-        "description": "Send the visitor to the identity provider's sign-in page.\n\nA request with no valid session gets a guest account first. After\nsign-in, the callback sends the visitor to `return_to`. It must be a path\non this site, or the callback uses `/`.",
+        "description": "Send the visitor to the identity provider's sign-in page.\n\nA request with no valid session gets no guest account. It gets a login\ncookie instead, which the callback checks. After sign-in, the callback\nsends the visitor to `return_to`. It must be a path\non this site, or the callback uses `/`.",
         "operationId": "login",
         "security": [
           {
@@ -165,6 +165,22 @@
                 }
               ],
               "title": "Error"
+            }
+          },
+          {
+            "name": "__Host-fortymm_login",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "  Host-Fortymm Login"
             }
           }
         ],

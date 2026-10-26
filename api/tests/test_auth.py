@@ -18,6 +18,7 @@ from fortymm_api.auth import RequestAccount
 from fortymm_api.main import create_app
 
 COOKIE = "__Host-fortymm_session"
+LOGIN_COOKIE = "__Host-fortymm_login"
 JSON = {"Content-Type": "application/json"}
 CALLBACK = "https://testserver/v1/auth/callback"
 
@@ -128,13 +129,35 @@ def test_login_sends_the_browser_to_the_providers_sign_in_page(
     assert "prompt" not in query
 
 
-def test_login_starts_a_guest_account_for_a_browser_with_no_session(
+def test_login_gives_a_browser_with_no_session_a_login_cookie(
     browser: TestClient,
 ) -> None:
     response = login(browser)
 
-    assert COOKIE in SimpleCookie(response.headers["Set-Cookie"])
-    assert start_session(browser)["kind"] == "guest"
+    cookies = SimpleCookie(response.headers["Set-Cookie"])
+    assert COOKIE not in cookies
+    cookie = cookies[LOGIN_COOKIE]
+    assert cookie["max-age"] == "600"
+    assert cookie["path"] == "/"
+    assert cookie["secure"] is True
+    assert cookie["httponly"] is True
+    assert cookie["samesite"] == "lax"
+
+
+def test_signing_in_again_after_sign_out_starts_no_guest_account(
+    browser: TestClient,
+) -> None:
+    ann = signed_in(browser, "auth0|ann", "ann@example.com")
+    browser.post("/v1/auth/logout", headers=JSON)
+
+    response = sign_in(browser, "auth0|ann", "ann@example.com")
+
+    assert response.status_code == 302
+    assert response.headers["Location"] == "/games?tab=open&signed_in=1"
+    assert browser.cookies.get(LOGIN_COOKIE) is None
+    assert start_session(browser) == ann
+    players = browser.get("/v1/account/players").json()["data"]
+    assert [player["open_question"] for player in players] == [False]
 
 
 def test_login_makes_a_verified_account_sign_in_again(browser: TestClient) -> None:

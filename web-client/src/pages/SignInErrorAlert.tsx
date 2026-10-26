@@ -40,7 +40,7 @@ export function SignInErrorAlert() {
       </p>
       <p className="fm-alert__body">{body}</p>
       <div className="fm-alert__actions">
-        {/* A full page load, as the account strip's Sign in is. */}
+        {/* A full page load, as the account menu's Sign in is. */}
         <a className="fm-btn fm-btn--primary fm-btn--sm" href={signInHref}>
           Try again
         </a>

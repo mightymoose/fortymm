@@ -9,12 +9,6 @@ export class HomePage {
   // The loading screen the app shows in place of the page on a full page
   // load, until the session starts.
   readonly loadingScreen: Locator
-  // The strip that asks a guest to sign in, and its link.
-  readonly signInStrip: Locator
-  readonly signInLink: Locator
-  // The strip that shows a verified account, and its button that signs out.
-  readonly accountStrip: Locator
-  readonly signOutButton: Locator
   // The topbar's chip that opens the account menu, the menu, and the dialog
   // that asks a guest before it signs out.
   readonly accountButton: Locator
@@ -32,10 +26,6 @@ export class HomePage {
     this.page = page
     this.title = page.getByRole('heading', { level: 1 })
     this.loadingScreen = page.getByRole('status', { name: 'Loading FortyMM' })
-    this.signInStrip = page.getByRole('complementary', { name: 'Sign in' })
-    this.signInLink = this.signInStrip.getByRole('link', { name: 'Sign in' })
-    this.accountStrip = page.getByRole('complementary', { name: 'Your account' })
-    this.signOutButton = this.accountStrip.getByRole('button', { name: 'Sign out' })
     this.accountButton = page.getByRole('button', { name: 'Your account' })
     this.accountMenu = page.getByRole('menu', { name: 'Your account' })
     this.guestSignOutDialog = page.getByRole('dialog', {
@@ -58,9 +48,11 @@ export class HomePage {
     await this.continueButton.click()
   }
 
-  // The account strip's line that names the account signed in as `email`.
-  signedInAs(email: string): Locator {
-    return this.accountStrip.getByText(`Signed in as ${email}.`)
+  // Opens the account menu and picks `item`, such as Sign in. A verified
+  // account's Sign out leaves at once. A guest's opens a dialog first.
+  async fromAccountMenu(item: 'Sign in' | 'Sign out'): Promise<void> {
+    await this.accountButton.click()
+    await this.accountMenu.getByRole('menuitem', { name: item }).click()
   }
 
   // The topbar's avatar of the player named `displayName`.

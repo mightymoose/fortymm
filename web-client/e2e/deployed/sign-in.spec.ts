@@ -9,8 +9,8 @@ const auth0 = Object.fromEntries(
     .map((line) => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 1)]),
 )
 
-// Previews only: a login without a session starts a guest account. It
-// doesn't sign in, so it can't check that Auth0 accepts the callback URL.
+// Previews only: a login without a session counts toward the guest account
+// limit. It doesn't sign in, so it can't check that Auth0 accepts the callback URL.
 test("sends sign-in to the Auth0 tenant's /authorize", async ({ request, baseURL }) => {
   const response = await request.get('/api/v1/auth/login', { maxRedirects: 0 })
 

@@ -96,7 +96,7 @@ export function UserMenu() {
           </p>
         )}
         {account.kind === 'guest' && (
-          // A full page load, as the account strip's Sign in is.
+          // A full page load, because the API answers with a 302.
           <a className="fm-menu__item" role="menuitem" href={signInHref}>
             Sign in
           </a>

@@ -240,7 +240,8 @@ account has no `email`. A verified account has one, always lowercase.
 - `start_session()` limits guest accounts per client network. A network can
   start 30 guest accounts per window of one minute (`GUEST_ACCOUNT_LIMIT`,
   `GUEST_ACCOUNT_WINDOW`). The 31st gets `GuestAccountLimitReached`, and
-  `create_app()` answers 429 with `Retry-After`. A resume never counts. An
+  `create_app()` answers 429 with `Retry-After`. A resume never counts. A
+  sign-in from a browser with no session counts too (see Sign-in). An
   IPv4 address is one network. An IPv6 address counts as its /64. The counts
   live in `guest_account_counts`, so every API instance shares them. Each
   counted start deletes up to 100 rows whose windows ended. So a row lasts
@@ -256,10 +257,10 @@ account has no `email`. A verified account has one, always lowercase.
 - `services/sessions.py`: a session is valid if its `token_hash` matches,
   `expires_at` is in the future and its account has no `adopted_into`.
   `authenticate()` returns the account of a valid session, or `None`.
-- `auth.py`: the cookie and the `RequestAccount` dependency. A route that
-  needs the account takes a `RequestAccount` parameter. Without a valid
-  session, that dependency answers 401 in the `errors` shape. Only `POST
-  /v1/session` and `GET /v1/auth/login` make a guest account.
+- `auth.py`: the session and login cookies, and the `RequestAccount`
+  dependency. A route that needs the account takes a `RequestAccount`
+  parameter. Without a valid session, that dependency answers 401 in the
+  `errors` shape. Only `POST /v1/session` makes a guest account.
 - A service that writes as an account first calls
   `lock_account_for_write()` in `services/sessions.py`. It holds the account
   row `FOR SHARE` until the transaction ends. After the lock, it checks
@@ -329,17 +330,30 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   `/oidc/default/authorize`, and the web-client dev server proxies `/oidc/*`
   to the mock. The API still reaches the mock at `http://oidc:8080`. The
   tests unset `AUTH0_AUTHORIZE_URL` and post the mock's form directly.
-- `GET /v1/auth/login?return_to=...` (`v1/auth.py`) starts a guest account
-  if the request has no valid session. Then it stores a `login_attempts` row
-  for 10 minutes and answers 302 to the provider. A verified account also
-  gets `prompt=login`. `return_to` must start with `/`, its second character
-  must be neither `/` nor `\`, and it must hold no control character. Any
-  other value becomes `/`.
+- `GET /v1/auth/login?return_to=...` (`v1/auth.py`) stores a
+  `login_attempts` row for 10 minutes and answers 302 to the provider. A
+  verified account also gets `prompt=login`. The callback must come from the
+  browser that started the attempt. A browser with a valid session proves
+  it with that session (`login_attempts.session_id`). A browser without one
+  gets no guest account. After a sign-out, a guest account would hold
+  nothing, yet its player would ask "Is this you?". Its attempt has no
+  `session_id`. The browser gets the attempt's `state` in the
+  `__Host-fortymm_login` cookie instead, for 10 minutes, and the callback
+  checks that the cookie matches the `state` in its URL. Another browser can
+  open that URL, but it can't set this browser's cookie. Such a login
+  counts toward the guest account limit, because nothing else bounds it.
+  `return_to` must start with `/`, its second character must be neither `/`
+  nor `\`, and it must hold no control character. Any other value becomes
+  `/`.
 - `GET /v1/auth/callback` runs `finish_sign_in()` in
   `services/sign_in.py`, in one transaction. It deletes the attempt first.
   `resolve_login()` is a pure function that picks the outcome from the
   current account and the identity's owner. The owner is the account with
   the `sub`, or else the account with the email.
+- A browser with no session at login has no current account, unless
+  another tab started a guest account meanwhile. With no current account,
+  `resolve_login()` gives `SwitchAccount` to the owner, or `CreateAccount`.
+  The callback expires the login cookie, whatever the result.
 - Every outcome gives the browser a new session and token.
   `VerifyInPlace` calls `convert_guest()` in `services/sessions.py`, which
   deletes every session of the guest account. It also calls
@@ -507,14 +521,11 @@ it to `src/routes/`.
   history replace, so a reload shows nothing. `cancelled` is a neutral
   `fm-alert` with `role="status"`. The other codes are `fm-alert--error`
   with `role="alert"`. Its Try again link starts another sign-in.
-- Home (`src/pages/Home.tsx`) shows `AccountStrip`
-  (`src/pages/AccountStrip.tsx`), then `AdoptionReview`
-  (`src/pages/adoption/`), above the roadmap.
-- `AccountStrip`: a guest sees the Sign in link. A verified account sees
-  its email and a Sign out button. A guest gets no Sign out, because it
-  would throw the account away. Both sign-in links come from
-  `useSignInHref()` (`src/pages/useSignInHref.ts`). It is a full page load
-  of `/api/v1/auth/login` with the current path and query as `return_to`,
+- Home (`src/pages/Home.tsx`) shows `AdoptionReview`
+  (`src/pages/adoption/`) above the roadmap.
+- The sign-in links come from `useSignInHref()`
+  (`src/pages/useSignInHref.ts`). Each is a full page load of
+  `/api/v1/auth/login` with the current path and query as `return_to`,
   because the API answers with a 302.
 - `AdoptionReview`: for a verified account, it
   reads `GET /v1/account/players`. With open questions, it shows a
@@ -578,10 +589,10 @@ longer calls `/v1/health`.
 
 `logout(api)` in `queries.ts` sends `POST /v1/auth/logout` and returns
 `data.logout_url`. `useSignOut()` (`src/pages/useSignOut.ts`) runs it
-through `useMutation`, for `AccountStrip` and `UserMenu`. On success, it
+through `useMutation`, for `UserMenu`. On success, it
 calls `leavePage()` (`src/leavePage.ts`), which loads the URL with
 `window.location.assign`. jsdom's `location.assign` can't be spied on, so
-tests `vi.mock` that module. If the request fails, the strip or the menu
+tests `vi.mock` that module. If the request fails, the menu
 says so and offers Sign out again.
 
 ### Error pages
@@ -680,7 +691,7 @@ database keeps its accounts.
 person's first sign-in from a guest is VerifyInPlace, so the account's
 first question is about that guest's own player.
 
-`e2e/sign-out.spec.ts` opens `/`, follows the strip's Sign in link and
+`e2e/sign-out.spec.ts` opens `/`, picks Sign in from the account menu and
 fills the mock's form with `SignInPage.completeSignIn()`. It lands back on
 `/` as a verified account, closes "Is this you?" with Review later, signs
 out and ends on `/signed-out`. Then Play as a guest opens `/` as a new
@@ -689,9 +700,11 @@ logout URL. So the spec answers that navigation with `page.route()`, a 302
 to its `returnTo`. The API builds `returnTo` from the browser's `Host`, so
 in the e2e suite it is `http://localhost:5173/signed-out`. A second test
 signs a guest out from the account menu, through its dialog, to
-`/signed-out`.
+`/signed-out`. A third signs in again from `/signed-out`, and checks that
+the account has no new player to review.
 
-The suite starts about 21 guest accounts, under the limit of 30 a minute.
+The suite counts about 23 guest accounts and sign-ins with no session,
+under the limit of 30 a minute.
 
 The design system page is a copy of the reference's component gallery
 (`references/design-system/ui_kits/components/index.html`). It has one
@@ -762,9 +775,9 @@ production keeps every account. So a production run checks only `/api/v1/health`
 Preview, `app.spec.ts` answers `POST /api/v1/session` itself with
 `page.route()`, so its page loads make no account. The stub is in that spec,
 not in `e2e/fixtures.ts`, because the main suite needs the real endpoint.
-Only `sign-in.spec.ts` and `session-limit.spec.ts` start real guest
-accounts. `sign-in.spec.ts` starts one, so `session-limit` gets 29 before
-the 429.
+Only `sign-in.spec.ts` and `session-limit.spec.ts` count toward the guest
+account limit. `sign-in.spec.ts` starts a login with no session, which
+counts as one, so `session-limit` gets 29 before the 429.
 
 ```sh
 DEPLOY_URL=https://fortymm.com ./bin/mise run web-client:e2e-deployed
@@ -787,9 +800,8 @@ The design system's styles apply to the whole app; `main.tsx` imports them:
 - `src/styles/base.css`: the base, type roles, status markers and motion of
   the same file. Then the app's own styles: the loading screen,
   `.app-shell` (`src/pages/AppShell.tsx`), `.roadmap`, the list of what's
-  ready and what's coming that Home shows (`src/pages/Home.tsx`),
-  `.sign-in-strip` (`AccountStrip`) and `.sign-in-error`
-  (`SignInErrorAlert`).
+  ready and what's coming that Home shows (`src/pages/Home.tsx`), and
+  `.sign-in-error` (`SignInErrorAlert`).
 - `src/styles/kit.css`: the component classes (`fm-*`) of
   `references/design-system/ui_kits/components/kit.css`.
 - `src/styles/page.css`: the gallery's page chrome (`.doc-*`), with `.page`

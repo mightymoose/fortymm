@@ -1,5 +1,4 @@
 import { Icon, type IconName } from '../components/Icon'
-import { AccountStrip } from './AccountStrip'
 import { AdoptionReview } from './adoption/AdoptionReview'
 
 type Stage = 'ready' | 'building' | 'next' | 'later'
@@ -39,11 +38,10 @@ const parts: readonly { title: string; body: string; icon: IconName; stage: Stag
   },
 ]
 
-// The visitor's account and the "Is this you?" review over the roadmap.
+// The "Is this you?" review over the roadmap.
 export function Home() {
   return (
     <div className="home">
-      <AccountStrip />
       <AdoptionReview />
       <Roadmap />
     </div>

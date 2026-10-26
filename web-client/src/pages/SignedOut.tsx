@@ -11,7 +11,7 @@ export function SignedOut() {
       title="You’re signed out"
       actions={
         <>
-          {/* A full page load, as the account strip's Sign in is. */}
+          {/* A full page load, as the account menu's Sign in is. */}
           <a className="fm-btn fm-btn--primary" href={signInHref('/')}>
             Sign in
           </a>

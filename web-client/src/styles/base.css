@@ -493,8 +493,7 @@ a:hover{color:var(--ball-200)}
 }
 
 /* =========================================================================
-   Home (src/pages/Home.tsx): the account strip (src/pages/AccountStrip.tsx)
-   above the roadmap.
+   Home (src/pages/Home.tsx): the "Is this you?" review above the roadmap.
    ========================================================================= */
 .home {
   display: flex;
@@ -502,44 +501,9 @@ a:hover{color:var(--ball-200)}
   gap: var(--s-12);
 }
 
-/* The strip sits closer to the topbar than the page's padding puts it.
-   When the text has less than 20rem beside the button, the button wraps
-   under it. */
-.sign-in-strip {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--s-3) var(--s-4);
-  margin-top: calc(-1 * var(--s-4));
-  padding: var(--s-3) var(--s-4);
-  border-radius: var(--r-md);
-  background: var(--bg-panel);
-}
-
-.sign-in-strip p {
-  flex: 1 1 20rem;
-  min-width: 0;
-  margin: 0;
-  font: 400 var(--text-base)/var(--lh-normal) var(--font-ui);
-  color: var(--fg-2);
-  /* A long email wraps instead of pushing the button off the page. */
-  overflow-wrap: anywhere;
-}
-
-.sign-in-strip b {
-  font-weight: 600;
-  color: var(--fg-1);
-}
-
-.sign-in-strip[data-error] b {
-  color: var(--danger);
-}
-
 /* The message of a sign-in that came back with an error
    (src/pages/SignInErrorAlert.tsx), above any authenticated page. It sits
-   as close to the topbar as the strip. Home's strip pulls up into its
-   bottom margin, so the two stay --s-8 apart. */
+   closer to the topbar than the page's padding puts it. */
 .sign-in-error {
   max-width: 640px;
   margin: calc(-1 * var(--s-4)) 0 var(--s-12);
