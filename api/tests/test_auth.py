@@ -339,6 +339,6 @@ def test_logout_ends_the_session_and_expires_the_cookie(
     assert cookie["secure"] is True
     logout_url = urlsplit(response.json()["data"]["logout_url"])
     assert logout_url.path == "/default/v2/logout"
-    assert parse_qs(logout_url.query)["returnTo"] == ["https://testserver/"]
+    assert parse_qs(logout_url.query)["returnTo"] == ["https://testserver/signed-out"]
     browser.cookies.set(COOKIE, old_token or "", domain="testserver")
     assert start_session(browser)["id"] != ann["id"]

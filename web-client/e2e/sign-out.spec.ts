@@ -1,9 +1,10 @@
 import { expect, test } from './fixtures.ts'
 import { newPerson } from './pages/SignInPage.ts'
 
-test('signs in from the strip on Home, then signs out to a new guest account', async ({
+test('signs in from the strip on Home, signs out, then plays as a new guest account', async ({
   homePage,
   signInPage,
+  signedOutPage,
   page,
   baseURL,
 }) => {
@@ -34,8 +35,12 @@ test('signs in from the strip on Home, then signs out to a new guest account', a
 
   await homePage.signOutButton.click()
 
+  await expect(signedOutPage.title).toHaveText('You’re signed out')
+  expect(page.url()).toBe(new URL('/signed-out', baseURL).href)
+
+  await signedOutPage.guestLink.click()
+
   await expect(homePage.signInStrip).toContainText('Playing as a guest.')
-  expect(page.url()).toBe(new URL('/', baseURL).href)
   const next = await signInPage.account()
   expect(next.kind).toBe('guest')
   expect(next.id).not.toBe(guest.id)

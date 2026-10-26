@@ -223,7 +223,7 @@ application() {
   step "Name it ${BOLD}$name${RESET}, pick ${BOLD}Regular Web Applications${RESET}, then Create."
   step "On the Settings tab, under Application URIs, set:"
   note "    Allowed Callback URLs: $origin/api/v1/auth/callback"
-  note "    Allowed Logout URLs:   $origin/"
+  note "    Allowed Logout URLs:   $origin/signed-out"
   step "Scroll down and select Save Changes."
   pause "Press Enter when the URLs are saved."
   step "On the Credentials tab, check that Authentication Method is ${BOLD}Client Secret (Post)${RESET}."
