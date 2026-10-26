@@ -314,4 +314,5 @@ else
 fi
 SKIPPED+=("commit api/deploy/auth0.env and push a branch, so CI deploys a Preview")
 SKIPPED+=("on that Preview, sign in with an email code and with Google")
+SKIPPED+=("run api/deploy/setup-email next, so Auth0 sends the email codes through Postmark")
 finish
