@@ -191,7 +191,7 @@
           "auth"
         ],
         "summary": "Logout",
-        "description": "End the visitor's session and expire its cookie.\n\n`logout_url` is the identity provider's logout page. The client follows\nit, so the provider's own session ends too.",
+        "description": "End the visitor's session and expire its cookie.\n\n`logout_url` is the identity provider's logout page. The client follows\nit, so the provider's own session ends too. The provider then sends the\nbrowser to `/signed-out`, which starts no session. `/` would start a new\nguest account, and it wouldn't look like a sign-out.",
         "operationId": "logout",
         "responses": {
           "200": {

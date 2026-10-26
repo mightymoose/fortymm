@@ -5,5 +5,10 @@ import { useLocation } from '@tanstack/react-router'
 // identity provider, and the browser must follow it.
 export function useSignInHref(): string {
   const { pathname, searchStr } = useLocation()
-  return `/api/v1/auth/login?return_to=${encodeURIComponent(pathname + searchStr)}`
+  return signInHref(pathname + searchStr)
+}
+
+// The link that signs the visitor in and sends them to `returnTo`.
+export function signInHref(returnTo: string): string {
+  return `/api/v1/auth/login?return_to=${encodeURIComponent(returnTo)}`
 }

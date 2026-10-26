@@ -367,10 +367,13 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   callback whose `state` matches no attempt, such as a replay, answers 302
   to `/` with no error.
 - `POST /v1/auth/logout` deletes the session, expires the cookie and
-  returns Auth0's `/v2/logout` URL as `data.logout_url`. In dev, that URL
+  returns Auth0's `/v2/logout` URL as `data.logout_url`. Its `returnTo` is
+  the origin's `/signed-out`, a public page that starts no session. `/`
+  would start a new guest account at once, so the sign-out wouldn't show.
+  In dev, that URL
   is the mock's `http://oidc:8080/default/v2/logout`. The browser can't
   reach it, and the mock answers 405 there. So a dev sign-out ends on an
-  error page. Open `/` again to see the new guest account.
+  error page. Open `/signed-out` to see the page.
 
 ### Migrations
 
@@ -522,6 +525,11 @@ it to `src/routes/`.
 - `design-system.tsx`: a public page. Public pages go directly in
   `src/routes/`. They make no request and never show the loading screen.
   The design system page has no `AppShell`, and no page links to it.
+- `signed-out.tsx`: a public page. Auth0 sends the browser there after
+  sign-out. It says the visitor is signed out, with Sign in (back to `/`)
+  and Play as a guest (a link to `/`). `signed-out-1.tsx` to
+  `signed-out-4.tsx` show the designs under review, from
+  `src/pages/signedOut/SignedOutDesigns.tsx`. `/signed-out` shows design 1.
 
 ### API client
 
@@ -670,10 +678,11 @@ first question is about that guest's own player.
 `e2e/sign-out.spec.ts` opens `/`, follows the strip's Sign in link and
 fills the mock's form with `SignInPage.completeSignIn()`. It lands back on
 `/` as a verified account, closes "Is this you?" with Review later, signs
-out and ends on `/` as a new guest account. The mock answers 405 to the
+out and ends on `/signed-out`. Then Play as a guest opens `/` as a new
+guest account. The mock answers 405 to the
 logout URL. So the spec answers that navigation with `page.route()`, a 302
 to its `returnTo`. The API builds `returnTo` from the browser's `Host`, so
-in the e2e suite it is `http://localhost:5173/`.
+in the e2e suite it is `http://localhost:5173/signed-out`.
 
 The suite starts about 18 guest accounts, under the limit of 30 a minute.
 
@@ -1079,7 +1088,7 @@ email (see Sign-in).
 | `api` | `fortymm` | `https://fortymm.com/api/v1/auth/callback` | `auth0-client-secret` |
 | `api-preview` | `fortymm-preview` | `https://*-fortymm.mightymoose.workers.dev/api/v1/auth/callback` | `auth0-preview-client-secret` |
 
-Each application's allowed logout URL is its origin with `/`.
+Each application's allowed logout URL is its origin with `/signed-out`.
 `api/deploy/auth0.env` holds `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` and
 `AUTH0_PREVIEW_CLIENT_ID`. These values are public, so the file is
 committed. `cloud-run-deploy` reads it before it pushes the image, and fails

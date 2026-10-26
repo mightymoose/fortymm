@@ -117,7 +117,9 @@ export interface paths {
          * @description End the visitor's session and expire its cookie.
          *
          *     `logout_url` is the identity provider's logout page. The client follows
-         *     it, so the provider's own session ends too.
+         *     it, so the provider's own session ends too. The provider then sends the
+         *     browser to `/signed-out`, which starts no session. `/` would start a new
+         *     guest account, and it wouldn't look like a sign-out.
          */
         post: operations["logout"];
         delete?: never;

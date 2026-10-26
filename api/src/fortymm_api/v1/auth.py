@@ -145,10 +145,12 @@ def logout(
     """End the visitor's session and expire its cookie.
 
     `logout_url` is the identity provider's logout page. The client follows
-    it, so the provider's own session ends too.
+    it, so the provider's own session ends too. The provider then sends the
+    browser to `/signed-out`, which starts no session. `/` would start a new
+    guest account, and it wouldn't look like a sign-out.
     """
     sessions.end_session(session, token)
     delete_session_cookie(response)
     response.headers["Cache-Control"] = "no-store"
-    logout_url = provider.logout_url(f"{public_origin(request)}/")
+    logout_url = provider.logout_url(f"{public_origin(request)}/signed-out")
     return LogoutResponse(data=LogoutData(logout_url=logout_url))

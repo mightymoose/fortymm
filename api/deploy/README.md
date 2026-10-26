@@ -120,8 +120,8 @@ applications of type Regular Web Application:
 
 | Application | Allowed callback URLs | Allowed logout URLs | Client secret | Used by |
 | --- | --- | --- | --- | --- |
-| `fortymm` | `https://fortymm.com/api/v1/auth/callback` | `https://fortymm.com/` | `auth0-client-secret` | `api` |
-| `fortymm-preview` | `https://*-fortymm.mightymoose.workers.dev/api/v1/auth/callback` | `https://*-fortymm.mightymoose.workers.dev/` | `auth0-preview-client-secret` | `api-preview` |
+| `fortymm` | `https://fortymm.com/api/v1/auth/callback` | `https://fortymm.com/signed-out` | `auth0-client-secret` | `api` |
+| `fortymm-preview` | `https://*-fortymm.mightymoose.workers.dev/api/v1/auth/callback` | `https://*-fortymm.mightymoose.workers.dev/signed-out` | `auth0-preview-client-secret` | `api-preview` |
 
 The tenant has only two connections, the email code (Passwordless Email) and
 Google. The API links a Google login and an email code login to one account
