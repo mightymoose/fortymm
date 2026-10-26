@@ -166,8 +166,118 @@ a:hover{color:var(--ball-200)}
   color: var(--fg-1);
 }
 
-.app-avatar {
+.user-menu {
+  position: relative;
   margin-left: auto;
+}
+
+.user-menu__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: none;
+  font: 500 15px var(--font-ui);
+  color: var(--fg-1);
+  cursor: pointer;
+}
+
+.user-menu__trigger:not(.user-menu__trigger--chip):hover .fm-avatar,
+.user-menu__trigger:not(.user-menu__trigger--chip)[aria-expanded='true'] .fm-avatar {
+  background: var(--bg-hover);
+  color: var(--fg-1);
+}
+
+.user-menu__trigger:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.user-menu__trigger--chip {
+  padding: 2px var(--s-3) 2px 2px;
+  background: var(--bg-group);
+}
+
+.user-menu__trigger--chip:hover,
+.user-menu__trigger--chip[aria-expanded='true'] {
+  background: var(--bg-hover);
+}
+
+.user-menu__trigger--chip .fm-ic {
+  color: var(--fg-3);
+}
+
+.user-menu__popup {
+  position: absolute;
+  top: calc(100% + var(--s-2));
+  right: 0;
+  z-index: 70;
+}
+
+.user-menu a.fm-menu__item {
+  text-decoration: none;
+}
+
+.user-menu__head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--s-2) 10px;
+  font: 400 13px var(--font-ui);
+  color: var(--fg-3);
+  overflow-wrap: anywhere;
+}
+
+.user-menu__head b {
+  font: 600 15px var(--font-ui);
+  color: var(--fg-1);
+}
+
+.user-menu__head--center {
+  align-items: center;
+  text-align: center;
+}
+
+.user-menu__error {
+  margin: 0;
+  padding: var(--s-1) 10px;
+  font: 400 13px/1.4 var(--font-ui);
+  color: var(--danger);
+}
+
+.user-menu__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--s-3);
+  width: min(280px, calc(100vw - 32px));
+  box-sizing: border-box;
+  padding: var(--s-5) var(--s-4) var(--s-4);
+}
+
+.user-menu__card-avatar {
+  width: 56px;
+  height: 56px;
+  font-size: 18px;
+}
+
+.user-menu__stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  width: 100%;
+}
+
+.user-menu__block {
+  width: 100%;
+}
+
+@media (max-width: 599px) {
+  .user-menu__chip-name {
+    display: none;
+  }
 }
 
 .app-nav {

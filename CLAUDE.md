@@ -473,10 +473,15 @@ it to `src/routes/`.
   the authenticated pages, which folds to its icons and remembers it in
   `localStorage`. Below 900px the sidebar is a tab bar along the bottom. To
   add a page to the sidebar, add its link in `AppShell`. The topbar's right
-  end shows `PlayerAvatar` (`src/components/PlayerAvatar.tsx`), the
-  initials of the player's display name. Its accessible name and tooltip
-  are the full name. It reads the session without suspending, so it never
-  holds up the loading screen.
+  end shows `UserMenu` (`src/pages/userMenu/UserMenu.tsx`). Its button
+  is a `PlayerAvatar` (`src/components/PlayerAvatar.tsx`), the initials
+  of the player's display name, or of the email if a verified account has
+  no player. The avatar's accessible name is the full name. The button
+  opens the account menu. A guest gets Sign in, and a verified account
+  gets Sign out. `?menu=` picks one of the designs under review in
+  `userMenuDesigns.ts`: `menu` (the default), `chip`, `card`, `sheet` or
+  `confirm`. It reads the session without suspending, so it never holds up
+  the loading screen.
 - `SignInErrorAlert` (`src/pages/SignInErrorAlert.tsx`) sits in
   `AuthenticatedLayout`, inside `AppShell` and above the page. If the URL
   has `sign_in_error`, it shows that code's message from `signInErrors`
@@ -549,11 +554,12 @@ retries, the root route's error page shows (see Error pages). The web-client no
 longer calls `/v1/health`.
 
 `logout(api)` in `queries.ts` sends `POST /v1/auth/logout` and returns
-`data.logout_url`. `AccountStrip` runs it through `useMutation`. On success,
-it calls `leavePage()` (`src/leavePage.ts`), which loads the URL with
+`data.logout_url`. `useSignOut()` (`src/pages/useSignOut.ts`) runs it
+through `useMutation`, for `AccountStrip` and `UserMenu`. On success, it
+calls `leavePage()` (`src/leavePage.ts`), which loads the URL with
 `window.location.assign`. jsdom's `location.assign` can't be spied on, so
-tests `vi.mock` that module. If the request fails, the strip says so and
-the button offers Sign out again.
+tests `vi.mock` that module. If the request fails, the strip or the menu
+says so and offers Sign out again.
 
 ### Error pages
 
