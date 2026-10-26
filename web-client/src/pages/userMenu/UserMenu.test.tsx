@@ -1,4 +1,4 @@
-import { within } from '@testing-library/react'
+import { act, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -94,6 +94,27 @@ describe('UserMenu', () => {
     await vi.waitFor(() =>
       expect(leavePage).toHaveBeenCalledExactlyOnceWith(logoutResponse.data.logout_url),
     )
+  })
+
+  it('shows that it is signing out until the API answers', async () => {
+    let answer!: (response: Response) => void
+    signInAs(ann)
+    server.use(
+      http.post(
+        `${API_BASE_URL}/v1/auth/logout`,
+        () => new Promise<Response>((resolve) => (answer = resolve)),
+      ),
+    )
+    const homePage = await HomePage.render()
+
+    await userEvent.click(homePage.accountButton!)
+    await userEvent.click(menuItem(homePage, 'Sign out'))
+
+    const signingOut = menuItem(homePage, 'Signing out…')
+    expect(signingOut).toHaveAttribute('aria-disabled', 'true')
+    await userEvent.click(signingOut)
+    await act(async () => answer(HttpResponse.json(logoutResponse)))
+    expect(leavePage).toHaveBeenCalledExactlyOnceWith(logoutResponse.data.logout_url)
   })
 
   it('says when signing out failed, and keeps the menu open', async () => {

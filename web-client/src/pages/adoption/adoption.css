@@ -1,5 +1,5 @@
 /* The "Is this you?" review on Home (AdoptionReview.tsx). Home's `.home`
-   gap spaces it from the strip and the roadmap. */
+   gap spaces it from the roadmap. */
 .adopt{display:flex;flex-direction:column;gap:var(--s-6)}
 .adopt>.fm-notice{align-self:flex-start}
 
