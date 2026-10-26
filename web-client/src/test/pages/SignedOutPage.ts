@@ -3,10 +3,9 @@ import { renderRoute } from '../renderRoute'
 
 // Page object for the page after sign-out in unit tests.
 export class SignedOutPage {
-  // Renders `/signed-out` or one of its designs. The page starts no session,
-  // so this doesn't wait for one.
-  static async render(path = '/signed-out'): Promise<SignedOutPage> {
-    await renderRoute(path, { waitForSession: false })
+  // The page starts no session, so this doesn't wait for one.
+  static async render(): Promise<SignedOutPage> {
+    await renderRoute('/signed-out', { waitForSession: false })
     return new SignedOutPage()
   }
 
@@ -15,7 +14,7 @@ export class SignedOutPage {
   }
 
   get signInLink(): HTMLElement {
-    return screen.getByRole('link', { name: /^Sign in/ })
+    return screen.getByRole('link', { name: 'Sign in' })
   }
 
   get guestLink(): HTMLElement {

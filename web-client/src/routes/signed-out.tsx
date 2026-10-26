@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { SignedOutScreen } from '../pages/signedOut/SignedOutDesigns'
+import { SignedOut } from '../pages/SignedOut'
 
 export const Route = createFileRoute('/signed-out')({
-  component: SignedOutScreen,
+  component: SignedOut,
 })

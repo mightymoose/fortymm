@@ -525,11 +525,10 @@ it to `src/routes/`.
 - `design-system.tsx`: a public page. Public pages go directly in
   `src/routes/`. They make no request and never show the loading screen.
   The design system page has no `AppShell`, and no page links to it.
-- `signed-out.tsx`: a public page. Auth0 sends the browser there after
-  sign-out. It says the visitor is signed out, with Sign in (back to `/`)
-  and Play as a guest (a link to `/`). `signed-out-1.tsx` to
-  `signed-out-4.tsx` show the designs under review, from
-  `src/pages/signedOut/SignedOutDesigns.tsx`. `/signed-out` shows design 1.
+- `signed-out.tsx`: a public page, with component `SignedOut`
+  (`src/pages/SignedOut.tsx`). Auth0 sends the browser there after
+  sign-out. It is an `ErrorScreen` that says the visitor is signed out,
+  with Sign in (back to `/`) and Play as a guest (a link to `/`).
 
 ### API client
 
