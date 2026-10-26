@@ -58,10 +58,6 @@ export class AdoptionPage {
     return within(this.dialog!).getByRole('radio', { name: new RegExp(`^${label}`) })
   }
 
-  available(label: AdoptionChoice): boolean {
-    return !this.choice(label).disabled
-  }
-
   // The text inside the choice, under its label.
   description(label: AdoptionChoice): string {
     return this.choice(label).closest('label')?.querySelector('.fm-help')?.textContent ?? ''

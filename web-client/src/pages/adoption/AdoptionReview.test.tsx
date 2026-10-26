@@ -21,6 +21,13 @@ const badger: AccountPlayer = {
   relationship: 'managed',
   open_question: true,
 }
+// The player the API gives the account after sign-in. It is the newest.
+const dove: AccountPlayer = {
+  id: '9f8e7d6c-5b4a-4392-8a1b-0c9d8e7f6a5b',
+  display_name: 'dreamy dove 412',
+  relationship: 'self',
+  open_question: false,
+}
 const ama: AccountPlayer = {
   id: '5e4d3c2b-1a09-4f8e-8d7c-6b5a4f3e2d10',
   display_name: 'Ama Mensah',
@@ -30,7 +37,7 @@ const ama: AccountPlayer = {
 
 describe('Is this you?', () => {
   it('asks who the player is right after sign-in, with focus on the first choice', async () => {
-    mockVerifiedAccount([egret])
+    mockVerifiedAccount([egret, dove])
     const page = await AdoptionPage.render()
 
     expect(page.dialogTitle).toBe(`Who is ${egret.display_name}?`)
@@ -47,7 +54,7 @@ describe('Is this you?', () => {
   })
 
   it('takes signed_in out of the URL, so a reload shows only the reminder', async () => {
-    mockVerifiedAccount([egret, badger])
+    mockVerifiedAccount([egret, badger, dove])
     const page = await AdoptionPage.render()
 
     expect(page.dialog).not.toBeNull()
@@ -66,7 +73,7 @@ describe('Is this you?', () => {
   })
 
   it('answers only once a choice is picked', async () => {
-    const api = mockVerifiedAccount([egret])
+    const api = mockVerifiedAccount([egret, dove])
     const page = await AdoptionPage.render()
 
     await userEvent.click(page.continueButton)
@@ -81,7 +88,7 @@ describe('Is this you?', () => {
     ['I manage this player', 'no', `You manage ${egret.display_name}.`],
     ['Remove from my account', 'not_mine', `${egret.display_name} removed from your account.`],
   ] as const)('sends %s as %s, closes and confirms it', async (label, answer, toast) => {
-    const api = mockVerifiedAccount([egret])
+    const api = mockVerifiedAccount([egret, dove])
     const page = await AdoptionPage.render()
 
     await page.pick(label)
@@ -95,7 +102,7 @@ describe('Is this you?', () => {
   })
 
   it('shows the new player in the topbar after "This is me"', async () => {
-    mockVerifiedAccount([egret])
+    mockVerifiedAccount([egret, dove])
     const page = await AdoptionPage.render()
     const home = new HomePage(page.router)
     expect(home.avatar(egret.display_name)).toBeNull()
@@ -105,19 +112,20 @@ describe('Is this you?', () => {
     expect(home.avatar(egret.display_name)).toHaveTextContent('EE')
   })
 
-  it('explains why "This is me" is off when the account has its own player', async () => {
-    mockVerifiedAccount([ama, egret])
+  it('merges into the account’s older player after "This is me"', async () => {
+    const api = mockVerifiedAccount([ama, egret])
     const page = await AdoptionPage.render()
+    const home = new HomePage(page.router)
 
-    expect(page.available('This is me')).toBe(false)
-    expect(page.description('This is me')).toBe(
-      'You already play as Ama Mensah. We can’t combine two players yet.',
-    )
-    expect(page.choice('I manage this player')).toHaveFocus()
+    await page.pick('This is me')
+
+    expect(api.answers).toEqual([{ playerId: egret.id, answer: 'yes' }])
+    expect(page.toasts).toEqual([`${egret.display_name} merged into Ama Mensah, your player.`])
+    expect(home.avatar('Ama Mensah')).toHaveTextContent('AM')
   })
 
-  it('shows progress, confirms in the dialog, and turns "This is me" off after it', async () => {
-    const api = mockVerifiedAccount([egret, badger])
+  it('shows progress, confirms in the dialog, and merges a second "This is me"', async () => {
+    const api = mockVerifiedAccount([egret, badger, dove])
     const page = await AdoptionPage.render()
     expect(page.dialogText).toContain('Player 1 of 2')
 
@@ -127,16 +135,19 @@ describe('Is this you?', () => {
     expect(page.dialogTitle).toBe(`Who is ${badger.display_name}?`)
     expect(page.dialogText).toContain('Player 2 of 2')
     expect(page.dialogText).toContain(`${egret.display_name} is your player now.`)
-    expect(page.available('This is me')).toBe(false)
-    expect(page.description('This is me')).toBe(
-      `You already play as ${egret.display_name}. We can’t combine two players yet.`,
-    )
-    expect(page.choice('I manage this player')).toHaveFocus()
+    expect(page.choice('This is me')).toHaveFocus()
     expect(page.continueButton).toHaveAttribute('aria-disabled', 'true')
+
+    await page.pick('This is me')
+
+    expect(page.dialog).toBeNull()
+    expect(page.toasts).toEqual([
+      `${badger.display_name} merged into ${egret.display_name}, your player.`,
+    ])
   })
 
   it('skips a player without coming back to it, and Home keeps it', async () => {
-    const api = mockVerifiedAccount([egret, badger])
+    const api = mockVerifiedAccount([egret, badger, dove])
     const page = await AdoptionPage.render()
 
     await page.skip()
@@ -154,7 +165,7 @@ describe('Is this you?', () => {
   })
 
   it('reviews later, keeps every player on Home, and reviews them again', async () => {
-    const api = mockVerifiedAccount([egret, badger])
+    const api = mockVerifiedAccount([egret, badger, dove])
     const page = await AdoptionPage.render()
 
     await page.reviewLater()
@@ -169,7 +180,7 @@ describe('Is this you?', () => {
   })
 
   it('opens no dialog without signed_in', async () => {
-    mockVerifiedAccount([egret])
+    mockVerifiedAccount([egret, dove])
     const page = await AdoptionPage.render('/')
 
     expect(page.dialog).toBeNull()
@@ -186,7 +197,7 @@ describe('Is this you?', () => {
   })
 
   it('says a refused answer wasn’t saved, and shows the players again', async () => {
-    const api = mockVerifiedAccount([egret], { refuse: 409 })
+    const api = mockVerifiedAccount([egret, dove], { refuse: 409 })
     const page = await AdoptionPage.render()
 
     await page.pick('I manage this player')

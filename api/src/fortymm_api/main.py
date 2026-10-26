@@ -13,11 +13,7 @@ from fortymm_api import v1
 from fortymm_api.auth import NoValidSession
 from fortymm_api.database import create_database_engine, migrate
 from fortymm_api.identity_provider import IdentityProvider
-from fortymm_api.services.players import (
-    PlayerNotManaged,
-    QuestionClosed,
-    SelfPlayerExists,
-)
+from fortymm_api.services.players import PlayerNotManaged, QuestionClosed
 from fortymm_api.services.sessions import AccountAdopted, GuestAccountLimitReached
 from fortymm_api.v1.auth import SignInUnavailable
 
@@ -29,7 +25,6 @@ SIGN_IN_UNAVAILABLE = "Sign-in isn't set up on this server"
 PLAYER_ERRORS: dict[type[Exception], tuple[int, str]] = {
     PlayerNotManaged: (404, "You don't manage this player"),
     QuestionClosed: (409, "This question was already answered"),
-    SelfPlayerExists: (409, "You already have your own player"),
 }
 AUTH0_SETTINGS = ("AUTH0_DOMAIN", "AUTH0_CLIENT_ID", "AUTH0_CLIENT_SECRET")
 

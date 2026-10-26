@@ -1,5 +1,9 @@
 """What adoption and player merge do to each foreign key to `accounts` and
 `players`. tests/test_ownership.py fails when a foreign key has no entry.
+
+Player merge (services/player_merge.py) keeps every row that names the merged
+player. Only the account's own row changes kind: it becomes `managed`, and
+the survivor's row becomes `self`.
 """
 
 from enum import StrEnum

@@ -88,7 +88,7 @@ class InvalidSession:
 class StartedSession:
     session_id: uuid.UUID
     account: CurrentAccount
-    player: SelfPlayer | None
+    player: SelfPlayer
     token: str
 
 
@@ -182,10 +182,10 @@ def start_session(
     deleted. Its account stays. Raises GuestAccountLimitReached before any
     write when the address's network is at the limit.
 
-    Every guest account it returns has a self player. A new guest account
-    gets one with a name from `new_display_name`. So does a resumed guest
-    account that has none yet. A verified account gets none here, because
-    sign-in can leave it a player that waits for the "Is this you?" answer.
+    Every account it returns has a self player. A new guest account gets
+    one with a name from `new_display_name`. So does a resumed account that
+    has none, such as a verified account whose players wait for the "Is this
+    you?" answer. A "Yes" then merges the two players.
     """
     found = find_session(session, token, lock=True)
     if isinstance(found, ValidSession) and token is not None:
@@ -196,7 +196,7 @@ def start_session(
             .values(last_seen_at=func.now())
         )
         player = _self_player(session, found.account.id)
-        if player is None and isinstance(found.account, GuestAccount):
+        if player is None:
             player = _create_self_player(session, found.account.id, new_display_name)
         return StartedSession(found.row.id, found.account, player, token)
 

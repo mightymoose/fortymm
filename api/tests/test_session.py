@@ -99,6 +99,31 @@ def test_answers_with_the_account_and_sets_the_cookie(client: TestClient) -> Non
     session_cookie(response)
 
 
+def test_answers_with_a_verified_accounts_email_and_player(
+    client: TestClient, migrated_database: Engine
+) -> None:
+    first = start_session(client)
+    with migrated_database.begin() as connection:
+        connection.execute(
+            text("UPDATE accounts SET email = 'ann@example.com' WHERE id = :id"),
+            {"id": account_id(first)},
+        )
+
+    response = start_session(client)
+
+    player = response.json()["data"]["account"]["player"]
+    assert response.json() == {
+        "data": {
+            "account": {
+                "id": account_id(first),
+                "kind": "verified",
+                "email": "ann@example.com",
+                "player": {"id": player["id"], "display_name": player["display_name"]},
+            }
+        }
+    }
+
+
 def test_reads_the_cookie_and_sets_it_again(client: TestClient) -> None:
     first = start_session(client)
 

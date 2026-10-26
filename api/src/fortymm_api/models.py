@@ -97,7 +97,13 @@ class Player(Base):
     managers: Mapped[list[PlayerManager]] = relationship()
 
 
-Index("unique_display_name", func.lower(Player.display_name), unique=True)
+# A merged player gives up its display name, so a new player can take it.
+Index(
+    "unique_display_name",
+    func.lower(Player.display_name),
+    unique=True,
+    postgresql_where=text("merged_into IS NULL"),
+)
 
 
 class PlayerManager(Base):
