@@ -5,6 +5,7 @@ the `oidc` Compose service. tests/services/test_sign_in.py covers the rules.
 import json
 from collections.abc import Callable, Iterator
 from http.cookies import SimpleCookie
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import httpx2 as httpx
@@ -55,10 +56,10 @@ def browser(new_browser: Browser) -> TestClient:
     return new_browser()
 
 
-def start_session(browser: TestClient) -> dict[str, str]:
+def start_session(browser: TestClient) -> dict[str, Any]:
     response = browser.post("/v1/session", headers=JSON)
     assert response.status_code == 200
-    account: dict[str, str] = response.json()["data"]["account"]
+    account: dict[str, Any] = response.json()["data"]["account"]
     return account
 
 
