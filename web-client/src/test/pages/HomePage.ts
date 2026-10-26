@@ -128,6 +128,21 @@ export class HomePage {
     return screen.queryByRole('img', { name: displayName })
   }
 
+  // The topbar's button that opens the account menu, or null.
+  get accountButton(): HTMLElement | null {
+    return screen.queryByRole('button', { name: 'Your account' })
+  }
+
+  // The open account menu.
+  get accountMenu(): HTMLElement {
+    return screen.getByRole('menu', { name: 'Your account' })
+  }
+
+  // The dialog that asks a guest before it signs out.
+  get guestSignOutDialog(): HTMLElement {
+    return screen.getByRole('dialog', { name: 'Sign out of this guest account?' })
+  }
+
   // The button that shows and hides the sidebar's labels.
   get sidebarLabelsButton(): HTMLElement {
     return screen.getByRole('button', { name: 'Sidebar labels' })

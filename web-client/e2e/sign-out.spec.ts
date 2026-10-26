@@ -1,5 +1,17 @@
+import type { Page } from '@playwright/test'
 import { expect, test } from './fixtures.ts'
 import { newPerson } from './pages/SignInPage.ts'
+
+// The mock provider answers 405 to Auth0's logout path, so this stands in for
+// Auth0, which sends the browser on to returnTo.
+async function answerLogout(page: Page) {
+  await page.route('http://oidc:8080/default/v2/logout?**', (route) =>
+    route.fulfill({
+      status: 302,
+      headers: { Location: new URL(route.request().url()).searchParams.get('returnTo')! },
+    }),
+  )
+}
 
 test('signs in from the strip on Home, signs out, then plays as a new guest account', async ({
   homePage,
@@ -8,14 +20,7 @@ test('signs in from the strip on Home, signs out, then plays as a new guest acco
   page,
   baseURL,
 }) => {
-  // The mock provider answers 405 to Auth0's logout path, so this stands in
-  // for Auth0, which sends the browser on to returnTo.
-  await page.route('http://oidc:8080/default/v2/logout?**', (route) =>
-    route.fulfill({
-      status: 302,
-      headers: { Location: new URL(route.request().url()).searchParams.get('returnTo')! },
-    }),
-  )
+  await answerLogout(page)
   const ann = newPerson('ann')
   await homePage.goto()
   await expect(homePage.signInStrip).toContainText('Playing as a guest.')
@@ -44,4 +49,27 @@ test('signs in from the strip on Home, signs out, then plays as a new guest acco
   const next = await signInPage.account()
   expect(next.kind).toBe('guest')
   expect(next.id).not.toBe(guest.id)
+})
+
+test('asks a guest before it signs out from the account menu', async ({
+  homePage,
+  signInPage,
+  signedOutPage,
+  page,
+  baseURL,
+}) => {
+  await answerLogout(page)
+  await homePage.goto()
+  const guest = await signInPage.account()
+
+  await homePage.accountButton.click()
+  await homePage.accountMenu.getByRole('menuitem', { name: 'Sign out' }).click()
+  await expect(homePage.guestSignOutDialog).toContainText(
+    `${guest.player.display_name} stays behind`,
+  )
+  await homePage.guestSignOutDialog.getByRole('button', { name: 'Sign out' }).click()
+
+  await expect(signedOutPage.title).toHaveText('You’re signed out')
+  expect(page.url()).toBe(new URL('/signed-out', baseURL).href)
+  expect((await signInPage.account()).id).not.toBe(guest.id)
 })
