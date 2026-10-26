@@ -15,6 +15,11 @@ export class HomePage {
   // The strip that shows a verified account, and its button that signs out.
   readonly accountStrip: Locator
   readonly signOutButton: Locator
+  // The topbar's chip that opens the account menu, the menu, and the dialog
+  // that asks a guest before it signs out.
+  readonly accountButton: Locator
+  readonly accountMenu: Locator
+  readonly guestSignOutDialog: Locator
 
   // The reminder of the players still to review, by its title.
   readonly reminder: Locator
@@ -31,6 +36,11 @@ export class HomePage {
     this.signInLink = this.signInStrip.getByRole('link', { name: 'Sign in' })
     this.accountStrip = page.getByRole('complementary', { name: 'Your account' })
     this.signOutButton = this.accountStrip.getByRole('button', { name: 'Sign out' })
+    this.accountButton = page.getByRole('button', { name: 'Your account' })
+    this.accountMenu = page.getByRole('menu', { name: 'Your account' })
+    this.guestSignOutDialog = page.getByRole('dialog', {
+      name: 'Sign out of this guest account?',
+    })
     this.reminder = page.getByText(/^\d+ players? to review$/)
     this.review = page.getByRole('dialog')
     this.reviewTitle = this.review.getByRole('heading', { level: 2 })

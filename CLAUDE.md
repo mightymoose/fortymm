@@ -490,10 +490,15 @@ it to `src/routes/`.
   the authenticated pages, which folds to its icons and remembers it in
   `localStorage`. Below 900px the sidebar is a tab bar along the bottom. To
   add a page to the sidebar, add its link in `AppShell`. The topbar's right
-  end shows `PlayerAvatar` (`src/components/PlayerAvatar.tsx`), the
-  initials of the player's display name. Its accessible name and tooltip
-  are the full name. It reads the session without suspending, so it never
-  holds up the loading screen.
+  end shows `UserMenu` (`src/pages/userMenu/UserMenu.tsx`): a chip of the
+  player's `PlayerAvatar` (`src/components/PlayerAvatar.tsx`, the initials
+  of the display name, whose accessible name is the full name) and the
+  name. Below 600px the chip hides the name. The chip opens the account
+  menu. A verified account gets Sign out, which signs out at once. A guest
+  gets Sign in, and Sign out behind a dialog. The dialog says nobody can
+  get a guest account back after it signs out, and links to sign-in. The
+  menu reads the session without suspending, so it never holds up the
+  loading screen.
 - `SignInErrorAlert` (`src/pages/SignInErrorAlert.tsx`) sits in
   `AuthenticatedLayout`, inside `AppShell` and above the page. If the URL
   has `sign_in_error`, it shows that code's message from `signInErrors`
@@ -572,11 +577,12 @@ retries, the root route's error page shows (see Error pages). The web-client no
 longer calls `/v1/health`.
 
 `logout(api)` in `queries.ts` sends `POST /v1/auth/logout` and returns
-`data.logout_url`. `AccountStrip` runs it through `useMutation`. On success,
-it calls `leavePage()` (`src/leavePage.ts`), which loads the URL with
+`data.logout_url`. `useSignOut()` (`src/pages/useSignOut.ts`) runs it
+through `useMutation`, for `AccountStrip` and `UserMenu`. On success, it
+calls `leavePage()` (`src/leavePage.ts`), which loads the URL with
 `window.location.assign`. jsdom's `location.assign` can't be spied on, so
-tests `vi.mock` that module. If the request fails, the strip says so and
-the button offers Sign out again.
+tests `vi.mock` that module. If the request fails, the strip or the menu
+says so and offers Sign out again.
 
 ### Error pages
 
@@ -681,9 +687,11 @@ out and ends on `/signed-out`. Then Play as a guest opens `/` as a new
 guest account. The mock answers 405 to the
 logout URL. So the spec answers that navigation with `page.route()`, a 302
 to its `returnTo`. The API builds `returnTo` from the browser's `Host`, so
-in the e2e suite it is `http://localhost:5173/signed-out`.
+in the e2e suite it is `http://localhost:5173/signed-out`. A second test
+signs a guest out from the account menu, through its dialog, to
+`/signed-out`.
 
-The suite starts about 18 guest accounts, under the limit of 30 a minute.
+The suite starts about 21 guest accounts, under the limit of 30 a minute.
 
 The design system page is a copy of the reference's component gallery
 (`references/design-system/ui_kits/components/index.html`). It has one
