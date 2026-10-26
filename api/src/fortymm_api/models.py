@@ -173,7 +173,12 @@ class Identity(Base):
 
 
 class LoginAttempt(Base):
-    """A sign-in sent to Auth0, waiting for its callback."""
+    """A sign-in sent to Auth0, waiting for its callback.
+
+    The callback must come from the browser that started it. A browser with a
+    session proves it with that session. A browser without one has no
+    session_id, and proves it with the login cookie, which holds the state.
+    """
 
     __tablename__ = "login_attempts"
 
@@ -181,7 +186,7 @@ class LoginAttempt(Base):
         primary_key=True, server_default=func.gen_random_uuid()
     )
     state: Mapped[str] = mapped_column(Text, unique=True)
-    session_id: Mapped[uuid.UUID] = mapped_column(
+    session_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("sessions.id", ondelete="CASCADE")
     )
     code_verifier: Mapped[str] = mapped_column(Text)

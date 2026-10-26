@@ -65,8 +65,9 @@ export interface paths {
          * Login
          * @description Send the visitor to the identity provider's sign-in page.
          *
-         *     A request with no valid session gets a guest account first. After
-         *     sign-in, the callback sends the visitor to `return_to`. It must be a path
+         *     A request with no valid session gets no guest account. It gets a login
+         *     cookie instead, which the callback checks. After sign-in, the callback
+         *     sends the visitor to `return_to`. It must be a path
          *     on this site, or the callback uses `/`.
          */
         get: operations["login"];
@@ -382,7 +383,9 @@ export interface operations {
             };
             header?: never;
             path?: never;
-            cookie?: never;
+            cookie?: {
+                "__Host-fortymm_login"?: string | null;
+            };
         };
         requestBody?: never;
         responses: {

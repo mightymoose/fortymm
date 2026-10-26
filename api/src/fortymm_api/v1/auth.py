@@ -5,7 +5,14 @@ from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from fortymm_api.auth import SessionToken, delete_session_cookie, set_session_cookie
+from fortymm_api.auth import (
+    LoginState,
+    SessionToken,
+    delete_login_cookie,
+    delete_session_cookie,
+    set_login_cookie,
+    set_session_cookie,
+)
 from fortymm_api.database import DatabaseSession
 from fortymm_api.identity_provider import IdentityProvider, IdToken
 from fortymm_api.services import sessions, sign_in
@@ -68,8 +75,9 @@ def login(
 ) -> RedirectResponse:
     """Send the visitor to the identity provider's sign-in page.
 
-    A request with no valid session gets a guest account first. After
-    sign-in, the callback sends the visitor to `return_to`. It must be a path
+    A request with no valid session gets no guest account. It gets a login
+    cookie instead, which the callback checks. After sign-in, the callback
+    sends the visitor to `return_to`. It must be a path
     on this site, or the callback uses `/`.
     """
     started = sign_in.begin_sign_in(
@@ -84,7 +92,10 @@ def login(
             prompt_login=started.prompt_login,
         )
     )
-    set_session_cookie(response, started.token)
+    if started.token is not None:
+        set_session_cookie(response, started.token)
+    if started.login_state is not None:
+        set_login_cookie(response, started.login_state)
     return response
 
 
@@ -96,6 +107,7 @@ def callback(
     token: SessionToken,
     request: Request,
     provider: Provider,
+    login_state: LoginState = None,
     state: str | None = None,
     code: str | None = None,
     error: str | None = None,
@@ -113,17 +125,19 @@ def callback(
         return provider.exchange(code, code_verifier, redirect_uri, nonce)
 
     result = sign_in.finish_sign_in(
-        session, token, sign_in.Callback(state, code, error), exchange
+        session, token, login_state, sign_in.Callback(state, code, error), exchange
     )
     match result:
         case sign_in.SignedIn(return_to, new_token):
             response = redirect(with_query(return_to, "signed_in", "1"))
             set_session_cookie(response, new_token)
-            return response
         case sign_in.SignInFailed(return_to, sign_in_error):
-            return redirect(with_query(return_to, "sign_in_error", sign_in_error))
+            response = redirect(with_query(return_to, "sign_in_error", sign_in_error))
         case sign_in.Replayed():
-            return redirect("/")
+            response = redirect("/")
+    if login_state is not None:
+        delete_login_cookie(response)
+    return response
 
 
 class LogoutData(BaseModel):

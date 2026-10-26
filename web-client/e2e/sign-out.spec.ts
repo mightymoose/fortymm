@@ -73,3 +73,31 @@ test('asks a guest before it signs out from the account menu', async ({
   expect(page.url()).toBe(new URL('/signed-out', baseURL).href)
   expect((await signInPage.account()).id).not.toBe(guest.id)
 })
+
+test('signs in again after sign-out with no new player to review', async ({
+  homePage,
+  signInPage,
+  signedOutPage,
+  page,
+}) => {
+  await answerLogout(page)
+  const ann = newPerson('ann')
+  await homePage.goto()
+  await homePage.signInLink.click()
+  await signInPage.completeSignIn(ann)
+  await homePage.review.getByRole('button', { name: 'Review later' }).click()
+  await expect(homePage.reminder).toHaveText('1 player to review')
+  const anns = await signInPage.account()
+  await homePage.signOutButton.click()
+  await expect(signedOutPage.title).toHaveText('You’re signed out')
+
+  await signedOutPage.signInLink.click()
+  await signInPage.completeSignIn(ann)
+  await homePage.review.getByRole('button', { name: 'Review later' }).click()
+
+  await expect(homePage.signedInAs(ann.email)).toBeVisible()
+  // Only the first sign-in's guest player waits. Sign-in from no session
+  // starts no guest account, so there's nothing new to adopt.
+  await expect(homePage.reminder).toHaveText('1 player to review')
+  expect((await signInPage.account()).id).toBe(anns.id)
+})

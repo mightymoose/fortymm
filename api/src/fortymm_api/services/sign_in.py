@@ -21,7 +21,6 @@ from fortymm_api.accounts import (
 from fortymm_api.identity_provider import ExchangeFailed, IdToken
 from fortymm_api.models import (
     Account,
-    AuthSession,
     Identity,
     LoginAttempt,
 )
@@ -30,6 +29,7 @@ from fortymm_api.services.sessions import (
     ClientAddress,
     ValidSession,
     convert_guest,
+    count_start_without_session,
     find_session,
     new_session,
     start_session,
@@ -62,14 +62,16 @@ class AdoptGuest:
 
 @dataclass(frozen=True)
 class SwitchAccount:
-    """A verified account signs in with another account's identity."""
+    """A verified account, or a browser with no session, signs in with another
+    account's identity."""
 
     to: AccountId
 
 
 @dataclass(frozen=True)
 class CreateAccount:
-    """A verified account signs in with a new identity."""
+    """A verified account, or a browser with no session, signs in with a new
+    identity."""
 
 
 type LoginOutcome = (
@@ -77,16 +79,21 @@ type LoginOutcome = (
 )
 
 
-def resolve_login(current: CurrentAccount, owner: AccountId | None) -> LoginOutcome:
-    """What a sign-in does, from the current account and the identity's owner."""
-    if owner == current.id:
+def resolve_login(
+    current: CurrentAccount | None, owner: AccountId | None
+) -> LoginOutcome:
+    """What a sign-in does, from the current account and the identity's owner.
+
+    `current` is None for a browser with no session.
+    """
+    if current is not None and owner == current.id:
         return AlreadySignedIn(current.id)
     match current:
         case GuestAccount():
             if owner is None:
                 return VerifyInPlace(current.id)
             return AdoptGuest(current.id, owner)
-        case VerifiedAccount():
+        case VerifiedAccount() | None:
             if owner is None:
                 return CreateAccount()
             return SwitchAccount(owner)
@@ -110,9 +117,15 @@ def safe_return_to(value: str | None) -> str:
 
 @dataclass(frozen=True)
 class LoginStarted:
-    """A login attempt, for the identity provider's sign-in page."""
+    """A login attempt, for the identity provider's sign-in page.
 
-    token: str
+    A browser with a session gets its session `token` again. A browser
+    without one gets `login_state` for the login cookie instead, which is the
+    attempt's state.
+    """
+
+    token: str | None
+    login_state: str | None
     state: str
     nonce: str
     code_verifier: str
@@ -124,27 +137,38 @@ class LoginStarted:
 def begin_sign_in(
     session: Session, token: str | None, address: ClientAddress, return_to: str
 ) -> LoginStarted:
-    """Start a login attempt for the token's session.
+    """Start a login attempt for the token's session, or for a browser with
+    no valid session.
 
-    A request with no valid session gets a guest account first, as
-    `start_session()` gives one. The attempt lasts LOGIN_ATTEMPT_LIFETIME.
+    A browser with no valid session gets no guest account. Such as after a
+    sign-out, it would hold nothing, yet adoption would ask "Is this you?"
+    about its player. The attempt counts toward the guest account limit
+    instead. The attempt lasts LOGIN_ATTEMPT_LIFETIME.
     """
-    started = start_session(session, token, address)
     attempt = LoginAttempt(
         state=secrets.token_urlsafe(32),
-        session_id=started.session_id,
         code_verifier=secrets.token_urlsafe(64),
         nonce=secrets.token_urlsafe(32),
         return_to=return_to,
         expires_at=func.now() + LOGIN_ATTEMPT_LIFETIME,
     )
+    if isinstance(find_session(session, token), ValidSession):
+        started = start_session(session, token, address)
+        attempt.session_id = started.session_id
+        session_token, login_state = started.token, None
+        prompt_login = isinstance(started.account, VerifiedAccount)
+    else:
+        count_start_without_session(session, address)
+        session_token, login_state = None, attempt.state
+        prompt_login = False
     session.add(attempt)
     return LoginStarted(
-        token=started.token,
+        token=session_token,
+        login_state=login_state,
         state=attempt.state,
         nonce=attempt.nonce,
         code_verifier=attempt.code_verifier,
-        prompt_login=isinstance(started.account, VerifiedAccount),
+        prompt_login=prompt_login,
     )
 
 
@@ -190,7 +214,11 @@ class Replayed:
 
 
 def finish_sign_in(
-    session: Session, token: str | None, callback: Callback, exchange: ExchangeCode
+    session: Session,
+    token: str | None,
+    login_state: str | None,
+    callback: Callback,
+    exchange: ExchangeCode,
 ) -> SignedIn | SignInFailed | Replayed:
     """Finish the login attempt that the callback's state names.
 
@@ -212,8 +240,18 @@ def finish_sign_in(
     def failed(error: SignInError) -> SignInFailed:
         return SignInFailed(attempt.return_to, error)
 
-    current = find_session(session, token, lock=True)
-    if not isinstance(current, ValidSession) or current.row.id != attempt.session_id:
+    browser_session = find_session(session, token, lock=True)
+    current = browser_session if isinstance(browser_session, ValidSession) else None
+    if attempt.session_id is None:
+        # The browser had no session. It may have one now, such as a guest
+        # account that another tab started, and the sign-in uses it.
+        # Another browser can open the callback's URL, but it can't set this
+        # browser's login cookie.
+        if login_state is None or not secrets.compare_digest(
+            login_state, attempt.state
+        ):
+            return failed(SignInError.FAILED)
+    elif current is None or current.row.id != attempt.session_id:
         return failed(SignInError.FAILED)
     if not unexpired:
         return failed(SignInError.EXPIRED)
@@ -233,7 +271,9 @@ def finish_sign_in(
     )
 
 
-def _sign_in(session: Session, current: ValidSession, sub: str, email: Email) -> str:
+def _sign_in(
+    session: Session, current: ValidSession | None, sub: str, email: Email
+) -> str:
     """Apply the login's outcome. Returns the new session's token.
 
     The advisory lock makes sign-ins with one email take turns. So when two
@@ -248,7 +288,7 @@ def _sign_in(session: Session, current: ValidSession, sub: str, email: Email) ->
         # reaches the account that has the email.
         owner = session.scalar(select(Account.id).where(Account.email == email))
 
-    match resolve_login(current.account, owner):
+    match resolve_login(None if current is None else current.account, owner):
         case VerifyInPlace(account):
             session.execute(
                 update(Account).where(Account.id == account).values(email=email)
@@ -258,16 +298,16 @@ def _sign_in(session: Session, current: ValidSession, sub: str, email: Email) ->
             new_token = convert_guest(session, account, account)
         case AlreadySignedIn(account):
             destination = account
-            new_token = _replace_session(session, current.row, account)
+            new_token = _replace_session(session, current, account)
         case SwitchAccount(to):
             destination = to
-            new_token = _replace_session(session, current.row, to)
+            new_token = _replace_session(session, current, to)
         case CreateAccount():
             created = Account(email=email)
             session.add(created)
             session.flush()
             destination = created.id
-            new_token = _replace_session(session, current.row, created.id)
+            new_token = _replace_session(session, current, created.id)
         case AdoptGuest(guest, into):
             destination = into
             new_token = adopt_guest(session, guest, into)
@@ -277,9 +317,12 @@ def _sign_in(session: Session, current: ValidSession, sub: str, email: Email) ->
     return new_token
 
 
-def _replace_session(session: Session, row: AuthSession, account: AccountId) -> str:
-    """Swap the browser's session for a new one on the account. The API never
-    changes a token in place."""
-    session.delete(row)
+def _replace_session(
+    session: Session, current: ValidSession | None, account: AccountId
+) -> str:
+    """Swap the browser's session, if any, for a new one on the account. The
+    API never changes a token in place."""
+    if current is not None:
+        session.delete(current.row)
     _, token = new_session(session, account)
     return token

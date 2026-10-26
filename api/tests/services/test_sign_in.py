@@ -17,7 +17,9 @@ from fortymm_api.accounts import (
 from fortymm_api.identity_provider import ExchangeFailed, IdToken
 from fortymm_api.ownership import OWNERSHIP_RULES, OwnershipRule
 from fortymm_api.services.sessions import (
+    GUEST_ACCOUNT_LIMIT,
     AccountAdopted,
+    GuestAccountLimitReached,
     authenticate,
     lock_account_for_write,
     new_session,
@@ -57,10 +59,12 @@ OTHER = AccountId(uuid.uuid4())
         (GUEST, OTHER, AdoptGuest(GUEST.id, OTHER)),
         (VERIFIED, OTHER, SwitchAccount(OTHER)),
         (VERIFIED, None, CreateAccount()),
+        (None, OTHER, SwitchAccount(OTHER)),
+        (None, None, CreateAccount()),
     ],
 )
 def test_resolves_each_login(
-    current: CurrentAccount, owner: AccountId | None, outcome: object
+    current: CurrentAccount | None, owner: AccountId | None, outcome: object
 ) -> None:
     assert resolve_login(current, owner) == outcome
 
@@ -116,12 +120,13 @@ def finish(
     state: str | None,
     exchange: ExchangeCode,
     *,
+    login_state: str | None = None,
     error: str | None = None,
 ) -> SignedIn | SignInFailed | Replayed:
     return in_transaction(
         database,
         lambda session: finish_sign_in(
-            session, token, Callback(state, "code", error), exchange
+            session, token, login_state, Callback(state, "code", error), exchange
         ),
     )
 
@@ -129,7 +134,13 @@ def finish(
 def sign_in(database: Engine, token: str | None, exchange: ExchangeCode) -> str:
     """Sign the token's browser in, and return its new token."""
     started = begin(database, token)
-    result = finish(database, started.token, started.state, exchange)
+    result = finish(
+        database,
+        started.token,
+        started.state,
+        exchange,
+        login_state=started.login_state,
+    )
     assert isinstance(result, SignedIn)
     return result.token
 
@@ -529,8 +540,97 @@ def finish_with(
     attempt: LoginStarted, exchange: ExchangeCode
 ) -> Callable[[Session], SignedIn | SignInFailed | Replayed]:
     return lambda session: finish_sign_in(
-        session, attempt.token, Callback(attempt.state, "code", None), exchange
+        session,
+        attempt.token,
+        attempt.login_state,
+        Callback(attempt.state, "code", None),
+        exchange,
     )
+
+
+def test_a_browser_with_no_session_signs_in_with_no_guest_account(
+    migrated_database: Engine,
+) -> None:
+    # Such as after a sign-out. A guest account here would hold nothing, yet
+    # its player would ask "Is this you?".
+    token = sign_in(migrated_database, guest_token(migrated_database), ANN_IDENTITY)
+    ann = account_of(migrated_database, token)
+    before = accounts_and_managers(migrated_database)
+
+    started = begin(migrated_database, None)
+    result = finish(
+        migrated_database,
+        None,
+        started.state,
+        ANN_IDENTITY,
+        login_state=started.login_state,
+    )
+
+    assert started.token is None
+    assert isinstance(result, SignedIn)
+    assert account_of(migrated_database, result.token) == ann
+    assert accounts_and_managers(migrated_database) == before
+
+
+def test_a_browser_with_no_session_and_a_new_email_gets_a_new_account(
+    migrated_database: Engine,
+) -> None:
+    token = sign_in(migrated_database, None, ANN_IDENTITY)
+
+    created = account_of(migrated_database, token)
+    assert created == VerifiedAccount(created.id, Email("ann@example.com"))
+    assert count(migrated_database, "SELECT count(*) FROM accounts") == 1
+    # start_session() gives it a self player on the next POST /v1/session.
+    assert count(migrated_database, "SELECT count(*) FROM player_managers") == 0
+
+
+@pytest.mark.parametrize("case", ["no login cookie", "another browser's"])
+def test_a_sign_in_with_no_session_needs_the_browser_that_started_it(
+    migrated_database: Engine, case: str
+) -> None:
+    started = begin(migrated_database, None)
+    other = begin(migrated_database, None)
+    login_state = None if case == "no login cookie" else other.login_state
+
+    result = finish(
+        migrated_database,
+        None,
+        started.state,
+        ANN_IDENTITY,
+        login_state=login_state,
+    )
+
+    assert result == SignInFailed("/games", SignInError.FAILED)
+    assert count(migrated_database, "SELECT count(*) FROM accounts") == 0
+
+
+def test_a_guest_started_during_a_sign_in_with_no_session_is_adopted(
+    migrated_database: Engine,
+) -> None:
+    _, bob = bob_signed_in(migrated_database)
+    started = begin(migrated_database, None)
+    # Another tab opened Home meanwhile.
+    token = guest_token(migrated_database)
+    guest = account_of(migrated_database, token).id
+
+    result = finish(
+        migrated_database, token, started.state, BOB, login_state=started.login_state
+    )
+
+    assert isinstance(result, SignedIn)
+    assert account_of(migrated_database, result.token).id == bob
+    assert managers_of_players_from(migrated_database, guest) == [(bob, "managed")]
+
+
+def test_a_sign_in_with_no_session_counts_toward_the_guest_account_limit(
+    migrated_database: Engine,
+) -> None:
+    for _ in range(GUEST_ACCOUNT_LIMIT):
+        begin(migrated_database, None)
+
+    with pytest.raises(GuestAccountLimitReached):
+        begin(migrated_database, None)
+    assert count(migrated_database, "SELECT count(*) FROM accounts") == 0
 
 
 def test_two_sign_ins_with_one_new_email_make_one_account(
@@ -580,8 +680,9 @@ def test_a_player_made_before_adoption_moves_to_the_account(
     migrated_database: Engine,
 ) -> None:
     _, bob = bob_signed_in(migrated_database)
-    attempt = begin(migrated_database, guest_token(migrated_database))
-    guest = account_of(migrated_database, attempt.token).id
+    token = guest_token(migrated_database)
+    attempt = begin(migrated_database, token)
+    guest = account_of(migrated_database, token).id
 
     _, adoption = wait_behind(
         migrated_database, create_player(guest), finish_with(attempt, BOB)
@@ -599,8 +700,9 @@ def test_a_write_that_waits_for_adoption_is_refused(
     migrated_database: Engine,
 ) -> None:
     _, bob = bob_signed_in(migrated_database)
-    attempt = begin(migrated_database, guest_token(migrated_database))
-    guest = account_of(migrated_database, attempt.token).id
+    token = guest_token(migrated_database)
+    attempt = begin(migrated_database, token)
+    guest = account_of(migrated_database, token).id
     before = players(migrated_database)
 
     adoption, create = wait_behind(

@@ -211,6 +211,16 @@ def start_session(
     return StartedSession(row.id, GuestAccount(guest.id), player, token)
 
 
+def count_start_without_session(session: Session, address: ClientAddress) -> None:
+    """Count a start that makes no guest account toward the guest account
+    limit, or raise GuestAccountLimitReached.
+
+    A sign-in from a browser with no session is one. Before it made a guest
+    account, the limit was the only thing that bounded its writes.
+    """
+    _count_guest_account(session, client_network(address))
+
+
 def new_session(session: Session, account_id: AccountId) -> tuple[AuthSession, str]:
     """A new session row for the account, and its token."""
     token = new_token()
