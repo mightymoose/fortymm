@@ -11,6 +11,9 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as DesignSystemRouteImport } from './routes/design-system'
+import { Route as LoginGate1RouteImport } from './routes/login-gate1'
+import { Route as LoginGate2RouteImport } from './routes/login-gate2'
+import { Route as LoginGate3RouteImport } from './routes/login-gate3'
 import { Route as SignedOutRouteImport } from './routes/signed-out'
 import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
 
@@ -21,6 +24,21 @@ const AuthenticatedRoute = AuthenticatedRouteImport.update({
 const DesignSystemRoute = DesignSystemRouteImport.update({
   id: '/design-system',
   path: '/design-system',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginGate1Route = LoginGate1RouteImport.update({
+  id: '/login-gate1',
+  path: '/login-gate1',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginGate2Route = LoginGate2RouteImport.update({
+  id: '/login-gate2',
+  path: '/login-gate2',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginGate3Route = LoginGate3RouteImport.update({
+  id: '/login-gate3',
+  path: '/login-gate3',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SignedOutRoute = SignedOutRouteImport.update({
@@ -37,10 +55,16 @@ const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedIndexRoute
   '/design-system': typeof DesignSystemRoute
+  '/login-gate1': typeof LoginGate1Route
+  '/login-gate2': typeof LoginGate2Route
+  '/login-gate3': typeof LoginGate3Route
   '/signed-out': typeof SignedOutRoute
 }
 export interface FileRoutesByTo {
   '/design-system': typeof DesignSystemRoute
+  '/login-gate1': typeof LoginGate1Route
+  '/login-gate2': typeof LoginGate2Route
+  '/login-gate3': typeof LoginGate3Route
   '/signed-out': typeof SignedOutRoute
   '/': typeof AuthenticatedIndexRoute
 }
@@ -48,18 +72,36 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/design-system': typeof DesignSystemRoute
+  '/login-gate1': typeof LoginGate1Route
+  '/login-gate2': typeof LoginGate2Route
+  '/login-gate3': typeof LoginGate3Route
   '/signed-out': typeof SignedOutRoute
   '/_authenticated/': typeof AuthenticatedIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/design-system' | '/signed-out'
+  fullPaths:
+    | '/'
+    | '/design-system'
+    | '/login-gate1'
+    | '/login-gate2'
+    | '/login-gate3'
+    | '/signed-out'
   fileRoutesByTo: FileRoutesByTo
-  to: '/design-system' | '/signed-out' | '/'
+  to:
+    | '/design-system'
+    | '/login-gate1'
+    | '/login-gate2'
+    | '/login-gate3'
+    | '/signed-out'
+    | '/'
   id:
     | '__root__'
     | '/_authenticated'
     | '/design-system'
+    | '/login-gate1'
+    | '/login-gate2'
+    | '/login-gate3'
     | '/signed-out'
     | '/_authenticated/'
   fileRoutesById: FileRoutesById
@@ -67,6 +109,9 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   DesignSystemRoute: typeof DesignSystemRoute
+  LoginGate1Route: typeof LoginGate1Route
+  LoginGate2Route: typeof LoginGate2Route
+  LoginGate3Route: typeof LoginGate3Route
   SignedOutRoute: typeof SignedOutRoute
 }
 
@@ -84,6 +129,27 @@ declare module '@tanstack/react-router' {
       path: '/design-system'
       fullPath: '/design-system'
       preLoaderRoute: typeof DesignSystemRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login-gate1': {
+      id: '/login-gate1'
+      path: '/login-gate1'
+      fullPath: '/login-gate1'
+      preLoaderRoute: typeof LoginGate1RouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login-gate2': {
+      id: '/login-gate2'
+      path: '/login-gate2'
+      fullPath: '/login-gate2'
+      preLoaderRoute: typeof LoginGate2RouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login-gate3': {
+      id: '/login-gate3'
+      path: '/login-gate3'
+      fullPath: '/login-gate3'
+      preLoaderRoute: typeof LoginGate3RouteImport
       parentRoute: typeof rootRouteImport
     }
     '/signed-out': {
@@ -118,6 +184,9 @@ const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   DesignSystemRoute: DesignSystemRoute,
+  LoginGate1Route: LoginGate1Route,
+  LoginGate2Route: LoginGate2Route,
+  LoginGate3Route: LoginGate3Route,
   SignedOutRoute: SignedOutRoute,
 }
 export const routeTree = rootRouteImport

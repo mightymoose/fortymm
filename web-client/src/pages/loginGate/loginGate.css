@@ -1,0 +1,128 @@
+/* The login gate mockups (src/pages/loginGate/). Each frame is a container,
+   so the layouts switch to their desktop form at 720px of frame width. */
+
+/* The gallery: the layout links, then each frame at both widths. */
+.gate-gallery{box-sizing:border-box;display:flex;flex-direction:column;gap:var(--s-12);max-width:1760px;margin:0 auto;padding:var(--s-8) var(--s-4) var(--s-16)}
+.gate-gallery p{margin:0}
+.gate-gallery__head{display:flex;flex-direction:column;gap:var(--s-3)}
+.gate-gallery__head h1{margin:0;font:700 var(--text-2xl)/var(--lh-tight) var(--font-ui);letter-spacing:-0.01em;color:var(--fg-1)}
+.gate-options{display:flex;flex-wrap:wrap;gap:var(--s-2) var(--s-4);font:500 var(--text-sm) var(--font-ui)}
+.gate-options a{color:var(--fg-2);text-decoration:none}
+.gate-options a:hover{color:var(--fg-1);text-decoration:underline}
+.gate-options a[aria-current=page]{color:var(--fg-1);font-weight:600}
+.gate-gallery__frame{display:flex;flex-direction:column;gap:var(--s-4)}
+.gate-gallery__frame>h2{margin:0;font:600 var(--text-lg)/var(--lh-snug) var(--font-ui);color:var(--fg-1)}
+.gate-gallery__sizes{display:flex;flex-wrap:wrap;align-items:flex-start;gap:var(--s-8)}
+.gate-gallery__size{display:flex;flex-direction:column;gap:var(--s-2);min-width:0;max-width:100%;margin:0}
+.gate-gallery__scroll{max-width:100%;overflow-x:auto}
+
+.gate-frame{container-type:inline-size;position:relative;box-sizing:border-box;border:1px solid var(--border-control);border-radius:var(--r-lg);background:var(--bg-app);overflow:hidden}
+.gate-frame--phone{width:375px;min-height:812px}
+.gate-frame--desktop{width:1280px;min-height:800px}
+
+/* The screen: the wordmark, then the question. */
+.gate{box-sizing:border-box;display:flex;flex-direction:column;align-items:center;gap:var(--s-8);min-height:inherit;padding:var(--s-6) var(--s-4) var(--s-8)}
+.gate p{margin:0}
+.gate-wordmark{font:400 28px/1 var(--font-display);letter-spacing:0.04em;color:var(--fg-1)}
+.gate-body{display:flex;flex-direction:column;gap:var(--s-6);width:100%;max-width:440px}
+.gate-title{margin:0;font:700 var(--text-2xl)/var(--lh-tight) var(--font-ui);letter-spacing:-0.01em;color:var(--fg-1)}
+.gate-intro{color:var(--fg-2)}
+.gate-note{font:400 var(--text-sm)/var(--lh-normal) var(--font-ui);color:var(--fg-3)}
+
+.gate-avatar--lg{width:56px;height:56px;font-size:var(--text-lg)}
+.gate-avatar--xl{width:112px;height:112px;font-size:var(--text-2xl)}
+
+.gate-player{display:flex;align-items:center;gap:var(--s-3);min-width:0}
+.gate-player__text{display:flex;flex-direction:column;min-width:0}
+.gate-player__name{font-weight:600;color:var(--fg-1);overflow-wrap:anywhere}
+.gate-player__sub{font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
+
+/* Match rows: opponent, result and time. The won result gets weight. */
+.gate-matches{list-style:none;margin:0;padding:0}
+.gate-matches li{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:baseline;gap:var(--s-4);padding:var(--s-3) 0}
+.gate-matches li+li{border-top:1px solid var(--border-subtle)}
+.gate-matches__opponent{font-weight:600;color:var(--fg-1);overflow-wrap:anywhere}
+.gate-matches__result{color:var(--loser)}
+.gate-matches__result--won{font-weight:600;color:var(--winner)}
+.gate-matches__time{font:400 var(--text-sm) var(--font-num);font-variant-numeric:tabular-nums;color:var(--fg-3)}
+.gate-matches--lg li{padding:var(--s-4) 0}
+.gate-matches--lg .gate-matches__opponent{font-size:var(--text-md)}
+.gate-matches--lg .gate-matches__result .num{font-size:var(--text-lg)}
+
+.gate-merge{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);align-items:center;gap:var(--s-3);padding:var(--s-4);border-radius:var(--r-md);background:var(--bg-panel)}
+.gate-merge__arrow{color:var(--fg-3)}
+
+/* The answers. Each is one tap. */
+.gate-answers{display:flex;flex-direction:column;gap:var(--s-3)}
+.gate-answer{width:100%}
+.gate-choice{flex-direction:column;align-items:flex-start;gap:2px;width:100%;min-height:72px;padding:var(--s-3) var(--s-4);text-align:left}
+.gate-choice__label{font:600 var(--text-md)/var(--lh-snug) var(--font-ui);color:var(--fg-1)}
+.gate-choice__help{font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
+.gate-back{align-self:flex-start;gap:var(--s-1);min-height:44px}
+
+/* Layout 1, profile picker: everything centred in one column. */
+.pick .gate-body{text-align:center}
+.pick .gate-matches,.pick .gate-merge,.pick .gate-answers{text-align:left}
+.pick-profile{display:flex;flex-direction:column;align-items:center;gap:var(--s-2)}
+.pick-name{font:600 var(--text-xl)/var(--lh-snug) var(--font-ui);color:var(--fg-1)}
+.pick-activity{color:var(--fg-2)}
+
+/* Layout 2, activity first: the matches card, then the answers. */
+.act .gate-body{max-width:none}
+.act-head{display:flex;flex-direction:column;gap:var(--s-2)}
+.act-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s-6)}
+.act-card{display:flex;flex-direction:column;padding:var(--s-4) var(--s-4) 0;border-radius:var(--r-md);background:var(--bg-panel)}
+.act-card__count{font:600 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
+.act-card__as{padding:var(--s-3) 0 var(--s-4);border-top:1px solid var(--border-subtle)}
+.act-side{display:flex;flex-direction:column;gap:var(--s-5)}
+
+/* Layout 3, side by side: the two players, then the result. */
+.pair .gate-body{max-width:none}
+.pair-head{display:flex;flex-direction:column;gap:var(--s-2)}
+.pair-cards{display:flex;flex-direction:column;gap:var(--s-3)}
+.pair-card{display:flex;flex-direction:column;gap:var(--s-3);min-width:0;padding:var(--s-5);border-radius:var(--r-md);background:var(--bg-panel)}
+.pair-card>p{color:var(--fg-2)}
+.pair-card__who{display:flex;align-items:center;gap:var(--s-3)}
+.pair-card__role{font:500 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
+.pair-card__name{font:600 var(--text-lg)/var(--lh-snug) var(--font-ui);color:var(--fg-1);overflow-wrap:anywhere}
+.pair-arrow{align-self:center;color:var(--fg-3);transform:rotate(90deg)}
+.pair-result{display:flex;flex-direction:column;gap:var(--s-3);padding:var(--s-4);border:1px solid var(--border-subtle);border-radius:var(--r-md)}
+.pair-step2{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s-6)}
+
+/* The dashboard after an answer, with its toast at the bottom centre. */
+.gate-dash{display:flex;flex-direction:column;min-height:inherit}
+.gate-dash__bar{display:flex;align-items:center;justify-content:space-between;gap:var(--s-3);min-height:56px;padding:0 var(--s-4);background:var(--bg-panel)}
+.gate-dash__wordmark{font:400 24px/1 var(--font-display);letter-spacing:0.04em;color:var(--fg-1)}
+.gate-dash__chip{display:flex;align-items:center;gap:var(--s-2);font:500 var(--text-sm) var(--font-ui);color:var(--fg-2)}
+.gate-dash__body{display:flex;flex-direction:column;gap:var(--s-2);padding:var(--s-6) var(--s-4)}
+.gate-dash__body h3{margin:0;font:600 var(--text-xl)/var(--lh-snug) var(--font-ui);color:var(--fg-1)}
+.gate-dash__body p{margin:0}
+.gate-dash__toast{position:absolute;right:var(--s-4);bottom:var(--s-6);left:var(--s-4);display:flex;justify-content:center}
+
+@container (max-width:599px){
+  .gate-dash__chip-name{display:none}
+}
+
+@container (min-width:720px){
+  .gate{gap:var(--s-12);padding:var(--s-8) var(--s-16) var(--s-16)}
+  .gate-dash__bar,.gate-dash__body{padding-inline:var(--s-6)}
+
+  .pick .gate-body{padding-top:var(--s-6)}
+  .pick .gate-title{font-size:var(--text-3xl)}
+  .pick .gate-avatar--xl{width:144px;height:144px;font-size:var(--text-3xl)}
+
+  .act .gate-body,.pair .gate-body{max-width:1040px}
+  .act-grid{grid-template-columns:minmax(0,1fr) 380px;align-items:start;gap:var(--s-8)}
+  .act .gate-title,.pair .gate-title{font-size:var(--text-3xl)}
+
+  .pair-head{align-items:center;text-align:center}
+  .pair-cards{flex-direction:row;align-items:stretch}
+  .pair-cards>.pair-card{flex:1}
+  .pair-cards--one{justify-content:center}
+  .pair-cards--one>.pair-card{flex:0 1 520px}
+  .pair-arrow{transform:none}
+  .pair-result{align-self:center;width:min(100%,520px);box-sizing:border-box}
+  .pair .gate-body>.gate-answers{flex-direction:row;justify-content:center}
+  .pair .gate-body>.gate-answers .gate-answer{width:auto;min-width:280px}
+  .pair-step2{grid-template-columns:minmax(0,1fr) 380px;align-items:start;gap:var(--s-8)}
+}
