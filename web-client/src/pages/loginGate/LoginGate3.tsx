@@ -9,6 +9,7 @@ import {
   mergedActivity,
   type QuestionFrame,
 } from './gateData'
+import { questionFrames } from './questionFrames'
 
 // Layout 3, side by side: the guest player beside the account's player, and
 // the result of a merge under them. A first sign-in has one card. On a phone
@@ -18,7 +19,7 @@ export function LoginGate3() {
     <GateGallery
       current="/login-gate3"
       description="The guest player and the account’s player side by side, with the result of the merge. A first sign-in shows one card."
-      Screen={SideBySide}
+      frames={questionFrames(SideBySide)}
     />
   )
 }

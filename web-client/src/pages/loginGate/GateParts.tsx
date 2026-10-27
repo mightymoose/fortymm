@@ -10,7 +10,6 @@ import {
   guestPlayer,
   type AccountCase,
   type SaveStatus,
-  type ToastAnswer,
 } from './gateData'
 
 // The parts that the three login gate layouts share. Every button is visual
@@ -139,17 +138,10 @@ export function Step2Answers() {
   )
 }
 
-const toasts: Record<ToastAnswer, { player: string; message: string }> = {
-  'yes-new': { player: guestPlayer, message: `${guestPlayer} is your player now.` },
-  'yes-existing': { player: accountPlayer, message: `3 matches added to ${accountPlayer}.` },
-  manage: { player: accountPlayer, message: `You manage ${guestPlayer} now.` },
-  remove: { player: accountPlayer, message: `${guestPlayer} removed from your account.` },
-}
-
 // The dashboard right after an answer, simplified to its topbar, with the
-// toast that confirms the answer.
-export function DashboardToast({ answer }: { answer: ToastAnswer }) {
-  const { player, message } = toasts[answer]
+// toast that confirms the answer. `player` is the account's player, in the
+// topbar's chip.
+export function DashboardToast({ player, message }: { player: string; message: string }) {
   return (
     <div className="gate-dash">
       <div className="gate-dash__bar">

@@ -18,7 +18,15 @@ export class LoginGatePage {
 
   // The titles of the frames, in page order.
   get frameTitles(): string[] {
-    return screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent ?? '')
+    return screen
+      .getAllByRole('region')
+      .filter((region) => within(region).queryAllByRole('figure').length > 0)
+      .map((region) => within(region).getByRole('heading', { level: 2 }).textContent ?? '')
+  }
+
+  // The section under the header that lists what the real gate must do.
+  get requirements(): HTMLElement {
+    return screen.getByRole('region', { name: 'What the real gate must do' })
   }
 
   // The frame titled `title`, at `size`.

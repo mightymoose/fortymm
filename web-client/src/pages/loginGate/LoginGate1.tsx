@@ -1,6 +1,7 @@
 import { GateGallery } from './GateGallery'
 import { Avatar, GateScreen, MatchRows, MergeLine, Step1Answers, Step2Answers, YesNote } from './GateParts'
 import { guestActivity, guestPlayer, type QuestionFrame } from './gateData'
+import { questionFrames } from './questionFrames'
 
 // Layout 1, the profile picker: a large centred avatar and name, the
 // activity under it, and the answers as large buttons.
@@ -9,7 +10,7 @@ export function LoginGate1() {
     <GateGallery
       current="/login-gate1"
       description="Like a streaming service’s “Who’s watching?”. A large avatar and name, the activity under it, and the answers as large buttons."
-      Screen={ProfilePicker}
+      frames={questionFrames(ProfilePicker)}
     />
   )
 }

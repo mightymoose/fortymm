@@ -1,0 +1,53 @@
+/* /login-gate2 (LoginGate2.tsx): one centred column. It uses `.gate` from
+   loginGate.css for the screen's padding, and only its own classes after
+   that. */
+
+.g2{gap:var(--s-6)}
+.g2-wordmark{font:400 20px/1 var(--font-display);letter-spacing:0.04em;color:var(--fg-3)}
+.g2-body{display:flex;flex-direction:column;gap:var(--s-5);width:100%;max-width:480px}
+.g2-body p{margin:0}
+
+.g2-saved{align-items:center}
+.g2-saved>span:not(.fm-ic){flex:1}
+.g2-undo{min-height:44px}
+
+.g2-head{display:flex;flex-direction:column;gap:var(--s-2)}
+.g2-progress{font:500 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
+.g2-title{margin:0;font:700 var(--text-2xl)/var(--lh-tight) var(--font-ui);letter-spacing:-0.01em;color:var(--fg-1)}
+.g2-source{font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3);overflow-wrap:anywhere}
+
+/* The one surface: the matches. Opponent and score lead. */
+.g2-matches{padding:var(--s-3) var(--s-4) var(--s-1);border-radius:var(--r-md);background:var(--bg-panel)}
+.g2-matches__head{display:flex;justify-content:space-between;gap:var(--s-3);font:500 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
+.g2-matches ul{list-style:none;margin:0;padding:0}
+/* The result wraps under the opponent when the row is too narrow for both. */
+.g2-matches li{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--s-1) var(--s-4);padding:var(--s-3) 0}
+.g2-matches li+li{border-top:1px solid var(--border-subtle)}
+.g2-match__who{display:flex;flex:1 1 8em;flex-direction:column;gap:2px;min-width:0}
+.g2-match__opponent{font:600 var(--text-md)/var(--lh-snug) var(--font-ui);color:var(--fg-1);overflow-wrap:break-word}
+.g2-match__when{font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
+.g2-match__result{flex:none;color:var(--loser)}
+.g2-match__result .num{font-size:var(--text-lg)}
+.g2-match__result--won{font-weight:600;color:var(--winner)}
+
+.g2-outcome{color:var(--fg-2)}
+
+.g2-actions{display:flex;flex-direction:column;gap:var(--s-3)}
+.g2-actions>.fm-btn{width:100%}
+.g2-choice{flex-direction:column;align-items:flex-start;gap:2px;min-height:72px;padding:var(--s-3) var(--s-4);text-align:left}
+.g2-choice__label{font:600 var(--text-md)/var(--lh-snug) var(--font-ui);color:var(--fg-1)}
+.g2-choice__help{font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
+.g2-actions>.g2-back{align-self:flex-start;width:auto;min-height:44px;gap:var(--s-1)}
+
+.g2-review summary{min-height:44px;box-sizing:border-box}
+.g2-review .g2-matches{margin-bottom:var(--s-4)}
+
+/* The rules under the page's header. */
+.g2-reqs{display:flex;flex-direction:column;gap:var(--s-3);max-width:760px}
+.g2-reqs h2{margin:0;font:600 var(--text-lg)/var(--lh-snug) var(--font-ui);color:var(--fg-1)}
+.g2-reqs ul{display:flex;flex-direction:column;gap:var(--s-2);margin:0;padding-left:var(--s-5);color:var(--fg-2)}
+
+@container (min-width:720px){
+  .g2{gap:var(--s-8)}
+  .g2-title{font-size:var(--text-3xl)}
+}

@@ -1,7 +1,5 @@
 import { Link } from '@tanstack/react-router'
-import { useId, type ComponentType } from 'react'
-import { DashboardToast } from './GateParts'
-import { frames, type Frame, type QuestionFrame } from './gateData'
+import { useId, type ReactNode } from 'react'
 import './loginGate.css'
 
 export type LoginGatePath = '/login-gate1' | '/login-gate2' | '/login-gate3'
@@ -17,17 +15,22 @@ const sizes = [
   { key: 'desktop', label: 'Desktop, 1280px' },
 ] as const
 
+// One frame of a layout: its title and what it draws.
+export type GalleryFrame = { title: string; render: () => ReactNode }
+
 // One login gate layout's frames, each at phone and desktop width. Each
 // frame is a container, so the layout responds to the frame's width, not the
-// window's.
+// window's. `children` goes under the page's header.
 export function GateGallery({
   current,
   description,
-  Screen,
+  frames,
+  children,
 }: {
   current: LoginGatePath
   description: string
-  Screen: ComponentType<{ question: QuestionFrame }>
+  frames: readonly GalleryFrame[]
+  children?: ReactNode
 }) {
   const name = layouts.find((layout) => layout.path === current)?.name
   return (
@@ -48,20 +51,15 @@ export function GateGallery({
         <p>{description}</p>
         <p className="meta">Visual only. Example players and matches. Nothing is saved.</p>
       </header>
+      {children}
       {frames.map((frame) => (
-        <FrameSection key={frame.title} frame={frame} Screen={Screen} />
+        <FrameSection key={frame.title} frame={frame} />
       ))}
     </main>
   )
 }
 
-function FrameSection({
-  frame,
-  Screen,
-}: {
-  frame: Frame
-  Screen: ComponentType<{ question: QuestionFrame }>
-}) {
+function FrameSection({ frame }: { frame: GalleryFrame }) {
   const titleId = useId()
   return (
     <section className="gate-gallery__frame" aria-labelledby={titleId}>
@@ -73,13 +71,7 @@ function FrameSection({
               {size.label}
             </figcaption>
             <div className="gate-gallery__scroll">
-              <div className={`gate-frame gate-frame--${size.key}`}>
-                {frame.kind === 'question' ? (
-                  <Screen question={frame.question} />
-                ) : (
-                  <DashboardToast answer={frame.answer} />
-                )}
-              </div>
+              <div className={`gate-frame gate-frame--${size.key}`}>{frame.render()}</div>
             </div>
           </figure>
         ))}
