@@ -1,21 +1,24 @@
-/* /login-gate2 (LoginGate2.tsx): one centred column. It uses `.gate` from
-   loginGate.css for the screen's padding, and only its own classes after
-   that. */
+/* /login-gate2 (Gate2Flow.tsx): one centred column, with the step's actions
+   in a bar at the bottom. In a frame, `.g2` stands in for the window: it has
+   the frame's height and scrolls, and the bar sticks to its bottom. The real
+   gate scrolls the page instead. */
 
-.g2{gap:var(--s-6)}
+.g2{box-sizing:border-box;display:flex;flex-direction:column;height:812px;overflow-y:auto;background:var(--bg-app)}
+.g2 p{margin:0}
+.g2-content{flex:1 0 auto;display:flex;flex-direction:column;align-items:center;gap:var(--s-6);padding:var(--s-6) var(--s-4)}
 .g2-wordmark{font:400 20px/1 var(--font-display);letter-spacing:0.04em;color:var(--fg-3)}
 .g2-body{display:flex;flex-direction:column;gap:var(--s-5);width:100%;max-width:480px}
-.g2-body p{margin:0}
 
 .g2-head{display:flex;flex-direction:column;gap:var(--s-2)}
 .g2-progress{font:500 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
 .g2-title{margin:0;font:700 var(--text-2xl)/var(--lh-tight) var(--font-ui);letter-spacing:-0.01em;color:var(--fg-1)}
+.g2-title:focus{outline:none}
 .g2-source{font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3);overflow-wrap:anywhere}
 
 /* The one surface: the matches. Opponent and score lead. */
 .g2-matches{padding:var(--s-3) var(--s-4) var(--s-1);border-radius:var(--r-md);background:var(--bg-panel)}
 .g2-matches .g2-matches__summary{font:600 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-2)}
-.g2-matches .g2-matches__head,.g2-more .g2-matches__head{display:flex;flex-wrap:wrap;justify-content:space-between;gap:0 var(--s-3);margin-top:var(--s-2);font:500 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
+.g2-matches .g2-matches__head{display:flex;flex-wrap:wrap;justify-content:space-between;gap:0 var(--s-3);margin-top:var(--s-2);font:500 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
 .g2-list{list-style:none;margin:0;padding:0}
 /* The result wraps under the opponent when the row is too narrow for both. */
 .g2-list li{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--s-1) var(--s-4);padding:var(--s-3) 0}
@@ -26,33 +29,41 @@
 .g2-match__result{flex:none;color:var(--loser)}
 .g2-match__result .num{font-size:var(--text-lg)}
 .g2-match__result--won{font-weight:600;color:var(--winner)}
-
 .g2-view-all{min-height:44px}
-
-/* "View all": every match in a box that scrolls, so the gate stays short. */
-.g2-all{max-height:420px}
-.g2-more{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--s-3)}
-.g2-more .g2-matches__head,.g2-matches .g2-matches__head:first-child{margin:0}
 
 .g2-outcome{color:var(--fg-2)}
 
-.g2-actions{display:flex;flex-direction:column;gap:var(--s-3)}
-.g2-actions>.fm-btn{width:100%}
-.g2-choice{flex-direction:column;align-items:flex-start;gap:2px;min-height:72px;padding:var(--s-3) var(--s-4);text-align:left}
-.g2-choice__label{font:600 var(--text-md)/var(--lh-snug) var(--font-ui);color:var(--fg-1)}
-.g2-choice__help{font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
-.g2-back{align-self:flex-start;min-height:44px;gap:var(--s-1)}
-.g2-actions>.g2-back{width:auto}
+/* The history view's loading, failure and end rows. */
+.g2-matches .g2-history-status{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-2) var(--s-3);padding:var(--s-3) 0;border-top:1px solid var(--border-subtle);font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
+.g2-spinner{width:14px;height:14px;box-sizing:border-box;border-radius:50%;border:2px solid currentColor;border-right-color:transparent}
 
-.g2-review summary{min-height:44px;box-sizing:border-box}
-.g2-review .g2-matches{margin-bottom:var(--s-4)}
+/* "Which player?" */
+.g2-pick{display:flex;flex-direction:column;gap:var(--s-3);margin:0;padding:0;border:0}
+.g2-option{padding:var(--s-3) var(--s-4);border:1px solid var(--border-control);border-radius:var(--r-md)}
+.g2-option:has(input:checked){border-color:var(--accent)}
+.g2-option__text{display:flex;flex-direction:column;gap:2px;min-width:0}
+.g2-option__label{font-weight:600;overflow-wrap:anywhere}
 
-/* The rules under the page's header. */
+/* The bar: the step's actions, at the bottom of the screen. */
+.g2-bar{position:sticky;bottom:0;display:flex;justify-content:center;padding:var(--s-3) var(--s-4) calc(var(--s-4) + env(safe-area-inset-bottom));border-top:1px solid var(--border-subtle);background:var(--bg-app)}
+.g2-bar__inner{display:flex;flex-direction:column;gap:var(--s-2);width:100%;max-width:480px}
+.g2-bar__inner>.fm-btn{width:100%;height:auto;padding-block:var(--s-2);white-space:normal;text-align:center}
+.g2-bar__inner>.g2-back{align-self:center;width:auto;min-height:44px;gap:var(--s-1)}
+.g2-note{font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3);text-align:center}
+
+/* A short window: the bar scrolls with the page, so it can't cover it. */
+@media (max-height:480px){
+  .g2-bar{position:static}
+}
+
+/* The notes above the frames. */
 .g2-reqs{display:flex;flex-direction:column;gap:var(--s-3);max-width:760px}
 .g2-reqs h2{margin:0;font:600 var(--text-lg)/var(--lh-snug) var(--font-ui);color:var(--fg-1)}
+.g2-reqs h3{margin:var(--s-2) 0 0;font:600 var(--text-base)/var(--lh-snug) var(--font-ui);color:var(--fg-1)}
 .g2-reqs ul{display:flex;flex-direction:column;gap:var(--s-2);margin:0;padding-left:var(--s-5);color:var(--fg-2)}
 
 @container (min-width:720px){
-  .g2{gap:var(--s-8)}
+  .g2{height:800px}
+  .g2-content{gap:var(--s-8);padding-top:var(--s-8)}
   .g2-title{font-size:var(--text-3xl)}
 }

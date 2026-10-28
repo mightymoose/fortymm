@@ -24,9 +24,9 @@ export class LoginGatePage {
       .map((region) => within(region).getByRole('heading', { level: 2 }).textContent ?? '')
   }
 
-  // The section under the header that lists what the real gate must do.
+  // The notes under gate2's header: what the page simulates, and what the real gate needs.
   get requirements(): HTMLElement {
-    return screen.getByRole('region', { name: 'What the real gate must do' })
+    return screen.getByRole('region', { name: 'Simulated here, and what the real gate needs' })
   }
 
   // The frame titled `title`, at `size`.
