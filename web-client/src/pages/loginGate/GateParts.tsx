@@ -140,8 +140,16 @@ export function Step2Answers() {
 
 // The dashboard right after an answer, simplified to its topbar, with the
 // toast that confirms the answer. `player` is the account's player, in the
-// topbar's chip.
-export function DashboardToast({ player, message }: { player: string; message: string }) {
+// topbar's chip. `undo` false leaves Undo out of the toast.
+export function DashboardToast({
+  player,
+  message,
+  undo = true,
+}: {
+  player: string
+  message: string
+  undo?: boolean
+}) {
   return (
     <div className="gate-dash">
       <div className="gate-dash__bar">
@@ -156,7 +164,7 @@ export function DashboardToast({ player, message }: { player: string; message: s
         <p className="meta">The dashboard, left out of this mockup.</p>
       </div>
       <div className="gate-dash__toast">
-        <Toast role="status" message={message} onUndo={() => undefined} />
+        <Toast role="status" message={message} onUndo={undo ? () => undefined : undefined} />
       </div>
     </div>
   )

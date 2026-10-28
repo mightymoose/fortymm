@@ -1,4 +1,4 @@
-import { useId } from 'react'
+import { useId, type ReactNode } from 'react'
 import { Button } from '../../components/Button'
 import { Icon } from '../../components/Icon'
 import { GateGallery, type GalleryFrame } from './GateGallery'
@@ -6,26 +6,41 @@ import { DashboardToast } from './GateParts'
 import {
   existingAccount,
   firstSignIn,
+  largeHistory,
   longNames,
   manageConfirmation,
   matchCount,
+  olderGuest,
   olderQuestion,
   outcome,
+  PAGE,
+  playerAfterNo,
+  playerAfterYes,
   removeConfirmation,
+  SHOWN,
   yesConfirmation,
   yesLabel,
+  type Gate2Match,
   type Gate2Question,
 } from './gate2Data'
 import './loginGate2.css'
+
+type Progress = { index: number; total: number }
 
 type Step = {
   question: Gate2Question
   step: 1 | 2
   status?: 'saving' | 'error'
   // Only while more than one player is in the review.
-  progress?: { index: number; total: number }
+  progress?: Progress
   // The confirmation of the answer before this one.
   saved?: string
+  // Whether step 2's matches are open.
+  open?: boolean
+}
+
+function Done({ player, message }: { player: string; message: string }) {
+  return <DashboardToast player={player} message={message} undo={false} />
 }
 
 const frames: readonly GalleryFrame[] = [
@@ -34,25 +49,36 @@ const frames: readonly GalleryFrame[] = [
     title: 'Step 1, sign-in to an existing account',
     render: () => <Question question={existingAccount} step={1} />,
   },
+  {
+    title: 'Step 1, the older guest player’s name survives',
+    render: () => <Question question={olderGuest} step={1} />,
+  },
+  { title: 'Step 1, 48 matches', render: () => <Question question={largeHistory} step={1} /> },
+  { title: 'View all 48 matches', render: () => <AllMatches question={largeHistory} /> },
   { title: 'Step 2', render: () => <Question question={existingAccount} step={2} /> },
+  { title: 'Step 2, matches open', render: () => <Question question={largeHistory} step={2} open /> },
   { title: 'Saving', render: () => <Question question={existingAccount} step={1} status="saving" /> },
   { title: 'Error', render: () => <Question question={existingAccount} step={1} status="error" /> },
   { title: 'Long player names', render: () => <Question question={longNames} step={1} /> },
   {
     title: 'Done after Yes, first sign-in',
-    render: () => <DashboardToast player={firstSignIn.player} message={yesConfirmation(firstSignIn)} />,
+    render: () => <Done player={playerAfterYes(firstSignIn)} message={yesConfirmation(firstSignIn)} />,
   },
   {
     title: 'Done after Yes, existing account',
-    render: () => <DashboardToast player={existingAccount.survivor} message={yesConfirmation(existingAccount)} />,
+    render: () => <Done player={playerAfterYes(existingAccount)} message={yesConfirmation(existingAccount)} />,
+  },
+  {
+    title: 'Done after Yes, the name changes',
+    render: () => <Done player={playerAfterYes(olderGuest)} message={yesConfirmation(olderGuest)} />,
   },
   {
     title: 'Done after I manage this player',
-    render: () => <DashboardToast player={existingAccount.survivor} message={manageConfirmation(existingAccount)} />,
+    render: () => <Done player={playerAfterNo(existingAccount)} message={manageConfirmation(existingAccount)} />,
   },
   {
     title: 'Done after Remove from my account',
-    render: () => <DashboardToast player={existingAccount.survivor} message={removeConfirmation(existingAccount)} />,
+    render: () => <Done player={playerAfterNo(existingAccount)} message={removeConfirmation(existingAccount)} />,
   },
   {
     title: 'Two players: the first, oldest question',
@@ -75,7 +101,7 @@ const frames: readonly GalleryFrame[] = [
   },
   {
     title: 'Two players: done after Yes on the last one',
-    render: () => <DashboardToast player={existingAccount.survivor} message={yesConfirmation(existingAccount)} />,
+    render: () => <Done player={playerAfterYes(existingAccount)} message={yesConfirmation(existingAccount)} />,
   },
 ]
 
@@ -93,69 +119,95 @@ export function LoginGate2() {
   )
 }
 
-function Question({ question, step, status, progress, saved }: Step) {
-  const titleId = useId()
+function Screen({ titleId, children }: { titleId: string; children: ReactNode }) {
   return (
     <div className="gate g2" role="group" aria-labelledby={titleId}>
       <div className="g2-wordmark">FortyMM</div>
-      <div className="g2-body">
-        {saved && (
-          <p className="fm-notice fm-notice--success g2-saved" role="status">
-            <Icon name="check" />
-            <span>
-              {saved}
-              {progress && <span className="fm-sr"> Player {progress.index} of {progress.total} next.</span>}
-            </span>
-            <Button variant="link" className="g2-undo">
-              Undo
-            </Button>
-          </p>
-        )}
-        <div className="g2-head">
-          {progress && (
-            <p className="g2-progress">
-              Player {progress.index} of {progress.total}
-            </p>
-          )}
-          <h3 id={titleId} className="g2-title">
-            {step === 1 ? 'Did you play these matches?' : 'Do you manage this player?'}
-          </h3>
-          {/* Step 2's answers name the player, so it isn't named here too. */}
-          {step === 1 && <p className="g2-source">Played as {question.player}</p>}
-        </div>
-        {step === 1 ? <Step1 question={question} status={status} /> : <Step2 question={question} />}
-      </div>
+      <div className="g2-body">{children}</div>
     </div>
   )
 }
 
-function Matches({ question }: { question: Gate2Question }) {
-  const sample = question.matches.length < question.total
+function Question({ question, step, status, progress, saved, open }: Step) {
+  const titleId = useId()
+  return (
+    <Screen titleId={titleId}>
+      {saved && (
+        <p className="fm-notice fm-notice--success" role="status">
+          <Icon name="check" />
+          <span>
+            {saved}
+            {progress && (
+              <span className="fm-sr">
+                {' '}
+                Player {progress.index} of {progress.total} next.
+              </span>
+            )}
+          </span>
+        </p>
+      )}
+      <div className="g2-head">
+        {progress && (
+          <p className="g2-progress">
+            Player {progress.index} of {progress.total}
+          </p>
+        )}
+        <h3 id={titleId} className="g2-title">
+          {step === 1 ? 'Did you play these matches?' : 'Do you manage this player?'}
+        </h3>
+        <p className="g2-source">Played as {question.player}</p>
+      </div>
+      {step === 1 ? <Step1 question={question} status={status} /> : <Step2 question={question} open={open} />}
+    </Screen>
+  )
+}
+
+function MatchList({ matches, label }: { matches: readonly Gate2Match[]; label: string }) {
+  return (
+    <ul className="g2-list" aria-label={label}>
+      {matches.map((match) => (
+        <li key={`${match.date} ${match.time} ${match.opponent}`}>
+          <span className="g2-match__who">
+            <span className="g2-match__opponent">{match.opponent}</span>
+            <span className="g2-match__when">
+              {match.date}, {match.time}
+            </span>
+          </span>
+          <span className={match.won ? 'g2-match__result g2-match__result--won' : 'g2-match__result'}>
+            {match.won ? 'Won' : 'Lost'} <span className="num">{match.score}</span>
+          </span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+function summary(question: Gate2Question): string {
+  return `${matchCount(question.total)} · ${question.range}`
+}
+
+// Up to 3 matches. With more, it says how many it shows and offers the
+// rest. `withSummary` false leaves out the count and dates, for a place that
+// already shows them.
+function Matches({ question, withSummary = true }: { question: Gate2Question; withSummary?: boolean }) {
+  const sample = question.total > SHOWN
   return (
     <div className="g2-matches">
-      <p className="g2-matches__head">
-        <span>{sample ? 'Recent matches' : matchCount(question.total)}</span>
-        {sample && (
+      {withSummary && <p className="g2-matches__summary">{summary(question)}</p>}
+      {sample && (
+        <p className="g2-matches__head">
+          <span>Recent matches</span>
           <span>
-            {question.matches.length} of {question.total}
+            Showing {SHOWN} of {question.total}
           </span>
-        )}
-      </p>
-      <ul aria-label={sample ? 'Recent matches' : 'Matches'}>
-        {question.matches.map((match) => (
-          <li key={`${match.date} ${match.time}`}>
-            <span className="g2-match__who">
-              <span className="g2-match__opponent">{match.opponent}</span>
-              <span className="g2-match__when">
-                {match.date}, {match.time}
-              </span>
-            </span>
-            <span className={match.won ? 'g2-match__result g2-match__result--won' : 'g2-match__result'}>
-              {match.won ? 'Won' : 'Lost'} <span className="num">{match.score}</span>
-            </span>
-          </li>
-        ))}
-      </ul>
+        </p>
+      )}
+      <MatchList matches={question.matches.slice(0, SHOWN)} label={sample ? 'Recent matches' : 'Matches'} />
+      {sample && (
+        <Button variant="link" className="g2-view-all">
+          View all {question.total} matches
+        </Button>
+      )}
     </div>
   )
 }
@@ -170,8 +222,7 @@ function Step1({ question, status }: { question: Gate2Question; status?: 'saving
         {status === 'error' && (
           <div className="fm-alert fm-alert--error" role="alert">
             <Icon name="error" />
-            <p className="fm-alert__title">Your answer wasn’t saved</p>
-            <p className="fm-alert__body">Check your connection, then tap {yesLabel(question)} again.</p>
+            <p className="fm-alert__title">Your answer wasn’t saved. Please try again.</p>
           </div>
         )}
         <Button variant="primary" size="xl" busy={saving}>
@@ -185,24 +236,21 @@ function Step1({ question, status }: { question: Gate2Question; status?: 'saving
   )
 }
 
-function Step2({ question }: { question: Gate2Question }) {
-  const latest = question.matches[0]
+function Step2({ question, open }: { question: Gate2Question; open?: boolean }) {
   return (
     <>
-      <details className="fm-disclosure g2-review">
-        <summary>
-          {matchCount(question.total)}, the latest on {latest.date}
-        </summary>
-        <Matches question={question} />
+      <details className="fm-disclosure g2-review" open={open}>
+        <summary>{summary(question)}</summary>
+        <Matches question={question} withSummary={false} />
       </details>
       <div className="g2-actions">
         <Button variant="secondary" className="g2-choice">
           <span className="g2-choice__label">I manage this player</span>
-          <span className="g2-choice__help">Keep {question.player} as a separate player in your account.</span>
+          <span className="g2-choice__help">Keep this player separate in your account.</span>
         </Button>
         <Button variant="secondary" className="g2-choice">
           <span className="g2-choice__label">Remove from my account</span>
-          <span className="g2-choice__help">{question.player} and their matches will stay in FortyMM.</span>
+          <span className="g2-choice__help">The player and their matches will stay in FortyMM.</span>
         </Button>
         <Button variant="ghost" className="g2-back">
           <Icon name="left" />
@@ -210,6 +258,41 @@ function Step2({ question }: { question: Gate2Question }) {
         </Button>
       </div>
     </>
+  )
+}
+
+// Every match of the question's player, a page at a time, in a box that
+// scrolls. Back returns to the question.
+function AllMatches({ question }: { question: Gate2Question }) {
+  const titleId = useId()
+  const loaded = Math.min(PAGE, question.total)
+  return (
+    <Screen titleId={titleId}>
+      <Button variant="ghost" className="g2-back">
+        <Icon name="left" />
+        Back to the question
+      </Button>
+      <div className="g2-head">
+        <h3 id={titleId} className="g2-title">
+          All {question.total} matches
+        </h3>
+        <p className="g2-source">
+          Played as {question.player} · {question.range}
+        </p>
+      </div>
+      {/* tabIndex lets a keyboard scroll the box. */}
+      <div className="g2-matches g2-all fm-scroll" role="region" aria-label="All matches" tabIndex={0}>
+        <MatchList matches={question.matches.slice(0, loaded)} label="All matches" />
+      </div>
+      {loaded < question.total && (
+        <div className="g2-more">
+          <p className="g2-matches__head">
+            Showing {loaded} of {question.total}
+          </p>
+          <Button variant="secondary">Load {Math.min(PAGE, question.total - loaded)} more</Button>
+        </div>
+      )}
+    </Screen>
   )
 }
 
@@ -235,9 +318,15 @@ function Requirements() {
           The API lists players by display name today, so it needs to give each question’s time.
         </li>
         <li>
-          Yes merges the player into the account’s self player, and the player created first keeps its name.
-          The copy names that player, so the API needs to say which player survives for each question. The
-          gate doesn’t decide it from whether the account is new.
+          Yes merges the question’s player and the account’s self player. The player created first survives.
+          The other gets <code>merged_into</code> set to it, and no match moves. The copy names the surviving
+          player, and says so when the account’s player gets a new name. So the API needs to say which player
+          survives for each question. The gate doesn’t decide it from whether the account is new.
+        </li>
+        <li>
+          The gate shows the 3 newest matches, with the total and the dates of the whole history. With more than
+          3, “View all” opens every match in a box that scrolls, {PAGE} at a time. The API needs a paged list of a
+          player’s matches. An answer always covers every match of the player.
         </li>
         <li>
           The counter shows only when the review holds more than one player. Its total is the questions
@@ -245,7 +334,10 @@ function Requirements() {
           adds 1. A question answered in another browser leaves the queue and takes 1 away. So “Player 1 of 1”
           never shows after an answer.
         </li>
-        <li>The player on screen stays while the list changes. Step 2 is the same question, so it doesn’t move the counter.</li>
+        <li>
+          The player on screen stays while the list changes. Step 2 and “View all” are the same question, so
+          they don’t move the counter.
+        </li>
         <li>
           After each saved answer, the gate fetches the list again, then picks the next question. It also
           fetches the list when the tab gets focus again.
@@ -261,11 +353,7 @@ function Requirements() {
         <li>
           After an answer, a status notice confirms it and names the next player for screen readers. Focus goes
           to the next player’s heading. When no question is left, the gate shows the requested page, with the
-          confirmation as a toast, and focus goes to the page.
-        </li>
-        <li>
-          Undo needs an API route that opens the question again, and none exists yet. After an Undo, the
-          question is open, so the gate comes back with that player.
+          confirmation as a toast, and focus goes to the page. Nothing offers Undo.
         </li>
         <li>The gate only hides pages. The API’s authorization stays as it is.</li>
       </ul>
