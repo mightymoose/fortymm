@@ -39,8 +39,6 @@ type Done = { player: string; message: string }
 export type FlowStart = {
   index?: number
   view?: View
-  // A managed player's id, or 'separate'.
-  picked?: string
   saving?: Action
   failed?: Action
   notice?: string
@@ -48,8 +46,6 @@ export type FlowStart = {
   // History pages the current player already loaded.
   history?: { pages: number; loading?: boolean; failed?: boolean }
 }
-
-const SEPARATE = 'separate'
 
 // The player the account gets when nothing gives it one. The API makes it
 // with a default name.
@@ -69,21 +65,26 @@ function shortDate(match: Gate2Match): string {
 
 // The gate on /login-gate2, on simulated data. It asks about one player at a
 // time and saves each answer after LATENCY. `hold` keeps saves and history
-// pages pending, for a frame that shows them.
+// pages pending, for a frame that shows them. `fullScreen` fills the window
+// and scrolls the page, as the real gate does. Otherwise the gate scrolls
+// inside its frame.
 export function Gate2Flow({
   scenario,
   start = {},
   hold = false,
+  fullScreen = false,
 }: {
   scenario: Scenario
   start?: FlowStart
   hold?: boolean
+  fullScreen?: boolean
 }) {
   const { queue } = scenario
   const [account, setAccount] = useState<Gate2Account>(scenario.account)
   const [index, setIndex] = useState(start.index ?? 0)
   const [view, setView] = useState<View>(start.view ?? 'question')
-  const [picked, setPicked] = useState<string | null>(start.picked ?? null)
+  // The step "View all" left, to go back to.
+  const [historyFrom, setHistoryFrom] = useState<View>('question')
   const [saving, setSaving] = useState<Action | null>(start.saving ?? null)
   const [failed, setFailed] = useState<Action | null>(start.failed ?? null)
   const [notice, setNotice] = useState<string | null>(start.notice ?? null)
@@ -119,6 +120,11 @@ export function Gate2Flow({
   const eligible = account.managed.filter((managed) => managed.id !== player.id)
   const busy = saving !== null
 
+  // What scrolls: the page, or the gate in its frame.
+  function scrollBox(): Element | null {
+    return fullScreen ? document.scrollingElement : scroller.current
+  }
+
   useEffect(() => {
     const target = focusNext.current === 'viewAll' ? viewAll.current : heading.current
     if (focusNext.current) target?.focus()
@@ -127,7 +133,8 @@ export function Gate2Flow({
 
   // Back in the history view, it opens where it was left.
   const restoreScroll = useEffectEvent(() => {
-    if (scroller.current) scroller.current.scrollTop = view === 'history' ? history.scrollTop : 0
+    const box = scrollBox()
+    if (box) box.scrollTop = view === 'history' ? history.scrollTop : 0
   })
   useLayoutEffect(() => {
     restoreScroll()
@@ -172,21 +179,22 @@ export function Gate2Flow({
       (entries) => {
         if (entries.some((entry) => entry.isIntersecting)) loadNext(next)
       },
-      { root: scroller.current, rootMargin: '0px 0px 240px 0px' },
+      { root: fullScreen ? null : scroller.current, rootMargin: '0px 0px 240px 0px' },
     )
     observer.observe(node)
     return () => observer.disconnect()
-  }, [view, next, loading, pageFailed, loaded])
+  }, [view, next, loading, pageFailed, loaded, fullScreen])
 
   function openHistory() {
     if (history.rows.length === 0 && !history.loading) loadPage(player.id, 0)
+    setHistoryFrom(view)
     go('history')
   }
 
   function closeHistory() {
-    const top = scroller.current?.scrollTop ?? 0
+    const top = scrollBox()?.scrollTop ?? 0
     updateHistory(player.id, (current) => ({ ...current, scrollTop: top }))
-    go('question', 'viewAll')
+    go(historyFrom, 'viewAll')
   }
 
   function finish(action: Action) {
@@ -209,7 +217,8 @@ export function Gate2Flow({
             {
               id: player.id,
               name: player.name,
-              summary: `${matchCount(player.total)} · latest ${shortDate(player.recent[0])}`,
+              total: player.total,
+              lastMatch: `${player.recent[0].opponent} on ${shortDate(player.recent[0])}`,
             },
           ],
         }
@@ -225,7 +234,6 @@ export function Gate2Flow({
     setAccount(after)
     setSaving(null)
     setFailed(null)
-    setPicked(null)
     if (index + 1 < queue.length) {
       focusNext.current = 'heading'
       setIndex(index + 1)
@@ -255,13 +263,13 @@ export function Gate2Flow({
 
   function manage() {
     if (eligible.length === 0) save({ kind: 'separate' })
-    else {
-      setPicked(null)
-      go('pick')
-    }
+    else go('pick')
   }
 
-  if (done) return <DashboardToast player={done.player} message={done.message} undo={false} />
+  if (done) {
+    const toast = <DashboardToast player={done.player} message={done.message} undo={false} />
+    return fullScreen ? <div className="g2-done--full">{toast}</div> : toast
+  }
 
   const progress = queue.length > 1 && (
     <p className="g2-progress">
@@ -269,15 +277,21 @@ export function Gate2Flow({
     </p>
   )
   const savingKind = saving?.kind
-  const pickedPlayer = eligible.find((managed) => managed.id === picked)
 
-  function pickAction(): Action | null {
-    if (picked === SEPARATE) return { kind: 'separate' }
-    return pickedPlayer ? { kind: 'merge', into: pickedPlayer } : null
+  // Whether `action` is the answer that is saving now.
+  function savingThis(action: Action): boolean {
+    return saving !== null && sameAction(saving, action)
   }
 
+  const saveError = failed && (
+    <div className="fm-alert fm-alert--error" role="alert">
+      <Icon name="error" />
+      <p className="fm-alert__title">Your answer wasn’t saved. Please try again.</p>
+    </div>
+  )
+
   return (
-    <div className="g2" ref={scroller} role="group" aria-labelledby={titleId}>
+    <div className={fullScreen ? 'g2 g2--full' : 'g2'} ref={scroller} role="group" aria-labelledby={titleId}>
       <div className="g2-content">
         <div className="g2-wordmark">FortyMM</div>
         <div className="g2-body">
@@ -297,53 +311,62 @@ export function Gate2Flow({
             {progress}
             <h3 id={titleId} className="g2-title" ref={heading} tabIndex={-1}>
               {view === 'question' && 'Did you play these matches?'}
-              {view === 'manage' && 'Do you manage this player?'}
-              {view === 'pick' && 'Which player?'}
+              {view === 'manage' && 'Who played these matches?'}
+              {view === 'pick' && 'Which of your players played these?'}
               {view === 'history' && `All ${player.total} matches`}
             </h3>
             <p className="g2-source">
               Played as {player.name}
-              {(view === 'history' || view === 'manage') && ` · ${matchCount(player.total)} · ${player.range}`}
+              {view === 'history' && ` · ${matchCount(player.total)} · ${player.range}`}
             </p>
           </div>
 
-          {view === 'question' && (
-            <>
-              <Matches player={player} onViewAll={openHistory} viewAllRef={viewAll} />
-              <p className="g2-outcome">{outcome(player, account)}</p>
-            </>
+          {view !== 'history' && <Matches player={player} onViewAll={openHistory} viewAllRef={viewAll} />}
+          {view === 'question' && <p className="g2-outcome">{outcome(player, account)}</p>}
+
+          {view === 'manage' && (
+            <div className="g2-choices">
+              {saveError}
+              <Choice
+                label="Someone I manage"
+                help="Like your child, or a club member you look after. Their matches stay in your account, apart from yours."
+                saving={savingThis({ kind: 'separate' })}
+                off={busy}
+                onClick={manage}
+              />
+              <Choice
+                label="Not someone I know"
+                help="These matches come off your account. They stay in FortyMM."
+                saving={savingThis({ kind: 'remove' })}
+                off={busy}
+                onClick={() => save({ kind: 'remove' })}
+              />
+              <Back disabled={busy} onClick={() => go('question')} />
+            </div>
           )}
 
           {view === 'pick' && (
-            <fieldset className="g2-pick" disabled={busy}>
-              <legend className="fm-sr">Which player?</legend>
+            <div className="g2-choices">
+              {saveError}
               {eligible.map((managed) => (
-                <label key={managed.id} className="fm-radio g2-option">
-                  <input
-                    type="radio"
-                    name={titleId}
-                    checked={picked === managed.id}
-                    onChange={() => setPicked(managed.id)}
-                  />
-                  <span className="g2-option__text">
-                    <span className="g2-option__label">{managed.name}</span>
-                    <span className="fm-help">{managed.summary}</span>
-                  </span>
-                </label>
-              ))}
-              <label className="fm-radio g2-option">
-                <input
-                  type="radio"
-                  name={titleId}
-                  checked={picked === SEPARATE}
-                  onChange={() => setPicked(SEPARATE)}
+                <Choice
+                  key={managed.id}
+                  label={managed.name}
+                  help={`${matchCount(managed.total)}. Last against ${managed.lastMatch}.`}
+                  saving={savingThis({ kind: 'merge', into: managed })}
+                  off={busy}
+                  onClick={() => save({ kind: 'merge', into: managed })}
                 />
-                <span className="g2-option__text">
-                  <span className="g2-option__label">Keep as a separate player</span>
-                  <span className="fm-help">For someone who isn’t in your account yet.</span>
-                </span>
-              </label>
-            </fieldset>
+              ))}
+              <Choice
+                label="Someone new"
+                help="Keep these matches as a new player you manage."
+                saving={savingThis({ kind: 'separate' })}
+                off={busy}
+                onClick={() => save({ kind: 'separate' })}
+              />
+              <Back disabled={busy} onClick={() => go('manage')} />
+            </div>
           )}
 
           {view === 'history' && (
@@ -372,93 +395,73 @@ export function Gate2Flow({
         </div>
       </div>
 
-      <div className="g2-bar">
-        <div className="g2-bar__inner">
-          {failed && view !== 'history' && (
-            <div className="fm-alert fm-alert--error" role="alert">
-              <Icon name="error" />
-              <p className="fm-alert__title">Your answer wasn’t saved. Please try again.</p>
-            </div>
-          )}
-
-          {view === 'question' && (
-            <>
-              <Button variant="primary" size="lg" busy={savingKind === 'yes'} onClick={() => save({ kind: 'yes' })}>
-                {savingKind === 'yes' ? 'Saving…' : 'Yes, these were mine'}
-              </Button>
-              <Button variant="secondary" size="lg" aria-disabled={busy || undefined} onClick={() => go('manage')}>
-                Someone else played
-              </Button>
-            </>
-          )}
-
-          {view === 'manage' && (
-            <>
-              <Button
-                variant="secondary"
-                size="lg"
-                busy={savingKind === 'separate'}
-                aria-disabled={(busy && savingKind !== 'separate') || undefined}
-                onClick={manage}
-              >
-                {savingKind === 'separate' ? 'Saving…' : 'I manage this player'}
-              </Button>
-              <Button
-                variant="secondary"
-                size="lg"
-                busy={savingKind === 'remove'}
-                aria-disabled={(busy && savingKind !== 'remove') || undefined}
-                aria-describedby={`${titleId}-remove`}
-                onClick={() => save({ kind: 'remove' })}
-              >
-                {savingKind === 'remove' ? 'Saving…' : 'Remove from my account'}
-              </Button>
-              <p id={`${titleId}-remove`} className="g2-note">
-                The player and their matches stay in FortyMM.
-              </p>
-              <Button variant="ghost" className="g2-back" aria-disabled={busy || undefined} onClick={() => go('question')}>
+      {(view === 'question' || view === 'history') && (
+        <div className="g2-bar">
+          <div className="g2-bar__inner">
+            {view === 'question' && (
+              <>
+                {saveError}
+                <Button variant="primary" size="lg" busy={savingKind === 'yes'} onClick={() => save({ kind: 'yes' })}>
+                  {savingKind === 'yes' ? 'Saving…' : 'Yes, these were mine'}
+                </Button>
+                <Button variant="secondary" size="lg" aria-disabled={busy || undefined} onClick={() => go('manage')}>
+                  Someone else played
+                </Button>
+              </>
+            )}
+            {view === 'history' && (
+              <Button variant="secondary" size="lg" onClick={closeHistory}>
                 <Icon name="left" />
                 Back
               </Button>
-            </>
-          )}
-
-          {view === 'pick' && (
-            <>
-              <Button
-                variant="primary"
-                size="lg"
-                busy={busy}
-                aria-disabled={pickAction() === null || undefined}
-                onClick={() => {
-                  const action = pickAction()
-                  if (action) save(action)
-                }}
-              >
-                {busy
-                  ? 'Saving…'
-                  : picked === SEPARATE
-                    ? 'Keep as a separate player'
-                    : pickedPlayer
-                      ? `Add to ${pickedPlayer.name}`
-                      : 'Choose a player'}
-              </Button>
-              <Button variant="ghost" className="g2-back" aria-disabled={busy || undefined} onClick={() => go('manage')}>
-                <Icon name="left" />
-                Back
-              </Button>
-            </>
-          )}
-
-          {view === 'history' && (
-            <Button variant="secondary" size="lg" onClick={closeHistory}>
-              <Icon name="left" />
-              Back to the question
-            </Button>
-          )}
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
+  )
+}
+
+function sameAction(a: Action, b: Action): boolean {
+  if (a.kind === 'merge' && b.kind === 'merge') return a.into.id === b.into.id
+  return a.kind === b.kind
+}
+
+// One choice of step 2 or the picker: one tap saves it. While it saves, it
+// shows Saving…, and while any answer saves, the other choices are off.
+function Choice({
+  label,
+  help,
+  saving,
+  off,
+  onClick,
+}: {
+  label: string
+  help: string
+  saving: boolean
+  off: boolean
+  onClick: () => void
+}) {
+  return (
+    <Button
+      variant="secondary"
+      className="g2-choice"
+      busy={saving}
+      aria-disabled={(off && !saving) || undefined}
+      onClick={onClick}
+    >
+      <span className="g2-choice__label">{saving ? 'Saving…' : label}</span>
+      <span className="g2-choice__help">{help}</span>
+    </Button>
+  )
+}
+
+function Back({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
+  return (
+    <Button variant="ghost" className="g2-back" aria-disabled={disabled || undefined} onClick={onClick}>
+      <Icon name="left" />
+      Back
+    </Button>
   )
 }
 

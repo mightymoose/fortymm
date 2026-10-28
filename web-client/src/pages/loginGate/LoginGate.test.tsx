@@ -91,22 +91,20 @@ describe('/login-gate2', () => {
     'History, every match loaded',
     'Someone else played, no managed players',
     'Someone else played, with managed players',
-    'Which player? nothing chosen',
-    'Which player? kindly koala 552 chosen',
-    'Which player? Keep as a separate player chosen',
+    'Which of your players?',
     'Saving Yes (held)',
-    'Saving Add to kindly koala 552 (held)',
+    'Saving kindly koala 552 (held)',
     'Error on Yes',
-    'Error on I manage this player',
-    'Error on Add to kindly koala 552',
+    'Error on Someone I manage',
+    'Error on kindly koala 552',
     'Long player names',
-    'Long player names, Which player?',
+    'Long player names, Which of your players?',
     'Done after Yes',
-    'Done after Add to kindly koala 552',
-    'Done after Keep as a separate player',
-    'Done after Remove from my account',
+    'Done after kindly koala 552',
+    'Done after Someone I manage',
+    'Done after Not someone I know',
     'Two players: player 1 of 2',
-    'Two players: Which player? stays on player 1',
+    'Two players: Which of your players? stays on player 1',
     'Two players: player 2 of 2 after the first answer',
     'Two players: the first save fails once',
     'Two players: done after the last answer',
@@ -234,67 +232,69 @@ describe('/login-gate2', () => {
     expect(rows(frame, 'All matches')).toHaveLength(48)
     expect(frame).toHaveTextContent('That’s all 48 matches.')
 
-    await user.click(within(frame).getByRole('button', { name: 'Back to the question' }))
+    await user.click(within(frame).getByRole('button', { name: 'Back' }))
     expect(within(frame).getByRole('button', { name: 'View all 48 matches' })).toHaveFocus()
     await user.click(within(frame).getByRole('button', { name: 'View all 48 matches' }))
     expect(rows(frame, 'All matches')).toHaveLength(48)
     expect(within(frame).queryByText('Loading matches…')).not.toBeInTheDocument()
   })
 
-  it('saves I manage this player at once when the account manages no player', async () => {
+  it('shows the matches again on step 2, and saves Someone I manage at once when the account manages no player', async () => {
     const { page, user } = await render()
     const frame = page.frame('Yes merges into your main player', phone)
 
     await user.click(within(frame).getByRole('button', { name: 'Someone else played' }))
-    expect(within(frame).getByRole('heading', { name: 'Do you manage this player?' })).toHaveFocus()
+    expect(within(frame).getByRole('heading', { name: 'Who played these matches?' })).toHaveFocus()
     expect(frame.textContent?.match(/mellow mongoose 594/g)).toHaveLength(1)
-    expect(frame).toHaveTextContent('The player and their matches stay in FortyMM.')
+    expect(rows(frame, 'Matches')).toHaveLength(3)
+    expect(frame).toHaveTextContent('These matches come off your account. They stay in FortyMM.')
 
-    await user.click(within(frame).getByRole('button', { name: 'I manage this player' }))
-    expect(within(frame).getByRole('button', { name: 'Saving…' })).toHaveAttribute('aria-busy', 'true')
+    await user.click(within(frame).getByRole('button', { name: /^Someone I manage/ }))
+    expect(within(frame).getByRole('button', { name: /^Saving…/ })).toHaveAttribute('aria-busy', 'true')
     await respond()
     expect(within(frame).getByRole('status')).toHaveTextContent('You manage mellow mongoose 594 now.')
     expect(within(frame).queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument()
   })
 
-  it('asks which managed player, with nothing chosen, and adds to the chosen one', async () => {
+  it('asks which managed player, and one tap adds the matches to it', async () => {
     const { page, user } = await render()
     const frame = page.frame('Someone else played, with managed players', phone)
 
-    await user.click(within(frame).getByRole('button', { name: 'I manage this player' }))
-    expect(within(frame).getByRole('heading', { name: 'Which player?' })).toBeInTheDocument()
-    for (const radio of within(frame).getAllByRole('radio')) expect(radio).not.toBeChecked()
-    expect(within(frame).getAllByRole('radio').map((radio) => radio.closest('label')?.textContent)).toEqual([
-      'kindly koala 55214 matches · latest Oct 20',
-      'blithe bobcat 1726 matches · latest Sep 28',
-      'Keep as a separate playerFor someone who isn’t in your account yet.',
+    await user.click(within(frame).getByRole('button', { name: /^Someone I manage/ }))
+    expect(within(frame).getByRole('heading', { name: 'Which of your players played these?' })).toBeInTheDocument()
+    expect(rows(frame, 'Matches')).toHaveLength(3)
+    expect(within(frame).queryAllByRole('radio')).toHaveLength(0)
+    expect(within(frame).getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'kindly koala 55214 matches. Last against Ama Okafor on Oct 20.',
+      'blithe bobcat 1726 matches. Last against Mei Tanaka on Sep 28.',
+      'Someone newKeep these matches as a new player you manage.',
+      'Back',
     ])
-    expect(within(frame).getByRole('button', { name: 'Choose a player' })).toHaveAttribute('aria-disabled', 'true')
 
-    await user.click(within(frame).getByRole('radio', { name: /^kindly koala 552/ }))
-    await user.click(within(frame).getByRole('button', { name: 'Add to kindly koala 552' }))
+    await user.click(within(frame).getByRole('button', { name: /^kindly koala 552/ }))
+    expect(within(frame).getByRole('button', { name: /^Saving…/ })).toHaveAttribute('aria-busy', 'true')
+    expect(within(frame).getByRole('button', { name: /^blithe bobcat 172/ })).toHaveAttribute('aria-disabled', 'true')
     await respond()
     expect(within(frame).getByRole('status')).toHaveTextContent('3 matches added to kindly koala 552.')
   })
 
-  it('tries the failed answer again with the same destination', async () => {
+  it('tries the failed answer again with a tap on the same player', async () => {
     const { page, user } = await render()
-    const frame = page.frame('Error on Add to kindly koala 552', phone)
+    const frame = page.frame('Error on kindly koala 552', phone)
 
     expect(within(frame).getByRole('alert')).toHaveTextContent('Your answer wasn’t saved. Please try again.')
     expect(within(within(frame).getByRole('alert')).queryByRole('button')).not.toBeInTheDocument()
-    expect(within(frame).getByRole('radio', { name: /^kindly koala 552/ })).toBeChecked()
 
-    await user.click(within(frame).getByRole('button', { name: 'Add to kindly koala 552' }))
+    await user.click(within(frame).getByRole('button', { name: /^kindly koala 552/ }))
     await respond()
     expect(within(frame).getByRole('status')).toHaveTextContent('3 matches added to kindly koala 552.')
   })
 
-  it('removes the player from the account', async () => {
+  it('takes the matches off the account for Not someone I know', async () => {
     const { page, user } = await render()
     const frame = page.frame('Someone else played, no managed players', phone)
 
-    await user.click(within(frame).getByRole('button', { name: 'Remove from my account' }))
+    await user.click(within(frame).getByRole('button', { name: /^Not someone I know/ }))
     await respond()
     expect(within(frame).getByRole('status')).toHaveTextContent('mellow mongoose 594 removed from your account.')
   })
@@ -323,7 +323,7 @@ describe('/login-gate2', () => {
     expect(frame).toHaveTextContent('Player 1 of 2')
     await user.click(within(frame).getByRole('button', { name: 'Someone else played' }))
     expect(frame).toHaveTextContent('Player 1 of 2')
-    await user.click(within(frame).getByRole('button', { name: 'I manage this player' }))
+    await user.click(within(frame).getByRole('button', { name: /^Someone I manage/ }))
     await respond()
 
     expect(frame).toHaveTextContent('Player 2 of 2')
@@ -331,17 +331,17 @@ describe('/login-gate2', () => {
     expect(within(frame).getByRole('heading', { name: 'Did you play these matches?' })).toHaveFocus()
 
     await user.click(within(frame).getByRole('button', { name: 'Someone else played' }))
-    await user.click(within(frame).getByRole('button', { name: 'I manage this player' }))
-    expect(within(frame).getByRole('radio', { name: /^brave badger 214/ })).toBeInTheDocument()
-    expect(within(frame).queryByRole('radio', { name: /^mellow mongoose 594/ })).not.toBeInTheDocument()
+    await user.click(within(frame).getByRole('button', { name: /^Someone I manage/ }))
+    expect(within(frame).getByRole('button', { name: /^brave badger 214/ })).toBeInTheDocument()
+    expect(within(frame).queryByRole('button', { name: /^mellow mongoose 594/ })).not.toBeInTheDocument()
   })
 
   it('leaves the question’s own player out of the picker', async () => {
     const page = await LoginGatePage.render('/login-gate2')
 
-    const frame = page.frame('Two players: Which player? stays on player 1', phone)
+    const frame = page.frame('Two players: Which of your players? stays on player 1', phone)
     expect(frame).toHaveTextContent('Player 1 of 2')
-    expect(within(frame).queryByRole('radio', { name: /^brave badger 214/ })).not.toBeInTheDocument()
+    expect(within(frame).queryByRole('button', { name: /^brave badger 214/ })).not.toBeInTheDocument()
   })
 
   it('offers no Undo when the gate ends', async () => {
@@ -351,5 +351,24 @@ describe('/login-gate2', () => {
       expect(within(page.frame(title, phone)).queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument()
     }
     expect(screen.queryAllByRole('button', { name: 'Undo' })).toHaveLength(0)
+  })
+
+  it('links each frame to its full-screen view', async () => {
+    const page = await LoginGatePage.render('/login-gate2')
+
+    const section = screen.getByRole('region', { name: 'Someone else played, no managed players' })
+    expect(within(section).getByRole('link', { name: 'Open full screen' })).toHaveAttribute(
+      'href',
+      '/login-gate2?frame=someone-else-played-no-managed-players',
+    )
+    expect(page.frameTitles).toHaveLength(titles.length)
+  })
+
+  it('shows one frame full screen, without the gallery', async () => {
+    await LoginGatePage.renderFullScreen('someone-else-played-no-managed-players')
+
+    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument()
+    expect(screen.queryAllByRole('figure')).toHaveLength(0)
+    expect(screen.getByRole('heading', { name: 'Who played these matches?' })).toBeInTheDocument()
   })
 })

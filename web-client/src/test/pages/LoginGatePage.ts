@@ -12,6 +12,12 @@ export class LoginGatePage {
     return new LoginGatePage()
   }
 
+  // One gate2 frame alone, full screen, by its `?frame=` name.
+  static async renderFullScreen(frame: string): Promise<LoginGatePage> {
+    await renderRoute(`/login-gate2?frame=${frame}`, { waitForSession: false })
+    return new LoginGatePage()
+  }
+
   get title(): HTMLElement {
     return screen.getByRole('heading', { level: 1 })
   }

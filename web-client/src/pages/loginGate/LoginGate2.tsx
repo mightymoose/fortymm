@@ -1,4 +1,6 @@
-import { GateGallery, type GalleryFrame } from './GateGallery'
+import { Link, useSearch } from '@tanstack/react-router'
+import type { ReactNode } from 'react'
+import { GateGallery } from './GateGallery'
 import { Gate2Flow, type FlowStart } from './Gate2Flow'
 import {
   badger,
@@ -18,8 +20,8 @@ import './loginGate2.css'
 const koala = managedPlayers[0]
 
 const longManaged: readonly ManagedPlayer[] = [
-  { id: 'hedgehog', name: 'harmonious hedgehog 731', summary: '27 matches · latest Oct 22' },
-  { id: 'kingfisher', name: 'knightly kingfisher 641', summary: '3 matches · latest Jun 14' },
+  { id: 'hedgehog', name: 'harmonious hedgehog 731', total: 27, lastMatch: 'Oluwaseun Adeyemi-Fitzgerald on Oct 22' },
+  { id: 'kingfisher', name: 'knightly kingfisher 641', total: 3, lastMatch: 'Maximiliane Hohenberger on Jun 14' },
 ]
 
 function one(
@@ -32,17 +34,31 @@ function one(
   return { account: { main, managed }, queue: [player], ...rest }
 }
 
-const badgerManaged: ManagedPlayer = { id: badger.id, name: badger.name, summary: '12 matches · latest Oct 27' }
+const badgerManaged: ManagedPlayer = { id: badger.id, name: badger.name, total: 12, lastMatch: 'Lin Wei on Oct 27' }
 
 function two(managed: readonly ManagedPlayer[] = [], rest: Omit<Scenario, 'account' | 'queue'> = {}): Scenario {
   return { account: { main: mainPlayer, managed }, queue: [badger, mellow], ...rest }
 }
 
-function frame(title: string, scenario: Scenario, start?: FlowStart, hold?: boolean): GalleryFrame {
-  return { title, render: () => <Gate2Flow scenario={scenario} start={start} hold={hold} /> }
+type Gate2Frame = { title: string; slug: string; render: (fullScreen: boolean) => ReactNode }
+
+// The frame's title as a URL word, such as `which-player-nothing-chosen`.
+function slugOf(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
 }
 
-const frames: readonly GalleryFrame[] = [
+function frame(title: string, scenario: Scenario, start?: FlowStart, hold?: boolean): Gate2Frame {
+  return {
+    title,
+    slug: slugOf(title),
+    render: (fullScreen) => <Gate2Flow scenario={scenario} start={start} hold={hold} fullScreen={fullScreen} />,
+  }
+}
+
+const frames: readonly Gate2Frame[] = [
   frame('Yes merges into your main player', one(mellow)),
   frame('Yes with no main player yet', one(mellow, { main: null })),
   frame('A larger history, whose third page fails once', one(heron, { failPage: 2 })),
@@ -51,46 +67,34 @@ const frames: readonly GalleryFrame[] = [
   frame('History, every match loaded', one(heron), { view: 'history', history: { pages: 3 } }),
   frame('Someone else played, no managed players', one(mellow), { view: 'manage' }),
   frame('Someone else played, with managed players', one(mellow, { managed: managedPlayers }), { view: 'manage' }),
-  frame('Which player? nothing chosen', one(mellow, { managed: managedPlayers }), { view: 'pick' }),
-  frame('Which player? kindly koala 552 chosen', one(mellow, { managed: managedPlayers }), {
-    view: 'pick',
-    picked: koala.id,
-  }),
-  frame('Which player? Keep as a separate player chosen', one(mellow, { managed: managedPlayers }), {
-    view: 'pick',
-    picked: 'separate',
-  }),
+  frame('Which of your players?', one(mellow, { managed: managedPlayers }), { view: 'pick' }),
   frame('Saving Yes (held)', one(mellow), { saving: { kind: 'yes' } }, true),
   frame(
-    'Saving Add to kindly koala 552 (held)',
+    'Saving kindly koala 552 (held)',
     one(mellow, { managed: managedPlayers }),
-    { view: 'pick', picked: koala.id, saving: { kind: 'merge', into: koala } },
+    { view: 'pick', saving: { kind: 'merge', into: koala } },
     true,
   ),
   frame('Error on Yes', one(mellow), { failed: { kind: 'yes' } }),
-  frame('Error on I manage this player', one(mellow), { view: 'manage', failed: { kind: 'separate' } }),
-  frame('Error on Add to kindly koala 552', one(mellow, { managed: managedPlayers }), {
+  frame('Error on Someone I manage', one(mellow), { view: 'manage', failed: { kind: 'separate' } }),
+  frame('Error on kindly koala 552', one(mellow, { managed: managedPlayers }), {
     view: 'pick',
-    picked: koala.id,
     failed: { kind: 'merge', into: koala },
   }),
   frame('Long player names', one(hummingbird, { main: 'marvelous mongoose 902' })),
-  frame('Long player names, Which player?', one(hummingbird, { managed: longManaged }), {
-    view: 'pick',
-    picked: 'hedgehog',
-  }),
+  frame('Long player names, Which of your players?', one(hummingbird, { managed: longManaged }), { view: 'pick' }),
   frame('Done after Yes', one(mellow), { done: { player: mainPlayer, message: `3 matches added to ${mainPlayer}.` } }),
-  frame('Done after Add to kindly koala 552', one(mellow), {
+  frame('Done after kindly koala 552', one(mellow), {
     done: { player: mainPlayer, message: `3 matches added to ${koala.name}.` },
   }),
-  frame('Done after Keep as a separate player', one(mellow), {
+  frame('Done after Someone I manage', one(mellow), {
     done: { player: mainPlayer, message: `You manage ${mellow.name} now.` },
   }),
-  frame('Done after Remove from my account', one(mellow), {
+  frame('Done after Not someone I know', one(mellow), {
     done: { player: mainPlayer, message: `${mellow.name} removed from your account.` },
   }),
   frame('Two players: player 1 of 2', two()),
-  frame('Two players: Which player? stays on player 1', two(managedPlayers), { view: 'pick' }),
+  frame('Two players: Which of your players? stays on player 1', two(managedPlayers), { view: 'pick' }),
   frame('Two players: player 2 of 2 after the first answer', two([badgerManaged]), {
     index: 1,
     notice: `You manage ${badger.name} now.`,
@@ -103,13 +107,22 @@ const frames: readonly GalleryFrame[] = [
 ]
 
 // Layout 2, activity first: one centred column that leads with the matches,
-// and asks about one player at a time.
+// and asks about one player at a time. `?frame=` shows one frame full
+// screen, at the window's real size.
 export function LoginGate2() {
+  const { frame: slug } = useSearch({ from: '/login-gate2' })
+  const alone = slug && frames.find((found) => found.slug === slug)
+  if (alone) return <div className="g2-screen">{alone.render(true)}</div>
   return (
     <GateGallery
       current="/login-gate2"
       description="One column that leads with the matches, because people recognize their matches, not a random name. It asks about one player at a time."
-      frames={frames}
+      frames={frames.map((found) => ({ title: found.title, render: () => found.render(false) }))}
+      frameLink={(title) => (
+        <Link className="g2-open" to="/login-gate2" search={{ frame: slugOf(title) }}>
+          Open full screen
+        </Link>
+      )}
     >
       <Requirements />
     </GateGallery>
@@ -132,7 +145,10 @@ function Requirements() {
           page from the simulated server as the end of the list comes near. Some frames fail one save or one page
           once, to show the error and the retry.
         </li>
-        <li>Each frame is a phone or desktop screen. In the real gate the page scrolls, not the frame.</li>
+        <li>
+          Each frame here is a box that scrolls. On a phone, the box doesn’t fit the screen, so use “Open full
+          screen”: it shows the frame at the window’s real size, and the page scrolls as in the real gate.
+        </li>
       </ul>
 
       <h3>The real gate</h3>

@@ -5,7 +5,7 @@
 
 .g2{box-sizing:border-box;display:flex;flex-direction:column;height:812px;overflow-y:auto;background:var(--bg-app)}
 .g2 p{margin:0}
-.g2-content{flex:1 0 auto;display:flex;flex-direction:column;align-items:center;gap:var(--s-6);padding:var(--s-6) var(--s-4)}
+.g2-content{flex:none;display:flex;flex-direction:column;align-items:center;gap:var(--s-6);padding:var(--s-6) var(--s-4)}
 .g2-wordmark{font:400 20px/1 var(--font-display);letter-spacing:0.04em;color:var(--fg-3)}
 .g2-body{display:flex;flex-direction:column;gap:var(--s-5);width:100%;max-width:480px}
 
@@ -37,19 +37,26 @@
 .g2-matches .g2-history-status{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-2) var(--s-3);padding:var(--s-3) 0;border-top:1px solid var(--border-subtle);font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
 .g2-spinner{width:14px;height:14px;box-sizing:border-box;border-radius:50%;border:2px solid currentColor;border-right-color:transparent}
 
-/* "Which player?" */
-.g2-pick{display:flex;flex-direction:column;gap:var(--s-3);margin:0;padding:0;border:0}
-.g2-option{padding:var(--s-3) var(--s-4);border:1px solid var(--border-control);border-radius:var(--r-md)}
-.g2-option:has(input:checked){border-color:var(--accent)}
-.g2-option__text{display:flex;flex-direction:column;gap:2px;min-width:0}
-.g2-option__label{font-weight:600;overflow-wrap:anywhere}
+/* Step 2 and the picker: each choice is one button, right under the
+   matches. */
+.g2-choices{display:flex;flex-direction:column;gap:var(--s-3)}
+.g2 .fm-btn.g2-choice{flex-direction:column;align-items:flex-start;gap:2px;width:100%;height:auto;min-height:72px;padding:var(--s-3) var(--s-4);white-space:normal;text-align:left}
+.g2-choice__label{font:600 var(--text-md)/var(--lh-snug) var(--font-ui);color:var(--fg-1);overflow-wrap:anywhere}
+.g2-choice__help{font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-2)}
+.g2-choices>.g2-back{align-self:center;min-height:44px;gap:var(--s-1)}
 
-/* The bar: the step's actions, at the bottom of the screen. */
+/* The bar: the step's actions, right under the content. When the content is
+   longer than the screen, the bar sticks to the bottom and the content
+   scrolls above it. */
 .g2-bar{position:sticky;bottom:0;display:flex;justify-content:center;padding:var(--s-3) var(--s-4) calc(var(--s-4) + env(safe-area-inset-bottom));border-top:1px solid var(--border-subtle);background:var(--bg-app)}
 .g2-bar__inner{display:flex;flex-direction:column;gap:var(--s-2);width:100%;max-width:480px}
 .g2-bar__inner>.fm-btn{width:100%;height:auto;padding-block:var(--s-2);white-space:normal;text-align:center}
-.g2-bar__inner>.g2-back{align-self:center;width:auto;min-height:44px;gap:var(--s-1)}
-.g2-note{font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3);text-align:center}
+
+/* Full screen (?frame=): the window is the screen, and the page scrolls. */
+.g2-screen{container-type:inline-size}
+.g2.g2--full{height:auto;min-height:100dvh;overflow:visible}
+.g2-done--full{position:relative;min-height:100dvh}
+.g2-open{font:500 var(--text-sm) var(--font-ui)}
 
 /* A short window: the bar scrolls with the page, so it can't cover it. */
 @media (max-height:480px){

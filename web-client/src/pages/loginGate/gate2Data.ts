@@ -21,8 +21,9 @@ export type SourcePlayer = {
   recent: readonly Gate2Match[]
 }
 
-// A player the account already manages, as the picker shows it.
-export type ManagedPlayer = { id: string; name: string; summary: string }
+// A player the account already manages, as the picker shows it: its match
+// count and its last match, so the person can tell who it is.
+export type ManagedPlayer = { id: string; name: string; total: number; lastMatch: string }
 
 export type Gate2Account = {
   // The account's own player. A first sign-in has none yet.
@@ -96,7 +97,6 @@ function source(
   id: string,
   name: string,
   total: number,
-  range: string,
   last: Date,
   firstOpponents: readonly string[] = [],
 ): SourcePlayer {
@@ -104,15 +104,30 @@ function source(
     index < firstOpponents.length ? { ...match, opponent: firstOpponents[index] } : match,
   )
   histories.set(id, matches)
-  return { id, name, total, range, recent: matches.slice(0, SHOWN) }
+  return { id, name, total, range: range(matches), recent: matches.slice(0, SHOWN) }
+}
+
+// The dates of a history, oldest first: "Oct 27", "Oct 25–27" or
+// "Sep 3–Oct 27".
+function range(matches: readonly Gate2Match[]): string {
+  const [newMonth, newDay] = monthDay(matches[0])
+  const [oldMonth, oldDay] = monthDay(matches[matches.length - 1])
+  if (oldMonth === newMonth) return oldDay === newDay ? `${newMonth} ${newDay}` : `${newMonth} ${oldDay}–${newDay}`
+  return `${oldMonth} ${oldDay}–${newMonth} ${newDay}`
+}
+
+// "Tue, Oct 27" as ["Oct", "27"].
+function monthDay(match: Gate2Match): [string, string] {
+  const [month, day] = match.date.split(', ')[1].split(' ')
+  return [month, day]
 }
 
 const oct27 = new Date(Date.UTC(2026, 9, 27))
 
-export const mellow = source('mellow', 'mellow mongoose 594', 3, 'Oct 27', oct27)
-export const badger = source('badger', 'brave badger 214', 12, 'Oct 15–27', oct27)
-export const heron = source('heron', 'hardy heron 233', 48, 'Sep 3–Oct 27', oct27)
-export const hummingbird = source('hummingbird', 'harmonious hummingbird 908', 12, 'Oct 15–27', oct27, [
+export const mellow = source('mellow', 'mellow mongoose 594', 3, oct27)
+export const badger = source('badger', 'brave badger 214', 12, oct27)
+export const heron = source('heron', 'hardy heron 233', 48, oct27)
+export const hummingbird = source('hummingbird', 'harmonious hummingbird 908', 12, oct27, [
   'Oluwaseun Adeyemi-Fitzgerald',
   'Maximiliane Hohenberger',
 ])
@@ -120,8 +135,8 @@ export const hummingbird = source('hummingbird', 'harmonious hummingbird 908', 1
 export const mainPlayer = 'excited egret 387'
 
 export const managedPlayers: readonly ManagedPlayer[] = [
-  { id: 'koala', name: 'kindly koala 552', summary: '14 matches · latest Oct 20' },
-  { id: 'bobcat', name: 'blithe bobcat 172', summary: '6 matches · latest Sep 28' },
+  { id: 'koala', name: 'kindly koala 552', total: 14, lastMatch: 'Ama Okafor on Oct 20' },
+  { id: 'bobcat', name: 'blithe bobcat 172', total: 6, lastMatch: 'Mei Tanaka on Sep 28' },
 ]
 
 // The first `pages` pages of a player's history at once, for a frame that

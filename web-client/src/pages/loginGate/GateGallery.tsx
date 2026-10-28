@@ -26,11 +26,14 @@ export function GateGallery({
   description,
   frames,
   children,
+  frameLink,
 }: {
   current: LoginGatePath
   description: string
   frames: readonly GalleryFrame[]
   children?: ReactNode
+  // A link under each frame's title, such as one that opens it full screen.
+  frameLink?: (title: string) => ReactNode
 }) {
   const name = layouts.find((layout) => layout.path === current)?.name
   return (
@@ -53,17 +56,18 @@ export function GateGallery({
       </header>
       {children}
       {frames.map((frame) => (
-        <FrameSection key={frame.title} frame={frame} />
+        <FrameSection key={frame.title} frame={frame} link={frameLink?.(frame.title)} />
       ))}
     </main>
   )
 }
 
-function FrameSection({ frame }: { frame: GalleryFrame }) {
+function FrameSection({ frame, link }: { frame: GalleryFrame; link?: ReactNode }) {
   const titleId = useId()
   return (
     <section className="gate-gallery__frame" aria-labelledby={titleId}>
       <h2 id={titleId}>{frame.title}</h2>
+      {link}
       <div className="gate-gallery__sizes">
         {sizes.map((size) => (
           <figure key={size.key} className="gate-gallery__size" aria-labelledby={`${titleId}-${size.key}`}>
