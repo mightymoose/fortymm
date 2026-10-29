@@ -506,7 +506,7 @@ it to `src/routes/`.
   page that stands alone, such as `/review-players`, goes directly in
   `_authenticated/`. The layout puts the page in `AppShell`
   (`src/pages/AppShell.tsx`): a topbar over a sidebar of
-  the authenticated pages, which folds to its icons and remembers it in
+  the `_shell` pages, which folds to its icons and remembers it in
   `localStorage`. Below 900px the sidebar is a tab bar along the bottom. To
   add a page to the sidebar, add its link in `AppShell`. The topbar's right
   end shows `UserMenu` (`src/pages/userMenu/UserMenu.tsx`): a chip of the
@@ -689,7 +689,8 @@ account with the players it gets. One of them must be `self`, and their
 order is the order the API made them. It answers "Is this you?" as the API
 does, with a merge into the older player, and returns the answers it got.
 `PlayerReviewPage` renders `/review-players` by default, or Home with or
-without `signed_in=1`.
+without `signed_in=1`. Its `clickTwiceAtOnce()` clicks a button twice before React
+renders again, as a quick double click can.
 
 `HomePage.render({ path })` renders the app at another path, such as one
 with a query. `homePage.href` is the router's current path and query, so a

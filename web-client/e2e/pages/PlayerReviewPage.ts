@@ -8,12 +8,15 @@ export class PlayerReviewPage {
   readonly page: Page
   // The question, such as "Is this you?".
   readonly question: Locator
+  // The question with the player it asks about.
+  readonly content: Locator
   // The answer buttons, with the line about what "Yes" does.
   readonly answers: Locator
 
   constructor(page: Page) {
     this.page = page
     this.question = page.getByRole('heading', { level: 1 })
+    this.content = page.getByRole('main')
     this.answers = page.getByRole('group', { name: 'Your answer' })
   }
 

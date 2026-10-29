@@ -16,7 +16,7 @@ test('a new email asks about the guest’s own player, and the reminder reopens 
   await signInPage.signIn(newPerson('ann'), { returnTo: '/' })
 
   await expect(playerReviewPage.question).toHaveText('Is this you?')
-  await expect(homePage.page.getByRole('main')).toContainText(
+  await expect(playerReviewPage.content).toContainText(
     `${guest.player.display_name} was used on this device before you signed in.`,
   )
   await playerReviewPage.reviewLater()
