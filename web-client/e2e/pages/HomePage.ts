@@ -1,7 +1,5 @@
 import type { Locator, Page } from '@playwright/test'
 
-export type ReviewChoice = 'This is me' | 'I manage this player' | 'Remove from my account'
-
 // Page object for the home page in the Playwright suite.
 export class HomePage {
   readonly page: Page
@@ -15,12 +13,10 @@ export class HomePage {
   readonly accountMenu: Locator
   readonly guestSignOutDialog: Locator
 
-  // The reminder of the players still to review, by its title.
+  // The reminder of the players still to review, by its title, and its
+  // link to the review.
   readonly reminder: Locator
-  // The "Who is <player>?" dialog.
-  readonly review: Locator
-  readonly reviewTitle: Locator
-  readonly continueButton: Locator
+  readonly reviewLink: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -32,20 +28,7 @@ export class HomePage {
       name: 'Sign out of this guest account?',
     })
     this.reminder = page.getByText(/^\d+ players? to review$/)
-    this.review = page.getByRole('dialog')
-    this.reviewTitle = this.review.getByRole('heading', { level: 2 })
-    this.continueButton = this.review.getByRole('button', { name: 'Continue' })
-  }
-
-  // One of the dialog's answers, such as "This is me".
-  choice(label: ReviewChoice): Locator {
-    return this.review.getByRole('radio', { name: new RegExp(`^${label}`) })
-  }
-
-  // Picks the answer, then Continue.
-  async answer(label: ReviewChoice): Promise<void> {
-    await this.choice(label).check()
-    await this.continueButton.click()
+    this.reviewLink = page.getByRole('link', { name: /^Review players?$/ })
   }
 
   // Opens the account menu and picks `item`, such as Sign in. A verified

@@ -2,6 +2,7 @@ import { Link } from '@tanstack/react-router'
 import { useState, type ReactNode } from 'react'
 import { Button } from '../components/Button'
 import { Icon } from '../components/Icon'
+import { Wordmark } from '../components/Wordmark'
 import { useTooltip } from '../components/tooltipContext'
 import { UserMenu } from './userMenu/UserMenu'
 
@@ -55,10 +56,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Icon name="menu" />
           </Button>
         </span>
-        <span className="app-wordmark" role="img" aria-label="FortyMM">
-          <span className="app-wordmark__ball" />
-          <span className="app-wordmark__name">FortyMM</span>
-        </span>
+        <Wordmark />
         <UserMenu />
       </header>
       <nav className="app-nav" id="app-nav" aria-label="Main">

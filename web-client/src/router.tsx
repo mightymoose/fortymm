@@ -29,3 +29,11 @@ declare module '@tanstack/react-router' {
     router: ReturnType<typeof createAppRouter>
   }
 }
+
+declare module '@tanstack/history' {
+  interface HistoryState {
+    // Set by the player review when it goes to Home, so Home moves focus to
+    // what comes next.
+    fromReview?: true
+  }
+}

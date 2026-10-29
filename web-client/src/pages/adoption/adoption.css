@@ -1,30 +1,51 @@
-/* The "Is this you?" review on Home (AdoptionReview.tsx). Home's `.home`
-   gap spaces it from the roadmap. */
+/* The reminder of the players to review on Home (AdoptionReview.tsx). Home's
+   `.home` gap spaces it from the roadmap. */
 .adopt{display:flex;flex-direction:column;gap:var(--s-6)}
-.adopt>.fm-notice{align-self:flex-start}
 
-/* The dialog: the question, the player, then three equal choices. */
-.adopt-review{width:min(520px,calc(100vw - 32px))}
-.adopt-review[open]{display:flex;flex-direction:column;gap:var(--s-5)}
-.adopt-review p{margin:0}
-.adopt-review p.meta{font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
-.adopt-review__head{display:flex;flex-direction:column;gap:var(--s-1)}
-.adopt-review__head h2{margin:0}
-.adopt-review .fm-dialog__actions{align-items:center}
-.adopt-skip{margin-right:auto}
+/* The player review (PlayerReview.tsx): one column, with the answers in an
+   action bar under the question. On a phone the bar sticks to the bottom. */
+.review{box-sizing:border-box;min-height:100dvh;max-width:520px;margin:0 auto;padding:0 var(--s-5);display:flex;flex-direction:column;background:var(--bg-app)}
+.review-top{padding:var(--s-5) 0 var(--s-1);display:flex}
+.review-top .app-wordmark{padding:0}
+.review-content{flex:1 0 auto;padding:var(--s-6) 0 var(--s-2)}
+.review-counter{margin:0 0 var(--s-2);font:500 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
+/* `.review-q` goes with `.h2`, and only changes its margin and phone size. */
+.review-q{margin:0;text-wrap:balance;outline:none}
+.review-q:focus-visible{box-shadow:none}
+.review-playedas{margin:var(--s-2) 0 0;font:400 var(--text-base)/var(--lh-normal) var(--font-ui);color:var(--fg-2);overflow-wrap:anywhere}
+.review-playedas b,.review-outcome b{font-weight:600;color:var(--fg-1)}
+.review-ident{margin-top:var(--s-5);display:flex;flex-direction:column;align-items:flex-start;gap:var(--s-1)}
+/* `.review-ident__name` goes with `.h3`. */
+.review-ident__name{margin:0;overflow-wrap:anywhere}
+.review-actions{display:flex;flex-direction:column;gap:var(--s-3);padding:var(--s-6) 0 var(--s-8)}
+.review-actions>.fm-btn{width:100%}
+.review-outcome{margin:0;font:400 var(--text-sm)/var(--lh-normal) var(--font-ui);color:var(--fg-2);overflow-wrap:anywhere;text-wrap:pretty}
+.review-note{margin:calc(-1 * var(--s-1)) 0 var(--s-1);font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3);text-align:center;text-wrap:balance}
+.review-error{margin:calc(-1 * var(--s-1)) 0 0}
+.review-saved{margin:0;overflow-wrap:anywhere}
+.review > .fm-alert{margin-top:var(--s-6)}
 
-.adopt-player{display:flex;flex-direction:column;gap:var(--s-3);padding:var(--s-4);border-radius:var(--r-md);background:var(--bg-app)}
-.adopt-player__who{display:flex;align-items:center;gap:var(--s-3)}
-.adopt-review .adopt-player__name{font:600 var(--text-base)/var(--lh-snug) var(--font-ui);color:var(--fg-1)}
+/* The review's skeleton (ReviewSkeleton): each block takes the size of the
+   line or button it stands for. */
+.review-skeleton--counter{width:30%;height:calc(var(--text-sm) * var(--lh-snug));margin-bottom:var(--s-2)}
+.review-skeleton--question{width:60%;height:calc(var(--text-2xl) * var(--lh-snug))}
+.review-skeleton--line{height:calc(var(--text-base) * var(--lh-normal));margin-top:var(--s-2)}
+.review-skeleton--outcome{height:calc(2 * var(--text-sm) * var(--lh-normal))}
+.review-skeleton--button{height:var(--s-12);border-radius:var(--r-md)}
+/* Review later is a ghost button, so its block is only its label. */
+.review-skeleton--later{width:30%;align-self:center;height:calc(var(--text-base) * var(--lh-snug));margin:var(--s-2) 0}
 
-.adopt-options{display:flex;flex-direction:column;gap:var(--s-3);margin:0;padding:0;border:0}
-.adopt-option{padding:var(--s-3) var(--s-4);border:1px solid var(--border-control);border-radius:var(--r-md)}
-.adopt-option:has(input:checked){border-color:var(--accent)}
-.adopt-option:has(input:disabled){border-color:var(--border-subtle)}
-.adopt-option__text{display:flex;flex-direction:column;gap:2px}
-.adopt-option__label{font-weight:600}
+@media (min-width:600px){
+  .review{padding-top:var(--s-8)}
+  .review-content{padding-top:var(--s-12)}
+  .review-ident__name{font-size:var(--text-xl)}
+}
 
-@media (max-width:480px){
-  .adopt-skip{flex-basis:100%}
-  .adopt-review .fm-dialog__actions .fm-btn:not(.adopt-skip){flex:1}
+@media (max-width:599px){
+  .review-q{font-size:var(--text-xl)}
+  .review-skeleton--question{height:calc(var(--text-xl) * var(--lh-snug))}
+}
+
+@media (max-width:599px) and (min-height:560px){
+  .review-actions{position:sticky;bottom:0;z-index:2;margin:0 calc(-1 * var(--s-5));padding:var(--s-4) var(--s-5) calc(var(--s-4) + env(safe-area-inset-bottom,0px));background:var(--bg-app);border-top:1px solid var(--border-subtle)}
 }

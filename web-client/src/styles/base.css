@@ -379,6 +379,12 @@ a:hover{color:var(--ball-200)}
   color: var(--fg-1);
 }
 
+/* Focus lands on the title only from the player review, as a place to
+   start reading, so it shows no ring. */
+.roadmap__title:focus-visible {
+  box-shadow: none;
+}
+
 .roadmap__lead {
   margin: 0;
   max-width: 52ch;

@@ -15,6 +15,7 @@ async function answerLogout(page: Page) {
 
 test('signs in from the account menu, signs out, then plays as a new guest account', async ({
   homePage,
+  playerReviewPage,
   signInPage,
   signedOutPage,
   page,
@@ -28,7 +29,7 @@ test('signs in from the account menu, signs out, then plays as a new guest accou
 
   await homePage.fromAccountMenu('Sign in')
   await signInPage.completeSignIn(ann)
-  await homePage.review.getByRole('button', { name: 'Review later' }).click()
+  await playerReviewPage.reviewLater()
 
   await homePage.accountButton.click()
   await expect(homePage.accountMenu).toContainText(ann.email)
@@ -77,6 +78,7 @@ test('asks a guest before it signs out from the account menu', async ({
 
 test('signs in again after sign-out with no new player to review', async ({
   homePage,
+  playerReviewPage,
   signInPage,
   signedOutPage,
   page,
@@ -86,7 +88,7 @@ test('signs in again after sign-out with no new player to review', async ({
   await homePage.goto()
   await homePage.fromAccountMenu('Sign in')
   await signInPage.completeSignIn(ann)
-  await homePage.review.getByRole('button', { name: 'Review later' }).click()
+  await playerReviewPage.reviewLater()
   await expect(homePage.reminder).toHaveText('1 player to review')
   const anns = await signInPage.account()
   await homePage.fromAccountMenu('Sign out')
@@ -94,7 +96,7 @@ test('signs in again after sign-out with no new player to review', async ({
 
   await signedOutPage.signInLink.click()
   await signInPage.completeSignIn(ann)
-  await homePage.review.getByRole('button', { name: 'Review later' }).click()
+  await playerReviewPage.reviewLater()
 
   // Only the first sign-in's guest player waits. Sign-in from no session
   // starts no guest account, so there's nothing new to adopt.

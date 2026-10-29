@@ -31,3 +31,42 @@ function parseRetryAfter(value: string | null): Date | null {
   const date = Date.parse(value)
   return Number.isNaN(date) ? null : new Date(date)
 }
+
+export type Failure =
+  | { kind: 'unreachable' }
+  | { kind: 'rate-limited'; retryAt: Date | null }
+  | { kind: 'broken' }
+
+// The Worker answers 503 without an API origin, and Cloudflare answers 502
+// or 504 when the API doesn't. Each means the API can't be reached.
+const UNREACHABLE_STATUSES = new Set([502, 503, 504])
+
+// What a failed request means for the visitor, so a page can say what to do.
+export function classifyFailure(error: unknown): Failure {
+  if (error instanceof ApiUnreachable) return { kind: 'unreachable' }
+  if (error instanceof ApiError) {
+    if (error.status === 429) return { kind: 'rate-limited', retryAt: error.retryAt }
+    if (UNREACHABLE_STATUSES.has(error.status)) return { kind: 'unreachable' }
+  }
+  return { kind: 'broken' }
+}
+
+// What each failure tells the visitor: a title, then a sentence. ErrorPage
+// and QueryBoundary both say it.
+export const failureMessages: Record<Failure['kind'], { title: string; sentence: string }> = {
+  unreachable: {
+    title: 'Can’t reach FortyMM',
+    sentence:
+      'Our server isn’t answering. It may be starting up, or your connection may be down. Check your connection, then try again.',
+  },
+  'rate-limited': {
+    title: 'Wait a minute, then try again',
+    sentence:
+      'Your network sent a lot of requests in a short time, so we paused it for a minute.',
+  },
+  broken: {
+    title: 'Something went wrong',
+    sentence:
+      'FortyMM hit an error loading this page. Try again. If it keeps happening, tell us what you were doing.',
+  },
+}
