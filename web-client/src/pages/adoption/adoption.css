@@ -32,7 +32,8 @@
 .review-skeleton--line{height:calc(var(--text-base) * var(--lh-normal));margin-top:var(--s-2)}
 .review-skeleton--outcome{height:calc(2 * var(--text-sm) * var(--lh-normal))}
 .review-skeleton--button{height:var(--s-12);border-radius:var(--r-md)}
-.review-skeleton--later{height:calc(var(--s-8) + var(--s-2));border-radius:var(--r-md)}
+/* Review later is a ghost button, so its block is only its label. */
+.review-skeleton--later{width:30%;align-self:center;height:calc(var(--text-base) * var(--lh-snug));margin:var(--s-2) 0}
 
 @media (min-width:600px){
   .review{padding-top:var(--s-8)}
