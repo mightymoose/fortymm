@@ -18,9 +18,10 @@ type Step = 'recognize' | 'relationship'
 
 // What this page has done since it opened. The step and the failed answer
 // belong to one player, so the next player starts at `recognize` with no
-// error, whatever ended the last one.
+// error, whatever ended the last one. `shown` holds every player this visit
+// has queued, so the count holds when another tab answers one.
 type Review = {
-  answered: number
+  shown: ReadonlySet<string>
   notice: string | null
   step: { playerId: string; step: Step } | null
   failed: { playerId: string; answer: Answer } | null
@@ -28,6 +29,7 @@ type Review = {
 
 type ReviewEvent =
   | { type: 'go'; playerId: string; step: Step }
+  | { type: 'queued'; shown: ReadonlySet<string> }
   | { type: 'save' }
   | { type: 'saved'; notice: string }
   | { type: 'failed'; playerId: string; answer: Answer }
@@ -36,16 +38,18 @@ function review(state: Review, event: ReviewEvent): Review {
   switch (event.type) {
     case 'go':
       return { ...state, step: { playerId: event.playerId, step: event.step }, failed: null }
+    case 'queued':
+      return { ...state, shown: event.shown }
     case 'save':
       return { ...state, notice: null, failed: null }
     case 'saved':
-      return { ...state, answered: state.answered + 1, notice: event.notice }
+      return { ...state, notice: event.notice }
     case 'failed':
       return { ...state, failed: { playerId: event.playerId, answer: event.answer } }
   }
 }
 
-const start: Review = { answered: 0, notice: null, step: null, failed: null }
+const start: Review = { shown: new Set(), notice: null, step: null, failed: null }
 
 // `survivor` is the account's older player, when "Yes" merged the player
 // into it.
@@ -138,7 +142,9 @@ function Questions({ selfName }: { selfName: string }) {
   const step = current && state.step?.playerId === current.id ? state.step.step : 'recognize'
   const failed = current && state.failed?.playerId === current.id ? state.failed.answer : null
   const saving = answer.isPending ? answer.variables.answer : null
-  const total = state.answered + queue.length
+  const shown = new Set([...state.shown, ...queue.map((player) => player.id)])
+  if (shown.size > state.shown.size) dispatch({ type: 'queued', shown })
+  const total = shown.size
 
   useEffect(() => {
     heading.current?.focus({ preventScroll: true })
@@ -194,7 +200,7 @@ function Questions({ selfName }: { selfName: string }) {
 
   const counter = total > 1 && (
     <p className="review-counter">
-      Player {state.answered + 1} of {total}
+      Player {total - queue.length + 1} of {total}
     </p>
   )
   const notice = state.notice && (

@@ -40,6 +40,13 @@ const ama: AccountPlayer = {
   open_question: false,
 }
 
+const heron: AccountPlayer = {
+  id: '3c2b1a09-8f7e-4d6c-9b5a-4e3d2c1b0a98',
+  display_name: 'happy heron 530',
+  relationship: 'managed',
+  open_question: true,
+}
+
 const NOT_SAVED = 'Your answer wasn’t saved. Please try again.'
 
 describe('Is this you?', () => {
@@ -226,6 +233,37 @@ describe('Is this you?', () => {
 
     expect(api.answers).toEqual([{ playerId: egret.id, answer: 'yes' }])
     expect(page.notice).toBe(`${egret.display_name} is your player now.`)
+  })
+
+  it('keeps the count when another tab answered a player first', async () => {
+    mockVerifiedAccount([egret, badger, heron, dove])
+    let otherTabAnswered = false
+    // The answer is refused, and the refetch after it no longer has the
+    // badger, which another tab answered.
+    server.use(
+      http.post(
+        `${API_BASE_URL}/v1/account/players/:playerId/answer`,
+        () => {
+          otherTabAnswered = true
+          return HttpResponse.json({ errors: [{ status: '409', title: 'Refused' }] }, { status: 409 })
+        },
+        { once: true },
+      ),
+      http.get(`${API_BASE_URL}/v1/account/players`, () =>
+        otherTabAnswered
+          ? HttpResponse.json<components['schemas']['AccountPlayersResponse']>({
+              data: [egret, { ...badger, open_question: false }, heron, dove],
+            })
+          : undefined,
+      ),
+    )
+    const page = await PlayerReviewPage.render()
+    expect(page.counter).toBe('Player 1 of 3')
+
+    await page.click('Yes, this is me')
+
+    expect(page.button('Yes, this is me')).toHaveAccessibleDescription(NOT_SAVED)
+    expect(page.counter).toBe('Player 2 of 3')
   })
 
   it('shows Saving… while an answer saves, and holds the other actions', async () => {

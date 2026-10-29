@@ -550,8 +550,11 @@ it to `src/routes/`.
   "Yes, this is me" answers `yes`. "Someone else played" asks "Do you
   manage this player?", which answers `no` or `not_mine`, or goes Back.
   "Review later" goes to `/` with no answer. A reducer holds the page's
-  state: the answers it saved, the last confirmation, and the step and
-  failed answer of the player on screen. A failed save shows its error
+  state: every player it has queued this visit, the last confirmation,
+  and the step and failed answer of the player on screen. The counter
+  "Player N of M" counts the queued players, so it holds when another tab
+  answers one, and grows when a new one comes. A ref holds the answer in
+  flight, so a second quick click sends nothing. A failed save shows its error
   under its button and refetches the players. An answer puts the API's
   list in the players query. A "Yes" also puts the list's `self` player in
   the session's account, so the topbar shows it. When "Yes" merged the
