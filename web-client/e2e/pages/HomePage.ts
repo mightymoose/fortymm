@@ -13,8 +13,10 @@ export class HomePage {
   readonly accountMenu: Locator
   readonly guestSignOutDialog: Locator
 
-  // The reminder of the players still to review, by its title.
+  // The reminder of the players still to review, by its title, and its
+  // link to the review.
   readonly reminder: Locator
+  readonly reviewLink: Locator
 
   constructor(page: Page) {
     this.page = page
@@ -26,6 +28,7 @@ export class HomePage {
       name: 'Sign out of this guest account?',
     })
     this.reminder = page.getByText(/^\d+ players? to review$/)
+    this.reviewLink = page.getByRole('link', { name: /^Review players?$/ })
   }
 
   // Opens the account menu and picks `item`, such as Sign in. A verified

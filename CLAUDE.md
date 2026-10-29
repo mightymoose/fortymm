@@ -738,7 +738,10 @@ database keeps its accounts.
 `e2e/adoption.spec.ts` signs in back to Home, which goes on to
 `/review-players`, and answers "Is this you?" there (`PlayerReviewPage`). A
 person's first sign-in from a guest is VerifyInPlace, so the account's
-first question is about that guest's own player.
+first question is about that guest's own player. The VerifyInPlace test
+reviews later, then opens the review again from Home's reminder and answers
+"I manage this player". The AdoptGuest test answers "Yes" twice and
+"Remove from my account" once.
 
 `e2e/sign-out.spec.ts` opens `/`, picks Sign in from the account menu and
 fills the mock's form with `SignInPage.completeSignIn()`. It lands back on

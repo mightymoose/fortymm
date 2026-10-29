@@ -204,6 +204,20 @@ describe('Is this you?', () => {
     expect(page.toasts).toEqual([])
   })
 
+  it('says under "Yes, this is me" that a refused "Yes" wasn’t saved', async () => {
+    const api = mockVerifiedAccount([egret, dove], { refuse: 409 })
+    const page = await PlayerReviewPage.render()
+
+    await page.click('Yes, this is me')
+
+    expect(api.answers).toEqual([{ playerId: egret.id, answer: 'yes' }])
+    expect(page.href).toBe('/review-players')
+    expect(page.heading).toHaveTextContent('Is this you?')
+    expect(page.button('Yes, this is me')).toHaveAccessibleDescription(NOT_SAVED)
+    expect(page.button('Yes, this is me')).toBeEnabled()
+    expect(page.toasts).toEqual([])
+  })
+
   it('shows Saving… while an answer saves, and holds the other actions', async () => {
     mockVerifiedAccount([egret, dove])
     let release = () => {}

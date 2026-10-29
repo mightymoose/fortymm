@@ -5,7 +5,7 @@ import { newPerson } from './pages/SignInPage.ts'
 // provider. Each Home load without a session starts one guest account, so
 // this file starts four.
 
-test('a new email asks about the guest’s own player (VerifyInPlace)', async ({
+test('a new email asks about the guest’s own player, and the reminder reopens it (VerifyInPlace)', async ({
   homePage,
   playerReviewPage,
   signInPage,
@@ -26,6 +26,14 @@ test('a new email asks about the guest’s own player (VerifyInPlace)', async ({
 
   await expect(homePage.reminder).toHaveText('1 player to review')
   expect(new URL(homePage.page.url()).pathname).toBe('/')
+
+  await homePage.reviewLink.click()
+  await playerReviewPage.answer('no')
+
+  await expect(
+    homePage.page.getByText(`${guest.player.display_name} added to players you manage.`),
+  ).toBeVisible()
+  await expect(homePage.reminder).toBeHidden()
 })
 
 test('each sign-in from a guest asks about its player, and answers stay answered (AdoptGuest)', async ({
