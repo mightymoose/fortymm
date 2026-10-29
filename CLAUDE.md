@@ -374,7 +374,7 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   account.
 - A successful callback answers 302 to the attempt's `return_to` with
   `signed_in=1` added to its query. The web client opens "Is this you?"
-  only then.
+  by itself only then.
 - A failed callback answers 302 to the attempt's `return_to` with
   `sign_in_error` added to its query: `cancelled`, `email_not_verified`,
   `expired` or `failed`. It changes no account and sets no cookie. A
@@ -497,10 +497,15 @@ it to `src/routes/`.
   page toasts and tooltips, and no frame.
 - `_authenticated.tsx`: a pathless layout route with no path segment, with
   component `AuthenticatedLayout` (`src/pages/AuthenticatedLayout.tsx`).
-  Pages that will need a signed-in user (such as `/`, which is
-  `_authenticated/index.tsx`) go in `_authenticated/`. The layout starts
-  the session and shows the loading screen (see API client). It puts the
-  page in `AppShell` (`src/pages/AppShell.tsx`): a topbar over a sidebar of
+  Pages that will need a signed-in user go in `_authenticated/`. The layout
+  starts the session and shows the loading screen (see API client).
+- `_authenticated/_shell.tsx`: a pathless layout route under
+  `_authenticated`, with component `ShellLayout`
+  (`src/pages/ShellLayout.tsx`). Its pages, such as `/`
+  (`_authenticated/_shell/index.tsx`), go in `_authenticated/_shell/`. A
+  page that stands alone, such as `/review-players`, goes directly in
+  `_authenticated/`. The layout puts the page in `AppShell`
+  (`src/pages/AppShell.tsx`): a topbar over a sidebar of
   the authenticated pages, which folds to its icons and remembers it in
   `localStorage`. Below 900px the sidebar is a tab bar along the bottom. To
   add a page to the sidebar, add its link in `AppShell`. The topbar's right
@@ -514,7 +519,7 @@ it to `src/routes/`.
   menu reads the session without suspending, so it never holds up the
   loading screen.
 - `SignInErrorAlert` (`src/pages/SignInErrorAlert.tsx`) sits in
-  `AuthenticatedLayout`, inside `AppShell` and above the page. If the URL
+  `ShellLayout`, inside `AppShell` and above the page. If the URL
   has `sign_in_error`, it shows that code's message from `signInErrors`
   (`src/pages/signInErrors.ts`). An unknown code shows the `failed`
   message. It keeps the message in state and removes the param with a
@@ -529,15 +534,26 @@ it to `src/routes/`.
   because the API answers with a 302.
 - `AdoptionReview`: for a verified account, it
   reads `GET /v1/account/players`. With open questions, it shows a
-  reminder with a "Review players" button. That opens a dialog that asks
-  "Who is <player>?" about one player at a time. The dialog opens by itself
-  when the URL has `signed_in=1`, and then the router replaces the URL
-  without it. So a reload shows only the reminder. An answer puts the
-  API's list in the players query. A "This is me" also puts the list's
-  `self` player in the session's account, so the topbar shows it. When
-  "This is me" merged the player into an older one, the confirmation names
-  both, such as "brave badger 214 merged into excited egret 387, your
-  player."
+  reminder with a "Review players" link to `/review-players`. If the URL
+  has `signed_in=1`, the router replaces it with `/review-players` when a
+  question is open, or with `/` without the param when none is. So a
+  reload shows only the reminder.
+- `review-players.tsx`: the page `PlayerReview`
+  (`src/pages/adoption/PlayerReview.tsx`), with the wordmark and no
+  `AppShell`. It asks "Is this you?" about one open question at a time.
+  "Yes, this is me" answers `yes`. "Someone else played" asks "Do you
+  manage this player?", which answers `no` or `not_mine`, or goes Back.
+  "Review later" goes to `/` with no answer. A reducer holds the page's
+  state: the answers it saved, the last confirmation, and the step and
+  failed answer of the player on screen. A failed save shows its error
+  under its button and refetches the players. An answer puts the API's
+  list in the players query. A "Yes" also puts the list's `self` player in
+  the session's account, so the topbar shows it. When "Yes" merged the
+  player into an older one, the confirmation names both, such as "brave
+  badger 214 merged into excited egret 387, your player." While players
+  remain, the confirmation shows above the answers. After the last one,
+  the page goes to `/` and shows it as a toast. With no open question, or
+  for a guest, the page goes to `/` at once.
 - `design-system.tsx`: a public page. Public pages go directly in
   `src/routes/`. They make no request and never show the loading screen.
   The design system page has no `AppShell`, and no page links to it.
@@ -643,6 +659,8 @@ no players. `mockVerifiedAccount()` signs the mock API in as a verified
 account with the players it gets. One of them must be `self`, and their
 order is the order the API made them. It answers "Is this you?" as the API
 does, with a merge into the older player, and returns the answers it got.
+`PlayerReviewPage` renders `/review-players` by default, or Home with or
+without `signed_in=1`.
 
 `HomePage.render({ path })` renders the app at another path, such as one
 with a query. `homePage.href` is the router's current path and query, so a
@@ -656,8 +674,9 @@ the session response with `holdSession()` from `src/test/server.ts` (see
 `src/pages/AuthenticatedLayout.test.tsx`). `DesignSystemPage.render()` never
 waits for the session, because the page doesn't start one.
 `src/api/queries.test.ts` checks the retry rule through `createQueryClient()`. `renderRoute` calls
-`router.load()`, which also loads the route's chunk, so no page object waits
-for a chunk.
+`router.load()`, which also loads the route's chunk. A navigation after the
+render can load another chunk. So `PlayerReviewPage.findQuestion()` waits
+for the review's heading after Home sends the browser there.
 
 ### End-to-end tests
 
@@ -687,13 +706,14 @@ with the page's cookies. The `SignInPage` page object returns to
 `returnTo: '/'`. Each run makes a new `sub` and email, because the dev
 database keeps its accounts.
 
-`e2e/adoption.spec.ts` signs in back to Home and answers "Is this you?". A
+`e2e/adoption.spec.ts` signs in back to Home, which goes on to
+`/review-players`, and answers "Is this you?" there (`PlayerReviewPage`). A
 person's first sign-in from a guest is VerifyInPlace, so the account's
 first question is about that guest's own player.
 
 `e2e/sign-out.spec.ts` opens `/`, picks Sign in from the account menu and
 fills the mock's form with `SignInPage.completeSignIn()`. It lands back on
-`/` as a verified account, closes "Is this you?" with Review later, signs
+`/review-players` as a verified account, goes to `/` with Review later, signs
 out and ends on `/signed-out`. Then Play as a guest opens `/` as a new
 guest account. The mock answers 405 to the
 logout URL. So the spec answers that navigation with `page.route()`, a 302
