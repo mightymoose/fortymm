@@ -44,13 +44,15 @@ test('each sign-in from a guest asks about its player, and answers stay answered
   const ann = newPerson('ann')
 
   // A new person's first sign-in from a guest keeps that guest account, so
-  // its own player is the first question.
+  // its own player is the first question. The sign-in gives the account a
+  // new self player, which merges into the older guest player.
   await homePage.goto()
   const first = (await signInPage.account()).player.display_name
   await signInPage.signIn(ann, { returnTo: '/' })
   await expect(playerReviewPage.question).toHaveText('Is this you?')
+  const newSelf = (await signInPage.account()).player.display_name
   await playerReviewPage.answer('yes')
-  await expect(homePage.page.getByText(`${first} is your player now.`)).toBeVisible()
+  await expect(homePage.page.getByText(`${newSelf} merged into ${first}, your player.`)).toBeVisible()
   await expect(homePage.avatar(first)).toBeVisible()
 
   await signInPage.forgetSession()

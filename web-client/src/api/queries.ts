@@ -64,11 +64,13 @@ export type Answer = components['schemas']['Answer']
 export function accountPlayersQuery(api: ApiClient) {
   return queryOptions({
     queryKey: ['v1', 'account', 'players'],
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const request = 'GET /v1/account/players'
-      const { data, response } = await api.GET('/v1/account/players').catch((cause: unknown) => {
-        throw new ApiUnreachable(request, { cause })
-      })
+      const { data, response } = await api
+        .GET('/v1/account/players', { signal })
+        .catch((cause: unknown) => {
+          throw new ApiUnreachable(request, { cause })
+        })
       if (data === undefined) throw new ApiError(request, response)
       return data.data
     },
@@ -79,8 +81,11 @@ export function accountPlayersQuery(api: ApiClient) {
 // players after the answer, so the players query takes them as they are. A
 // "Yes" gives the account its own player, so the session's account takes it
 // too, for the topbar's avatar. Refetching the session would start it again.
+// A players request already in flight read the list from before the answer,
+// so the answer cancels it first.
 export function answerQuestionMutation(api: ApiClient, queryClient: QueryClient) {
   return {
+    onMutate: () => queryClient.cancelQueries({ queryKey: accountPlayersQuery(api).queryKey }),
     mutationFn: async ({ player, answer }: { player: AccountPlayer; answer: Answer }) => {
       const request = 'POST /v1/account/players/{player_id}/answer'
       const { data, response } = await api

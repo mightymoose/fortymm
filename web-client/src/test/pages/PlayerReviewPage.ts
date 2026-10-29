@@ -122,6 +122,13 @@ export class PlayerReviewPage {
     await this.settle()
   }
 
+  // Clicks `name` as the second click of a double click, after the first
+  // one's answer came back and the page moved on.
+  async clickAgainInDoubleClick(name: ReviewAction): Promise<void> {
+    fireEvent.click(this.button(name), { detail: 2 })
+    await this.settle()
+  }
+
   async review(): Promise<void> {
     await userEvent.click(this.reviewLink)
     await this.findQuestion()

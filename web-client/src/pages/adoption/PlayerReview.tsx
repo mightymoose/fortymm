@@ -8,14 +8,18 @@ import {
   type AccountPlayer,
   type Answer,
 } from '../../api/queries'
+import { ApiError } from '../../api/errors'
 import { Button, type ButtonVariant } from '../../components/Button'
 import { Icon } from '../../components/Icon'
 import { QueryBoundary } from '../../components/QueryBoundary'
-import { useToast } from '../../components/toastContext'
+import { useToast, type ToastIcon } from '../../components/toastContext'
 import { Wordmark } from '../../components/Wordmark'
 import './adoption.css'
 
 type Step = 'recognize' | 'relationship'
+
+// What the last answer did, or why it didn't count.
+type Notice = { text: string; icon: ToastIcon }
 
 // What this page has done since it opened. The step and the failed answer
 // belong to one player, so the next player starts at `recognize` with no
@@ -23,7 +27,7 @@ type Step = 'recognize' | 'relationship'
 // has queued, so the count holds when another tab answers one.
 type Review = {
   shown: ReadonlySet<string>
-  notice: string | null
+  notice: Notice | null
   step: { playerId: string; step: Step } | null
   failed: { playerId: string; answer: Answer } | null
 }
@@ -32,7 +36,7 @@ type ReviewEvent =
   | { type: 'go'; playerId: string; step: Step }
   | { type: 'queued'; shown: ReadonlySet<string> }
   | { type: 'save' }
-  | { type: 'saved'; notice: string }
+  | { type: 'saved'; notice: Notice }
   | { type: 'failed'; playerId: string; answer: Answer }
 
 function review(state: Review, event: ReviewEvent): Review {
@@ -52,18 +56,38 @@ function review(state: Review, event: ReviewEvent): Review {
 
 const start: Review = { shown: new Set(), notice: null, step: null, failed: null }
 
-// `survivor` is the account's older player, when "Yes" merged the player
-// into it.
-function confirmation(answer: Answer, name: string, survivor?: string): string {
+function selfPlayer(players: readonly AccountPlayer[]): AccountPlayer | undefined {
+  return players.find((found) => found.relationship === 'self')
+}
+
+// `before` and `after` are the account's players around the answer. A "Yes"
+// merges the player and the self player, and the older one survives. So
+// either one can be the player that is gone.
+function confirmation(
+  answer: Answer,
+  player: AccountPlayer,
+  before: readonly AccountPlayer[],
+  after: readonly AccountPlayer[],
+): string {
+  const name = player.display_name
   switch (answer) {
-    case 'yes':
-      return survivor ? `${name} merged into ${survivor}, your player.` : `${name} is your player now.`
+    case 'yes': {
+      const was = selfPlayer(before)
+      const now = selfPlayer(after)
+      if (now && now.id !== player.id) return `${name} merged into ${now.display_name}, your player.`
+      if (was && was.id !== player.id) return `${was.display_name} merged into ${name}, your player.`
+      return `${name} is your player now.`
+    }
     case 'no':
       return `${name} added to players you manage.`
     case 'not_mine':
       return `${name} removed from your account.`
   }
 }
+
+// The API refuses an answer with a 409 or a 404 when another tab answered
+// the player first, or merged it.
+const ANSWERED_ELSEWHERE = new Set([404, 409])
 
 const SAVE_ERROR = 'Your answer wasn’t saved. Please try again.'
 
@@ -81,12 +105,12 @@ export function PlayerReview() {
       <header className="review-top">
         <Wordmark />
       </header>
-      <ReviewQuestions selfName={account.player.display_name} />
+      <ReviewQuestions />
     </div>
   )
 }
 
-function ReviewQuestions({ selfName }: { selfName: string }) {
+function ReviewQuestions() {
   return (
     <QueryBoundary
       skeleton={<ReviewSkeleton />}
@@ -96,7 +120,7 @@ function ReviewQuestions({ selfName }: { selfName: string }) {
         </Link>
       }
     >
-      <Questions selfName={selfName} />
+      <Questions />
     </QueryBoundary>
   )
 }
@@ -123,7 +147,7 @@ function ReviewSkeleton() {
   )
 }
 
-function Questions({ selfName }: { selfName: string }) {
+function Questions() {
   const { api, queryClient } = useRouteContext({ from: '__root__' })
   const { data: players } = useSuspenseQuery(accountPlayersQuery(api))
   const answer = useMutation(answerQuestionMutation(api, queryClient))
@@ -143,6 +167,7 @@ function Questions({ selfName }: { selfName: string }) {
   const shown = new Set([...state.shown, ...queue.map((player) => player.id)])
   if (shown.size > state.shown.size) dispatch({ type: 'queued', shown })
   const total = shown.size
+  const own = selfPlayer(players)
 
   useEffect(() => {
     heading.current?.focus({ preventScroll: true })
@@ -158,22 +183,39 @@ function Questions({ selfName }: { selfName: string }) {
     if (sending.current) return
     sending.current = true
     dispatch({ type: 'save' })
+    const before = players
     let after: AccountPlayer[]
     try {
       after = await answer.mutateAsync({ player, answer: choice })
-    } catch {
-      dispatch({ type: 'failed', playerId: player.id, answer: choice })
-      // A 409 means another tab answered first.
-      void queryClient.refetchQueries(accountPlayersQuery(api))
+    } catch (error) {
+      if (!(await answeredElsewhere(error))) {
+        dispatch({ type: 'failed', playerId: player.id, answer: choice })
+      }
       return
     } finally {
       sending.current = false
     }
-    const self = after.find((found) => found.relationship === 'self')
-    const survivor = self && self.id !== player.id ? self.display_name : undefined
-    const message = confirmation(choice, player.display_name, survivor)
-    if (after.some((found) => found.open_question)) dispatch({ type: 'saved', notice: message })
-    else showToast(message)
+    finish({ text: confirmation(choice, player, before, after), icon: 'check' }, after)
+  }
+
+  // Whether `error` means another tab answered the player first. Then the
+  // refetched players leave it out, and the page says so in place of an
+  // error that would go with the player.
+  async function answeredElsewhere(error: unknown): Promise<boolean> {
+    if (!(error instanceof ApiError && ANSWERED_ELSEWHERE.has(error.status))) return false
+    const { queryKey } = accountPlayersQuery(api)
+    await queryClient.refetchQueries({ queryKey })
+    const now = queryClient.getQueryData(queryKey)
+    if (!now || now.some((found) => found.id === player.id && found.open_question)) return false
+    finish({ text: `${player.display_name} was already answered in another tab.`, icon: 'info' }, now)
+    return true
+  }
+
+  // Shows `notice` above the next question, or as a toast on Home when no
+  // question is left.
+  function finish(notice: Notice, after: readonly AccountPlayer[]) {
+    if (after.some((found) => found.open_question)) dispatch({ type: 'saved', notice })
+    else showToast(notice.text, { icon: notice.icon })
   }
 
   function go(next: Step) {
@@ -202,9 +244,14 @@ function Questions({ selfName }: { selfName: string }) {
     </p>
   )
   const notice = state.notice && (
-    <p className="fm-notice fm-notice--success review-saved" role="status">
-      <Icon name="check" />
-      <span>{state.notice}</span>
+    <p
+      className={
+        state.notice.icon === 'check' ? 'fm-notice fm-notice--success review-saved' : 'fm-notice review-saved'
+      }
+      role="status"
+    >
+      <Icon name={state.notice.icon} />
+      <span>{state.notice.text}</span>
     </p>
   )
 
@@ -221,10 +268,12 @@ function Questions({ selfName }: { selfName: string }) {
       </main>
       <div className="review-actions" role="group" aria-label="Your answer">
         {notice}
-        <p className="review-outcome">
-          <b>{current.display_name}</b> and <b>{selfName}</b> will become
-          one player, your player.
-        </p>
+        {own && (
+          <p className="review-outcome">
+            <b>{current.display_name}</b> and <b>{own.display_name}</b> will become
+            one player, your player.
+          </p>
+        )}
         {answerButton('yes', 'primary', 'Yes, this is me')}
         <Button
           variant="secondary"
@@ -294,7 +343,11 @@ function SaveButton({
         busy={busy}
         disabled={disabled}
         aria-describedby={failed ? errorId : undefined}
-        onClick={onClick}
+        // A second click of a double click is the same gesture. By then the
+        // answer may have saved and moved the next player's button under it.
+        onClick={(event) => {
+          if (event.detail <= 1) onClick()
+        }}
       >
         {busy ? 'Saving…' : children}
       </Button>

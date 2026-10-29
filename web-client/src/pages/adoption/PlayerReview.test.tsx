@@ -49,6 +49,27 @@ const heron: AccountPlayer = {
 
 const NOT_SAVED = 'Your answer wasn’t saved. Please try again.'
 
+// Another tab answered first: the next answer is refused with `status`, and
+// the players list is `after` from then on.
+function answeredInAnotherTab(status: 404 | 409, after: AccountPlayer[]) {
+  let answered = false
+  server.use(
+    http.post(
+      `${API_BASE_URL}/v1/account/players/:playerId/answer`,
+      () => {
+        answered = true
+        return HttpResponse.json({ errors: [{ status: String(status), title: 'Refused' }] }, { status })
+      },
+      { once: true },
+    ),
+    http.get(`${API_BASE_URL}/v1/account/players`, () =>
+      answered
+        ? HttpResponse.json<components['schemas']['AccountPlayersResponse']>({ data: after })
+        : undefined,
+    ),
+  )
+}
+
 describe('Is this you?', () => {
   afterEach(() => {
     vi.restoreAllMocks()
@@ -92,7 +113,7 @@ describe('Is this you?', () => {
   })
 
   it.each([
-    [['Yes, this is me'], 'yes', `${egret.display_name} is your player now.`],
+    [['Yes, this is me'], 'yes', `${dove.display_name} merged into ${egret.display_name}, your player.`],
     [
       ['Someone else played', 'I manage this player'],
       'no',
@@ -126,7 +147,8 @@ describe('Is this you?', () => {
     expect(page.counter).toBe('Player 2 of 2')
     expect(page.heading).toHaveTextContent('Is this you?')
     expect(page.heading).toHaveFocus()
-    expect(page.notice).toBe(`${egret.display_name} is your player now.`)
+    // The egret is older than the dove, so the dove merges into it.
+    expect(page.notice).toBe(`${dove.display_name} merged into ${egret.display_name}, your player.`)
     expect(page.answers).toHaveTextContent(
       `${badger.display_name} and ${egret.display_name} will become one player, your player.`,
     )
@@ -211,8 +233,8 @@ describe('Is this you?', () => {
     expect(page.toasts).toEqual([])
   })
 
-  it('says under "Yes, this is me" that a refused "Yes" wasn’t saved', async () => {
-    const api = mockVerifiedAccount([egret, dove], { refuse: 409 })
+  it('says under "Yes, this is me" that a failed "Yes" wasn’t saved', async () => {
+    const api = mockVerifiedAccount([egret, dove], { refuse: 500 })
     const page = await PlayerReviewPage.render()
 
     await page.click('Yes, this is me')
@@ -232,38 +254,106 @@ describe('Is this you?', () => {
     await page.clickTwiceAtOnce('Yes, this is me')
 
     expect(api.answers).toEqual([{ playerId: egret.id, answer: 'yes' }])
-    expect(page.notice).toBe(`${egret.display_name} is your player now.`)
+    expect(page.notice).toBe(`${dove.display_name} merged into ${egret.display_name}, your player.`)
   })
 
-  it('keeps the count when another tab answered a player first', async () => {
-    mockVerifiedAccount([egret, badger, heron, dove])
-    let otherTabAnswered = false
-    // The answer is refused, and the refetch after it no longer has the
-    // badger, which another tab answered.
+  it('ignores the second click of a double click that lands on the next player', async () => {
+    const api = mockVerifiedAccount([egret, badger, dove])
+    const page = await PlayerReviewPage.render()
+
+    await page.click('Yes, this is me')
+    await page.clickAgainInDoubleClick('Yes, this is me')
+
+    expect(api.answers).toEqual([{ playerId: egret.id, answer: 'yes' }])
+    expect(page.counter).toBe('Player 2 of 2')
+  })
+
+  it('ignores the second click of a double click on "Someone else played"', async () => {
+    const api = mockVerifiedAccount([egret, dove])
+    const page = await PlayerReviewPage.render()
+
+    await page.click('Someone else played')
+    await page.clickAgainInDoubleClick('Remove from my account')
+
+    expect(api.answers).toEqual([])
+    expect(page.heading).toHaveTextContent('Do you manage this player?')
+  })
+
+  it('keeps an answered player gone when an older players request comes back after it', async () => {
+    const api = mockVerifiedAccount([egret, badger, dove])
+    const page = await PlayerReviewPage.render('/')
+    // Home's players are a minute old, so the review fetches them again.
+    const now = Date.now()
+    vi.spyOn(Date, 'now').mockReturnValue(now + 60_000)
+    let release = () => {}
+    // The review's refetch on entry reads the list from before the answer.
     server.use(
-      http.post(
-        `${API_BASE_URL}/v1/account/players/:playerId/answer`,
-        () => {
-          otherTabAnswered = true
-          return HttpResponse.json({ errors: [{ status: '409', title: 'Refused' }] }, { status: 409 })
+      http.get(
+        `${API_BASE_URL}/v1/account/players`,
+        async () => {
+          await new Promise<void>((resolve) => (release = resolve))
+          return HttpResponse.json<components['schemas']['AccountPlayersResponse']>({
+            data: [egret, badger, dove],
+          })
         },
         { once: true },
       ),
+    )
+    await page.review()
+
+    await page.click('Yes, this is me')
+    release()
+    await page.settle()
+
+    expect(api.answers).toEqual([{ playerId: egret.id, answer: 'yes' }])
+    expect(page.counter).toBe('Player 2 of 2')
+    expect(page.text).toContain(`${badger.display_name} was used on this device`)
+    expect(page.loadError('Can’t reach FortyMM')).toBeNull()
+  })
+
+  it('names the self player of the latest players list in what "Yes" does', async () => {
+    mockVerifiedAccount([egret, dove])
+    const page = await PlayerReviewPage.render('/')
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 60_000)
+    // Another tab merged the dove into Ama's older player.
+    server.use(
       http.get(`${API_BASE_URL}/v1/account/players`, () =>
-        otherTabAnswered
-          ? HttpResponse.json<components['schemas']['AccountPlayersResponse']>({
-              data: [egret, { ...badger, open_question: false }, heron, dove],
-            })
-          : undefined,
+        HttpResponse.json<components['schemas']['AccountPlayersResponse']>({ data: [ama, egret] }),
       ),
     )
+
+    await page.review()
+
+    expect(page.answers).toHaveTextContent(
+      `${egret.display_name} and ${ama.display_name} will become one player, your player.`,
+    )
+  })
+
+  it('says another tab answered the player, keeps the count, and asks about the next one', async () => {
+    mockVerifiedAccount([egret, badger, heron, dove])
+    answeredInAnotherTab(409, [dove, heron])
     const page = await PlayerReviewPage.render()
     expect(page.counter).toBe('Player 1 of 3')
 
     await page.click('Yes, this is me')
 
-    expect(page.button('Yes, this is me')).toHaveAccessibleDescription(NOT_SAVED)
-    expect(page.counter).toBe('Player 2 of 3')
+    expect(page.notice).toBe(`${egret.display_name} was already answered in another tab.`)
+    expect(page.counter).toBe('Player 3 of 3')
+    expect(page.text).toContain(`${heron.display_name} was used on this device`)
+    expect(page.button('Yes, this is me')).not.toHaveAccessibleDescription()
+  })
+
+  it('goes Home with a toast when another tab answered the last player', async () => {
+    mockVerifiedAccount([egret, dove])
+    answeredInAnotherTab(404, [dove])
+    const page = await PlayerReviewPage.render()
+
+    await page.click('Someone else played')
+    await page.click('I manage this player')
+
+    expect(page.href).toBe('/')
+    expect(page.toasts).toEqual([`${egret.display_name} was already answered in another tab.`])
+    expect(new HomePage(page.router).title).toHaveFocus()
   })
 
   it('shows Saving… while an answer saves, and holds the other actions', async () => {
@@ -288,7 +378,7 @@ describe('Is this you?', () => {
     await page.settle()
 
     expect(page.href).toBe('/')
-    expect(page.toasts).toEqual([`${egret.display_name} is your player now.`])
+    expect(page.toasts).toEqual([`${dove.display_name} merged into ${egret.display_name}, your player.`])
   })
 
   it('leaves for Home when no player waits', async () => {
