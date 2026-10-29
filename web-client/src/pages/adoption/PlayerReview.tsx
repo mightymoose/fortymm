@@ -129,6 +129,9 @@ function Questions({ selfName }: { selfName: string }) {
   const showToast = useToast()
   const [state, dispatch] = useReducer(review, start)
   const heading = useRef<HTMLHeadingElement>(null)
+  // `answer.isPending` is from the last render, so a second click before
+  // the next one would send a second answer.
+  const sending = useRef(false)
 
   const queue = players.filter((player) => player.open_question)
   const current = queue.at(0)
@@ -148,7 +151,8 @@ function Questions({ selfName }: { selfName: string }) {
   // Awaited rather than passed to `mutate`, because answering the last
   // player leaves the page before `mutate`'s callbacks would run.
   async function save(choice: Answer) {
-    if (answer.isPending) return
+    if (sending.current) return
+    sending.current = true
     dispatch({ type: 'save' })
     let after: AccountPlayer[]
     try {
@@ -158,6 +162,8 @@ function Questions({ selfName }: { selfName: string }) {
       // A 409 means another tab answered first.
       void queryClient.refetchQueries(accountPlayersQuery(api))
       return
+    } finally {
+      sending.current = false
     }
     const self = after.find((found) => found.relationship === 'self')
     const survivor = self && self.id !== player.id ? self.display_name : undefined

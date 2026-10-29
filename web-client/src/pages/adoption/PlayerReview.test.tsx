@@ -218,6 +218,16 @@ describe('Is this you?', () => {
     expect(page.toasts).toEqual([])
   })
 
+  it('sends one answer when "Yes" is clicked twice at once', async () => {
+    const api = mockVerifiedAccount([egret, badger, dove])
+    const page = await PlayerReviewPage.render()
+
+    await page.clickTwiceAtOnce('Yes, this is me')
+
+    expect(api.answers).toEqual([{ playerId: egret.id, answer: 'yes' }])
+    expect(page.notice).toBe(`${egret.display_name} is your player now.`)
+  })
+
   it('shows Saving… while an answer saves, and holds the other actions', async () => {
     mockVerifiedAccount([egret, dove])
     let release = () => {}

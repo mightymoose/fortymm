@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/react'
+import { fireEvent, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderRoute, type AppRouter } from '../renderRoute'
 
@@ -110,6 +110,15 @@ export class PlayerReviewPage {
   // Clicks `name` and waits for its request and the navigation.
   async click(name: ReviewAction): Promise<void> {
     await userEvent.click(this.button(name))
+    await this.settle()
+  }
+
+  // Clicks `name` twice before React renders again, as a quick double
+  // click can, then waits as click() does.
+  async clickTwiceAtOnce(name: ReviewAction): Promise<void> {
+    const button = this.button(name)
+    fireEvent.click(button)
+    fireEvent.click(button)
     await this.settle()
   }
 
