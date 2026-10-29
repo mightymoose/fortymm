@@ -554,18 +554,29 @@ it to `src/routes/`.
   and the step and failed answer of the player on screen. The counter
   "Player N of M" counts the queued players, so it holds when another tab
   answers one, and grows when a new one comes. A ref holds the answer in
-  flight, so a second quick click sends nothing. A failed save shows its error
-  under its button and refetches the players. An answer puts the API's
-  list in the players query. A "Yes" also puts the list's `self` player in
-  the session's account, so the topbar shows it. When "Yes" merged the
-  player into an older one, the confirmation names both, such as "brave
-  badger 214 merged into excited egret 387, your player." While players
-  remain, the confirmation shows above the answers. After the last one,
-  the page goes to `/` and shows it as a toast. With no open question, or
-  for a guest, the page goes to `/` at once. Review later and the last
-  answer set `fromReview` in the router's history state (typed in
-  `src/router.tsx`). Home then focuses the reminder's link while questions
-  remain, or else its title, so focus doesn't fall to the document.
+  flight, so a second quick click sends nothing. An answer button also
+  ignores a click whose `detail` is above 1. That is the second click of a
+  double click, which can land on the next player's button. A keyboard
+  press has `detail` 0. "Yes" says it merges the player into the `self`
+  player of the players list. An answer first cancels a players request
+  in flight, because that request read the list from before the answer.
+  An answer puts the API's list in the players query. A "Yes" also puts
+  the list's `self` player in the session's account, so the topbar shows
+  it. A "Yes" merges the two players, and the older one survives. The
+  confirmation names both, such as "brave badger 214 merged into excited
+  egret 387, your player." The merged player can be the reviewed one or
+  the old `self` player. While players remain, the confirmation shows
+  above the answers. After the last one, the page goes to `/` and shows it
+  as a toast. A save that fails shows its error under its button. A 409 or
+  404 can mean that another tab answered the player first. Then the page
+  refetches the players. If the player left the list, the page says
+  "<player> was already answered in another tab." where a confirmation
+  would show. With no open question, or for a guest, the page goes to `/`
+  at once. For a verified account, each time the page goes to `/`, it sets
+  `fromReview` in the router's history state (typed in `src/router.tsx`).
+  That covers Review later, the last answer and a visit with no open
+  question. Home then focuses the reminder's link while questions remain,
+  or else its title, so focus doesn't fall to the document.
 - `design-system.tsx`: a public page. Public pages go directly in
   `src/routes/`. They make no request and never show the loading screen.
   The design system page has no `AppShell`, and no page links to it.
@@ -604,9 +615,10 @@ says why. The boundary puts `Suspense` inside the `ErrorBoundary` of
 While the data loads, it shows its `skeleton`. Build the skeleton from
 `.fm-skeleton` blocks in the shape of the content. The kit's skeleton is
 static, because the design system removed shimmer. If the request fails, the
-boundary shows an `fm-alert--error` with `role="alert"`. Its title and
-sentence come from `classifyFailure()` in `src/api/errors.ts`, which
-`ErrorPage` uses too. Its Try again resets the boundary, so the query
+boundary shows an `fm-alert--error` with `role="alert"`. `classifyFailure()`
+in `src/api/errors.ts` sorts the failure, and `failureMessages` there gives
+its title and sentence. `ErrorPage` uses both too. After a 429, the alert
+also shows the time from `Retry-After` (`RetryTime`). Its Try again resets the boundary, so the query
 fetches again. A caller can add more actions, such as a link to Home. One
 boundary wraps one loading component, and the component's file exports
 them together. The skeleton may be `null` only when the component usually

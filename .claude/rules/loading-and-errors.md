@@ -7,9 +7,15 @@ component. The component's file exports the boundary and the component
 together, so a caller can't render one without the other.
 
 The root route's error page stays as the safety net. It catches what no
-component boundary catches, such as a failed session or a render bug. A
-user should see a component's own error first, and the root page only when
-nothing nearer could handle the error.
+component boundary catches, such as a render bug. A user should see a
+component's own error first, and the root page only when nothing nearer
+could handle the error.
+
+The session is the one exception. Every authenticated page needs it, so it
+must hold up the loading screen. `AuthenticatedLayout`'s `Suspense` waits
+for it, and the root error page shows its failure. A component that reads
+`sessionQuery` gets the data that the layout already loaded. It needs no
+boundary of its own.
 
 ## Why
 
@@ -26,9 +32,12 @@ nothing nearer could handle the error.
 ## How to tell
 
 - A component that loads data with no boundary of its own is a bug, even
-  though the root error page would catch its error.
-- A boundary that wraps more than one data-loading component is too big. Add
-  no boundary between the root route and the components.
+  though the root error page would catch its error. The session is the
+  exception (see above).
+- A boundary that wraps more than one data-loading component is too big.
+  Wrap each loading component in its own boundary, not a page or a group
+  of components. `AuthenticatedLayout`'s `Suspense` is for the session
+  only.
 - A component that returns `null` or a spinner while `useQuery` loads should
   suspend instead.
 - A skeleton that doesn't look like the content it stands for is wrong.
