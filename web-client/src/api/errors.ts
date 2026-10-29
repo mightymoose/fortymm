@@ -50,3 +50,23 @@ export function classifyFailure(error: unknown): Failure {
   }
   return { kind: 'broken' }
 }
+
+// What each failure tells the visitor: a title, then a sentence. ErrorPage
+// and QueryBoundary both say it.
+export const failureMessages: Record<Failure['kind'], { title: string; sentence: string }> = {
+  unreachable: {
+    title: 'Can’t reach FortyMM',
+    sentence:
+      'Our server isn’t answering. It may be starting up, or your connection may be down. Check your connection, then try again.',
+  },
+  'rate-limited': {
+    title: 'Wait a minute, then try again',
+    sentence:
+      'Your network sent a lot of requests in a short time, so we paused it for a minute.',
+  },
+  broken: {
+    title: 'Something went wrong',
+    sentence:
+      'FortyMM hit an error loading this page. Try again. If it keeps happening, tell us what you were doing.',
+  },
+}

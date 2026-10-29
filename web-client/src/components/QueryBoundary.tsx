@@ -1,24 +1,10 @@
 import { QueryErrorResetBoundary } from '@tanstack/react-query'
 import { Suspense, useId, type ReactNode } from 'react'
 import { ErrorBoundary } from 'react-error-boundary'
-import { classifyFailure, type Failure } from '../api/errors'
+import { classifyFailure, failureMessages } from '../api/errors'
 import { Button } from './Button'
 import { Icon } from './Icon'
-
-const messages: Record<Failure['kind'], { title: string; body: string }> = {
-  unreachable: {
-    title: 'Can’t reach FortyMM',
-    body: 'Our server isn’t answering. Check your connection, then try again.',
-  },
-  'rate-limited': {
-    title: 'Wait a minute, then try again',
-    body: 'Your network sent a lot of requests in a short time.',
-  },
-  broken: {
-    title: 'Something went wrong',
-    body: 'This part of the page didn’t load. Try again.',
-  },
-}
+import { RetryTime } from './RetryTime'
 
 // The loading and error states of one component that reads its data with
 // `useSuspenseQuery`. While the data loads, `skeleton` shows in its place.
@@ -59,14 +45,23 @@ function QueryError({
   actions?: ReactNode
 }) {
   const titleId = useId()
-  const { title, body } = messages[classifyFailure(error).kind]
+  const failure = classifyFailure(error)
+  const { title, sentence } = failureMessages[failure.kind]
   return (
     <div className="fm-alert fm-alert--error" role="alert" aria-labelledby={titleId}>
       <Icon name="error" />
       <p className="fm-alert__title" id={titleId}>
         {title}
       </p>
-      <p className="fm-alert__body">{body}</p>
+      <p className="fm-alert__body">
+        {sentence}
+        {failure.kind === 'rate-limited' && failure.retryAt && (
+          <>
+            {' '}
+            <RetryTime at={failure.retryAt} />
+          </>
+        )}
+      </p>
       <div className="fm-alert__actions">
         <Button variant="primary" size="sm" onClick={onRetry}>
           Try again

@@ -59,6 +59,23 @@ describe('QueryBoundary', () => {
     expect(alert).toContainElement(screen.getByRole('link', { name: 'Go to Home' }))
   })
 
+  it('says when to try again after a 429 with Retry-After', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(Date, 'now').mockReturnValue(new Date(2026, 9, 25, 19, 42, 10).getTime())
+    const error = new ApiError(
+      'GET /greeting',
+      new Response(null, { status: 429, headers: { 'Retry-After': '60' } }),
+    )
+    renderBoundary(() => Promise.reject(error))
+
+    const alert = await screen.findByRole('alert', { name: 'Wait a minute, then try again' })
+    const at = new Date(2026, 9, 25, 19, 43, 10).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+    expect(alert).toHaveTextContent(`Try again at ${at}`)
+  })
+
   it('loads again on Try again, and shows the component when that works', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     const load = vi

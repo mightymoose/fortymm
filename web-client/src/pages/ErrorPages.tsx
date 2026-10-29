@@ -1,8 +1,10 @@
 import { Link, type ErrorComponentProps } from '@tanstack/react-router'
-import { classifyFailure } from '../api/errors'
+import type { ReactNode } from 'react'
+import { classifyFailure, failureMessages, type Failure } from '../api/errors'
 import { Button } from '../components/Button'
 import { ErrorScreen } from '../components/ErrorScreen'
 import { Icon } from '../components/Icon'
+import { RetryTime } from '../components/RetryTime'
 
 function TryAgain() {
   return (
@@ -24,64 +26,40 @@ function GoHome({ primary = false }: { primary?: boolean }) {
 // a route fails to load or render.
 export function ErrorPage({ error }: ErrorComponentProps) {
   const failure = classifyFailure(error)
+  const { title, sentence } = failureMessages[failure.kind]
+  return (
+    <ErrorScreen
+      title={title}
+      note={note(failure)}
+      actions={
+        failure.kind === 'broken' ? (
+          <>
+            <TryAgain />
+            <GoHome />
+          </>
+        ) : (
+          <TryAgain />
+        )
+      }
+    >
+      {sentence}
+    </ErrorScreen>
+  )
+}
+
+function note(failure: Failure): ReactNode {
   switch (failure.kind) {
     case 'unreachable':
       return (
-        <ErrorScreen
-          title="Can’t reach FortyMM"
-          note={
-            <p className="fm-notice">
-              <Icon name="info" />
-              <span>The server can take a few seconds to start.</span>
-            </p>
-          }
-          actions={<TryAgain />}
-        >
-          Our server isn’t answering. It may be starting up, or your
-          connection may be down. Check your connection, then try again.
-        </ErrorScreen>
+        <p className="fm-notice">
+          <Icon name="info" />
+          <span>The server can take a few seconds to start.</span>
+        </p>
       )
     case 'rate-limited':
-      return (
-        <ErrorScreen
-          title="Wait a minute, then try again"
-          note={
-            failure.retryAt && (
-              <span className="fm-rest">
-                <Icon name="clock" />
-                <span>
-                  Try again at{' '}
-                  <span className="num">
-                    {failure.retryAt.toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </span>
-                </span>
-              </span>
-            )
-          }
-          actions={<TryAgain />}
-        >
-          Your network sent a lot of requests in a short time, so we paused it
-          for a minute.
-        </ErrorScreen>
-      )
+      return failure.retryAt && <RetryTime at={failure.retryAt} />
     case 'broken':
-      return (
-        <ErrorScreen
-          title="Something went wrong"
-          actions={
-            <>
-              <TryAgain />
-              <GoHome />
-            </>
-          }
-        >
-          FortyMM hit an error loading this page. Try again. If it keeps
-          happening, tell us what you were doing.
-        </ErrorScreen>
-      )
+      return null
   }
 }
 
