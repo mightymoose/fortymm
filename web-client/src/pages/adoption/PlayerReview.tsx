@@ -12,6 +12,7 @@ import { Button, type ButtonVariant } from '../../components/Button'
 import { Icon } from '../../components/Icon'
 import { QueryBoundary } from '../../components/QueryBoundary'
 import { useToast } from '../../components/toastContext'
+import { Wordmark } from '../../components/Wordmark'
 import './adoption.css'
 
 type Step = 'recognize' | 'relationship'
@@ -78,10 +79,7 @@ export function PlayerReview() {
   return (
     <div className="review">
       <header className="review-top">
-        <span className="app-wordmark" role="img" aria-label="FortyMM">
-          <span className="app-wordmark__ball" />
-          <span className="app-wordmark__name">FortyMM</span>
-        </span>
+        <Wordmark />
       </header>
       <ReviewQuestions selfName={account.player.display_name} />
     </div>
