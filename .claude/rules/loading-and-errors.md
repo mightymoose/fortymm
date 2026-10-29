@@ -15,9 +15,9 @@ nothing nearer could handle the error.
 
 - A failed request breaks only the part of the page that needed it. The
   rest of the page keeps working, and the user can still leave.
-- A page never goes blank. `useQuery` returns `undefined` and no error, so a
-  component that returns `null` until its data comes shows nothing forever
-  after a failure. `useSuspenseQuery` throws the failure to the boundary.
+- A page never goes blank. `useQuery` doesn't throw. A component that
+  returns `null` until its data comes shows nothing forever if the request
+  fails. `useSuspenseQuery` throws the failure to the boundary.
 - A skeleton in the shape of the content tells the user what is coming, and
   the layout doesn't jump when it arrives.
 - The component reads data that is always there. It has no `isPending` or
