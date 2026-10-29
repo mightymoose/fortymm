@@ -12,7 +12,9 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as DesignSystemRouteImport } from './routes/design-system'
 import { Route as SignedOutRouteImport } from './routes/signed-out'
-import { Route as AuthenticatedIndexRouteImport } from './routes/_authenticated/index'
+import { Route as AuthenticatedShellRouteImport } from './routes/_authenticated/_shell'
+import { Route as AuthenticatedReviewPlayersRouteImport } from './routes/_authenticated/review-players'
+import { Route as AuthenticatedShellIndexRouteImport } from './routes/_authenticated/_shell/index'
 
 const AuthenticatedRoute = AuthenticatedRouteImport.update({
   id: '/_authenticated',
@@ -28,40 +30,56 @@ const SignedOutRoute = SignedOutRouteImport.update({
   path: '/signed-out',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AuthenticatedIndexRoute = AuthenticatedIndexRouteImport.update({
+const AuthenticatedShellRoute = AuthenticatedShellRouteImport.update({
+  id: '/_shell',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
+const AuthenticatedReviewPlayersRoute =
+  AuthenticatedReviewPlayersRouteImport.update({
+    id: '/review-players',
+    path: '/review-players',
+    getParentRoute: () => AuthenticatedRoute,
+  } as any)
+const AuthenticatedShellIndexRoute = AuthenticatedShellIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => AuthenticatedRoute,
+  getParentRoute: () => AuthenticatedShellRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof AuthenticatedIndexRoute
+  '/': typeof AuthenticatedShellIndexRoute
   '/design-system': typeof DesignSystemRoute
   '/signed-out': typeof SignedOutRoute
+  '/review-players': typeof AuthenticatedReviewPlayersRoute
 }
 export interface FileRoutesByTo {
+  '/': typeof AuthenticatedShellIndexRoute
   '/design-system': typeof DesignSystemRoute
   '/signed-out': typeof SignedOutRoute
-  '/': typeof AuthenticatedIndexRoute
+  '/review-players': typeof AuthenticatedReviewPlayersRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/design-system': typeof DesignSystemRoute
   '/signed-out': typeof SignedOutRoute
-  '/_authenticated/': typeof AuthenticatedIndexRoute
+  '/_authenticated/_shell': typeof AuthenticatedShellRouteWithChildren
+  '/_authenticated/review-players': typeof AuthenticatedReviewPlayersRoute
+  '/_authenticated/_shell/': typeof AuthenticatedShellIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/design-system' | '/signed-out'
+  fullPaths: '/' | '/design-system' | '/signed-out' | '/review-players'
   fileRoutesByTo: FileRoutesByTo
-  to: '/design-system' | '/signed-out' | '/'
+  to: '/' | '/design-system' | '/signed-out' | '/review-players'
   id:
     | '__root__'
     | '/_authenticated'
     | '/design-system'
     | '/signed-out'
-    | '/_authenticated/'
+    | '/_authenticated/_shell'
+    | '/_authenticated/review-players'
+    | '/_authenticated/_shell/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -93,22 +111,49 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignedOutRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_authenticated/': {
-      id: '/_authenticated/'
+    '/_authenticated/_shell': {
+      id: '/_authenticated/_shell'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AuthenticatedShellRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/review-players': {
+      id: '/_authenticated/review-players'
+      path: '/review-players'
+      fullPath: '/review-players'
+      preLoaderRoute: typeof AuthenticatedReviewPlayersRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
+    '/_authenticated/_shell/': {
+      id: '/_authenticated/_shell/'
       path: '/'
       fullPath: '/'
-      preLoaderRoute: typeof AuthenticatedIndexRouteImport
-      parentRoute: typeof AuthenticatedRoute
+      preLoaderRoute: typeof AuthenticatedShellIndexRouteImport
+      parentRoute: typeof AuthenticatedShellRoute
     }
   }
 }
 
+interface AuthenticatedShellRouteChildren {
+  AuthenticatedShellIndexRoute: typeof AuthenticatedShellIndexRoute
+}
+
+const AuthenticatedShellRouteChildren: AuthenticatedShellRouteChildren = {
+  AuthenticatedShellIndexRoute: AuthenticatedShellIndexRoute,
+}
+
+const AuthenticatedShellRouteWithChildren =
+  AuthenticatedShellRoute._addFileChildren(AuthenticatedShellRouteChildren)
+
 interface AuthenticatedRouteChildren {
-  AuthenticatedIndexRoute: typeof AuthenticatedIndexRoute
+  AuthenticatedShellRoute: typeof AuthenticatedShellRouteWithChildren
+  AuthenticatedReviewPlayersRoute: typeof AuthenticatedReviewPlayersRoute
 }
 
 const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
-  AuthenticatedIndexRoute: AuthenticatedIndexRoute,
+  AuthenticatedShellRoute: AuthenticatedShellRouteWithChildren,
+  AuthenticatedReviewPlayersRoute: AuthenticatedReviewPlayersRoute,
 }
 
 const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(

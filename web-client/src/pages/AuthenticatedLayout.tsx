@@ -3,12 +3,9 @@ import { Outlet, useRouteContext } from '@tanstack/react-router'
 import { Suspense } from 'react'
 import { sessionQuery } from '../api/queries'
 import { LoadingScreen } from '../components/LoadingScreen'
-import { AppShell } from './AppShell'
-import { SignInErrorAlert } from './SignInErrorAlert'
 
-// The layout of the pages that will need a signed-in user: AppShell around
-// the page, and the message of a sign-in that came back with an error. It
-// shows the loading screen over it until the page stops suspending. The page
+// The layout of the pages that will need a signed-in user. It shows the
+// loading screen over the page until the page stops suspending. The page
 // renders under it before it fades out. The session starts once per page
 // load, so coming back to these pages later doesn't show the loading screen.
 export function AuthenticatedLayout() {
@@ -17,12 +14,9 @@ export function AuthenticatedLayout() {
 
   return (
     <>
-      <AppShell>
-        <SignInErrorAlert />
-        <Suspense fallback={null}>
-          <AuthenticatedPage />
-        </Suspense>
-      </AppShell>
+      <Suspense fallback={null}>
+        <AuthenticatedPage />
+      </Suspense>
       <LoadingScreen ready={ready} />
     </>
   )

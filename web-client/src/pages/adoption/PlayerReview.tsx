@@ -1,0 +1,256 @@
+import { useMutation, useQuery, useSuspenseQuery } from '@tanstack/react-query'
+import { Navigate, useNavigate, useRouteContext } from '@tanstack/react-router'
+import { useEffect, useId, useReducer, useRef, type ReactNode } from 'react'
+import {
+  accountPlayersQuery,
+  answerQuestionMutation,
+  sessionQuery,
+  type AccountPlayer,
+  type Answer,
+} from '../../api/queries'
+import { Button, type ButtonVariant } from '../../components/Button'
+import { Icon } from '../../components/Icon'
+import { useToast } from '../../components/toastContext'
+import './adoption.css'
+
+type Step = 'recognize' | 'relationship'
+
+// What this page has done since it opened. The step and the failed answer
+// belong to one player, so the next player starts at `recognize` with no
+// error, whatever ended the last one.
+type Review = {
+  answered: number
+  notice: string | null
+  step: { playerId: string; step: Step } | null
+  failed: { playerId: string; answer: Answer } | null
+}
+
+type ReviewEvent =
+  | { type: 'go'; playerId: string; step: Step }
+  | { type: 'save' }
+  | { type: 'saved'; notice: string }
+  | { type: 'failed'; playerId: string; answer: Answer }
+
+function review(state: Review, event: ReviewEvent): Review {
+  switch (event.type) {
+    case 'go':
+      return { ...state, step: { playerId: event.playerId, step: event.step }, failed: null }
+    case 'save':
+      return { ...state, notice: null, failed: null }
+    case 'saved':
+      return { ...state, answered: state.answered + 1, notice: event.notice }
+    case 'failed':
+      return { ...state, failed: { playerId: event.playerId, answer: event.answer } }
+  }
+}
+
+const start: Review = { answered: 0, notice: null, step: null, failed: null }
+
+// `survivor` is the account's older player, when "Yes" merged the player
+// into it.
+function confirmation(answer: Answer, name: string, survivor?: string): string {
+  switch (answer) {
+    case 'yes':
+      return survivor ? `${name} merged into ${survivor}, your player.` : `${name} is your player now.`
+    case 'no':
+      return `${name} added to players you manage.`
+    case 'not_mine':
+      return `${name} removed from your account.`
+  }
+}
+
+const SAVE_ERROR = 'Your answer wasn’t saved. Please try again.'
+
+// "Is this you?" for each player a sign-in brought to the account, one
+// player at a time, styled by `.review-*` in adoption.css. A player is
+// either the visitor, someone they manage, or not theirs. The page goes back
+// to Home once no question is open, with a toast for the last answer.
+export function PlayerReview() {
+  const { api, queryClient } = useRouteContext({ from: '__root__' })
+  const { data: account } = useSuspenseQuery(sessionQuery(api))
+  const verified = account.kind === 'verified'
+  const { data: players } = useQuery({ ...accountPlayersQuery(api), enabled: verified })
+  const answer = useMutation(answerQuestionMutation(api, queryClient))
+  const navigate = useNavigate()
+  const showToast = useToast()
+  const [state, dispatch] = useReducer(review, start)
+  const heading = useRef<HTMLHeadingElement>(null)
+
+  const queue = players?.filter((player) => player.open_question) ?? []
+  const current = queue.at(0)
+  const step = current && state.step?.playerId === current.id ? state.step.step : 'recognize'
+  const failed = current && state.failed?.playerId === current.id ? state.failed.answer : null
+  const saving = answer.isPending ? answer.variables.answer : null
+  const total = state.answered + queue.length
+
+  useEffect(() => {
+    heading.current?.focus({ preventScroll: true })
+    window.scrollTo(0, 0)
+  }, [current?.id, step])
+
+  if (!verified || (players && !current)) return <Navigate to="/" replace />
+  if (!current) return null
+  const player = current
+
+  // Awaited rather than passed to `mutate`, because answering the last
+  // player leaves the page before `mutate`'s callbacks would run.
+  async function save(choice: Answer) {
+    if (answer.isPending) return
+    dispatch({ type: 'save' })
+    let after: AccountPlayer[]
+    try {
+      after = await answer.mutateAsync({ player, answer: choice })
+    } catch {
+      dispatch({ type: 'failed', playerId: player.id, answer: choice })
+      // A 409 means another tab answered first.
+      void queryClient.refetchQueries(accountPlayersQuery(api))
+      return
+    }
+    const self = after.find((found) => found.relationship === 'self')
+    const survivor = self && self.id !== player.id ? self.display_name : undefined
+    const message = confirmation(choice, player.display_name, survivor)
+    if (after.some((found) => found.open_question)) dispatch({ type: 'saved', notice: message })
+    else showToast(message)
+  }
+
+  function go(next: Step) {
+    dispatch({ type: 'go', playerId: player.id, step: next })
+  }
+
+  // A button that answers the question. While an answer saves, every other
+  // action waits.
+  function answerButton(value: Answer, variant: ButtonVariant, label: string) {
+    return (
+      <SaveButton
+        variant={variant}
+        busy={saving === value}
+        disabled={saving !== null && saving !== value}
+        failed={failed === value}
+        onClick={() => void save(value)}
+      >
+        {label}
+      </SaveButton>
+    )
+  }
+
+  const counter = total > 1 && (
+    <p className="review-counter">
+      Player {state.answered + 1} of {total}
+    </p>
+  )
+  const notice = state.notice && (
+    <p className="fm-notice fm-notice--success review-saved" role="status">
+      <Icon name="check" />
+      <span>{state.notice}</span>
+    </p>
+  )
+
+  return (
+    <div className="review">
+      <header className="review-top">
+        <span className="app-wordmark" role="img" aria-label="FortyMM">
+          <span className="app-wordmark__ball" />
+          <span className="app-wordmark__name">FortyMM</span>
+        </span>
+      </header>
+      {step === 'recognize' ? (
+        <>
+          <main className="review-content">
+            {counter}
+            <h1 className="review-q" ref={heading} tabIndex={-1}>
+              Is this you?
+            </h1>
+            <p className="review-playedas">
+              <b>{current.display_name}</b> was used on this device before you signed in.
+            </p>
+          </main>
+          <div className="review-actions" role="group" aria-label="Your answer">
+            {notice}
+            <p className="review-outcome">
+              <b>{current.display_name}</b> and <b>{account.player.display_name}</b> will become
+              one player, your player.
+            </p>
+            {answerButton('yes', 'primary', 'Yes, this is me')}
+            <Button
+              variant="secondary"
+              size="lg"
+              disabled={saving !== null}
+              onClick={() => go('relationship')}
+            >
+              Someone else played
+            </Button>
+            <Button
+              variant="ghost"
+              disabled={saving !== null}
+              onClick={() => void navigate({ to: '/' })}
+            >
+              Review later
+            </Button>
+          </div>
+        </>
+      ) : (
+        <>
+          <main className="review-content">
+            {counter}
+            <h1 className="review-q" ref={heading} tabIndex={-1}>
+              Do you manage this player?
+            </h1>
+            <div className="review-ident">
+              <p className="review-ident__name">{current.display_name}</p>
+            </div>
+          </main>
+          <div className="review-actions" role="group" aria-label="Your answer">
+            {notice}
+            {answerButton('no', 'primary', 'I manage this player')}
+            {answerButton('not_mine', 'secondary', 'Remove from my account')}
+            <p className="review-note">The player and their matches will stay in FortyMM.</p>
+            <Button variant="ghost" disabled={saving !== null} onClick={() => go('recognize')}>
+              <Icon name="back" />
+              Back
+            </Button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// A large button that saves an answer, with the error of a save that failed
+// right under it.
+function SaveButton({
+  variant,
+  busy,
+  disabled,
+  failed,
+  onClick,
+  children,
+}: {
+  variant: ButtonVariant
+  busy: boolean
+  disabled: boolean
+  failed: boolean
+  onClick: () => void
+  children: ReactNode
+}) {
+  const errorId = useId()
+  return (
+    <>
+      <Button
+        variant={variant}
+        size="lg"
+        busy={busy}
+        disabled={disabled}
+        aria-describedby={failed ? errorId : undefined}
+        onClick={onClick}
+      >
+        {busy ? 'Saving…' : children}
+      </Button>
+      {failed && (
+        <p className="fm-error review-error" id={errorId} role="alert">
+          <Icon name="error" />
+          {SAVE_ERROR}
+        </p>
+      )}
+    </>
+  )
+}

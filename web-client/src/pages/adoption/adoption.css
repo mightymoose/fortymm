@@ -1,30 +1,34 @@
-/* The "Is this you?" review on Home (AdoptionReview.tsx). Home's `.home`
-   gap spaces it from the roadmap. */
+/* The reminder of the players to review on Home (AdoptionReview.tsx). Home's
+   `.home` gap spaces it from the roadmap. */
 .adopt{display:flex;flex-direction:column;gap:var(--s-6)}
-.adopt>.fm-notice{align-self:flex-start}
 
-/* The dialog: the question, the player, then three equal choices. */
-.adopt-review{width:min(520px,calc(100vw - 32px))}
-.adopt-review[open]{display:flex;flex-direction:column;gap:var(--s-5)}
-.adopt-review p{margin:0}
-.adopt-review p.meta{font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
-.adopt-review__head{display:flex;flex-direction:column;gap:var(--s-1)}
-.adopt-review__head h2{margin:0}
-.adopt-review .fm-dialog__actions{align-items:center}
-.adopt-skip{margin-right:auto}
+/* The player review (PlayerReview.tsx): one column, with the answers in an
+   action bar under the question. On a phone the bar sticks to the bottom. */
+.review{box-sizing:border-box;min-height:100dvh;max-width:520px;margin:0 auto;padding:0 20px;display:flex;flex-direction:column;background:var(--bg-app)}
+.review-top{padding:20px 0 4px;display:flex}
+.review-top .app-wordmark{padding:0}
+.review-content{flex:1 0 auto;padding:28px 0 8px}
+.review-counter{margin:0 0 8px;font:500 13px/1.3 var(--font-ui);color:var(--fg-3)}
+.review-q{margin:0;font:600 24px/1.25 var(--font-ui);letter-spacing:-0.01em;color:var(--fg-1);text-wrap:balance;outline:none}
+.review-q:focus-visible{box-shadow:none}
+.review-playedas{margin:8px 0 0;font:400 15px/1.45 var(--font-ui);color:var(--fg-2);overflow-wrap:anywhere}
+.review-playedas b,.review-outcome b{font-weight:600;color:var(--fg-1)}
+.review-ident{margin-top:20px;display:flex;flex-direction:column;align-items:flex-start;gap:4px}
+.review-ident__name{margin:0;font:600 20px/1.3 var(--font-ui);color:var(--fg-1);overflow-wrap:anywhere}
+.review-actions{display:flex;flex-direction:column;gap:12px;padding:24px 0 40px}
+.review-actions>.fm-btn{width:100%}
+.review-outcome{margin:0;font:400 14px/1.45 var(--font-ui);color:var(--fg-2);overflow-wrap:anywhere;text-wrap:pretty}
+.review-note{margin:-4px 0 4px;font:400 13px/1.4 var(--font-ui);color:var(--fg-3);text-align:center;text-wrap:balance}
+.review-error{margin:-4px 0 0}
+.review-saved{margin:0;overflow-wrap:anywhere}
 
-.adopt-player{display:flex;flex-direction:column;gap:var(--s-3);padding:var(--s-4);border-radius:var(--r-md);background:var(--bg-app)}
-.adopt-player__who{display:flex;align-items:center;gap:var(--s-3)}
-.adopt-review .adopt-player__name{font:600 var(--text-base)/var(--lh-snug) var(--font-ui);color:var(--fg-1)}
+@media (min-width:600px){
+  .review{padding-top:32px}
+  .review-content{padding-top:56px}
+  .review-q{font-size:32px;line-height:1.2}
+  .review-ident__name{font-size:24px}
+}
 
-.adopt-options{display:flex;flex-direction:column;gap:var(--s-3);margin:0;padding:0;border:0}
-.adopt-option{padding:var(--s-3) var(--s-4);border:1px solid var(--border-control);border-radius:var(--r-md)}
-.adopt-option:has(input:checked){border-color:var(--accent)}
-.adopt-option:has(input:disabled){border-color:var(--border-subtle)}
-.adopt-option__text{display:flex;flex-direction:column;gap:2px}
-.adopt-option__label{font-weight:600}
-
-@media (max-width:480px){
-  .adopt-skip{flex-basis:100%}
-  .adopt-review .fm-dialog__actions .fm-btn:not(.adopt-skip){flex:1}
+@media (max-width:599px) and (min-height:560px){
+  .review-actions{position:sticky;bottom:0;z-index:2;margin:0 -20px;padding:16px 20px calc(16px + env(safe-area-inset-bottom,0px));background:var(--bg-app);border-top:1px solid var(--border-subtle)}
 }

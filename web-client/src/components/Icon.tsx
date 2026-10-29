@@ -103,6 +103,12 @@ const paths = {
       <path d="M8 6h13" /><path d="M8 12h13" /><path d="M8 18h13" /><path d="M3 6h.01" /><path d="M3 12h.01" /><path d="M3 18h.01" />
     </>
   ),
+  // Lucide's "arrow-left", which kit.js doesn't draw, for a Back button.
+  back: (
+    <>
+      <path d="m12 19-7-7 7-7" /><path d="M19 12H5" />
+    </>
+  ),
   // Lucide's "menu" and "house", which kit.js doesn't draw, for the app's
   // sidebar.
   menu: (
