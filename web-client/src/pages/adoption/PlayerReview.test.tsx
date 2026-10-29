@@ -106,6 +106,7 @@ describe('Is this you?', () => {
     expect(page.href).toBe('/')
     expect(page.toasts).toEqual([toast])
     expect(page.reminderTitle).toBeNull()
+    expect(new HomePage(page.router).title).toHaveFocus()
   })
 
   it('confirms an answer on the page, and asks about the next player', async () => {
@@ -184,6 +185,7 @@ describe('Is this you?', () => {
     expect(api.answers).toEqual([])
     expect(page.href).toBe('/')
     expect(page.reminderTitle).toBe('1 player to review')
+    expect(page.reviewLink).toHaveFocus()
   })
 
   it('says under the button that a refused answer wasn’t saved, and stays on the step', async () => {

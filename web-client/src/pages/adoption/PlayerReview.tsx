@@ -142,7 +142,7 @@ function Questions({ selfName }: { selfName: string }) {
     window.scrollTo(0, 0)
   }, [current?.id, step])
 
-  if (!current) return <Navigate to="/" replace />
+  if (!current) return <Navigate to="/" replace state={{ fromReview: true }} />
   const player = current
 
   // Awaited rather than passed to `mutate`, because answering the last
@@ -227,7 +227,7 @@ function Questions({ selfName }: { selfName: string }) {
         <Button
           variant="ghost"
           disabled={saving !== null}
-          onClick={() => void navigate({ to: '/' })}
+          onClick={() => void navigate({ to: '/', state: { fromReview: true } })}
         >
           Review later
         </Button>

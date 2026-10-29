@@ -559,7 +559,10 @@ it to `src/routes/`.
   badger 214 merged into excited egret 387, your player." While players
   remain, the confirmation shows above the answers. After the last one,
   the page goes to `/` and shows it as a toast. With no open question, or
-  for a guest, the page goes to `/` at once.
+  for a guest, the page goes to `/` at once. Review later and the last
+  answer set `fromReview` in the router's history state (typed in
+  `src/router.tsx`). Home then focuses the reminder's link while questions
+  remain, or else its title, so focus doesn't fall to the document.
 - `design-system.tsx`: a public page. Public pages go directly in
   `src/routes/`. They make no request and never show the loading screen.
   The design system page has no `AppShell`, and no page links to it.

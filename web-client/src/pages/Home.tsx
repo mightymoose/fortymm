@@ -1,3 +1,5 @@
+import { useRouterState } from '@tanstack/react-router'
+import { useEffect, useRef, type Ref } from 'react'
 import { Icon, type IconName } from '../components/Icon'
 import { AdoptionReview } from './adoption/AdoptionReview'
 
@@ -38,23 +40,32 @@ const parts: readonly { title: string; body: string; icon: IconName; stage: Stag
   },
 ]
 
-// The "Is this you?" review over the roadmap.
+// The "Is this you?" reminder over the roadmap. Back from the review, focus
+// goes to the reminder's link while questions remain, or else to the title.
 export function Home() {
+  const reviewLink = useRef<HTMLAnchorElement>(null)
+  const title = useRef<HTMLHeadingElement>(null)
+  const fromReview = useRouterState({ select: (state) => state.location.state.fromReview })
+
+  useEffect(() => {
+    if (fromReview) (reviewLink.current ?? title.current)?.focus()
+  }, [fromReview])
+
   return (
     <div className="home">
-      <AdoptionReview />
-      <Roadmap />
+      <AdoptionReview linkRef={reviewLink} />
+      <Roadmap titleRef={title} />
     </div>
   )
 }
 
 // What we're building and what comes after, styled by `.roadmap` in
 // styles/base.css. Each part's stage sets its colour there.
-function Roadmap() {
+function Roadmap({ titleRef }: { titleRef: Ref<HTMLHeadingElement> }) {
   return (
     <section className="roadmap">
       <div className="roadmap__intro">
-        <h1 className="roadmap__title">What’s coming, and when.</h1>
+        <h1 className="roadmap__title" ref={titleRef} tabIndex={-1}>What’s coming, and when.</h1>
         <p className="roadmap__lead">
           We’re building FortyMM one part at a time. Here’s what we’re working on now and what
           comes after.
