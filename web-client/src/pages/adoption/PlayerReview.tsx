@@ -212,7 +212,7 @@ function Questions({ selfName }: { selfName: string }) {
     <>
       <main className="review-content">
         {counter}
-        <h1 className="review-q" ref={heading} tabIndex={-1}>
+        <h1 className="h2 review-q" ref={heading} tabIndex={-1}>
           Is this you?
         </h1>
         <p className="review-playedas">
@@ -247,11 +247,11 @@ function Questions({ selfName }: { selfName: string }) {
     <>
       <main className="review-content">
         {counter}
-        <h1 className="review-q" ref={heading} tabIndex={-1}>
+        <h1 className="h2 review-q" ref={heading} tabIndex={-1}>
           Do you manage this player?
         </h1>
         <div className="review-ident">
-          <p className="review-ident__name">{current.display_name}</p>
+          <p className="h3 review-ident__name">{current.display_name}</p>
         </div>
       </main>
       <div className="review-actions" role="group" aria-label="Your answer">
