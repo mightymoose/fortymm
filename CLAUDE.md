@@ -533,14 +533,20 @@ it to `src/routes/`.
   `/api/v1/auth/login` with the current path and query as `return_to`,
   because the API answers with a 302.
 - `AdoptionReview`: for a verified account, it
-  reads `GET /v1/account/players`. With open questions, it shows a
+  reads `GET /v1/account/players` in its own `QueryBoundary`, with no
+  skeleton and the inline error (see API client). A guest asks for no
+  players. With open questions, it shows a
   reminder with a "Review players" link to `/review-players`. If the URL
   has `signed_in=1`, the router replaces it with `/review-players` when a
   question is open, or with `/` without the param when none is. So a
   reload shows only the reminder.
 - `review-players.tsx`: the page `PlayerReview`
   (`src/pages/adoption/PlayerReview.tsx`), with the wordmark and no
-  `AppShell`. It asks "Is this you?" about one open question at a time.
+  `AppShell`. The wordmark always shows. The question and its answers read
+  `GET /v1/account/players` in a `QueryBoundary`, with a skeleton of the
+  question and the action bar, and an error that also links to Home. A
+  guest goes to `/` before it asks for players. It asks "Is this you?"
+  about one open question at a time.
   "Yes, this is me" answers `yes`. "Someone else played" asks "Do you
   manage this player?", which answers `no` or `not_mine`, or goes Back.
   "Review later" goes to `/` with no answer. A reducer holds the page's
@@ -583,6 +589,23 @@ A retry after a lost `POST /v1/session` response can leave one unused guest
 account, which is an accepted cost. `createAppRouter()` puts the client in the router context as `api`,
 with the `QueryClient` as `queryClient`, and wraps the router in a
 `QueryClientProvider`.
+
+A component that loads data reads it with `useSuspenseQuery`, inside its own
+`QueryBoundary` (`src/components/QueryBoundary.tsx`).
+[.claude/rules/loading-and-errors.md](.claude/rules/loading-and-errors.md)
+says why. The boundary puts `Suspense` inside the `ErrorBoundary` of
+`react-error-boundary`, inside TanStack Query's `QueryErrorResetBoundary`.
+While the data loads, it shows its `skeleton`. Build the skeleton from
+`.fm-skeleton` blocks in the shape of the content. The kit's skeleton is
+static, because the design system removed shimmer. If the request fails, the
+boundary shows an `fm-alert--error` with `role="alert"`. Its title and
+sentence come from `classifyFailure()` in `src/api/errors.ts`, which
+`ErrorPage` uses too. Its Try again resets the boundary, so the query
+fetches again. A caller can add more actions, such as a link to Home. One
+boundary wraps one loading component, and the component's file exports
+them together. The skeleton may be `null` only when the component usually
+renders nothing, such as Home's reminder. The root route's error page stays
+as the safety net for what no boundary catches.
 
 `sessionQuery` sends `POST /v1/session` and returns the account, with its
 player. Pages read the account from it. It passes no abort `signal`. An
@@ -671,7 +694,10 @@ API client with base URL `API_BASE_URL` (`http://localhost/api`), because
 Node's `Request` rejects a relative URL. It waits for the session, so the
 page is on screen when `render()` resolves. To test the loading screen, hold
 the session response with `holdSession()` from `src/test/server.ts` (see
-`src/pages/AuthenticatedLayout.test.tsx`). `DesignSystemPage.render()` never
+`src/pages/AuthenticatedLayout.test.tsx`). To test a skeleton, hold the players
+response with `holdPlayers()`. `failPlayersOnce()` fails the next players
+request, for a boundary's error. React keeps a Suspense fallback up for a
+moment after the data comes, so wait for the content with a `find*` query. `DesignSystemPage.render()` never
 waits for the session, because the page doesn't start one.
 `src/api/queries.test.ts` checks the retry rule through `createQueryClient()`. `renderRoute` calls
 `router.load()`, which also loads the route's chunk. A navigation after the

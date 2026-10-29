@@ -58,6 +58,35 @@ export function holdSession() {
   }
 }
 
+// Holds the mock API's players responses until the test releases them. Then
+// the handler set before this one answers, such as mockVerifiedAccount()'s.
+export function holdPlayers() {
+  const pending: (() => void)[] = []
+  server.use(
+    http.get(
+      `${API_BASE_URL}/v1/account/players`,
+      () => new Promise<undefined>((resolve) => pending.push(() => resolve(undefined))),
+    ),
+  )
+  return {
+    async release(): Promise<void> {
+      await act(async () => pending.splice(0).forEach((resolve) => resolve()))
+    },
+  }
+}
+
+// Makes the mock API's next players request fail with `status`. The
+// requests after it reach the handler set before this one.
+export function failPlayersOnce(status: number) {
+  server.use(
+    http.get(
+      `${API_BASE_URL}/v1/account/players`,
+      () => HttpResponse.json({ errors: [{ status: String(status), title: 'Failed' }] }, { status }),
+      { once: true },
+    ),
+  )
+}
+
 type AccountPlayer = components['schemas']['AccountPlayer']
 type Answer = components['schemas']['Answer']
 

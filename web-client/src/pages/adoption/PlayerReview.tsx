@@ -1,5 +1,5 @@
-import { useMutation, useQuery, useSuspenseQuery } from '@tanstack/react-query'
-import { Navigate, useNavigate, useRouteContext } from '@tanstack/react-router'
+import { useMutation, useSuspenseQuery } from '@tanstack/react-query'
+import { Link, Navigate, useNavigate, useRouteContext } from '@tanstack/react-router'
 import { useEffect, useId, useReducer, useRef, type ReactNode } from 'react'
 import {
   accountPlayersQuery,
@@ -10,6 +10,7 @@ import {
 } from '../../api/queries'
 import { Button, type ButtonVariant } from '../../components/Button'
 import { Icon } from '../../components/Icon'
+import { QueryBoundary } from '../../components/QueryBoundary'
 import { useToast } from '../../components/toastContext'
 import './adoption.css'
 
@@ -64,19 +65,72 @@ const SAVE_ERROR = 'Your answer wasn’t saved. Please try again.'
 // "Is this you?" for each player a sign-in brought to the account, one
 // player at a time, styled by `.review-*` in adoption.css. A player is
 // either the visitor, someone they manage, or not theirs. The page goes back
-// to Home once no question is open, with a toast for the last answer.
+// to Home once no question is open, with a toast for the last answer. A
+// guest has no questions, so it goes Home without asking for players.
 export function PlayerReview() {
-  const { api, queryClient } = useRouteContext({ from: '__root__' })
+  const { api } = useRouteContext({ from: '__root__' })
   const { data: account } = useSuspenseQuery(sessionQuery(api))
-  const verified = account.kind === 'verified'
-  const { data: players } = useQuery({ ...accountPlayersQuery(api), enabled: verified })
+  if (account.kind !== 'verified') return <Navigate to="/" replace />
+  return (
+    <div className="review">
+      <header className="review-top">
+        <span className="app-wordmark" role="img" aria-label="FortyMM">
+          <span className="app-wordmark__ball" />
+          <span className="app-wordmark__name">FortyMM</span>
+        </span>
+      </header>
+      <ReviewQuestions selfName={account.player.display_name} />
+    </div>
+  )
+}
+
+function ReviewQuestions({ selfName }: { selfName: string }) {
+  return (
+    <QueryBoundary
+      skeleton={<ReviewSkeleton />}
+      actions={
+        <Link to="/" className="fm-btn fm-btn--ghost fm-btn--sm">
+          Go to Home
+        </Link>
+      }
+    >
+      <Questions selfName={selfName} />
+    </QueryBoundary>
+  )
+}
+
+// The shape of the question and its action bar, while the players load.
+function ReviewSkeleton() {
+  return (
+    <>
+      <main className="review-content" aria-busy="true">
+        <span className="fm-sr" role="status">
+          Loading players
+        </span>
+        <div className="fm-skeleton review-skeleton review-skeleton--counter" aria-hidden="true" />
+        <div className="fm-skeleton review-skeleton review-skeleton--question" aria-hidden="true" />
+        <div className="fm-skeleton review-skeleton review-skeleton--line" aria-hidden="true" />
+      </main>
+      <div className="review-actions" aria-hidden="true">
+        <div className="fm-skeleton review-skeleton review-skeleton--outcome" />
+        <div className="fm-skeleton review-skeleton review-skeleton--button" />
+        <div className="fm-skeleton review-skeleton review-skeleton--button" />
+        <div className="fm-skeleton review-skeleton review-skeleton--later" />
+      </div>
+    </>
+  )
+}
+
+function Questions({ selfName }: { selfName: string }) {
+  const { api, queryClient } = useRouteContext({ from: '__root__' })
+  const { data: players } = useSuspenseQuery(accountPlayersQuery(api))
   const answer = useMutation(answerQuestionMutation(api, queryClient))
   const navigate = useNavigate()
   const showToast = useToast()
   const [state, dispatch] = useReducer(review, start)
   const heading = useRef<HTMLHeadingElement>(null)
 
-  const queue = players?.filter((player) => player.open_question) ?? []
+  const queue = players.filter((player) => player.open_question)
   const current = queue.at(0)
   const step = current && state.step?.playerId === current.id ? state.step.step : 'recognize'
   const failed = current && state.failed?.playerId === current.id ? state.failed.answer : null
@@ -88,8 +142,7 @@ export function PlayerReview() {
     window.scrollTo(0, 0)
   }, [current?.id, step])
 
-  if (!verified || (players && !current)) return <Navigate to="/" replace />
-  if (!current) return null
+  if (!current) return <Navigate to="/" replace />
   const player = current
 
   // Awaited rather than passed to `mutate`, because answering the last
@@ -145,73 +198,63 @@ export function PlayerReview() {
     </p>
   )
 
-  return (
-    <div className="review">
-      <header className="review-top">
-        <span className="app-wordmark" role="img" aria-label="FortyMM">
-          <span className="app-wordmark__ball" />
-          <span className="app-wordmark__name">FortyMM</span>
-        </span>
-      </header>
-      {step === 'recognize' ? (
-        <>
-          <main className="review-content">
-            {counter}
-            <h1 className="review-q" ref={heading} tabIndex={-1}>
-              Is this you?
-            </h1>
-            <p className="review-playedas">
-              <b>{current.display_name}</b> was used on this device before you signed in.
-            </p>
-          </main>
-          <div className="review-actions" role="group" aria-label="Your answer">
-            {notice}
-            <p className="review-outcome">
-              <b>{current.display_name}</b> and <b>{account.player.display_name}</b> will become
-              one player, your player.
-            </p>
-            {answerButton('yes', 'primary', 'Yes, this is me')}
-            <Button
-              variant="secondary"
-              size="lg"
-              disabled={saving !== null}
-              onClick={() => go('relationship')}
-            >
-              Someone else played
-            </Button>
-            <Button
-              variant="ghost"
-              disabled={saving !== null}
-              onClick={() => void navigate({ to: '/' })}
-            >
-              Review later
-            </Button>
-          </div>
-        </>
-      ) : (
-        <>
-          <main className="review-content">
-            {counter}
-            <h1 className="review-q" ref={heading} tabIndex={-1}>
-              Do you manage this player?
-            </h1>
-            <div className="review-ident">
-              <p className="review-ident__name">{current.display_name}</p>
-            </div>
-          </main>
-          <div className="review-actions" role="group" aria-label="Your answer">
-            {notice}
-            {answerButton('no', 'primary', 'I manage this player')}
-            {answerButton('not_mine', 'secondary', 'Remove from my account')}
-            <p className="review-note">The player and their matches will stay in FortyMM.</p>
-            <Button variant="ghost" disabled={saving !== null} onClick={() => go('recognize')}>
-              <Icon name="back" />
-              Back
-            </Button>
-          </div>
-        </>
-      )}
-    </div>
+  return step === 'recognize' ? (
+    <>
+      <main className="review-content">
+        {counter}
+        <h1 className="review-q" ref={heading} tabIndex={-1}>
+          Is this you?
+        </h1>
+        <p className="review-playedas">
+          <b>{current.display_name}</b> was used on this device before you signed in.
+        </p>
+      </main>
+      <div className="review-actions" role="group" aria-label="Your answer">
+        {notice}
+        <p className="review-outcome">
+          <b>{current.display_name}</b> and <b>{selfName}</b> will become
+          one player, your player.
+        </p>
+        {answerButton('yes', 'primary', 'Yes, this is me')}
+        <Button
+          variant="secondary"
+          size="lg"
+          disabled={saving !== null}
+          onClick={() => go('relationship')}
+        >
+          Someone else played
+        </Button>
+        <Button
+          variant="ghost"
+          disabled={saving !== null}
+          onClick={() => void navigate({ to: '/' })}
+        >
+          Review later
+        </Button>
+      </div>
+    </>
+  ) : (
+    <>
+      <main className="review-content">
+        {counter}
+        <h1 className="review-q" ref={heading} tabIndex={-1}>
+          Do you manage this player?
+        </h1>
+        <div className="review-ident">
+          <p className="review-ident__name">{current.display_name}</p>
+        </div>
+      </main>
+      <div className="review-actions" role="group" aria-label="Your answer">
+        {notice}
+        {answerButton('no', 'primary', 'I manage this player')}
+        {answerButton('not_mine', 'secondary', 'Remove from my account')}
+        <p className="review-note">The player and their matches will stay in FortyMM.</p>
+        <Button variant="ghost" disabled={saving !== null} onClick={() => go('recognize')}>
+          <Icon name="back" />
+          Back
+        </Button>
+      </div>
+    </>
   )
 }
 

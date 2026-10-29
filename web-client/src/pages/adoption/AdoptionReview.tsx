@@ -1,24 +1,35 @@
-import { useQuery } from '@tanstack/react-query'
+import { useSuspenseQuery } from '@tanstack/react-query'
 import { Link, useNavigate, useRouteContext, useSearch } from '@tanstack/react-router'
 import { useEffect, useEffectEvent } from 'react'
 import { accountPlayersQuery, sessionQuery, type AccountPlayer } from '../../api/queries'
 import { Icon } from '../../components/Icon'
+import { QueryBoundary } from '../../components/QueryBoundary'
 import './adoption.css'
 
 // The reminder on Home of the players a sign-in brought to the account that
 // still wait for "Is this you?". Its link opens the review. Right after a
-// sign-in, Home goes straight to the review instead.
+// sign-in, Home goes straight to the review instead. A guest has no
+// questions, so it asks for no players.
 export function AdoptionReview() {
   const { api } = useRouteContext({ from: '__root__' })
-  const { data: account } = useQuery(sessionQuery(api))
-  const { data: players } = useQuery({
-    ...accountPlayersQuery(api),
-    enabled: account?.kind === 'verified',
-  })
+  const { data: account } = useSuspenseQuery(sessionQuery(api))
+  if (account.kind !== 'verified') return null
+  return (
+    // Most accounts have no reminder, so a skeleton would push the roadmap
+    // down while the players load, then pull it back up.
+    <QueryBoundary skeleton={null}>
+      <OpenQuestions />
+    </QueryBoundary>
+  )
+}
+
+function OpenQuestions() {
+  const { api } = useRouteContext({ from: '__root__' })
+  const { data: players } = useSuspenseQuery(accountPlayersQuery(api))
   const { signed_in: signedIn } = useSearch({ from: '/_authenticated/_shell/' })
   const navigate = useNavigate()
 
-  const open = players?.filter((player) => player.open_question) ?? []
+  const open = players.filter((player) => player.open_question)
 
   // Both replace the URL, so a reload or Back after a sign-in shows only the
   // reminder.
@@ -26,10 +37,9 @@ export function AdoptionReview() {
     if (open.length > 0) void navigate({ to: '/review-players', replace: true })
     else void navigate({ to: '/', search: {}, replace: true })
   })
-  const loaded = players !== undefined
   useEffect(() => {
-    if (signedIn && loaded) afterSignIn()
-  }, [signedIn, loaded])
+    if (signedIn) afterSignIn()
+  }, [signedIn])
 
   if (open.length === 0) return null
   return (

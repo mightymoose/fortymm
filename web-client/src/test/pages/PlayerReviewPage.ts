@@ -42,6 +42,15 @@ export class PlayerReviewPage {
     return screen.getByRole('heading', { level: 1 })
   }
 
+  // The question, or null while the players load.
+  get queryHeading(): HTMLElement | null {
+    return screen.queryByRole('heading', { level: 1 })
+  }
+
+  get wordmark(): HTMLElement {
+    return screen.getByRole('img', { name: 'FortyMM' })
+  }
+
   // Waits for the review's question, after a navigation that loads the
   // page's chunk.
   findQuestion(): Promise<HTMLElement> {
@@ -70,6 +79,23 @@ export class PlayerReviewPage {
   // The toasts on screen, by their text.
   get toasts(): string[] {
     return [...document.querySelectorAll('.fm-toast__msg')].map((toast) => toast.textContent ?? '')
+  }
+
+  // Whether the review shows its skeleton while the players load.
+  get loading(): boolean {
+    return screen.queryByText('Loading players') !== null
+  }
+
+  // The alert that says the players didn't load, found by its title, or
+  // null.
+  loadError(title: string): HTMLElement | null {
+    return screen.queryByRole('alert', { name: title })
+  }
+
+  // Clicks a load error's Try again. React shows the skeleton for a while
+  // after it, so wait with findQuestion().
+  async tryAgain(alert: HTMLElement): Promise<void> {
+    await userEvent.click(within(alert).getByRole('button', { name: 'Try again' }))
   }
 
   // The reminder's title on Home, such as "2 players to review", or null.

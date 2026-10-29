@@ -1,26 +1,8 @@
 import { Link, type ErrorComponentProps } from '@tanstack/react-router'
-import { ApiError, ApiUnreachable } from '../api/errors'
+import { classifyFailure } from '../api/errors'
 import { Button } from '../components/Button'
 import { ErrorScreen } from '../components/ErrorScreen'
 import { Icon } from '../components/Icon'
-
-type Failure =
-  | { kind: 'unreachable' }
-  | { kind: 'rate-limited'; retryAt: Date | null }
-  | { kind: 'broken' }
-
-// The Worker answers 503 without an API origin, and Cloudflare answers 502
-// or 504 when the API doesn't. Each means the API can't be reached.
-const UNREACHABLE_STATUSES = new Set([502, 503, 504])
-
-function classify(error: unknown): Failure {
-  if (error instanceof ApiUnreachable) return { kind: 'unreachable' }
-  if (error instanceof ApiError) {
-    if (error.status === 429) return { kind: 'rate-limited', retryAt: error.retryAt }
-    if (UNREACHABLE_STATUSES.has(error.status)) return { kind: 'unreachable' }
-  }
-  return { kind: 'broken' }
-}
 
 function TryAgain() {
   return (
@@ -41,7 +23,7 @@ function GoHome({ primary = false }: { primary?: boolean }) {
 // The root route's error component: the page shown in place of the app when
 // a route fails to load or render.
 export function ErrorPage({ error }: ErrorComponentProps) {
-  const failure = classify(error)
+  const failure = classifyFailure(error)
   switch (failure.kind) {
     case 'unreachable':
       return (

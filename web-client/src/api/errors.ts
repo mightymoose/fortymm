@@ -31,3 +31,22 @@ function parseRetryAfter(value: string | null): Date | null {
   const date = Date.parse(value)
   return Number.isNaN(date) ? null : new Date(date)
 }
+
+export type Failure =
+  | { kind: 'unreachable' }
+  | { kind: 'rate-limited'; retryAt: Date | null }
+  | { kind: 'broken' }
+
+// The Worker answers 503 without an API origin, and Cloudflare answers 502
+// or 504 when the API doesn't. Each means the API can't be reached.
+const UNREACHABLE_STATUSES = new Set([502, 503, 504])
+
+// What a failed request means for the visitor, so a page can say what to do.
+export function classifyFailure(error: unknown): Failure {
+  if (error instanceof ApiUnreachable) return { kind: 'unreachable' }
+  if (error instanceof ApiError) {
+    if (error.status === 429) return { kind: 'rate-limited', retryAt: error.retryAt }
+    if (UNREACHABLE_STATUSES.has(error.status)) return { kind: 'unreachable' }
+  }
+  return { kind: 'broken' }
+}

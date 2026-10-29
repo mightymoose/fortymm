@@ -1,10 +1,16 @@
 import { within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { components } from '../../api/schema'
 import { HomePage } from '../../test/pages/HomePage'
 import { PlayerReviewPage, type ReviewAction } from '../../test/pages/PlayerReviewPage'
-import { API_BASE_URL, mockVerifiedAccount, server } from '../../test/server'
+import {
+  API_BASE_URL,
+  failPlayersOnce,
+  holdPlayers,
+  mockVerifiedAccount,
+  server,
+} from '../../test/server'
 
 type AccountPlayer = components['schemas']['AccountPlayer']
 
@@ -37,6 +43,10 @@ const ama: AccountPlayer = {
 const NOT_SAVED = 'Your answer wasn’t saved. Please try again.'
 
 describe('Is this you?', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('opens right after sign-in and asks about the first player', async () => {
     mockVerifiedAccount([egret, dove])
     const page = await PlayerReviewPage.render('/?signed_in=1')
@@ -238,5 +248,48 @@ describe('Is this you?', () => {
     expect(requests).toEqual([])
     expect(page.href).toBe('/')
     expect(page.reminderTitle).toBeNull()
+  })
+
+  it('shows a skeleton while the players load, then the question', async () => {
+    mockVerifiedAccount([egret, dove])
+    const players = holdPlayers()
+    const page = await PlayerReviewPage.render()
+
+    expect(page.loading).toBe(true)
+    expect(page.wordmark).toBeVisible()
+    expect(page.queryHeading).toBeNull()
+
+    await players.release()
+    await page.findQuestion()
+
+    expect(page.loading).toBe(false)
+    expect(page.heading).toHaveTextContent('Is this you?')
+  })
+
+  it('says the players didn’t load, and Try again asks again', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockVerifiedAccount([egret, dove])
+    failPlayersOnce(500)
+    const page = await PlayerReviewPage.render()
+
+    const alert = page.loadError('Something went wrong')
+    expect(alert).not.toBeNull()
+    expect(within(alert!).getByRole('link', { name: 'Go to Home' })).toHaveAttribute('href', '/')
+
+    await page.tryAgain(alert!)
+    await page.findQuestion()
+
+    expect(page.loadError('Something went wrong')).toBeNull()
+    expect(page.heading).toHaveTextContent('Is this you?')
+  })
+
+  it('keeps Home working when its reminder can’t load', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    mockVerifiedAccount([egret, dove])
+    failPlayersOnce(500)
+    const page = await PlayerReviewPage.render('/')
+
+    expect(page.loadError('Something went wrong')).not.toBeNull()
+    expect(new HomePage(page.router).title).toHaveTextContent('What’s coming, and when.')
   })
 })
