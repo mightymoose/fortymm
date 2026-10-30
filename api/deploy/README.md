@@ -15,8 +15,8 @@ sends. CLAUDE.md's Deploy section describes how it all fits together.
   database below).
 - `bootstrap-gcp.sh`: the one-time project setup below.
 - `setup-auth0`: the one-time Auth0 setup (see Auth0 below).
-- `auth0.env`: the Auth0 tenant's domain and client IDs, which `setup-auth0`
-  writes and `cloud-run-deploy` reads.
+- `auth0.env`: the Auth0 sign-in domain, the tenant's own domain and the
+  client IDs, which `cloud-run-deploy` reads.
 - `apply-auth0-branding` and `auth0-branding/`: the look of the Auth0
   sign-in page (see The sign-in page below).
 - `cleanup-policy.json`: the Artifact Registry cleanup policy it applies (see
@@ -200,8 +200,8 @@ and run it again.
 
 ### A custom domain
 
-Auth0 can serve the sign-in page on `auth.fortymm.com` instead of the
-tenant's domain. The free plan allows one custom domain after you add a
+Auth0 serves the sign-in page on `auth.fortymm.com` instead of the
+tenant's domain. These steps set it up. The free plan allows one custom domain after you add a
 credit card. Do these steps in order:
 
 1. In Auth0, open Branding > Custom Domains. Add `auth.fortymm.com` with

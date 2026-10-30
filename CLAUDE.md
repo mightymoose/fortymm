@@ -1176,9 +1176,11 @@ email (see Sign-in).
 | `api-preview` | `fortymm-preview` | `https://*-fortymm.mightymoose.workers.dev/api/v1/auth/callback` | `auth0-preview-client-secret` |
 
 Each application's allowed logout URL is its origin with `/signed-out`.
-`api/deploy/auth0.env` holds `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` and
-`AUTH0_PREVIEW_CLIENT_ID`. These values are public, so the file is
-committed. `cloud-run-deploy` reads it before it pushes the image, and fails
+`api/deploy/auth0.env` holds `AUTH0_DOMAIN`, `AUTH0_TENANT_DOMAIN`,
+`AUTH0_CLIENT_ID` and `AUTH0_PREVIEW_CLIENT_ID`. `AUTH0_DOMAIN` is the
+custom domain `auth.fortymm.com`, where Auth0 serves the sign-in page.
+`AUTH0_TENANT_DOMAIN` is the tenant's own domain, where the Management API
+answers. These values are public, so the file is committed. `cloud-run-deploy` reads it before it pushes the image, and fails
 without it. It sets `AUTH0_DOMAIN` and the target's `AUTH0_CLIENT_ID`. It
 mounts the target's client secret as `AUTH0_CLIENT_SECRET` at `latest`, so a
 cold start reads a rotated secret. Only the matching runtime service account
