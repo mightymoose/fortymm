@@ -15,6 +15,8 @@ sends. CLAUDE.md's Deploy section describes how it all fits together.
   database below).
 - `bootstrap-gcp.sh`: the one-time project setup below.
 - `setup-auth0`: the one-time Auth0 setup (see Auth0 below).
+- `setup-email`: the one-time setup that sends Auth0's email codes through
+  Postmark (see Email below).
 - `auth0.env`: the Auth0 tenant's domain and client IDs, which `setup-auth0`
   writes and `cloud-run-deploy` reads.
 - `cleanup-policy.json`: the Artifact Registry cleanup policy it applies (see
@@ -162,6 +164,67 @@ then redeploy. Sign-in fails between the rotation and the redeploy.
 printf '%s' '<new client secret>' |
   gcloud secrets versions add auth0-client-secret --project fortymm --data-file=-
 ```
+
+## Email
+
+Auth0 sends the email codes through Postmark over SMTP, from an address on
+`fortymm.com`. Auth0's built-in provider sends at most 10 emails a minute,
+from `no-reply@auth0user.net`, and Auth0 says it doesn't support production
+use. The API sends no email. One tenant serves production and every Preview,
+so one setup covers both.
+
+After `setup-auth0`, run the wizard from the repo root:
+
+```sh
+api/deploy/setup-email
+```
+
+It walks you through Postmark, the Cloudflare DNS dashboard and Auth0, in
+this order:
+
+1. You check that the Postmark account is approved. Until then, Postmark
+   sends only to addresses on its verified domains.
+2. You check that the FortyMM server is Live, with SMTP on. A Sandbox server
+   never delivers, and a server's type can't change.
+3. You add `fortymm.com` to Postmark's Sender Signatures.
+4. You add the three DNS records below in Cloudflare. The wizard checks each
+   one with `dig` against a `fortymm.com` name server before it goes on.
+5. You verify DKIM and the Return-Path in Postmark.
+6. You generate an SMTP token on the server's transactional stream.
+7. You set Auth0's email provider (Branding > Email Provider) to SMTP, with
+   host `smtp.postmarkapp.com` and port 587, and send Auth0's test email.
+8. You set the From of the Passwordless Email connection. Auth0 uses the
+   email provider for email codes only if that From isn't its default
+   address on `auth0.com`.
+
+| Type | Name | Content |
+| --- | --- | --- |
+| TXT | the DKIM Hostname that Postmark shows | the DKIM Value that Postmark shows |
+| CNAME | `pm-bounces` | `pm.mtasv.net`, with Proxy status DNS only |
+| TXT | `_dmarc` | `v=DMARC1; p=none` |
+
+A proxied `pm-bounces` record breaks the Return-Path.
+
+`fortymm.com` receives mail through Cloudflare Email Routing. Its records
+are the MX records `route1.mx.cloudflare.net` to `route3.mx.cloudflare.net`,
+the SPF record `v=spf1 include:_spf.mx.cloudflare.net ~all` and the DKIM
+record `cf2024-1._domainkey`. Postmark's records sit beside them with no
+conflict. Postmark's DKIM uses its own selector. Postmark aligns SPF through
+the Return-Path, so the SPF record needs no Postmark include. Email Routing
+adds no `_dmarc` record.
+
+The SMTP token's Access Key is the username, and its Secret Key is the
+password. You copy both from Postmark straight into Auth0. The wizard never
+asks for them, and it writes no file. So the token lives only in Auth0, not
+in Secret Manager, Cloud Run, CI or the repo.
+
+The wizard can't sign in for you. So after it ends, sign in on a Preview
+with an email code. Check that the email comes from the From address, and
+that Postmark's Activity page shows it as delivered.
+
+To rotate the SMTP token, generate a new one on the same stream in Postmark.
+Paste its keys into Auth0's email provider and save. Then delete the old
+token in Postmark. Sign-in emails keep working through the rotation.
 
 ## The database
 
