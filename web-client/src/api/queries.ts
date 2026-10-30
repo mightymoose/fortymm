@@ -56,7 +56,14 @@ export async function logout(api: ApiClient): Promise<string> {
 }
 
 export type AccountPlayer = components['schemas']['AccountPlayer']
-export type Answer = components['schemas']['Answer']
+// An answer to "Is this you?". `same_as` names the managed player that the
+// answered player is.
+export type Reply =
+  | { answer: Exclude<components['schemas']['Answer'], 'same_as'> }
+  | { answer: 'same_as'; player_id: string }
+// What an answer did. A merge names the player that survived and the one
+// that merged into it.
+export type AnswerMeta = components['schemas']['AnswerResponse']['meta']
 
 // The players the account manages, each with whether it still waits for the
 // "Is this you?" answer. A guest account never has a question, so pages ask
@@ -77,32 +84,34 @@ export function accountPlayersQuery(api: ApiClient) {
   })
 }
 
-// Answers "Is this you?" for one player. The API returns the account's
-// players after the answer, so the players query takes them as they are. A
-// "Yes" gives the account its own player, so the session's account takes it
-// too, for the topbar's avatar. Refetching the session would start it again.
-// A players request already in flight read the list from before the answer,
-// so the answer cancels it first.
+// Answers "Is this you?" for one player. The API returns what the answer did
+// and the account's players after it, so the players query takes them as
+// they are. When the answer changes the account's self player, the session's
+// account takes it too, for the topbar's avatar. Refetching the session would
+// start it again. A players request already in flight read the list from
+// before the answer, so the answer cancels it first.
 export function answerQuestionMutation(api: ApiClient, queryClient: QueryClient) {
   return {
     onMutate: () => queryClient.cancelQueries({ queryKey: accountPlayersQuery(api).queryKey }),
-    mutationFn: async ({ player, answer }: { player: AccountPlayer; answer: Answer }) => {
+    mutationFn: async ({ player, reply }: { player: AccountPlayer; reply: Reply }) => {
       const request = 'POST /v1/account/players/{player_id}/answer'
       const { data, response } = await api
         .POST('/v1/account/players/{player_id}/answer', {
           params: { path: { player_id: player.id } },
-          body: { answer },
+          body: reply,
         })
         .catch((cause: unknown) => {
           throw new ApiUnreachable(request, { cause })
         })
       if (data === undefined) throw new ApiError(request, response)
-      return data.data
+      return { players: data.data, meta: data.meta }
     },
-    onSuccess: (players: AccountPlayer[]) => {
+    onSuccess: ({ players, meta }: { players: AccountPlayer[]; meta: AnswerMeta }) => {
       queryClient.setQueryData(accountPlayersQuery(api).queryKey, players)
       const self = players.find((player) => player.relationship === 'self')
-      if (!self) return
+      const selfChanged =
+        meta.outcome === 'self' || (meta.outcome === 'merged' && meta.survivor === self?.id)
+      if (!self || !selfChanged) return
       queryClient.setQueryData(sessionQuery(api).queryKey, (account) =>
         account && { ...account, player: { id: self.id, display_name: self.display_name } },
       )
