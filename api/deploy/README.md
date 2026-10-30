@@ -182,11 +182,20 @@ AUTH0_MANAGEMENT_TOKEN=<token> api/deploy/apply-auth0-branding
 
 The script fails if the tenant uses the Classic Universal Login. Before it
 changes anything, it saves the current settings to a backup directory and
-prints its path. To undo a run, send each backup file back with the
-Management API: `theme.json` without its `themeId` to `PATCH
-/api/v2/branding/themes/<themeId>`, `settings.json` to `PATCH
-/api/v2/branding`, and each `custom-text-<prompt>.json` to `PUT
-/api/v2/prompts/<prompt>/custom-text/en`. To change the page, edit the files
+prints its path. To undo a run, send the backup back with the Management
+API:
+
+- `tenant.json`: only its `friendly_name` and `picture_url`, to `PATCH
+  /api/v2/tenants/settings`. That endpoint rejects the other fields that the
+  GET returns.
+- `settings.json`: to `PATCH /api/v2/branding`.
+- `theme.json`: without its `themeId`, to `PATCH
+  /api/v2/branding/themes/<themeId>`. If the backup has no `theme.json`, the
+  tenant had no theme, so `DELETE` the theme that the run made instead.
+- Each `custom-text-<prompt>.json`: to `PUT
+  /api/v2/prompts/<prompt>/custom-text/en`.
+
+To change the page, edit the files
 and run it again.
 
 ### A custom domain
