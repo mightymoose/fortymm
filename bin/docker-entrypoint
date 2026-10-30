@@ -3,7 +3,9 @@
 # then run the requested command with them on PATH.
 set -euo pipefail
 
-/app/bin/mise install --quiet
+# Every container shares the mise volume. Without the lock, two installs can run
+# at once, and one can finish while a tool the other is writing is still missing.
+flock /mise/.install.lock /app/bin/mise install --quiet
 # The compose healthcheck reports the container ready once this exists.
 touch /tmp/tools-installed
 exec /app/bin/mise exec -- "$@"
