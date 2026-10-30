@@ -1,0 +1,20 @@
+{
+  "login-id": {
+    "login-id": {
+      "title": "Sign in to FortyMM",
+      "description": "We email you a code. No password needed."
+    }
+  },
+  "login": {
+    "login": {
+      "title": "Sign in to FortyMM",
+      "description": "We email you a code. No password needed."
+    }
+  },
+  "login-passwordless": {
+    "login-passwordless-email-code": {
+      "title": "Check your email",
+      "description": "Enter the code we sent to ${email}."
+    }
+  }
+}

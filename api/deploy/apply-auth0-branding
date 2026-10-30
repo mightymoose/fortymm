@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+#
+# Applies the FortyMM look to the Auth0 tenant's Universal Login page, from
+# the files in api/deploy/auth0-branding/. Production and the Previews share
+# the tenant, so this changes the sign-in page for both at once.
+#
+# It needs a Management API token in AUTH0_MANAGEMENT_TOKEN, or it asks for
+# one. Get it in the Auth0 dashboard under Applications > APIs > Auth0
+# Management API > API Explorer. The token ends after 24 hours.
+#
+# Before it changes anything, it saves the tenant's current settings to a
+# backup directory and prints its path.
+
+set -euo pipefail
+
+here="$(cd "$(dirname "$0")" && pwd)"
+branding="$here/auth0-branding"
+. "$here/auth0.env"
+
+# The Management API answers only on the tenant's own domain, never on a
+# custom domain such as auth.fortymm.com.
+tenant="${AUTH0_TENANT_DOMAIN:-$AUTH0_DOMAIN}"
+api="https://$tenant/api/v2"
+
+if [[ -z "${AUTH0_MANAGEMENT_TOKEN:-}" ]]; then
+  printf 'Management API token for %s: ' "$tenant"
+  read -rs AUTH0_MANAGEMENT_TOKEN
+  printf '\n'
+fi
+
+# call METHOD PATH [JSON] prints the response body. It fails on a status
+# other than 2xx, after it prints the body to stderr.
+call() {
+  local method="$1" path="$2" body="${3:-}" out status
+  out=$(mktemp)
+  status=$(curl -sS -o "$out" -w '%{http_code}' -X "$method" "$api$path" \
+    -H "Authorization: Bearer $AUTH0_MANAGEMENT_TOKEN" \
+    -H 'Content-Type: application/json' \
+    ${body:+--data "$body"})
+  if [[ "$status" != 2* ]]; then
+    echo "$method $path answered $status:" >&2
+    cat "$out" >&2
+    echo >&2
+    rm -f "$out"
+    return 1
+  fi
+  cat "$out"
+  rm -f "$out"
+}
+
+# The theme applies only to the new Universal Login experience.
+experience=$(call GET /prompts | jq -r '.universal_login_experience')
+if [[ "$experience" != "new" ]]; then
+  echo "The tenant uses the '$experience' Universal Login experience. Switch it to New under Branding > Universal Login, then run this again." >&2
+  exit 1
+fi
+
+backup="$(mktemp -d "${TMPDIR:-/tmp}/auth0-branding-backup.XXXXXX")"
+call GET /branding > "$backup/settings.json"
+call GET /tenants/settings > "$backup/tenant.json"
+for prompt in $(jq -r 'keys[]' "$branding/custom-text.json"); do
+  call GET "/prompts/$prompt/custom-text/en" > "$backup/custom-text-$prompt.json"
+done
+# The tenant has no theme until someone saves one, and then this is a 404.
+if call GET /branding/themes/default > "$backup/theme.json" 2>/dev/null; then
+  theme_id=$(jq -r '.themeId' "$backup/theme.json")
+else
+  rm -f "$backup/theme.json"
+  theme_id=""
+fi
+echo "Saved the current settings to $backup"
+
+call PATCH /tenants/settings "$(jq -c . "$branding/tenant.json")" >/dev/null
+echo "Set the tenant's name and picture."
+
+call PATCH /branding "$(jq -c . "$branding/settings.json")" >/dev/null
+echo "Set the colours, logo and favicon."
+
+if [[ -n "$theme_id" ]]; then
+  # Keep any field the tenant has that theme.json doesn't name.
+  theme=$(jq -c -s '(.[0] * .[1]) | del(.themeId)' "$backup/theme.json" "$branding/theme.json")
+  call PATCH "/branding/themes/$theme_id" "$theme" >/dev/null
+else
+  call POST /branding/themes "$(jq -c . "$branding/theme.json")" >/dev/null
+fi
+echo "Set the theme."
+
+for prompt in $(jq -r 'keys[]' "$branding/custom-text.json"); do
+  call PUT "/prompts/$prompt/custom-text/en" "$(jq -c --arg p "$prompt" '.[$p]' "$branding/custom-text.json")" >/dev/null
+done
+echo "Set the sign-in text."
+
+echo "Done. Open a Preview and pick Sign in to see the page."

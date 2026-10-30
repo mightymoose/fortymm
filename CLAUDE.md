@@ -1188,3 +1188,11 @@ can read each client secret.
 `bootstrap-gcp.sh`. It walks them through the Auth0 dashboard and the Google
 Cloud console. It adds each client secret to Secret Manager and writes
 `auth0.env`. `api/deploy/README.md` describes it.
+
+`api/deploy/apply-auth0-branding` gives the tenant's sign-in page the
+design system's look, from the files in `api/deploy/auth0-branding/`. A
+person runs it with a Management API token. It changes the page for
+production and the Previews at once. Its logo is
+`web-client/public/logo-wordmark.svg`, served from `https://fortymm.com`.
+`api/deploy/README.md` describes it, and the steps to serve the page on
+`auth.fortymm.com`.

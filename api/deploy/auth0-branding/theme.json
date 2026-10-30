@@ -1,0 +1,58 @@
+{
+  "displayName": "FortyMM",
+  "borders": {
+    "button_border_radius": 8,
+    "button_border_weight": 1,
+    "buttons_style": "rounded",
+    "input_border_radius": 6,
+    "input_border_weight": 1,
+    "inputs_style": "rounded",
+    "show_widget_shadow": false,
+    "widget_border_weight": 0,
+    "widget_corner_radius": 12
+  },
+  "colors": {
+    "base_focus_color": "#FF7A1A",
+    "base_hover_color": "#FF9A4A",
+    "body_text": "#E4E7EF",
+    "captcha_widget_theme": "dark",
+    "error": "#FF6B6B",
+    "header": "#F7F8FB",
+    "icons": "#A9B0C2",
+    "input_background": "#11141B",
+    "input_border": "#6B7389",
+    "input_filled_text": "#F7F8FB",
+    "input_labels_placeholders": "#7C8396",
+    "links_focused_components": "#FF9A4A",
+    "primary_button": "#FF7A1A",
+    "primary_button_label": "#0B0D12",
+    "secondary_button_border": "#6B7389",
+    "secondary_button_label": "#F7F8FB",
+    "success": "#3DD68C",
+    "widget_background": "#11141B",
+    "widget_border": "#2A3040"
+  },
+  "fonts": {
+    "font_url": "https://fonts.gstatic.com/s/spacegrotesk/v22/V8mDoQDjQSkFtoMM3T6r8E7mPbF4C_k3HqU.woff2",
+    "reference_text_size": 15,
+    "title": { "bold": true, "size": 150 },
+    "subtitle": { "bold": false, "size": 100 },
+    "body_text": { "bold": false, "size": 100 },
+    "buttons_text": { "bold": true, "size": 100 },
+    "input_labels": { "bold": false, "size": 87 },
+    "links": { "bold": false, "size": 100 },
+    "links_style": "underlined"
+  },
+  "page_background": {
+    "background_color": "#0B0D12",
+    "background_image_url": "",
+    "page_layout": "center"
+  },
+  "widget": {
+    "header_text_alignment": "center",
+    "logo_height": 40,
+    "logo_position": "center",
+    "logo_url": "https://fortymm.com/logo-wordmark.svg",
+    "social_buttons_layout": "bottom"
+  }
+}

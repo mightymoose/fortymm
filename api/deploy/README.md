@@ -17,6 +17,8 @@ sends. CLAUDE.md's Deploy section describes how it all fits together.
 - `setup-auth0`: the one-time Auth0 setup (see Auth0 below).
 - `auth0.env`: the Auth0 tenant's domain and client IDs, which `setup-auth0`
   writes and `cloud-run-deploy` reads.
+- `apply-auth0-branding` and `auth0-branding/`: the look of the Auth0
+  sign-in page (see The sign-in page below).
 - `cleanup-policy.json`: the Artifact Registry cleanup policy it applies (see
   Image cleanup below).
 
@@ -153,6 +155,63 @@ The post-deploy suite checks that a Preview's `GET /api/v1/auth/login`
 answers 302 to the tenant's `/authorize`, with the Preview's client ID and
 callback URL. It doesn't sign in. So after a change to the tenant, sign in on
 a Preview with an email code and with Google.
+
+### The sign-in page
+
+`apply-auth0-branding` gives the tenant's Universal Login page the design
+system's look. It reads the files in `auth0-branding/`:
+
+- `theme.json`: the colours, borders, font and logo of the page. The font
+  is Space Grotesk from Google Fonts, because Auth0 loads it from another
+  origin and needs CORS. The logo is `https://fortymm.com/logo-wordmark.svg`,
+  the reference's wordmark with its text drawn as paths.
+- `settings.json`: the primary colour, the page background, the logo and
+  the favicon.
+- `tenant.json`: the tenant's name, so the page says FortyMM and not the
+  tenant's generated name.
+- `custom-text.json`: the titles and descriptions of the sign-in screens.
+
+Production and the Previews share the tenant, so the script changes the
+page for both. The logo and favicon come from production, so deploy `main`
+before the first run. Get a Management API token in the Auth0 dashboard,
+under Applications > APIs > Auth0 Management API > API Explorer. Then run:
+
+```sh
+AUTH0_MANAGEMENT_TOKEN=<token> api/deploy/apply-auth0-branding
+```
+
+The script fails if the tenant uses the Classic Universal Login. Before it
+changes anything, it saves the current settings to a backup directory and
+prints its path. To change the page, edit the files and run it again.
+
+### A custom domain
+
+Auth0 can serve the sign-in page on `auth.fortymm.com` instead of the
+tenant's domain. The free plan allows one custom domain after you add a
+credit card. Do these steps in order:
+
+1. In Auth0, open Branding > Custom Domains. Add `auth.fortymm.com` with
+   Auth0-managed certificates.
+2. In Cloudflare, add the CNAME record that Auth0 shows to the `fortymm.com`
+   zone. Set it to DNS only. A proxied record breaks Auth0's certificate.
+   Then verify the domain in Auth0.
+3. In the Google Cloud console, add
+   `https://auth.fortymm.com/login/callback` to the Google OAuth client's
+   authorized redirect URIs. Keep the tenant's URI. Without the new URI,
+   Google sign-in fails with `redirect_uri_mismatch`.
+4. Check that
+   `curl https://auth.fortymm.com/.well-known/openid-configuration` shows
+   `"issuer":"https://auth.fortymm.com/"`.
+5. In `auth0.env`, add `AUTH0_TENANT_DOMAIN` with the old value of
+   `AUTH0_DOMAIN`, then set `AUTH0_DOMAIN=auth.fortymm.com`. The API reads
+   the issuer from the discovery document, so it accepts the new tokens.
+   `apply-auth0-branding` uses `AUTH0_TENANT_DOMAIN`, because the
+   Management API answers only on the tenant's domain.
+6. Push a branch, and sign in on its Preview with an email code and with
+   Google. The post-deploy suite checks only the redirect to `/authorize`.
+
+A session signed in before the switch stays valid, because the API keeps
+its own sessions.
 
 To rotate a client secret, rotate it in the application's settings in
 Auth0. That ends the old one. Add the new one as a version of its secret,
