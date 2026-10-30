@@ -88,25 +88,84 @@ export function failPlayersOnce(status: number) {
 }
 
 type AccountPlayer = components['schemas']['AccountPlayer']
-type Answer = components['schemas']['Answer']
+type AnswerRequest = components['schemas']['AnswerRequest']
+type AnswerMeta = components['schemas']['AnswerResponse']['meta']
+
+// A player as the players list gives it. No player has a match until games
+// exist.
+export function listedPlayer(
+  player: Pick<AccountPlayer, 'id' | 'display_name' | 'relationship' | 'open_question'>,
+): AccountPlayer {
+  return { ...player, match_count: 0, recent_matches: [] }
+}
 
 // Signs the mock API in as a verified account that manages `players`, and
-// answers "Is this you?" as the API does. Returns the answers it received.
-// One of `players` is the account's self player, and they are in the order
-// the API made them. So a "This is me" merges into the first of the two.
-// `refuse` makes it answer that status instead, as when another tab
-// answered first.
+// answers "Is this you?" as the API does. Returns the answers it received,
+// and answerInAnotherTab(), which answers without the page knowing. One of
+// `players` is the account's self player, and they are in the order the API
+// made them. So a merge keeps the first of the two. `failAnswers` makes
+// every answer fail with a 500.
 export function mockVerifiedAccount(
   players: AccountPlayer[],
-  { refuse }: { refuse?: number } = {},
+  { failAnswers = false }: { failAnswers?: boolean } = {},
 ) {
   let current = players
-  const answers: { playerId: string; answer: Answer }[] = []
+  const answers: ({ playerId: string } & AnswerRequest)[] = []
   const self = () => {
     const found = current.find((player) => player.relationship === 'self')
     if (!found) throw new Error('The account has no self player')
     return { id: found.id, display_name: found.display_name }
   }
+
+  // The older player survives, and takes the relationship of `into`.
+  function merge(player: AccountPlayer, into: AccountPlayer): AnswerMeta {
+    const [survivor, merged] =
+      current.indexOf(into) < current.indexOf(player) ? [into, player] : [player, into]
+    current = current.flatMap((found) => {
+      if (found === merged) return []
+      if (found !== survivor) return [found]
+      return [{ ...found, relationship: into.relationship, open_question: false }]
+    })
+    return { outcome: 'merged', survivor: survivor.id, merged: merged.id }
+  }
+
+  // The API's answer: the outcome, or the status it refuses with.
+  function answer(playerId: string, request: AnswerRequest): AnswerMeta | 404 | 409 | 422 {
+    if (request.answer === 'same_as' && request.player_id === playerId) return 422
+    const answered = current.find((player) => player.id === playerId)
+    if (!answered) return 404
+    const target = current.find(
+      (player) =>
+        player.id === request.player_id &&
+        player.relationship === 'managed' &&
+        !player.open_question,
+    )
+    if (request.answer === 'same_as' && !target) return 404
+    if (!answered.open_question) {
+      return request.answer === 'not_mine' ? 409 : { outcome: 'already_answered' }
+    }
+    const close = (relationship: AccountPlayer['relationship']) => {
+      current = current.map((player) =>
+        player === answered ? { ...player, relationship, open_question: false } : player,
+      )
+    }
+    const own = current.find((player) => player.relationship === 'self')
+    switch (request.answer) {
+      case 'yes':
+        if (own) return merge(answered, own)
+        close('self')
+        return { outcome: 'self' }
+      case 'no':
+        close('managed')
+        return { outcome: 'managed' }
+      case 'not_mine':
+        current = current.filter((player) => player !== answered)
+        return { outcome: 'removed' }
+      case 'same_as':
+        return merge(answered, target!)
+    }
+  }
+
   server.use(
     http.post(`${API_BASE_URL}/v1/session`, () =>
       HttpResponse.json<components['schemas']['SessionResponse']>({
@@ -123,41 +182,28 @@ export function mockVerifiedAccount(
     http.get(`${API_BASE_URL}/v1/account/players`, () =>
       HttpResponse.json<components['schemas']['AccountPlayersResponse']>({ data: current }),
     ),
-    http.post<{ playerId: string }, components['schemas']['AnswerRequest']>(
+    http.post<{ playerId: string }, AnswerRequest>(
       `${API_BASE_URL}/v1/account/players/:playerId/answer`,
       async ({ params, request }) => {
-        const { answer } = await request.json()
-        answers.push({ playerId: params.playerId, answer })
-        if (refuse) {
+        const body = await request.json()
+        answers.push({ playerId: params.playerId, ...body })
+        const meta = failAnswers ? 500 : answer(params.playerId, body)
+        if (typeof meta === 'number') {
           return HttpResponse.json(
-            { errors: [{ status: String(refuse), title: 'Refused' }] },
-            { status: refuse },
+            { errors: [{ status: String(meta), title: 'Refused' }] },
+            { status: meta },
           )
         }
-        const answered = current.find((player) => player.id === params.playerId)
-        const own = current.find((player) => player.relationship === 'self')
-        if (answer === 'yes' && answered?.open_question && own) {
-          // A merge. The older player survives as the self player.
-          const [survivor, merged] =
-            current.indexOf(own) < current.indexOf(answered) ? [own, answered] : [answered, own]
-          current = current.flatMap((player) => {
-            if (player === merged) return []
-            if (player !== survivor) return [player]
-            return [{ ...player, relationship: 'self', open_question: false }]
-          })
-        } else {
-          current = current.flatMap((player) => {
-            if (player.id !== params.playerId) return [player]
-            if (answer === 'not_mine') return []
-            const relationship = answer === 'yes' ? 'self' : player.relationship
-            return [{ ...player, relationship, open_question: false }]
-          })
-        }
-        return HttpResponse.json<components['schemas']['AccountPlayersResponse']>({
-          data: current,
-        })
+        return HttpResponse.json<components['schemas']['AnswerResponse']>({ data: current, meta })
       },
     ),
   )
-  return { answers }
+  return {
+    answers,
+    // Answers as another tab would, so the page still shows the players
+    // from before.
+    answerInAnotherTab(playerId: string, request: AnswerRequest): void {
+      answer(playerId, request)
+    },
+  }
 }

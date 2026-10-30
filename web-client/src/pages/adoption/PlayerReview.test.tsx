@@ -1,4 +1,4 @@
-import { within } from '@testing-library/react'
+import { fireEvent, within } from '@testing-library/react'
 import { http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { components } from '../../api/schema'
@@ -8,67 +8,53 @@ import {
   API_BASE_URL,
   failPlayersOnce,
   holdPlayers,
+  listedPlayer,
   mockVerifiedAccount,
   server,
 } from '../../test/server'
 
-type AccountPlayer = components['schemas']['AccountPlayer']
-
-const egret: AccountPlayer = {
+const egret = listedPlayer({
   id: '7d1c2f0a-3b6e-4f8a-9c2d-1e5f6a7b8c90',
   display_name: 'excited egret 387',
   relationship: 'managed',
   open_question: true,
-}
-const badger: AccountPlayer = {
+})
+const badger = listedPlayer({
   id: '2a9b8c7d-6e5f-4a3b-8c1d-0e9f8a7b6c54',
   display_name: 'brave badger 214',
   relationship: 'managed',
   open_question: true,
-}
+})
 // The player the API gives the account after sign-in. It is the newest.
-const dove: AccountPlayer = {
+const dove = listedPlayer({
   id: '9f8e7d6c-5b4a-4392-8a1b-0c9d8e7f6a5b',
   display_name: 'dreamy dove 412',
   relationship: 'self',
   open_question: false,
-}
-const ama: AccountPlayer = {
+})
+const ama = listedPlayer({
   id: '5e4d3c2b-1a09-4f8e-8d7c-6b5a4f3e2d10',
   display_name: 'Ama Mensah',
   relationship: 'self',
   open_question: false,
-}
+})
 
-const heron: AccountPlayer = {
+const heron = listedPlayer({
   id: '3c2b1a09-8f7e-4d6c-9b5a-4e3d2c1b0a98',
   display_name: 'happy heron 530',
   relationship: 'managed',
   open_question: true,
-}
+})
+
+// A player the account already manages, older than the others.
+const ant = listedPlayer({
+  id: '1b2c3d4e-5f60-4718-9a2b-3c4d5e6f7a81',
+  display_name: 'able ant 102',
+  relationship: 'managed',
+  open_question: false,
+})
 
 const NOT_SAVED = 'Your answer wasn’t saved. Please try again.'
-
-// Another tab answered first: the next answer is refused with `status`, and
-// the players list is `after` from then on.
-function answeredInAnotherTab(status: 404 | 409, after: AccountPlayer[]) {
-  let answered = false
-  server.use(
-    http.post(
-      `${API_BASE_URL}/v1/account/players/:playerId/answer`,
-      () => {
-        answered = true
-        return HttpResponse.json({ errors: [{ status: String(status), title: 'Refused' }] }, { status })
-      },
-      { once: true },
-    ),
-    http.get(`${API_BASE_URL}/v1/account/players`, () =>
-      answered
-        ? HttpResponse.json<components['schemas']['AccountPlayersResponse']>({ data: after })
-        : undefined,
-    ),
-  )
-}
 
 describe('Is this you?', () => {
   afterEach(() => {
@@ -217,8 +203,8 @@ describe('Is this you?', () => {
     expect(page.reviewLink).toHaveFocus()
   })
 
-  it('says under the button that a refused answer wasn’t saved, and stays on the step', async () => {
-    const api = mockVerifiedAccount([egret, dove], { refuse: 409 })
+  it('says under the button that a failed answer wasn’t saved, and stays on the step', async () => {
+    const api = mockVerifiedAccount([egret, dove], { failAnswers: true })
     const page = await PlayerReviewPage.render()
     await page.click('Someone else played')
 
@@ -234,7 +220,7 @@ describe('Is this you?', () => {
   })
 
   it('says under "Yes, this is me" that a failed "Yes" wasn’t saved', async () => {
-    const api = mockVerifiedAccount([egret, dove], { refuse: 500 })
+    const api = mockVerifiedAccount([egret, dove], { failAnswers: true })
     const page = await PlayerReviewPage.render()
 
     await page.click('Yes, this is me')
@@ -329,24 +315,71 @@ describe('Is this you?', () => {
     )
   })
 
-  it('says another tab answered the player, keeps the count, and asks about the next one', async () => {
-    mockVerifiedAccount([egret, badger, heron, dove])
-    answeredInAnotherTab(409, [dove, heron])
+  it.each([
+    ['yes', ['Yes, this is me']],
+    ['no', ['Someone else played', 'I manage this player']],
+  ] as const)(
+    'says another tab answered the player when it said %s, keeps the count, and asks about the next one',
+    async (_answer, clicks) => {
+      const api = mockVerifiedAccount([egret, badger, heron, dove])
+      const page = await PlayerReviewPage.render()
+      expect(page.counter).toBe('Player 1 of 3')
+      api.answerInAnotherTab(egret.id, { answer: 'no' })
+      api.answerInAnotherTab(badger.id, { answer: 'no' })
+
+      for (const name of clicks) await page.click(name as ReviewAction)
+
+      expect(page.notice).toBe(`${egret.display_name} was already answered in another tab.`)
+      expect(page.counter).toBe('Player 3 of 3')
+      expect(page.text).toContain(`${heron.display_name} was used on this device`)
+      expect(page.button('Yes, this is me')).not.toHaveAccessibleDescription()
+    },
+  )
+
+  it('says nothing merged when another tab said No before this tab’s Yes', async () => {
+    const api = mockVerifiedAccount([egret, dove])
     const page = await PlayerReviewPage.render()
-    expect(page.counter).toBe('Player 1 of 3')
+    api.answerInAnotherTab(egret.id, { answer: 'no' })
 
     await page.click('Yes, this is me')
 
-    expect(page.notice).toBe(`${egret.display_name} was already answered in another tab.`)
-    expect(page.counter).toBe('Player 3 of 3')
-    expect(page.text).toContain(`${heron.display_name} was used on this device`)
-    expect(page.button('Yes, this is me')).not.toHaveAccessibleDescription()
+    expect(page.href).toBe('/')
+    expect(page.toasts).toEqual([`${egret.display_name} was already answered in another tab.`])
+    expect(new HomePage(page.router).avatar(dove.display_name)).toHaveTextContent('DD')
   })
 
-  it('goes Home with a toast when another tab answered the last player', async () => {
-    mockVerifiedAccount([egret, dove])
-    answeredInAnotherTab(404, [dove])
+  it('says nothing was added when another tab said Yes before this tab’s No', async () => {
+    const api = mockVerifiedAccount([egret, dove])
     const page = await PlayerReviewPage.render()
+    api.answerInAnotherTab(egret.id, { answer: 'yes' })
+
+    await page.click('Someone else played')
+    await page.click('I manage this player')
+
+    expect(api.answers.at(-1)).toEqual({ playerId: egret.id, answer: 'no' })
+    expect(page.href).toBe('/')
+    expect(page.toasts).toEqual([`${egret.display_name} was already answered in another tab.`])
+  })
+
+  it('says another tab answered the player when Remove from my account gets a 409', async () => {
+    const api = mockVerifiedAccount([egret, dove])
+    const page = await PlayerReviewPage.render()
+    api.answerInAnotherTab(egret.id, { answer: 'no' })
+
+    await page.click('Someone else played')
+    await page.click('Remove from my account')
+
+    expect(api.answers).toEqual([{ playerId: egret.id, answer: 'not_mine' }])
+    expect(page.href).toBe('/')
+    expect(page.toasts).toEqual([`${egret.display_name} was already answered in another tab.`])
+    expect(new HomePage(page.router).title).toHaveFocus()
+  })
+
+  it('goes Home with a toast when another tab merged the last player', async () => {
+    const api = mockVerifiedAccount([ama, egret])
+    const page = await PlayerReviewPage.render()
+    // The egret merges into Ama's older player, so the API answers 404.
+    api.answerInAnotherTab(egret.id, { answer: 'yes' })
 
     await page.click('Someone else played')
     await page.click('I manage this player')
@@ -354,6 +387,128 @@ describe('Is this you?', () => {
     expect(page.href).toBe('/')
     expect(page.toasts).toEqual([`${egret.display_name} was already answered in another tab.`])
     expect(new HomePage(page.router).title).toHaveFocus()
+  })
+
+  it('says a "Yes" made the player the account’s own when it had none', async () => {
+    mockVerifiedAccount([egret, dove])
+    server.use(
+      http.post(`${API_BASE_URL}/v1/account/players/:playerId/answer`, () =>
+        HttpResponse.json<components['schemas']['AnswerResponse']>({
+          data: [{ ...egret, relationship: 'self', open_question: false }],
+          meta: { outcome: 'self' },
+        }),
+      ),
+    )
+    const page = await PlayerReviewPage.render()
+
+    await page.click('Yes, this is me')
+
+    expect(page.toasts).toEqual([`${egret.display_name} is your player now.`])
+    expect(new HomePage(page.router).avatar(egret.display_name)).toHaveTextContent('EE')
+  })
+
+  it('shows an empty match preview, with no way to see all matches', async () => {
+    mockVerifiedAccount([egret, dove])
+    const page = await PlayerReviewPage.render()
+
+    expect(page.matchPreview).toHaveTextContent('No matches yet')
+    expect(within(page.matchPreview).queryByRole('button')).toBeNull()
+    expect(within(page.matchPreview).queryByRole('link')).toBeNull()
+  })
+
+  describe('Which player?', () => {
+    async function choosing(players: Parameters<typeof mockVerifiedAccount>[0], options = {}) {
+      const api = mockVerifiedAccount(players, options)
+      const page = await PlayerReviewPage.render()
+      await page.click('Someone else played')
+      await page.click('I manage this player')
+      return { api, page }
+    }
+
+    it('offers the players the account manages', async () => {
+      const { api, page } = await choosing([ant, egret, badger, dove])
+
+      expect(api.answers).toEqual([])
+      expect(page.heading).toHaveTextContent('Which player?')
+      expect(page.heading).toHaveFocus()
+      expect(page.text).toContain(`Matches from ${egret.display_name}`)
+      expect(page.text).toContain('Choose a player to add these matches to.')
+      // The badger's question is open and the dove is the account's own, so
+      // neither is offered.
+      expect(page.targets).toEqual([ant.display_name])
+      expect(page.button('Keep as a separate player')).toBeEnabled()
+    })
+
+    it.each([
+      [[ant, egret, dove], `${egret.display_name} merged into ${ant.display_name}.`],
+      [[egret, ant, dove], `${ant.display_name} merged into ${egret.display_name}.`],
+    ])('merges the player into the one chosen, and the older survives', async (players, toast) => {
+      const { api, page } = await choosing(players)
+
+      await page.choose(ant.display_name)
+
+      expect(api.answers).toEqual([{ playerId: egret.id, answer: 'same_as', player_id: ant.id }])
+      expect(page.href).toBe('/')
+      expect(page.toasts).toEqual([toast])
+      expect(new HomePage(page.router).avatar(dove.display_name)).toHaveTextContent('DD')
+    })
+
+    it('keeps the player as a separate one', async () => {
+      const { api, page } = await choosing([ant, egret, dove])
+
+      await page.click('Keep as a separate player')
+
+      expect(api.answers).toEqual([{ playerId: egret.id, answer: 'no' }])
+      expect(page.toasts).toEqual([`${egret.display_name} added to players you manage.`])
+    })
+
+    it('goes back to "Do you manage this player?"', async () => {
+      const { api, page } = await choosing([ant, egret, dove])
+
+      await page.click('Back')
+
+      expect(api.answers).toEqual([])
+      expect(page.heading).toHaveTextContent('Do you manage this player?')
+      expect(page.heading).toHaveFocus()
+    })
+
+    it('says under the player that a failed merge wasn’t saved', async () => {
+      const { api, page } = await choosing([ant, egret, dove], { failAnswers: true })
+
+      await page.choose(ant.display_name)
+
+      expect(api.answers).toEqual([{ playerId: egret.id, answer: 'same_as', player_id: ant.id }])
+      expect(page.heading).toHaveTextContent('Which player?')
+      expect(page.target(ant.display_name)).toHaveAccessibleDescription(NOT_SAVED)
+      expect(page.target(ant.display_name)).toBeEnabled()
+      expect(page.button('Keep as a separate player')).not.toHaveAccessibleDescription()
+      expect(page.toasts).toEqual([])
+    })
+
+    it('says so when another tab merged the chosen player away', async () => {
+      const { api, page } = await choosing([badger, egret, ant, dove])
+      // The egret is older, so the ant merges into it and leaves the list.
+      api.answerInAnotherTab(egret.id, { answer: 'same_as', player_id: ant.id })
+
+      await page.choose(ant.display_name)
+
+      expect(page.heading).toHaveTextContent('Which player?')
+      expect(page.notice).toBe(`${ant.display_name} isn’t one of your players any more.`)
+      expect(page.targets).toEqual([egret.display_name])
+      expect(page.toasts).toEqual([])
+    })
+
+    it('sends one answer when a player is clicked twice at once', async () => {
+      const { api, page } = await choosing([ant, egret, badger, dove])
+
+      const target = page.target(ant.display_name)
+      fireEvent.click(target)
+      fireEvent.click(target)
+      await page.settle()
+
+      expect(api.answers).toEqual([{ playerId: egret.id, answer: 'same_as', player_id: ant.id }])
+      expect(page.notice).toBe(`${egret.display_name} merged into ${ant.display_name}.`)
+    })
   })
 
   it('shows Saving… while an answer saves, and holds the other actions', async () => {

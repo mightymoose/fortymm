@@ -280,26 +280,43 @@ Sign-in). Each one is an open "Is this you?" question.
 `services/players.py` holds the rules, and `v1/players.py` the routes.
 
 - `GET /v1/account/players` lists the account's players, its `self`
-  player first, then by display name. Each has `relationship` and
-  `open_question`. It leaves out merged players.
+  player first, then by display name. Each has `relationship`,
+  `open_question`, `match_count` and `recent_matches`. It leaves out merged
+  players. No player has a match yet, so the service always gives
+  `match_count` 0 and no `recent_matches`. The games work fills them.
 - `POST /v1/account/players/{player_id}/answer` takes `{"answer": "yes"}`,
-  `"no"` or `"not_mine"`, and returns the same list after the answer.
+  `"no"`, `"not_mine"`, or `"same_as"` with a `player_id`. It returns the
+  same list after the answer as `data`, and what the answer did as `meta`.
   `yes` makes the row `self`. If the account already has a `self` player,
   `yes` merges the two players instead (see below). `no` keeps it
   `managed`. `not_mine` deletes the `player_managers` row. The player
-  stays, with no manager.
-- Every answer clears `adopted_from`. A second `yes` or `no` changes
-  nothing, whatever the first answer was.
+  stays, with no manager. `same_as` merges it with the player that
+  `player_id` names. That player must be a `managed` player of the account
+  with a closed question. A merge would close an open question with no
+  answer.
+- `meta.outcome` is `self`, `managed`, `removed`, `merged` or
+  `already_answered`. A `merged` outcome also has `survivor`, the id of the
+  player that survived, and `merged`, the id of the other. `services/players.py` decides it, as
+  `Settled` or `Merged`.
+- Every answer clears `adopted_from`. A second answer changes nothing,
+  whatever the first answer was, and its outcome is `already_answered`.
 - The API answers 409 to `not_mine` for a question already answered. It
   answers 404 for a player the account doesn't manage, or a merged player.
+  It also answers 404 if `same_as` names a player that isn't a `managed`
+  player of the account with a closed question. It answers 422 if
+  `player_id` is missing with `same_as` or comes with another answer. That
+  422 is FastAPI's own `detail` body. A `same_as` that names the answered
+  player gets a 422 in the `errors` shape.
 - Both routes call `lock_account_for_write()`. The answer also locks every
   `player_managers` row of the account `FOR UPDATE`. So two answers from
   two tabs take turns, and the second `yes` merges with the first one's
   player.
-- `merge_into_self()` in `services/player_merge.py` merges a player and
-  the account's `self` player. The original player survives. It is the one
-  created first (`players.created_at`, then `id`). It keeps its id and
-  display name, and its row becomes `self`. The other player gets
+- `merge_players()` in `services/player_merge.py` merges a player into
+  another player the account manages: the `self` player for `yes`, a
+  `managed` player for `same_as`. The original player survives. It is the
+  one created first (`players.created_at`, then `id`). It keeps its id and
+  display name. Its row takes the relationship of the player it merged
+  into, so a `yes` keeps the account's `self` player. The other player gets
   `merged_into` set to the survivor and gives up its display name. Its row
   stays, as `managed` (`STAYS_ON_PLAYER_MERGE`). The merge also points
   every player already merged into the merged player at the survivor. So
@@ -546,10 +563,15 @@ it to `src/routes/`.
   `GET /v1/account/players` in a `QueryBoundary`, with a skeleton of the
   question and the action bar, and an error that also links to Home. A
   guest goes to `/` before it asks for players. It asks "Is this you?"
-  about one open question at a time.
+  about one open question at a time. Under the question, a match preview
+  shows "No matches yet". The games work adds the player's matches there.
   "Yes, this is me" answers `yes`. "Someone else played" asks "Do you
-  manage this player?", which answers `no` or `not_mine`, or goes Back.
-  "Review later" goes to `/` with no answer. A reducer holds the page's
+  manage this player?". There "Remove from my account" answers `not_mine`,
+  and Back goes back. "I manage this player" answers `no`, unless the
+  account manages another player with a closed question. Then it asks
+  "Which player?", with one button per such player, which answers
+  `same_as`. Its "Keep as a separate player" answers `no`, and its Back
+  goes back. "Review later" goes to `/` with no answer. A reducer holds the page's
   state: every player it has queued this visit, the last confirmation,
   and the step and failed answer of the player on screen. The counter
   "Player N of M" counts the queued players, so it holds when another tab
@@ -560,19 +582,24 @@ it to `src/routes/`.
   press has `detail` 0. "Yes" says it merges the player into the `self`
   player of the players list. An answer first cancels a players request
   in flight, because that request read the list from before the answer.
-  An answer puts the API's list in the players query. A "Yes" also puts
-  the list's `self` player in the session's account, so the topbar shows
-  it. A "Yes" merges the two players, and the older one survives. The
-  confirmation names both, such as "brave badger 214 merged into excited
-  egret 387, your player." The merged player can be the reviewed one or
-  the old `self` player. While players remain, the confirmation shows
-  above the answers. After the last one, the page goes to `/` and shows it
-  as a toast. A save that fails shows its error under its button. A 409 or
-  404 can mean that another tab answered the player first. Then the page
-  refetches the players. If the player left the list, the page says
-  "<player> was already answered in another tab." where a confirmation
-  would show. With no open question, or for a guest, the page goes to `/`
-  at once. For a verified account, each time the page goes to `/`, it sets
+  An answer puts the API's list in the players query. If `meta` says the
+  account's `self` player changed, the answer also puts the list's `self`
+  player in the session's account, so the topbar shows it. The
+  confirmation comes from `meta`, such as "brave badger 214 merged into
+  excited egret 387, your player." A merge into a `managed` player drops
+  ", your player". The merged player can be the reviewed one or the other
+  one. The merged player has left the list after the answer, so its name
+  comes from the list before it. `already_answered` says "<player> was
+  already answered in another tab." While players remain, the
+  confirmation shows above the answers. After the last one, the page goes
+  to `/` and shows it as a toast. A save that fails shows its error under
+  its button. A 409 means that another tab answered the player first, so
+  the page says so too, and refetches the players. A 404 can mean that
+  another tab merged the player. Then the page refetches the players, and
+  says so only if the player left the list. A 404 to `same_as` can also
+  mean that another tab merged the chosen player away. Then "Which player?"
+  says that the player isn't one of the account's players any more. With no
+  open question, or for a guest, the page goes to `/` at once. For a verified account, each time the page goes to `/`, it sets
   `fromReview` in the router's history state (typed in `src/router.tsx`).
   That covers Review later, the last answer and a visit with no open
   question. Home then focuses the reminder's link while questions remain,
@@ -696,10 +723,15 @@ e.g. `components['schemas']['SessionResponse']`. The default handler answers
 `POST /v1/session` with `sessionResponse`, a guest account whose player is
 `excited egret 387`. Another default handler answers `POST /v1/auth/logout`
 with `logoutResponse`, and another answers `GET /v1/account/players` with
-no players. `mockVerifiedAccount()` signs the mock API in as a verified
+no players. `listedPlayer()` makes a player for the players list, with no
+matches. `mockVerifiedAccount()` signs the mock API in as a verified
 account with the players it gets. One of them must be `self`, and their
 order is the order the API made them. It answers "Is this you?" as the API
-does, with a merge into the older player, and returns the answers it got.
+does, with `meta`, a merge into the older player and `same_as`. On a
+closed question it changes nothing and returns `already_answered`, except
+that `not_mine` gets a 409. It returns the answers it got, and
+`answerInAnotherTab()`, which answers a question without the page
+knowing. `failAnswers` makes every answer fail with a 500.
 `PlayerReviewPage` renders `/review-players` by default, or Home with or
 without `signed_in=1`. Its `clickTwiceAtOnce()` clicks a button twice before React
 renders again, as a quick double click can.
@@ -757,7 +789,10 @@ person's first sign-in from a guest is VerifyInPlace, so the account's
 first question is about that guest's own player. The VerifyInPlace test
 reviews later, then opens the review again from Home's reminder and answers
 "I manage this player". The AdoptGuest test answers "Yes" twice and
-"Remove from my account" once.
+"Remove from my account" once. The `same_as` test answers "I manage this
+player" for a first guest, then signs in from a second guest. It picks the
+first guest's player on "Which player?", and checks through
+`GET /v1/account/players` that one of the two players is left.
 
 `e2e/sign-out.spec.ts` opens `/`, picks Sign in from the account menu and
 fills the mock's form with `SignInPage.completeSignIn()`. It lands back on
@@ -771,7 +806,7 @@ signs a guest out from the account menu, through its dialog, to
 `/signed-out`. A third signs in again from `/signed-out`, and checks that
 the account has no new player to review.
 
-The suite counts about 23 guest accounts and sign-ins with no session,
+The suite counts about 25 guest accounts and sign-ins with no session,
 under the limit of 30 a minute.
 
 The design system page is a copy of the reference's component gallery

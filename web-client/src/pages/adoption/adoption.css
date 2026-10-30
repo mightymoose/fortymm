@@ -14,6 +14,27 @@
 .review-q:focus-visible{box-shadow:none}
 .review-playedas{margin:var(--s-2) 0 0;font:400 var(--text-base)/var(--lh-normal) var(--font-ui);color:var(--fg-2);overflow-wrap:anywhere}
 .review-playedas b,.review-outcome b{font-weight:600;color:var(--fg-1)}
+.review-support{margin:var(--s-4) 0 0;font:400 var(--text-base)/var(--lh-normal) var(--font-ui);color:var(--fg-2);text-wrap:pretty}
+/* The match preview under "Is this you?". It has only its empty state until
+   players have matches. */
+.review-preview{margin-top:var(--s-6);background:var(--bg-panel);border-radius:var(--r-md);padding:var(--s-1) var(--s-4) var(--s-2)}
+.review-preview__head{margin:0;padding:var(--s-3) 0 2px;font:500 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
+/* "Which player?": one button per player to merge into, then "Keep as a
+   separate player" a little apart. */
+.review-choice>.review-saved{margin-top:var(--s-4)}
+.review-dests{list-style:none;margin:var(--s-6) 0 0;padding:0;display:flex;flex-direction:column;gap:var(--s-2)}
+.review-dests__sep{margin-top:var(--s-2)}
+.review-dests .review-error{margin:var(--s-2) 0 0}
+.review-dest{display:flex;flex-direction:column;justify-content:center;gap:2px;width:100%;min-height:var(--s-16);box-sizing:border-box;padding:var(--s-3) var(--s-3) var(--s-3) var(--s-4);border:1px solid var(--border-field);border-radius:var(--r-md);background:transparent;color:var(--fg-1);font-family:var(--font-ui);text-align:left;cursor:pointer;transition:background-color var(--dur-change) var(--ease-out),border-color var(--dur-change),transform var(--dur-press) var(--ease-out)}
+.review-dest:hover{background:var(--bg-hover);border-color:var(--border-field-hover)}
+.review-dest:active{transform:scale(.98)}
+.review-dest:focus-visible{outline:none;box-shadow:var(--focus-ring)}
+.review-dest[aria-busy=true]{cursor:progress;pointer-events:none;background:var(--bg-hover)}
+.review-dest:disabled,.review-dest:disabled:hover{cursor:not-allowed;background:transparent;border-color:var(--border-subtle);color:var(--fg-disabled);transform:none}
+.review-dest__name{font:600 var(--text-md)/var(--lh-snug) var(--font-ui);overflow-wrap:anywhere}
+/* Saving…, after the kit's static partial ring. */
+.review-dest__meta{display:flex;align-items:center;gap:6px;font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
+.review-dest__meta::before{content:"";flex:none;width:var(--s-3);height:var(--s-3);box-sizing:border-box;border-radius:50%;border:2px solid currentColor;border-right-color:transparent}
 .review-ident{margin-top:var(--s-5);display:flex;flex-direction:column;align-items:flex-start;gap:var(--s-1)}
 /* `.review-ident__name` goes with `.h3`. */
 .review-ident__name{margin:0;overflow-wrap:anywhere}
@@ -30,6 +51,7 @@
 .review-skeleton--counter{width:30%;height:calc(var(--text-sm) * var(--lh-snug));margin-bottom:var(--s-2)}
 .review-skeleton--question{width:60%;height:calc(var(--text-2xl) * var(--lh-snug))}
 .review-skeleton--line{height:calc(var(--text-base) * var(--lh-normal));margin-top:var(--s-2)}
+.review-skeleton--preview{height:calc(var(--s-1) + var(--s-3) + var(--text-sm) * var(--lh-snug) + 2px + var(--s-2));margin-top:var(--s-6);border-radius:var(--r-md)}
 .review-skeleton--outcome{height:calc(2 * var(--text-sm) * var(--lh-normal))}
 .review-skeleton--button{height:var(--s-12);border-radius:var(--r-md)}
 /* Review later is a ghost button, so its block is only its label. */
@@ -48,4 +70,5 @@
 
 @media (max-width:599px) and (min-height:560px){
   .review-actions{position:sticky;bottom:0;z-index:2;margin:0 calc(-1 * var(--s-5));padding:var(--s-4) var(--s-5) calc(var(--s-4) + env(safe-area-inset-bottom,0px));background:var(--bg-app);border-top:1px solid var(--border-subtle)}
+  .review-actions--nav{padding-top:var(--s-2);padding-bottom:calc(var(--s-2) + env(safe-area-inset-bottom,0px))}
 }

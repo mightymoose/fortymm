@@ -8,6 +8,7 @@ export type ReviewAction =
   | 'Review later'
   | 'I manage this player'
   | 'Remove from my account'
+  | 'Keep as a separate player'
   | 'Back'
 
 // Page object for "Is this you?": the review page that asks about one player
@@ -54,7 +55,7 @@ export class PlayerReviewPage {
   // Waits for the review's question, after a navigation that loads the
   // page's chunk.
   findQuestion(): Promise<HTMLElement> {
-    return screen.findByRole('heading', { level: 1, name: /^(Is this you|Do you manage)/ })
+    return screen.findByRole('heading', { level: 1, name: /^(Is this you|Do you manage|Which player)/ })
   }
 
   // "Player N of M", or null when only one player waits.
@@ -67,8 +68,28 @@ export class PlayerReviewPage {
     return screen.getByRole('group', { name: 'Your answer' })
   }
 
+  // An answer, or Back, which "Which player?" keeps apart from the answers.
   button(name: ReviewAction): HTMLElement {
-    return within(this.answers).getByRole('button', { name })
+    return screen.getByRole('button', { name })
+  }
+
+  // The button on "Which player?" that merges the player into the managed
+  // player named `displayName`.
+  target(displayName: string): HTMLElement {
+    return within(this.answers).getByRole('button', { name: displayName })
+  }
+
+  // The names of the players that "Which player?" offers.
+  get targets(): string[] {
+    return within(this.answers)
+      .getAllByRole('button')
+      .map((button) => button.textContent ?? '')
+      .filter((name) => name !== 'Keep as a separate player')
+  }
+
+  // The match preview under "Is this you?".
+  get matchPreview(): HTMLElement {
+    return screen.getByRole('region', { name: 'Recent matches' })
   }
 
   // The confirmation of the last answer, while more players remain.
@@ -110,6 +131,13 @@ export class PlayerReviewPage {
   // Clicks `name` and waits for its request and the navigation.
   async click(name: ReviewAction): Promise<void> {
     await userEvent.click(this.button(name))
+    await this.settle()
+  }
+
+  // Merges the player into `displayName` on "Which player?", and waits as
+  // click() does.
+  async choose(displayName: string): Promise<void> {
+    await userEvent.click(this.target(displayName))
     await this.settle()
   }
 

@@ -7,15 +7,17 @@ A merged player is hidden: the account no longer plays as it or manages it.
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from typing import Literal
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from fortymm_api.accounts import AccountId, PlayerId
 from fortymm_api.models import Player, PlayerManager
-from fortymm_api.services.player_merge import merge_into_self
+from fortymm_api.services.player_merge import Merged, merge_players
 from fortymm_api.services.sessions import lock_account_for_write
 
 type Relationship = Literal["self", "managed"]
@@ -29,6 +31,34 @@ class Answer(StrEnum):
     NO = "no"
     # The row goes. The player stays, with no manager.
     NOT_MINE = "not_mine"
+    # The player merges with another managed player of the account, and the
+    # survivor's row stays 'managed'. It comes with the other player's id, as
+    # SameAs.
+    SAME_AS = "same_as"
+
+
+@dataclass(frozen=True)
+class SameAs:
+    """The answer `same_as`, with the managed player it names."""
+
+    player: PlayerId
+
+
+type Reply = Literal[Answer.YES, Answer.NO, Answer.NOT_MINE] | SameAs
+
+
+@dataclass(frozen=True)
+class Settled:
+    kind: Literal["self", "managed", "removed", "already_answered"]
+
+
+type Outcome = Settled | Merged
+
+
+@dataclass(frozen=True)
+class RecentMatch:
+    id: UUID
+    played_at: datetime
 
 
 @dataclass(frozen=True)
@@ -37,6 +67,14 @@ class AccountPlayer:
     display_name: str
     relationship: Relationship
     open_question: bool
+    match_count: int
+    recent_matches: tuple[RecentMatch, ...]
+
+
+@dataclass(frozen=True)
+class Answered:
+    outcome: Outcome
+    players: list[AccountPlayer]
 
 
 class PlayerNotManaged(Exception):
@@ -48,6 +86,11 @@ class QuestionClosed(Exception):
     `create_app()` answers 409."""
 
 
+class SameAsItself(Exception):
+    """The answer `same_as` names the player it answers for. `create_app()`
+    answers 422."""
+
+
 def account_players(session: Session, account: AccountId) -> list[AccountPlayer]:
     """The players the account manages: its self player first, then the rest
     by display name."""
@@ -56,45 +99,74 @@ def account_players(session: Session, account: AccountId) -> list[AccountPlayer]
 
 
 def answer_question(
-    session: Session, account: AccountId, player: PlayerId, answer: Answer
-) -> list[AccountPlayer]:
-    """Answer "Is this you?" for one player. Returns the account's players
-    after the answer.
+    session: Session, account: AccountId, player: PlayerId, answer: Reply
+) -> Answered:
+    """Answer "Is this you?" for one player. Returns what the answer did, and
+    the account's players after it.
 
-    Every answer closes the question. A second "Yes" or "No" changes nothing,
-    whatever the first answer was. A second "Not mine" raises QuestionClosed,
-    because it can't delete a row the first answer kept.
+    Every answer closes the question. A second answer changes nothing,
+    whatever the first answer was, and its outcome is `already_answered`. A
+    second "Not mine" raises QuestionClosed, because it can't delete a row
+    the first answer kept.
+
+    `same_as` names a managed player of the account whose question is
+    closed. A player with an open question is refused, because the merge
+    would close its question with no answer.
     """
     lock_account_for_write(session, account)
+    if isinstance(answer, SameAs) and answer.player == player:
+        raise SameAsItself
     # FOR UPDATE on every row of the account, so answers from two tabs take
     # turns. A second "Yes" sees the self player that the first one made.
-    rows = session.scalars(
-        select(PlayerManager)
-        .join(Player, Player.id == PlayerManager.player_id)
-        .where(PlayerManager.account_id == account, Player.merged_into.is_(None))
-        .order_by(PlayerManager.id)
-        .with_for_update(of=PlayerManager)
-    ).all()
-    row = next((row for row in rows if row.player_id == player), None)
+    rows = {
+        row.player_id: row
+        for row in session.scalars(
+            select(PlayerManager)
+            .join(Player, Player.id == PlayerManager.player_id)
+            .where(PlayerManager.account_id == account, Player.merged_into.is_(None))
+            .order_by(PlayerManager.id)
+            .with_for_update(of=PlayerManager)
+        )
+    }
+    row = rows.get(player)
     if row is None:
         raise PlayerNotManaged
+    if isinstance(answer, SameAs):
+        target = rows.get(answer.player)
+        if (
+            target is None
+            or target.relationship != "managed"
+            or target.adopted_from is not None
+        ):
+            raise PlayerNotManaged
     if row.adopted_from is None:
         if answer is Answer.NOT_MINE:
             raise QuestionClosed
-        return _players(session, account)
+        return Answered(Settled("already_answered"), _players(session, account))
 
+    outcome: Outcome
     match answer:
-        case Answer.YES if any(other.relationship == "self" for other in rows):
-            merge_into_self(session, account, player)
+        case SameAs(target_player):
+            outcome = merge_players(session, account, player, target_player)
         case Answer.YES:
-            row.relationship = "self"
-            row.adopted_from = None
+            self_player = next(
+                (id for id, other in rows.items() if other.relationship == "self"),
+                None,
+            )
+            if self_player is None:
+                row.relationship = "self"
+                row.adopted_from = None
+                outcome = Settled("self")
+            else:
+                outcome = merge_players(session, account, player, self_player)
         case Answer.NO:
             row.adopted_from = None
+            outcome = Settled("managed")
         case Answer.NOT_MINE:
             session.delete(row)
+            outcome = Settled("removed")
     session.flush()
-    return _players(session, account)
+    return Answered(outcome, _players(session, account))
 
 
 def _players(session: Session, account: AccountId) -> list[AccountPlayer]:
@@ -109,8 +181,17 @@ def _players(session: Session, account: AccountId) -> list[AccountPlayer]:
         .where(PlayerManager.account_id == account, Player.merged_into.is_(None))
         .order_by(PlayerManager.relationship != "self", Player.display_name)
     ).all()
+    # No games are played yet, so no player has a match. The games work
+    # fills match_count and recent_matches.
     return [
-        AccountPlayer(id, display_name, _relationship(relationship), open_question)
+        AccountPlayer(
+            id,
+            display_name,
+            _relationship(relationship),
+            open_question,
+            match_count=0,
+            recent_matches=(),
+        )
         for id, display_name, relationship, open_question in found
     ]
 
