@@ -61,13 +61,19 @@ call GET /tenants/settings > "$backup/tenant.json"
 for prompt in $(jq -r 'keys[]' "$branding/custom-text.json"); do
   call GET "/prompts/$prompt/custom-text/en" > "$backup/custom-text-$prompt.json"
 done
-# The tenant has no theme until someone saves one, and then this is a 404.
-if call GET /branding/themes/default > "$backup/theme.json" 2>/dev/null; then
-  theme_id=$(jq -r '.themeId' "$backup/theme.json")
-else
-  rm -f "$backup/theme.json"
-  theme_id=""
-fi
+# The tenant has no theme until someone saves one, and until then this is a 404.
+status=$(curl -sS -o "$backup/theme.json" -w '%{http_code}' "$api/branding/themes/default" \
+  -H "Authorization: Bearer $AUTH0_MANAGEMENT_TOKEN")
+case "$status" in
+  2*) theme_id=$(jq -r '.themeId' "$backup/theme.json") ;;
+  404) rm -f "$backup/theme.json"; theme_id="" ;;
+  *)
+    echo "GET /branding/themes/default answered $status:" >&2
+    cat "$backup/theme.json" >&2
+    echo >&2
+    exit 1
+    ;;
+esac
 echo "Saved the current settings to $backup"
 
 call PATCH /tenants/settings "$(jq -c . "$branding/tenant.json")" >/dev/null
@@ -85,8 +91,11 @@ else
 fi
 echo "Set the theme."
 
+# A PUT replaces the text of every screen in the prompt, so keep the screens
+# and keys that custom-text.json doesn't name.
 for prompt in $(jq -r 'keys[]' "$branding/custom-text.json"); do
-  call PUT "/prompts/$prompt/custom-text/en" "$(jq -c --arg p "$prompt" '.[$p]' "$branding/custom-text.json")" >/dev/null
+  text=$(jq -c -s --arg p "$prompt" '.[0] * .[1][$p]' "$backup/custom-text-$prompt.json" "$branding/custom-text.json")
+  call PUT "/prompts/$prompt/custom-text/en" "$text" >/dev/null
 done
 echo "Set the sign-in text."
 
