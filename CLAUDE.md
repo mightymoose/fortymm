@@ -1176,9 +1176,11 @@ email (see Sign-in).
 | `api-preview` | `fortymm-preview` | `https://*-fortymm.mightymoose.workers.dev/api/v1/auth/callback` | `auth0-preview-client-secret` |
 
 Each application's allowed logout URL is its origin with `/signed-out`.
-`api/deploy/auth0.env` holds `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` and
-`AUTH0_PREVIEW_CLIENT_ID`. These values are public, so the file is
-committed. `cloud-run-deploy` reads it before it pushes the image, and fails
+`api/deploy/auth0.env` holds `AUTH0_DOMAIN`, `AUTH0_TENANT_DOMAIN`,
+`AUTH0_CLIENT_ID` and `AUTH0_PREVIEW_CLIENT_ID`. `AUTH0_DOMAIN` is the
+custom domain `auth.fortymm.com`, where Auth0 serves the sign-in page.
+`AUTH0_TENANT_DOMAIN` is the tenant's own domain, where the Management API
+answers. These values are public, so the file is committed. `cloud-run-deploy` reads it before it pushes the image, and fails
 without it. It sets `AUTH0_DOMAIN` and the target's `AUTH0_CLIENT_ID`. It
 mounts the target's client secret as `AUTH0_CLIENT_SECRET` at `latest`, so a
 cold start reads a rotated secret. Only the matching runtime service account
@@ -1188,3 +1190,11 @@ can read each client secret.
 `bootstrap-gcp.sh`. It walks them through the Auth0 dashboard and the Google
 Cloud console. It adds each client secret to Secret Manager and writes
 `auth0.env`. `api/deploy/README.md` describes it.
+
+`api/deploy/apply-auth0-branding` gives the tenant's sign-in page the
+design system's look, from the files in `api/deploy/auth0-branding/`. A
+person runs it with a Management API token. It changes the page for
+production and the Previews at once. Its logo is
+`web-client/public/logo-wordmark.svg`, served from `https://fortymm.com`.
+`api/deploy/README.md` describes it, and the steps to serve the page on
+`auth.fortymm.com`.
