@@ -2,8 +2,9 @@
 `players`. tests/test_ownership.py fails when a foreign key has no entry.
 
 Player merge (services/player_merge.py) keeps every row that names the merged
-player. Only the account's own row changes kind: it becomes `managed`, and
-the survivor's row becomes `self`.
+player. Only the account's own rows change kind. The merged player's row
+becomes `managed`, and the survivor's row takes the relationship of the
+player it merged into: `self` or `managed`.
 """
 
 from enum import StrEnum

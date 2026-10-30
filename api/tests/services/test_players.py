@@ -11,11 +11,18 @@ from sqlalchemy.orm import Session, sessionmaker
 from fortymm_api.accounts import AccountId, Email, PlayerId
 from fortymm_api.models import Account, Player, PlayerManager
 from fortymm_api.services.adoption import adopt_guest, hand_over_players
+from fortymm_api.services.player_merge import Merged
 from fortymm_api.services.players import (
     AccountPlayer,
     Answer,
+    Answered,
     PlayerNotManaged,
     QuestionClosed,
+    Relationship,
+    Reply,
+    SameAs,
+    SameAsItself,
+    Settled,
     account_players,
     answer_question,
 )
@@ -23,6 +30,8 @@ from fortymm_api.services.sessions import AccountAdopted, start_session
 
 ANN = ip_address("203.0.113.7")
 EGRET = "excited egret 387"
+# The answers that need no other player.
+PLAIN_ANSWERS: list[Reply] = [Answer.YES, Answer.NO, Answer.NOT_MINE]
 
 
 def in_transaction[T](database: Engine, work: Callable[[Session], T]) -> T:
@@ -111,7 +120,21 @@ def players_of(database: Engine, account: AccountId) -> list[AccountPlayer]:
     return in_transaction(database, lambda session: account_players(session, account))
 
 
-def answer(database: Engine, question: Question, value: Answer) -> list[AccountPlayer]:
+def listed(
+    id: PlayerId, display_name: str, relationship: Relationship, *, open_question: bool
+) -> AccountPlayer:
+    """A listed player. No player has a match until games exist."""
+    return AccountPlayer(
+        id,
+        display_name,
+        relationship,
+        open_question,
+        match_count=0,
+        recent_matches=(),
+    )
+
+
+def answer(database: Engine, question: Question, value: Reply) -> Answered:
     return in_transaction(
         database,
         lambda session: answer_question(
@@ -180,7 +203,7 @@ def test_lists_a_player_with_an_open_question(
     question = setup(migrated_database)
 
     assert players_of(migrated_database, question.account) == [
-        AccountPlayer(question.player, EGRET, "managed", open_question=True)
+        listed(question.player, EGRET, "managed", open_question=True)
     ]
 
 
@@ -192,9 +215,9 @@ def test_lists_the_self_player_first_then_the_rest_by_name(
     ant = add_player(migrated_database, question.account, "able ant 102", "managed")
 
     assert players_of(migrated_database, question.account) == [
-        AccountPlayer(zebra, "zany zebra 101", "self", open_question=False),
-        AccountPlayer(ant, "able ant 102", "managed", open_question=False),
-        AccountPlayer(question.player, EGRET, "managed", open_question=True),
+        listed(zebra, "zany zebra 101", "self", open_question=False),
+        listed(ant, "able ant 102", "managed", open_question=False),
+        listed(question.player, EGRET, "managed", open_question=True),
     ]
 
 
@@ -206,7 +229,9 @@ def test_yes_makes_the_player_the_accounts_own(
 
     found = answer(migrated_database, question, Answer.YES)
 
-    assert found == [AccountPlayer(question.player, EGRET, "self", open_question=False)]
+    assert found == Answered(
+        Settled("self"), [listed(question.player, EGRET, "self", open_question=False)]
+    )
     assert manager_rows(migrated_database, question.player) == [
         (question.account, "self", None)
     ]
@@ -220,9 +245,10 @@ def test_no_keeps_the_player_as_one_the_account_manages(
 
     found = answer(migrated_database, question, Answer.NO)
 
-    assert found == [
-        AccountPlayer(question.player, EGRET, "managed", open_question=False)
-    ]
+    assert found == Answered(
+        Settled("managed"),
+        [listed(question.player, EGRET, "managed", open_question=False)],
+    )
     assert manager_rows(migrated_database, question.player) == [
         (question.account, "managed", None)
     ]
@@ -236,7 +262,7 @@ def test_not_mine_takes_the_player_off_the_account_and_keeps_it(
 
     found = answer(migrated_database, question, Answer.NOT_MINE)
 
-    assert found == []
+    assert found == Answered(Settled("removed"), [])
     assert manager_rows(migrated_database, question.player) == []
     assert exists(migrated_database, "players", question.player)
     assert exists(migrated_database, "accounts", question.adopted_from)
@@ -252,7 +278,10 @@ def test_yes_merges_the_accounts_newer_self_player_into_the_player(
 
     found = answer(migrated_database, question, Answer.YES)
 
-    assert found == [AccountPlayer(question.player, EGRET, "self", open_question=False)]
+    assert found == Answered(
+        Merged(survivor=question.player, merged=dove),
+        [listed(question.player, EGRET, "self", open_question=False)],
+    )
     assert merged_into(migrated_database, dove) == question.player
     assert merged_into(migrated_database, question.player) is None
     assert self_players(migrated_database, question.account) == [question.player]
@@ -271,9 +300,10 @@ def test_yes_merges_the_player_into_the_accounts_older_self_player(
 
     found = answer(migrated_database, question, Answer.YES)
 
-    assert found == [
-        AccountPlayer(zebra, "zany zebra 101", "self", open_question=False)
-    ]
+    assert found == Answered(
+        Merged(survivor=zebra, merged=question.player),
+        [listed(zebra, "zany zebra 101", "self", open_question=False)],
+    )
     assert merged_into(migrated_database, question.player) == zebra
     assert merged_into(migrated_database, zebra) is None
     assert self_players(migrated_database, question.account) == [zebra]
@@ -282,9 +312,9 @@ def test_yes_merges_the_player_into_the_accounts_older_self_player(
     ]
 
 
-@pytest.mark.parametrize("value", list(Answer))
+@pytest.mark.parametrize("value", PLAIN_ANSWERS)
 def test_a_merged_player_is_no_longer_the_accounts(
-    migrated_database: Engine, value: Answer
+    migrated_database: Engine, value: Reply
 ) -> None:
     question = adopted(migrated_database)
     zebra = add_player(migrated_database, question.account, "zany zebra 101", "self")
@@ -322,7 +352,8 @@ def test_a_second_devices_yes_merges_into_the_oldest_player(
 
     found = answer(migrated_database, second, Answer.YES)
 
-    assert [(player.id, player.relationship) for player in found] == [
+    assert found.outcome == Merged(survivor, merged)
+    assert [(player.id, player.relationship) for player in found.players] == [
         (survivor, "self")
     ]
     assert self_players(migrated_database, first.account) == [survivor]
@@ -359,20 +390,22 @@ def test_a_new_player_can_take_a_merged_players_name(
     ],
 )
 def test_a_second_answer_changes_nothing(
-    migrated_database: Engine, setup: Setup, first: Answer, second: Answer
+    migrated_database: Engine, setup: Setup, first: Reply, second: Reply
 ) -> None:
     question = setup(migrated_database)
     after_first = answer(migrated_database, question, first)
     rows = manager_rows(migrated_database, question.player)
 
-    assert answer(migrated_database, question, second) == after_first
+    assert answer(migrated_database, question, second) == Answered(
+        Settled("already_answered"), after_first.players
+    )
     assert manager_rows(migrated_database, question.player) == rows
 
 
 @SETUPS
 @pytest.mark.parametrize("first", [Answer.YES, Answer.NO])
 def test_not_mine_is_refused_once_the_question_is_answered(
-    migrated_database: Engine, setup: Setup, first: Answer
+    migrated_database: Engine, setup: Setup, first: Reply
 ) -> None:
     question = setup(migrated_database)
     answer(migrated_database, question, first)
@@ -384,9 +417,9 @@ def test_not_mine_is_refused_once_the_question_is_answered(
     assert manager_rows(migrated_database, question.player) == rows
 
 
-@pytest.mark.parametrize("value", list(Answer))
+@pytest.mark.parametrize("value", PLAIN_ANSWERS)
 def test_a_player_the_account_doesnt_manage_is_refused(
-    migrated_database: Engine, value: Answer
+    migrated_database: Engine, value: Reply
 ) -> None:
     question = adopted(migrated_database)
     _, someone_elses = in_transaction(
@@ -442,9 +475,133 @@ def test_two_yes_answers_at_once_make_one_self_player(
         lambda session: answer_question(session, question.account, badger, Answer.YES),
     )
 
-    assert [player.relationship for player in first_result] == ["self", "managed"]
-    assert waiter.result() == [
-        AccountPlayer(question.player, EGRET, "self", open_question=False)
+    assert first_result.outcome == Settled("self")
+    assert [player.relationship for player in first_result.players] == [
+        "self",
+        "managed",
     ]
+    assert waiter.result() == Answered(
+        Merged(survivor=question.player, merged=badger),
+        [listed(question.player, EGRET, "self", open_question=False)],
+    )
     assert self_players(migrated_database, question.account) == [question.player]
     assert merged_into(migrated_database, badger) == question.player
+
+
+@SETUPS
+@pytest.mark.parametrize("answered_older", [True, False], ids=["answered", "target"])
+def test_same_as_merges_with_a_managed_player_into_the_oldest(
+    migrated_database: Engine, setup: Setup, answered_older: bool
+) -> None:
+    question = setup(migrated_database)
+    ant = add_player(migrated_database, question.account, "able ant 102", "managed")
+    created(migrated_database, question.player if answered_older else ant, 1)
+    survivor, merged = (
+        (question.player, ant) if answered_older else (ant, question.player)
+    )
+
+    found = answer(migrated_database, question, SameAs(ant))
+
+    assert found.outcome == Merged(survivor, merged)
+    assert [(player.id, player.open_question) for player in found.players] == [
+        (survivor, False)
+    ]
+    assert merged_into(migrated_database, merged) == survivor
+    assert merged_into(migrated_database, survivor) is None
+    assert manager_rows(migrated_database, survivor) == [
+        (question.account, "managed", None)
+    ]
+    assert manager_rows(migrated_database, merged) == [
+        (question.account, "managed", None)
+    ]
+    assert self_players(migrated_database, question.account) == []
+
+
+def test_same_as_keeps_the_accounts_self_player(migrated_database: Engine) -> None:
+    question = adopted(migrated_database)
+    zebra = add_player(migrated_database, question.account, "zany zebra 101", "self")
+    ant = add_player(migrated_database, question.account, "able ant 102", "managed")
+
+    found = answer(migrated_database, question, SameAs(ant))
+
+    assert found.outcome == Merged(survivor=question.player, merged=ant)
+    assert self_players(migrated_database, question.account) == [zebra]
+
+
+@SETUPS
+def test_same_as_the_answered_player_is_refused(
+    migrated_database: Engine, setup: Setup
+) -> None:
+    question = setup(migrated_database)
+    rows = manager_rows(migrated_database, question.player)
+
+    with pytest.raises(SameAsItself):
+        answer(migrated_database, question, SameAs(question.player))
+
+    assert manager_rows(migrated_database, question.player) == rows
+
+
+def test_same_as_refuses_a_player_that_isnt_a_managed_player_of_the_account(
+    migrated_database: Engine,
+) -> None:
+    question = adopted(migrated_database)
+    zebra = add_player(migrated_database, question.account, "zany zebra 101", "self")
+    merged = add_player(
+        migrated_database,
+        question.account,
+        "merged mole 333",
+        "managed",
+        adopted_from=question.adopted_from,
+    )
+    ant = add_player(migrated_database, question.account, "able ant 102", "managed")
+    created(migrated_database, ant, days_ago=1)
+    answer(
+        migrated_database,
+        Question(question.account, merged, question.adopted_from),
+        SameAs(ant),
+    )
+    _, someone_elses = in_transaction(
+        migrated_database, lambda session: new_guest(session, "brave badger 214")
+    )
+    rows = manager_rows(migrated_database, question.player)
+
+    for target in (zebra, merged, someone_elses, PlayerId(uuid.uuid4())):
+        with pytest.raises(PlayerNotManaged):
+            answer(migrated_database, question, SameAs(target))
+
+    assert manager_rows(migrated_database, question.player) == rows
+    assert merged_into(migrated_database, question.player) is None
+
+
+def test_same_as_refuses_a_player_with_an_open_question(
+    migrated_database: Engine,
+) -> None:
+    question = adopted(migrated_database)
+    badger = add_player(
+        migrated_database,
+        question.account,
+        "brave badger 214",
+        "managed",
+        adopted_from=question.adopted_from,
+    )
+
+    with pytest.raises(PlayerNotManaged):
+        answer(migrated_database, question, SameAs(badger))
+
+    assert merged_into(migrated_database, badger) is None
+    assert merged_into(migrated_database, question.player) is None
+
+
+@SETUPS
+@pytest.mark.parametrize("first", [Answer.YES, Answer.NO])
+def test_same_as_changes_nothing_once_the_question_is_answered(
+    migrated_database: Engine, setup: Setup, first: Reply
+) -> None:
+    question = setup(migrated_database)
+    ant = add_player(migrated_database, question.account, "able ant 102", "managed")
+    after_first = answer(migrated_database, question, first)
+
+    assert answer(migrated_database, question, SameAs(ant)) == Answered(
+        Settled("already_answered"), after_first.players
+    )
+    assert merged_into(migrated_database, ant) is None

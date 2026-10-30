@@ -234,7 +234,7 @@
           "players"
         ],
         "summary": "Account Players",
-        "description": "List the players the account manages, its own player first. A merged\nplayer isn't listed.\n\n`open_question` is true for a player that a sign-in brought to the\naccount, until the account answers \"Is this you?\" for it.",
+        "description": "List the players the account manages, its own player first. A merged\nplayer isn't listed.\n\n`open_question` is true for a player that a sign-in brought to the\naccount, until the account answers \"Is this you?\" for it.\n`match_count` counts the player's matches, and `recent_matches` holds\nits latest ones, newest first.",
         "operationId": "account_players",
         "responses": {
           "200": {
@@ -261,7 +261,7 @@
           "players"
         ],
         "summary": "Answer Question",
-        "description": "Answer \"Is this you?\" for one player, and list the account's players\nafter it.\n\n`yes` makes it the account's own player. If the account already has one,\nthe two players merge. The player created first survives, and the other\nleaves the list. `no` keeps it as a player the account manages. `not_mine` takes\nit off the account. The player stays, with no manager. Every answer\ncloses the question. A second `yes` or `no` changes nothing, and a second\n`not_mine` answers 409.",
+        "description": "Answer \"Is this you?\" for one player. `data` lists the account's\nplayers after the answer, and `meta.outcome` says what the answer did.\n\n`yes` makes it the account's own player, with outcome `self`. If the\naccount already has one, the two players merge, with outcome `merged`.\n`no` keeps it as a player the account manages, with outcome `managed`.\n`not_mine` takes it off the account, with outcome `removed`. The player\nstays, with no manager. `same_as` merges it with the `managed` player\nthat `player_id` names, with outcome `merged`. That player's question\nmust be closed, because the merge would close it with no answer.\n\nIn a merge, the player created first survives, and the other leaves the\nlist. `meta.survivor` and `meta.merged` name them. Every answer closes\nthe question. A second answer changes nothing, with outcome\n`already_answered`, but a second `not_mine` answers 409.",
         "operationId": "answer_question",
         "security": [
           {
@@ -296,19 +296,19 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AccountPlayersResponse"
+                  "$ref": "#/components/schemas/AnswerResponse"
                 }
               }
             }
           },
           "404": {
-            "description": "The account doesn't manage the player"
+            "description": "The account doesn't manage the player, or `player_id` isn't a `managed` player of the account with a closed question"
           },
           "409": {
             "description": "The answer is `not_mine` and the question was already answered"
           },
           "422": {
-            "description": "Validation Error",
+            "description": "The body is invalid, or `player_id` is missing with `same_as` or set with another answer. If `player_id` is the answered player, the body is in the `errors` shape instead",
             "content": {
               "application/json": {
                 "schema": {
@@ -345,6 +345,17 @@
           "open_question": {
             "type": "boolean",
             "title": "Open Question"
+          },
+          "match_count": {
+            "type": "integer",
+            "title": "Match Count"
+          },
+          "recent_matches": {
+            "items": {
+              "$ref": "#/components/schemas/RecentMatch"
+            },
+            "type": "array",
+            "title": "Recent Matches"
           }
         },
         "type": "object",
@@ -352,7 +363,9 @@
           "id",
           "display_name",
           "relationship",
-          "open_question"
+          "open_question",
+          "match_count",
+          "recent_matches"
         ],
         "title": "AccountPlayer"
       },
@@ -377,7 +390,8 @@
         "enum": [
           "yes",
           "no",
-          "not_mine"
+          "not_mine",
+          "same_as"
         ],
         "title": "Answer"
       },
@@ -385,6 +399,18 @@
         "properties": {
           "answer": {
             "$ref": "#/components/schemas/Answer"
+          },
+          "player_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Player Id"
           }
         },
         "type": "object",
@@ -392,6 +418,44 @@
           "answer"
         ],
         "title": "AnswerRequest"
+      },
+      "AnswerResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/AccountPlayer"
+            },
+            "type": "array",
+            "title": "Data"
+          },
+          "meta": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/MergedOutcome"
+              },
+              {
+                "$ref": "#/components/schemas/SettledOutcome"
+              }
+            ],
+            "title": "Meta",
+            "discriminator": {
+              "propertyName": "outcome",
+              "mapping": {
+                "already_answered": "#/components/schemas/SettledOutcome",
+                "managed": "#/components/schemas/SettledOutcome",
+                "merged": "#/components/schemas/MergedOutcome",
+                "removed": "#/components/schemas/SettledOutcome",
+                "self": "#/components/schemas/SettledOutcome"
+              }
+            }
+          }
+        },
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "title": "AnswerResponse"
       },
       "HTTPValidationError": {
         "properties": {
@@ -456,6 +520,52 @@
           "data"
         ],
         "title": "LogoutResponse"
+      },
+      "MergedOutcome": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "const": "merged",
+            "title": "Outcome"
+          },
+          "survivor": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Survivor"
+          },
+          "merged": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Merged"
+          }
+        },
+        "type": "object",
+        "required": [
+          "outcome",
+          "survivor",
+          "merged"
+        ],
+        "title": "MergedOutcome"
+      },
+      "RecentMatch": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "played_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Played At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "played_at"
+        ],
+        "title": "RecentMatch"
       },
       "SessionAccount": {
         "properties": {
@@ -538,6 +648,25 @@
           "data"
         ],
         "title": "SessionResponse"
+      },
+      "SettledOutcome": {
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "self",
+              "managed",
+              "removed",
+              "already_answered"
+            ],
+            "title": "Outcome"
+          }
+        },
+        "type": "object",
+        "required": [
+          "outcome"
+        ],
+        "title": "SettledOutcome"
       },
       "ValidationError": {
         "properties": {

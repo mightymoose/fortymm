@@ -45,12 +45,38 @@ def player(client: TestClient, migrated_database: Engine) -> dict[str, str]:
     return found
 
 
-def answer(client: TestClient, player_id: str, value: str) -> httpx.Response:
+def answer(
+    client: TestClient, player_id: str, value: str, body: dict[str, str] | None = None
+) -> httpx.Response:
     return client.post(
         f"/v1/account/players/{player_id}/answer",
         headers=JSON,
-        json={"answer": value},
+        json={"answer": value, **(body or {})},
     )
+
+
+def managed_player(database: Engine, beside: str) -> str:
+    """A player that the account of `beside` manages, with no open question,
+    made before `beside`."""
+    with database.begin() as connection:
+        account = connection.scalar(
+            text("SELECT account_id FROM player_managers WHERE player_id = :player"),
+            {"player": beside},
+        )
+        player: uuid.UUID = connection.scalar(
+            text(
+                "INSERT INTO players (display_name, created_at)"
+                " VALUES ('able ant 102', now() - interval '1 day') RETURNING id"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO player_managers (player_id, account_id, relationship)"
+                " VALUES (:player, :account, 'managed')"
+            ),
+            {"player": player, "account": account},
+        )
+    return str(player)
 
 
 def test_lists_the_accounts_players(client: TestClient, player: dict[str, str]) -> None:
@@ -64,6 +90,8 @@ def test_lists_the_accounts_players(client: TestClient, player: dict[str, str]) 
                 "display_name": player["display_name"],
                 "relationship": "managed",
                 "open_question": True,
+                "match_count": 0,
+                "recent_matches": [],
             }
         ]
     }
@@ -82,8 +110,49 @@ def test_an_answer_returns_the_accounts_players(
                 "display_name": player["display_name"],
                 "relationship": "self",
                 "open_question": False,
+                "match_count": 0,
+                "recent_matches": [],
             }
-        ]
+        ],
+        "meta": {"outcome": "self"},
+    }
+
+
+def test_a_merge_says_which_player_survived(
+    client: TestClient, player: dict[str, str], migrated_database: Engine
+) -> None:
+    ant = managed_player(migrated_database, player["id"])
+
+    response = answer(client, player["id"], "same_as", {"player_id": ant})
+
+    assert response.status_code == 200
+    assert response.json()["meta"] == {
+        "outcome": "merged",
+        "survivor": ant,
+        "merged": player["id"],
+    }
+    assert [listed["id"] for listed in response.json()["data"]] == [ant]
+
+
+@pytest.mark.parametrize(
+    ("value", "body"),
+    [("same_as", {}), ("no", {"player_id": str(uuid.uuid4())})],
+    ids=["same_as_without_player_id", "no_with_player_id"],
+)
+def test_answers_422_when_player_id_and_same_as_dont_go_together(
+    client: TestClient, player: dict[str, str], value: str, body: dict[str, str]
+) -> None:
+    assert answer(client, player["id"], value, body).status_code == 422
+
+
+def test_answers_422_for_same_as_the_answered_player(
+    client: TestClient, player: dict[str, str]
+) -> None:
+    response = answer(client, player["id"], "same_as", {"player_id": player["id"]})
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "errors": [{"status": "422", "title": "A player can't be the same as itself"}]
     }
 
 

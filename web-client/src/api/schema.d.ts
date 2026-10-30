@@ -143,6 +143,8 @@ export interface paths {
          *
          *     `open_question` is true for a player that a sign-in brought to the
          *     account, until the account answers "Is this you?" for it.
+         *     `match_count` counts the player's matches, and `recent_matches` holds
+         *     its latest ones, newest first.
          */
         get: operations["account_players"];
         put?: never;
@@ -164,15 +166,21 @@ export interface paths {
         put?: never;
         /**
          * Answer Question
-         * @description Answer "Is this you?" for one player, and list the account's players
-         *     after it.
+         * @description Answer "Is this you?" for one player. `data` lists the account's
+         *     players after the answer, and `meta.outcome` says what the answer did.
          *
-         *     `yes` makes it the account's own player. If the account already has one,
-         *     the two players merge. The player created first survives, and the other
-         *     leaves the list. `no` keeps it as a player the account manages. `not_mine` takes
-         *     it off the account. The player stays, with no manager. Every answer
-         *     closes the question. A second `yes` or `no` changes nothing, and a second
-         *     `not_mine` answers 409.
+         *     `yes` makes it the account's own player, with outcome `self`. If the
+         *     account already has one, the two players merge, with outcome `merged`.
+         *     `no` keeps it as a player the account manages, with outcome `managed`.
+         *     `not_mine` takes it off the account, with outcome `removed`. The player
+         *     stays, with no manager. `same_as` merges it with the `managed` player
+         *     that `player_id` names, with outcome `merged`. That player's question
+         *     must be closed, because the merge would close it with no answer.
+         *
+         *     In a merge, the player created first survives, and the other leaves the
+         *     list. `meta.survivor` and `meta.merged` name them. Every answer closes
+         *     the question. A second answer changes nothing, with outcome
+         *     `already_answered`, but a second `not_mine` answers 409.
          */
         post: operations["answer_question"];
         delete?: never;
@@ -201,6 +209,10 @@ export interface components {
             relationship: "self" | "managed";
             /** Open Question */
             open_question: boolean;
+            /** Match Count */
+            match_count: number;
+            /** Recent Matches */
+            recent_matches: components["schemas"]["RecentMatch"][];
         };
         /** AccountPlayersResponse */
         AccountPlayersResponse: {
@@ -211,10 +223,19 @@ export interface components {
          * Answer
          * @enum {string}
          */
-        Answer: "yes" | "no" | "not_mine";
+        Answer: "yes" | "no" | "not_mine" | "same_as";
         /** AnswerRequest */
         AnswerRequest: {
             answer: components["schemas"]["Answer"];
+            /** Player Id */
+            player_id?: string | null;
+        };
+        /** AnswerResponse */
+        AnswerResponse: {
+            /** Data */
+            data: components["schemas"]["AccountPlayer"][];
+            /** Meta */
+            meta: components["schemas"]["MergedOutcome"] | components["schemas"]["SettledOutcome"];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -241,6 +262,37 @@ export interface components {
         /** LogoutResponse */
         LogoutResponse: {
             data: components["schemas"]["LogoutData"];
+        };
+        /** MergedOutcome */
+        MergedOutcome: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            outcome: "merged";
+            /**
+             * Survivor
+             * Format: uuid
+             */
+            survivor: string;
+            /**
+             * Merged
+             * Format: uuid
+             */
+            merged: string;
+        };
+        /** RecentMatch */
+        RecentMatch: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Played At
+             * Format: date-time
+             */
+            played_at: string;
         };
         /** SessionAccount */
         SessionAccount: {
@@ -275,6 +327,14 @@ export interface components {
         /** SessionResponse */
         SessionResponse: {
             data: components["schemas"]["SessionData"];
+        };
+        /** SettledOutcome */
+        SettledOutcome: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            outcome: "already_answered" | "managed" | "removed" | "self";
         };
         /** ValidationError */
         ValidationError: {
@@ -468,10 +528,10 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["AccountPlayersResponse"];
+                    "application/json": components["schemas"]["AnswerResponse"];
                 };
             };
-            /** @description The account doesn't manage the player */
+            /** @description The account doesn't manage the player, or `player_id` isn't a `managed` player of the account with a closed question */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -485,7 +545,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Validation Error */
+            /** @description The body is invalid, or `player_id` is missing with `same_as` or set with another answer. If `player_id` is the answered player, the body is in the `errors` shape instead */
             422: {
                 headers: {
                     [name: string]: unknown;
