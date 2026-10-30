@@ -203,9 +203,15 @@ this order:
 | CNAME | `pm-bounces` | `pm.mtasv.net`, with Proxy status DNS only |
 | TXT | `_dmarc` | `v=DMARC1; p=none` |
 
-A proxied `pm-bounces` record breaks the Return-Path. The MX and SPF records
-of Namecheap's email forwarding stay unchanged. Postmark aligns SPF through
-the Return-Path, so the SPF record needs no Postmark include.
+A proxied `pm-bounces` record breaks the Return-Path.
+
+`fortymm.com` receives mail through Cloudflare Email Routing. Its records
+are the MX records `route1.mx.cloudflare.net` to `route3.mx.cloudflare.net`,
+the SPF record `v=spf1 include:_spf.mx.cloudflare.net ~all` and the DKIM
+record `cf2024-1._domainkey`. Postmark's records sit beside them with no
+conflict. Postmark's DKIM uses its own selector. Postmark aligns SPF through
+the Return-Path, so the SPF record needs no Postmark include. Email Routing
+adds no `_dmarc` record.
 
 The SMTP token's Access Key is the username, and its Secret Key is the
 password. You copy both from Postmark straight into Auth0. The wizard never
