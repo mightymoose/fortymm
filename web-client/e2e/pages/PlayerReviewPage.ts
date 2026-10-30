@@ -1,4 +1,5 @@
 import type { Locator, Page } from '@playwright/test'
+import type { components } from '../../src/api/schema.d.ts'
 
 export type ReviewAnswer = 'yes' | 'no' | 'not_mine'
 
@@ -29,6 +30,24 @@ export class PlayerReviewPage {
     }
     await this.button('Someone else played').click()
     await this.button(answer === 'no' ? 'I manage this player' : 'Remove from my account').click()
+  }
+
+  // Says the player on screen is `displayName`, a player the account
+  // already manages, through "Which player?". The two players merge.
+  async mergeInto(displayName: string): Promise<void> {
+    await this.button('Someone else played').click()
+    await this.button('I manage this player').click()
+    await this.page.getByRole('heading', { level: 1, name: 'Which player?' }).waitFor()
+    await this.button(displayName).click()
+  }
+
+  // The account's players, from GET /v1/account/players with the browser's
+  // cookies.
+  async players(): Promise<components['schemas']['AccountPlayer'][]> {
+    const response = await this.page.request.get('/api/v1/account/players')
+    if (!response.ok()) throw new Error(`GET /api/v1/account/players answered ${response.status()}`)
+    const body: components['schemas']['AccountPlayersResponse'] = await response.json()
+    return body.data
   }
 
   // Leaves for Home without an answer.

@@ -3,7 +3,7 @@ import { newPerson } from './pages/SignInPage.ts'
 
 // "Is this you?" after a sign-in, against the real API and the mock
 // provider. Each Home load without a session starts one guest account, so
-// this file starts four.
+// this file starts six.
 
 test('a new email asks about the guest’s own player, and the reminder reopens it (VerifyInPlace)', async ({
   homePage,
@@ -82,4 +82,33 @@ test('each sign-in from a guest asks about its player, and answers stay answered
   const account = await signInPage.account()
   expect(account).toMatchObject({ kind: 'verified', email: ann.email })
   expect(account.player.display_name).toBe(first)
+})
+
+test('a player can merge into one the account already manages (same_as)', async ({
+  homePage,
+  playerReviewPage,
+  signInPage,
+}) => {
+  const ann = newPerson('ann')
+
+  // The first sign-in asks about the guest's own player. "I manage this
+  // player" keeps it as a player Ann manages.
+  await homePage.goto()
+  const managed = (await signInPage.account()).player.display_name
+  await signInPage.signIn(ann, { returnTo: '/' })
+  await expect(playerReviewPage.question).toHaveText('Is this you?')
+  await playerReviewPage.answer('no')
+  await expect(homePage.page.getByText(`${managed} added to players you manage.`)).toBeVisible()
+
+  await signInPage.forgetSession()
+  await homePage.goto()
+  const second = (await signInPage.account()).player.display_name
+  await signInPage.signIn(ann, { returnTo: '/' })
+  await expect(playerReviewPage.question).toHaveText('Is this you?')
+  await playerReviewPage.mergeInto(managed)
+
+  // The managed player is older, so it survives.
+  await expect(homePage.page.getByText(`${second} merged into ${managed}.`)).toBeVisible()
+  const names = (await playerReviewPage.players()).map((player) => player.display_name)
+  expect(names.filter((name) => name === managed || name === second)).toEqual([managed])
 })
