@@ -596,8 +596,10 @@ it to `src/routes/`.
   its button. A 409 means that another tab answered the player first, so
   the page says so too, and refetches the players. A 404 can mean that
   another tab merged the player. Then the page refetches the players, and
-  says so only if the player left the list. With no open question, or for a guest, the page goes to `/`
-  at once. For a verified account, each time the page goes to `/`, it sets
+  says so only if the player left the list. A 404 to `same_as` can also
+  mean that another tab merged the chosen player away. Then "Which player?"
+  says that the player isn't one of the account's players any more. With no
+  open question, or for a guest, the page goes to `/` at once. For a verified account, each time the page goes to `/`, it sets
   `fromReview` in the router's history state (typed in `src/router.tsx`).
   That covers Review later, the last answer and a visit with no open
   question. Home then focuses the reminder's link while questions remain,

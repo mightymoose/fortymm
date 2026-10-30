@@ -485,6 +485,19 @@ describe('Is this you?', () => {
       expect(page.toasts).toEqual([])
     })
 
+    it('says so when another tab merged the chosen player away', async () => {
+      const { api, page } = await choosing([badger, egret, ant, dove])
+      // The egret is older, so the ant merges into it and leaves the list.
+      api.answerInAnotherTab(egret.id, { answer: 'same_as', player_id: ant.id })
+
+      await page.choose(ant.display_name)
+
+      expect(page.heading).toHaveTextContent('Which player?')
+      expect(page.notice).toBe(`${ant.display_name} isn’t one of your players any more.`)
+      expect(page.targets).toEqual([egret.display_name])
+      expect(page.toasts).toEqual([])
+    })
+
     it('sends one answer when a player is clicked twice at once', async () => {
       const { api, page } = await choosing([ant, egret, badger, dove])
 

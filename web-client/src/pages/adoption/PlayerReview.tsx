@@ -211,7 +211,7 @@ function Questions() {
     try {
       answered = await answer.mutateAsync({ player, reply })
     } catch (error) {
-      if (!(await answeredElsewhere(error))) {
+      if (!(await answeredElsewhere(error, reply))) {
         dispatch({ type: 'failed', playerId: player.id, reply: replyKey(reply) })
       }
       return
@@ -225,15 +225,19 @@ function Questions() {
   // answers 409 only to "Remove from my account" on a closed question. A 404
   // can mean that another tab merged the player, so the refetched players
   // must leave it out. Then the page says so in place of an error that would
-  // go with the player.
-  async function answeredElsewhere(error: unknown): Promise<boolean> {
+  // go with the player. A 404 to `same_as` can instead mean that the chosen
+  // player is gone, and its button with it, so the page says that.
+  async function answeredElsewhere(error: unknown, reply: Reply): Promise<boolean> {
     if (!(error instanceof ApiError && (error.status === 404 || error.status === 409))) return false
     const { queryKey } = accountPlayersQuery(api)
     await queryClient.refetchQueries({ queryKey })
     const now = queryClient.getQueryData(queryKey)
     if (!now) return false
     if (error.status === 404 && now.some((found) => found.id === player.id && found.open_question)) {
-      return false
+      if (reply.answer !== 'same_as' || now.some((found) => found.id === reply.player_id)) return false
+      const gone = players.find((found) => found.id === reply.player_id)?.display_name ?? 'That player'
+      dispatch({ type: 'saved', notice: { text: `${gone} isn’t one of your players any more.`, icon: 'info' } })
+      return true
     }
     finish(alreadyAnswered(player), now)
     return true
@@ -385,7 +389,8 @@ function Questions() {
           Matches from <b>{current.display_name}</b>
         </p>
         <p className="review-support">Choose a player to add these matches to.</p>
-        <div role="group" aria-label="Your answer">
+        <div className="review-choice" role="group" aria-label="Your answer">
+          {notice}
           <ul className="review-dests">
             {targets.map((target) => (
               <li key={target.id}>
