@@ -22,6 +22,10 @@ targets:
       path: FortyMM/Info.plist
       properties:
         CFBundleDisplayName: FortyMM
+        # XcodeGen writes 1.0 and 1 otherwise, and TestFlight refuses a
+        # build number it already has.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UIAppFonts: [BebasNeue-Regular.ttf]
         UILaunchScreen:
           UIColorName: LaunchBackground
@@ -31,6 +35,13 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # The upload fails validation unless an iPad that multitasks gets
+        # every orientation.
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
     settings:
