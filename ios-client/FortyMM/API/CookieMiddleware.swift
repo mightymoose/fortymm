@@ -22,7 +22,7 @@ struct CookieMiddleware: ClientMiddleware {
         }
         request.headerFields[.cookie] = jar.header
         let (response, responseBody) = try await next(request, body, baseURL)
-        jar.apply(setCookie: response.headerFields[values: .setCookie], from: baseURL)
+        jar.apply(setCookie: response.headerFields[values: .setCookie])
         return (response, responseBody)
     }
 }

@@ -37,23 +37,69 @@ final class CookieJar: Sendable {
     /// expired, such as one with `Max-Age=0`, removes the one the jar holds.
     /// A value may hold several cookies folded into one line, as
     /// `HTTPURLResponse` folds them.
-    func apply(setCookie values: [String], from url: URL, now: Date = .now) {
-        guard !values.isEmpty else { return }
-        let parsed = HTTPCookie.cookies(
-            withResponseHeaderFields: ["Set-Cookie": values.joined(separator: ", ")],
-            for: url
-        )
+    ///
+    /// It parses the values itself. `HTTPCookie`'s parser changes between
+    /// iOS versions, and iOS 26 drops a `Secure` cookie for an http URL.
+    func apply(setCookie values: [String], now: Date = .now) {
+        let parsed = values.flatMap(Self.unfold).compactMap { SetCookie($0, now: now) }
+        guard !parsed.isEmpty else { return }
         let updated = cookies.withLock { cookies in
             for cookie in parsed {
-                if let expires = cookie.expiresDate, expires <= now {
-                    cookies[cookie.name] = nil
-                } else {
-                    cookies[cookie.name] = cookie.value
-                }
+                cookies[cookie.name] = cookie.expired ? nil : cookie.value
             }
             return cookies
         }
         store.save(updated)
+    }
+
+    /// The cookies of a value that may fold several into one line. A fold is
+    /// a comma before the next `name=`. The comma in an `expires` date is
+    /// followed by a day number and a space, so it never matches.
+    private static func unfold(_ value: String) -> [String] {
+        value.split(separator: /,\s*(?=[!#$%&'*+.^_`|~0-9A-Za-z-]+=)/).map(String.init)
+    }
+}
+
+/// One `Set-Cookie` value: its name and value, and whether it has already
+/// expired. `Max-Age` wins over `Expires`, as RFC 6265 says.
+private struct SetCookie {
+    let name: String
+    let value: String
+    let expired: Bool
+
+    init?(_ line: String, now: Date) {
+        let parts = line.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }
+        guard let pair = parts.first, let equals = pair.firstIndex(of: "=") else { return nil }
+        name = String(pair[..<equals])
+        value = String(pair[pair.index(after: equals)...]).trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+        guard !name.isEmpty else { return nil }
+
+        var maxAge: Int?
+        var expires: Date?
+        for attribute in parts.dropFirst() {
+            let keyValue = attribute.split(separator: "=", maxSplits: 1).map(String.init)
+            let attributeValue = keyValue.dropFirst().first ?? ""
+            switch keyValue.first?.lowercased() {
+            case "max-age": maxAge = Int(attributeValue)
+            case "expires": expires = Self.httpDate().date(from: attributeValue)
+            default: break
+            }
+        }
+        if let maxAge {
+            expired = maxAge <= 0
+        } else if let expires {
+            expired = expires <= now
+        } else {
+            expired = false
+        }
+    }
+
+    private static func httpDate() -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "GMT")
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return formatter
     }
 }
 
