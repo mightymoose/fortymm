@@ -69,6 +69,7 @@ val colorsAndType = designSystem.file("colors_and_type.css")
 tasks.withType<Test>().configureEach {
     inputs.file(colorsAndType).withPathSensitivity(PathSensitivity.NONE)
     systemProperty("fortymm.colorsAndType", colorsAndType.asFile.path)
+    systemProperty("fortymm.screenshots", layout.buildDirectory.dir("screenshots").get().asFile.path)
     // Robolectric's Android 15+ sandboxes reach into the JDK's file descriptors.
     jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED")
     // Robolectric downloads its Android jars here, so they last as long as

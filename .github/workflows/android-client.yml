@@ -32,3 +32,4 @@ jobs:
           path: |
             android-client/app/build/reports/tests
             android-client/app/build/test-results
+            android-client/app/build/screenshots

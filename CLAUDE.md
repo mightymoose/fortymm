@@ -1063,10 +1063,12 @@ Android SDK.
   objects such as `SplashScreen` in `src/test/.../pages/`, which find
   elements by what TalkBack reads. Robolectric runs SDK 36
   (`robolectric.properties`), because Espresso fails on its SDK 37.
+  It draws with Android's native graphics on a 411x891dp phone and saves
+  the screen to `app/build/screenshots/splash.png`.
 - `.github/workflows/android-client.yml` runs `android-client:ci` on Ubuntu,
   only on a push that changes the app, its design-system inputs,
   `compose.yaml`, `mise.toml`, `bin/mise` or the workflow. It uploads the
-  test reports as `android-client-results`.
+  test reports and the screenshot as `android-client-results`.
 
 ## Deploy
 
