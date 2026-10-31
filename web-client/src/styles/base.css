@@ -106,7 +106,7 @@ a:hover{color:var(--ball-200)}
    The authenticated pages' frame (src/pages/AppShell.tsx): a topbar over a
    sidebar that folds to its icons, and below 900px a tab bar along the
    bottom. The bar is --bg-panel and the page is --bg-app. Orange marks only
-   the open page.
+   the open page. The links to the mobile betas sit at the sidebar's foot.
    ========================================================================= */
 .app-shell {
   display: grid;
@@ -271,6 +271,14 @@ a:hover{color:var(--ball-200)}
   box-shadow: var(--focus-ring);
 }
 
+.app-link--app {
+  margin-top: auto;
+}
+
+.app-link--app ~ .app-link--app {
+  margin-top: 0;
+}
+
 .app-shell[data-folded='true'] .app-link {
   justify-content: center;
   width: 48px;
@@ -326,6 +334,10 @@ a:hover{color:var(--ball-200)}
     min-height: 56px;
     padding: var(--s-1) 0;
     font-size: var(--text-xs);
+  }
+
+  .app-link--app {
+    margin-top: 0;
   }
 
   .app-shell[data-folded='true'] .app-link__label {
