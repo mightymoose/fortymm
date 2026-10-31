@@ -1,0 +1,11 @@
+generate:
+  - types
+  - client
+accessModifier: internal
+namingStrategy: idiomatic
+filter:
+  operations:
+    - start_session
+    - logout
+    - app_login
+    - app_finish

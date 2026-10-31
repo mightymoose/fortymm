@@ -23,6 +23,8 @@ fi
 archive=build/FortyMM.xcarchive
 rm -rf "$archive" build/export
 xcodebuild archive -quiet \
+  -skipPackagePluginValidation \
+  -onlyUsePackageVersionsFromResolvedFile \
   -project FortyMM.xcodeproj \
   -scheme FortyMM \
   -configuration Release \

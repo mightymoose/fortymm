@@ -176,6 +176,12 @@ through FastAPI's `TestClient`).
 - Response bodies follow JSON:API's top-level shape: the payload goes under
   `data` (e.g. `/v1/health` returns `{"data": {"database": "ok"}}`), so each
   response model has a `data` field rather than naming the payload itself.
+- An error the API answers itself is in the `errors` shape,
+  `ErrorsResponse` in `v1/errors.py`. Each route lists the errors it can
+  answer with the entries there, such as `NO_SESSION` and `GUEST_LIMIT`, so
+  the schema types each error's body. `GUEST_LIMIT` also declares
+  `Retry-After`. The 403 of the Worker secret and FastAPI's own 422 aren't
+  listed.
 
 It runs in the `api` Compose service (uvicorn with `--reload` on port 8000)
 with no published port: the web-client dev server proxies `/api/*` to it with
@@ -417,6 +423,17 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   is the mock's `http://oidc:8080/default/v2/logout`. The browser can't
   reach it, and the mock answers 405 there. So a dev sign-out ends on an
   error page. Open `/signed-out` to see the page.
+- The iOS app signs in through three routes of its own, because its sign-in
+  sheet (`ASWebAuthenticationSession`) is a browser with none of the app's
+  cookies. `POST /v1/auth/app-login` runs `begin_sign_in()` and returns the
+  provider's URL as `data.authorize_url`, which is relative in dev. Its
+  `redirect_uri` is `/v1/auth/app-callback`. That route touches nothing. It
+  answers 302 to `fortymm://sign-in` with its query, which ends the sheet.
+  The app sends that query's `state`, `code` and `error` to
+  `POST /v1/auth/app-finish`, which runs `finish_sign_in()` with the app's
+  cookies. It answers `data.outcome`: `signed_in` or a `sign_in_error`
+  code, and a replay is `expired`. A code that another app catches is
+  useless without this app's session or login cookie.
 
 ### Migrations
 
@@ -464,6 +481,13 @@ web-client's are in `web-client/src/api/schema.d.ts` (`npm run
 generate:api`, openapi-typescript). After changing a route or model, run
 `api:openapi` and commit both files; CI's `openapi:check` fails if either is
 stale.
+
+The iOS app generates its client from the same file (see ios-client).
+swift-openapi-generator drops a property whose schema is `anyOf` with
+`null`, which is how Pydantic writes a nullable. So `create_app()` rewrites
+each such schema in `components.schemas` as `type: [X, "null"]`, which means
+the same. Parameters keep `anyOf`, because oasdiff reads a parameter's type
+array as a break. `tests/test_openapi.py` checks both.
 
 A published API version (today `/v1`) never changes in a breaking way. Released
 iOS and Android apps stay installed for months, and they call the API that
@@ -971,9 +995,9 @@ container, e.g.
 
 ## ios-client
 
-`ios-client/` is the iOS app, in SwiftUI. For now it shows only a splash
-screen: the wordmark on `--bg-app`, as the web client's loading screen shows
-it. It builds on the macOS host with Xcode, not in the dev container.
+`ios-client/` is the iOS app, in SwiftUI. It has the web client's guest
+accounts, sign-in and sign-out, with Home's roadmap. It builds on the macOS
+host with Xcode, not in the dev container.
 
 ```sh
 ./bin/mise run ios-client:generate   # write ios-client/FortyMM.xcodeproj
@@ -993,16 +1017,63 @@ BUILD_NUMBER=7 ./bin/mise run ios-client:testflight  # archive and upload to Tes
   holds the colour tokens the app uses. `FortyMMTests` (Swift Testing) fails
   if a token's hex differs from `colors_and_type.css`, if the launch
   screen's `LaunchBackground` colour differs from the splash background
-  (`Color.bgApp`), or if the font isn't in the bundle.
+  (`Color.bgApp`), or if the font isn't in the bundle. It also bundles
+  JetBrains Mono, for the time in the 429 message. Space Grotesk isn't in
+  the reference's fonts, so other text uses the system font with Dynamic
+  Type.
+- The app talks to `FORTYMM_API_BASE_URL` from its launch environment, or
+  else `https://fortymm.com`, under `/api`. Point it at the web dev
+  server's port for local dev (see `ios-client/README.md`). A hosted unit
+  test run makes no request, and every UI test passes a base URL, so tests
+  never reach production.
+- swift-openapi-generator's build plugin generates the API client from
+  `api/openapi.json`, which `project.yml` lists by path.
+  `FortyMM/API/openapi-generator-config.yaml` picks the operations the app
+  calls. So a schema change that the app's code doesn't handle breaks the
+  build. `FortyMMAPI.swift` is the one place that reads the generated types.
+  It turns each response into `Account`, `SignInOutcome` or `Failure`.
+  The scripts pass `-skipPackagePluginValidation` to trust the plugin.
+  `Package.resolved` pins every package. `ios-client:generate` copies it
+  into the gitignored project, and the scripts build only from it. After
+  you change a package, copy the project's new `Package.resolved` back.
+- Apple's cookie storage drops the API's `Secure` cookies over
+  `http://localhost`. So the app keeps the session and login cookies
+  itself, in the Keychain, one item per base URL. `CookieMiddleware` sends
+  them, keeps each `Set-Cookie`, and gives each `POST` its JSON
+  `Content-Type`.
+- `AppModel` holds the app's state: a phase (`starting`, `ready`, `failed`,
+  `signedOut`), the sign-in in flight with its last error, and the sign-out
+  in flight. Starting shows the splash, as the web's loading screen.
+  A failure shows the web's error page text with Try again.
+- Sign-in uses `POST /v1/auth/app-login` and `app-finish` (see Sign-in),
+  through SwiftUI's `webAuthenticationSession` with the `fortymm` scheme
+  and an ephemeral browser session. That session keeps no provider cookie,
+  so sign-out calls `POST /v1/auth/logout` and doesn't open `logout_url`.
+  Closing the sheet shows nothing. A refused sign-in shows the web's
+  `signInErrors` message in a banner above Home or on the signed-out
+  screen.
+- Home has the wordmark as the navigation bar's centred title, where iOS
+  puts it (a leading toolbar item crops it to a glass capsule), and the
+  account menu at the right, whose label is the player's avatar. Its menu matches
+  the web's `UserMenu`. A guest's Sign out asks first, in an alert with the
+  web dialog's text, "device" for "browser". Signed out shows the web's
+  `/signed-out` text with Sign in and Play as a guest. A relaunch after a
+  sign-out starts a new guest account, as opening `/` does. There's no tab
+  bar while Home is the only page.
 - `FortyMMUITests` (XCUITest) launches the app and goes through page objects
-  such as `SplashScreen`, which find elements by what VoiceOver reads. Each
-  run attaches a screenshot of the splash screen.
+  in `Screens.swift`, which find elements by what VoiceOver reads. The
+  launch tests answer the app from `StubAPI`, a listener on 127.0.0.1 in the
+  test runner. The account and sign-in tests run against the dev stack
+  when `FORTYMM_API_BASE_URL` is set, and skip otherwise, so iOS CI skips
+  them. `bin/xcodebuild-test` passes it to the runner as
+  `TEST_RUNNER_FORTYMM_API_BASE_URL`. The sign-in test fills the mock
+  provider's form in the sign-in sheet.
 - `bin/xcodebuild-test` runs the tests on the first available iPhone
   simulator, or on `IOS_SIMULATOR` (a name or UDID). It writes a result
   bundle per run to `build/results/`.
 - `.github/workflows/ios-client.yml` runs `ios-client:ci` on a macOS runner,
-  only on a push that changes the app, its design-system inputs, `mise.toml`,
-  `bin/mise` or the workflow. It uploads the result bundles as `ios-client-results`.
+  only on a push that changes the app, its design-system inputs,
+  `api/openapi.json`, `mise.toml`, `bin/mise` or the workflow. It uploads the result bundles as `ios-client-results`.
 - `bin/app-icon` writes the app icon, `AppIcon.png` in
   `FortyMM/Assets.xcassets`, from `references/design-system/assets/logo-mark.svg`
   on `--ink-950`. The PNG has no alpha channel, because the App Store
@@ -1274,8 +1345,8 @@ email (see Sign-in).
 
 | Target | Auth0 application | Allowed callback URLs | Client secret |
 | --- | --- | --- | --- |
-| `api` | `fortymm` | `https://fortymm.com/api/v1/auth/callback` | `auth0-client-secret` |
-| `api-preview` | `fortymm-preview` | `https://*-fortymm.mightymoose.workers.dev/api/v1/auth/callback` | `auth0-preview-client-secret` |
+| `api` | `fortymm` | `https://fortymm.com/api/v1/auth/callback`, `https://fortymm.com/api/v1/auth/app-callback` | `auth0-client-secret` |
+| `api-preview` | `fortymm-preview` | `https://*-fortymm.mightymoose.workers.dev/api/v1/auth/callback`, `https://*-fortymm.mightymoose.workers.dev/api/v1/auth/app-callback` | `auth0-preview-client-secret` |
 
 Each application's allowed logout URL is its origin with `/signed-out`.
 `api/deploy/auth0.env` holds `AUTH0_DOMAIN`, `AUTH0_TENANT_DOMAIN`,
