@@ -561,7 +561,9 @@ it to `src/routes/`.
   (`src/pages/AppShell.tsx`): a topbar over a sidebar of
   the `_shell` pages, which folds to its icons and remembers it in
   `localStorage`. Below 900px the sidebar is a tab bar along the bottom. To
-  add a page to the sidebar, add its link in `AppShell`. The topbar's right
+  add a page to the sidebar, add its link in `AppShell`. The sidebar's
+  footer, and a tab below 900px, links to each mobile beta in `mobileApps`
+  (`src/mobileApps.ts`), in a new tab. The topbar's right
   end shows `UserMenu` (`src/pages/userMenu/UserMenu.tsx`): a chip of the
   player's `PlayerAvatar` (`src/components/PlayerAvatar.tsx`, the initials
   of the display name, whose accessible name is the full name) and the
