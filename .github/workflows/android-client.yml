@@ -1,0 +1,36 @@
+name: Android client
+
+# Runs only when something the app builds from changes.
+on:
+  push:
+    paths:
+      - android-client/**
+      - references/design-system/colors_and_type.css
+      - references/design-system/fonts/**
+      - compose.yaml
+      - mise.toml
+      - bin/mise
+      - .github/workflows/android-client.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-client-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - run: ./bin/mise run android-client:ci
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-client-results
+          path: |
+            android-client/app/build/reports/tests
+            android-client/app/build/test-results

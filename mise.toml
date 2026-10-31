@@ -383,3 +383,15 @@ run = "ios-client/bin/xcodebuild-test"
 description = "Archive the iOS client and upload it to TestFlight as build $BUILD_NUMBER (macOS)"
 depends = ["ios-client:generate"]
 run = "ios-client/bin/xcodebuild-testflight"
+
+[tasks."android-client:test"]
+description = "Run the Android client's unit tests in the android container"
+run = "docker compose run --rm --build -T android gradle testDebugUnitTest -Ptests=unit"
+
+[tasks."android-client:e2e"]
+description = "Run the Android client's UI tests, on Robolectric, in the android container"
+run = "docker compose run --rm --build -T android gradle testDebugUnitTest -Ptests=ui"
+
+[tasks."android-client:ci"]
+description = "Run the Android client's unit and UI tests and build its debug APK in the android container"
+run = "docker compose run --rm --build -T android gradle testDebugUnitTest assembleDebug"
