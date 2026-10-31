@@ -26,6 +26,9 @@ targets:
         UILaunchScreen:
           UIColorName: LaunchBackground
         UIUserInterfaceStyle: Dark
+        # The app's only encryption is the system's HTTPS, which is exempt. So
+        # TestFlight asks no export compliance question per build.
+        ITSAppUsesNonExemptEncryption: false
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
@@ -34,8 +37,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.fortymm.FortyMM
         TARGETED_DEVICE_FAMILY: "1,2"
-        # No app icon yet.
-        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
   FortyMMTests:
     type: bundle.unit-test
     platform: iOS
