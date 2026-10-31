@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""Writes the app icon from the design system's logo mark: its circle, scaled
+to a 1024px canvas of --ink-950. The App Store rejects an icon with an alpha
+channel, so the PNG is RGB."""
+import re
+import struct
+import zlib
+from pathlib import Path
+
+SIZE = 1024
+root = Path(__file__).resolve().parents[2]
+design = root / "references/design-system"
+out = root / "ios-client/FortyMM/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
+
+svg = (design / "assets/logo-mark.svg").read_text()
+view = [float(n) for n in re.search(r'viewBox="([^"]+)"', svg)[1].split()]
+circle = re.search(r"<circle([^>]*)>", svg)[1]
+attr = dict(re.findall(r'(\w+)="([^"]*)"', circle))
+css = (design / "colors_and_type.css").read_text()
+background = re.search(r"--ink-950:\s*(#[0-9A-Fa-f]{6})", css)[1]
+
+
+def rgb(hex_colour):
+    return [int(hex_colour[i : i + 2], 16) for i in (1, 3, 5)]
+
+
+scale = SIZE / view[2]
+cx = (float(attr["cx"]) - view[0]) * scale
+cy = (float(attr["cy"]) - view[1]) * scale
+r = float(attr["r"]) * scale
+bg, fg = rgb(background), rgb(attr["fill"])
+
+rows = []
+for y in range(SIZE):
+    row = bytearray([0])
+    for x in range(SIZE):
+        # Coverage of the pixel's centre within one pixel of the edge, for a
+        # smooth rim without supersampling.
+        d = ((x + 0.5 - cx) ** 2 + (y + 0.5 - cy) ** 2) ** 0.5
+        a = min(1.0, max(0.0, r - d + 0.5))
+        row += bytes(round(b + (f - b) * a) for b, f in zip(bg, fg))
+    rows.append(bytes(row))
+
+
+def chunk(kind, data):
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+
+png = b"\x89PNG\r\n\x1a\n"
+png += chunk(b"IHDR", struct.pack(">IIBBBBB", SIZE, SIZE, 8, 2, 0, 0, 0))
+png += chunk(b"IDAT", zlib.compress(b"".join(rows), 9))
+png += chunk(b"IEND", b"")
+out.write_bytes(png)
+print(out.relative_to(root))

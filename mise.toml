@@ -378,3 +378,8 @@ run = "ios-client/bin/xcodebuild-test -only-testing:FortyMMUITests"
 description = "Run the iOS client's unit and UI tests on an iPhone simulator (macOS)"
 depends = ["ios-client:generate"]
 run = "ios-client/bin/xcodebuild-test"
+
+[tasks."ios-client:testflight"]
+description = "Archive the iOS client and upload it to TestFlight as build $BUILD_NUMBER (macOS)"
+depends = ["ios-client:generate"]
+run = "ios-client/bin/xcodebuild-testflight"

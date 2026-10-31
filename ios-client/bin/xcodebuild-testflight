@@ -1,0 +1,57 @@
+#!/bin/sh
+# Archives the FortyMM scheme and uploads it to TestFlight, as build
+# BUILD_NUMBER. Xcode signs the export with a cloud-managed certificate,
+# through the App Store Connect API key, so no certificate or profile is
+# stored anywhere. ios-client/README.md describes the one-time setup.
+# ARCHIVE_ONLY=1 stops after the unsigned archive, with no request to Apple.
+set -eu
+cd "$(dirname "$0")/.."
+
+required="BUILD_NUMBER"
+[ -n "${ARCHIVE_ONLY:-}" ] ||
+  required="$required APPLE_TEAM_ID APP_STORE_CONNECT_KEY_ID APP_STORE_CONNECT_ISSUER_ID APP_STORE_CONNECT_KEY_PATH"
+missing=""
+for name in $required; do
+  eval "value=\${$name:-}"
+  [ -n "$value" ] || missing="$missing $name"
+done
+if [ -n "$missing" ]; then
+  echo "Set$missing to upload to TestFlight. See ios-client/README.md." >&2
+  exit 1
+fi
+
+archive=build/FortyMM.xcarchive
+rm -rf "$archive" build/export
+xcodebuild archive -quiet \
+  -project FortyMM.xcodeproj \
+  -scheme FortyMM \
+  -configuration Release \
+  -destination generic/platform=iOS \
+  -derivedDataPath build \
+  -archivePath "$archive" \
+  CODE_SIGNING_ALLOWED=NO \
+  CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
+[ -z "${ARCHIVE_ONLY:-}" ] || exit 0
+
+cat > build/ExportOptions.plist <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>method</key><string>app-store-connect</string>
+  <key>destination</key><string>upload</string>
+  <key>signingStyle</key><string>automatic</string>
+  <key>teamID</key><string>$APPLE_TEAM_ID</string>
+  <key>manageAppVersionAndBuildNumber</key><false/>
+</dict>
+</plist>
+PLIST
+
+exec xcodebuild -exportArchive \
+  -archivePath "$archive" \
+  -exportOptionsPlist build/ExportOptions.plist \
+  -exportPath build/export \
+  -allowProvisioningUpdates \
+  -authenticationKeyPath "$APP_STORE_CONNECT_KEY_PATH" \
+  -authenticationKeyID "$APP_STORE_CONNECT_KEY_ID" \
+  -authenticationKeyIssuerID "$APP_STORE_CONNECT_ISSUER_ID"
