@@ -5,8 +5,11 @@ ios-client section of CLAUDE.md). The upload needs an app record in App Store
 Connect and an App Store Connect API key, which a person sets up once. Until
 then, the workflow warns and skips the upload.
 
-- The build number is the workflow's run number (`github.run_number`), so
-  each upload gets a new one.
+- The app record is the FortyMM app in App Store Connect, with the bundle
+  ID `com.fortymm.ios-client`. It holds the builds of an earlier iOS app,
+  versions 0.1.0 to 0.3.0, so this app starts at 0.4.0.
+- The build number is the workflow's run number (`github.run_number`).
+  Apple needs a build number to be unique only within its version.
 - The version that testers see is `MARKETING_VERSION` in `project.yml`.
   Change it there for a new release.
 - Xcode signs each build with a cloud-managed distribution certificate, so
@@ -16,18 +19,15 @@ then, the workflow warns and skips the upload.
 
 You need the Account Holder or an Admin of the Apple Developer Program team.
 
-1. Register the bundle ID. In the Apple Developer portal, under
-   Certificates, Identifiers & Profiles, add an App ID with the bundle ID
-   `com.fortymm.FortyMM`. Skip this if it's already there.
-2. Create the app. In App Store Connect, under Apps, add a new iOS app named
-   FortyMM with the bundle ID `com.fortymm.FortyMM`.
-3. Create the API key. In App Store Connect, under Users and Access,
+The bundle ID and the app record already exist.
+
+1. Create the API key. In App Store Connect, under Users and Access,
    Integrations, App Store Connect API, add a Team key with the Admin role.
    Cloud-managed distribution certificates need Admin. Download its
    `AuthKey_<key ID>.p8`, which Apple offers only once. Note the key ID and
    the issuer ID above the list of keys.
-4. Find the team ID, under Membership details in the Apple Developer portal.
-5. Give them to GitHub Actions, from the repo:
+2. Find the team ID, under Membership details in the Apple Developer portal.
+3. Give them to GitHub Actions, from the repo:
 
    ```sh
    gh variable set APPLE_TEAM_ID --body <team ID>
