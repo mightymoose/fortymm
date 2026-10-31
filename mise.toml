@@ -355,3 +355,26 @@ while read -r name id; do
   done | sort -u
 done
 """
+
+# The iOS client builds on the host, not in the dev container: Xcode and the
+# simulators run only on macOS.
+[tasks."ios-client:generate"]
+description = "Generate ios-client/FortyMM.xcodeproj from ios-client/project.yml (macOS)"
+dir = "ios-client"
+tools = { xcodegen = "2.46.0" }
+run = "xcodegen generate --quiet"
+
+[tasks."ios-client:test"]
+description = "Run the iOS client's unit tests on an iPhone simulator (macOS)"
+depends = ["ios-client:generate"]
+run = "ios-client/bin/xcodebuild-test -only-testing:FortyMMTests"
+
+[tasks."ios-client:e2e"]
+description = "Run the iOS client's UI tests on an iPhone simulator (macOS)"
+depends = ["ios-client:generate"]
+run = "ios-client/bin/xcodebuild-test -only-testing:FortyMMUITests"
+
+[tasks."ios-client:ci"]
+description = "Run the iOS client's unit and UI tests on an iPhone simulator (macOS)"
+depends = ["ios-client:generate"]
+run = "ios-client/bin/xcodebuild-test"
