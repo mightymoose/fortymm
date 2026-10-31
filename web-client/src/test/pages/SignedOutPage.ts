@@ -5,7 +5,7 @@ import { renderRoute } from '../renderRoute'
 export class SignedOutPage {
   // The page starts no session, so this doesn't wait for one.
   static async render(): Promise<SignedOutPage> {
-    await renderRoute('/signed-out', { waitForSession: false })
+    await renderRoute('/signed-out')
     return new SignedOutPage()
   }
 

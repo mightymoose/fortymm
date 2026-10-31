@@ -1,4 +1,4 @@
-import { fireEvent, screen, within } from '@testing-library/react'
+import { screen, within } from '@testing-library/react'
 import { navigate, renderRoute, type AppRouter } from '../renderRoute'
 
 // Page object for the home page in unit tests. Elements are looked up through
@@ -70,22 +70,10 @@ export class HomePage {
     return screen.queryByRole('heading', { level: 1 })
   }
 
-  // The loading screen shown over the page on a slow page load, or null
-  // while it isn't.
+  // The loading screen shown in place of the page on a slow page load, or
+  // null while it isn't.
   get loadingScreen(): HTMLElement | null {
     return screen.queryByRole('status', { name: 'Loading FortyMM' })
-  }
-
-  // Whether the loading screen has started to fade out. jsdom runs no CSS
-  // animations, so the class is what tests can see.
-  get loadingScreenFading(): boolean {
-    return !!this.loadingScreen?.classList.contains('loading-screen-leaving')
-  }
-
-  // jsdom runs no CSS animations, so tests end the loading screen's fade-out
-  // themselves.
-  endLoadingScreenFade(): void {
-    fireEvent.animationEnd(this.loadingScreen!)
   }
 
   // The sidebar's link to Home, or null.

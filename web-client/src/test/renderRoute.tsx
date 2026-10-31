@@ -2,18 +2,17 @@ import { QueryClient } from '@tanstack/react-query'
 import { createMemoryHistory, RouterProvider } from '@tanstack/react-router'
 import { act, render } from '@testing-library/react'
 import { createApiClient } from '../api/client'
-import { sessionQuery } from '../api/queries'
 import { createAppRouter } from '../router'
 import { API_BASE_URL } from './server'
 
 // Renders the app's router starting at `path`, against the mock API in
-// ./server.ts, and returns the router. The route is loaded before rendering.
-// By default this also waits for the session. The mock API answers it before
-// the loading screen would show, so the page is on screen as soon as this
-// resolves. Pass `waitForSession: false` to test the loading screen.
+// ./server.ts, and returns the router. By default the route is loaded before
+// rendering. An authenticated route's loader waits for the session, so the
+// page is on screen as soon as this resolves. Pass `waitForLoad: false` to
+// render while the route loads, such as to test the loading screen.
 export async function renderRoute(
   path: string,
-  { waitForSession = true }: { waitForSession?: boolean } = {},
+  { waitForLoad = true }: { waitForLoad?: boolean } = {},
 ): Promise<AppRouter> {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -23,13 +22,10 @@ export async function renderRoute(
     createMemoryHistory({ initialEntries: [path] }),
     { queryClient, api },
   )
-  await router.load()
+  if (waitForLoad) await router.load()
   await act(async () => {
     render(<RouterProvider router={router} />)
   })
-  if (waitForSession) {
-    await act(() => queryClient.ensureQueryData(sessionQuery(api)))
-  }
   return router
 }
 

@@ -6,7 +6,7 @@ test('shows the roadmap title', async ({ homePage }) => {
   await expect(homePage.title).toHaveText('What’s coming, and when.')
 })
 
-test('shows the loading screen until the session starts, then fades it out over the page', async ({
+test('shows the loading screen until the session starts, then the page in its place', async ({
   homePage,
   page,
 }) => {
@@ -27,15 +27,9 @@ test('shows the loading screen until the session starts, then fades it out over 
   // Motion is feedback only, so nothing moves while it waits.
   expect(await page.evaluate('document.getAnimations().length')).toBe(0)
 
-  // A string, because the e2e tsconfig has no DOM types.
-  const fadeEnded = page.evaluate(`new Promise((resolve) => {
-    document.addEventListener('animationend', (event) => {
-      if (event.animationName === 'loading-screen-out') resolve()
-    })
-  })`)
   releaseSession()
 
   await expect(homePage.title).toHaveText('What’s coming, and when.')
-  await fadeEnded
-  await expect(homePage.loadingScreen).toBeHidden()
+  // The page replaces the loading screen in one frame, with no fade.
+  await expect(homePage.loadingScreen).toHaveCount(0)
 })

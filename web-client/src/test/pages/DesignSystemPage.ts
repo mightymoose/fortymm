@@ -7,7 +7,7 @@ import { navigate, renderRoute, type AppRouter } from '../renderRoute'
 export class DesignSystemPage {
   // The page starts no session, so this doesn't wait for one.
   static async render(): Promise<DesignSystemPage> {
-    return new DesignSystemPage(await renderRoute('/design-system', { waitForSession: false }))
+    return new DesignSystemPage(await renderRoute('/design-system'))
   }
 
   private readonly router: AppRouter

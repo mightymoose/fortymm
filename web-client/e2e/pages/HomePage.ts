@@ -43,11 +43,10 @@ export class HomePage {
     return this.page.getByRole('img', { name: displayName })
   }
 
-  // Opens the page and waits for the loading screen over it to go.
+  // Opens the page and waits for it to replace the loading screen.
   async goto(): Promise<void> {
     await this.open()
     await this.title.waitFor()
-    await this.loadingScreen.waitFor({ state: 'hidden' })
   }
 
   // Opens the page without waiting for the loading screen to go.
