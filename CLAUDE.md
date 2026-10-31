@@ -211,9 +211,10 @@ account has no `email`. A verified account has one, always lowercase.
 - `start_session()` gives every account it returns a `self` player
   (`SelfPlayer` in `accounts.py`). A new guest account gets a new player
   with a default display name, such as `excited egret 387`. A resumed
-  account that has no `self` player gets one too. That includes a verified
-  account whose players wait for the "Is this you?" answer. A "Yes" then
-  merges the two players (see Is this you?).
+  account that has no `self` player gets one too. That includes an account
+  that a sign-in with no session made, and a verified account whose only
+  player waits for the "Is this you?" answer. A "Yes" then merges the two
+  players (see Is this you?).
 - `services/display_names.py` makes the default names: an animal, an
   adjective with the same first letter, and a number from 100 to 999. The
   adjectives are kind or neutral. `lower(display_name)` is unique among
@@ -275,8 +276,9 @@ account has no `email`. A verified account has one, always lowercase.
 
 ### Is this you?
 
-A sign-in can bring players to an account with `adopted_from` set (see
-Sign-in). Each one is an open "Is this you?" question.
+A sign-in can bring players that have played to an account with
+`adopted_from` set (see Sign-in). Each one is an open "Is this you?"
+question. No table records play yet, so today no sign-in asks it.
 `services/players.py` holds the rules, and `v1/players.py` the routes.
 
 - `GET /v1/account/players` lists the account's players, its `self`
@@ -353,8 +355,8 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   browser that started the attempt. A browser with a valid session proves
   it with that session (`login_attempts.session_id`). A browser without one
   gets no guest account. After a sign-out, a guest account would hold
-  nothing, yet its player would ask "Is this you?". Its attempt has no
-  `session_id`. The browser gets the attempt's `state` in the
+  nothing, and adoption would merge its new player away at once. Its
+  attempt has no `session_id`. The browser gets the attempt's `state` in the
   `__Host-fortymm_login` cookie instead, for 10 minutes, and the callback
   checks that the cookie matches the `state` in its URL. Another browser can
   open that URL, but it can't set this browser's cookie. Such a login
@@ -375,12 +377,22 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   `VerifyInPlace` calls `convert_guest()` in `services/sessions.py`, which
   deletes every session of the guest account. It also calls
   `hand_over_players()` in `services/adoption.py`, with the guest account
-  as the target. That makes each of the account's `player_managers` rows
-  `managed`, with `adopted_from` set to the account, for the "Is this you?"
-  question (see Is this you?).
+  as the target.
+- `hand_over_players()` asks "Is this you?" only about a player that has
+  played. `has_activity()` in `services/adoption.py` decides it. It says no
+  for every player until the games work fills it (#124). Such a player's
+  row becomes `managed`, with `adopted_from` set to the guest account (see
+  Is this you?). A player that hasn't played asks nothing. `VerifyInPlace`
+  keeps it as it is, so the guest keeps its player and name. `AdoptGuest`
+  merges the guest's `self` player into the target account's `self`
+  player, as "Yes" does, so the older player survives. If the target
+  account has no `self` player, the guest's becomes it. A `managed` player
+  moves as `managed`. It locks the target account row and its
+  `player_managers` rows `FOR UPDATE` first, so a `POST /v1/session` that
+  makes the account's `self` player meanwhile takes turns with it.
 - `AdoptGuest` calls `adopt_guest()` in `services/adoption.py`. It locks
   the guest account row `FOR UPDATE`. It hands the guest's players to the
-  target account, as `hand_over_players()` does. It moves every other
+  target account through `hand_over_players()`. It moves every other
   column whose `OWNERSHIP_RULES` entry is `MOVES_ON_ADOPT`, read from the
   registry at call time. Then it calls `convert_guest()` and sets
   `adopted_into` on the guest account. The API never deletes that row. The
@@ -787,30 +799,27 @@ with the page's cookies. The `SignInPage` page object returns to
 `returnTo: '/'`. Each run makes a new `sub` and email, because the dev
 database keeps its accounts.
 
-`e2e/adoption.spec.ts` signs in back to Home, which goes on to
-`/review-players`, and answers "Is this you?" there (`PlayerReviewPage`). A
-person's first sign-in from a guest is VerifyInPlace, so the account's
-first question is about that guest's own player. The VerifyInPlace test
-reviews later, then opens the review again from Home's reminder and answers
-"I manage this player". The AdoptGuest test answers "Yes" twice and
-"Remove from my account" once. The `same_as` test answers "I manage this
-player" for a first guest, then signs in from a second guest. It picks the
-first guest's player on "Which player?", and checks through
-`GET /v1/account/players` that one of the two players is left.
+`e2e/adoption.spec.ts` signs in back to Home. No player has played, so no
+sign-in asks "Is this you?", and Home stays on `/`. The VerifyInPlace test
+checks that the topbar shows the guest's player after a person's first
+sign-in. The AdoptGuest test signs the same person in from a second guest.
+It checks that the topbar shows the account's player, and through
+`GET /v1/account/players` that the account has only that player. The
+Vitest unit tests cover the "Is this you?" page.
 
 `e2e/sign-out.spec.ts` opens `/`, picks Sign in from the account menu and
 fills the mock's form with `SignInPage.completeSignIn()`. It lands back on
-`/review-players` as a verified account, goes to `/` with Review later, signs
-out and ends on `/signed-out`. Then Play as a guest opens `/` as a new
+`/` as a verified account, with the guest's player, signs out and ends on
+`/signed-out`. Then Play as a guest opens `/` as a new
 guest account. The mock answers 405 to the
 logout URL. So the spec answers that navigation with `page.route()`, a 302
 to its `returnTo`. The API builds `returnTo` from the browser's `Host`, so
 in the e2e suite it is `http://localhost:5173/signed-out`. A second test
 signs a guest out from the account menu, through its dialog, to
 `/signed-out`. A third signs in again from `/signed-out`, and checks that
-the account has no new player to review.
+the account keeps its one player.
 
-The suite counts about 25 guest accounts and sign-ins with no session,
+The suite counts about 22 guest accounts and sign-ins with no session,
 under the limit of 30 a minute.
 
 The design system page is a copy of the reference's component gallery

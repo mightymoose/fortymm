@@ -31,7 +31,7 @@ def client(
 @pytest.fixture
 def player(client: TestClient, migrated_database: Engine) -> dict[str, str]:
     """The session's player, with its question open, as verify in place
-    leaves it."""
+    leaves a player that has played."""
     account = client.post("/v1/session", headers=JSON).json()["data"]["account"]
     with migrated_database.begin() as connection:
         connection.execute(
