@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The window shows ink-950 before Compose draws, and the system splash
+         screen takes its colour from it. -->
+    <color name="ink_950">#FF0B0D12</color>
+
+    <style name="Theme.FortyMM" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/ink_950</item>
+    </style>
+</resources>
