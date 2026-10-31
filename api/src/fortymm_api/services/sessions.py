@@ -184,8 +184,9 @@ def start_session(
 
     Every account it returns has a self player. A new guest account gets
     one with a name from `new_display_name`. So does a resumed account that
-    has none, such as a verified account whose players wait for the "Is this
-    you?" answer. A "Yes" then merges the two players.
+    has none, such as one that a sign-in with no session made, or one whose
+    only player waits for the "Is this you?" answer. A "Yes" then merges the
+    two players.
     """
     found = find_session(session, token, lock=True)
     if isinstance(found, ValidSession) and token is not None:

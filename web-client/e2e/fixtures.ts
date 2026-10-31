@@ -1,7 +1,6 @@
 import { test as base } from '@playwright/test'
 import { DesignSystemPage } from './pages/DesignSystemPage.ts'
 import { HomePage } from './pages/HomePage.ts'
-import { PlayerReviewPage } from './pages/PlayerReviewPage.ts'
 import { ReferenceKitPage } from './pages/ReferenceKitPage.ts'
 import { SignInPage } from './pages/SignInPage.ts'
 import { SignedOutPage } from './pages/SignedOutPage.ts'
@@ -11,7 +10,6 @@ import { SignedOutPage } from './pages/SignedOutPage.ts'
 export const test = base.extend<{
   designSystemPage: DesignSystemPage
   homePage: HomePage
-  playerReviewPage: PlayerReviewPage
   referenceKitPage: ReferenceKitPage
   signInPage: SignInPage
   signedOutPage: SignedOutPage
@@ -23,9 +21,6 @@ export const test = base.extend<{
   },
   homePage: async ({ page }, provide) => {
     await provide(new HomePage(page))
-  },
-  playerReviewPage: async ({ page }, provide) => {
-    await provide(new PlayerReviewPage(page))
   },
   referenceKitPage: async ({ page }, provide) => {
     await provide(new ReferenceKitPage(page))

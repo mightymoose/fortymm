@@ -15,7 +15,6 @@ async function answerLogout(page: Page) {
 
 test('signs in from the account menu, signs out, then plays as a new guest account', async ({
   homePage,
-  playerReviewPage,
   signInPage,
   signedOutPage,
   page,
@@ -29,15 +28,16 @@ test('signs in from the account menu, signs out, then plays as a new guest accou
 
   await homePage.fromAccountMenu('Sign in')
   await signInPage.completeSignIn(ann)
-  await playerReviewPage.reviewLater()
+  await expect(page).toHaveURL(new URL('/', baseURL).href)
 
+  await expect(homePage.avatar(guest.player.display_name)).toBeVisible()
   await homePage.accountButton.click()
   await expect(homePage.accountMenu).toContainText(ann.email)
-  expect(new URL(page.url()).pathname).toBe('/')
   expect(await signInPage.account()).toMatchObject({
     id: guest.id,
     kind: 'verified',
     email: ann.email,
+    player: guest.player,
   })
 
   await homePage.accountMenu.getByRole('menuitem', { name: 'Sign out' }).click()
@@ -76,30 +76,30 @@ test('asks a guest before it signs out from the account menu', async ({
   expect((await signInPage.account()).id).not.toBe(guest.id)
 })
 
-test('signs in again after sign-out with no new player to review', async ({
+test('signs in again after sign-out to the same account and player', async ({
   homePage,
-  playerReviewPage,
   signInPage,
   signedOutPage,
   page,
+  baseURL,
 }) => {
   await answerLogout(page)
   const ann = newPerson('ann')
   await homePage.goto()
   await homePage.fromAccountMenu('Sign in')
   await signInPage.completeSignIn(ann)
-  await playerReviewPage.reviewLater()
-  await expect(homePage.reminder).toHaveText('1 player to review')
+  await expect(page).toHaveURL(new URL('/', baseURL).href)
   const anns = await signInPage.account()
   await homePage.fromAccountMenu('Sign out')
   await expect(signedOutPage.title).toHaveText('You’re signed out')
 
   await signedOutPage.signInLink.click()
   await signInPage.completeSignIn(ann)
-  await playerReviewPage.reviewLater()
 
-  // Only the first sign-in's guest player waits. Sign-in from no session
-  // starts no guest account, so there's nothing new to adopt.
-  await expect(homePage.reminder).toHaveText('1 player to review')
-  expect((await signInPage.account()).id).toBe(anns.id)
+  // Sign-in from no session starts no guest account, so there's no new
+  // player to adopt.
+  await expect(page).toHaveURL(new URL('/', baseURL).href)
+  await expect(homePage.avatar(anns.player.display_name)).toBeVisible()
+  expect(await signInPage.account()).toEqual(anns)
+  expect((await signInPage.players()).map((player) => player.id)).toEqual([anns.player.id])
 })

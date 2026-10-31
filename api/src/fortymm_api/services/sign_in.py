@@ -141,8 +141,8 @@ def begin_sign_in(
     no valid session.
 
     A browser with no valid session gets no guest account. Such as after a
-    sign-out, it would hold nothing, yet adoption would ask "Is this you?"
-    about its player. The attempt counts toward the guest account limit
+    sign-out, it would hold nothing, and adoption would merge its new player
+    away at once. The attempt counts toward the guest account limit
     instead. The attempt lasts LOGIN_ATTEMPT_LIFETIME.
     """
     attempt = LoginAttempt(

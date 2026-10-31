@@ -633,8 +633,8 @@ def finish_with(
 def test_a_browser_with_no_session_signs_in_with_no_guest_account(
     migrated_database: Engine,
 ) -> None:
-    # Such as after a sign-out. A guest account here would hold nothing, yet
-    # its player would ask "Is this you?".
+    # Such as after a sign-out. A guest account here would hold nothing, and
+    # adoption would merge its new player away at once.
     token = sign_in(migrated_database, guest_token(migrated_database), ANN_IDENTITY)
     ann = account_of(migrated_database, token)
     before = accounts_and_managers(migrated_database)
@@ -797,3 +797,24 @@ def test_a_write_that_waits_for_adoption_is_refused(
     assert [
         relationship for _, relationship, _ in players_listed(migrated_database, bob)
     ] == ["self"]
+
+
+def test_an_adoption_that_waits_for_the_accounts_new_player_merges_into_it(
+    migrated_database: Engine,
+) -> None:
+    # The account has no player until its first POST /v1/session.
+    bobs_laptop = sign_in(migrated_database, None, BOB)
+    bob = account_of(migrated_database, bobs_laptop).id
+    guest = new_guest(migrated_database)
+    attempt = begin(migrated_database, guest.token)
+
+    bobs_player, adoption = wait_behind(
+        migrated_database,
+        lambda session: start_session(session, bobs_laptop, ANN).player,
+        finish_with(attempt, BOB),
+    )
+
+    assert isinstance(adoption.result(), SignedIn)
+    # The guest's player is older, so it survives.
+    assert players_listed(migrated_database, bob) == [(guest.player.id, "self", False)]
+    assert merged_into(migrated_database, bobs_player.id) == guest.player.id

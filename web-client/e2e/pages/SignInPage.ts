@@ -64,6 +64,15 @@ export class SignInPage {
     return body.data.account
   }
 
+  // The account's players, from GET /v1/account/players with the browser's
+  // cookies.
+  async players(): Promise<components['schemas']['AccountPlayer'][]> {
+    const response = await this.page.request.get('/api/v1/account/players')
+    if (!response.ok()) throw new Error(`GET /api/v1/account/players answered ${response.status()}`)
+    const body: components['schemas']['AccountPlayersResponse'] = await response.json()
+    return body.data
+  }
+
   // Drops the session cookie, as a new browser on the same device would.
   async forgetSession(): Promise<void> {
     await this.page.context().clearCookies()

@@ -5,28 +5,70 @@ account everything it owns.
 from sqlalchemy import Uuid, column, select, table, update
 from sqlalchemy.orm import Session
 
-from fortymm_api.accounts import AccountId
+from fortymm_api.accounts import AccountId, PlayerId
 from fortymm_api.models import Account, PlayerManager
 from fortymm_api.ownership import OWNERSHIP_RULES, OwnershipRule
+from fortymm_api.services.player_merge import merge_players
 from fortymm_api.services.sessions import convert_guest
 
 # hand_over_players() moves these, because they also change kind.
 PLAYER_MANAGERS = ("player_managers", "account_id")
 
 
-def hand_over_players(session: Session, guest: AccountId, into: AccountId) -> None:
-    """Give `into` every player the guest account manages, each as `managed`
-    with `adopted_from` set to the guest account.
+def has_activity(session: Session, player: PlayerId) -> bool:
+    """Whether the player has played. No table records play yet, so no
+    player has. The games work (#124) fills it."""
+    return False
 
-    Sets up "Is this you?": a guest's self player could be a child who played
-    on a parent's computer. Verify in place passes the guest account as
-    `into`.
+
+def hand_over_players(session: Session, guest: AccountId, into: AccountId) -> None:
+    """Give `into` every player the guest account manages. Verify in place
+    passes the guest account as `into`.
+
+    A player that has played becomes `managed`, with `adopted_from` set to
+    the guest account. That sets up "Is this you?": a guest's player could be
+    a child who played on a parent's computer.
+
+    A player that hasn't played asks nothing. Verify in place keeps it as it
+    is, so the guest keeps its player and name. Adoption merges a self
+    player into the self player of `into`, as "Yes" would, or makes it the
+    self player of `into` if it has none. A managed one stays managed.
     """
-    session.execute(
-        update(PlayerManager)
-        .where(PlayerManager.account_id == guest)
-        .values(account_id=into, relationship="managed", adopted_from=guest)
+    # start_session() and another adoption can give `into` a self player
+    # meanwhile, and a row lock can't see a row that moves in. Both lock
+    # this account row first.
+    session.execute(select(Account.id).where(Account.id == into).with_for_update())
+    # merge_players() needs the rows of `into` held FOR UPDATE.
+    held = session.execute(
+        select(PlayerManager.player_id, PlayerManager.relationship)
+        .where(PlayerManager.account_id == into)
+        .with_for_update()
+    ).all()
+    self_player = next(
+        (player for player, relationship in held if relationship == "self"), None
     )
+    rows = session.execute(
+        select(PlayerManager.player_id, PlayerManager.relationship)
+        .where(PlayerManager.account_id == guest)
+        .order_by(PlayerManager.id)
+    ).all()
+    for player, relationship in rows:
+        row = update(PlayerManager).where(
+            PlayerManager.account_id == guest, PlayerManager.player_id == player
+        )
+        if has_activity(session, player):
+            session.execute(
+                row.values(account_id=into, relationship="managed", adopted_from=guest)
+            )
+        elif guest == into:
+            continue
+        elif relationship == "self" and self_player is not None:
+            # The self index isn't deferrable, so the row moves as managed
+            # before the merge picks the survivor's relationship.
+            session.execute(row.values(account_id=into, relationship="managed"))
+            merge_players(session, into, player, self_player)
+        else:
+            session.execute(row.values(account_id=into))
 
 
 def adopt_guest(session: Session, guest: AccountId, into: AccountId) -> str:
