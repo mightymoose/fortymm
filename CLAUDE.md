@@ -512,10 +512,10 @@ it to `src/routes/`.
 - `__root.tsx`: the root route, with component `Root` (`src/pages/Root.tsx`),
   and the router context type (`api` and `queryClient`). `Root` gives every
   page toasts and tooltips, and no frame.
-- `_authenticated.tsx`: a pathless layout route with no path segment, with
-  component `AuthenticatedLayout` (`src/pages/AuthenticatedLayout.tsx`).
-  Pages that will need a signed-in user go in `_authenticated/`. The layout
-  starts the session and shows the loading screen (see API client).
+- `_authenticated.tsx`: a pathless layout route with no path segment and no
+  component. Pages that will need a signed-in user go in `_authenticated/`.
+  Its loader starts the session, and its `pendingComponent` is the loading
+  screen (see API client).
 - `_authenticated/_shell.tsx`: a pathless layout route under
   `_authenticated`, with component `ShellLayout`
   (`src/pages/ShellLayout.tsx`). Its pages, such as `/`
@@ -655,17 +655,17 @@ as the safety net for what no boundary catches.
 `sessionQuery` sends `POST /v1/session` and returns the account, with its
 player. Pages read the account from it. It passes no abort `signal`. An
 aborted request still starts a guest account on the API, but the browser
-drops its cookie, so the query would start another one. On a full page load,
-the `_authenticated` route's loader starts the session without waiting for
-it. The loader stays in the entry chunk, so the request runs while the page's
-chunk downloads. `AuthenticatedLayout` (`src/pages/AuthenticatedLayout.tsx`)
-suspends until the session answers.
-`LoadingScreen` covers it if that takes more than `SHOW_AFTER_MS` (300ms), so
-a fast load shows the page with no loading screen. Once shown, the loading
-screen stays up for at least `MIN_SHOWN_MS` (900ms). Then the page
-renders under it, and it fades out (`.loading-screen-leaving`) and removes
-itself when the fade ends. jsdom runs no CSS animations, so the `HomePage`
-page object ends the fade itself. `sessionQuery` never goes stale, so the
+drops its cookie, so the query would start another one. The `_authenticated`
+route's loader waits for the session (`ensureQueryData`). The loader stays in
+the entry chunk, so the request runs while the page's chunk downloads. The
+router shows the page only once the session has answered and the page's
+chunk has loaded. Until then it shows the route's `pendingComponent`,
+`LoadingScreen` (`src/components/LoadingScreen.tsx`), if the wait passes
+`SHOW_AFTER_MS` (300ms, the route's `pendingMs`). So a fast load shows the
+page with no loading screen. Once shown, the loading screen stays up for at
+least `MIN_SHOWN_MS` (900ms, `pendingMinMs`). Then the page replaces it in
+one frame, with no fade. A navigation to an authenticated page waits for the
+session the same way. `sessionQuery` never goes stale, so the
 session starts once per page load, and coming back to an authenticated page
 doesn't show the loading screen again. If the session fails after the
 retries, the root route's error page shows (see Error pages). The web-client no
@@ -742,10 +742,14 @@ test can check what `SignInErrorAlert` left in the URL.
 
 `renderRoute` gives each render its own `QueryClient` with retries off and an
 API client with base URL `API_BASE_URL` (`http://localhost/api`), because
-Node's `Request` rejects a relative URL. It waits for the session, so the
+Node's `Request` rejects a relative URL. It loads the route before it
+renders, and an authenticated route's loader waits for the session, so the
 page is on screen when `render()` resolves. To test the loading screen, hold
-the session response with `holdSession()` from `src/test/server.ts` (see
-`src/pages/AuthenticatedLayout.test.tsx`). To test a skeleton, hold the players
+the session response with `holdSession()` from `src/test/server.ts` and
+render with `waitForLoad: false` (see `src/components/LoadingScreen.test.tsx`).
+The router times `pendingMs` with `Date.now()`, so that test fakes `Date`
+with the timers. It loads the page's chunks once first, because they load
+in real time while the fake clock stands still. To test a skeleton, hold the players
 response with `holdPlayers()`. `failPlayersOnce()` fails the next players
 request, for a boundary's error. React keeps a Suspense fallback up for a
 moment after the data comes, so wait for the content with a `find*` query. `DesignSystemPage.render()` never

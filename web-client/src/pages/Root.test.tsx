@@ -7,9 +7,10 @@ import { sessionResponse, holdSession } from '../test/server'
 
 describe('Root', () => {
   beforeEach(() => {
-    // Only the loading screen's own timers. React and MSW keep real ones.
+    // Only the router's and the loading screen's timers, and the clock the
+    // router times them by. React and MSW keep real ones.
     vi.useFakeTimers({
-      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'],
+      toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'],
     })
   })
 
@@ -35,9 +36,11 @@ describe('Root', () => {
     const designSystemPage = await DesignSystemPage.render()
     vi.useRealTimers()
 
-    await designSystemPage.navigate('/')
+    // The navigation waits for the session, so it ends after the response.
+    const navigation = designSystemPage.navigate('/')
     await vi.waitFor(() => expect(session.requests).toHaveLength(1))
     await session.respond(HttpResponse.json(sessionResponse))
+    await navigation
     expect(
       await screen.findByRole('heading', { level: 1, name: 'What’s coming, and when.' }),
     ).toBeInTheDocument()

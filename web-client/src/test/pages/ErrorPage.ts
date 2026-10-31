@@ -7,7 +7,7 @@ export class ErrorPage {
   // Renders the app at `path` and waits for its error page. The test makes
   // the page fail first, e.g. by overriding the session.
   static async render(path: string): Promise<ErrorPage> {
-    await renderRoute(path, { waitForSession: false })
+    await renderRoute(path)
     await screen.findByRole('button', { name: /Try again|Go back/ })
     return new ErrorPage()
   }

@@ -16,9 +16,9 @@ export function createQueryClient(): QueryClient {
 }
 
 // The visitor's account, from resuming their session or starting a guest
-// account. AuthenticatedLayout waits on it before showing a page. It runs
-// once per page load: it never goes stale, so revisiting those pages doesn't
-// start the session again.
+// account. The `_authenticated` route's loader waits on it before showing a
+// page. It runs once per page load: it never goes stale, so revisiting those
+// pages doesn't start the session again.
 export function sessionQuery(api: ApiClient) {
   return queryOptions({
     queryKey: ['v1', 'session'],

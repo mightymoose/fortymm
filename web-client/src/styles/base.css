@@ -36,8 +36,8 @@ a:hover{color:var(--ball-200)}
 
 /* =========================================================================
    Loading screen (src/components/LoadingScreen.tsx), shown in place of the
-   page on a full page load: the wordmark and one status line. Nothing moves
-   until the fade-out, because v2.1 motion is feedback only.
+   page on a full page load: the wordmark and one status line. Nothing moves,
+   because v2.1 motion is feedback only. The page replaces it in one frame.
    ========================================================================= */
 .loading-screen {
   position: fixed;
@@ -54,13 +54,6 @@ a:hover{color:var(--ball-200)}
   text-align: center;
 }
 
-/* Fades out over the page once it's ready, then LoadingScreen.tsx removes
-   it. Clicks reach the page during the fade. */
-.loading-screen-leaving {
-  animation: loading-screen-out 240ms var(--ease-out) forwards;
-  pointer-events: none;
-}
-
 .loading-screen-wordmark {
   font: 400 40px/1 var(--font-display);
   letter-spacing: 0.04em;
@@ -72,10 +65,6 @@ a:hover{color:var(--ball-200)}
   max-width: 30ch;
   font: 400 var(--text-sm)/var(--lh-normal) var(--font-ui);
   color: var(--fg-3);
-}
-
-@keyframes loading-screen-out {
-  to { opacity: 0; }
 }
 
 /* =========================================================================

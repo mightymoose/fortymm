@@ -12,10 +12,11 @@ component's own error first, and the root page only when nothing nearer
 could handle the error.
 
 The session is the one exception. Every authenticated page needs it, so it
-must hold up the loading screen. `AuthenticatedLayout`'s `Suspense` waits
-for it, and the root error page shows its failure. A component that reads
-`sessionQuery` gets the data that the layout already loaded. It needs no
-boundary of its own.
+must hold up the loading screen. The `_authenticated` route's loader waits
+for it, with the loading screen as the route's `pendingComponent`, and the
+root error page shows its failure. A component that reads `sessionQuery`
+gets the data that the loader already loaded. It needs no boundary of its
+own.
 
 ## Why
 
@@ -36,8 +37,8 @@ boundary of its own.
   exception (see above).
 - A boundary that wraps more than one data-loading component is too big.
   Wrap each loading component in its own boundary, not a page or a group
-  of components. `AuthenticatedLayout`'s `Suspense` is for the session
-  only.
+  of components. The `_authenticated` route's loading screen is for the
+  session only.
 - A component that returns `null` or a spinner while `useQuery` loads should
   suspend instead.
 - A skeleton that doesn't look like the content it stands for is wrong.
