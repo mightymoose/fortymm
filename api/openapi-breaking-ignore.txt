@@ -7,3 +7,6 @@ POST /v1/session the `data/account/player` response's property `type` changed fr
 POST /v1/session removed the required property `data/account/player/display_name` from the response with the `200` status
 POST /v1/session removed the required property `data/account/player/id` from the response with the `200` status
 POST /v1/session added `#/components/schemas/SessionPlayer, subschema #2` to the `data/account/player` response property `anyOf` list for the response status `200`
+# The models write a nullable as `type: [X, "null"]`, not `anyOf`, for the iOS
+# client's generator. oasdiff reads that as removing `null`, but it means the same.
+POST /v1/account/players/{player_id}/answer request property `player_id` list-of-types was narrowed by removing types `null` from media type `application/json`

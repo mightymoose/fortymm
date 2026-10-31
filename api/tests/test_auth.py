@@ -21,6 +21,7 @@ COOKIE = "__Host-fortymm_session"
 LOGIN_COOKIE = "__Host-fortymm_login"
 JSON = {"Content-Type": "application/json"}
 CALLBACK = "https://testserver/v1/auth/callback"
+APP_CALLBACK = "https://testserver/v1/auth/app-callback"
 
 type Browser = Callable[[], TestClient]
 
@@ -73,7 +74,12 @@ def login(browser: TestClient, return_to: str = "/games?tab=open") -> httpx.Resp
 
 
 def at_mock(
-    authorize_url: str, sub: str, email: str, *, email_verified: bool = True
+    authorize_url: str,
+    sub: str,
+    email: str,
+    *,
+    email_verified: bool = True,
+    callback: str = CALLBACK,
 ) -> str:
     """Sign in at the mock's sign-in page. Returns the callback path it sends
     the browser to."""
@@ -85,7 +91,7 @@ def at_mock(
     )
     assert response.status_code == 302
     location = response.headers["Location"]
-    assert location.startswith(CALLBACK)
+    assert location.startswith(callback)
     return location.removeprefix("https://testserver")
 
 
@@ -364,3 +370,116 @@ def test_logout_ends_the_session_and_expires_the_cookie(
     assert parse_qs(logout_url.query)["returnTo"] == ["https://testserver/signed-out"]
     browser.cookies.set(COOKIE, old_token or "", domain="testserver")
     assert start_session(browser)["id"] != ann["id"]
+
+
+def app_login(phone: TestClient) -> httpx.Response:
+    response = phone.post("/v1/auth/app-login", headers=JSON)
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    return response
+
+
+def app_sign_in(phone: TestClient, sub: str, email: str) -> dict[str, str | None]:
+    """Run the app's sign-in up to `app-finish`. Returns the query that
+    `app-callback` hands to the app."""
+    authorize_url = app_login(phone).json()["data"]["authorize_url"]
+    assert parse_qs(urlsplit(authorize_url).query)["redirect_uri"] == [APP_CALLBACK]
+    # The provider's page runs in a browser with none of the app's cookies.
+    handed_over = TestClient(phone.app, base_url="https://testserver").get(
+        at_mock(authorize_url, sub, email, callback=APP_CALLBACK),
+        follow_redirects=False,
+    )
+    assert handed_over.status_code == 302
+    assert handed_over.headers["Cache-Control"] == "no-store"
+    location = urlsplit(handed_over.headers["Location"])
+    assert f"{location.scheme}://{location.netloc}" == "fortymm://sign-in"
+    query = parse_qs(location.query)
+    return {name: query[name][0] for name in ("state", "code")}
+
+
+def app_finish(phone: TestClient, body: dict[str, str | None]) -> httpx.Response:
+    response = phone.post("/v1/auth/app-finish", json=body)
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    return response
+
+
+def test_a_guest_signs_in_from_the_app(browser: TestClient) -> None:
+    guest = start_session(browser)
+    guest_token = token(browser)
+
+    response = app_finish(browser, app_sign_in(browser, "auth0|ann", "ann@example.com"))
+
+    assert response.json() == {"data": {"outcome": "signed_in"}}
+    assert token(browser) not in (None, guest_token)
+    account = start_session(browser)
+    assert account["id"] == guest["id"]
+    assert account["kind"] == "verified"
+    assert account["email"] == "ann@example.com"
+
+
+def test_an_app_with_no_session_signs_in_with_a_login_cookie(
+    browser: TestClient,
+) -> None:
+    login_response = app_login(browser)
+    cookies = SimpleCookie(login_response.headers["Set-Cookie"])
+    assert COOKIE not in cookies
+    assert LOGIN_COOKIE in cookies
+    authorize_url = login_response.json()["data"]["authorize_url"]
+    callback = urlsplit(
+        at_mock(authorize_url, "auth0|ann", "ann@example.com", callback=APP_CALLBACK)
+    )
+    query = parse_qs(callback.query)
+
+    response = app_finish(
+        browser, {"state": query["state"][0], "code": query["code"][0]}
+    )
+
+    assert response.json() == {"data": {"outcome": "signed_in"}}
+    cookies = SimpleCookie()
+    for header in response.headers.get_list("Set-Cookie"):
+        cookies.load(header)
+    assert cookies[LOGIN_COOKIE]["max-age"] == "0"
+    assert token(browser) is not None
+    assert start_session(browser)["email"] == "ann@example.com"
+
+
+def test_an_app_sign_in_the_visitor_cancels_changes_nothing(
+    browser: TestClient,
+) -> None:
+    guest = start_session(browser)
+    authorize_url = app_login(browser).json()["data"]["authorize_url"]
+    state = parse_qs(urlsplit(authorize_url).query)["state"][0]
+
+    response = app_finish(browser, {"state": state, "error": "access_denied"})
+
+    assert response.json() == {"data": {"outcome": "cancelled"}}
+    assert "Set-Cookie" not in response.headers
+    assert start_session(browser) == guest
+
+
+def test_an_app_sign_in_with_an_unknown_state_has_expired(
+    browser: TestClient,
+) -> None:
+    start_session(browser)
+
+    response = app_finish(browser, {"state": "unknown", "code": "code"})
+
+    assert response.json() == {"data": {"outcome": "expired"}}
+
+
+def test_app_callback_with_no_query_opens_the_app(browser: TestClient) -> None:
+    response = browser.get("/v1/auth/app-callback")
+
+    assert response.status_code == 302
+    assert response.headers["Location"] == "fortymm://sign-in"
+
+
+def test_app_login_answers_503_without_a_provider(
+    app: FastAPI, browser: TestClient
+) -> None:
+    app.state.identity_provider = None
+
+    response = browser.post("/v1/auth/app-login", headers=JSON)
+
+    assert response.status_code == 503

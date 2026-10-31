@@ -47,7 +47,32 @@
             }
           },
           "429": {
-            "description": "The client's network started too many guest accounts. Retry-After gives the seconds until it can start more."
+            "description": "The client's network started too many guest accounts. Retry-After gives the seconds until it can start more.",
+            "headers": {
+              "Retry-After": {
+                "description": "The seconds until the network can start more",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -91,6 +116,34 @@
         "responses": {
           "302": {
             "description": "A redirect"
+          },
+          "429": {
+            "description": "The client's network started too many guest accounts. Retry-After gives the seconds until it can start more.",
+            "headers": {
+              "Retry-After": {
+                "description": "The seconds until the network can start more",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The API has no identity provider configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -188,6 +241,181 @@
           "302": {
             "description": "A redirect"
           },
+          "503": {
+            "description": "The API has no identity provider configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/app-login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "App Login",
+        "description": "Start a sign-in from the native app.\n\nThe app opens `authorize_url` in a browser of its own. That browser has\nnone of the app's cookies, so the provider sends it to `app-callback`,\nwhich hands the query back to the app, and the app finishes the sign-in\nwith `app-finish`. Like `login`, a request with no valid session gets no\nguest account, but a login cookie that `app-finish` checks.\n`authorize_url` can be relative to the API's origin.",
+        "operationId": "app_login",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppLoginResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The client's network started too many guest accounts. Retry-After gives the seconds until it can start more.",
+            "headers": {
+              "Retry-After": {
+                "description": "The seconds until the network can start more",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The API has no identity provider configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/app-callback": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "App Callback",
+        "description": "Send the provider's redirect on to the native app.\n\nIt answers 302 to `fortymm://sign-in` with this request's query, which\nthe app passes to `app-finish`. Another app that claims the scheme gets\nnothing it can use, because finishing needs the app's session or login\ncookie.",
+        "operationId": "app_callback",
+        "responses": {
+          "302": {
+            "description": "A redirect"
+          }
+        }
+      }
+    },
+    "/v1/auth/app-finish": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "App Finish",
+        "description": "Finish a sign-in that `app-login` started, with the query that\n`app-callback` handed to the app.\n\n`outcome` is `signed_in`, or why the sign-in failed: `cancelled`,\n`email_not_verified`, `expired` or `failed`. A sign-in sets a new session\ncookie. A `state` that matches no login attempt, such as a replay, is\n`expired`. A failed sign-in changes no account.",
+        "operationId": "app_finish",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "__Host-fortymm_login",
+            "in": "cookie",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "  Host-Fortymm Login"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppFinishRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AppFinishResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The API has no identity provider configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
           "422": {
             "description": "Validation Error",
             "content": {
@@ -219,6 +447,26 @@
                 }
               }
             }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The API has no identity provider configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -243,6 +491,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AccountPlayersResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
                 }
               }
             }
@@ -301,11 +559,45 @@
               }
             }
           },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
           "404": {
-            "description": "The account doesn't manage the player, or `player_id` isn't a `managed` player of the account with a closed question"
+            "description": "The account doesn't manage the player, or `player_id` isn't a `managed` player of the account with a closed question",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
           },
           "409": {
-            "description": "The answer is `not_mine` and the question was already answered"
+            "description": "The answer is `not_mine` and the question was already answered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
           },
           "422": {
             "description": "The body is invalid, or `player_id` is missing with `same_as` or set with another answer. If `player_id` is the answered player, the body is in the `errors` shape instead",
@@ -401,14 +693,10 @@
             "$ref": "#/components/schemas/Answer"
           },
           "player_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
             ],
             "title": "Player Id"
           }
@@ -456,6 +744,127 @@
           "meta"
         ],
         "title": "AnswerResponse"
+      },
+      "AppFinishData": {
+        "properties": {
+          "outcome": {
+            "$ref": "#/components/schemas/AppSignInOutcome"
+          }
+        },
+        "type": "object",
+        "required": [
+          "outcome"
+        ],
+        "title": "AppFinishData"
+      },
+      "AppFinishRequest": {
+        "properties": {
+          "state": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "State"
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Code"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "title": "AppFinishRequest"
+      },
+      "AppFinishResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AppFinishData"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "AppFinishResponse"
+      },
+      "AppLoginData": {
+        "properties": {
+          "authorize_url": {
+            "type": "string",
+            "title": "Authorize Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "authorize_url"
+        ],
+        "title": "AppLoginData"
+      },
+      "AppLoginResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AppLoginData"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "AppLoginResponse"
+      },
+      "AppSignInOutcome": {
+        "type": "string",
+        "enum": [
+          "signed_in",
+          "cancelled",
+          "email_not_verified",
+          "expired",
+          "failed"
+        ],
+        "title": "AppSignInOutcome"
+      },
+      "Error": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "title"
+        ],
+        "title": "Error"
+      },
+      "ErrorsResponse": {
+        "properties": {
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "type": "array",
+            "title": "Errors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "errors"
+        ],
+        "title": "ErrorsResponse"
       },
       "HTTPValidationError": {
         "properties": {
@@ -583,13 +992,9 @@
             "title": "Kind"
           },
           "email": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ],
             "title": "Email"
           },
