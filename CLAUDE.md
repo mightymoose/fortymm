@@ -971,6 +971,7 @@ it. It builds on the macOS host with Xcode, not in the dev container.
 ./bin/mise run ios-client:test       # run the unit tests on an iPhone simulator
 ./bin/mise run ios-client:e2e        # run the UI tests on an iPhone simulator
 ./bin/mise run ios-client:ci         # run both
+BUILD_NUMBER=7 ./bin/mise run ios-client:testflight  # archive and upload to TestFlight
 ```
 
 - `project.yml` is the project's source. XcodeGen (`tools` on
@@ -993,7 +994,25 @@ it. It builds on the macOS host with Xcode, not in the dev container.
 - `.github/workflows/ios-client.yml` runs `ios-client:ci` on a macOS runner,
   only on a push that changes the app, its design-system inputs, `mise.toml`,
   `bin/mise` or the workflow. It uploads the result bundles as `ios-client-results`.
-  The app isn't signed or released yet.
+- `bin/app-icon` writes the app icon, `AppIcon.png` in
+  `FortyMM/Assets.xcassets`, from `references/design-system/assets/logo-mark.svg`
+  on `--ink-950`. The PNG has no alpha channel, because the App Store
+  refuses one that has. The PNG is committed, so run the script again if
+  the logo mark changes.
+- On a push to `main`, after the tests, the workflow uploads the app to
+  TestFlight with `ios-client:testflight`. `bin/xcodebuild-testflight`
+  archives the app unsigned, then exports it with Xcode's cloud-managed
+  signing, through an App Store Connect API key, and uploads it. No
+  certificate or profile is stored anywhere. The build number is the
+  workflow's run number, and the version is `MARKETING_VERSION` in
+  `project.yml`. Until the Apple team and the key are set, the workflow
+  warns and skips the upload. A run on `main` isn't cancelled by the next
+  push, so an upload never stops midway. `ARCHIVE_ONLY=1` stops the script
+  after the archive, with no request to Apple. `ios-client/README.md`
+  describes the one-time setup.
+- `ITSAppUsesNonExemptEncryption` is false in the Info.plist, so TestFlight
+  asks no export compliance question per build. An app that adds its own
+  encryption must change it.
 
 ## Deploy
 

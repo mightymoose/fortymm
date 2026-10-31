@@ -1,7 +1,8 @@
 name: iOS client
 
 # macOS runners cost ten times the Linux minutes on a private repo, so this
-# runs only when something the app builds from changes.
+# runs only when something the app builds from changes. A push to main then
+# uploads the app to TestFlight, from the same runner.
 on:
   push:
     paths:
@@ -15,13 +16,18 @@ on:
 permissions:
   contents: read
 
+# A run on main isn't cancelled, so an upload never stops midway.
 concurrency:
   group: ios-client-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:
     runs-on: macos-26
+    env:
+      # Set by ios-client/README.md's instructions; until then nothing is
+      # uploaded.
+      TESTFLIGHT_CONFIGURED: ${{ vars.APPLE_TEAM_ID != '' && vars.APP_STORE_CONNECT_KEY_ID != '' && vars.APP_STORE_CONNECT_ISSUER_ID != '' && secrets.APP_STORE_CONNECT_KEY != '' }}
     steps:
       - uses: actions/checkout@v5
       - run: ./bin/mise run ios-client:ci
@@ -33,3 +39,21 @@ jobs:
         with:
           name: ios-client-results
           path: ios-client/build/results
+
+      - name: Skip the TestFlight upload
+        if: ${{ github.ref == 'refs/heads/main' && env.TESTFLIGHT_CONFIGURED != 'true' }}
+        run: echo "::warning::APPLE_TEAM_ID, APP_STORE_CONNECT_KEY_ID, APP_STORE_CONNECT_ISSUER_ID and the APP_STORE_CONNECT_KEY secret aren't all set, so the app isn't uploaded to TestFlight. See ios-client/README.md."
+
+      - name: Upload to TestFlight
+        if: ${{ github.ref == 'refs/heads/main' && env.TESTFLIGHT_CONFIGURED == 'true' }}
+        run: |
+          printf '%s\n' "$APP_STORE_CONNECT_KEY" > "$APP_STORE_CONNECT_KEY_PATH"
+          ./bin/mise run ios-client:testflight
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BUILD_NUMBER: ${{ github.run_number }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          APP_STORE_CONNECT_KEY_ID: ${{ vars.APP_STORE_CONNECT_KEY_ID }}
+          APP_STORE_CONNECT_ISSUER_ID: ${{ vars.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY: ${{ secrets.APP_STORE_CONNECT_KEY }}
+          APP_STORE_CONNECT_KEY_PATH: ${{ runner.temp }}/AuthKey.p8
