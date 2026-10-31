@@ -12,14 +12,17 @@ from fortymm_api.accounts import (
     CurrentAccount,
     Email,
     GuestAccount,
+    PlayerId,
     VerifiedAccount,
 )
 from fortymm_api.identity_provider import ExchangeFailed, IdToken
 from fortymm_api.ownership import OWNERSHIP_RULES, OwnershipRule
+from fortymm_api.services.players import account_players
 from fortymm_api.services.sessions import (
     GUEST_ACCOUNT_LIMIT,
     AccountAdopted,
     GuestAccountLimitReached,
+    StartedSession,
     authenticate,
     lock_account_for_write,
     new_session,
@@ -102,10 +105,39 @@ def identity(sub: str, email: str, *, verified: bool = True) -> ExchangeCode:
     return exchange
 
 
+def new_guest(database: Engine) -> StartedSession:
+    return in_transaction(database, lambda session: start_session(session, None, ANN))
+
+
 def guest_token(database: Engine) -> str:
-    return in_transaction(
-        database, lambda session: start_session(session, None, ANN).token
-    )
+    return new_guest(database).token
+
+
+def resume(database: Engine, token: str) -> StartedSession:
+    """POST /v1/session with the token, as the browser sends after a sign-in."""
+    return in_transaction(database, lambda session: start_session(session, token, ANN))
+
+
+def players_listed(
+    database: Engine, account: AccountId
+) -> list[tuple[PlayerId, str, bool]]:
+    """The account's players, as GET /v1/account/players lists them: id,
+    relationship and whether "Is this you?" is open."""
+    return [
+        (player.id, player.relationship, player.open_question)
+        for player in in_transaction(
+            database, lambda session: account_players(session, account)
+        )
+    ]
+
+
+def merged_into(database: Engine, player: PlayerId) -> PlayerId | None:
+    with database.connect() as connection:
+        found: PlayerId | None = connection.scalar(
+            text("SELECT merged_into FROM players WHERE id = :player"),
+            {"player": player},
+        )
+        return found
 
 
 def begin(database: Engine, token: str | None) -> LoginStarted:
@@ -190,23 +222,33 @@ def test_verify_in_place_revokes_the_guests_sessions_in_every_browser(
     assert account_of(migrated_database, new_token).id == guest.id
 
 
-def test_verify_in_place_asks_is_this_you_about_the_self_player(
+def test_verify_in_place_keeps_the_guests_player(
     migrated_database: Engine,
 ) -> None:
-    token = guest_token(migrated_database)
-    guest = account_of(migrated_database, token)
+    guest = new_guest(migrated_database)
 
-    sign_in(migrated_database, token, identity("a|1", "ann@example.com"))
+    new_token = sign_in(
+        migrated_database, guest.token, identity("a|1", "ann@example.com")
+    )
 
-    with migrated_database.connect() as connection:
-        rows = connection.execute(
-            text(
-                "SELECT relationship, adopted_from FROM player_managers"
-                " WHERE account_id = :id"
-            ),
-            {"id": guest.id},
-        ).all()
-    assert [tuple(row) for row in rows] == [("managed", guest.id)]
+    assert resume(migrated_database, new_token).player == guest.player
+    assert players_listed(migrated_database, guest.account.id) == [
+        (guest.player.id, "self", False)
+    ]
+    assert count(migrated_database, "SELECT count(*) FROM players") == 1
+
+
+@pytest.mark.usefixtures("players_have_activity")
+def test_verify_in_place_asks_is_this_you_about_a_player_that_has_played(
+    migrated_database: Engine,
+) -> None:
+    guest = new_guest(migrated_database)
+
+    sign_in(migrated_database, guest.token, identity("a|1", "ann@example.com"))
+
+    assert managers_of_players_from(migrated_database, guest.account.id) == [
+        (guest.account.id, "managed")
+    ]
 
 
 def test_a_verified_account_with_its_own_identity_stays_signed_in(
@@ -307,16 +349,17 @@ def bob_signed_in(database: Engine) -> tuple[str, AccountId]:
     return token, account_of(database, token).id
 
 
-def add_managed_player(session: Session, account: AccountId, name: str) -> None:
-    session.execute(
+def add_managed_player(session: Session, account: AccountId, name: str) -> PlayerId:
+    player: PlayerId = session.scalar(
         text(
             "WITH player AS ("
             "  INSERT INTO players (display_name) VALUES (:name) RETURNING id"
             ") INSERT INTO player_managers (player_id, account_id, relationship)"
-            " SELECT id, :account, 'managed' FROM player"
+            " SELECT id, :account, 'managed' FROM player RETURNING player_id"
         ),
         {"name": name, "account": account},
     )
+    return player
 
 
 def managers_of_players_from(
@@ -350,7 +393,7 @@ def test_adoption_hands_the_guests_players_and_browser_to_the_account(
     _, second_browser = in_transaction(
         migrated_database, lambda session: new_session(session, guest)
     )
-    in_transaction(
+    friend = in_transaction(
         migrated_database,
         lambda session: add_managed_player(session, guest, "guest's friend"),
     )
@@ -360,11 +403,50 @@ def test_adoption_hands_the_guests_players_and_browser_to_the_account(
     assert account_of(migrated_database, new_token).id == bob
     assert signed_in(migrated_database, first_browser) is None
     assert signed_in(migrated_database, second_browser) is None
-    assert managers_of_players_from(migrated_database, guest) == [
-        (bob, "managed"),
-        (bob, "managed"),
-    ]
     assert managed_by(migrated_database, guest) == 0
+    assert (friend, "managed", False) in players_listed(migrated_database, bob)
+
+
+def test_adoption_merges_the_guests_player_into_the_accounts_player(
+    migrated_database: Engine,
+) -> None:
+    bobs_laptop, bob = bob_signed_in(migrated_database)
+    bobs_player = resume(migrated_database, bobs_laptop).player
+    guest = new_guest(migrated_database)
+
+    new_token = sign_in(migrated_database, guest.token, BOB)
+
+    assert players_listed(migrated_database, bob) == [(bobs_player.id, "self", False)]
+    assert merged_into(migrated_database, guest.player.id) == bobs_player.id
+    assert resume(migrated_database, new_token).player == bobs_player
+
+
+def test_adoption_into_an_account_with_no_player_makes_the_guests_player_its_own(
+    migrated_database: Engine,
+) -> None:
+    # A sign-in from a browser with no session makes an account with no
+    # player.
+    bob = account_of(migrated_database, sign_in(migrated_database, None, BOB)).id
+    guest = new_guest(migrated_database)
+
+    new_token = sign_in(migrated_database, guest.token, BOB)
+
+    assert players_listed(migrated_database, bob) == [(guest.player.id, "self", False)]
+    assert resume(migrated_database, new_token).player == guest.player
+
+
+@pytest.mark.usefixtures("players_have_activity")
+def test_adoption_asks_is_this_you_about_a_player_that_has_played(
+    migrated_database: Engine,
+) -> None:
+    _, bob = bob_signed_in(migrated_database)
+    guest = new_guest(migrated_database)
+
+    sign_in(migrated_database, guest.token, BOB)
+
+    assert managers_of_players_from(migrated_database, guest.account.id) == [
+        (bob, "managed")
+    ]
 
 
 def test_adoption_keeps_the_accounts_other_sessions(
@@ -619,7 +701,7 @@ def test_a_guest_started_during_a_sign_in_with_no_session_is_adopted(
 
     assert isinstance(result, SignedIn)
     assert account_of(migrated_database, result.token).id == bob
-    assert managers_of_players_from(migrated_database, guest) == [(bob, "managed")]
+    assert managed_by(migrated_database, guest) == 0
 
 
 def test_a_sign_in_with_no_session_counts_toward_the_guest_account_limit(
@@ -690,10 +772,9 @@ def test_a_player_made_before_adoption_moves_to_the_account(
 
     assert isinstance(adoption.result(), SignedIn)
     assert managed_by(migrated_database, guest) == 0
-    assert managers_of_players_from(migrated_database, guest) == [
-        (bob, "managed"),
-        (bob, "managed"),
-    ]
+    assert [
+        relationship for _, relationship, _ in players_listed(migrated_database, bob)
+    ] == ["self", "managed"]
 
 
 def test_a_write_that_waits_for_adoption_is_refused(
@@ -713,4 +794,6 @@ def test_a_write_that_waits_for_adoption_is_refused(
     assert isinstance(create.exception(), AccountAdopted)
     assert players(migrated_database) == before
     assert managed_by(migrated_database, guest) == 0
-    assert managers_of_players_from(migrated_database, guest) == [(bob, "managed")]
+    assert [
+        relationship for _, relationship, _ in players_listed(migrated_database, bob)
+    ] == ["self"]

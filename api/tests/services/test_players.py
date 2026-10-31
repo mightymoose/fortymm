@@ -28,6 +28,9 @@ from fortymm_api.services.players import (
 )
 from fortymm_api.services.sessions import AccountAdopted, start_session
 
+# A sign-in asks "Is this you?" only about a player that has played.
+pytestmark = pytest.mark.usefixtures("players_have_activity")
+
 ANN = ip_address("203.0.113.7")
 EGRET = "excited egret 387"
 # The answers that need no other player.

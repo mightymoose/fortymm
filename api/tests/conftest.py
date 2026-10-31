@@ -51,3 +51,12 @@ def migrated_database(throwaway_database_url: str) -> Iterator[Engine]:
     migrate(engine)
     yield engine
     engine.dispose()
+
+
+@pytest.fixture
+def players_have_activity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Treat every player as one that has played, so a sign-in asks "Is this
+    you?" about it. No table records play yet."""
+    monkeypatch.setattr(
+        "fortymm_api.services.adoption.has_activity", lambda session, player: True
+    )
