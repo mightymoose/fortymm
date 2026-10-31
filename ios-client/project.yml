@@ -37,17 +37,12 @@ targets:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        # The upload fails validation unless an iPad that multitasks gets
-        # every orientation.
-        UISupportedInterfaceOrientations~ipad:
-          - UIInterfaceOrientationPortrait
-          - UIInterfaceOrientationPortraitUpsideDown
-          - UIInterfaceOrientationLandscapeLeft
-          - UIInterfaceOrientationLandscapeRight
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.fortymm.ios-client
-        TARGETED_DEVICE_FAMILY: "1,2"
+        # iPhone only for now. An App Store update can't drop iPad support
+        # once a release has it, so add "2" only with an iPad layout.
+        TARGETED_DEVICE_FAMILY: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
   FortyMMTests:
     type: bundle.unit-test
