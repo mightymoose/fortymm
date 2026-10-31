@@ -7,6 +7,8 @@ on:
   push:
     paths:
       - ios-client/**
+      # The app generates its API client from the schema.
+      - api/openapi.json
       - references/design-system/colors_and_type.css
       - references/design-system/fonts/**
       - mise.toml

@@ -9,13 +9,9 @@ from fortymm_api.accounts import VerifiedAccount
 from fortymm_api.auth import SessionToken, set_session_cookie
 from fortymm_api.database import DatabaseSession
 from fortymm_api.services import sessions
+from fortymm_api.v1.errors import GUEST_LIMIT, UNSUPPORTED_MEDIA_TYPE
 
 router = APIRouter(tags=["session"])
-
-GUEST_LIMIT_DESCRIPTION = (
-    "The client's network started too many guest accounts. "
-    "Retry-After gives the seconds until it can start more."
-)
 
 
 class SessionPlayer(BaseModel):
@@ -51,7 +47,7 @@ def client_address(request: Request) -> sessions.ClientAddress:
     return ip_address(request.client.host)
 
 
-@router.post("/session", responses={429: {"description": GUEST_LIMIT_DESCRIPTION}})
+@router.post("/session", responses={**GUEST_LIMIT, **UNSUPPORTED_MEDIA_TYPE})
 def start_session(
     session: DatabaseSession,
     token: SessionToken,

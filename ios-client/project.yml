@@ -4,6 +4,18 @@ options:
   deploymentTarget:
     iOS: "18.0"
   createIntermediateGroups: true
+packages:
+  # Apple's OpenAPI generator writes the API client from api/openapi.json at
+  # build time, so a schema change breaks this build.
+  OpenAPIGenerator:
+    url: https://github.com/apple/swift-openapi-generator
+    exactVersion: 1.14.3
+  OpenAPIRuntime:
+    url: https://github.com/apple/swift-openapi-runtime
+    exactVersion: 1.13.3
+  OpenAPIURLSession:
+    url: https://github.com/apple/swift-openapi-urlsession
+    exactVersion: 1.4.0
 settings:
   base:
     SWIFT_VERSION: "6.0"
@@ -18,6 +30,18 @@ targets:
       # The design system's own file, so the app can't drift from it.
       - path: ../references/design-system/fonts/BebasNeue-Regular.ttf
         group: FortyMM/Fonts
+      - path: ../references/design-system/fonts/JetBrainsMono-VariableFont_wght.ttf
+        group: FortyMM/Fonts
+      # The API's committed schema. The generator finds it, and its config,
+      # only among the target's files, so both also land in the bundle.
+      - path: ../api/openapi.json
+        group: FortyMM/API
+    dependencies:
+      - package: OpenAPIRuntime
+      - package: OpenAPIURLSession
+    buildToolPlugins:
+      - plugin: OpenAPIGenerator
+        package: OpenAPIGenerator
     info:
       path: FortyMM/Info.plist
       properties:
@@ -26,10 +50,13 @@ targets:
         # build number it already has.
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        UIAppFonts: [BebasNeue-Regular.ttf]
+        UIAppFonts: [BebasNeue-Regular.ttf, JetBrainsMono-VariableFont_wght.ttf]
         UILaunchScreen:
           UIColorName: LaunchBackground
         UIUserInterfaceStyle: Dark
+        # The dev stack serves the API over http on localhost.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         # The app's only encryption is the system's HTTPS, which is exempt. So
         # TestFlight asks no export compliance question per build.
         ITSAppUsesNonExemptEncryption: false

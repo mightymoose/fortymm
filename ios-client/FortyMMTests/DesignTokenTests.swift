@@ -29,6 +29,10 @@ struct DesignTokenTests {
         #expect(UIFont(name: "BebasNeue-Regular", size: 40) != nil)
     }
 
+    @Test func numberFontIsBundled() {
+        #expect(UIFont(name: "JetBrainsMono-Regular", size: 14) != nil)
+    }
+
     private func rgb(_ color: UIColor) -> [Int] {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
         color.getRed(&r, green: &g, blue: &b, alpha: &a)

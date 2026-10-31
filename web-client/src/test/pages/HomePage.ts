@@ -81,6 +81,11 @@ export class HomePage {
     return screen.queryByRole('link', { name: 'Home' })
   }
 
+  // The sidebar's link to a mobile beta, by its accessible name, or null.
+  mobileAppLink(name: string): HTMLElement | null {
+    return screen.queryByRole('link', { name })
+  }
+
   // A link to the design system page. The app has none, so this is null.
   get designSystemLink(): HTMLElement | null {
     return screen.queryByRole('link', { name: 'Design System' })
