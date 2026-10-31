@@ -982,8 +982,8 @@ it. It builds on the macOS host with Xcode, not in the dev container.
   path, so it has no copy to drift. `DesignToken` (`FortyMM/DesignToken.swift`)
   holds the colour tokens the app uses. `FortyMMTests` (Swift Testing) fails
   if a token's hex differs from `colors_and_type.css`, if the launch
-  screen's `LaunchBackground` colour differs from `--bg-app`, or if the font
-  isn't in the bundle.
+  screen's `LaunchBackground` colour differs from the splash background
+  (`Color.bgApp`), or if the font isn't in the bundle.
 - `FortyMMUITests` (XCUITest) launches the app and goes through page objects
   such as `SplashScreen`, which find elements by what VoiceOver reads. Each
   run attaches a screenshot of the splash screen.
@@ -991,8 +991,8 @@ it. It builds on the macOS host with Xcode, not in the dev container.
   simulator, or on `IOS_SIMULATOR` (a name or UDID). It writes a result
   bundle per run to `build/results/`.
 - `.github/workflows/ios-client.yml` runs `ios-client:ci` on a macOS runner,
-  only on a push that changes the app, its design-system inputs, `mise.toml`
-  or the workflow. It uploads the result bundles as `ios-client-results`.
+  only on a push that changes the app, its design-system inputs, `mise.toml`,
+  `bin/mise` or the workflow. It uploads the result bundles as `ios-client-results`.
   The app isn't signed or released yet.
 
 ## Deploy

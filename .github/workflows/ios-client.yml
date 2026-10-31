@@ -9,6 +9,7 @@ on:
       - references/design-system/colors_and_type.css
       - references/design-system/fonts/**
       - mise.toml
+      - bin/mise
       - .github/workflows/ios-client.yml
 
 permissions:
