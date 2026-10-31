@@ -362,7 +362,12 @@ done
 description = "Generate ios-client/FortyMM.xcodeproj from ios-client/project.yml (macOS)"
 dir = "ios-client"
 tools = { xcodegen = "2.46.0" }
-run = "xcodegen generate --quiet"
+# The project is gitignored, so the committed Package.resolved goes into it.
+run = """
+xcodegen generate --quiet
+mkdir -p FortyMM.xcodeproj/project.xcworkspace/xcshareddata/swiftpm
+cp Package.resolved FortyMM.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/
+"""
 
 [tasks."ios-client:test"]
 description = "Run the iOS client's unit tests on an iPhone simulator (macOS)"

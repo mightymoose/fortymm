@@ -3,6 +3,7 @@ import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from math import ceil
+from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -20,6 +21,7 @@ from fortymm_api.services.players import (
 )
 from fortymm_api.services.sessions import AccountAdopted, GuestAccountLimitReached
 from fortymm_api.v1.auth import SignInUnavailable
+from fortymm_api.v1.errors import Error, ErrorsResponse
 
 WORKER_SECRET_HEADER = "X-FortyMM-Worker-Secret"
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -35,9 +37,8 @@ AUTH0_SETTINGS = ("AUTH0_DOMAIN", "AUTH0_CLIENT_ID", "AUTH0_CLIENT_SECRET")
 
 
 def error_response(status: int, title: str) -> JSONResponse:
-    return JSONResponse(
-        {"errors": [{"status": str(status), "title": title}]}, status_code=status
-    )
+    body = ErrorsResponse(errors=[Error(status=str(status), title=title)])
+    return JSONResponse(body.model_dump(), status_code=status)
 
 
 def answers(status: int, title: str) -> Callable[[Request, Exception], Response]:
@@ -61,6 +62,42 @@ def operation_id(route: APIRoute) -> str:
     leak into the clients generated from the schema.
     """
     return route.name
+
+
+def type_array_nullables(schema: Any) -> Any:
+    """`schema` with each `anyOf: [{type: X, ...}, {type: null}]` written as
+    `type: [X, "null"]`, which means the same in OpenAPI 3.1.
+
+    swift-openapi-generator drops a property in the `anyOf` form, so the
+    iOS client wouldn't see it.
+    """
+    if isinstance(schema, list):
+        return [type_array_nullables(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    schema = {key: type_array_nullables(value) for key, value in schema.items()}
+    match schema.get("anyOf"):
+        case [{"type": str(kind), **rest}, {"type": "null"}]:
+            del schema["anyOf"]
+            return {**rest, "type": [kind, "null"], **schema}
+    return schema
+
+
+def nullables_as_type_arrays(app: FastAPI) -> None:
+    """Rewrite the nullables of the models only. oasdiff reads a parameter's
+    type array as dropping `null`, a false break, and the iOS client sends
+    no nullable parameter."""
+
+    def openapi() -> dict[str, Any]:
+        if app.openapi_schema is None:
+            schema = FastAPI.openapi(app)
+            components = schema.get("components", {})
+            if "schemas" in components:
+                components["schemas"] = type_array_nullables(components["schemas"])
+            app.openapi_schema = schema
+        return app.openapi_schema
+
+    app.openapi = openapi  # type: ignore[method-assign]
 
 
 def require_worker_secret(app: FastAPI, secret: str) -> None:
@@ -158,6 +195,7 @@ def create_app() -> FastAPI:
     app.state.sessions = sessionmaker(engine) if engine is not None else None
     app.state.identity_provider = identity_provider_from_env()
     app.include_router(v1.router)
+    nullables_as_type_arrays(app)
     app.add_exception_handler(
         NoValidSession, lambda _request, _error: error_response(401, NO_SESSION)
     )

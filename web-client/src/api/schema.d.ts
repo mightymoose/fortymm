@@ -104,6 +104,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/auth/app-login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * App Login
+         * @description Start a sign-in from the native app.
+         *
+         *     The app opens `authorize_url` in a browser of its own. That browser has
+         *     none of the app's cookies, so the provider sends it to `app-callback`,
+         *     which hands the query back to the app, and the app finishes the sign-in
+         *     with `app-finish`. Like `login`, a request with no valid session gets no
+         *     guest account, but a login cookie that `app-finish` checks.
+         *     `authorize_url` can be relative to the API's origin.
+         */
+        post: operations["app_login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/auth/app-callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * App Callback
+         * @description Send the provider's redirect on to the native app.
+         *
+         *     It answers 302 to `fortymm://sign-in` with this request's query, which
+         *     the app passes to `app-finish`. Another app that claims the scheme gets
+         *     nothing it can use, because finishing needs the app's session or login
+         *     cookie.
+         */
+        get: operations["app_callback"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/auth/app-finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * App Finish
+         * @description Finish a sign-in that `app-login` started, with the query that
+         *     `app-callback` handed to the app.
+         *
+         *     `outcome` is `signed_in`, or why the sign-in failed: `cancelled`,
+         *     `email_not_verified`, `expired` or `failed`. A sign-in sets a new session
+         *     cookie. A `state` that matches no login attempt, such as a replay, is
+         *     `expired`. A failed sign-in changes no account.
+         */
+        post: operations["app_finish"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/auth/logout": {
         parameters: {
             query?: never;
@@ -227,7 +305,10 @@ export interface components {
         /** AnswerRequest */
         AnswerRequest: {
             answer: components["schemas"]["Answer"];
-            /** Player Id */
+            /**
+             * Player Id
+             * Format: uuid
+             */
             player_id?: string | null;
         };
         /** AnswerResponse */
@@ -236,6 +317,49 @@ export interface components {
             data: components["schemas"]["AccountPlayer"][];
             /** Meta */
             meta: components["schemas"]["MergedOutcome"] | components["schemas"]["SettledOutcome"];
+        };
+        /** AppFinishData */
+        AppFinishData: {
+            outcome: components["schemas"]["AppSignInOutcome"];
+        };
+        /** AppFinishRequest */
+        AppFinishRequest: {
+            /** State */
+            state?: string | null;
+            /** Code */
+            code?: string | null;
+            /** Error */
+            error?: string | null;
+        };
+        /** AppFinishResponse */
+        AppFinishResponse: {
+            data: components["schemas"]["AppFinishData"];
+        };
+        /** AppLoginData */
+        AppLoginData: {
+            /** Authorize Url */
+            authorize_url: string;
+        };
+        /** AppLoginResponse */
+        AppLoginResponse: {
+            data: components["schemas"]["AppLoginData"];
+        };
+        /**
+         * AppSignInOutcome
+         * @enum {string}
+         */
+        AppSignInOutcome: "signed_in" | "cancelled" | "email_not_verified" | "expired" | "failed";
+        /** Error */
+        Error: {
+            /** Status */
+            status: string;
+            /** Title */
+            title: string;
+        };
+        /** ErrorsResponse */
+        ErrorsResponse: {
+            /** Errors */
+            errors: components["schemas"]["Error"][];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -396,12 +520,25 @@ export interface operations {
                     "application/json": components["schemas"]["SessionResponse"];
                 };
             };
-            /** @description The client's network started too many guest accounts. Retry-After gives the seconds until it can start more. */
-            429: {
+            /** @description The request's Content-Type isn't application/json */
+            415: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The client's network started too many guest accounts. Retry-After gives the seconds until it can start more. */
+            429: {
+                headers: {
+                    /** @description The seconds until the network can start more */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
             };
         };
     };
@@ -430,6 +567,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description The client's network started too many guest accounts. Retry-After gives the seconds until it can start more. */
+            429: {
+                headers: {
+                    /** @description The seconds until the network can start more */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The API has no identity provider configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
                 };
             };
         };
@@ -465,6 +622,135 @@ export interface operations {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
+            /** @description The API has no identity provider configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+        };
+    };
+    app_login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppLoginResponse"];
+                };
+            };
+            /** @description The request's Content-Type isn't application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The client's network started too many guest accounts. Retry-After gives the seconds until it can start more. */
+            429: {
+                headers: {
+                    /** @description The seconds until the network can start more */
+                    "Retry-After"?: number;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The API has no identity provider configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+        };
+    };
+    app_callback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A redirect */
+            302: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    app_finish: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: {
+                "__Host-fortymm_login"?: string | null;
+            };
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AppFinishRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppFinishResponse"];
+                };
+            };
+            /** @description The request's Content-Type isn't application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description The API has no identity provider configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
         };
     };
     logout: {
@@ -485,6 +771,24 @@ export interface operations {
                     "application/json": components["schemas"]["LogoutResponse"];
                 };
             };
+            /** @description The request's Content-Type isn't application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The API has no identity provider configured */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
         };
     };
     account_players: {
@@ -503,6 +807,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccountPlayersResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
                 };
             };
         };
@@ -531,19 +844,41 @@ export interface operations {
                     "application/json": components["schemas"]["AnswerResponse"];
                 };
             };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
             /** @description The account doesn't manage the player, or `player_id` isn't a `managed` player of the account with a closed question */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
             };
             /** @description The answer is `not_mine` and the question was already answered */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The request's Content-Type isn't application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
             };
             /** @description The body is invalid, or `player_id` is missing with `same_as` or set with another answer. If `player_id` is the answered player, the body is in the `errors` shape instead */
             422: {

@@ -2,6 +2,8 @@
 # Runs the FortyMM scheme's tests on an iPhone simulator, passing its
 # arguments to xcodebuild (e.g. -only-testing:FortyMMTests). IOS_SIMULATOR
 # picks the simulator by name or UDID. Without it, the first available iPhone.
+# FORTYMM_API_BASE_URL, the dev stack's web dev server, runs the UI tests
+# that need the dev API. Without it, they skip.
 set -eu
 cd "$(dirname "$0")/.."
 if [ -n "${IOS_SIMULATOR:-}" ]; then
@@ -17,7 +19,18 @@ else
   fi
   destination="id=$udid"
 fi
+# The UI tests that need the dev stack read its URL in the test runner,
+# where xcodebuild passes TEST_RUNNER_ variables without the prefix.
+if [ -n "${FORTYMM_API_BASE_URL:-}" ]; then
+  export TEST_RUNNER_FORTYMM_API_BASE_URL="$FORTYMM_API_BASE_URL"
+fi
+# -skipPackagePluginValidation trusts the OpenAPI generator's build plugin,
+# which Xcode would otherwise ask about.
+# -onlyUsePackageVersionsFromResolvedFile holds every package, the
+# generator's dependencies too, to ios-client/Package.resolved.
 exec xcodebuild test -quiet \
+  -skipPackagePluginValidation \
+  -onlyUsePackageVersionsFromResolvedFile \
   -project FortyMM.xcodeproj \
   -scheme FortyMM \
   -destination "platform=iOS Simulator,$destination" \

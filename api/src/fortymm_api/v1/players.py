@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Annotated, Any, Literal, Self
+from typing import Annotated, Literal, Self
 from uuid import UUID
 
 from fastapi import APIRouter
@@ -11,21 +11,19 @@ from fortymm_api.database import DatabaseSession
 from fortymm_api.services import players
 from fortymm_api.services.player_merge import Merged
 from fortymm_api.services.players import Answer, Reply, SameAs
+from fortymm_api.v1.errors import NO_SESSION, UNSUPPORTED_MEDIA_TYPE, Responses, errors
 
 router = APIRouter(prefix="/account/players", tags=["players"])
 
-ANSWER_ERRORS: dict[int | str, dict[str, Any]] = {
-    404: {
-        "description": (
-            "The account doesn't manage the player, or `player_id` isn't a"
-            " `managed` player of the account with a closed question"
-        )
-    },
-    409: {
-        "description": (
-            "The answer is `not_mine` and the question was already answered"
-        )
-    },
+ANSWER_ERRORS: Responses = {
+    **NO_SESSION,
+    **errors(
+        404,
+        "The account doesn't manage the player, or `player_id` isn't a"
+        " `managed` player of the account with a closed question",
+    ),
+    **errors(409, "The answer is `not_mine` and the question was already answered"),
+    **UNSUPPORTED_MEDIA_TYPE,
     # This entry replaces FastAPI's own 422, so it repeats its body.
     422: {
         "description": (
@@ -124,7 +122,7 @@ def outcome_model(outcome: players.Outcome) -> MergedOutcome | SettledOutcome:
             return SettledOutcome(outcome=kind)
 
 
-@router.get("")
+@router.get("", responses=NO_SESSION)
 def account_players(
     session: DatabaseSession, account: RequestAccount
 ) -> AccountPlayersResponse:
