@@ -1,0 +1,26 @@
+#!/bin/sh
+# Runs the FortyMM scheme's tests on an iPhone simulator, passing its
+# arguments to xcodebuild (e.g. -only-testing:FortyMMTests). IOS_SIMULATOR
+# picks the simulator by name or UDID. Without it, the first available iPhone.
+set -eu
+cd "$(dirname "$0")/.."
+if [ -n "${IOS_SIMULATOR:-}" ]; then
+  case "$IOS_SIMULATOR" in
+    *-*-*-*-*) destination="id=$IOS_SIMULATOR" ;;
+    *) destination="name=$IOS_SIMULATOR" ;;
+  esac
+else
+  udid=$(xcrun simctl list devices available | sed -n 's/^ *iPhone.*(\([0-9A-F-]\{36\}\)).*/\1/p' | head -n 1)
+  if [ -z "$udid" ]; then
+    echo "No iPhone simulator is available. Add one in Xcode, or set IOS_SIMULATOR." >&2
+    exit 1
+  fi
+  destination="id=$udid"
+fi
+exec xcodebuild test -quiet \
+  -project FortyMM.xcodeproj \
+  -scheme FortyMM \
+  -destination "platform=iOS Simulator,$destination" \
+  -derivedDataPath build \
+  -resultBundlePath "build/results/$(date +%Y%m%d-%H%M%S).xcresult" \
+  "$@"

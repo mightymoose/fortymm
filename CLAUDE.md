@@ -960,6 +960,41 @@ match the container's platform. Install or run npm commands through the
 container, e.g.
 `docker compose run --rm -w /app/web-client dev npm install <pkg>`.
 
+## ios-client
+
+`ios-client/` is the iOS app, in SwiftUI. For now it shows only a splash
+screen: the wordmark on `--bg-app`, as the web client's loading screen shows
+it. It builds on the macOS host with Xcode, not in the dev container.
+
+```sh
+./bin/mise run ios-client:generate   # write ios-client/FortyMM.xcodeproj
+./bin/mise run ios-client:test       # run the unit tests on an iPhone simulator
+./bin/mise run ios-client:e2e        # run the UI tests on an iPhone simulator
+./bin/mise run ios-client:ci         # run both
+```
+
+- `project.yml` is the project's source. XcodeGen (`tools` on
+  `ios-client:generate`, so Linux never installs it) writes
+  `FortyMM.xcodeproj` and `FortyMM/Info.plist` from it. Both are
+  gitignored, so run `ios-client:generate` before you open the project in
+  Xcode, and after you add a file or change `project.yml`.
+- The app bundles Bebas Neue from `references/design-system/fonts/` by
+  path, so it has no copy to drift. `DesignToken` (`FortyMM/DesignToken.swift`)
+  holds the colour tokens the app uses. `FortyMMTests` (Swift Testing) fails
+  if a token's hex differs from `colors_and_type.css`, if the launch
+  screen's `LaunchBackground` colour differs from the splash background
+  (`Color.bgApp`), or if the font isn't in the bundle.
+- `FortyMMUITests` (XCUITest) launches the app and goes through page objects
+  such as `SplashScreen`, which find elements by what VoiceOver reads. Each
+  run attaches a screenshot of the splash screen.
+- `bin/xcodebuild-test` runs the tests on the first available iPhone
+  simulator, or on `IOS_SIMULATOR` (a name or UDID). It writes a result
+  bundle per run to `build/results/`.
+- `.github/workflows/ios-client.yml` runs `ios-client:ci` on a macOS runner,
+  only on a push that changes the app, its design-system inputs, `mise.toml`,
+  `bin/mise` or the workflow. It uploads the result bundles as `ios-client-results`.
+  The app isn't signed or released yet.
+
 ## Deploy
 
 Production is `https://fortymm.com`: a Cloudflare Worker serves the

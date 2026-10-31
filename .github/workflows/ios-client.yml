@@ -1,0 +1,35 @@
+name: iOS client
+
+# macOS runners cost ten times the Linux minutes on a private repo, so this
+# runs only when something the app builds from changes.
+on:
+  push:
+    paths:
+      - ios-client/**
+      - references/design-system/colors_and_type.css
+      - references/design-system/fonts/**
+      - mise.toml
+      - bin/mise
+      - .github/workflows/ios-client.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-client-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v5
+      - run: ./bin/mise run ios-client:ci
+        env:
+          # mise installs xcodegen from its GitHub release, through GitHub's API.
+          GITHUB_TOKEN: ${{ github.token }}
+      - if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-client-results
+          path: ios-client/build/results

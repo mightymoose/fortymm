@@ -1,0 +1,66 @@
+name: FortyMM
+options:
+  bundleIdPrefix: com.fortymm
+  deploymentTarget:
+    iOS: "18.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  FortyMM:
+    type: application
+    platform: iOS
+    sources:
+      - FortyMM
+      # The design system's own file, so the app can't drift from it.
+      - path: ../references/design-system/fonts/BebasNeue-Regular.ttf
+        group: FortyMM/Fonts
+    info:
+      path: FortyMM/Info.plist
+      properties:
+        CFBundleDisplayName: FortyMM
+        UIAppFonts: [BebasNeue-Regular.ttf]
+        UILaunchScreen:
+          UIColorName: LaunchBackground
+        UIUserInterfaceStyle: Dark
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.fortymm.FortyMM
+        TARGETED_DEVICE_FAMILY: "1,2"
+        # No app icon yet.
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+  FortyMMTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [FortyMMTests]
+    dependencies:
+      - target: FortyMM
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+  FortyMMUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [FortyMMUITests]
+    dependencies:
+      - target: FortyMM
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: FortyMM
+schemes:
+  FortyMM:
+    build:
+      targets:
+        FortyMM: all
+    test:
+      targets:
+        - FortyMMTests
+        - FortyMMUITests
