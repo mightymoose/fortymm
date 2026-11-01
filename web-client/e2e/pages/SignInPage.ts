@@ -39,10 +39,17 @@ export class SignInPage {
     person: Person,
     { returnTo = PUBLIC_PAGE }: { returnTo?: '/' | typeof PUBLIC_PAGE } = {},
   ): Promise<URL> {
-    await this.page.goto(`/api/v1/auth/login?return_to=${returnTo}`)
+    await this.startSignIn({ returnTo })
     await this.completeSignIn(person)
     await this.page.waitForURL((url) => url.pathname === returnTo)
     return new URL(this.page.url())
+  }
+
+  // Opens the mock provider's sign-in page, and stops there.
+  async startSignIn({
+    returnTo = PUBLIC_PAGE,
+  }: { returnTo?: '/' | typeof PUBLIC_PAGE } = {}): Promise<void> {
+    await this.page.goto(`/api/v1/auth/login?return_to=${returnTo}`)
   }
 
   // Fills the mock provider's sign-in page as `person` and sends it. The
