@@ -1,7 +1,8 @@
 import { QueryClient, queryOptions } from '@tanstack/react-query'
 import type { ApiClient } from './client'
 import type { components } from './schema'
-import { ApiError, ApiUnreachable } from './errors'
+import { ApiError, ApiUnreachable, classifyFailure } from './errors'
+import { forgetAccount, saveAccount, savedAccount, type SessionAccount } from './savedSession'
 
 // Retries a network error or a 5xx only, which can pass. A 4xx comes back the
 // same. A retry after a lost POST /v1/session response can leave one unused
@@ -33,34 +34,104 @@ export function createQueryClient(): QueryClient {
   return new QueryClient({ defaultOptions: { queries: { retry: shouldRetry } } })
 }
 
+// How long a page load with a saved account waits for the session before it
+// shows the saved account instead. A hall's weak signal can hold a request
+// far longer than the connection takes to fail.
+export const OFFLINE_AFTER_MS = 2000
+
+const SESSION_KEY = ['v1', 'session'] as const
+
+type SessionOutcome =
+  | { kind: 'answered'; account: SessionAccount }
+  | { kind: 'failed'; error: unknown }
+  | { kind: 'slow' }
+
 // The visitor's account, from resuming their session or starting a guest
 // account. The `_authenticated` route's loader waits on it before showing a
 // page. It runs once per page load: it never goes stale, so revisiting those
 // pages doesn't start the session again.
+//
+// Each account it gets is saved. With a saved account, a load that can't
+// reach the API, or waits OFFLINE_AFTER_MS for it, shows the saved account.
+// The request goes on: its answer replaces the saved account, and a request
+// that never got through starts again when the browser comes back online.
+// Any other failure shows as before, and with nothing saved so does every
+// failure.
 export function sessionQuery(api: ApiClient) {
   return queryOptions({
-    queryKey: ['v1', 'session'],
+    queryKey: SESSION_KEY,
     staleTime: Infinity,
+    // The default mode pauses a fetch while TanStack thinks the browser is
+    // offline, which would hold the loading screen up with nothing to show.
+    networkMode: 'always',
     // No `signal`: aborting the request can't stop the API starting a guest
     // account, but it drops the response and its cookie. The query would
     // then start another account, e.g. when StrictMode remounts the layout.
-    queryFn: async () => {
-      const data = await send(
+    queryFn: async ({ client }) => {
+      const request = send(
         'POST /v1/session',
         api.POST('/v1/session', { headers: JSON_HEADERS }),
-      )
-      return data.data.account
+      ).then(({ data }) => {
+        saveAccount(data.account)
+        return data.account
+      })
+      const saved = savedAccount()
+      if (!saved) return request
+
+      const refetchWhenOnline = () =>
+        // TanStack's onlineManager starts online and changes only on an
+        // `offline` event, so it never reports a page that loaded offline
+        // coming back.
+        window.addEventListener(
+          'online',
+          () => void client.refetchQueries({ queryKey: SESSION_KEY }),
+          { once: true },
+        )
+      const unreachable = (error: unknown) => classifyFailure(error).kind === 'unreachable'
+
+      const outcome = await raceSession(request)
+      switch (outcome.kind) {
+        case 'answered':
+          return outcome.account
+        case 'failed':
+          if (!unreachable(outcome.error)) throw outcome.error
+          refetchWhenOnline()
+          return saved
+        case 'slow':
+          request.then(
+            (account) => client.setQueryData(SESSION_KEY, account),
+            (error: unknown) => {
+              if (unreachable(error)) refetchWhenOnline()
+            },
+          )
+          return saved
+      }
     },
   })
 }
 
+function raceSession(request: Promise<SessionAccount>): Promise<SessionOutcome> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const slow = new Promise<SessionOutcome>((resolve) => {
+    timer = setTimeout(() => resolve({ kind: 'slow' }), OFFLINE_AFTER_MS)
+  })
+  const settled = request.then(
+    (account): SessionOutcome => ({ kind: 'answered', account }),
+    (error: unknown): SessionOutcome => ({ kind: 'failed', error }),
+  )
+  return Promise.race([settled, slow]).finally(() => clearTimeout(timer))
+}
+
 // Ends the visitor's session, and returns the identity provider's logout
-// page, which the browser follows to end the provider's session too.
+// page, which the browser follows to end the provider's session too. It
+// forgets the saved account, so an offline load after it doesn't show the
+// account that signed out.
 export async function logout(api: ApiClient): Promise<string> {
   const data = await send(
     'POST /v1/auth/logout',
     api.POST('/v1/auth/logout', { headers: JSON_HEADERS }),
   )
+  forgetAccount()
   return data.data.logout_url
 }
 
