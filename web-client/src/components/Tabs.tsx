@@ -7,15 +7,19 @@ export type Tab = { label: string; panel: ReactNode }
 // styles/kit.css: a tablist, then each tab's panel, of which only the
 // selected tab's shows. The first tab starts selected. Only the selected tab
 // is a tab stop, and the arrow keys, Home and End select another.
-// `panelStyle` styles every panel.
+// `panelStyle` styles every panel. With `lazy`, only the selected tab's
+// panel renders its content, so a panel that loads data loads it once its
+// tab opens.
 export function Tabs({
   label,
   tabs,
   panelStyle,
+  lazy = false,
 }: {
   label: string
   tabs: readonly Tab[]
   panelStyle?: CSSProperties
+  lazy?: boolean
 }) {
   const id = useId()
   const { selected, optionProps } = useSingleSelect(
@@ -47,7 +51,7 @@ export function Tabs({
           hidden={index !== selected}
           style={panelStyle}
         >
-          {tab.panel}
+          {(!lazy || index === selected) && tab.panel}
         </div>
       ))}
     </>
