@@ -449,3 +449,93 @@ def test_a_permission_key_can_hold_digits_and_underscores(
     connection: Connection,
 ) -> None:
     connection.execute(text("INSERT INTO permissions (key) VALUES ('games_2.record')"))
+
+
+def test_one_default_league_is_on_default_leagues_only(
+    connection: Connection,
+) -> None:
+    indexdef = connection.scalar(
+        text(
+            "SELECT indexdef FROM pg_indexes"
+            " WHERE tablename = 'leagues' AND indexname = 'one_default_league'"
+        )
+    )
+
+    assert indexdef == (
+        "CREATE UNIQUE INDEX one_default_league ON public.leagues"
+        " USING btree (is_default) WHERE is_default"
+    )
+
+
+def test_unique_league_name_is_on_the_lowercase_name(connection: Connection) -> None:
+    indexdef = connection.scalar(
+        text(
+            "SELECT indexdef FROM pg_indexes"
+            " WHERE tablename = 'leagues' AND indexname = 'unique_league_name'"
+        )
+    )
+
+    assert indexdef == (
+        "CREATE UNIQUE INDEX unique_league_name ON public.leagues"
+        " USING btree (lower(name))"
+    )
+
+
+def test_a_new_player_joins_the_default_league(connection: Connection) -> None:
+    # alembic check doesn't see triggers.
+    trigger = connection.execute(
+        text(
+            "SELECT tgenabled, pg_get_triggerdef(oid) FROM pg_trigger"
+            " WHERE tgname = 'players_join_default_league'"
+        )
+    ).one()
+
+    assert trigger == (
+        "O",
+        "CREATE TRIGGER players_join_default_league AFTER INSERT ON public.players"
+        " FOR EACH ROW EXECUTE FUNCTION join_default_league()",
+    )
+
+
+def test_there_is_at_most_one_default_league(connection: Connection) -> None:
+    with pytest.raises(IntegrityError) as error:
+        connection.execute(
+            text("INSERT INTO leagues (name, is_default) VALUES ('Club', true)")
+        )
+
+    assert violated_constraint(error) == "one_default_league"
+
+
+def test_league_names_are_unique_whatever_their_case(connection: Connection) -> None:
+    with pytest.raises(IntegrityError) as error:
+        connection.execute(text("INSERT INTO leagues (name) VALUES ('fortymm')"))
+
+    assert violated_constraint(error) == "unique_league_name"
+
+
+@pytest.mark.parametrize(
+    ("name", "constraint"),
+    [
+        (" Club", "ck_leagues_name_trimmed"),
+        ("", "ck_leagues_name_trimmed"),
+        ("x" * 51, "ck_leagues_name_length"),
+    ],
+)
+def test_a_league_name_is_trimmed_and_short(
+    connection: Connection, name: str, constraint: str
+) -> None:
+    with pytest.raises(IntegrityError) as error:
+        connection.execute(
+            text("INSERT INTO leagues (name) VALUES (:name)"), {"name": name}
+        )
+
+    assert violated_constraint(error) == constraint
+
+
+def test_a_league_with_members_is_never_deleted(connection: Connection) -> None:
+    add_player(connection)
+
+    with pytest.raises(IntegrityError) as error:
+        connection.execute(text("DELETE FROM leagues"))
+
+    assert violated_constraint(error) == "fk_league_members_league_id_leagues"

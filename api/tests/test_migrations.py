@@ -148,3 +148,35 @@ def test_an_account_with_the_first_administrators_email_gets_the_role(
 
     assert held == [("mightymoose@fortymm.com", "Administrator")]
     assert grants == 0
+
+
+def test_the_upgrade_puts_every_existing_player_in_the_default_league(
+    throwaway_database_url: str,
+) -> None:
+    with connected(throwaway_database_url) as config:
+        command.upgrade(config, "f9a766362b60")
+        connection = config.attributes["connection"]
+        connection.execute(
+            text("INSERT INTO players (display_name) VALUES ('Ann'), ('Bob')")
+        )
+        connection.execute(
+            text(
+                "UPDATE players SET merged_into ="
+                " (SELECT id FROM players WHERE display_name = 'Ann')"
+                " WHERE display_name = 'Bob'"
+            )
+        )
+        connection.commit()
+        command.upgrade(config, "head")
+        connection.commit()
+
+        members = connection.execute(
+            text(
+                "SELECT players.display_name, leagues.name FROM league_members"
+                " JOIN players ON players.id = player_id"
+                " JOIN leagues ON leagues.id = league_id"
+                " ORDER BY players.display_name"
+            )
+        ).all()
+
+    assert members == [("Ann", "FortyMM"), ("Bob", "FortyMM")]
