@@ -1050,7 +1050,10 @@ gets the API's JSON 404 rather than the SPA's `index.html` (so
 assets and the SPA fallback work). On a Preview, `sign-in.spec.ts` checks
 that `GET /api/v1/auth/login` answers 302 to the Auth0 tenant's
 `/authorize`, with the Preview's client ID and callback URL. It reads them
-from `api/deploy/auth0.env`. It doesn't sign in. The
+from `api/deploy/auth0.env`. It doesn't sign in. On a Preview,
+`offline.spec.ts` installs the service worker (see Service worker), goes
+offline, and checks that `/design-system` and `/signed-out` still load and
+that `/api/*` doesn't. The
 main config ignores it; `web-client/playwright.deployed.config.ts` runs it,
 with `baseURL` from `PLAYWRIGHT_BASE_URL` (it fails fast without one) and no
 screenshot tests. Its `ready` project retries `/api/v1/health` for up to a
@@ -1124,6 +1127,27 @@ paint uses, update the preloads too.
 Use these classes and CSS variables rather than raw values or page-specific
 styles. `/design-system` is where the app's styles are checked against the
 reference (see the screenshot tests above).
+
+### Service worker
+
+A production build has a service worker, `/sw.js`, which caches the app so
+it loads with no network, as in a hall with no signal. `vite-plugin-pwa`
+writes it with Workbox (`VitePWA` in `vite.config.ts`).
+`registerServiceWorker()` (`src/serviceWorker.ts`) registers it after the
+page loads, only in a build, so the dev server and the tests have none.
+
+- It precaches every JS, CSS, HTML, SVG and font file of the build, about
+  830 KB. So a navigation to a route whose chunk hasn't loaded yet never
+  waits on the network.
+- A navigation gets the precached `index.html`, except under `/api/`. Those
+  navigations, such as sign-in and its callback, go to the Worker.
+- It caches no API response. The authenticated pages still need
+  `POST /v1/session`, so offline they show "Can’t reach FortyMM". Only the
+  public pages work offline.
+- A new version waits until every tab of the old one has closed. It never
+  calls `skipWaiting`, which would delete the precache that an open tab
+  still loads its chunks from (#153). The API never breaks `/v1`, so an old
+  version keeps working.
 
 ### Dev server
 

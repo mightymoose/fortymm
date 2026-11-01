@@ -1,6 +1,7 @@
 import { tanstackRouter } from '@tanstack/router-plugin/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
+import { VitePWA } from 'vite-plugin-pwa'
 import { configDefaults } from 'vitest/config'
 
 // https://vite.dev/config/
@@ -9,6 +10,23 @@ export default defineConfig({
     // It has to run before the React plugin.
     tanstackRouter({ target: 'react', autoCodeSplitting: true }),
     react(),
+    VitePWA({
+      // src/serviceWorker.ts registers it, so tests and the dev server never do.
+      injectRegister: false,
+      manifest: false,
+      workbox: {
+        // The whole build is under 1 MB, so every chunk, style and font is
+        // precached and a later navigation never waits on the network.
+        globPatterns: ['**/*.{js,css,html,svg,woff2}'],
+        navigateFallback: '/index.html',
+        // These navigations must reach the Worker: the sign-in redirects and
+        // the API's docs.
+        navigateFallbackDenylist: [/^\/api\//],
+        // No skipWaiting: a new worker would delete the precache of an open
+        // tab, which then fails to load its next route chunk (#153). It
+        // takes over once every tab of the old version has closed.
+      },
+    }),
   ],
   server: {
     // Listen on all interfaces so the dev server is reachable from outside
