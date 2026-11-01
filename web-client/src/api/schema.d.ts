@@ -412,6 +412,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/accounts/{account_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Account
+         * @description The verified account, with every role and whether it holds each, for
+         *     its admin page. Needs `admin.view`.
+         */
+        get: operations["admin_account"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/accounts/{account_id}/roles": {
         parameters: {
             query?: never;
@@ -485,9 +506,51 @@ export interface components {
             /** Role Ids */
             role_ids: string[];
         };
+        /** AdminAccountDetail */
+        AdminAccountDetail: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Email */
+            email: string;
+            /** Display Name */
+            display_name: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Last Seen At
+             * Format: date-time
+             */
+            last_seen_at: string;
+            /** Roles */
+            roles: components["schemas"]["AdminAccountRole"][];
+        };
+        /** AdminAccountDetailResponse */
+        AdminAccountDetailResponse: {
+            data: components["schemas"]["AdminAccountDetail"];
+        };
         /** AdminAccountResponse */
         AdminAccountResponse: {
             data: components["schemas"]["AdminAccount"];
+        };
+        /** AdminAccountRole */
+        AdminAccountRole: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Held */
+            held: boolean;
         };
         /** AdminAccountsMeta */
         AdminAccountsMeta: {
@@ -1704,6 +1767,64 @@ export interface operations {
             };
             /** @description The account's roles don't grant the permission the route needs */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_account: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAccountDetailResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description No verified account has this id */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

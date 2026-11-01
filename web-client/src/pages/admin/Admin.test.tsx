@@ -1,4 +1,4 @@
-import { waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { AdminPage, type AdminTab } from '../../test/pages/AdminPage'
 import {
@@ -267,57 +267,14 @@ describe('permissions', () => {
 })
 
 describe('accounts', () => {
-  it('sets the roles an account holds', async () => {
-    const api = admin()
-    const page = await AdminPage.render()
-    await page.openTab('Accounts')
-    await page.findRow('ben@example.com')
-    await page.click('Edit roles of ben@example.com')
-    const sheet = page.dialog('Edit roles')!
-    await page.toggle(sheet, 'Viewer')
-    await page.press(sheet, 'Save roles')
-
-    expect(await page.findToast('Roles saved for ben@example.com')).toBeInTheDocument()
-    expect(api.writes).toEqual([
-      { method: 'PUT', path: `/v1/admin/accounts/${ben.id}/roles`, body: { role_ids: [viewer.id] } },
-    ])
-    expect(await page.findRow('ben@example.com')).toHaveTextContent('Viewer')
-  })
-
-  it('says why the last administrator keeps their role', async () => {
+  it('links each account to its own page', async () => {
     admin()
     const page = await AdminPage.render()
     await page.openTab('Accounts')
-    await page.findRow('ann@example.com')
-    await page.click('Edit roles of ann@example.com')
-    const sheet = page.dialog('Edit roles')!
-    await page.toggle(sheet, 'Administrator')
-    await page.press(sheet, 'Save roles')
-    await waitFor(() =>
-      expect(sheet).toHaveTextContent('At least one account must keep the permission to grant roles'),
-    )
-  })
-
-  it('sends a visitor who takes admin.view from themselves to Home', async () => {
-    const granter = {
-      id: 'c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f',
-      name: 'Granter',
-      description: '',
-      permissions: ['account_roles.manage'],
-    }
-    admin({
-      roles: [administrator, viewer, granter],
-      accounts: [{ ...ann, role_ids: [viewer.id, granter.id] }, ben],
-    })
-    const page = await AdminPage.render()
-    await page.openTab('Accounts')
-    await page.findRow('ann@example.com')
-    await page.click('Edit roles of ann@example.com')
-    await page.toggle(page.dialog('Edit roles')!, 'Viewer')
-    await page.press(page.dialog('Edit roles')!, 'Save roles')
-
-    await waitFor(() => expect(page.href).toBe('/'))
-    expect(await page.adminLink()).toBeNull()
+    await page.findRow('ben@example.com')
+    await page.follow('ben@example.com')
+    expect(page.href).toBe(`/admin/accounts/${ben.id}`)
+    expect(await page.findHeading('ben@example.com')).toBeInTheDocument()
   })
 
   it('finds accounts by email', async () => {
@@ -344,6 +301,116 @@ describe('accounts', () => {
   })
 })
 
+describe('an account’s page', () => {
+  it('shows who the account is', async () => {
+    admin()
+    const page = await AdminPage.renderAccount(ben.id)
+    await page.findHeading('ben@example.com')
+    expect(document.body).toHaveTextContent('Playerbrave badger 214')
+    expect(document.body).toHaveTextContent('Joined')
+    expect(document.body).toHaveTextContent('Last seen')
+  })
+
+  it('sets the roles the account holds', async () => {
+    const api = admin()
+    const page = await AdminPage.renderAccount(ben.id)
+    await page.findHeading('ben@example.com')
+    await page.toggle(page.rolesCard, 'Viewer')
+    await page.press(page.rolesCard, 'Save roles')
+
+    expect(await page.findToast('Roles saved for ben@example.com')).toBeInTheDocument()
+    expect(api.writes).toEqual([
+      { method: 'PUT', path: `/v1/admin/accounts/${ben.id}/roles`, body: { role_ids: [viewer.id] } },
+    ])
+    expect(api.state.accounts[1].role_ids).toEqual([viewer.id])
+    expect(within(page.rolesCard).getByRole('checkbox', { name: /^Viewer/ })).toBeChecked()
+  })
+
+  it('says why the last administrator keeps their role', async () => {
+    admin()
+    const page = await AdminPage.renderAccount(ann.id)
+    await page.findHeading('ann@example.com')
+    await page.toggle(page.rolesCard, 'Administrator')
+    await page.press(page.rolesCard, 'Save roles')
+    await waitFor(() =>
+      expect(page.rolesCard).toHaveTextContent(
+        'At least one account must keep the permission to grant roles',
+      ),
+    )
+  })
+
+  it('sends a visitor who takes admin.view from themselves to Home', async () => {
+    const granter = {
+      id: 'c3d4e5f6-a7b8-4c9d-8e0f-1a2b3c4d5e6f',
+      name: 'Granter',
+      description: '',
+      permissions: ['account_roles.manage'],
+    }
+    admin({
+      roles: [administrator, viewer, granter],
+      accounts: [{ ...ann, role_ids: [viewer.id, granter.id] }, ben],
+    })
+    const page = await AdminPage.renderAccount(ann.id)
+    await page.findHeading('ann@example.com')
+    await page.toggle(page.rolesCard, 'Viewer')
+    await page.press(page.rolesCard, 'Save roles')
+
+    await waitFor(() => expect(page.href).toBe('/'))
+    expect(await page.adminLink()).toBeNull()
+  })
+
+  it('goes back to the Accounts tab', async () => {
+    admin()
+    const page = await AdminPage.renderAccount(ben.id)
+    await page.findHeading('ben@example.com')
+    await page.follow('Accounts')
+    expect(page.href).toBe('/admin?tab=accounts')
+    expect(page.selectedTab).toBe('Accounts')
+    expect(await page.findRow('ben@example.com')).toBeInTheDocument()
+  })
+
+  it('keeps the open tab in the URL', async () => {
+    admin()
+    const page = await AdminPage.render()
+    await page.openTab('Permissions')
+    expect(page.href).toBe('/admin?tab=permissions')
+  })
+
+  it('opens Roles for a tab it doesn’t know', async () => {
+    admin()
+    const page = await AdminPage.render('/admin?tab=bogus')
+    expect(page.selectedTab).toBe('Roles')
+    expect(await page.findRow('Administrator')).toBeInTheDocument()
+  })
+
+  it('says when no verified account has the id', async () => {
+    admin()
+    const page = await AdminPage.renderAccount(crypto.randomUUID())
+    expect(await page.findHeading('No such account')).toBeInTheDocument()
+  })
+
+  it('shows a skeleton while the account loads', async () => {
+    admin()
+    const held = holdAdmin(`accounts/${ben.id}`)
+    const page = await AdminPage.render(`/admin/accounts/${ben.id}`)
+    expect(document.body).toHaveTextContent('Loading account')
+    await held.release()
+    expect(await page.findHeading('ben@example.com')).toBeInTheDocument()
+  })
+
+  it('shows an error with Try again when the account fails', async () => {
+    admin()
+    failAdminOnce(`accounts/${ben.id}`, 500)
+    const page = await AdminPage.renderAccount(ben.id)
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('Something went wrong'),
+    )
+    expect(screen.getByRole('link', { name: 'Accounts' })).toBeInTheDocument()
+    await page.user.click(screen.getByRole('button', { name: 'Try again' }))
+    expect(await page.findHeading('ben@example.com')).toBeInTheDocument()
+  })
+})
+
 describe('an account with only admin.view', () => {
   it('sees every list, with no controls that change them', async () => {
     admin({ accounts: [{ ...ann, role_ids: [viewer.id] }, { ...ben, role_ids: [administrator.id] }] })
@@ -356,9 +423,15 @@ describe('an account with only admin.view', () => {
     await page.findRow('games.record')
     expect(page.button('New permission')).toBeNull()
     expect(page.button('Edit games.record')).toBeNull()
+  })
 
-    await page.openTab('Accounts')
-    await page.findRow('ben@example.com')
-    expect(page.button('Edit roles of ben@example.com')).toBeNull()
+  it('sees an account’s roles, with no way to change them', async () => {
+    admin({ accounts: [{ ...ann, role_ids: [viewer.id] }, { ...ben, role_ids: [administrator.id] }] })
+    const page = await AdminPage.renderAccount(ben.id)
+    await page.findHeading('ben@example.com')
+    expect(page.rolesCard).toHaveTextContent('Administrator')
+    expect(page.rolesCard).not.toHaveTextContent('Viewer')
+    expect(within(page.rolesCard).queryByRole('checkbox')).toBeNull()
+    expect(within(page.rolesCard).queryByRole('button', { name: 'Save roles' })).toBeNull()
   })
 })

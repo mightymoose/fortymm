@@ -1,5 +1,6 @@
 /* The admin page (Admin.tsx): a title, the tabs, then each tab's toolbar
-   over its table. */
+   over its table. An account's page (AccountAdmin.tsx): the breadcrumb, its
+   email, its facts, then a card of its roles. */
 .admin{display:flex;flex-direction:column;gap:var(--s-6)}
 .admin [role=tabpanel]{padding-top:var(--s-6)}
 .admin-section{display:flex;flex-direction:column;gap:var(--s-5)}
@@ -11,6 +12,8 @@
 .admin-search>.fm-btn{margin-top:26px}
 .admin-table-wrap{overflow-x:auto}
 .admin-table td{vertical-align:top}
+.admin-title{overflow-wrap:anywhere}
+.admin-facts{max-width:640px}
 .admin-name{display:block;color:var(--fg-1);overflow-wrap:anywhere}
 .admin-desc{display:block;margin-top:2px;font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
 .admin-key{font-family:var(--font-num)}
@@ -23,3 +26,5 @@
 .admin-skeleton{display:flex;flex-direction:column;gap:var(--s-3)}
 .admin-skeleton__bar{height:44px;max-width:420px}
 .admin-skeleton__row{height:44px}
+.admin-skeleton__title{height:40px;max-width:320px}
+.admin-skeleton__card{height:240px}

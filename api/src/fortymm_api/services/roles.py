@@ -11,6 +11,7 @@ holds `account_roles.manage`. Otherwise nobody could grant a role again.
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from sqlalchemy import ColumnElement, and_, delete, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as upsert
@@ -84,6 +85,29 @@ class AccountPage:
     accounts: list[AdminAccount]
     # More accounts match than the page holds.
     has_more: bool
+
+
+@dataclass(frozen=True)
+class RoleChoice:
+    """A role, and whether one account holds it."""
+
+    id: RoleId
+    name: str
+    description: str
+    held: bool
+
+
+@dataclass(frozen=True)
+class AccountDetail:
+    """What the admin page shows about one verified account."""
+
+    id: AccountId
+    email: Email
+    display_name: str | None
+    created_at: datetime
+    last_seen_at: datetime
+    # Every role, by name.
+    roles: tuple[RoleChoice, ...]
 
 
 class RoleNotFound(Exception):
@@ -230,6 +254,29 @@ def list_accounts(session: Session, email: str | None) -> AccountPage:
     )
     return AccountPage(
         found[:ACCOUNT_PAGE_SIZE], has_more=len(found) > ACCOUNT_PAGE_SIZE
+    )
+
+
+def get_account(session: Session, account: AccountId) -> AccountDetail:
+    """The verified account, with every role and whether it holds each."""
+    found = _accounts(session, Account.id == account)
+    if not found:
+        raise AccountNotFound
+    summary = found[0]
+    created_at, last_seen_at = session.execute(
+        select(Account.created_at, Account.last_seen_at).where(Account.id == account)
+    ).one()
+    held = set(summary.role_ids)
+    return AccountDetail(
+        summary.id,
+        summary.email,
+        summary.display_name,
+        created_at,
+        last_seen_at,
+        tuple(
+            RoleChoice(role.id, role.name, role.description, role.id in held)
+            for role in _roles(session)
+        ),
     )
 
 

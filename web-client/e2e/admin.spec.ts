@@ -5,7 +5,7 @@ import { expect, test } from './fixtures.ts'
 // with no session counts toward the guest account limit.
 const administrator = { sub: 'e2e|mightymoose', email: 'mightymoose@fortymm.com' }
 
-test('an administrator creates a role, then deletes it', async ({ adminPage, signInPage }) => {
+test('an administrator creates a role, deletes it, then opens their account', async ({ adminPage, signInPage }) => {
   await signInPage.signIn(administrator)
   await adminPage.goto()
   await expect(adminPage.title).toBeVisible()
@@ -18,4 +18,8 @@ test('an administrator creates a role, then deletes it', async ({ adminPage, sig
 
   await adminPage.deleteRole(name)
   await expect(adminPage.row(name)).toHaveCount(0)
+
+  await adminPage.openAccount(administrator.email)
+  await expect(adminPage.accountHeading(administrator.email)).toBeVisible()
+  await expect(adminPage.roleCheckbox('Administrator')).toBeChecked()
 })

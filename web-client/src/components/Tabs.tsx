@@ -15,16 +15,23 @@ export function Tabs({
   tabs,
   panelStyle,
   lazy = false,
+  initial = 0,
+  onChange,
 }: {
   label: string
   tabs: readonly Tab[]
   panelStyle?: CSSProperties
   lazy?: boolean
+  initial?: number
+  onChange?: (index: number) => void
 }) {
   const id = useId()
+  const labels = tabs.map((tab) => tab.label)
   const { selected, optionProps } = useSingleSelect(
     'tab',
-    tabs.map((tab) => tab.label),
+    labels,
+    onChange && ((label) => onChange(labels.indexOf(label))),
+    initial,
   )
   return (
     <>

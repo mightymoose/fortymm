@@ -236,7 +236,8 @@ export type AdminState = {
   roles: Omit<AdminRole, 'account_count'>[]
   accounts: AdminAccount[]
 }
-export type AdminList = 'permissions' | 'roles' | 'accounts'
+// A list, or one account's page, such as `accounts/<id>`.
+export type AdminList = 'permissions' | 'roles' | 'accounts' | `accounts/${string}`
 
 // The built-in permissions and the Administrator role, as the migration
 // makes them.
@@ -253,7 +254,7 @@ export const administrator: AdminState['roles'][number] = {
 }
 
 // Signs the mock API in as the verified account `accounts[0]`, and answers
-// the admin routes as the API does, from `state`. The session's permissions
+// the admin routes as the API does, from `state`, an account's page too. The session's permissions
 // come from the account's roles, so a write can change them. Writes refuse
 // as the API does: a taken name or key, a built-in permission, and any
 // change that leaves no account with `account_roles.manage`. Returns the
@@ -321,6 +322,27 @@ export function mockAdmin(initial: AdminState) {
       return HttpResponse.json<components['schemas']['AdminAccountsResponse']>({
         data: found.slice(0, 50),
         meta: { has_more: found.length > 50 },
+      })
+    }),
+    http.get<{ id: string }>(`${API_BASE_URL}/v1/admin/accounts/:id`, ({ params }) => {
+      const account = state.accounts.find((found) => found.id === params.id)
+      if (!account) return refuse(404, 'No verified account has this id')
+      return HttpResponse.json<components['schemas']['AdminAccountDetailResponse']>({
+        data: {
+          id: account.id,
+          email: account.email,
+          display_name: account.display_name,
+          created_at: '2026-03-14T09:30:00Z',
+          last_seen_at: '2026-10-31T18:05:00Z',
+          roles: [...state.roles]
+            .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()))
+            .map(({ id, name, description }) => ({
+              id,
+              name,
+              description,
+              held: account.role_ids.includes(id),
+            })),
+        },
       })
     }),
     // The API answers 415 to a write that isn't JSON, a bodyless DELETE too.
