@@ -109,7 +109,7 @@ const paths = {
       <path d="m12 19-7-7 7-7" /><path d="M19 12H5" />
     </>
   ),
-  // Lucide's "menu", "house" and "smartphone", which kit.js doesn't draw, for
+  // Lucide's "menu" and "house", which kit.js doesn't draw, for
   // the app's sidebar.
   menu: (
     <>
@@ -119,11 +119,6 @@ const paths = {
   house: (
     <>
       <path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8" /><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-    </>
-  ),
-  smartphone: (
-    <>
-      <rect width="14" height="20" x="5" y="2" rx="2" ry="2" /><path d="M12 18h.01" />
     </>
   ),
 } satisfies Record<string, ReactElement>

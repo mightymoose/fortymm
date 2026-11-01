@@ -4,6 +4,7 @@ import { http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { components } from '../../api/schema'
 import { leavePage } from '../../leavePage'
+import { TESTFLIGHT_URL } from '../../mobileApps'
 import { HomePage } from '../../test/pages/HomePage'
 import { API_BASE_URL, logoutResponse, server, sessionResponse } from '../../test/server'
 
@@ -26,6 +27,41 @@ function menuItem(homePage: HomePage, name: string): HTMLElement {
 describe('UserMenu', () => {
   afterEach(() => {
     vi.mocked(leavePage).mockReset()
+    vi.unstubAllGlobals()
+  })
+
+  function layout(narrow: boolean) {
+    vi.stubGlobal('matchMedia', () => ({
+      matches: narrow,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    }))
+  }
+
+  it('links to the iPhone beta in a new tab below 900px, with no Android link yet', async () => {
+    layout(true)
+    const homePage = await HomePage.render()
+    await userEvent.click(homePage.accountButton!)
+
+    const iphone = menuItem(homePage, 'Get the iPhone app')
+    expect(iphone).toHaveAttribute('href', TESTFLIGHT_URL)
+    expect(iphone).toHaveAttribute('target', '_blank')
+    expect(iphone.getAttribute('rel')?.split(' ')).toEqual(
+      expect.arrayContaining(['noopener', 'noreferrer']),
+    )
+    expect(
+      within(homePage.accountMenu).queryByRole('menuitem', { name: 'Get the Android app' }),
+    ).toBeNull()
+  })
+
+  it('has no iPhone link on a wide layout', async () => {
+    layout(false)
+    const homePage = await HomePage.render()
+    await userEvent.click(homePage.accountButton!)
+
+    expect(
+      within(homePage.accountMenu).queryByRole('menuitem', { name: 'Get the iPhone app' }),
+    ).toBeNull()
   })
 
   it('shows the player as a chip, which opens the menu, and Esc closes it back to the chip', async () => {

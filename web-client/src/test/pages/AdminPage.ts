@@ -28,9 +28,11 @@ export class AdminPage {
     return screen.queryByRole('heading', { level: 1, name: 'Admin' })
   }
 
-  // The sidebar's link to the admin page, or null.
-  get adminLink(): HTMLElement | null {
-    return screen.queryByRole('link', { name: 'Admin' })
+  // Opens the account menu, and returns its link to the admin page, or null.
+  async adminLink(): Promise<HTMLElement | null> {
+    await this.user.click(screen.getByRole('button', { name: 'Your account' }))
+    const menu = screen.getByRole('menu', { name: 'Your account' })
+    return within(menu).queryByRole('menuitem', { name: 'Admin' })
   }
 
   async openTab(tab: AdminTab): Promise<void> {

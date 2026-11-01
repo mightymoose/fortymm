@@ -42,14 +42,16 @@ function admin(state: Partial<AdminState> = {}) {
 }
 
 describe('the admin page', () => {
-  it('is in the sidebar only for an account with admin.view', async () => {
+  it('is in the account menu only for an account with admin.view', async () => {
     admin()
-    expect((await AdminPage.render()).adminLink).toBeInTheDocument()
+    const page = await AdminPage.render()
+    await page.user.click((await page.adminLink())!)
+    expect(page.href).toBe('/admin')
   })
 
-  it('isn’t in the sidebar for a guest', async () => {
+  it('isn’t in the account menu for a guest', async () => {
     const page = await AdminPage.render()
-    expect(page.adminLink).toBeNull()
+    expect(await page.adminLink()).toBeNull()
   })
 
   it('sends an account without admin.view to Home', async () => {
@@ -315,7 +317,7 @@ describe('accounts', () => {
     await page.press(page.dialog('Edit roles')!, 'Save roles')
 
     await waitFor(() => expect(page.href).toBe('/'))
-    expect(page.adminLink).toBeNull()
+    expect(await page.adminLink()).toBeNull()
   })
 
   it('finds accounts by email', async () => {
