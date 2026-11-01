@@ -649,6 +649,11 @@ it to `src/routes/`.
   (`src/pages/SignedOut.tsx`). Auth0 sends the browser there after
   sign-out. It is an `ErrorScreen` that says the visitor is signed out,
   with Sign in (back to `/`) and Play as a guest (a link to `/`).
+- `sign-in-stopped.tsx`: a public page, with component `SignInStopped`
+  (`src/pages/SignInStopped.tsx`). Auth0's error page sends the browser
+  there, such as after Back from a sign-in that worked. It is an
+  `ErrorScreen` with Go to FortyMM (a link to `/`) and Sign in again. It
+  reads none of Auth0's query, so it shows one message for every error.
 
 ### API client
 
@@ -1372,4 +1377,5 @@ person runs it with a Management API token. It changes the page for
 production and the Previews at once. Its logo is
 `web-client/public/logo-wordmark.svg`, served from `https://fortymm.com`.
 `api/deploy/README.md` describes it, and the steps to serve the page on
-`auth.fortymm.com`.
+`auth.fortymm.com`. `tenant.json` also points the tenant's error page at
+`https://fortymm.com/sign-in-stopped`.
