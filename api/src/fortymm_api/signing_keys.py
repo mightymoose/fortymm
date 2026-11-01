@@ -68,7 +68,10 @@ class SigningPublicKey:
         # bool is an int in Python, so a CBOR true key would pass as 1.
         if {type(key) for key in value} != {int} or set(value) != {_KTY, _CRV, _X, _Y}:
             raise InvalidKey("not exactly the kty, crv, x and y parameters")
-        if value[_KTY] != _EC2 or value[_CRV] != _P256:
+        kty, crv = value[_KTY], value[_CRV]
+        if type(kty) is not int or type(crv) is not int:
+            raise InvalidKey("kty or crv isn't an integer")
+        if kty != _EC2 or crv != _P256:
             raise InvalidKey("not an EC2 key on P-256")
         x, y = value[_X], value[_Y]
         if not isinstance(x, bytes) or not isinstance(y, bytes):
