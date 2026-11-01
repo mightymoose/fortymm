@@ -1,6 +1,6 @@
 import os
 import secrets
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
 from fastapi.testclient import TestClient
@@ -60,3 +60,23 @@ def players_have_activity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "fortymm_api.services.adoption.has_activity", lambda session, player: True
     )
+
+
+@pytest.fixture
+def spend_guest_budget(migrated_database: Engine) -> Callable[[str], None]:
+    """Spend a network's guest account budget for the current window, so its
+    next guest start, or sign-in with no session, gets
+    `GuestAccountLimitReached`."""
+
+    def spend(network: str) -> None:
+        with migrated_database.begin() as connection:
+            connection.execute(
+                text(
+                    "INSERT INTO guest_account_counts"
+                    " (network, window_ends_at, started)"
+                    " VALUES (CAST(:network AS cidr), now() + interval '1 minute', 30)"
+                ),
+                {"network": network},
+            )
+
+    return spend

@@ -2,7 +2,6 @@ import hmac
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from math import ceil
 from typing import Any
 
 from fastapi import FastAPI, Request, Response
@@ -21,7 +20,7 @@ from fortymm_api.services.players import (
 )
 from fortymm_api.services.sessions import AccountAdopted, GuestAccountLimitReached
 from fortymm_api.v1.auth import SignInUnavailable
-from fortymm_api.v1.errors import Error, ErrorsResponse
+from fortymm_api.v1.errors import Error, ErrorsResponse, retry_after_seconds
 
 WORKER_SECRET_HEADER = "X-FortyMM-Worker-Secret"
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -50,8 +49,7 @@ def too_many_guest_accounts(_request: Request, error: Exception) -> Response:
     """429 with Retry-After in whole seconds, at least 1."""
     assert isinstance(error, GuestAccountLimitReached)
     response = error_response(429, TOO_MANY_GUEST_ACCOUNTS)
-    seconds = ceil(error.retry_after.total_seconds())
-    response.headers["Retry-After"] = str(max(1, seconds))
+    response.headers["Retry-After"] = str(retry_after_seconds(error))
     return response
 
 

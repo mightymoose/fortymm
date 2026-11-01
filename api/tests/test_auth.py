@@ -166,6 +166,29 @@ def test_signing_in_again_after_sign_out_starts_no_guest_account(
     assert [player["open_question"] for player in players] == [False]
 
 
+def test_a_rate_limited_login_goes_to_signed_out_with_the_wait(
+    browser: TestClient,
+    spend_guest_budget: Callable[[str], None],
+    migrated_database: Engine,
+) -> None:
+    spend_guest_budget("203.0.113.7/32")
+
+    response = login(browser)
+
+    assert response.status_code == 302
+    assert response.headers["Cache-Control"] == "no-store"
+    location = urlsplit(response.headers["Location"])
+    assert location.path == "/signed-out"
+    query = parse_qs(location.query)
+    assert query.keys() == {"sign_in_error", "retry_after"}
+    assert query["sign_in_error"] == ["rate_limited"]
+    assert 1 <= int(query["retry_after"][0]) <= 60
+    assert "Set-Cookie" not in response.headers
+    with migrated_database.connect() as connection:
+        attempts = connection.scalar(text("SELECT count(*) FROM login_attempts"))
+    assert attempts == 0
+
+
 def test_login_makes_a_verified_account_sign_in_again(browser: TestClient) -> None:
     signed_in(browser, "auth0|ann", "ann@example.com")
 
@@ -480,6 +503,23 @@ def test_app_callback_with_no_query_opens_the_app(browser: TestClient) -> None:
 
     assert response.status_code == 302
     assert response.headers["Location"] == "fortymm://sign-in"
+
+
+def test_a_rate_limited_app_login_answers_429(
+    browser: TestClient, spend_guest_budget: Callable[[str], None]
+) -> None:
+    spend_guest_budget("203.0.113.7/32")
+
+    response = browser.post("/v1/auth/app-login", headers=JSON)
+
+    assert response.status_code == 429
+    assert 1 <= int(response.headers["Retry-After"]) <= 60
+    assert response.json() == {
+        "errors": [
+            {"status": "429", "title": "Too many new guest accounts from this network"}
+        ]
+    }
+    assert "Set-Cookie" not in response.headers
 
 
 def test_app_login_answers_503_without_a_provider(

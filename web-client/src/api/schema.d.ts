@@ -69,6 +69,10 @@ export interface paths {
          *     cookie instead, which the callback checks. After sign-in, the callback
          *     sends the visitor to `return_to`. It must be a path
          *     on this site, or the callback uses `/`.
+         *
+         *     Such a login counts toward the guest account limit. Past it, the visitor
+         *     goes to `/signed-out` with `sign_in_error=rate_limited` and
+         *     `retry_after`, the seconds until the network can sign in again.
          */
         get: operations["login"];
         put?: never;
@@ -570,17 +574,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-            /** @description The client's network started too many guest accounts. Retry-After gives the seconds until it can start more. */
-            429: {
-                headers: {
-                    /** @description The seconds until the network can start more */
-                    "Retry-After"?: number;
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorsResponse"];
                 };
             };
             /** @description The API has no identity provider configured */
