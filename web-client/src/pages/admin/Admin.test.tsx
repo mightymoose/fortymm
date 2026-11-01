@@ -376,6 +376,13 @@ describe('an account’s page', () => {
     expect(page.href).toBe('/admin?tab=permissions')
   })
 
+  it('opens Roles for a tab it doesn’t know', async () => {
+    admin()
+    const page = await AdminPage.render('/admin?tab=bogus')
+    expect(page.selectedTab).toBe('Roles')
+    expect(await page.findRow('Administrator')).toBeInTheDocument()
+  })
+
   it('says when no verified account has the id', async () => {
     admin()
     const page = await AdminPage.renderAccount(crypto.randomUUID())
