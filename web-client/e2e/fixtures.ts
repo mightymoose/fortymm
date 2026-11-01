@@ -1,4 +1,5 @@
 import { test as base } from '@playwright/test'
+import { AdminPage } from './pages/AdminPage.ts'
 import { DesignSystemPage } from './pages/DesignSystemPage.ts'
 import { HomePage } from './pages/HomePage.ts'
 import { ReferenceKitPage } from './pages/ReferenceKitPage.ts'
@@ -8,6 +9,7 @@ import { SignedOutPage } from './pages/SignedOutPage.ts'
 // Specs import `test` and `expect` from here to receive page objects as
 // fixtures, e.g. `test('...', async ({ homePage }) => { ... })`.
 export const test = base.extend<{
+  adminPage: AdminPage
   designSystemPage: DesignSystemPage
   homePage: HomePage
   referenceKitPage: ReferenceKitPage
@@ -16,6 +18,9 @@ export const test = base.extend<{
 }>({
   // The callbacks are named `provide`, not Playwright's usual `use`, so the
   // React hooks lint rule doesn't mistake them for hooks.
+  adminPage: async ({ page }, provide) => {
+    await provide(new AdminPage(page))
+  },
   designSystemPage: async ({ page }, provide) => {
     await provide(new DesignSystemPage(page))
   },
