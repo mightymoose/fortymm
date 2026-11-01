@@ -1,0 +1,114 @@
+<!doctype html>
+<!--
+  The tenant's error page, in place of Auth0's "Oops!, something went wrong".
+  Auth0 renders it as a Liquid template, so {{ error }} is the error's code.
+  It looks like the web client's ErrorScreen, with the design system's
+  values written out, because the page can't load the app's CSS.
+  apply-auth0-branding sends it as the tenant's error_page.html.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sign-in stopped · FortyMM</title>
+    <link rel="icon" href="https://fortymm.com/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;600&display=swap"
+    />
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #0b0d12;
+        color: #f7f8fb;
+        font: 400 15px/1.5 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      main {
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        min-height: 100dvh;
+        padding: 24px;
+        text-align: center;
+      }
+      img {
+        height: 40px;
+      }
+      h1 {
+        margin: 16px 0 0;
+        font: 600 24px/1.3 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+      }
+      p {
+        margin: 0;
+        max-width: 42ch;
+        color: #e4e7ef;
+      }
+      .meta {
+        font-size: 13px;
+        color: #a9b0c2;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 12px;
+        margin-top: 8px;
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 40px;
+        padding: 0 16px;
+        box-sizing: border-box;
+        border-radius: 8px;
+        border: 1px solid transparent;
+        font: 600 15px/1.2 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+        text-decoration: none;
+      }
+      .btn:focus-visible {
+        outline: none;
+        box-shadow: 0 0 0 2px #0b0d12, 0 0 0 4px #ff7a1a;
+      }
+      .btn--primary {
+        background: #ff7a1a;
+        color: #0b0d12;
+      }
+      .btn--primary:hover {
+        background: #ff9a4a;
+      }
+      .btn--ghost {
+        color: #e4e7ef;
+      }
+      .btn--ghost:hover {
+        background: #1f2430;
+        color: #f7f8fb;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="https://fortymm.com/logo-wordmark.svg" alt="FortyMM" />
+      <h1>Sign-in stopped here</h1>
+      <p>
+        This sign-in page has ended. That often happens after going back
+        from a sign-in that worked. If you finished signing in, you’re still
+        signed in.
+      </p>
+      {% if error %}
+      <p class="meta">Error: {{ error | escape }}</p>
+      {% endif %}
+      <div class="actions">
+        <a class="btn btn--primary" href="https://fortymm.com/">Go to FortyMM</a>
+        <a class="btn btn--ghost" href="https://fortymm.com/api/v1/auth/login">Sign in again</a>
+      </div>
+    </main>
+  </body>
+</html>

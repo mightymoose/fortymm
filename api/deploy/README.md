@@ -172,6 +172,12 @@ system's look. It reads the files in `auth0-branding/`:
   the favicon.
 - `tenant.json`: the tenant's name, so the page says FortyMM and not the
   tenant's generated name.
+- `error-page.html`: the tenant's error page, in place of Auth0's "Oops!,
+  something went wrong". Auth0 shows it when a sign-in can't go on, such
+  as when Back after a sign-in reaches a step whose login has ended. It
+  links to `https://fortymm.com/` and to a new sign-in. It's a Liquid
+  template, and it shows `{{ error }}`. The script sends it as
+  `error_page.html` in the tenant settings.
 - `custom-text.json`: the titles and descriptions of the sign-in screens.
 
 Production and the Previews share the tenant, so the script changes the
@@ -188,8 +194,9 @@ changes anything, it saves the current settings to a backup directory and
 prints its path. To undo a run, send the backup back with the Management
 API:
 
-- `tenant.json`: only its `friendly_name` and `picture_url`, to `PATCH
-  /api/v2/tenants/settings`. That endpoint rejects the other fields that the
+- `tenant.json`: only its `friendly_name`, `picture_url` and `error_page`,
+  to `PATCH /api/v2/tenants/settings`. If it has no `error_page`, send
+  `{"error_page": {"html": "", "show_log_link": false}}`. That endpoint rejects the other fields that the
   GET returns.
 - `settings.json`: to `PATCH /api/v2/branding`.
 - `theme.json`: without its `themeId`, to `PATCH

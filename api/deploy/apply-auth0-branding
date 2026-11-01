@@ -76,8 +76,10 @@ case "$status" in
 esac
 echo "Saved the current settings to $backup"
 
-call PATCH /tenants/settings "$(jq -c . "$branding/tenant.json")" >/dev/null
-echo "Set the tenant's name and picture."
+tenant_settings=$(jq -c --rawfile html "$branding/error-page.html" \
+  '. + {error_page: {html: $html, show_log_link: false}}' "$branding/tenant.json")
+call PATCH /tenants/settings "$tenant_settings" >/dev/null
+echo "Set the tenant's name, picture and error page."
 
 call PATCH /branding "$(jq -c . "$branding/settings.json")" >/dev/null
 echo "Set the colours, logo and favicon."

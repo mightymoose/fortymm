@@ -1366,8 +1366,9 @@ can read each client secret.
 Cloud console. It adds each client secret to Secret Manager and writes
 `auth0.env`. `api/deploy/README.md` describes it.
 
-`api/deploy/apply-auth0-branding` gives the tenant's sign-in page the
-design system's look, from the files in `api/deploy/auth0-branding/`. A
+`api/deploy/apply-auth0-branding` gives the tenant's sign-in page and its
+error page the design system's look, from the files in
+`api/deploy/auth0-branding/`. A
 person runs it with a Management API token. It changes the page for
 production and the Previews at once. Its logo is
 `web-client/public/logo-wordmark.svg`, served from `https://fortymm.com`.
