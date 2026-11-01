@@ -98,7 +98,7 @@ def upgrade() -> None:
         END $$ LANGUAGE plpgsql
         """
     )
-    # Trigger before backfill: CREATE TRIGGER locks players, so no insert slips by.
+    # league_members' foreign key locked players until commit, so no insert slips by.
     op.execute(
         """
         CREATE TRIGGER players_join_default_league AFTER INSERT ON players
