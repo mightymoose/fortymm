@@ -8,7 +8,7 @@ export class AdminPage {
 
   constructor(page: Page) {
     this.page = page
-    this.title = page.getByRole('heading', { level: 1, name: 'Admin' })
+    this.title = page.getByRole('heading', { level: 1, name: 'Administration' })
     this.panel = page.getByRole('tabpanel')
   }
 

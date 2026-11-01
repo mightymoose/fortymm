@@ -25,7 +25,7 @@ export class AdminPage {
   }
 
   get title(): HTMLElement | null {
-    return screen.queryByRole('heading', { level: 1, name: 'Admin' })
+    return screen.queryByRole('heading', { level: 1, name: 'Administration' })
   }
 
   // Opens the account menu, and returns its link to the admin page, or null.

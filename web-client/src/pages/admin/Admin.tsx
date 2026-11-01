@@ -11,7 +11,7 @@ import './admin.css'
 export function Admin() {
   return (
     <div className="admin">
-      <h1>Admin</h1>
+      <h1>Administration</h1>
       <Tabs
         label="Admin"
         lazy
