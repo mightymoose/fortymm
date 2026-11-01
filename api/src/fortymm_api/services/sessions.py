@@ -26,6 +26,7 @@ from fortymm_api.models import (
     Player,
     PlayerManager,
 )
+from fortymm_api.services.authorization import permissions_of
 from fortymm_api.services.display_names import random_display_name
 
 # 400 days, the longest Max-Age browsers keep, so a session expires with its
@@ -90,6 +91,8 @@ class StartedSession:
     account: CurrentAccount
     player: SelfPlayer
     token: str
+    # The keys of the permissions the account's roles grant.
+    permissions: frozenset[str]
 
 
 def current_account(account: Account) -> CurrentAccount | None:
@@ -182,6 +185,9 @@ def start_session(
     deleted. Its account stays. Raises GuestAccountLimitReached before any
     write when the address's network is at the limit.
 
+    It returns the permissions the account's roles grant. A guest account
+    has none.
+
     Every account it returns has a self player. A new guest account gets
     one with a name from `new_display_name`. So does a resumed account that
     has none, such as one that a sign-in with no session made, or one whose
@@ -199,7 +205,13 @@ def start_session(
         player = _self_player(session, found.account.id)
         if player is None:
             player = _create_self_player(session, found.account.id, new_display_name)
-        return StartedSession(found.row.id, found.account, player, token)
+        return StartedSession(
+            found.row.id,
+            found.account,
+            player,
+            token,
+            permissions_of(session, found.account.id),
+        )
 
     _count_guest_account(session, client_network(address))
     if found is not None:
@@ -209,7 +221,7 @@ def start_session(
     session.flush()
     row, token = new_session(session, guest.id)
     player = _create_self_player(session, guest.id, new_display_name)
-    return StartedSession(row.id, GuestAccount(guest.id), player, token)
+    return StartedSession(row.id, GuestAccount(guest.id), player, token, frozenset())
 
 
 def count_start_without_session(session: Session, address: ClientAddress) -> None:
