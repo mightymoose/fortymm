@@ -239,9 +239,9 @@ def add_login_attempt(connection: Connection, state: str) -> uuid.UUID:
     )
     connection.execute(
         text(
-            "INSERT INTO login_attempts"
-            " (state, session_id, code_verifier, nonce, return_to, expires_at)"
-            " VALUES (:state, :session_id, 'v', 'n', '/', now())"
+            "INSERT INTO login_attempts (state, started_with_session, session_id,"
+            " code_verifier, nonce, return_to, expires_at)"
+            " VALUES (:state, true, :session_id, 'v', 'n', '/', now())"
         ),
         {"state": state, "session_id": session_id},
     )
@@ -257,11 +257,33 @@ def test_two_login_attempts_cannot_share_a_state(connection: Connection) -> None
     assert violated_constraint(error) == "uq_login_attempts_state"
 
 
-def test_deleting_a_session_deletes_its_login_attempts(
+def test_deleting_a_session_keeps_its_login_attempts(
     connection: Connection,
 ) -> None:
     session_id = add_login_attempt(connection, "s")
 
     connection.execute(text("DELETE FROM sessions WHERE id = :id"), {"id": session_id})
 
-    assert connection.scalar(text("SELECT count(*) FROM login_attempts")) == 0
+    assert connection.execute(
+        text("SELECT started_with_session, session_id FROM login_attempts")
+    ).one() == (True, None)
+
+
+def test_a_login_attempt_without_a_session_at_start_has_no_session(
+    connection: Connection,
+) -> None:
+    session_id = add_login_attempt(connection, "s")
+
+    with pytest.raises(IntegrityError) as error:
+        connection.execute(
+            text(
+                "UPDATE login_attempts SET started_with_session = false"
+                " WHERE session_id = :id"
+            ),
+            {"id": session_id},
+        )
+
+    assert (
+        violated_constraint(error)
+        == "ck_login_attempts_session_only_if_started_with_one"
+    )

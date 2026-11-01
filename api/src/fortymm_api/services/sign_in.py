@@ -154,11 +154,13 @@ def begin_sign_in(
     )
     if isinstance(find_session(session, token), ValidSession):
         started = start_session(session, token, address)
+        attempt.started_with_session = True
         attempt.session_id = started.session_id
         session_token, login_state = started.token, None
         prompt_login = isinstance(started.account, VerifiedAccount)
     else:
         count_start_without_session(session, address)
+        attempt.started_with_session = False
         session_token, login_state = None, attempt.state
         prompt_login = False
     session.add(attempt)
@@ -242,7 +244,7 @@ def finish_sign_in(
 
     browser_session = find_session(session, token, lock=True)
     current = browser_session if isinstance(browser_session, ValidSession) else None
-    if attempt.session_id is None:
+    if not attempt.started_with_session:
         # The browser had no session. It may have one now, such as a guest
         # account that another tab started, and the sign-in uses it.
         # Another browser can open the callback's URL, but it can't set this
@@ -252,6 +254,9 @@ def finish_sign_in(
         ):
             return failed(SignInError.FAILED)
     elif current is None or current.row.id != attempt.session_id:
+        # Includes a session that ended after the attempt began, such as when
+        # another tab's sign-in replaced it. The browser may be signed in as
+        # someone else now, so the sign-in must say it failed.
         return failed(SignInError.FAILED)
     if not unexpired:
         return failed(SignInError.EXPIRED)

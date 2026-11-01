@@ -39,10 +39,28 @@ export class SignInPage {
     person: Person,
     { returnTo = PUBLIC_PAGE }: { returnTo?: '/' | typeof PUBLIC_PAGE } = {},
   ): Promise<URL> {
-    await this.page.goto(`/api/v1/auth/login?return_to=${returnTo}`)
+    await this.startSignIn({ returnTo })
+    // Home's resume sets the session cookie again. Waiting for it keeps a
+    // later forgetSession() from being undone by a response still in flight.
+    const resumed =
+      returnTo === '/'
+        ? this.page.waitForResponse(
+            (response) =>
+              response.url().endsWith('/api/v1/session') &&
+              response.request().method() === 'POST',
+          )
+        : null
     await this.completeSignIn(person)
     await this.page.waitForURL((url) => url.pathname === returnTo)
+    await resumed
     return new URL(this.page.url())
+  }
+
+  // Opens the mock provider's sign-in page, and stops there.
+  async startSignIn({
+    returnTo = PUBLIC_PAGE,
+  }: { returnTo?: '/' | typeof PUBLIC_PAGE } = {}): Promise<void> {
+    await this.page.goto(`/api/v1/auth/login?return_to=${returnTo}`)
   }
 
   // Fills the mock provider's sign-in page as `person` and sends it. The

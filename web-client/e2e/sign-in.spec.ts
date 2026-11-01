@@ -1,5 +1,5 @@
 import { expect, test } from './fixtures.ts'
-import { newPerson } from './pages/SignInPage.ts'
+import { newPerson, SignInPage } from './pages/SignInPage.ts'
 
 // One test per row of the sign-in outcome table, against the mock provider.
 // Each test starts one or two guest accounts. The API allows 30 a minute
@@ -85,3 +85,25 @@ test('a verified account with a new email reaches a new account (CreateAccount)'
   expect(account).toMatchObject({ kind: 'verified', email: annAtWork.email })
   expect(account.id).not.toBe(anns.id)
 })
+
+// #134: each sign-in replaces the browser's session. A sign-in that another
+// tab's sign-in overtook must say it failed, not land in that tab's account.
+for (const browser of ['guest', 'verified'] as const) {
+  test(`a ${browser} browser's sign-in that another tab overtook shows an error`, async ({
+    page,
+    signInPage,
+  }) => {
+    if (browser === 'verified') await signInPage.signIn(newPerson('ann'))
+    else await signInPage.account()
+    await signInPage.startSignIn({ returnTo: '/' })
+    const otherTab = new SignInPage(await page.context().newPage())
+    const bob = newPerson('bob')
+    await otherTab.signIn(bob)
+
+    await signInPage.completeSignIn(newPerson('carol'))
+
+    await page.waitForURL((url) => url.pathname === '/')
+    await expect(page.getByRole('alert', { name: 'Sign-in didn’t work' })).toBeVisible()
+    expect(await signInPage.account()).toMatchObject({ kind: 'verified', email: bob.email })
+  })
+}

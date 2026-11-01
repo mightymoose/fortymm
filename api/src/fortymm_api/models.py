@@ -176,18 +176,29 @@ class LoginAttempt(Base):
     """A sign-in sent to Auth0, waiting for its callback.
 
     The callback must come from the browser that started it. A browser with a
-    session proves it with that session. A browser without one has no
-    session_id, and proves it with the login cookie, which holds the state.
+    session proves it with that session. A browser without one proves it with
+    the login cookie, which holds the state.
+
+    The attempt outlives its session, such as when another tab's sign-in
+    replaces it. Its session_id becomes NULL, and started_with_session tells
+    its callback to fail rather than read it as a replay.
     """
 
     __tablename__ = "login_attempts"
+    __table_args__ = (
+        CheckConstraint(
+            "session_id IS NULL OR started_with_session",
+            name="session_only_if_started_with_one",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         primary_key=True, server_default=func.gen_random_uuid()
     )
     state: Mapped[str] = mapped_column(Text, unique=True)
+    started_with_session: Mapped[bool]
     session_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("sessions.id", ondelete="CASCADE")
+        ForeignKey("sessions.id", ondelete="SET NULL")
     )
     code_verifier: Mapped[str] = mapped_column(Text)
     nonce: Mapped[str] = mapped_column(Text)

@@ -415,6 +415,12 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   `expired` or `failed`. It changes no account and sets no cookie. A
   callback whose `state` matches no attempt, such as a replay, answers 302
   to `/` with no error.
+- Every outcome deletes the browser's session, so a second tab's sign-in
+  ends the session that the first tab's attempt started with. A sign-out
+  does too. The attempt stays: `login_attempts.session_id` is `ON DELETE
+  SET NULL`, and `started_with_session` records that it had one. Its
+  callback answers `failed`, for a guest or a verified account, so the
+  person sees that their sign-in didn't happen (#134).
 - `POST /v1/auth/logout` deletes the session, expires the cookie and
   returns Auth0's `/v2/logout` URL as `data.logout_url`. Its `returnTo` is
   the origin's `/signed-out`, a public page that starts no session. `/`
@@ -652,6 +658,11 @@ it to `src/routes/`.
   (`src/pages/SignedOut.tsx`). Auth0 sends the browser there after
   sign-out. It is an `ErrorScreen` that says the visitor is signed out,
   with Sign in (back to `/`) and Play as a guest (a link to `/`).
+- `sign-in-stopped.tsx`: a public page, with component `SignInStopped`
+  (`src/pages/SignInStopped.tsx`). Auth0's error page sends the browser
+  there, such as after Back from a sign-in that worked. It is an
+  `ErrorScreen` with Go to FortyMM (a link to `/`) and Sign in again. It
+  reads none of Auth0's query, so it shows one message for every error.
 
 ### API client
 
@@ -822,7 +833,9 @@ holds the session request with `page.route()` to show the loading screen.
 
 `e2e/sign-in.spec.ts` signs in through the dev server's `/oidc` proxy and
 the mock's sign-in page. It has one test for each outcome of
-`resolve_login()`. Each test reads the account from `POST /api/v1/session`
+`resolve_login()`, and one each for a guest and a verified browser whose
+sign-in another tab overtook, which must show `failed`. Each test reads the
+account from `POST /api/v1/session`
 with the page's cookies. The `SignInPage` page object returns to
 `/design-system`, which starts no session, unless the test passes
 `returnTo: '/'`. Each run makes a new `sub` and email, because the dev
@@ -848,7 +861,7 @@ signs a guest out from the account menu, through its dialog, to
 `/signed-out`. A third signs in again from `/signed-out`, and checks that
 the account keeps its one player.
 
-The suite counts about 23 guest accounts and sign-ins with no session,
+The suite counts about 25 guest accounts and sign-ins with no session,
 under the limit of 30 a minute.
 
 The design system page is a copy of the reference's component gallery
@@ -1375,4 +1388,5 @@ person runs it with a Management API token. It changes the page for
 production and the Previews at once. Its logo is
 `web-client/public/logo-wordmark.svg`, served from `https://fortymm.com`.
 `api/deploy/README.md` describes it, and the steps to serve the page on
-`auth.fortymm.com`.
+`auth.fortymm.com`. `tenant.json` also points the tenant's error page at
+`https://fortymm.com/sign-in-stopped`.
