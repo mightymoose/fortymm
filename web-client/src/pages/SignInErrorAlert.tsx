@@ -30,7 +30,7 @@ export function SignInErrorAlert() {
   }, [inUrl, navigate])
 
   if (code === null) return null
-  const { title, body, tone } = signInErrors[code]
+  const { title, body, tone, action } = signInErrors[code]
   const { className, icon, role } = tones[tone]
   return (
     <div className={`${className} sign-in-error`} role={role} aria-labelledby={titleId}>
@@ -42,7 +42,7 @@ export function SignInErrorAlert() {
       <div className="fm-alert__actions">
         {/* A full page load, as the account menu's Sign in is. */}
         <a className="fm-btn fm-btn--primary fm-btn--sm" href={signInHref}>
-          Try again
+          {action}
         </a>
         <Button variant="ghost" size="sm" onClick={() => setCode(null)}>
           Dismiss

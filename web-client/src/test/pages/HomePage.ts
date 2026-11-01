@@ -38,8 +38,8 @@ export class HomePage {
   }
 
   // The sign-in message's link that starts another sign-in.
-  tryAgainLink(message: HTMLElement): HTMLElement {
-    return within(message).getByRole('link', { name: 'Try again' })
+  signInLink(message: HTMLElement): HTMLElement {
+    return within(message).getByRole('link')
   }
 
   // The sign-in message's button that hides it.

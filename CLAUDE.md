@@ -597,7 +597,8 @@ it to `src/routes/`.
   message. It keeps the message in state and removes the param with a
   history replace, so a reload shows nothing. `cancelled` is a neutral
   `fm-alert` with `role="status"`. The other codes are `fm-alert--error`
-  with `role="alert"`. Its Try again link starts another sign-in.
+  with `role="alert"`. Its link starts another sign-in. It reads Try
+  again, or Sign in for `used`, where nothing failed.
 - Home (`src/pages/Home.tsx`) shows `AdoptionReview`
   (`src/pages/adoption/`) above the roadmap.
 - The sign-in links come from `useSignInHref()`
