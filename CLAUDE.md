@@ -341,7 +341,9 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
 - The `oidc` Compose service runs navikt's mock-oauth2-server. Its issuer is
   `http://oidc:8080/default`. Its sign-in page signs in any `sub` with the
   claims typed into it, such as `{"email": "ann@example.com",
-  "email_verified": true}`. It has no published port.
+  "email_verified": true}`. It has no published port. From 6.1.0, it puts
+  `auth_time` in the ID token when the request has `max_age`, as Auth0
+  does, so the callback's check works against it.
 - The API reads `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` and `AUTH0_CLIENT_SECRET`.
   `AUTH0_DOMAIN` is Auth0's host, or a base URL with a scheme, such as the
   mock's. Compose points it at the mock. Without `AUTH0_DOMAIN`, the sign-in
@@ -350,14 +352,23 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
 - `identity_provider.py` talks to the provider. It finds the endpoints in
   the provider's discovery document, exchanges the code with PKCE and
   verifies the ID token against the provider's JWKS, with the nonce. It
-  lowercases the email.
+  lowercases the email. It reads `auth_time` into `IdToken`, or `None` if
+  the claim is missing or isn't a number.
 - The browser can't resolve `oidc`. So in Compose, `AUTH0_AUTHORIZE_URL` is
   `/oidc/default/authorize`, and the web-client dev server proxies `/oidc/*`
   to the mock. The API still reaches the mock at `http://oidc:8080`. The
   tests unset `AUTH0_AUTHORIZE_URL` and post the mock's form directly.
 - `GET /v1/auth/login?return_to=...` (`v1/auth.py`) stores a
-  `login_attempts` row for 10 minutes and answers 302 to the provider. A
-  verified account also gets `prompt=login`. The callback must come from the
+  `login_attempts` row for 10 minutes and answers 302 to the provider.
+  Every sign-in, with no session, a guest or a verified account, and from
+  the iOS app too, sends `prompt=login` and `max_age=0`. A sign-out deletes
+  FortyMM's session before the browser loads Auth0's logout. If that load
+  never finishes, Auth0 still remembers the person, and would sign the next
+  person on that browser in as them with no page (#130). `prompt=login` is
+  only a hint, which anyone can strip from the URL. `max_age=0` makes
+  Auth0 authenticate the person again and put `auth_time` in the ID token,
+  which the callback checks. Sessions last 400 days, so asking every time
+  costs little. The callback must come from the
   browser that started the attempt. A browser with a valid session proves
   it with that session (`login_attempts.session_id`). A browser without one
   gets no guest account. After a sign-out, a guest account would hold
@@ -384,7 +395,11 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   fetcher or an older tab, gets `WrongBrowser`. It changes nothing and
   leaves the attempt, and the code isn't exchanged, so the right browser
   can still finish (#111, #123). Only after the check does it delete the
-  attempt. `resolve_login()` is a pure function that picks the outcome from the
+  attempt. After the code exchange, it fails the sign-in with `failed` if
+  the ID token has no `auth_time`, or one earlier than when the attempt
+  started (`expires_at` less the 10 minutes), less the token check's clock
+  leeway (`LEEWAY_SECONDS`). Then the provider signed in someone it
+  remembered rather than asking. `resolve_login()` is a pure function that picks the outcome from the
   current account and the identity's owner. The owner is the account with
   the `sub`, or else the account with the email.
 - A browser with no session at login has no current account, unless
@@ -605,10 +620,11 @@ it to `src/routes/`.
   message. `rate_limited` also shows `RetryTime`, `retry_after` seconds
   after the page loaded, if the URL has a positive number there. It keeps
   the message in state and removes `sign_in_error` and `retry_after` with a
-  history replace, so a reload shows nothing. `cancelled` is a neutral
-  `fm-alert` with `role="status"`. The other codes are `fm-alert--error`
-  with `role="alert"`. Its Try again link starts another sign-in, back to
-  the page, or to its `returnTo` prop.
+  history replace, so a reload shows nothing. `cancelled` and `used` are
+  neutral `fm-alert`s with `role="status"`. The other codes are `fm-alert--error`
+  with `role="alert"`. Its link starts another sign-in, back to the page,
+  or to its `returnTo` prop. It reads Try again, or Sign in for `used`,
+  where nothing failed.
 - Home (`src/pages/Home.tsx`) shows `AdoptionReview`
   (`src/pages/adoption/`) above the roadmap.
 - The sign-in links come from `useSignInHref()`

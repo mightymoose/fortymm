@@ -11,8 +11,8 @@ const PARAMS = ['sign_in_error', 'retry_after'] as const
 
 // Why a sign-in that came back with `sign_in_error` didn't finish, styled by
 // `.sign-in-error` in styles/base.css. It keeps the message but removes the
-// params from the URL, so a reload doesn't show it again. Its Try again signs
-// in back to this page, or to `returnTo` if given.
+// params from the URL, so a reload doesn't show it again. Its link signs in
+// back to this page, or to `returnTo` if given.
 export function SignInErrorAlert({ returnTo }: { returnTo?: string }) {
   const search: { sign_in_error?: unknown; retry_after?: unknown } = useSearch({ strict: false })
   const inUrl = PARAMS.some((param) => param in search)
@@ -21,7 +21,7 @@ export function SignInErrorAlert({ returnTo }: { returnTo?: string }) {
   const [retryAt] = useState(() => parseRetryAfter(search.retry_after))
   const navigate = useNavigate()
   const thisPage = useSignInHref()
-  const tryAgainHref = returnTo === undefined ? thisPage : signInHref(returnTo)
+  const signInLink = returnTo === undefined ? thisPage : signInHref(returnTo)
   const titleId = useId()
 
   useEffect(() => {
@@ -38,7 +38,7 @@ export function SignInErrorAlert({ returnTo }: { returnTo?: string }) {
   }, [inUrl, navigate])
 
   if (code === null) return null
-  const { title, body, tone } = signInErrors[code]
+  const { title, body, tone, action } = signInErrors[code]
   const { className, icon, role } = tones[tone]
   return (
     <div className={`${className} sign-in-error`} role={role} aria-labelledby={titleId}>
@@ -57,8 +57,8 @@ export function SignInErrorAlert({ returnTo }: { returnTo?: string }) {
       </p>
       <div className="fm-alert__actions">
         {/* A full page load, as the account menu's Sign in is. */}
-        <a className="fm-btn fm-btn--primary fm-btn--sm" href={tryAgainHref}>
-          Try again
+        <a className="fm-btn fm-btn--primary fm-btn--sm" href={signInLink}>
+          {action}
         </a>
         <Button variant="ghost" size="sm" onClick={() => setCode(null)}>
           Dismiss
