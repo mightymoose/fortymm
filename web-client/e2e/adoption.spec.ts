@@ -39,6 +39,10 @@ test('a guest that signs in to an account plays as the account’s player (Adopt
   await signInPage.signIn(ann, { returnTo: '/' })
   const anns = await signInPage.account()
 
+  // Home shows once its own POST /v1/session has answered. Its response sets
+  // Ann's cookie, so a response that lands after the cookies are cleared
+  // would sign the next Home load back in as Ann.
+  await homePage.title.waitFor()
   await signInPage.forgetSession()
   await homePage.goto()
   const guest = await signInPage.account()
