@@ -1,6 +1,3 @@
-"""The device signing key type: the COSE_Key form, the RFC 9679 thumbprint
-and ES256 over raw r || s signatures."""
-
 import hashlib
 
 import cbor2

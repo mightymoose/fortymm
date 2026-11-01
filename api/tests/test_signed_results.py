@@ -1,6 +1,3 @@
-"""The signed result codec, checked against the committed vectors in
-api/signed-results/vectors.json, which every client's tests also check."""
-
 import hashlib
 import json
 from dataclasses import replace
@@ -11,6 +8,9 @@ from uuid import UUID
 import cbor2
 import pytest
 from signed_result_vectors import (
+    PAYLOAD,
+    SIGNATURE,
+    SIGNATURES,
     VECTORS_PATH,
     InvalidJson,
     ValidJson,
@@ -65,8 +65,7 @@ KEYS = [ANN_KEY.public_key, BO_KEY.public_key]
 VECTORS: VectorsJson = json.loads(VECTORS_PATH.read_text())
 DIRECTORY = public_keys(VECTORS)
 # ISO/IEC 18004 table 7: alphanumeric characters at version 16, error level
-# M, with no mode switching, the worst case for a renderer. Version 14 at
-# level L holds 667, so the budget fits that too.
+# M, with no mode switching.
 QR_VERSION_16_M_ALPHANUMERIC = 656
 
 valid = pytest.mark.parametrize("vector", VECTORS["valid"], ids=lambda v: v["name"])
@@ -130,9 +129,9 @@ def test_pycose_verifies_every_valid_envelope(vector: ValidJson) -> None:
 
 def _without_the_last_signature(vector: ValidJson) -> bytes:
     body = cbor2.loads(_envelope(vector)).value
-    signatures = [list(s) for s in body[3][:-1]]
+    signatures = [list(s) for s in body[SIGNATURES][:-1]]
     return cbor2.dumps(
-        cbor2.CBORTag(98, [b"", {}, body[2], signatures]), canonical=True
+        cbor2.CBORTag(98, [b"", {}, body[PAYLOAD], signatures]), canonical=True
     )
 
 
@@ -210,9 +209,6 @@ def test_derives_every_key(name: str) -> None:
 
 
 def test_the_first_vector_matches_the_spec_example() -> None:
-    """The vectors are generated, so a mistake made in both encode_payload and
-    decode_envelope, such as a wrong key number, would regenerate cleanly.
-    This golden structure is what catches it."""
     first = VECTORS["valid"][0]
     players = first["result"]["players"]
 
@@ -230,9 +226,6 @@ def test_the_first_vector_matches_the_spec_example() -> None:
 
 
 def test_every_two_signature_qr_text_fits_version_16_at_level_m() -> None:
-    """The budget is for the players' two approvals. A third signature, a
-    representative's, adds 116 bytes and is the exception, not the case a
-    phone must scan at arm's length."""
     two_signatures = [v for v in VECTORS["valid"] if len(v["signatures"]) <= 2]
 
     assert len(two_signatures) >= 2
@@ -260,9 +253,9 @@ def test_append_signature_keeps_the_received_payload_bytes() -> None:
 
     half_body = cbor2.loads(half).value
     full_body = cbor2.loads(full).value
-    assert full_body[2] == half_body[2]
-    assert full_body[3][0] == half_body[3][0]
-    assert len(full_body[3]) == 2
+    assert full_body[PAYLOAD] == half_body[PAYLOAD]
+    assert full_body[SIGNATURES][0] == half_body[SIGNATURES][0]
+    assert len(full_body[SIGNATURES]) == 2
 
 
 def test_the_envelope_names_the_keys_to_look_up() -> None:
@@ -286,10 +279,10 @@ def test_verify_refuses_a_signature_by_another_key() -> None:
     envelope = sign(RESULT, ISSUED_AT, ANN_KEY, ANN)
     impostor = SigningPrivateKey(hashlib.sha256(b"an impostor's key").digest())
     body = cbor2.loads(envelope).value
-    forged = [list(body[3][0])]
-    forged[0][2] = impostor.sign(b"something else")
+    forged = [list(body[SIGNATURES][0])]
+    forged[0][SIGNATURE] = impostor.sign(b"something else")
     forged_envelope = cbor2.dumps(
-        cbor2.CBORTag(98, [b"", {}, body[2], forged]), canonical=True
+        cbor2.CBORTag(98, [b"", {}, body[PAYLOAD], forged]), canonical=True
     )
 
     with pytest.raises(BadSignature) as refused:

@@ -2,11 +2,8 @@
 COSE_Key bytes, its thumbprint (the `kid` every signature cites, RFC 9679)
 and ES256 over a raw `r || s` signature.
 
-#183's `signing_keys.public_key` column stores to_cose_key(), so
-`sha256(public_key) == kid` holds for every row. The API holds no private
-key. SigningPrivateKey is for the tests, the vector generator
-(tests/signed_result_vectors.py) and as the recipe clients follow.
-tests/test_signing_keys.py guards this module.
+The API holds no private key. SigningPrivateKey is the clients' reference
+recipe. tests/test_signing_keys.py guards this module.
 """
 
 import hashlib
@@ -86,9 +83,7 @@ class SigningPublicKey:
 
     @property
     def kid(self) -> KeyId:
-        """The RFC 9679 thumbprint, sha256(to_cose_key()). This is the kid's
-        one definition, and it works for a key the server has no row for yet
-        (#189)."""
+        """The RFC 9679 thumbprint, sha256(to_cose_key())."""
         return KeyId(hashlib.sha256(self.to_cose_key()).digest())
 
     def verify(self, signature: bytes, message: bytes) -> bool:
@@ -130,9 +125,7 @@ class SigningPrivateKey:
         )
 
     def sign(self, message: bytes) -> bytes:
-        """ES256 over `message` as raw `r || s`. Deterministic (RFC 6979), so
-        the vector generator writes the same bytes each run. The DER to raw
-        conversion is the one Android's Keystore signatures need."""
+        """ES256 over `message` as raw `r || s`. Deterministic (RFC 6979)."""
         der = _private(self).sign(
             message, ec.ECDSA(hashes.SHA256(), deterministic_signing=True)
         )

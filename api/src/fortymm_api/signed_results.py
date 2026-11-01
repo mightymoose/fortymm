@@ -1,21 +1,16 @@
 """The signed result format v1. A match result is a CWT claims set in
 deterministic CBOR, which its players sign in a COSE_Sign envelope. The QR
 text and the link carry that envelope. api/signed-results/README.md is the
-specification. tests/test_signed_results.py checks this module against every
-vector in api/signed-results/vectors.json, which every client's tests check
-too.
+specification, and tests/test_signed_results.py checks this module against
+every vector in api/signed-results/vectors.json.
 
-The API only verifies. sign() and append_signature() are here because the
-vector generator and the tests sign, and because they are the clients'
-reference recipe. They share _sig_structure() with verify(), so signing and
-verifying can't drift apart.
+The API only verifies. sign() and append_signature() are the clients'
+reference recipe.
 
 Every CBOR item in the format is deterministic: the envelope, the payload
-and each signer's protected header. The decoder checks this by decoding,
-encoding again and comparing bytes, so it needs no list of
-non-deterministic forms. cbor2's canonical=True sorts map keys length-first
-(RFC 7049), and every map in this format sorts the same that way as in RFC
-8949's bytewise order.
+and each signer's protected header. cbor2's canonical=True sorts map keys
+length-first (RFC 7049), and every map in this format sorts the same that
+way as in RFC 8949's bytewise order.
 
 Python's dict treats True, 1 and 1.0 as one key, and the determinism check
 can't see the difference. So every map key and every integer is also
@@ -84,8 +79,7 @@ class Retired:
     by: Side
 
 
-# On the wire: ending 0, or ending 1 with retired_by. As a union, "retired_by
-# without a retirement" can't be built, so only the decoder knows that rule.
+# On the wire: ending 0, or ending 1 with retired_by.
 type Ending = Completed | Retired
 
 
@@ -109,8 +103,6 @@ class MatchResult:
     replaces: ResultHash | None = None
 
     def __post_init__(self) -> None:
-        """The one home of the rules the types can't hold. The decoder turns
-        the ValueError into Malformed."""
         if self.players[0] == self.players[1]:
             raise ValueError("the players are the same player")
         if len(self.games) > self.best_of:
@@ -191,10 +183,10 @@ class VerifiedResult:
 
 @dataclass(frozen=True)
 class _Signature:
-    protected: bytes  # the signer's protected header, as received
+    protected: bytes
     kid: KeyId
     player: PlayerId
-    signature: bytes  # 64 bytes: r || s
+    signature: bytes
 
 
 @dataclass(frozen=True)
@@ -207,7 +199,7 @@ class UnverifiedEnvelope:
     _payload: bytes = field(repr=False)
     _result: MatchResult
     _issued_at: datetime
-    _signatures: tuple[_Signature, ...]  # never empty
+    _signatures: tuple[_Signature, ...]
 
     @property
     def kids(self) -> frozenset[KeyId]:
@@ -442,9 +434,6 @@ def _exact_keys(
     required: set[int | str],
     optional: set[int | str] | None = None,
 ) -> Mapping[int | str, object]:
-    """A CBOR map whose keys are exactly `required` plus any of `optional`.
-    Each key is compared by type as well as value, so CBOR true or 1.0 never
-    passes for 1, and text "1" never passes for 1."""
     if not isinstance(value, Mapping):
         raise Malformed("not a map")
     if any(type(key) not in (int, str) for key in value):
@@ -556,7 +545,6 @@ def _sig_structure(signer_protected: bytes, payload: bytes) -> bytes:
 def _cose_signature(
     payload: bytes, key: SigningPrivateKey, side: Side
 ) -> tuple[bytes, bytes]:
-    """(protected header, r || s) for one signer."""
     protected = _dumps({_ALG: _ES256, _KID: key.public_key.kid, _PLAYER: side})
     return protected, key.sign(_sig_structure(protected, payload))
 

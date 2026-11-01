@@ -1,21 +1,7 @@
 """Write api/signed-results/vectors.json, the signed result test vectors that
 every client's tests check: `./bin/mise run api:signed-result-vectors`.
-tests/test_signed_results.py fails when the committed file differs from
-build(). Changing an existing vector's bytes is a format change, which
-breaks every client.
-
-Keys, ids and times are fixed, and ECDSA is deterministic (RFC 6979). So
-build() gives the same bytes every time.
-
-The vectors are made with signed_results, except for these:
-- One vector's second signature is made by pycose, the independent second
-  implementation, over the received payload bytes.
-- Each invalid vector is a valid one with one fault, made with cbor2
-  directly. A malformed vector may keep a signature that its fault made
-  stale. Malformed is decided before any signature is checked, so the stale
-  signature doesn't change its code.
-
-This module is also the tests' adapter to pycose.
+Changing an existing vector's bytes is a format change, which breaks every
+client.
 """
 
 import base64
@@ -135,12 +121,9 @@ def _test_key(name: str) -> SigningPrivateKey:
     )
 
 
-# ann and bo are the players' devices. cy is a representative's, which
-# approves for either player.
 KEYS: dict[str, SigningPrivateKey] = {
     name: _test_key(name) for name in ("ann", "bo", "cy")
 }
-# Signs the unknown-kid vector. Not in the file.
 UNLISTED = _test_key("unlisted")
 
 _NS = uuid5(NAMESPACE_URL, "https://fortymm.com/signed-results/v1/vectors")
@@ -208,7 +191,7 @@ LONGEST_FIRST = MatchResult(
     ending=Completed(),
 )
 # Every score takes two CBOR bytes, every game is played, and the correction
-# and the retirement add their keys. The QR budget is measured on it.
+# and the retirement add their keys.
 LONGEST = MatchResult(
     match=_match("longest"),
     best_of=7,
@@ -241,11 +224,8 @@ class ValidCase:
     name: str
     description: str
     result: MatchResult
-    signers: tuple[tuple[str, PlayerId], ...]  # (key name, player), in envelope order
+    signers: tuple[tuple[str, PlayerId], ...]
     note: str | None = None
-    # Who appends the last signature. The tests check every multi-signature
-    # vector against pycose either way. This records only which bytes the
-    # file holds.
     last_signed_by: Literal["api", "pycose"] = "api"
 
 
@@ -343,9 +323,12 @@ class InvalidCase:
     name: str
     description: str
     error: RefusalCode
-    # Builds the bad input from the valid envelopes, by name: envelope bytes,
-    # or a QR text or link.
     make: Callable[[dict[str, bytes]], bytes | str]
+
+
+# The elements of a COSE_Sign array and of each COSE_Signature in it.
+BODY_PROTECTED, BODY_UNPROTECTED, PAYLOAD, SIGNATURES = range(4)
+PROTECTED, UNPROTECTED, SIGNATURE = range(3)
 
 
 def _thaw(value: Any) -> Any:
@@ -361,8 +344,6 @@ def _thaw(value: Any) -> Any:
 
 
 def _parts(envelope: bytes) -> list[Any]:
-    """[protected, unprotected, payload, [[protected, unprotected,
-    signature], ...]], as plain lists and dicts."""
     tagged = cbor2.loads(envelope)
     assert tagged.tag == 98
     parts: list[Any] = _thaw(tagged.value)
@@ -374,19 +355,17 @@ def _assemble(parts: list[Any], tag: int = 98) -> bytes:
 
 
 def _payload_of(parts: list[Any]) -> dict[Any, Any]:
-    claims: dict[Any, Any] = _thaw(cbor2.loads(parts[2]))
+    claims: dict[Any, Any] = _thaw(cbor2.loads(parts[PAYLOAD]))
     return claims
 
 
 def replace_payload(
     envelope: bytes, change: Callable[[dict[Any, Any]], None], *, canonical: bool = True
 ) -> bytes:
-    """Decode the payload to plain dicts and lists, apply `change`, encode it
-    again and put it back. The signatures stay as they were."""
     parts = _parts(envelope)
     claims = _payload_of(parts)
     change(claims)
-    parts[2] = cbor2.dumps(claims, canonical=canonical)
+    parts[PAYLOAD] = cbor2.dumps(claims, canonical=canonical)
     return _assemble(parts)
 
 
@@ -400,36 +379,31 @@ def replace_signer_header(
     envelope: bytes, index: int, change: Callable[[dict[Any, Any]], None]
 ) -> bytes:
     parts = _parts(envelope)
-    header: dict[Any, Any] = _thaw(cbor2.loads(parts[3][index][0]))
+    header: dict[Any, Any] = _thaw(cbor2.loads(parts[SIGNATURES][index][PROTECTED]))
     change(header)
-    parts[3][index][0] = cbor2.dumps(header, canonical=True)
+    parts[SIGNATURES][index][PROTECTED] = cbor2.dumps(header, canonical=True)
     return _assemble(parts)
 
 
-def _sig_structure(protected: bytes, payload: bytes) -> bytes:
+def _sig_structure_by_cbor2(protected: bytes, payload: bytes) -> bytes:
+    # Built here, not imported from the codec, so the vectors cross-check it.
     return cbor2.dumps(["Signature", b"", protected, b"", payload], canonical=True)
 
 
 def _cose_signature(payload: bytes, name: str, side: Side) -> list[Any]:
-    """[protected, {}, signature] by the named key, made here with cbor2 and
-    the key alone, for a payload the codec won't sign."""
     key = KEYS[name]
     protected = cbor2.dumps(
         {1: -7, 4: key.public_key.kid, "player": side}, canonical=True
     )
-    return [protected, {}, key.sign(_sig_structure(protected, payload))]
+    return [protected, {}, key.sign(_sig_structure_by_cbor2(protected, payload))]
 
 
 def _reencoded_by_the_second_signer(envelopes: dict[str, bytes]) -> bytes:
-    """The second signer decoded the payload, wrote the result map's keys in
-    reverse order, and signed that. The first signature is now over other
-    bytes, but the determinism check refuses the payload before any
-    signature is checked."""
     parts = _parts(envelopes["half-signed"])
     claims = _payload_of(parts)
     claims[DOMAIN_TAG] = dict(reversed(list(claims[DOMAIN_TAG].items())))
-    parts[2] = cbor2.dumps(claims, canonical=False)
-    parts[3].append(_cose_signature(parts[2], "bo", 1))
+    parts[PAYLOAD] = cbor2.dumps(claims, canonical=False)
+    parts[SIGNATURES].append(_cose_signature(parts[PAYLOAD], "bo", 1))
     return _assemble(parts)
 
 
@@ -437,17 +411,17 @@ def _best_of_not_shortest(envelopes: dict[str, bytes]) -> bytes:
     """best_of 3 as the two bytes 0x18 0x03. cbor2 only writes the shortest
     form, so this is byte surgery on the pair (2: 3, 3: true)."""
     parts = _parts(envelopes["completed-best-of-3"])
-    payload: bytes = parts[2]
+    payload: bytes = parts[PAYLOAD]
     assert payload.count(b"\x02\x03\x03\xf5") == 1
-    parts[2] = payload.replace(b"\x02\x03\x03\xf5", b"\x02\x18\x03\x03\xf5")
+    parts[PAYLOAD] = payload.replace(b"\x02\x03\x03\xf5", b"\x02\x18\x03\x03\xf5")
     return _assemble(parts)
 
 
 def _indefinite_signature_array(envelopes: dict[str, bytes]) -> bytes:
     parts = _parts(envelopes["completed-best-of-3"])
-    signatures = cbor2.dumps(parts[3], canonical=True)
+    signatures = cbor2.dumps(parts[SIGNATURES], canonical=True)
     assert signatures[0] == 0x82
-    parts[3] = []
+    parts[SIGNATURES] = []
     return _assemble(parts)[:-1] + b"\x9f" + signatures[1:] + b"\xff"
 
 
@@ -532,7 +506,7 @@ def _set_signature(
     index: int, change: Callable[[list[Any]], None]
 ) -> Callable[[list[Any]], None]:
     def change_body(parts: list[Any]) -> None:
-        change(parts[3][index])
+        change(parts[SIGNATURES][index])
 
     return change_body
 
@@ -635,7 +609,7 @@ INVALID: tuple[InvalidCase, ...] = (
         "h'a0', an encoded empty map, as the body protected header. Some COSE"
         " libraries write this.",
         "malformed",
-        _body_change("completed-best-of-3", _set_body(0, b"\xa0")),
+        _body_change("completed-best-of-3", _set_body(BODY_PROTECTED, b"\xa0")),
     ),
     InvalidCase(
         "envelope-not-deterministic",
@@ -647,7 +621,7 @@ INVALID: tuple[InvalidCase, ...] = (
         "no-signatures",
         "An empty signature array.",
         "malformed",
-        _body_change("completed-best-of-3", _set_body(3, [])),
+        _body_change("completed-best-of-3", _set_body(SIGNATURES, [])),
     ),
     InvalidCase(
         "signer-unprotected-header-not-empty",
@@ -655,7 +629,7 @@ INVALID: tuple[InvalidCase, ...] = (
         "malformed",
         _body_change(
             "completed-best-of-3",
-            _set_signature(1, _set_body(1, {4: KEYS["bo"].public_key.kid})),
+            _set_signature(1, _set_body(UNPROTECTED, {4: KEYS["bo"].public_key.kid})),
         ),
     ),
     InvalidCase(
@@ -695,7 +669,9 @@ INVALID: tuple[InvalidCase, ...] = (
         "malformed",
         _body_change(
             "completed-best-of-3",
-            lambda parts: parts[3][0].__setitem__(2, parts[3][0][2][:63]),
+            lambda parts: parts[SIGNATURES][0].__setitem__(
+                SIGNATURE, parts[SIGNATURES][0][SIGNATURE][:63]
+            ),
         ),
     ),
     InvalidCase(
@@ -720,10 +696,6 @@ INVALID: tuple[InvalidCase, ...] = (
 
 
 def build() -> VectorsJson:
-    """Every vector, in table order. Each to_be_signed is worked out here
-    with cbor2, separately from the codec, and checked with cryptography
-    before it is written, so the file never carries a value that only the
-    codec agrees with."""
     valid = [_valid_vector(case) for case in VALID]
     envelopes = {v["name"]: bytes.fromhex(v["envelope"]) for v in valid}
     return VectorsJson(
@@ -765,10 +737,12 @@ def _valid_vector(case: ValidCase) -> ValidJson:
         else:
             envelope = append_signature(envelope, KEYS[name], player)
     parts = _parts(envelope)
-    assert parts[2] == payload
+    assert parts[PAYLOAD] == payload
     signatures = [
         _signature_json(name, player, case.result, payload, cose_signature)
-        for (name, player), cose_signature in zip(case.signers, parts[3], strict=True)
+        for (name, player), cose_signature in zip(
+            case.signers, parts[SIGNATURES], strict=True
+        )
     ]
     approvals = sorted({(s["player"], s["kid"]) for s in signatures})
     fields: dict[str, Any] = {"name": case.name, "description": case.description}
@@ -797,7 +771,7 @@ def _signature_json(
 ) -> SignatureJson:
     protected, unprotected, signature = cose_signature
     assert unprotected == {}
-    to_be_signed = _sig_structure(protected, payload)
+    to_be_signed = _sig_structure_by_cbor2(protected, payload)
     public = KEYS[name].public_key
     _check_with_cryptography(public, signature, to_be_signed)
     side: Side = 0 if player == result.players[0] else 1
@@ -816,7 +790,6 @@ def _signature_json(
 def _check_with_cryptography(
     key: SigningPublicKey, signature: bytes, message: bytes
 ) -> None:
-    """Raises InvalidSignature unless the raw r || s signature verifies."""
     point = ec.EllipticCurvePublicNumbers(
         int.from_bytes(key.x, "big"), int.from_bytes(key.y, "big"), ec.SECP256R1()
     ).public_key()
@@ -839,7 +812,6 @@ def _invalid_vector(case: InvalidCase, envelopes: dict[str, bytes]) -> InvalidJs
 
 
 def result_json(result: MatchResult) -> ResultJson:
-    """The readable form of a result: UUIDs as strings, hashes as hex."""
     return ResultJson(
         match=str(result.match),
         best_of=result.best_of,
@@ -853,8 +825,6 @@ def result_json(result: MatchResult) -> ResultJson:
 
 
 def result_from_json(value: ResultJson) -> MatchResult:
-    """The inverse of result_json(). The tests encode each vector's payload
-    from it, as a client does."""
     first, second = value["players"]
     retired_by = value["retired_by"]
     return MatchResult(
@@ -873,19 +843,16 @@ def result_from_json(value: ResultJson) -> MatchResult:
 
 
 def public_keys(vectors: VectorsJson) -> list[SigningPublicKey]:
-    """The key directory every verifier resolves kids against."""
     return [
         SigningPublicKey(bytes.fromhex(k["x"]), bytes.fromhex(k["y"]))
         for k in vectors["keys"].values()
     ]
 
 
-# pycose, the second implementation. Three things the adapter works around:
-# cbor2 6 decodes a tag's contents as tuples and frozendicts, which pycose's
-# decoder refuses (so thaw first); SignMessage.encode() signs again for every
-# signer, so pycose can't append to a received message (so it makes one
-# COSE_Signature, spliced in with cbor2); and pycose's package doesn't
-# re-export its classes, so mypy needs the submodule imports.
+# pycose's SignMessage.encode() signs again for every signer, so it can't
+# append to a received message: pycose_append() makes one COSE_Signature and
+# splices it in with cbor2. pycose's package doesn't re-export its classes,
+# so mypy needs the submodule imports.
 
 
 def _pycose_key(
@@ -903,8 +870,6 @@ def _pycose_message(envelope: bytes) -> SignMessage:
 
 
 def pycose_append(envelope: bytes, key: SigningPrivateKey, player: PlayerId) -> bytes:
-    """Append, by pycose, a COSE_Signature over the envelope's own payload
-    bytes."""
     parts = _parts(envelope)
     players: list[bytes] = _payload_of(parts)[DOMAIN_TAG][4]
     side = players.index(player.bytes)
@@ -912,14 +877,12 @@ def pycose_append(envelope: bytes, key: SigningPrivateKey, player: PlayerId) -> 
         phdr={Algorithm: Es256, KID: key.public_key.kid, "player": side}
     )
     signer.key = _pycose_key(key.public_key, key)
-    message = SignMessage(phdr={}, payload=parts[2], signers=[signer])
-    parts[3].append(_parts(message.encode())[3][0])
+    message = SignMessage(phdr={}, payload=parts[PAYLOAD], signers=[signer])
+    parts[SIGNATURES].append(_parts(message.encode())[SIGNATURES][0])
     return _assemble(parts)
 
 
 def pycose_verifies(envelope: bytes, keys: Iterable[SigningPublicKey]) -> bool:
-    """Whether pycose verifies every signature of the envelope with the key
-    its kid names."""
     by_kid = {key.kid: key for key in keys}
     for signer in _pycose_message(envelope).signers:
         key = by_kid.get(signer.phdr[KID])
