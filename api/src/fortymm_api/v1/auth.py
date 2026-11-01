@@ -104,7 +104,6 @@ def login(
             nonce=started.nonce,
             code_verifier=started.code_verifier,
             redirect_uri=callback_url(request),
-            prompt_login=started.prompt_login,
         )
     )
     if started.token is not None:
@@ -196,7 +195,6 @@ def app_login(
         nonce=started.nonce,
         code_verifier=started.code_verifier,
         redirect_uri=app_callback_url(request),
-        prompt_login=started.prompt_login,
     )
     if started.token is not None:
         set_session_cookie(response, started.token)

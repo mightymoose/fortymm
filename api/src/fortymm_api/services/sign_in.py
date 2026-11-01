@@ -18,7 +18,7 @@ from fortymm_api.accounts import (
     GuestAccount,
     VerifiedAccount,
 )
-from fortymm_api.identity_provider import ExchangeFailed, IdToken
+from fortymm_api.identity_provider import LEEWAY_SECONDS, ExchangeFailed, IdToken
 from fortymm_api.models import (
     Account,
     Identity,
@@ -129,9 +129,6 @@ class LoginStarted:
     state: str
     nonce: str
     code_verifier: str
-    # A verified account must see the sign-in page. Otherwise the provider's
-    # own session signs the same person in again with no page.
-    prompt_login: bool
 
 
 def begin_sign_in(
@@ -157,12 +154,10 @@ def begin_sign_in(
         attempt.started_with_session = True
         attempt.session_id = started.session_id
         session_token, login_state = started.token, None
-        prompt_login = isinstance(started.account, VerifiedAccount)
     else:
         count_start_without_session(session, address)
         attempt.started_with_session = False
         session_token, login_state = None, attempt.state
-        prompt_login = False
     session.add(attempt)
     return LoginStarted(
         token=session_token,
@@ -170,7 +165,6 @@ def begin_sign_in(
         state=attempt.state,
         nonce=attempt.nonce,
         code_verifier=attempt.code_verifier,
-        prompt_login=prompt_login,
     )
 
 
@@ -268,12 +262,29 @@ def finish_sign_in(
         id_token = exchange(callback.code, attempt.code_verifier, attempt.nonce)
     except ExchangeFailed:
         return failed(SignInError.FAILED)
+    if not _authenticated_during(id_token, attempt):
+        return failed(SignInError.FAILED)
     if not id_token.email_verified or id_token.email is None:
         return failed(SignInError.EMAIL_NOT_VERIFIED)
 
     return SignedIn(
         attempt.return_to, _sign_in(session, current, id_token.sub, id_token.email)
     )
+
+
+def _authenticated_during(id_token: IdToken, attempt: LoginAttempt) -> bool:
+    """Whether the provider authenticated the person after the attempt
+    started, as max_age=0 asks it to.
+
+    Otherwise the provider signed in whoever its own session remembered, such
+    as the last person after a sign-out whose provider logout never finished.
+    A token with no auth_time proves nothing. The leeway covers the clock
+    difference between the provider and the database.
+    """
+    if id_token.auth_time is None:
+        return False
+    started = attempt.expires_at - LOGIN_ATTEMPT_LIFETIME
+    return id_token.auth_time >= started - timedelta(seconds=LEEWAY_SECONDS)
 
 
 def _sign_in(

@@ -9,6 +9,7 @@ import hmac
 import http.client
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import cached_property
 from typing import Any
 from urllib.parse import urlencode
@@ -30,6 +31,9 @@ class IdToken:
     sub: str
     email: Email | None
     email_verified: bool
+    # When the provider last authenticated the person. None if the token has
+    # no usable auth_time claim. Sign-in refuses such a token.
+    auth_time: datetime | None
 
 
 class ExchangeFailed(Exception):
@@ -73,12 +77,17 @@ class IdentityProvider:
         nonce: str,
         code_verifier: str,
         redirect_uri: str,
-        prompt_login: bool,
     ) -> str:
         """The provider's sign-in page for one login attempt.
 
         response_mode=query, because the SameSite=Lax cookie rides the
         provider's redirect back only as a top-level GET.
+
+        Every attempt asks the provider to authenticate the person again, so
+        a provider session left over from an unfinished sign-out can't sign
+        the next person in as the last one. prompt=login is only a hint that
+        anyone can strip from this URL. max_age=0 makes the provider put
+        auth_time in the ID token, which sign-in checks.
         """
         challenge = hashlib.sha256(code_verifier.encode()).digest()
         params = {
@@ -91,9 +100,9 @@ class IdentityProvider:
             "nonce": nonce,
             "code_challenge": base64.urlsafe_b64encode(challenge).rstrip(b"=").decode(),
             "code_challenge_method": "S256",
+            "prompt": "login",
+            "max_age": "0",
         }
-        if prompt_login:
-            params["prompt"] = "login"
         endpoint = (
             self.authorize_url_override or self._discovery["authorization_endpoint"]
         )
@@ -151,9 +160,21 @@ class IdentityProvider:
             # Lowercased here, once. accounts.email refuses any other case.
             email=Email(email.lower()) if isinstance(email, str) else None,
             email_verified=claims.get("email_verified") is True,
+            auth_time=_timestamp(claims.get("auth_time")),
         )
 
     def logout_url(self, return_to: str) -> str:
         """Auth0's logout page, which ends Auth0's own session too."""
         params = urlencode({"client_id": self.client_id, "returnTo": return_to})
         return f"{self.base_url}/v2/logout?{params}"
+
+
+def _timestamp(value: object) -> datetime | None:
+    """A claim in seconds since the epoch, or None if it isn't one."""
+    # bool is an int, but no timestamp.
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    try:
+        return datetime.fromtimestamp(value, UTC)
+    except OverflowError, OSError, ValueError:
+        return None

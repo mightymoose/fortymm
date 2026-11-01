@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from ipaddress import ip_address
 
 import pytest
@@ -15,7 +16,7 @@ from fortymm_api.accounts import (
     PlayerId,
     VerifiedAccount,
 )
-from fortymm_api.identity_provider import ExchangeFailed, IdToken
+from fortymm_api.identity_provider import LEEWAY_SECONDS, ExchangeFailed, IdToken
 from fortymm_api.ownership import OWNERSHIP_RULES, OwnershipRule
 from fortymm_api.services.players import account_players
 from fortymm_api.services.sessions import (
@@ -97,11 +98,24 @@ def in_transaction[T](database: Engine, work: Callable[[Session], T]) -> T:
         return work(session)
 
 
-def identity(sub: str, email: str, *, verified: bool = True) -> ExchangeCode:
-    """An exchange that returns this identity, as the provider would."""
+def identity(
+    sub: str,
+    email: str,
+    *,
+    verified: bool = True,
+    authenticated_ago: timedelta | None = timedelta(0),
+) -> ExchangeCode:
+    """An exchange that returns this identity, as the provider would.
+
+    The ID token's auth_time is `authenticated_ago` before the exchange, or
+    missing if it is None.
+    """
 
     def exchange(code: str, code_verifier: str, nonce: str) -> IdToken:
-        return IdToken(sub, Email(email), verified)
+        auth_time = (
+            None if authenticated_ago is None else datetime.now(UTC) - authenticated_ago
+        )
+        return IdToken(sub, Email(email), verified, auth_time)
 
     return exchange
 
@@ -578,6 +592,18 @@ ANN_IDENTITY = identity("a|1", "ann@example.com")
         ("provider error", ANN_IDENTITY, "server_error", SignInError.FAILED),
         ("refused code", refused, None, SignInError.FAILED),
         ("another session", ANN_IDENTITY, None, SignInError.FAILED),
+        (
+            "authenticated before the attempt",
+            identity("a|1", "ann@example.com", authenticated_ago=timedelta(hours=1)),
+            None,
+            SignInError.FAILED,
+        ),
+        (
+            "no auth_time",
+            identity("a|1", "ann@example.com", authenticated_ago=None),
+            None,
+            SignInError.FAILED,
+        ),
     ],
 )
 def test_a_failed_sign_in_changes_nothing_and_ends_the_attempt(
@@ -605,6 +631,51 @@ def test_a_failed_sign_in_changes_nothing_and_ends_the_attempt(
     assert account_of(migrated_database, token) == guest
     assert count(migrated_database, "SELECT count(*) FROM login_attempts") == 0
     assert count(migrated_database, "SELECT count(*) FROM identities") == 0
+
+
+@pytest.mark.parametrize(
+    "authenticated_ago",
+    [
+        timedelta(0),
+        # Within the clock leeway of the attempt's start.
+        timedelta(seconds=LEEWAY_SECONDS - 5),
+    ],
+)
+def test_a_person_the_provider_authenticated_during_the_attempt_signs_in(
+    migrated_database: Engine, authenticated_ago: timedelta
+) -> None:
+    token = guest_token(migrated_database)
+    started = begin(migrated_database, token)
+
+    result = finish(
+        migrated_database,
+        started.token,
+        started.state,
+        identity("a|1", "ann@example.com", authenticated_ago=authenticated_ago),
+    )
+
+    assert isinstance(result, SignedIn)
+
+
+def test_a_browser_with_no_session_gets_no_account_the_provider_remembered(
+    migrated_database: Engine,
+) -> None:
+    """After a sign-out whose provider logout never finished, the provider
+    still remembers Ann. The next person's sign-in must not become Ann's."""
+    ann = sign_in(migrated_database, None, ANN_IDENTITY)
+    in_transaction(migrated_database, lambda session: end_session(session, ann))
+    started = begin(migrated_database, None)
+
+    result = finish(
+        migrated_database,
+        started.token,
+        started.state,
+        identity("a|1", "ann@example.com", authenticated_ago=timedelta(minutes=5)),
+        login_state=started.login_state,
+    )
+
+    assert result == SignInFailed("/games", SignInError.FAILED)
+    assert count(migrated_database, "SELECT count(*) FROM sessions") == 0
 
 
 def test_a_replayed_callback_changes_nothing(migrated_database: Engine) -> None:
