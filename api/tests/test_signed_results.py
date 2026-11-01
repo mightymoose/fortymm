@@ -2,13 +2,27 @@
 api/signed-results/vectors.json, which every client's tests also check."""
 
 import hashlib
+import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, get_args
 from uuid import UUID
 
 import cbor2
 import pytest
+from signed_result_vectors import (
+    VECTORS_PATH,
+    InvalidJson,
+    ValidJson,
+    VectorsJson,
+    build,
+    public_keys,
+    pycose_append,
+    pycose_verifies,
+    render,
+    replace_payload,
+    result_from_json,
+)
 
 from fortymm_api.accounts import PlayerId
 from fortymm_api.matches import MatchId
@@ -17,8 +31,10 @@ from fortymm_api.signed_results import (
     Completed,
     Malformed,
     MatchResult,
+    RefusalCode,
     ResultHash,
     Retired,
+    SignedResultRefused,
     UnknownKey,
     append_signature,
     decode_envelope,
@@ -45,6 +61,182 @@ RESULT = MatchResult(
     ending=Completed(),
 )
 KEYS = [ANN_KEY.public_key, BO_KEY.public_key]
+
+VECTORS: VectorsJson = json.loads(VECTORS_PATH.read_text())
+DIRECTORY = public_keys(VECTORS)
+# ISO/IEC 18004 table 7: alphanumeric characters at version 16, error level
+# M, with no mode switching, the worst case for a renderer. Version 14 at
+# level L holds 667, so the budget fits that too.
+QR_VERSION_16_M_ALPHANUMERIC = 656
+
+valid = pytest.mark.parametrize("vector", VECTORS["valid"], ids=lambda v: v["name"])
+multi_signed = pytest.mark.parametrize(
+    "vector",
+    [v for v in VECTORS["valid"] if len(v["signatures"]) > 1],
+    ids=lambda v: v["name"],
+)
+invalid = pytest.mark.parametrize("vector", VECTORS["invalid"], ids=lambda v: v["name"])
+
+
+def _envelope(vector: ValidJson) -> bytes:
+    return bytes.fromhex(vector["envelope"])
+
+
+def test_the_committed_vectors_are_fresh() -> None:
+    assert VECTORS_PATH.read_text() == render(build()), (
+        "api/signed-results/vectors.json differs from the generator's output."
+        " Run ./bin/mise run api:signed-result-vectors and commit it. Changing"
+        " an existing vector's bytes breaks every client that checks them."
+    )
+
+
+@valid
+def test_verifies_every_valid_vector(vector: ValidJson) -> None:
+    verified = decode_envelope(_envelope(vector)).verify(DIRECTORY)
+
+    assert verified.hash.hex() == vector["hash"]
+    assert verified.result == result_from_json(vector["result"])
+    assert verified.issued_at == datetime.fromtimestamp(vector["issued_at"], UTC)
+    assert {(a.kid.hex(), str(a.player)) for a in verified.approvals} == {
+        (a["kid"], a["player"]) for a in vector["approvals"]
+    }
+
+
+@valid
+def test_encodes_every_valid_payload(vector: ValidJson) -> None:
+    result = result_from_json(vector["result"])
+    issued_at = datetime.fromtimestamp(vector["issued_at"], UTC)
+
+    assert encode_payload(result, issued_at).hex() == vector["payload"]
+    assert (
+        hashlib.sha256(bytes.fromhex(vector["payload"])).hexdigest() == vector["hash"]
+    )
+
+
+@valid
+def test_writes_and_reads_every_qr_text_and_link(vector: ValidJson) -> None:
+    envelope = _envelope(vector)
+
+    assert qr_text(envelope) == vector["qr"]
+    assert link(envelope) == vector["link"]
+    assert envelope_from_text(vector["qr"]) == envelope
+    assert envelope_from_text(vector["link"]) == envelope
+
+
+@valid
+def test_pycose_verifies_every_valid_envelope(vector: ValidJson) -> None:
+    assert pycose_verifies(_envelope(vector), DIRECTORY)
+
+
+def _without_the_last_signature(vector: ValidJson) -> bytes:
+    body = cbor2.loads(_envelope(vector)).value
+    signatures = [list(s) for s in body[3][:-1]]
+    return cbor2.dumps(
+        cbor2.CBORTag(98, [b"", {}, body[2], signatures]), canonical=True
+    )
+
+
+def _last_signer(vector: ValidJson) -> tuple[SigningPrivateKey, PlayerId]:
+    last = vector["signatures"][-1]
+    key = SigningPrivateKey(bytes.fromhex(VECTORS["keys"][last["key"]]["d"]))
+    return key, PlayerId(UUID(last["player"]))
+
+
+@multi_signed
+def test_pycose_appends_the_last_signature_byte_for_byte(vector: ValidJson) -> None:
+    key, player = _last_signer(vector)
+
+    appended = pycose_append(_without_the_last_signature(vector), key, player)
+
+    assert appended == _envelope(vector)
+
+
+@multi_signed
+def test_the_codec_appends_the_last_signature_byte_for_byte(vector: ValidJson) -> None:
+    key, player = _last_signer(vector)
+
+    appended = append_signature(_without_the_last_signature(vector), key, player)
+
+    assert appended == _envelope(vector)
+
+
+@invalid
+def test_refuses_every_invalid_vector(vector: InvalidJson) -> None:
+    with pytest.raises(SignedResultRefused) as refused:
+        envelope = (
+            envelope_from_text(vector["text"])
+            if "text" in vector
+            else bytes.fromhex(vector["envelope"])
+        )
+        decode_envelope(envelope).verify(DIRECTORY)
+    assert refused.value.code == vector["error"]
+
+
+@pytest.mark.parametrize(
+    "vector",
+    [v for v in VECTORS["invalid"] if v["error"] != "malformed"],
+    ids=lambda v: v["name"],
+)
+def test_a_well_formed_invalid_vector_still_decodes(vector: InvalidJson) -> None:
+    decode_envelope(bytes.fromhex(vector["envelope"]))
+
+
+def test_the_vectors_cover_every_refusal_code() -> None:
+    codes = set(get_args(RefusalCode.__value__))
+
+    assert {v["error"] for v in VECTORS["invalid"]} == codes
+
+
+def test_an_unknown_key_is_reported_before_a_bad_signature() -> None:
+    unlisted = SigningPrivateKey(hashlib.sha256(b"an unlisted key").digest())
+    envelope = append_signature(sign(RESULT, ISSUED_AT, ANN_KEY, ANN), unlisted, BO)
+
+    def tamper(claims: dict[Any, Any]) -> None:
+        claims[6] += 1
+
+    with pytest.raises(UnknownKey):
+        decode_envelope(replace_payload(envelope, tamper)).verify(KEYS)
+
+
+@pytest.mark.parametrize("name", VECTORS["keys"])
+def test_derives_every_key(name: str) -> None:
+    expected = VECTORS["keys"][name]
+    key = SigningPrivateKey(bytes.fromhex(expected["d"])).public_key
+
+    assert key.x.hex() == expected["x"]
+    assert key.y.hex() == expected["y"]
+    assert key.to_cose_key().hex() == expected["cose_key"]
+    assert key.kid.hex() == expected["kid"]
+
+
+def test_the_first_vector_matches_the_spec_example() -> None:
+    """The vectors are generated, so a mistake made in both encode_payload and
+    decode_envelope, such as a wrong key number, would regenerate cleanly.
+    This golden structure is what catches it."""
+    first = VECTORS["valid"][0]
+    players = first["result"]["players"]
+
+    assert cbor2.loads(bytes.fromhex(first["payload"])) == {
+        6: 1793534400,
+        "fortymm/match-result/v1": {
+            1: UUID(first["result"]["match"]).bytes,
+            2: 3,
+            3: True,
+            4: [UUID(players[0]).bytes, UUID(players[1]).bytes],
+            5: [[11, 7], [9, 11], [11, 4]],
+            6: 0,
+        },
+    }
+
+
+def test_every_two_signature_qr_text_fits_version_16_at_level_m() -> None:
+    """The budget is for the players' two approvals. A third signature, a
+    representative's, adds 116 bytes and is the exception, not the case a
+    phone must scan at arm's length."""
+    two_signatures = [v for v in VECTORS["valid"] if len(v["signatures"]) <= 2]
+
+    assert len(two_signatures) >= 2
+    assert max(len(v["qr"]) for v in two_signatures) <= QR_VERSION_16_M_ALPHANUMERIC
 
 
 def test_both_players_signatures_verify_as_two_approvals() -> None:
