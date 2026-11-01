@@ -39,6 +39,18 @@ export const server = setupServer(
   http.get(`${API_BASE_URL}/v1/account/players`, () =>
     HttpResponse.json<components['schemas']['AccountPlayersResponse']>({ data: [] }),
   ),
+  http.get(`${API_BASE_URL}/v1/admin/permissions`, () =>
+    HttpResponse.json<components['schemas']['AdminPermissionsResponse']>({ data: [] }),
+  ),
+  http.get(`${API_BASE_URL}/v1/admin/roles`, () =>
+    HttpResponse.json<components['schemas']['AdminRolesResponse']>({ data: [] }),
+  ),
+  http.get(`${API_BASE_URL}/v1/admin/accounts`, () =>
+    HttpResponse.json<components['schemas']['AdminAccountsResponse']>({
+      data: [],
+      meta: { has_more: false },
+    }),
+  ),
 )
 
 // Holds the mock API's session responses until the test sends them.
@@ -207,4 +219,235 @@ export function mockVerifiedAccount(
       answer(playerId, request)
     },
   }
+}
+
+type AdminPermission = components['schemas']['AdminPermission']
+type AdminRole = components['schemas']['AdminRole']
+type AdminAccount = components['schemas']['AdminAccount']
+// The admin lists the mock API holds. It counts each permission's roles and
+// each role's accounts itself.
+export type AdminState = {
+  permissions: Omit<AdminPermission, 'role_count'>[]
+  roles: Omit<AdminRole, 'account_count'>[]
+  accounts: AdminAccount[]
+}
+export type AdminList = 'permissions' | 'roles' | 'accounts'
+
+// The built-in permissions and the Administrator role, as the migration
+// makes them.
+export const builtInPermissions: AdminState['permissions'] = [
+  { key: 'account_roles.manage', description: 'Set which roles an account holds.', built_in: true },
+  { key: 'admin.view', description: 'See the admin page.', built_in: true },
+  { key: 'roles.manage', description: 'Edit roles and permissions.', built_in: true },
+]
+export const administrator: AdminState['roles'][number] = {
+  id: 'a0d1f2e3-4b5c-4d6e-8f70-81920a1b2c3d',
+  name: 'Administrator',
+  description: 'Everything on the admin page.',
+  permissions: ['account_roles.manage', 'admin.view', 'roles.manage'],
+}
+
+// Signs the mock API in as the verified account `accounts[0]`, and answers
+// the admin routes as the API does, from `state`. The session's permissions
+// come from the account's roles, so a write can change them. Writes refuse
+// as the API does: a taken name or key, a built-in permission, and any
+// change that leaves no account with `account_roles.manage`. Returns the
+// state, which a test can change as another tab would, and the writes it
+// received.
+export function mockAdmin(initial: AdminState) {
+  const state: AdminState = structuredClone(initial)
+  const writes: { method: string; path: string; body: unknown }[] = []
+  const self = () => state.accounts[0]
+  const grants = (roleIds: readonly string[]) =>
+    new Set(
+      state.roles.filter((role) => roleIds.includes(role.id)).flatMap((role) => role.permissions),
+    )
+  const canGrantRoles = () =>
+    state.accounts.some((account) => grants(account.role_ids).has('account_roles.manage'))
+  const refuse = (status: number, title: string) =>
+    HttpResponse.json({ errors: [{ status: String(status), title }] }, { status })
+  const LAST_ADMINISTRATOR = 'At least one account must keep the permission to grant roles'
+
+  // Applies `change`, or undoes it and refuses if no account could grant
+  // roles after it.
+  function guarded(change: () => void, answer: () => Response): Response {
+    const before = structuredClone(state)
+    change()
+    if (canGrantRoles()) return answer()
+    Object.assign(state, before)
+    return refuse(409, LAST_ADMINISTRATOR)
+  }
+  const role = (id: string): AdminRole => {
+    const found = state.roles.find((role) => role.id === id)!
+    const holders = state.accounts.filter((account) => account.role_ids.includes(id))
+    return { ...found, account_count: holders.length }
+  }
+
+  server.use(
+    http.post(`${API_BASE_URL}/v1/session`, () =>
+      HttpResponse.json<components['schemas']['SessionResponse']>({
+        data: {
+          account: {
+            id: self().id,
+            kind: 'verified',
+            email: self().email,
+            player: { id: sessionResponse.data.account.player.id, display_name: self().display_name! },
+            permissions: [...grants(self().role_ids)].sort(),
+          },
+        },
+      }),
+    ),
+    http.get(`${API_BASE_URL}/v1/admin/permissions`, () =>
+      HttpResponse.json<components['schemas']['AdminPermissionsResponse']>({
+        data: state.permissions.map((permission) => ({
+          ...permission,
+          role_count: state.roles.filter((role) => role.permissions.includes(permission.key)).length,
+        })),
+      }),
+    ),
+    http.get(`${API_BASE_URL}/v1/admin/roles`, () =>
+      HttpResponse.json<components['schemas']['AdminRolesResponse']>({
+        data: state.roles.map((found) => role(found.id)),
+      }),
+    ),
+    http.get(`${API_BASE_URL}/v1/admin/accounts`, ({ request }) => {
+      const email = new URL(request.url).searchParams.get('email')?.toLowerCase() ?? ''
+      const found = state.accounts.filter((account) => account.email.includes(email))
+      return HttpResponse.json<components['schemas']['AdminAccountsResponse']>({
+        data: found.slice(0, 50),
+        meta: { has_more: found.length > 50 },
+      })
+    }),
+    // The API answers 415 to a write that isn't JSON, a bodyless DELETE too.
+    http.all(`${API_BASE_URL}/v1/admin/*`, async ({ request }) => {
+      if (request.method === 'GET') return
+      const path = new URL(request.url).pathname.replace('/api', '')
+      if (request.headers.get('Content-Type') !== 'application/json') {
+        return refuse(415, 'The request body must be JSON')
+      }
+      const body: unknown = request.method === 'DELETE' ? null : await request.clone().json()
+      writes.push({ method: request.method, path, body })
+    }),
+    http.post<never, components['schemas']['NewPermissionRequest']>(
+      `${API_BASE_URL}/v1/admin/permissions`,
+      async ({ request }) => {
+        const { key, description } = await request.json()
+        if (state.permissions.some((permission) => permission.key === key)) {
+          return refuse(409, 'Another permission has this key')
+        }
+        const permission = { key, description, built_in: false }
+        state.permissions.push(permission)
+        return HttpResponse.json({ data: { ...permission, role_count: 0 } }, { status: 201 })
+      },
+    ),
+    http.put<{ key: string }, components['schemas']['PermissionRequest']>(
+      `${API_BASE_URL}/v1/admin/permissions/:key`,
+      async ({ params, request }) => {
+        const { description } = await request.json()
+        const permission = state.permissions.find((found) => found.key === params.key)
+        if (!permission) return refuse(404, 'No permission has this key')
+        permission.description = description
+        return HttpResponse.json({ data: { ...permission, role_count: 0 } })
+      },
+    ),
+    http.delete<{ key: string }>(`${API_BASE_URL}/v1/admin/permissions/:key`, ({ params }) => {
+      const permission = state.permissions.find((found) => found.key === params.key)
+      if (!permission) return refuse(404, 'No permission has this key')
+      if (permission.built_in) return refuse(409, 'The code checks this permission, so it stays')
+      state.permissions = state.permissions.filter((found) => found !== permission)
+      for (const role of state.roles) {
+        role.permissions = role.permissions.filter((key) => key !== params.key)
+      }
+      return new HttpResponse(null, { status: 204 })
+    }),
+    http.post<never, components['schemas']['RoleRequest']>(
+      `${API_BASE_URL}/v1/admin/roles`,
+      async ({ request }) => {
+        const draft = await request.json()
+        if (nameTaken(draft.name)) return refuse(409, 'Another role has this name')
+        const id = crypto.randomUUID()
+        state.roles.push({ id, ...draft, permissions: [...draft.permissions].sort() })
+        return HttpResponse.json({ data: role(id) }, { status: 201 })
+      },
+    ),
+    http.put<{ id: string }, components['schemas']['RoleRequest']>(
+      `${API_BASE_URL}/v1/admin/roles/:id`,
+      async ({ params, request }) => {
+        const draft = await request.json()
+        const index = state.roles.findIndex((found) => found.id === params.id)
+        if (index === -1) return refuse(404, 'No role has this id')
+        if (nameTaken(draft.name, params.id)) return refuse(409, 'Another role has this name')
+        return guarded(
+          () => {
+            state.roles[index] = { id: params.id, ...draft, permissions: [...draft.permissions].sort() }
+          },
+          () => HttpResponse.json({ data: role(params.id) }),
+        )
+      },
+    ),
+    http.delete<{ id: string }>(`${API_BASE_URL}/v1/admin/roles/:id`, ({ params }) => {
+      if (!state.roles.some((found) => found.id === params.id)) {
+        return refuse(404, 'No role has this id')
+      }
+      return guarded(
+        () => {
+          state.roles = state.roles.filter((found) => found.id !== params.id)
+          for (const account of state.accounts) {
+            account.role_ids = account.role_ids.filter((id) => id !== params.id)
+          }
+        },
+        () => new HttpResponse(null, { status: 204 }),
+      )
+    }),
+    http.put<{ id: string }, components['schemas']['AccountRolesRequest']>(
+      `${API_BASE_URL}/v1/admin/accounts/:id/roles`,
+      async ({ params, request }) => {
+        const { role_ids } = await request.json()
+        const account = state.accounts.find((found) => found.id === params.id)
+        if (!account) return refuse(404, 'No verified account has this id')
+        return guarded(
+          () => {
+            account.role_ids = [...role_ids].sort()
+          },
+          () => HttpResponse.json({ data: account }),
+        )
+      },
+    ),
+  )
+
+  function nameTaken(name: string, except?: string): boolean {
+    return state.roles.some(
+      (role) => role.id !== except && role.name.toLowerCase() === name.trim().toLowerCase(),
+    )
+  }
+
+  return { state, writes }
+}
+
+// Holds the mock API's responses to `GET /v1/admin/<list>` until the test
+// releases them. Then the handler set before this one answers.
+export function holdAdmin(list: AdminList) {
+  const pending: (() => void)[] = []
+  server.use(
+    http.get(
+      `${API_BASE_URL}/v1/admin/${list}`,
+      () => new Promise<undefined>((resolve) => pending.push(() => resolve(undefined))),
+    ),
+  )
+  return {
+    async release(): Promise<void> {
+      await act(async () => pending.splice(0).forEach((resolve) => resolve()))
+    },
+  }
+}
+
+// Makes the mock API's next `GET /v1/admin/<list>` fail with `status`.
+export function failAdminOnce(list: AdminList, status: number) {
+  server.use(
+    http.get(
+      `${API_BASE_URL}/v1/admin/${list}`,
+      () => HttpResponse.json({ errors: [{ status: String(status), title: 'Failed' }] }, { status }),
+      { once: true },
+    ),
+  )
 }
