@@ -122,3 +122,29 @@ def test_check_fails_on_a_model_change_without_a_revision(
             command.check(config)
     assert "add_table" in str(diffs.value)
     assert "clubs" in str(diffs.value)
+
+
+def test_an_account_with_the_first_administrators_email_gets_the_role(
+    throwaway_database_url: str,
+) -> None:
+    with connected(throwaway_database_url) as config:
+        command.upgrade(config, "e88c34e67214")
+        connection = config.attributes["connection"]
+        connection.execute(
+            text("INSERT INTO accounts (email) VALUES ('mightymoose@fortymm.com')")
+        )
+        connection.commit()
+        command.upgrade(config, "head")
+        connection.commit()
+
+        held = connection.execute(
+            text(
+                "SELECT accounts.email, roles.name FROM account_roles"
+                " JOIN accounts ON accounts.id = account_id"
+                " JOIN roles ON roles.id = role_id"
+            )
+        ).all()
+        grants = connection.scalar(text("SELECT count(*) FROM email_role_grants"))
+
+    assert held == [("mightymoose@fortymm.com", "Administrator")]
+    assert grants == 0
