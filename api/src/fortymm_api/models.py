@@ -23,6 +23,7 @@ from sqlalchemy.dialects.postgresql import CIDR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from fortymm_api.accounts import AccountId, Email, PlayerId
+from fortymm_api.leagues import LeagueId
 from fortymm_api.permissions import RoleId
 
 
@@ -42,6 +43,7 @@ class Base(DeclarativeBase):
         AccountId: Uuid,
         PlayerId: Uuid,
         RoleId: Uuid,
+        LeagueId: Uuid,
         Email: Text,
     }
 
@@ -306,4 +308,49 @@ class EmailRoleGrant(Base):
     email: Mapped[Email] = mapped_column(primary_key=True)
     role_id: Mapped[RoleId] = mapped_column(
         ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class League(Base):
+    """The scope a match, and later a rating, belongs to."""
+
+    __tablename__ = "leagues"
+    __table_args__ = (
+        CheckConstraint("name = btrim(name) AND name <> ''", name="name_trimmed"),
+        CheckConstraint("char_length(name) <= 50", name="name_length"),
+        Index(
+            "one_default_league",
+            "is_default",
+            unique=True,
+            postgresql_where=text("is_default"),
+        ),
+    )
+
+    id: Mapped[LeagueId] = mapped_column(
+        primary_key=True, server_default=func.gen_random_uuid()
+    )
+    name: Mapped[str] = mapped_column(Text)
+    is_default: Mapped[bool] = mapped_column(server_default=text("false"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+Index("unique_league_name", func.lower(League.name), unique=True)
+
+
+class LeagueMember(Base):
+    """A player in a league. The `players_join_default_league` trigger adds
+    every new player to the default league."""
+
+    __tablename__ = "league_members"
+
+    league_id: Mapped[LeagueId] = mapped_column(
+        ForeignKey("leagues.id", ondelete="RESTRICT"), primary_key=True
+    )
+    player_id: Mapped[PlayerId] = mapped_column(
+        ForeignKey("players.id"), primary_key=True, index=True
+    )
+    joined_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )

@@ -170,8 +170,8 @@ through FastAPI's `TestClient`).
   gives each one its column type. The tables are `accounts`, `players`,
   `player_managers`, `sessions`, `guest_account_counts`, `identities`,
   `login_attempts`, `permissions`, `roles`, `role_permissions`,
-  `account_roles` and `email_role_grants` (see Accounts and sessions,
-  Sign-in, and Roles and permissions).
+  `account_roles`, `email_role_grants`, `leagues` and `league_members` (see
+  Accounts and sessions, Sign-in, Roles and permissions, and Leagues).
 - `/v1/health` runs `SELECT 1` and returns `{"data": {"database": "ok"}}`.
   The healthchecks, `api:smoke`, the 403 check and the post-deploy suite use
   it.
@@ -520,6 +520,24 @@ routes, under `/v1/admin`.
 - `GET /v1/admin/accounts` lists verified accounts by email, at most 50,
   with `meta.has_more`. `email` filters by a case-insensitive substring.
   `PUT /v1/admin/accounts/{account_id}/roles` sets the exact set of roles.
+
+### Leagues
+
+A league is the scope a match, and later a rating, belongs to. No route
+reads leagues yet.
+
+- `leagues` holds them. A league's name follows a role's rules: trimmed, at
+  most 50 characters, and unique whatever its case (`unique_league_name`).
+- Exactly one default league exists, `FortyMM`, which the migration makes.
+  The partial unique index `one_default_league` allows at most one.
+- `league_members` says which players are in which league. The
+  `players_join_default_league` trigger joins every new player to the
+  default league, whatever code inserts it. It raises if there is no
+  default league, so the insert fails. The migration put every existing
+  player in it, merged players too.
+- A league with members can't be deleted (`ON DELETE RESTRICT`).
+- A player merge keeps both players' memberships
+  (`STAYS_ON_PLAYER_MERGE`).
 
 ### Migrations
 
