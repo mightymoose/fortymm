@@ -132,7 +132,6 @@ def test_login_sends_the_browser_to_the_providers_sign_in_page(
     assert query["redirect_uri"] == [CALLBACK]
     assert query["code_challenge_method"] == ["S256"]
     assert {"state", "nonce", "code_challenge", "client_id"} <= query.keys()
-    assert "prompt" not in query
 
 
 def test_login_gives_a_browser_with_no_session_a_login_cookie(
@@ -166,12 +165,19 @@ def test_signing_in_again_after_sign_out_starts_no_guest_account(
     assert [player["open_question"] for player in players] == [False]
 
 
-def test_login_makes_a_verified_account_sign_in_again(browser: TestClient) -> None:
-    signed_in(browser, "auth0|ann", "ann@example.com")
+@pytest.mark.parametrize("visitor", ["no session", "guest", "verified"])
+def test_login_makes_every_visitor_sign_in_again(
+    browser: TestClient, visitor: str
+) -> None:
+    if visitor == "guest":
+        start_session(browser)
+    elif visitor == "verified":
+        signed_in(browser, "auth0|ann", "ann@example.com")
 
-    location = urlsplit(login(browser).headers["Location"])
+    query = parse_qs(urlsplit(login(browser).headers["Location"]).query)
 
-    assert parse_qs(location.query)["prompt"] == ["login"]
+    assert query["prompt"] == ["login"]
+    assert query["max_age"] == ["0"]
 
 
 def test_login_answers_503_without_a_provider(
