@@ -278,7 +278,7 @@ def test_a_guest_signing_in_to_another_account_joins_it(
     assert start_session(stale_tab)["kind"] == "guest"
 
 
-def test_a_replayed_callback_goes_home_and_changes_nothing(
+def test_a_replayed_callback_goes_home_with_used_and_changes_nothing(
     browser: TestClient,
 ) -> None:
     authorize_url = login(browser).headers["Location"]
@@ -289,7 +289,7 @@ def test_a_replayed_callback_goes_home_and_changes_nothing(
     response = browser.get(callback)
 
     assert response.status_code == 302
-    assert response.headers["Location"] == "/"
+    assert response.headers["Location"] == "/?sign_in_error=used"
     assert "Set-Cookie" not in response.headers
     assert start_session(browser) == account
 
@@ -339,14 +339,21 @@ def test_a_failed_callback_returns_with_its_error_and_changes_nothing(
     assert start_session(browser) == guest
 
 
-def test_a_callback_whose_attempt_is_gone_returns_home_with_no_error(
+def test_an_older_tabs_callback_keeps_the_newer_tabs_login_cookie(
     browser: TestClient,
 ) -> None:
-    start_session(browser)
+    older = login(browser).headers["Location"]
+    newer = login(browser).headers["Location"]
+    older_callback = at_mock(older, "auth0|ann", "ann@example.com")
+    newer_callback = at_mock(newer, "auth0|bob", "bob@example.com")
 
-    response = browser.get("/v1/auth/callback?state=unknown&error=access_denied")
+    response = browser.get(older_callback)
 
-    assert response.headers["Location"] == "/"
+    assert response.headers["Location"] == "/games?tab=open&sign_in_error=failed"
+    assert "Set-Cookie" not in response.headers
+    response = browser.get(newer_callback)
+    assert response.headers["Location"] == "/games?tab=open&signed_in=1"
+    assert start_session(browser)["email"] == "bob@example.com"
 
 
 def test_an_unsafe_return_to_becomes_home(browser: TestClient) -> None:

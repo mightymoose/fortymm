@@ -1,7 +1,7 @@
 import type { IconName } from '../components/Icon'
 
 // The codes that GET /v1/auth/callback adds to return_to as `sign_in_error`.
-export type SignInErrorCode = 'cancelled' | 'email_not_verified' | 'expired' | 'failed'
+export type SignInErrorCode = 'cancelled' | 'email_not_verified' | 'expired' | 'failed' | 'used'
 
 type Tone = 'error' | 'neutral'
 
@@ -26,6 +26,13 @@ export const signInErrors: Record<SignInErrorCode, { title: string; body: string
     title: 'Sign-in didn’t work',
     body: 'Something went wrong, and nothing changed. Try again.',
     tone: 'error',
+  },
+  // A replay, such as Back to the provider after a sign-in that worked. The
+  // person is often signed in already, so it gets no error colour.
+  used: {
+    title: 'Sign-in already finished',
+    body: 'That sign-in already finished. If you’re not signed in, sign in again.',
+    tone: 'neutral',
   },
 }
 
