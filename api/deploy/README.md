@@ -171,19 +171,16 @@ system's look. It reads the files in `auth0-branding/`:
 - `settings.json`: the primary colour, the page background, the logo and
   the favicon.
 - `tenant.json`: the tenant's name, so the page says FortyMM and not the
-  tenant's generated name.
-- `error-page.html`: the tenant's error page, in place of Auth0's "Oops!,
-  something went wrong". Auth0 shows it when a sign-in can't go on, such
-  as when Back after a sign-in reaches a step whose login has ended. It
-  links to `https://fortymm.com/` and to a new sign-in. It's a Liquid
-  template, and it shows `{{ error }}`. The script sends it as
-  `error_page.html` in the tenant settings.
+  tenant's generated name. It also sets the tenant's error page to
+  `https://fortymm.com/sign-in-stopped`, with no log link. So an Auth0
+  error, such as Back after a sign-in, shows a FortyMM page.
 - `custom-text.json`: the titles and descriptions of the sign-in screens.
 
 Production and the Previews share the tenant, so the script changes the
-page for both. The logo and favicon come from production, so deploy `main`
-before the first run. Get a Management API token in the Auth0 dashboard,
-under Applications > APIs > Auth0 Management API > API Explorer. Then run:
+page for both. The logo, the favicon and the error page come from
+production, so deploy `main` before the first run. Get a Management API
+token in the Auth0 dashboard, under Applications > APIs > Auth0 Management
+API > API Explorer. Then run:
 
 ```sh
 AUTH0_MANAGEMENT_TOKEN=<token> api/deploy/apply-auth0-branding
@@ -195,9 +192,9 @@ prints its path. To undo a run, send the backup back with the Management
 API:
 
 - `tenant.json`: only its `friendly_name`, `picture_url` and `error_page`,
-  to `PATCH /api/v2/tenants/settings`. If it has no `error_page`, send
-  `{"error_page": {"html": "", "show_log_link": false}}`. That endpoint rejects the other fields that the
-  GET returns.
+  to `PATCH /api/v2/tenants/settings`. That endpoint rejects the other
+  fields that the GET returns. If the backup has no `error_page`, clear
+  its `url` instead, to go back to Auth0's page.
 - `settings.json`: to `PATCH /api/v2/branding`.
 - `theme.json`: without its `themeId`, to `PATCH
   /api/v2/branding/themes/<themeId>`. If the backup has no `theme.json`, the

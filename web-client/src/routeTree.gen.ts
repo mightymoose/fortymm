@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as DesignSystemRouteImport } from './routes/design-system'
+import { Route as SignInStoppedRouteImport } from './routes/sign-in-stopped'
 import { Route as SignedOutRouteImport } from './routes/signed-out'
 import { Route as AuthenticatedShellRouteImport } from './routes/_authenticated/_shell'
 import { Route as AuthenticatedReviewPlayersRouteImport } from './routes/_authenticated/review-players'
@@ -23,6 +24,11 @@ const AuthenticatedRoute = AuthenticatedRouteImport.update({
 const DesignSystemRoute = DesignSystemRouteImport.update({
   id: '/design-system',
   path: '/design-system',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SignInStoppedRoute = SignInStoppedRouteImport.update({
+  id: '/sign-in-stopped',
+  path: '/sign-in-stopped',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SignedOutRoute = SignedOutRouteImport.update({
@@ -49,12 +55,14 @@ const AuthenticatedShellIndexRoute = AuthenticatedShellIndexRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedShellIndexRoute
   '/design-system': typeof DesignSystemRoute
+  '/sign-in-stopped': typeof SignInStoppedRoute
   '/signed-out': typeof SignedOutRoute
   '/review-players': typeof AuthenticatedReviewPlayersRoute
 }
 export interface FileRoutesByTo {
   '/': typeof AuthenticatedShellIndexRoute
   '/design-system': typeof DesignSystemRoute
+  '/sign-in-stopped': typeof SignInStoppedRoute
   '/signed-out': typeof SignedOutRoute
   '/review-players': typeof AuthenticatedReviewPlayersRoute
 }
@@ -62,6 +70,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/design-system': typeof DesignSystemRoute
+  '/sign-in-stopped': typeof SignInStoppedRoute
   '/signed-out': typeof SignedOutRoute
   '/_authenticated/_shell': typeof AuthenticatedShellRouteWithChildren
   '/_authenticated/review-players': typeof AuthenticatedReviewPlayersRoute
@@ -69,13 +78,24 @@ export interface FileRoutesById {
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/design-system' | '/signed-out' | '/review-players'
+  fullPaths:
+    | '/'
+    | '/design-system'
+    | '/sign-in-stopped'
+    | '/signed-out'
+    | '/review-players'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/design-system' | '/signed-out' | '/review-players'
+  to:
+    | '/'
+    | '/design-system'
+    | '/sign-in-stopped'
+    | '/signed-out'
+    | '/review-players'
   id:
     | '__root__'
     | '/_authenticated'
     | '/design-system'
+    | '/sign-in-stopped'
     | '/signed-out'
     | '/_authenticated/_shell'
     | '/_authenticated/review-players'
@@ -85,6 +105,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   DesignSystemRoute: typeof DesignSystemRoute
+  SignInStoppedRoute: typeof SignInStoppedRoute
   SignedOutRoute: typeof SignedOutRoute
 }
 
@@ -102,6 +123,13 @@ declare module '@tanstack/react-router' {
       path: '/design-system'
       fullPath: '/design-system'
       preLoaderRoute: typeof DesignSystemRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sign-in-stopped': {
+      id: '/sign-in-stopped'
+      path: '/sign-in-stopped'
+      fullPath: '/sign-in-stopped'
+      preLoaderRoute: typeof SignInStoppedRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/signed-out': {
@@ -163,6 +191,7 @@ const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   DesignSystemRoute: DesignSystemRoute,
+  SignInStoppedRoute: SignInStoppedRoute,
   SignedOutRoute: SignedOutRoute,
 }
 export const routeTree = rootRouteImport
