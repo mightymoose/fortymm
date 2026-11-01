@@ -378,6 +378,13 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   checks that the cookie matches the `state` in its URL. Another browser can
   open that URL, but it can't set this browser's cookie. Such a login
   counts toward the guest account limit, because nothing else bounds it.
+  Past the limit, the route answers 302 to
+  `/signed-out?sign_in_error=rate_limited&retry_after=<seconds>`, with no
+  cookie and no attempt. The seconds are the 429's `Retry-After`, from
+  `retry_after_seconds()` in `v1/errors.py`. `return_to` would usually be
+  `/`, which would start a guest account and get the same limit.
+  `/signed-out` starts none, and it is where such a browser usually clicked
+  Sign in. `POST /v1/auth/app-login` still answers 429 with `Retry-After`.
   `return_to` must start with `/`, its second character must be neither `/`
   nor `\`, and it must hold no control character. Any other value becomes
   `/`.
@@ -606,14 +613,18 @@ it to `src/routes/`.
   menu reads the session without suspending, so it never holds up the
   loading screen.
 - `SignInErrorAlert` (`src/pages/SignInErrorAlert.tsx`) sits in
-  `ShellLayout`, inside `AppShell` and above the page. If the URL
+  `ShellLayout`, inside `AppShell` and above the page, and on
+  `/signed-out`. If the URL
   has `sign_in_error`, it shows that code's message from `signInErrors`
   (`src/pages/signInErrors.ts`). An unknown code shows the `failed`
-  message. It keeps the message in state and removes the param with a
+  message. `rate_limited` also shows `RetryTime`, `retry_after` seconds
+  after the page loaded, if the URL has a positive number there. It keeps
+  the message in state and removes `sign_in_error` and `retry_after` with a
   history replace, so a reload shows nothing. `cancelled` and `used` are
   neutral `fm-alert`s with `role="status"`. The other codes are `fm-alert--error`
-  with `role="alert"`. Its link starts another sign-in. It reads Try
-  again, or Sign in for `used`, where nothing failed.
+  with `role="alert"`. Its link starts another sign-in, back to the page,
+  or to its `returnTo` prop. It reads Try again, or Sign in for `used`,
+  where nothing failed.
 - Home (`src/pages/Home.tsx`) shows `AdoptionReview`
   (`src/pages/adoption/`) above the roadmap.
 - The sign-in links come from `useSignInHref()`
@@ -681,7 +692,10 @@ it to `src/routes/`.
 - `signed-out.tsx`: a public page, with component `SignedOut`
   (`src/pages/SignedOut.tsx`). Auth0 sends the browser there after
   sign-out. It is an `ErrorScreen` that says the visitor is signed out,
-  with Sign in (back to `/`) and Play as a guest (a link to `/`).
+  with Sign in (back to `/`) and Play as a guest (a link to `/`). A
+  rate-limited sign-in also lands there (see Sign-in), so the screen shows
+  `SignInErrorAlert` above its wordmark, with Try again back to `/`. It
+  still makes no request.
 - `sign-in-stopped.tsx`: a public page, with component `SignInStopped`
   (`src/pages/SignInStopped.tsx`). Auth0's error page sends the browser
   there, such as after Back from a sign-in that worked. It is an

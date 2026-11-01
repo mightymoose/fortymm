@@ -515,3 +515,18 @@ a:hover{color:var(--ball-200)}
   max-width: 640px;
   margin: calc(-1 * var(--s-4)) 0 var(--s-12);
 }
+
+/* The same message above an error screen's wordmark, such as on /signed-out
+   (src/pages/SignedOut.tsx). The screen centres its text, and the alert reads
+   from the left like everywhere else. */
+.error-screen .sign-in-error {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 480px;
+  margin: 0 0 var(--s-4);
+  text-align: left;
+}
+
+.error-screen .sign-in-error p {
+  max-width: none;
+}

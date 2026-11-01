@@ -1,7 +1,7 @@
 """The HTTP layer of sessions. tests/services/test_sessions.py covers the rules."""
 
 import secrets
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from http.cookies import SimpleCookie
 
 import httpx2 as httpx
@@ -37,17 +37,6 @@ def client(
         app, base_url="https://testserver", client=("203.0.113.7", 50000)
     ) as client:
         yield client
-
-
-def spend_guest_budget(database: Engine, network: str) -> None:
-    with database.begin() as connection:
-        connection.execute(
-            text(
-                "INSERT INTO guest_account_counts (network, window_ends_at, started)"
-                " VALUES (CAST(:network AS cidr), now() + interval '1 minute', 30)"
-            ),
-            {"network": network},
-        )
 
 
 def add_routes(app: FastAPI) -> None:
@@ -135,9 +124,9 @@ def test_reads_the_cookie_and_sets_it_again(client: TestClient) -> None:
 
 
 def test_answers_429_when_the_network_has_started_too_many_guests(
-    client: TestClient, migrated_database: Engine
+    client: TestClient, spend_guest_budget: Callable[[str], None]
 ) -> None:
-    spend_guest_budget(migrated_database, "203.0.113.7/32")
+    spend_guest_budget("203.0.113.7/32")
 
     response = start_session(client)
 
@@ -152,9 +141,9 @@ def test_answers_429_when_the_network_has_started_too_many_guests(
 
 
 def test_keys_the_limit_by_the_requests_client_address(
-    client: TestClient, migrated_database: Engine
+    client: TestClient, spend_guest_budget: Callable[[str], None]
 ) -> None:
-    spend_guest_budget(migrated_database, "203.0.113.7/32")
+    spend_guest_budget("203.0.113.7/32")
 
     with TestClient(
         create_app(), base_url="https://testserver", client=("198.51.100.1", 50000)

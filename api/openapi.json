@@ -88,7 +88,7 @@
           "auth"
         ],
         "summary": "Login",
-        "description": "Send the visitor to the identity provider's sign-in page.\n\nA request with no valid session gets no guest account. It gets a login\ncookie instead, which the callback checks. After sign-in, the callback\nsends the visitor to `return_to`. It must be a path\non this site, or the callback uses `/`.",
+        "description": "Send the visitor to the identity provider's sign-in page.\n\nA request with no valid session gets no guest account. It gets a login\ncookie instead, which the callback checks. After sign-in, the callback\nsends the visitor to `return_to`. It must be a path\non this site, or the callback uses `/`.\n\nSuch a login counts toward the guest account limit. Past it, the visitor\ngoes to `/signed-out` with `sign_in_error=rate_limited` and\n`retry_after`, the seconds until the network can sign in again.",
         "operationId": "login",
         "security": [
           {
@@ -116,24 +116,6 @@
         "responses": {
           "302": {
             "description": "A redirect"
-          },
-          "429": {
-            "description": "The client's network started too many guest accounts. Retry-After gives the seconds until it can start more.",
-            "headers": {
-              "Retry-After": {
-                "description": "The seconds until the network can start more",
-                "schema": {
-                  "type": "integer"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorsResponse"
-                }
-              }
-            }
           },
           "503": {
             "description": "The API has no identity provider configured",

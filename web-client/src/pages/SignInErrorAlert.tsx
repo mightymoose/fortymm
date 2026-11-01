@@ -2,18 +2,26 @@ import { useNavigate, useSearch } from '@tanstack/react-router'
 import { useEffect, useId, useState } from 'react'
 import { Button } from '../components/Button'
 import { Icon } from '../components/Icon'
-import { parseSignInError, signInErrors, tones } from './signInErrors'
-import { useSignInHref } from './useSignInHref'
+import { RetryTime } from '../components/RetryTime'
+import { parseRetryAfter, parseSignInError, signInErrors, tones } from './signInErrors'
+import { signInHref, useSignInHref } from './useSignInHref'
+
+// The params a sign-in that didn't finish adds to the URL.
+const PARAMS = ['sign_in_error', 'retry_after'] as const
 
 // Why a sign-in that came back with `sign_in_error` didn't finish, styled by
 // `.sign-in-error` in styles/base.css. It keeps the message but removes the
-// param from the URL, so a reload doesn't show it again.
-export function SignInErrorAlert() {
-  const search: { sign_in_error?: unknown } = useSearch({ strict: false })
-  const inUrl = 'sign_in_error' in search
+// params from the URL, so a reload doesn't show it again. Its link signs in
+// back to this page, or to `returnTo` if given.
+export function SignInErrorAlert({ returnTo }: { returnTo?: string }) {
+  const search: { sign_in_error?: unknown; retry_after?: unknown } = useSearch({ strict: false })
+  const inUrl = PARAMS.some((param) => param in search)
   const [code, setCode] = useState(() => parseSignInError(search.sign_in_error))
+  // Read once, so the time counts from the page load.
+  const [retryAt] = useState(() => parseRetryAfter(search.retry_after))
   const navigate = useNavigate()
-  const signInHref = useSignInHref()
+  const thisPage = useSignInHref()
+  const signInLink = returnTo === undefined ? thisPage : signInHref(returnTo)
   const titleId = useId()
 
   useEffect(() => {
@@ -22,7 +30,7 @@ export function SignInErrorAlert() {
       to: '.',
       search: (prev: Record<string, unknown>) => {
         const next = { ...prev }
-        delete next.sign_in_error
+        for (const param of PARAMS) delete next[param]
         return next
       },
       replace: true,
@@ -38,10 +46,18 @@ export function SignInErrorAlert() {
       <p className="fm-alert__title" id={titleId}>
         {title}
       </p>
-      <p className="fm-alert__body">{body}</p>
+      <p className="fm-alert__body">
+        {body}
+        {code === 'rate_limited' && retryAt && (
+          <>
+            {' '}
+            <RetryTime at={retryAt} />
+          </>
+        )}
+      </p>
       <div className="fm-alert__actions">
         {/* A full page load, as the account menu's Sign in is. */}
-        <a className="fm-btn fm-btn--primary fm-btn--sm" href={signInHref}>
+        <a className="fm-btn fm-btn--primary fm-btn--sm" href={signInLink}>
           {action}
         </a>
         <Button variant="ghost" size="sm" onClick={() => setCode(null)}>

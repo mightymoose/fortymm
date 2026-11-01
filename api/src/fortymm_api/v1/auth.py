@@ -17,15 +17,22 @@ from fortymm_api.auth import (
 from fortymm_api.database import DatabaseSession
 from fortymm_api.identity_provider import IdentityProvider, IdToken
 from fortymm_api.services import sessions, sign_in
+from fortymm_api.services.sessions import GuestAccountLimitReached
 from fortymm_api.v1.errors import (
     GUEST_LIMIT,
     NO_PROVIDER,
     UNSUPPORTED_MEDIA_TYPE,
     Responses,
+    retry_after_seconds,
 )
 from fortymm_api.v1.session import client_address
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# Where a rate-limited web login sends the browser. It has no session, so `/`
+# would start a guest account and get the same limit. `/signed-out` starts
+# none, and it is where such a browser usually clicked Sign in.
+RATE_LIMITED_LOGIN = "/signed-out?sign_in_error=rate_limited"
 
 REDIRECT: Responses = {302: {"description": "A redirect"}}
 
@@ -79,7 +86,7 @@ def with_query(return_to: str, name: str, value: str) -> str:
     "/login",
     status_code=302,
     response_class=RedirectResponse,
-    responses={**REDIRECT, **GUEST_LIMIT, **NO_PROVIDER},
+    responses={**REDIRECT, **NO_PROVIDER},
 )
 def login(
     session: DatabaseSession,
@@ -94,10 +101,19 @@ def login(
     cookie instead, which the callback checks. After sign-in, the callback
     sends the visitor to `return_to`. It must be a path
     on this site, or the callback uses `/`.
+
+    Such a login counts toward the guest account limit. Past it, the visitor
+    goes to `/signed-out` with `sign_in_error=rate_limited` and
+    `retry_after`, the seconds until the network can sign in again.
     """
-    started = sign_in.begin_sign_in(
-        session, token, client_address(request), sign_in.safe_return_to(return_to)
-    )
+    try:
+        started = sign_in.begin_sign_in(
+            session, token, client_address(request), sign_in.safe_return_to(return_to)
+        )
+    except GuestAccountLimitReached as error:
+        return redirect(
+            f"{RATE_LIMITED_LOGIN}&retry_after={retry_after_seconds(error)}"
+        )
     response = redirect(
         provider.authorize_url(
             state=started.state,

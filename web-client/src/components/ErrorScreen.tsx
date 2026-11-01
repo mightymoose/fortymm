@@ -8,14 +8,18 @@ export function ErrorScreen({
   children,
   note,
   actions,
+  alert,
 }: {
   title: string
   children: ReactNode
   note?: ReactNode
   actions: ReactNode
+  // A message above the wordmark, such as why a sign-in didn't finish.
+  alert?: ReactNode
 }) {
   return (
     <main className="error-screen">
+      {alert}
       <div className="loading-screen-wordmark">FortyMM</div>
       <h1>{title}</h1>
       <p>{children}</p>
