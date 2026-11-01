@@ -17,6 +17,7 @@ export const sessionResponse: components['schemas']['SessionResponse'] = {
         id: 'c4a8f6a2-1f0e-4a63-8d2e-7f5b9e1c3d42',
         display_name: 'excited egret 387',
       },
+      permissions: [],
     },
   },
 }
