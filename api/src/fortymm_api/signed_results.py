@@ -434,6 +434,9 @@ def _exact_keys(
     required: set[int | str],
     optional: set[int | str] | None = None,
 ) -> Mapping[int | str, object]:
+    """A map whose keys are exactly `required` plus any of `optional`, each
+    compared by type as well as value: CBOR true or 1.0 never passes for 1,
+    and text "1" never passes for 1."""
     if not isinstance(value, Mapping):
         raise Malformed("not a map")
     if any(type(key) not in (int, str) for key in value):

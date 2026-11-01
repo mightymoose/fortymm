@@ -65,7 +65,8 @@ KEYS = [ANN_KEY.public_key, BO_KEY.public_key]
 VECTORS: VectorsJson = json.loads(VECTORS_PATH.read_text())
 DIRECTORY = public_keys(VECTORS)
 # ISO/IEC 18004 table 7: alphanumeric characters at version 16, error level
-# M, with no mode switching.
+# M, with no mode switching. Version 14 at level L holds 667, so the budget
+# fits that too.
 QR_VERSION_16_M_ALPHANUMERIC = 656
 
 valid = pytest.mark.parametrize("vector", VECTORS["valid"], ids=lambda v: v["name"])
@@ -209,6 +210,8 @@ def test_derives_every_key(name: str) -> None:
 
 
 def test_the_first_vector_matches_the_spec_example() -> None:
+    # The vectors are generated, so a mistake made in both encode_payload and
+    # decode_envelope would regenerate cleanly. This literal catches it.
     first = VECTORS["valid"][0]
     players = first["result"]["players"]
 
@@ -226,6 +229,9 @@ def test_the_first_vector_matches_the_spec_example() -> None:
 
 
 def test_every_two_signature_qr_text_fits_version_16_at_level_m() -> None:
+    # The budget covers the two players' approvals, the case the issue names.
+    # A third signature, a representative's, adds 116 bytes and needs version
+    # 17 at level M.
     two_signatures = [v for v in VECTORS["valid"] if len(v["signatures"]) <= 2]
 
     assert len(two_signatures) >= 2

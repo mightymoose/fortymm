@@ -124,9 +124,9 @@ character is in the QR alphanumeric set. The link is `https://fortymm.com/r#`
 followed by the unpadded base64url of the envelope bytes. The fragment never
 reaches a server log or a link preview.
 
-Neither form compresses the envelope. The payload is ids, hashes and
-signatures, and zlib saves 4% of the bytes on the longest vector and no QR
-version, while it would cost every client an inflate step.
+Neither form compresses the envelope. The bytes are ids, hashes and
+signatures, so zlib makes most vectors larger. It grows the `longest` vector
+from 406 to 414 bytes, and it would cost every client an inflate step.
 
 Measured on the `longest` vector (best of 7, every game past deuce, retired in
 the last game, a correction, two signatures): the payload is 166 bytes, the
@@ -360,6 +360,10 @@ Invalid, `malformed` unless marked:
 | `qr-wrong-prefix` | `FMR2:`. |
 | `qr-invalid-base45` | A Base45 group over 65535. |
 | `link-standard-base64-padded` | The link in standard base64, with its `=` padding. |
+| `envelope-trailing-byte` | A zero byte after the envelope. |
+| `more-games-than-best-of` | Four games in a best of 3. |
+| `missing-result-key` | No `rated` in the result map. |
+| `duplicate-result-key` | `best_of` twice in the result map. |
 
 ### Traps the vectors pin
 

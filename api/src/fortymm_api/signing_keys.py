@@ -4,6 +4,9 @@ and ES256 over a raw `r || s` signature.
 
 The API holds no private key. SigningPrivateKey is the clients' reference
 recipe. tests/test_signing_keys.py guards this module.
+
+#183's `signing_keys.public_key` column stores to_cose_key(), so
+`sha256(public_key) == kid` holds for every row.
 """
 
 import hashlib

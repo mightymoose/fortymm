@@ -425,6 +425,19 @@ def _indefinite_signature_array(envelopes: dict[str, bytes]) -> bytes:
     return _assemble(parts)[:-1] + b"\x9f" + signatures[1:] + b"\xff"
 
 
+def _duplicate_result_key(envelopes: dict[str, bytes]) -> bytes:
+    """The result map with best_of twice. cbor2 can't write a duplicate key,
+    so this is byte surgery: one more pair, and the map's count byte 0xa6
+    becomes 0xa7."""
+    parts = _parts(envelopes["completed-best-of-3"])
+    payload: bytes = parts[PAYLOAD]
+    assert payload.count(b"\xa6\x01\x50") == 1
+    assert payload.count(b"\x02\x03\x03\xf5") == 1
+    payload = payload.replace(b"\xa6\x01\x50", b"\xa7\x01\x50")
+    parts[PAYLOAD] = payload.replace(b"\x02\x03\x03\xf5", b"\x02\x03\x02\x03\x03\xf5")
+    return _assemble(parts)
+
+
 def _unknown_kid(envelopes: dict[str, bytes]) -> bytes:
     return append_signature(envelopes["half-signed"], UNLISTED, BO)
 
@@ -691,6 +704,32 @@ INVALID: tuple[InvalidCase, ...] = (
         "The link's envelope in standard base64, with its padding.",
         "malformed",
         _standard_base64_link,
+    ),
+    InvalidCase(
+        "envelope-trailing-byte",
+        "A zero byte after the envelope.",
+        "malformed",
+        lambda envelopes: envelopes["completed-best-of-3"] + b"\x00",
+    ),
+    InvalidCase(
+        "more-games-than-best-of",
+        "Four games in a best of 3.",
+        "malformed",
+        _result_change(
+            "completed-best-of-3", _set(5, [[11, 7], [9, 11], [11, 4], [11, 2]])
+        ),
+    ),
+    InvalidCase(
+        "missing-result-key",
+        "No rated (key 3) in the result map.",
+        "malformed",
+        _result_change("completed-best-of-3", _delete(3)),
+    ),
+    InvalidCase(
+        "duplicate-result-key",
+        "best_of (key 2) twice in the result map.",
+        "malformed",
+        _duplicate_result_key,
     ),
 )
 
