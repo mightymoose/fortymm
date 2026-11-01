@@ -1,6 +1,7 @@
 """The admin page's routes: permissions, the roles that grant them, and the
 accounts that hold the roles."""
 
+from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -47,6 +48,7 @@ INVALID_ROLE: Responses = {
         },
     }
 }
+NO_ACCOUNT = errors(404, "No verified account has this id")
 LAST_ADMINISTRATOR = errors(
     409,
     "The change would leave no account with `account_roles.manage`, so nobody"
@@ -142,6 +144,29 @@ class AdminAccountsResponse(BaseModel):
 
 class AdminAccountResponse(BaseModel):
     data: AdminAccount
+
+
+class AdminAccountRole(BaseModel):
+    id: UUID
+    name: str
+    description: str
+    # The account holds it.
+    held: bool
+
+
+class AdminAccountDetail(BaseModel):
+    id: UUID
+    email: str
+    # As in AdminAccount.
+    display_name: str | None
+    created_at: datetime
+    last_seen_at: datetime
+    # Every role, by name, with whether the account holds it.
+    roles: list[AdminAccountRole]
+
+
+class AdminAccountDetailResponse(BaseModel):
+    data: AdminAccountDetail
 
 
 class AccountRolesRequest(BaseModel):
@@ -311,6 +336,33 @@ def admin_accounts(
     return AdminAccountsResponse(
         data=[account_model(found) for found in page.accounts],
         meta=AdminAccountsMeta(has_more=page.has_more),
+    )
+
+
+@router.get("/accounts/{account_id}", responses={**READ_ERRORS, **NO_ACCOUNT})
+def admin_account(
+    session: DatabaseSession, account: AdminViewer, account_id: UUID
+) -> AdminAccountDetailResponse:
+    """The verified account, with every role and whether it holds each, for
+    its admin page. Needs `admin.view`."""
+    found = roles.get_account(session, AccountId(account_id))
+    return AdminAccountDetailResponse(
+        data=AdminAccountDetail(
+            id=found.id,
+            email=found.email,
+            display_name=found.display_name,
+            created_at=found.created_at,
+            last_seen_at=found.last_seen_at,
+            roles=[
+                AdminAccountRole(
+                    id=role.id,
+                    name=role.name,
+                    description=role.description,
+                    held=role.held,
+                )
+                for role in found.roles
+            ],
+        )
     )
 
 

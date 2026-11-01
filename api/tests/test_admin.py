@@ -312,6 +312,26 @@ def test_lists_the_accounts(
     }
 
 
+def test_gets_an_account(
+    client: TestClient, admin: dict[str, Any], migrated_database: Engine
+) -> None:
+    response = client.get(f"/v1/admin/accounts/{admin['id']}")
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["email"] == "ann@example.com"
+    assert data["display_name"] == admin["player"]["display_name"]
+    assert {"created_at", "last_seen_at"} <= data.keys()
+    assert data["roles"] == [
+        {
+            "id": administrator(migrated_database),
+            "name": "Administrator",
+            "description": data["roles"][0]["description"],
+            "held": True,
+        }
+    ]
+
+
 def test_sets_an_accounts_roles(
     client: TestClient, admin: dict[str, Any], migrated_database: Engine
 ) -> None:

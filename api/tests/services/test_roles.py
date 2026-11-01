@@ -32,6 +32,7 @@ from fortymm_api.services.roles import (
     create_role,
     delete_permission,
     delete_role,
+    get_account,
     list_accounts,
     list_permissions,
     list_roles,
@@ -397,6 +398,32 @@ def test_only_a_verified_account_holds_a_role(migrated_database: Engine) -> None
             migrated_database,
             lambda session: set_account_roles(session, ann, guest, role),
         )
+
+
+def test_gets_an_account_with_every_role_and_which_it_holds(
+    migrated_database: Engine,
+) -> None:
+    ann = admin(migrated_database)
+    viewer = new_role(migrated_database, ann)
+    bob = verified(migrated_database, "bob@example.com", viewer)
+
+    found = in_transaction(migrated_database, lambda session: get_account(session, bob))
+
+    assert (found.id, found.email) == (bob, "bob@example.com")
+    assert found.display_name is not None
+    assert [(role.name, role.held) for role in found.roles] == [
+        ("Administrator", False),
+        ("Viewer", True),
+    ]
+
+
+def test_getting_a_guest_account_is_not_found(migrated_database: Engine) -> None:
+    guest = in_transaction(
+        migrated_database, lambda session: start_session(session, None, ANN)
+    ).account.id
+
+    with pytest.raises(AccountNotFound):
+        in_transaction(migrated_database, lambda session: get_account(session, guest))
 
 
 def test_lists_verified_accounts_by_email(migrated_database: Engine) -> None:

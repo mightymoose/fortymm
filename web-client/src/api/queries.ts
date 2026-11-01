@@ -193,6 +193,7 @@ export function answerQuestionMutation(api: ApiClient, queryClient: QueryClient)
 export type AdminPermission = components['schemas']['AdminPermission']
 export type AdminRole = components['schemas']['AdminRole']
 export type AdminAccount = components['schemas']['AdminAccount']
+export type AdminAccountDetail = components['schemas']['AdminAccountDetail']
 export type RoleDraft = components['schemas']['RoleRequest']
 export type PermissionDraft = components['schemas']['NewPermissionRequest']
 
@@ -238,6 +239,29 @@ export function adminAccountsQuery(api: ApiClient, email: string) {
         }),
       )
       return { accounts: data.data, hasMore: data.meta.has_more }
+    },
+  })
+}
+
+// One verified account for its admin page, with every role and whether it
+// holds each. Null if no verified account has the id, such as a guest's.
+export function adminAccountQuery(api: ApiClient, id: string) {
+  return queryOptions({
+    queryKey: [...ADMIN_KEY, 'accounts', 'detail', id],
+    queryFn: async ({ signal }): Promise<AdminAccountDetail | null> => {
+      try {
+        const data = await send(
+          'GET /v1/admin/accounts/{account_id}',
+          api.GET('/v1/admin/accounts/{account_id}', {
+            params: { path: { account_id: id } },
+            signal,
+          }),
+        )
+        return data.data
+      } catch (error) {
+        if (error instanceof ApiError && (error.status === 404 || error.status === 422)) return null
+        throw error
+      }
     },
   })
 }

@@ -519,7 +519,10 @@ routes, under `/v1/admin`.
   mock as that email makes an administrator.
 - `GET /v1/admin/accounts` lists verified accounts by email, at most 50,
   with `meta.has_more`. `email` filters by a case-insensitive substring.
-  `PUT /v1/admin/accounts/{account_id}/roles` sets the exact set of roles.
+  `GET /v1/admin/accounts/{account_id}` is the account's page in one
+  request: its email, player, `created_at`, `last_seen_at`, and every role
+  by name with `held`. It answers 404 for a guest. `PUT
+  /v1/admin/accounts/{account_id}/roles` sets the exact set of roles.
 
 ### Leagues
 
@@ -752,20 +755,32 @@ it to `src/routes/`.
   That covers Review later, the last answer and a visit with no open
   question. Home then focuses the reminder's link while questions remain,
   or else its title, so focus doesn't fall to the document.
-- `_shell/admin.tsx`: the page `Admin` (`src/pages/admin/`), for an
-  account with `admin.view`. Its loader reads the session and sends any
-  other account to `/`. It has a tab each for roles, permissions and
-  accounts. `Tabs` is `lazy` there, so a tab loads its lists when it opens.
-  Each tab's list has its own `QueryBoundary` with a table skeleton.
-  `roles.manage` shows the controls that add, edit and delete roles and
-  permissions. `account_roles.manage` shows Edit roles on each account. A
-  built-in permission has no Delete. The accounts tab searches by email,
-  and says when it shows only the first 50.
+- `_shell/admin/`: the admin pages (`src/pages/admin/`), for an account
+  with `admin.view`. `route.tsx` has no component. Its loader reads the
+  session and sends any other account to `/`.
+- `_shell/admin/index.tsx`: the page `Admin`. It has a tab each for roles,
+  permissions and accounts. The `tab` search param names the open tab
+  (`src/pages/admin/tabs.ts`), and a tab change replaces it. `Tabs` is
+  `lazy` there, so a tab loads its lists when it opens. Each tab's list has
+  its own `QueryBoundary` with a table skeleton. `roles.manage` shows the
+  controls that add, edit and delete roles and permissions. A built-in
+  permission has no Delete. The accounts tab searches by email, says when
+  it shows only the first 50, and links each email to the account's page.
+- `_shell/admin/accounts/$accountId.tsx`: the page `AccountAdmin`, one
+  account's admin page. A breadcrumb links back to Administration and to
+  `/admin?tab=accounts`. The account loads in its own `QueryBoundary`,
+  from `GET /v1/admin/accounts/{account_id}`. A 404, or a 422 for an id
+  that isn't a UUID, shows "No such account". It shows the account's
+  email, player, join date and last visit, then a Roles card.
+  `account_roles.manage` makes the card a form of every role's checkbox
+  with Save roles. Without it, the card lists the roles the account holds.
+  Add the account's other admin tools to this page.
 - The admin forms use react-hook-form and zod. Each zod schema repeats the
   API's rules, such as the role name's 50 characters and the permission
   key's pattern, so a mistake shows before the request. `TextField` marks
   its input `aria-invalid` and describes it by its `FieldError`. A form
-  sits in a `FormSheet`, a drawer, and a delete in a `ConfirmDialog`. A
+  on the `Admin` page sits in a `FormSheet`, a drawer, and a delete in a
+  `ConfirmDialog`. The account page's Roles form sits in its card. A
   409 for a taken name or key lands on that field. Another refusal, such
   as the last administrator, shows the API's title in the form, through
   `ApiError.title`. A save shows a toast.
@@ -945,11 +960,13 @@ built-in permission's delete, and any write that leaves no account with
 `account_roles.manage`, with the API's titles. It answers 415 to a write
 without a JSON `Content-Type`. It returns the `state`, which a test changes
 as another tab would, and the `writes` it got. `builtInPermissions` and
-`administrator` are the rows the migration makes. `holdAdmin(list)` holds
-a list's responses, and `failAdminOnce(list, status)` fails the next one.
-The default handlers answer the admin lists with nothing. `AdminPage`
-renders `/admin`. Only the open tab's panel shows, so a test opens a tab
-first.
+`administrator` are the rows the migration makes. It also answers an
+account's page. `holdAdmin(list)` holds a list's responses, and
+`failAdminOnce(list, status)` fails the next one. A `list` of
+`accounts/<id>` names an account's page. The default handlers answer the
+admin lists with nothing. `AdminPage` renders `/admin`, and
+`AdminPage.renderAccount(id)` an account's page. Only the open tab's panel
+shows, so a test opens a tab first.
 
 `HomePage.render({ path })` renders the app at another path, such as one
 with a query. `homePage.href` is the router's current path and query, so a
@@ -1029,7 +1046,9 @@ the account keeps its one player.
 
 `e2e/admin.spec.ts` signs in as `mightymoose@fortymm.com`, whom the
 migration makes an administrator. On `/admin` it creates a role with a new
-name, because the dev database keeps its roles, then deletes it.
+name, because the dev database keeps its roles, then deletes it. Then it
+opens its own account's page from the Accounts tab, and checks that it
+holds Administrator.
 
 The suite counts about 25 guest accounts and sign-ins with no session,
 under the limit of 30 a minute.

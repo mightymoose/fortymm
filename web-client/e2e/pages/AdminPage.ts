@@ -1,6 +1,7 @@
 import type { Locator, Page } from '@playwright/test'
 
-// Page object for the admin page. Only the open tab's panel shows.
+// Page object for the admin page and an account's admin page. Only the open
+// tab's panel shows.
 export class AdminPage {
   readonly page: Page
   readonly title: Locator
@@ -19,6 +20,23 @@ export class AdminPage {
   // The open tab's table row whose first cell starts with `name`.
   row(name: string): Locator {
     return this.panel.getByRole('row', { name: new RegExp(`^${escape(name)}`) })
+  }
+
+  // Opens the account `email`'s page from the Accounts tab.
+  async openAccount(email: string): Promise<void> {
+    await this.page.getByRole('tab', { name: 'Accounts' }).click()
+    await this.panel.getByRole('link', { name: email }).click()
+  }
+
+  accountHeading(email: string): Locator {
+    return this.page.getByRole('heading', { level: 1, name: email })
+  }
+
+  // On an account's page, the checkbox of the role `name`.
+  roleCheckbox(name: string): Locator {
+    return this.page
+      .getByRole('region', { name: 'Roles' })
+      .getByRole('checkbox', { name: new RegExp(`^${escape(name)}`) })
   }
 
   // Creates the role `name` with `permissions`, on the Roles tab.

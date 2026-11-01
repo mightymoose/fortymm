@@ -4,12 +4,16 @@ import { renderRoute, type AppRouter } from '../renderRoute'
 
 export type AdminTab = 'Roles' | 'Permissions' | 'Accounts'
 
-// Page object for the admin page in unit tests. Mock the admin routes with
-// mockAdmin() from ../server first. Only the selected tab's panel is
-// visible, so open a tab before reading it.
+// Page object for the admin page and an account's admin page in unit tests.
+// Mock the admin routes with mockAdmin() from ../server first. Only the
+// selected tab's panel is visible, so open a tab before reading it.
 export class AdminPage {
-  static async render(): Promise<AdminPage> {
-    return new AdminPage(await renderRoute('/admin'))
+  static async render(path = '/admin'): Promise<AdminPage> {
+    return new AdminPage(await renderRoute(path))
+  }
+
+  static renderAccount(id: string): Promise<AdminPage> {
+    return AdminPage.render(`/admin/accounts/${id}`)
   }
 
   readonly router: AppRouter
@@ -33,6 +37,25 @@ export class AdminPage {
     await this.user.click(screen.getByRole('button', { name: 'Your account' }))
     const menu = screen.getByRole('menu', { name: 'Your account' })
     return within(menu).queryByRole('menuitem', { name: 'Administration' })
+  }
+
+  get selectedTab(): string | null {
+    return screen.queryByRole('tab', { selected: true })?.textContent ?? null
+  }
+
+  // A link in the panel or, on an account's page, in its breadcrumb.
+  async follow(name: string): Promise<void> {
+    await this.user.click(screen.getByRole('link', { name }))
+  }
+
+  // An account's page: its heading, once it loads.
+  findHeading(name: string): Promise<HTMLElement> {
+    return screen.findByRole('heading', { level: 1, name })
+  }
+
+  // An account's page: its Roles card.
+  get rolesCard(): HTMLElement {
+    return screen.getByRole('region', { name: 'Roles' })
   }
 
   async openTab(tab: AdminTab): Promise<void> {

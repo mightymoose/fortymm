@@ -1319,6 +1319,85 @@
         }
       }
     },
+    "/v1/admin/accounts/{account_id}": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin Account",
+        "description": "The verified account, with every role and whether it holds each, for\nits admin page. Needs `admin.view`.",
+        "operationId": "admin_account",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Account Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAccountDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No verified account has this id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/accounts/{account_id}/roles": {
       "put": {
         "tags": [
@@ -1546,6 +1625,65 @@
         ],
         "title": "AdminAccount"
       },
+      "AdminAccountDetail": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Display Name"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Seen At"
+          },
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/AdminAccountRole"
+            },
+            "type": "array",
+            "title": "Roles"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "display_name",
+          "created_at",
+          "last_seen_at",
+          "roles"
+        ],
+        "title": "AdminAccountDetail"
+      },
+      "AdminAccountDetailResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AdminAccountDetail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "AdminAccountDetailResponse"
+      },
       "AdminAccountResponse": {
         "properties": {
           "data": {
@@ -1557,6 +1695,35 @@
           "data"
         ],
         "title": "AdminAccountResponse"
+      },
+      "AdminAccountRole": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "held": {
+            "type": "boolean",
+            "title": "Held"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "held"
+        ],
+        "title": "AdminAccountRole"
       },
       "AdminAccountsMeta": {
         "properties": {
