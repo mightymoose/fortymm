@@ -32,7 +32,7 @@ export class AdminPage {
   async adminLink(): Promise<HTMLElement | null> {
     await this.user.click(screen.getByRole('button', { name: 'Your account' }))
     const menu = screen.getByRole('menu', { name: 'Your account' })
-    return within(menu).queryByRole('menuitem', { name: 'Admin' })
+    return within(menu).queryByRole('menuitem', { name: 'Administration' })
   }
 
   async openTab(tab: AdminTab): Promise<void> {

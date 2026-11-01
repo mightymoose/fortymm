@@ -103,7 +103,7 @@ export function UserMenu() {
             role="menuitem"
             onClick={() => setOpen(false)}
           >
-            Admin
+            Administration
           </Link>
         )}
         {narrow &&

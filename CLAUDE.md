@@ -652,7 +652,7 @@ it to `src/routes/`.
   player's `PlayerAvatar` (`src/components/PlayerAvatar.tsx`, the initials
   of the display name, whose accessible name is the full name) and the
   name. Below 600px the chip hides the name. The chip opens the account
-  menu. An account with `admin.view` gets an Admin link there. Below 900px
+  menu. An account with `admin.view` gets an Administration link there. Below 900px
   (`useNarrowLayout()`), the menu also links to each mobile beta in
   `mobileApps` (`src/mobileApps.ts`), in a new tab. A verified account gets
   Sign out, which signs out at once. A guest
