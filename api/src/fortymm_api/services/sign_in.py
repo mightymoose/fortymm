@@ -8,7 +8,7 @@ from datetime import timedelta
 from enum import StrEnum
 from typing import Protocol
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from fortymm_api.accounts import (
@@ -210,6 +210,15 @@ class SignInFailed:
 
 
 @dataclass(frozen=True)
+class WrongBrowser:
+    """The callback came from a browser other than the one that started the
+    attempt, such as a link-preview fetcher or another tab's older attempt.
+    The attempt stays for the browser that started it."""
+
+    return_to: str
+
+
+@dataclass(frozen=True)
 class Replayed:
     """The callback's state matches no login attempt, such as a second run of
     a callback that already finished."""
@@ -221,19 +230,21 @@ def finish_sign_in(
     login_state: str | None,
     callback: Callback,
     exchange: ExchangeCode,
-) -> SignedIn | SignInFailed | Replayed:
+) -> SignedIn | SignInFailed | WrongBrowser | Replayed:
     """Finish the login attempt that the callback's state names.
 
-    Deletes the attempt, whatever the result. A failure changes no account and
-    no session, and never raises, so the caller commits the delete. Each
-    success gives the browser a new session and token.
+    A callback from another browser changes nothing, and the attempt stays.
+    Once the browser checks out, the attempt is deleted, whatever the result.
+    A failure changes no account and no session, and never raises, so the
+    caller commits the delete. Each success gives the browser a new session
+    and token.
     """
     if callback.state is None:
         return Replayed()
     found = session.execute(
-        delete(LoginAttempt)
+        select(LoginAttempt, LoginAttempt.expires_at > func.now())
         .where(LoginAttempt.state == callback.state)
-        .returning(LoginAttempt, LoginAttempt.expires_at > func.now())
+        .with_for_update()
     ).one_or_none()
     if found is None:
         return Replayed()
@@ -252,12 +263,13 @@ def finish_sign_in(
         if login_state is None or not secrets.compare_digest(
             login_state, attempt.state
         ):
-            return failed(SignInError.FAILED)
+            return WrongBrowser(attempt.return_to)
     elif current is None or current.row.id != attempt.session_id:
         # Includes a session that ended after the attempt began, such as when
         # another tab's sign-in replaced it. The browser may be signed in as
         # someone else now, so the sign-in must say it failed.
-        return failed(SignInError.FAILED)
+        return WrongBrowser(attempt.return_to)
+    session.delete(attempt)
     if not unexpired:
         return failed(SignInError.EXPIRED)
     if callback.error == "access_denied":

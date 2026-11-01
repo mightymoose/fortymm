@@ -164,7 +164,7 @@
           "auth"
         ],
         "summary": "Callback",
-        "description": "Finish a sign-in, then send the visitor back to its `return_to`.\n\nA successful sign-in adds `signed_in=1` to that path's query. A failed\nsign-in adds `sign_in_error` instead: `cancelled`, `email_not_verified`,\n`expired` or `failed`. A callback whose `state` matches no login attempt,\nsuch as a replay, goes to `/`.",
+        "description": "Finish a sign-in, then send the visitor back to its `return_to`.\n\nA successful sign-in adds `signed_in=1` to that path's query. A failed\nsign-in adds `sign_in_error` instead: `cancelled`, `email_not_verified`,\n`expired` or `failed`. A callback from another browser gets `failed`, and\nkeeps the login cookie, which may belong to a newer sign-in. A callback\nwhose `state` matches no login attempt, such as a replay, goes to `/`\nwith `sign_in_error=used`.",
         "operationId": "callback",
         "security": [
           {
@@ -350,7 +350,7 @@
           "auth"
         ],
         "summary": "App Finish",
-        "description": "Finish a sign-in that `app-login` started, with the query that\n`app-callback` handed to the app.\n\n`outcome` is `signed_in`, or why the sign-in failed: `cancelled`,\n`email_not_verified`, `expired` or `failed`. A sign-in sets a new session\ncookie. A `state` that matches no login attempt, such as a replay, is\n`expired`. A failed sign-in changes no account.",
+        "description": "Finish a sign-in that `app-login` started, with the query that\n`app-callback` handed to the app.\n\n`outcome` is `signed_in`, or why the sign-in failed: `cancelled`,\n`email_not_verified`, `expired` or `failed`. A sign-in sets a new session\ncookie. A `state` that matches no login attempt, such as a replay, is\n`expired`. A failed sign-in changes no account. A request from another\nbrowser is `failed`, and keeps the login cookie.",
         "operationId": "app_finish",
         "security": [
           {
