@@ -595,8 +595,8 @@ it to `src/routes/`.
   has `sign_in_error`, it shows that code's message from `signInErrors`
   (`src/pages/signInErrors.ts`). An unknown code shows the `failed`
   message. It keeps the message in state and removes the param with a
-  history replace, so a reload shows nothing. `cancelled` is a neutral
-  `fm-alert` with `role="status"`. The other codes are `fm-alert--error`
+  history replace, so a reload shows nothing. `cancelled` and `used` are
+  neutral `fm-alert`s with `role="status"`. The other codes are `fm-alert--error`
   with `role="alert"`. Its link starts another sign-in. It reads Try
   again, or Sign in for `used`, where nothing failed.
 - Home (`src/pages/Home.tsx`) shows `AdoptionReview`
