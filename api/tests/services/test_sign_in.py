@@ -24,6 +24,7 @@ from fortymm_api.services.sessions import (
     GuestAccountLimitReached,
     StartedSession,
     authenticate,
+    end_session,
     lock_account_for_write,
     new_session,
     start_session,
@@ -616,6 +617,62 @@ def test_a_replayed_callback_changes_nothing(migrated_database: Engine) -> None:
 
     assert replay == Replayed()
     assert signed_in(migrated_database, first.token) is not None
+
+
+CAROL = identity("email|carol", "carol@example.com")
+
+
+@pytest.mark.parametrize(
+    ("browser", "other_tab"),
+    [
+        ("guest", ANN_IDENTITY),  # VerifyInPlace
+        ("guest", BOB),  # AdoptGuest
+        ("verified", ANN_IDENTITY),  # AlreadySignedIn
+        ("verified", BOB),  # SwitchAccount
+        ("verified", identity("email|dan", "dan@example.com")),  # CreateAccount
+    ],
+)
+def test_a_sign_in_whose_session_another_tab_replaced_fails(
+    migrated_database: Engine, browser: str, other_tab: ExchangeCode
+) -> None:
+    bob_signed_in(migrated_database)
+    token = guest_token(migrated_database)
+    if browser == "verified":
+        token = sign_in(migrated_database, token, ANN_IDENTITY)
+    carols = begin(migrated_database, token)
+    others = begin(migrated_database, token)
+    replaced = finish(migrated_database, others.token, others.state, other_tab)
+    assert isinstance(replaced, SignedIn)
+    account = account_of(migrated_database, replaced.token)
+
+    result = finish(migrated_database, replaced.token, carols.state, CAROL)
+
+    assert result == SignInFailed("/games", SignInError.FAILED)
+    assert account_of(migrated_database, replaced.token) == account
+    assert count(migrated_database, "SELECT count(*) FROM login_attempts") == 0
+    assert (
+        count(
+            migrated_database,
+            "SELECT count(*) FROM identities WHERE auth0_sub = 'email|carol'",
+        )
+        == 0
+    )
+
+
+@pytest.mark.parametrize("browser", ["guest", "verified"])
+def test_a_sign_in_whose_session_signed_out_in_another_tab_fails(
+    migrated_database: Engine, browser: str
+) -> None:
+    token = guest_token(migrated_database)
+    if browser == "verified":
+        token = sign_in(migrated_database, token, ANN_IDENTITY)
+    started = begin(migrated_database, token)
+    in_transaction(migrated_database, lambda session: end_session(session, token))
+
+    result = finish(migrated_database, None, started.state, CAROL)
+
+    assert result == SignInFailed("/games", SignInError.FAILED)
+    assert count(migrated_database, "SELECT count(*) FROM login_attempts") == 0
 
 
 def finish_with(
