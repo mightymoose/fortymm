@@ -851,6 +851,21 @@ doesn't show the loading screen again. If the session fails after the
 retries, the root route's error page shows (see Error pages). The web-client no
 longer calls `/v1/health`.
 
+`sessionQuery` saves each account it gets in `localStorage`
+(`src/api/savedSession.ts`), so a page load with no network can still show
+the authenticated pages. It is only what the pages show. The session itself
+is the cookie. With a saved account, a load whose request gets no response,
+or a 502, 503 or 504, shows the saved account at once. A load whose request
+takes `OFFLINE_AFTER_MS` (2s) shows it then. The request goes on. Its answer
+replaces the saved account in the query. A request that never got through
+starts again on the window's `online` event. TanStack's `onlineManager`
+can't tell, because it starts online and a page that loaded offline never
+saw an `offline` event. Any other failure, such as a 500 or a 429, shows the
+error page as before. With nothing saved, every failure does. The query's
+`networkMode` is `always`, so it never pauses while TanStack thinks the
+browser is offline. `logout()` forgets the saved account once the API has
+ended the session.
+
 Each request function in `queries.ts` goes through `send()`. It throws
 `ApiUnreachable` when no response came back, and `ApiError` when the
 response isn't ok. A bodyless `POST` or `DELETE` sends `JSON_HEADERS`.
@@ -887,7 +902,8 @@ data. It carries the status and the time from `Retry-After`. A query throws
 
 Vitest is configured in the `test` block of `web-client/vite.config.ts` (jsdom
 environment). `web-client/src/setupTests.ts` loads the jest-dom matchers,
-starts the mock API, and cleans up rendered components after each test. Tests
+starts the mock API, and cleans up rendered components and `localStorage`
+after each test, so a saved session doesn't leak into the next test. Tests
 live next to the code as `*.test.tsx`.
 
 Tests go through page objects in `web-client/src/test/pages/`. A static async
@@ -950,7 +966,10 @@ The router times `pendingMs` with `Date.now()`, so that test fakes `Date`
 with the timers. It loads the page's chunks once first, because they load
 in real time while the fake clock stands still. To test a skeleton, hold the players
 response with `holdPlayers()`. `failPlayersOnce()` fails the next players
-request, for a boundary's error. React keeps a Suspense fallback up for a
+request, for a boundary's error. `failSession()` makes every session
+request fail with no response, as offline. `src/api/savedSession.test.tsx`
+loads Home once to save the account, then loads it again with the session
+failing or held. React keeps a Suspense fallback up for a
 moment after the data comes, so wait for the content with a `find*` query. `DesignSystemPage.render()` never
 waits for the session, because the page doesn't start one.
 `src/api/queries.test.ts` checks the retry rule through `createQueryClient()`. `renderRoute` calls
@@ -1071,7 +1090,10 @@ that `GET /api/v1/auth/login` answers 302 to the Auth0 tenant's
 from `api/deploy/auth0.env`. It doesn't sign in. On a Preview,
 `offline.spec.ts` installs the service worker (see Service worker), goes
 offline, and checks that `/design-system` and `/signed-out` still load and
-that `/api/*` doesn't. The
+that `/api/*` doesn't. Its second test loads `/` once online, so the app
+saves the session, then loads it offline. Home shows, with the saved
+player in the topbar. Then it clears `localStorage` and reloads, and the
+error page says "Can’t reach FortyMM". The
 main config ignores it; `web-client/playwright.deployed.config.ts` runs it,
 with `baseURL` from `PLAYWRIGHT_BASE_URL` (it fails fast without one) and no
 screenshot tests. Its `ready` project retries `/api/v1/health` for up to a
@@ -1084,9 +1106,12 @@ the guest account limit through the Worker. It has no retries, because a
 retry in the same minute finds the budget spent.
 A page load of `/` without a session cookie starts a guest account, and
 production keeps every account. So a production run checks only `/api/v1/health`. Against a
-Preview, `app.spec.ts` answers `POST /api/v1/session` itself with
-`page.route()`, so its page loads make no account. The stub is in that spec,
-not in `e2e/fixtures.ts`, because the main suite needs the real endpoint.
+Preview, `app.spec.ts` and `offline.spec.ts` answer `POST /api/v1/session`
+themselves with `stubSession()` (`e2e/deployed/stubSession.ts`), so their
+page loads make no account. It routes on the context, because a page's
+route doesn't see the requests of a page that the service worker controls.
+The stub isn't in `e2e/fixtures.ts`, because the main suite needs the real
+endpoint.
 Only `sign-in.spec.ts` and `session-limit.spec.ts` count toward the guest
 account limit. `sign-in.spec.ts` starts a login with no session, which
 counts as one, so `session-limit` gets 29 before the 429.
@@ -1159,9 +1184,10 @@ page loads, only in a build, so the dev server and the tests have none.
   waits on the network.
 - A navigation gets the precached `index.html`, except under `/api/`. Those
   navigations, such as sign-in and its callback, go to the Worker.
-- It caches no API response. The authenticated pages still need
-  `POST /v1/session`, so offline they show "Can’t reach FortyMM". Only the
-  public pages work offline.
+- It caches no API response. The authenticated pages start from the
+  account that the last session saved (see API client). So offline they
+  work in a browser that loaded the app online once. A browser with nothing
+  saved shows "Can’t reach FortyMM".
 - A new version waits until every tab of the old one has closed. It never
   calls `skipWaiting`, which would delete the precache that an open tab
   still loads its chunks from (#153). The API never breaks `/v1`, so an old

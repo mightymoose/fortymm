@@ -35,6 +35,8 @@ beforeAll(() => {
 afterEach(() => {
   cleanup()
   server.resetHandlers()
+  // The saved session, and the sidebar's choice, must not leak between tests.
+  localStorage.clear()
 })
 
 afterAll(() => {

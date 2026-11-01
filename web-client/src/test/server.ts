@@ -71,6 +71,11 @@ export function holdSession() {
   }
 }
 
+// Makes every session request fail with no response, as with no network.
+export function failSession() {
+  server.use(http.post(`${API_BASE_URL}/v1/session`, () => HttpResponse.error()))
+}
+
 // Holds the mock API's players responses until the test releases them. Then
 // the handler set before this one answers, such as mockVerifiedAccount()'s.
 export function holdPlayers() {
