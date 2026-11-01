@@ -92,8 +92,10 @@ export interface paths {
          *
          *     A successful sign-in adds `signed_in=1` to that path's query. A failed
          *     sign-in adds `sign_in_error` instead: `cancelled`, `email_not_verified`,
-         *     `expired` or `failed`. A callback whose `state` matches no login attempt,
-         *     such as a replay, goes to `/`.
+         *     `expired` or `failed`. A callback from another browser gets `failed`, and
+         *     keeps the login cookie, which may belong to a newer sign-in. A callback
+         *     whose `state` matches no login attempt, such as a replay, goes to `/`
+         *     with `sign_in_error=used`.
          */
         get: operations["callback"];
         put?: never;
@@ -173,7 +175,8 @@ export interface paths {
          *     `outcome` is `signed_in`, or why the sign-in failed: `cancelled`,
          *     `email_not_verified`, `expired` or `failed`. A sign-in sets a new session
          *     cookie. A `state` that matches no login attempt, such as a replay, is
-         *     `expired`. A failed sign-in changes no account.
+         *     `expired`. A failed sign-in changes no account. A request from another
+         *     browser is `failed`, and keeps the login cookie.
          */
         post: operations["app_finish"];
         delete?: never;

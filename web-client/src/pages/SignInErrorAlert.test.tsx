@@ -20,6 +20,12 @@ describe('SignInErrorAlert', () => {
       'Something went wrong, and nothing changed. Try again.',
     ],
     [
+      'used',
+      'status',
+      'Sign-in already finished',
+      'That sign-in already finished. If you’re not signed in, sign in again.',
+    ],
+    [
       'something_new',
       'alert',
       'Sign-in didn’t work',

@@ -371,14 +371,21 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   nor `\`, and it must hold no control character. Any other value becomes
   `/`.
 - `GET /v1/auth/callback` runs `finish_sign_in()` in
-  `services/sign_in.py`, in one transaction. It deletes the attempt first.
-  `resolve_login()` is a pure function that picks the outcome from the
+  `services/sign_in.py`, in one transaction. It locks the attempt `FOR
+  UPDATE`, then checks that the callback comes from the browser that
+  started it. A callback from another browser, such as a link-preview
+  fetcher or an older tab, gets `WrongBrowser`. It changes nothing and
+  leaves the attempt, and the code isn't exchanged, so the right browser
+  can still finish (#111, #123). Only after the check does it delete the
+  attempt. `resolve_login()` is a pure function that picks the outcome from the
   current account and the identity's owner. The owner is the account with
   the `sub`, or else the account with the email.
 - A browser with no session at login has no current account, unless
   another tab started a guest account meanwhile. With no current account,
   `resolve_login()` gives `SwitchAccount` to the owner, or `CreateAccount`.
-  The callback expires the login cookie, whatever the result.
+  The callback expires the login cookie, except after `WrongBrowser`. That
+  cookie may hold a newer tab's `state`, so the newer tab still signs in
+  (#136).
 - Every outcome gives the browser a new session and token.
   `VerifyInPlace` calls `convert_guest()` in `services/sessions.py`, which
   deletes every session of the guest account. It also calls
@@ -412,15 +419,18 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   by itself only then.
 - A failed callback answers 302 to the attempt's `return_to` with
   `sign_in_error` added to its query: `cancelled`, `email_not_verified`,
-  `expired` or `failed`. It changes no account and sets no cookie. A
-  callback whose `state` matches no attempt, such as a replay, answers 302
-  to `/` with no error.
+  `expired` or `failed`. `WrongBrowser` answers `failed`. It changes no
+  account and sets no cookie. A callback whose `state` matches no attempt,
+  such as a replay, answers 302 to `/?sign_in_error=used`. The web client
+  shows `used` as a neutral message, because the person is often signed in
+  already.
 - Every outcome deletes the browser's session, so a second tab's sign-in
   ends the session that the first tab's attempt started with. A sign-out
   does too. The attempt stays: `login_attempts.session_id` is `ON DELETE
   SET NULL`, and `started_with_session` records that it had one. Its
-  callback answers `failed`, for a guest or a verified account, so the
-  person sees that their sign-in didn't happen (#134).
+  callback gets `WrongBrowser` and answers `failed`, for a guest or a
+  verified account, so the person sees that their sign-in didn't happen
+  (#134).
 - `POST /v1/auth/logout` deletes the session, expires the cookie and
   returns Auth0's `/v2/logout` URL as `data.logout_url`. Its `returnTo` is
   the origin's `/signed-out`, a public page that starts no session. `/`
@@ -438,7 +448,8 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   The app sends that query's `state`, `code` and `error` to
   `POST /v1/auth/app-finish`, which runs `finish_sign_in()` with the app's
   cookies. It answers `data.outcome`: `signed_in` or a `sign_in_error`
-  code, and a replay is `expired`. A code that another app catches is
+  code. `WrongBrowser` is `failed` and keeps the login cookie, and a replay
+  is `expired`. A code that another app catches is
   useless without this app's session or login cookie.
 
 ### Migrations

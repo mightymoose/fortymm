@@ -134,8 +134,10 @@ def callback(
 
     A successful sign-in adds `signed_in=1` to that path's query. A failed
     sign-in adds `sign_in_error` instead: `cancelled`, `email_not_verified`,
-    `expired` or `failed`. A callback whose `state` matches no login attempt,
-    such as a replay, goes to `/`.
+    `expired` or `failed`. A callback from another browser gets `failed`, and
+    keeps the login cookie, which may belong to a newer sign-in. A callback
+    whose `state` matches no login attempt, such as a replay, goes to `/`
+    with `sign_in_error=used`.
     """
     redirect_uri = callback_url(request)
 
@@ -151,9 +153,13 @@ def callback(
             set_session_cookie(response, new_token)
         case sign_in.SignInFailed(return_to, sign_in_error):
             response = redirect(with_query(return_to, "sign_in_error", sign_in_error))
+        case sign_in.WrongBrowser(return_to):
+            response = redirect(
+                with_query(return_to, "sign_in_error", sign_in.SignInError.FAILED)
+            )
         case sign_in.Replayed():
-            response = redirect("/")
-    if login_state is not None:
+            response = redirect("/?sign_in_error=used")
+    if login_state is not None and not isinstance(result, sign_in.WrongBrowser):
         delete_login_cookie(response)
     return response
 
@@ -262,7 +268,8 @@ def app_finish(
     `outcome` is `signed_in`, or why the sign-in failed: `cancelled`,
     `email_not_verified`, `expired` or `failed`. A sign-in sets a new session
     cookie. A `state` that matches no login attempt, such as a replay, is
-    `expired`. A failed sign-in changes no account.
+    `expired`. A failed sign-in changes no account. A request from another
+    browser is `failed`, and keeps the login cookie.
     """
     redirect_uri = app_callback_url(request)
 
@@ -282,9 +289,11 @@ def app_finish(
             set_session_cookie(response, new_token)
         case sign_in.SignInFailed(_, sign_in_error):
             outcome = AppSignInOutcome(sign_in_error.value)
+        case sign_in.WrongBrowser():
+            outcome = AppSignInOutcome.FAILED
         case sign_in.Replayed():
             outcome = AppSignInOutcome.EXPIRED
-    if login_state is not None:
+    if login_state is not None and not isinstance(result, sign_in.WrongBrowser):
         delete_login_cookie(response)
     response.headers["Cache-Control"] = "no-store"
     return AppFinishResponse(data=AppFinishData(outcome=outcome))

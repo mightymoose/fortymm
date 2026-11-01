@@ -42,6 +42,7 @@ from fortymm_api.services.sign_in import (
     SignInFailed,
     SwitchAccount,
     VerifyInPlace,
+    WrongBrowser,
     begin_sign_in,
     finish_sign_in,
     resolve_login,
@@ -155,7 +156,7 @@ def finish(
     *,
     login_state: str | None = None,
     error: str | None = None,
-) -> SignedIn | SignInFailed | Replayed:
+) -> SignedIn | SignInFailed | WrongBrowser | Replayed:
     return in_transaction(
         database,
         lambda session: finish_sign_in(
@@ -577,7 +578,6 @@ ANN_IDENTITY = identity("a|1", "ann@example.com")
         ("expired", ANN_IDENTITY, None, SignInError.EXPIRED),
         ("provider error", ANN_IDENTITY, "server_error", SignInError.FAILED),
         ("refused code", refused, None, SignInError.FAILED),
-        ("another session", ANN_IDENTITY, None, SignInError.FAILED),
     ],
 )
 def test_a_failed_sign_in_changes_nothing_and_ends_the_attempt(
@@ -590,7 +590,6 @@ def test_a_failed_sign_in_changes_nothing_and_ends_the_attempt(
     token = guest_token(migrated_database)
     guest = account_of(migrated_database, token)
     started = begin(migrated_database, token)
-    browser = guest_token(migrated_database) if case == "another session" else token
     if case == "expired":
         with migrated_database.begin() as connection:
             connection.execute(
@@ -598,7 +597,7 @@ def test_a_failed_sign_in_changes_nothing_and_ends_the_attempt(
             )
 
     result = finish(
-        migrated_database, browser, started.state, exchange, error=callback_error
+        migrated_database, token, started.state, exchange, error=callback_error
     )
 
     assert result == SignInFailed("/games", error)
@@ -617,6 +616,40 @@ def test_a_replayed_callback_changes_nothing(migrated_database: Engine) -> None:
 
     assert replay == Replayed()
     assert signed_in(migrated_database, first.token) is not None
+
+
+def test_a_callback_with_an_unknown_state_is_a_replay(
+    migrated_database: Engine,
+) -> None:
+    token = guest_token(migrated_database)
+    guest = account_of(migrated_database, token)
+
+    result = finish(migrated_database, token, "unknown", ANN_IDENTITY)
+
+    assert result == Replayed()
+    assert account_of(migrated_database, token) == guest
+
+
+def never_exchanged(code: str, code_verifier: str, nonce: str) -> IdToken:
+    raise AssertionError("the code was exchanged")
+
+
+def test_a_callback_from_another_session_leaves_the_attempt_for_the_browser(
+    migrated_database: Engine,
+) -> None:
+    token = guest_token(migrated_database)
+    guest = account_of(migrated_database, token)
+    started = begin(migrated_database, token)
+    other_browser = guest_token(migrated_database)
+
+    result = finish(migrated_database, other_browser, started.state, never_exchanged)
+
+    assert result == WrongBrowser("/games")
+    assert account_of(migrated_database, token) == guest
+    assert count(migrated_database, "SELECT count(*) FROM login_attempts") == 1
+    signed = finish(migrated_database, started.token, started.state, ANN_IDENTITY)
+    assert isinstance(signed, SignedIn)
+    assert account_of(migrated_database, signed.token).id == guest.id
 
 
 CAROL = identity("email|carol", "carol@example.com")
@@ -647,9 +680,9 @@ def test_a_sign_in_whose_session_another_tab_replaced_fails(
 
     result = finish(migrated_database, replaced.token, carols.state, CAROL)
 
-    assert result == SignInFailed("/games", SignInError.FAILED)
+    assert result == WrongBrowser("/games")
     assert account_of(migrated_database, replaced.token) == account
-    assert count(migrated_database, "SELECT count(*) FROM login_attempts") == 0
+    assert count(migrated_database, "SELECT count(*) FROM login_attempts") == 1
     assert (
         count(
             migrated_database,
@@ -671,13 +704,12 @@ def test_a_sign_in_whose_session_signed_out_in_another_tab_fails(
 
     result = finish(migrated_database, None, started.state, CAROL)
 
-    assert result == SignInFailed("/games", SignInError.FAILED)
-    assert count(migrated_database, "SELECT count(*) FROM login_attempts") == 0
+    assert result == WrongBrowser("/games")
 
 
 def finish_with(
     attempt: LoginStarted, exchange: ExchangeCode
-) -> Callable[[Session], SignedIn | SignInFailed | Replayed]:
+) -> Callable[[Session], SignedIn | SignInFailed | WrongBrowser | Replayed]:
     return lambda session: finish_sign_in(
         session,
         attempt.token,
@@ -735,12 +767,21 @@ def test_a_sign_in_with_no_session_needs_the_browser_that_started_it(
         migrated_database,
         None,
         started.state,
-        ANN_IDENTITY,
+        never_exchanged,
         login_state=login_state,
     )
 
-    assert result == SignInFailed("/games", SignInError.FAILED)
+    assert result == WrongBrowser("/games")
     assert count(migrated_database, "SELECT count(*) FROM accounts") == 0
+    signed = finish(
+        migrated_database,
+        None,
+        started.state,
+        ANN_IDENTITY,
+        login_state=started.login_state,
+    )
+    assert isinstance(signed, SignedIn)
+    assert isinstance(account_of(migrated_database, signed.token), VerifiedAccount)
 
 
 def test_a_guest_started_during_a_sign_in_with_no_session_is_adopted(
