@@ -168,8 +168,10 @@ through FastAPI's `TestClient`).
   the NewTypes `AccountId`, `PlayerId` and `Email` from `accounts.py`.
   SQLAlchemy can't see through a NewType, so `Base.type_annotation_map`
   gives each one its column type. The tables are `accounts`, `players`,
-  `player_managers`, `sessions`, `guest_account_counts`, `identities` and
-  `login_attempts` (see Accounts and sessions, and Sign-in).
+  `player_managers`, `sessions`, `guest_account_counts`, `identities`,
+  `login_attempts`, `permissions`, `roles`, `role_permissions`,
+  `account_roles` and `email_role_grants` (see Accounts and sessions,
+  Sign-in, and Roles and permissions).
 - `/v1/health` runs `SELECT 1` and returns `{"data": {"database": "ok"}}`.
   The healthchecks, `api:smoke`, the 403 check and the post-deploy suite use
   it.
@@ -473,6 +475,51 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   code. `WrongBrowser` is `failed` and keeps the login cookie, and a replay
   is `expired`. A code that another app catches is
   useless without this app's session or login cookie.
+
+### Roles and permissions
+
+An account may do what its roles' permissions let it. Admins edit roles,
+permissions and who holds them on the admin page. `services/roles.py` holds
+the rules, `services/authorization.py` the check, and `v1/admin.py` the
+routes, under `/v1/admin`.
+
+- A permission is a row of `permissions`. Its key is lowercase words of
+  letters, digits and `_`, joined by dots, such as `games.record`, at most
+  64 characters. The key never changes, because code checks it by key.
+- The built-in permissions are the ones the code checks: `admin.view`,
+  `roles.manage` and `account_roles.manage`. They are the members of
+  `Permission` in `permissions.py`, and their rows have `built_in` set. A
+  test fails if the two differ, so a new check in code needs a migration
+  that adds its row. Nobody can delete a built-in permission (409).
+- Admins add other permissions, for code that checks their keys later.
+  Deleting one takes it from every role (`ON DELETE CASCADE`).
+- A role is a named set of permissions. Its name is trimmed, at most 50
+  characters, and unique whatever its case (`unique_role_name`). A role
+  that names an unknown permission gets a 422 in the `errors` shape.
+- Only a verified account holds a role (`account_roles`). A guest holds
+  no permission, whatever the table says.
+- `POST /v1/session` returns the account's `permissions`: the sorted keys
+  that its roles grant, custom ones included.
+- A route that needs a permission takes `require_permission()` from
+  `auth.py`, such as `Annotated[CurrentAccount,
+  require_permission(Permission.ADMIN_VIEW)]`. Without the permission, the
+  API answers 403 in the `errors` shape.
+- Every write takes one Postgres advisory lock (`RBAC_LOCK`), so two
+  writes take turns. Under the lock, the write checks the acting account's
+  permission again. So two administrators can't revoke each other at once.
+- No write may leave zero accounts holding `account_roles.manage`. A
+  revoke, a permission taken from a role or a role delete that would do it
+  answers 409.
+- `email_role_grants` holds a role waiting for an email. A sign-in that
+  ends on the account with that email moves it to `account_roles` and
+  deletes it, so a later revoke sticks.
+- The migration makes the role `Administrator`, with the built-in
+  permissions. It grants it to `mightymoose@fortymm.com`: to the account
+  if one exists, or else as an email grant. In dev, signing in through the
+  mock as that email makes an administrator.
+- `GET /v1/admin/accounts` lists verified accounts by email, at most 50,
+  with `meta.has_more`. `email` filters by a case-insensitive substring.
+  `PUT /v1/admin/accounts/{account_id}/roles` sets the exact set of roles.
 
 ### Migrations
 
