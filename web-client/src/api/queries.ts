@@ -10,6 +10,24 @@ export function shouldRetry(failureCount: number, error: Error): boolean {
   return failureCount < 3 && (!(error instanceof ApiError) || error.status >= 500)
 }
 
+// openapi-fetch sends no Content-Type for a request with no body, and the
+// API answers 415 to a write that isn't JSON. So a bodyless POST or DELETE
+// sends this.
+const JSON_HEADERS = { 'Content-Type': 'application/json' }
+
+// Sends `request` and returns its body. Throws ApiUnreachable when no
+// response came back, and ApiError when the API answered with an error.
+async function send<Data>(
+  request: string,
+  sent: Promise<{ data?: Data; error?: unknown; response: Response }>,
+): Promise<Data> {
+  const { data, error, response } = await sent.catch((cause: unknown) => {
+    throw new ApiUnreachable(request, { cause })
+  })
+  if (!response.ok) throw new ApiError(request, response, error)
+  return data as Data
+}
+
 // The app's QueryClient. Tests make their own, with retries off.
 export function createQueryClient(): QueryClient {
   return new QueryClient({ defaultOptions: { queries: { retry: shouldRetry } } })
@@ -27,15 +45,10 @@ export function sessionQuery(api: ApiClient) {
     // account, but it drops the response and its cookie. The query would
     // then start another account, e.g. when StrictMode remounts the layout.
     queryFn: async () => {
-      const request = 'POST /v1/session'
-      // openapi-fetch sends no Content-Type without a body, and the API
-      // answers 415 to a POST that isn't JSON.
-      const { data, response } = await api
-        .POST('/v1/session', { headers: { 'Content-Type': 'application/json' } })
-        .catch((cause: unknown) => {
-          throw new ApiUnreachable(request, { cause })
-        })
-      if (data === undefined) throw new ApiError(request, response)
+      const data = await send(
+        'POST /v1/session',
+        api.POST('/v1/session', { headers: JSON_HEADERS }),
+      )
       return data.data.account
     },
   })
@@ -44,14 +57,10 @@ export function sessionQuery(api: ApiClient) {
 // Ends the visitor's session, and returns the identity provider's logout
 // page, which the browser follows to end the provider's session too.
 export async function logout(api: ApiClient): Promise<string> {
-  const request = 'POST /v1/auth/logout'
-  // The API answers 415 to a POST that isn't JSON, as for the session.
-  const { data, response } = await api
-    .POST('/v1/auth/logout', { headers: { 'Content-Type': 'application/json' } })
-    .catch((cause: unknown) => {
-      throw new ApiUnreachable(request, { cause })
-    })
-  if (data === undefined) throw new ApiError(request, response)
+  const data = await send(
+    'POST /v1/auth/logout',
+    api.POST('/v1/auth/logout', { headers: JSON_HEADERS }),
+  )
   return data.data.logout_url
 }
 
@@ -72,13 +81,7 @@ export function accountPlayersQuery(api: ApiClient) {
   return queryOptions({
     queryKey: ['v1', 'account', 'players'],
     queryFn: async ({ signal }) => {
-      const request = 'GET /v1/account/players'
-      const { data, response } = await api
-        .GET('/v1/account/players', { signal })
-        .catch((cause: unknown) => {
-          throw new ApiUnreachable(request, { cause })
-        })
-      if (data === undefined) throw new ApiError(request, response)
+      const data = await send('GET /v1/account/players', api.GET('/v1/account/players', { signal }))
       return data.data
     },
   })
@@ -94,16 +97,13 @@ export function answerQuestionMutation(api: ApiClient, queryClient: QueryClient)
   return {
     onMutate: () => queryClient.cancelQueries({ queryKey: accountPlayersQuery(api).queryKey }),
     mutationFn: async ({ player, reply }: { player: AccountPlayer; reply: Reply }) => {
-      const request = 'POST /v1/account/players/{player_id}/answer'
-      const { data, response } = await api
-        .POST('/v1/account/players/{player_id}/answer', {
+      const data = await send(
+        'POST /v1/account/players/{player_id}/answer',
+        api.POST('/v1/account/players/{player_id}/answer', {
           params: { path: { player_id: player.id } },
           body: reply,
-        })
-        .catch((cause: unknown) => {
-          throw new ApiUnreachable(request, { cause })
-        })
-      if (data === undefined) throw new ApiError(request, response)
+        }),
+      )
       return { players: data.data, meta: data.meta }
     },
     onSuccess: ({ players, meta }: { players: AccountPlayer[]; meta: AnswerMeta }) => {
@@ -117,4 +117,135 @@ export function answerQuestionMutation(api: ApiClient, queryClient: QueryClient)
       )
     },
   }
+}
+
+export type AdminPermission = components['schemas']['AdminPermission']
+export type AdminRole = components['schemas']['AdminRole']
+export type AdminAccount = components['schemas']['AdminAccount']
+export type RoleDraft = components['schemas']['RoleRequest']
+export type PermissionDraft = components['schemas']['NewPermissionRequest']
+
+// Every admin list starts with this key, so one write can refresh them all.
+const ADMIN_KEY = ['v1', 'admin'] as const
+
+// Every permission, with how many roles grant it.
+export function adminPermissionsQuery(api: ApiClient) {
+  return queryOptions({
+    queryKey: [...ADMIN_KEY, 'permissions'],
+    queryFn: async ({ signal }) => {
+      const data = await send(
+        'GET /v1/admin/permissions',
+        api.GET('/v1/admin/permissions', { signal }),
+      )
+      return data.data
+    },
+  })
+}
+
+// Every role, with its permissions and how many accounts hold it.
+export function adminRolesQuery(api: ApiClient) {
+  return queryOptions({
+    queryKey: [...ADMIN_KEY, 'roles'],
+    queryFn: async ({ signal }) => {
+      const data = await send('GET /v1/admin/roles', api.GET('/v1/admin/roles', { signal }))
+      return data.data
+    },
+  })
+}
+
+// The first 50 verified accounts whose email contains `email`, and whether
+// more match.
+export function adminAccountsQuery(api: ApiClient, email: string) {
+  return queryOptions({
+    queryKey: [...ADMIN_KEY, 'accounts', email],
+    queryFn: async ({ signal }) => {
+      const data = await send(
+        'GET /v1/admin/accounts',
+        api.GET('/v1/admin/accounts', {
+          params: { query: email ? { email } : {} },
+          signal,
+        }),
+      )
+      return { accounts: data.data, hasMore: data.meta.has_more }
+    },
+  })
+}
+
+export async function createPermission(api: ApiClient, draft: PermissionDraft): Promise<void> {
+  await send('POST /v1/admin/permissions', api.POST('/v1/admin/permissions', { body: draft }))
+}
+
+export async function updatePermission(
+  api: ApiClient,
+  { key, description }: PermissionDraft,
+): Promise<void> {
+  await send(
+    'PUT /v1/admin/permissions/{key}',
+    api.PUT('/v1/admin/permissions/{key}', {
+      params: { path: { key } },
+      body: { description },
+    }),
+  )
+}
+
+export async function deletePermission(api: ApiClient, key: string): Promise<void> {
+  await send(
+    'DELETE /v1/admin/permissions/{key}',
+    api.DELETE('/v1/admin/permissions/{key}', {
+      params: { path: { key } },
+      headers: JSON_HEADERS,
+    }),
+  )
+}
+
+export async function createRole(api: ApiClient, draft: RoleDraft): Promise<void> {
+  await send('POST /v1/admin/roles', api.POST('/v1/admin/roles', { body: draft }))
+}
+
+export async function updateRole(
+  api: ApiClient,
+  { id, ...draft }: RoleDraft & { id: string },
+): Promise<void> {
+  await send(
+    'PUT /v1/admin/roles/{role_id}',
+    api.PUT('/v1/admin/roles/{role_id}', { params: { path: { role_id: id } }, body: draft }),
+  )
+}
+
+export async function deleteRole(api: ApiClient, id: string): Promise<void> {
+  await send(
+    'DELETE /v1/admin/roles/{role_id}',
+    api.DELETE('/v1/admin/roles/{role_id}', {
+      params: { path: { role_id: id } },
+      headers: JSON_HEADERS,
+    }),
+  )
+}
+
+// Gives the account exactly the roles `roleIds` names.
+export async function setAccountRoles(
+  api: ApiClient,
+  { accountId, roleIds }: { accountId: string; roleIds: string[] },
+): Promise<void> {
+  await send(
+    'PUT /v1/admin/accounts/{account_id}/roles',
+    api.PUT('/v1/admin/accounts/{account_id}/roles', {
+      params: { path: { account_id: accountId } },
+      body: { role_ids: roleIds },
+    }),
+  )
+}
+
+// After a write to roles, permissions or who holds them. Each list counts
+// what the others hold, so all of them fetch again. The visitor's own
+// permissions can change too, but the session never goes stale, so it
+// fetches again here. A resumed session starts no guest account.
+export async function refreshAfterAdminWrite(
+  api: ApiClient,
+  queryClient: QueryClient,
+): Promise<void> {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: ADMIN_KEY }),
+    queryClient.refetchQueries({ queryKey: sessionQuery(api).queryKey }),
+  ])
 }
