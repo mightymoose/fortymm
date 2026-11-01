@@ -25,6 +25,7 @@ from fortymm_api.models import (
     LoginAttempt,
 )
 from fortymm_api.services.adoption import adopt_guest, hand_over_players
+from fortymm_api.services.roles import claim_email_role_grants
 from fortymm_api.services.sessions import (
     ClientAddress,
     ValidSession,
@@ -304,6 +305,8 @@ def _sign_in(
 ) -> str:
     """Apply the login's outcome. Returns the new session's token.
 
+    The account it ends on claims the roles waiting for its email.
+
     The advisory lock makes sign-ins with one email take turns. So when two
     browsers verify one new email at once, the second finds the account the
     first made, rather than failing on accounts.email's unique constraint.
@@ -342,6 +345,7 @@ def _sign_in(
 
     if sub_is_new:
         session.add(Identity(auth0_sub=sub, account_id=destination))
+    claim_email_role_grants(session, destination)
     return new_token
 
 

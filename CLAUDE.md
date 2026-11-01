@@ -168,8 +168,10 @@ through FastAPI's `TestClient`).
   the NewTypes `AccountId`, `PlayerId` and `Email` from `accounts.py`.
   SQLAlchemy can't see through a NewType, so `Base.type_annotation_map`
   gives each one its column type. The tables are `accounts`, `players`,
-  `player_managers`, `sessions`, `guest_account_counts`, `identities` and
-  `login_attempts` (see Accounts and sessions, and Sign-in).
+  `player_managers`, `sessions`, `guest_account_counts`, `identities`,
+  `login_attempts`, `permissions`, `roles`, `role_permissions`,
+  `account_roles` and `email_role_grants` (see Accounts and sessions,
+  Sign-in, and Roles and permissions).
 - `/v1/health` runs `SELECT 1` and returns `{"data": {"database": "ok"}}`.
   The healthchecks, `api:smoke`, the 403 check and the post-deploy suite use
   it.
@@ -474,6 +476,51 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   is `expired`. A code that another app catches is
   useless without this app's session or login cookie.
 
+### Roles and permissions
+
+An account may do what its roles' permissions let it. Admins edit roles,
+permissions and who holds them on the admin page. `services/roles.py` holds
+the rules, `services/authorization.py` the check, and `v1/admin.py` the
+routes, under `/v1/admin`.
+
+- A permission is a row of `permissions`. Its key is lowercase words of
+  letters, digits and `_`, joined by dots, such as `games.record`, at most
+  64 characters. The key never changes, because code checks it by key.
+- The built-in permissions are the ones the code checks: `admin.view`,
+  `roles.manage` and `account_roles.manage`. They are the members of
+  `Permission` in `permissions.py`, and their rows have `built_in` set. A
+  test fails if the two differ, so a new check in code needs a migration
+  that adds its row. Nobody can delete a built-in permission (409).
+- Admins add other permissions, for code that checks their keys later.
+  Deleting one takes it from every role (`ON DELETE CASCADE`).
+- A role is a named set of permissions. Its name is trimmed, at most 50
+  characters, and unique whatever its case (`unique_role_name`). A role
+  that names an unknown permission gets a 422 in the `errors` shape.
+- Only a verified account holds a role (`account_roles`). A guest holds
+  no permission, whatever the table says.
+- `POST /v1/session` returns the account's `permissions`: the sorted keys
+  that its roles grant, custom ones included.
+- A route that needs a permission takes `require_permission()` from
+  `auth.py`, such as `Annotated[CurrentAccount,
+  require_permission(Permission.ADMIN_VIEW)]`. Without the permission, the
+  API answers 403 in the `errors` shape.
+- Every write takes one Postgres advisory lock (`RBAC_LOCK`), so two
+  writes take turns. Under the lock, the write checks the acting account's
+  permission again. So two administrators can't revoke each other at once.
+- No write may leave zero accounts holding `account_roles.manage`. A
+  revoke, a permission taken from a role or a role delete that would do it
+  answers 409.
+- `email_role_grants` holds a role waiting for an email. A sign-in that
+  ends on the account with that email moves it to `account_roles` and
+  deletes it, so a later revoke sticks.
+- The migration makes the role `Administrator`, with the built-in
+  permissions. It grants it to `mightymoose@fortymm.com`: to the account
+  if one exists, or else as an email grant. In dev, signing in through the
+  mock as that email makes an administrator.
+- `GET /v1/admin/accounts` lists verified accounts by email, at most 50,
+  with `meta.has_more`. `email` filters by a case-insensitive substring.
+  `PUT /v1/admin/accounts/{account_id}/roles` sets the exact set of roles.
+
 ### Migrations
 
 Alembic migrates the database. `api/migrations/` holds `env.py`, the
@@ -600,14 +647,15 @@ it to `src/routes/`.
   (`src/pages/AppShell.tsx`): a topbar over a sidebar of
   the `_shell` pages, which folds to its icons and remembers it in
   `localStorage`. Below 900px the sidebar is a tab bar along the bottom. To
-  add a page to the sidebar, add its link in `AppShell`. The sidebar's
-  footer, and a tab below 900px, links to each mobile beta in `mobileApps`
-  (`src/mobileApps.ts`), in a new tab. The topbar's right
+  add a page to the sidebar, add its link in `AppShell`. The topbar's right
   end shows `UserMenu` (`src/pages/userMenu/UserMenu.tsx`): a chip of the
   player's `PlayerAvatar` (`src/components/PlayerAvatar.tsx`, the initials
   of the display name, whose accessible name is the full name) and the
   name. Below 600px the chip hides the name. The chip opens the account
-  menu. A verified account gets Sign out, which signs out at once. A guest
+  menu. An account with `admin.view` gets an Administration link there. Below 900px
+  (`useNarrowLayout()`), the menu also links to each mobile beta in
+  `mobileApps` (`src/mobileApps.ts`), in a new tab. A verified account gets
+  Sign out, which signs out at once. A guest
   gets Sign in, and Sign out behind a dialog. The dialog says nobody can
   get a guest account back after it signs out, and links to sign-in. The
   menu reads the session without suspending, so it never holds up the
@@ -686,6 +734,30 @@ it to `src/routes/`.
   That covers Review later, the last answer and a visit with no open
   question. Home then focuses the reminder's link while questions remain,
   or else its title, so focus doesn't fall to the document.
+- `_shell/admin.tsx`: the page `Admin` (`src/pages/admin/`), for an
+  account with `admin.view`. Its loader reads the session and sends any
+  other account to `/`. It has a tab each for roles, permissions and
+  accounts. `Tabs` is `lazy` there, so a tab loads its lists when it opens.
+  Each tab's list has its own `QueryBoundary` with a table skeleton.
+  `roles.manage` shows the controls that add, edit and delete roles and
+  permissions. `account_roles.manage` shows Edit roles on each account. A
+  built-in permission has no Delete. The accounts tab searches by email,
+  and says when it shows only the first 50.
+- The admin forms use react-hook-form and zod. Each zod schema repeats the
+  API's rules, such as the role name's 50 characters and the permission
+  key's pattern, so a mistake shows before the request. `TextField` marks
+  its input `aria-invalid` and describes it by its `FieldError`. A form
+  sits in a `FormSheet`, a drawer, and a delete in a `ConfirmDialog`. A
+  409 for a taken name or key lands on that field. Another refusal, such
+  as the last administrator, shows the API's title in the form, through
+  `ApiError.title`. A save shows a toast.
+- `useAdminWrite()` runs each admin write. After it, every admin list and
+  the session fetch again (`refreshAfterAdminWrite()` in `queries.ts`),
+  because a write can change the visitor's own permissions. Then
+  `router.invalidate()` runs the admin route's loader again, so a visitor
+  who takes `admin.view` from themselves goes to `/`. `can()` in
+  `src/api/permissions.ts` checks the session's permissions, by the
+  built-in keys in `Permission`. The API checks every request again.
 - `design-system.tsx`: a public page. Public pages go directly in
   `src/routes/`. They make no request and never show the loading screen.
   The design system page has no `AppShell`, and no page links to it.
@@ -761,6 +833,10 @@ doesn't show the loading screen again. If the session fails after the
 retries, the root route's error page shows (see Error pages). The web-client no
 longer calls `/v1/health`.
 
+Each request function in `queries.ts` goes through `send()`. It throws
+`ApiUnreachable` when no response came back, and `ApiError` when the
+response isn't ok. A bodyless `POST` or `DELETE` sends `JSON_HEADERS`.
+
 `logout(api)` in `queries.ts` sends `POST /v1/auth/logout` and returns
 `data.logout_url`. `useSignOut()` (`src/pages/useSignOut.ts`) runs it
 through `useMutation`, for `UserMenu`. On success, it
@@ -825,6 +901,21 @@ knowing. `failAnswers` makes every answer fail with a 500.
 `PlayerReviewPage` renders `/review-players` by default, or Home with or
 without `signed_in=1`. Its `clickTwiceAtOnce()` clicks a button twice before React
 renders again, as a quick double click can.
+
+`mockAdmin()` signs the mock API in as the verified account first in its
+`accounts`, and answers the admin routes from the state it gets, as the
+API does. The session's `permissions` come from that account's roles, so
+a write can change them. It counts each permission's roles and each
+role's accounts. It refuses a taken role name or permission key, a
+built-in permission's delete, and any write that leaves no account with
+`account_roles.manage`, with the API's titles. It answers 415 to a write
+without a JSON `Content-Type`. It returns the `state`, which a test changes
+as another tab would, and the `writes` it got. `builtInPermissions` and
+`administrator` are the rows the migration makes. `holdAdmin(list)` holds
+a list's responses, and `failAdminOnce(list, status)` fails the next one.
+The default handlers answer the admin lists with nothing. `AdminPage`
+renders `/admin`. Only the open tab's panel shows, so a test opens a tab
+first.
 
 `HomePage.render({ path })` renders the app at another path, such as one
 with a query. `homePage.href` is the router's current path and query, so a
@@ -899,7 +990,11 @@ signs a guest out from the account menu, through its dialog, to
 `/signed-out`. A third signs in again from `/signed-out`, and checks that
 the account keeps its one player.
 
-The suite counts about 24 guest accounts and sign-ins with no session,
+`e2e/admin.spec.ts` signs in as `mightymoose@fortymm.com`, whom the
+migration makes an administrator. On `/admin` it creates a role with a new
+name, because the dev database keeps its roles, then deletes it.
+
+The suite counts about 25 guest accounts and sign-ins with no session,
 under the limit of 30 a minute.
 
 The design system page is a copy of the reference's component gallery

@@ -18,6 +18,7 @@ from fortymm_api.accounts import (
 )
 from fortymm_api.identity_provider import LEEWAY_SECONDS, ExchangeFailed, IdToken
 from fortymm_api.ownership import OWNERSHIP_RULES, OwnershipRule
+from fortymm_api.permissions import Permission
 from fortymm_api.services.players import account_players
 from fortymm_api.services.sessions import (
     GUEST_ACCOUNT_LIMIT,
@@ -987,3 +988,37 @@ def test_an_adoption_that_waits_for_the_accounts_new_player_merges_into_it(
     # The guest's player is older, so it survives.
     assert players_listed(migrated_database, bob) == [(guest.player.id, "self", False)]
     assert merged_into(migrated_database, bobs_player.id) == guest.player.id
+
+
+@pytest.mark.parametrize("browser", ["guest", "no session"])
+def test_the_first_administrator_claims_their_role_at_sign_in(
+    migrated_database: Engine, browser: str
+) -> None:
+    token = guest_token(migrated_database) if browser == "guest" else None
+
+    signed_in_token = sign_in(
+        migrated_database,
+        token,
+        identity("auth0|moose", "mightymoose@fortymm.com"),
+    )
+
+    assert resume(migrated_database, signed_in_token).permissions == {
+        Permission.ADMIN_VIEW,
+        Permission.ROLES_MANAGE,
+        Permission.ACCOUNT_ROLES_MANAGE,
+    }
+    # Claimed once, so a later revoke sticks.
+    assert count(migrated_database, "SELECT count(*) FROM email_role_grants") == 0
+
+
+def test_a_sign_in_with_another_email_claims_no_role(
+    migrated_database: Engine,
+) -> None:
+    token = sign_in(
+        migrated_database,
+        guest_token(migrated_database),
+        identity("auth0|ann", "ann@example.com"),
+    )
+
+    assert resume(migrated_database, token).permissions == frozenset()
+    assert count(migrated_database, "SELECT count(*) FROM email_role_grants") == 1

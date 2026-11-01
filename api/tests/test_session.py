@@ -82,19 +82,27 @@ def test_answers_with_the_account_and_sets_the_cookie(client: TestClient) -> Non
                 "kind": "guest",
                 "email": None,
                 "player": {"id": player["id"], "display_name": player["display_name"]},
+                "permissions": [],
             }
         }
     }
     session_cookie(response)
 
 
-def test_answers_with_a_verified_accounts_email_and_player(
+def test_answers_with_a_verified_accounts_email_player_and_permissions(
     client: TestClient, migrated_database: Engine
 ) -> None:
     first = start_session(client)
     with migrated_database.begin() as connection:
         connection.execute(
             text("UPDATE accounts SET email = 'ann@example.com' WHERE id = :id"),
+            {"id": account_id(first)},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO account_roles (account_id, role_id)"
+                " SELECT :id, id FROM roles WHERE name = 'Administrator'"
+            ),
             {"id": account_id(first)},
         )
 
@@ -108,6 +116,7 @@ def test_answers_with_a_verified_accounts_email_and_player(
                 "kind": "verified",
                 "email": "ann@example.com",
                 "player": {"id": player["id"], "display_name": player["display_name"]},
+                "permissions": ["account_roles.manage", "admin.view", "roles.manage"],
             }
         }
     }

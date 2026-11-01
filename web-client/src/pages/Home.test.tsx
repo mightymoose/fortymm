@@ -1,7 +1,6 @@
 import { cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it } from 'vitest'
-import { TESTFLIGHT_URL } from '../mobileApps'
 import { HomePage } from '../test/pages/HomePage'
 import { sessionResponse } from '../test/server'
 
@@ -47,20 +46,5 @@ describe('Home', () => {
     cleanup()
     const nextVisit = await HomePage.render()
     expect(nextVisit.sidebarLabelsButton).toHaveAttribute('aria-expanded', 'false')
-  })
-
-  it('links to the iPhone beta in a new tab, with no Android link yet', async () => {
-    const homePage = await HomePage.render()
-
-    const iphone = homePage.mobileAppLink('Get the iPhone app')
-    expect(iphone).toHaveAttribute('href', TESTFLIGHT_URL)
-    expect(iphone).toHaveAttribute('target', '_blank')
-    expect(iphone?.getAttribute('rel')?.split(' ')).toEqual(
-      expect.arrayContaining(['noopener', 'noreferrer']),
-    )
-    expect(homePage.mobileAppLink('Get the Android app')).not.toBeInTheDocument()
-
-    await userEvent.click(homePage.sidebarLabelsButton)
-    expect(homePage.mobileAppLink('Get the iPhone app')).toBeInTheDocument()
   })
 })

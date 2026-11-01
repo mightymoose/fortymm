@@ -25,6 +25,9 @@ class SessionAccount(BaseModel):
     # Null for a guest account.
     email: str | None
     player: SessionPlayer
+    # The keys of the permissions the account's roles grant, sorted. A guest
+    # account has none.
+    permissions: list[str]
 
 
 class SessionData(BaseModel):
@@ -64,7 +67,8 @@ def start_session(
 
     The account's player is the one it plays as. Every account has one. A
     new player gets a default display name, such as `excited egret 387`. A
-    verified account has its email.
+    verified account has its email. `permissions` lists what the account's
+    roles let it do, such as `admin.view`.
     """
     started = sessions.start_session(session, token, client_address(request))
     response.headers["Cache-Control"] = "no-store"
@@ -76,6 +80,10 @@ def start_session(
         started.account.email if isinstance(started.account, VerifiedAccount) else None
     )
     account = SessionAccount(
-        id=started.account.id, kind=started.account.kind, email=email, player=player
+        id=started.account.id,
+        kind=started.account.kind,
+        email=email,
+        player=player,
+        permissions=sorted(started.permissions),
     )
     return SessionResponse(data=SessionData(account=account))

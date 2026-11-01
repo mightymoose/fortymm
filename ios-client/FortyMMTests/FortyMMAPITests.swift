@@ -22,7 +22,7 @@ struct FortyMMAPITests {
         let email = email.map { "\"\($0)\"" } ?? "null"
         return """
         {"data":{"account":{"id":"a1","kind":"\(kind)","email":\(email),\
-        "player":{"id":"p1","display_name":"excited egret 387"}}}}
+        "player":{"id":"p1","display_name":"excited egret 387"},"permissions":[]}}}
         """
     }
 

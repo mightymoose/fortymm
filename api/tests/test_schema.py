@@ -287,3 +287,165 @@ def test_a_login_attempt_without_a_session_at_start_has_no_session(
         violated_constraint(error)
         == "ck_login_attempts_session_only_if_started_with_one"
     )
+
+
+def add_role(connection: Connection, name: str) -> uuid.UUID:
+    id: uuid.UUID = connection.scalar(
+        text("INSERT INTO roles (name) VALUES (:name) RETURNING id"), {"name": name}
+    )
+    return id
+
+
+def test_role_names_are_unique_whatever_their_case(connection: Connection) -> None:
+    add_role(connection, "Coach")
+
+    with pytest.raises(IntegrityError) as error:
+        add_role(connection, "cOACH")
+
+    assert violated_constraint(error) == "unique_role_name"
+
+
+@pytest.mark.parametrize(
+    ("name", "constraint"),
+    [
+        (" Coach", "ck_roles_name_trimmed"),
+        ("Coach ", "ck_roles_name_trimmed"),
+        ("", "ck_roles_name_trimmed"),
+        ("x" * 51, "ck_roles_name_length"),
+    ],
+)
+def test_a_role_name_is_trimmed_and_short(
+    connection: Connection, name: str, constraint: str
+) -> None:
+    with pytest.raises(IntegrityError) as error:
+        add_role(connection, name)
+
+    assert violated_constraint(error) == constraint
+
+
+def test_an_account_holds_a_role_once(connection: Connection) -> None:
+    grant = text("INSERT INTO account_roles (account_id, role_id) VALUES (:a, :r)")
+    params = {"a": add_account(connection), "r": add_role(connection, "Coach")}
+    connection.execute(grant, params)
+
+    with pytest.raises(IntegrityError) as error:
+        connection.execute(grant, params)
+
+    assert violated_constraint(error) == "pk_account_roles"
+
+
+def test_an_email_role_grant_is_lowercase(connection: Connection) -> None:
+    with pytest.raises(IntegrityError) as error:
+        connection.execute(
+            text(
+                "INSERT INTO email_role_grants (email, role_id)"
+                " VALUES ('Ann@x.com', :role)"
+            ),
+            {"role": add_role(connection, "Coach")},
+        )
+
+    assert violated_constraint(error) == "ck_email_role_grants_email_lowercase"
+
+
+def test_deleting_a_permission_takes_it_from_its_roles(
+    connection: Connection,
+) -> None:
+    role = add_role(connection, "Coach")
+    connection.execute(text("INSERT INTO permissions (key) VALUES ('games.record')"))
+    connection.execute(
+        text(
+            "INSERT INTO role_permissions (role_id, permission_key)"
+            " VALUES (:role, 'games.record')"
+        ),
+        {"role": role},
+    )
+
+    connection.execute(text("DELETE FROM permissions WHERE key = 'games.record'"))
+
+    assert (
+        connection.scalar(
+            text("SELECT count(*) FROM role_permissions WHERE role_id = :role"),
+            {"role": role},
+        )
+        == 0
+    )
+
+
+def test_a_role_permission_names_a_known_permission(connection: Connection) -> None:
+    with pytest.raises(IntegrityError) as error:
+        connection.execute(
+            text(
+                "INSERT INTO role_permissions (role_id, permission_key)"
+                " VALUES (:role, 'games.cheat')"
+            ),
+            {"role": add_role(connection, "Coach")},
+        )
+
+    assert (
+        violated_constraint(error) == "fk_role_permissions_permission_key_permissions"
+    )
+
+
+def test_deleting_a_role_deletes_its_grants(connection: Connection) -> None:
+    role = add_role(connection, "Coach")
+    account = add_account(connection)
+    for grant in (
+        "INSERT INTO role_permissions (role_id, permission_key)"
+        " VALUES (:role, 'admin.view')",
+        "INSERT INTO account_roles (account_id, role_id, granted_by)"
+        " VALUES (:account, :role, :account)",
+        "INSERT INTO email_role_grants (email, role_id) VALUES ('a@x.com', :role)",
+    ):
+        connection.execute(text(grant), {"role": role, "account": account})
+
+    connection.execute(text("DELETE FROM roles WHERE id = :role"), {"role": role})
+
+    for table in ("role_permissions", "account_roles", "email_role_grants"):
+        assert (
+            connection.scalar(
+                text(f"SELECT count(*) FROM {table} WHERE role_id = :role"),
+                {"role": role},
+            )
+            == 0
+        )
+
+
+def test_unique_role_name_is_on_the_lowercase_name(connection: Connection) -> None:
+    indexdef = connection.scalar(
+        text(
+            "SELECT indexdef FROM pg_indexes"
+            " WHERE tablename = 'roles' AND indexname = 'unique_role_name'"
+        )
+    )
+
+    assert indexdef == (
+        "CREATE UNIQUE INDEX unique_role_name ON public.roles USING btree (lower(name))"
+    )
+
+
+@pytest.mark.parametrize(
+    ("key", "constraint"),
+    [
+        ("Games.record", "ck_permissions_key_format"),
+        ("games..record", "ck_permissions_key_format"),
+        ("games.record.", "ck_permissions_key_format"),
+        ("1games", "ck_permissions_key_format"),
+        ("games record", "ck_permissions_key_format"),
+        ("g" * 65, "ck_permissions_key_length"),
+    ],
+)
+def test_a_permission_key_is_a_short_lowercase_dotted_slug(
+    connection: Connection, key: str, constraint: str
+) -> None:
+    with pytest.raises(IntegrityError) as error:
+        connection.execute(
+            text("INSERT INTO permissions (key) VALUES (:key)"), {"key": key}
+        )
+
+    assert violated_constraint(error) == constraint
+
+
+def test_a_permission_key_can_hold_digits_and_underscores(
+    connection: Connection,
+) -> None:
+    connection.execute(text("INSERT INTO permissions (key) VALUES ('games_2.record')"))

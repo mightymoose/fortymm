@@ -1,15 +1,24 @@
 // The API answered `request` without data. For a 429, `retryAt` is when its
-// Retry-After header says to try again, or null without one.
+// Retry-After header says to try again, or null without one. `title` is the
+// first title of a body in the `errors` shape, or null for another body.
 export class ApiError extends Error {
   readonly status: number
   readonly retryAt: Date | null
+  readonly title: string | null
 
-  constructor(request: string, response: Response) {
+  constructor(request: string, response: Response, body?: unknown) {
     super(`${request} answered ${response.status}`)
     this.name = 'ApiError'
     this.status = response.status
     this.retryAt = parseRetryAfter(response.headers.get('Retry-After'))
+    this.title = errorsTitle(body)
   }
+}
+
+function errorsTitle(body: unknown): string | null {
+  if (typeof body !== 'object' || body === null || !('errors' in body)) return null
+  const [first] = Array.isArray(body.errors) ? body.errors : []
+  return typeof first?.title === 'string' ? first.title : null
 }
 
 // The API never answered `request`: the device is offline, or the request
