@@ -12,8 +12,9 @@ if (!baseURL) {
 }
 
 // Production keeps every account, and a check there must write nothing. So
-// production gets only the health check. Against a Preview, app.spec.ts
-// answers the session itself, so its page loads make no account. Only
+// production gets only the health check. Against a Preview, app.spec.ts and
+// offline.spec.ts answer the session themselves, so their page loads make no
+// account. Only
 // sign-in.spec.ts, which starts one, and session-limit.spec.ts start real
 // ones.
 const PRODUCTION_HOSTS = ['fortymm.com', 'www.fortymm.com']
