@@ -1,13 +1,15 @@
 """The session and login cookies, and the dependency that reads the
 session's account."""
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Cookie, Depends, Response
 from fastapi.security import APIKeyCookie
 
 from fortymm_api.accounts import CurrentAccount
 from fortymm_api.database import DatabaseSession
+from fortymm_api.permissions import Permission
+from fortymm_api.services.authorization import authorize
 from fortymm_api.services.sessions import SESSION_LIFETIME, authenticate
 from fortymm_api.services.sign_in import LOGIN_ATTEMPT_LIFETIME
 
@@ -79,3 +81,15 @@ def require_account(session: DatabaseSession, token: SessionToken) -> CurrentAcc
 
 # The account of the request's session, for a route that needs one.
 RequestAccount = Annotated[CurrentAccount, Depends(require_account)]
+
+
+def require_permission(permission: Permission) -> Any:
+    """A dependency for a route that needs the permission. It gives the
+    request's account, or raises MissingPermission, which `create_app()`
+    answers with 403."""
+
+    def check(session: DatabaseSession, account: RequestAccount) -> CurrentAccount:
+        authorize(session, account, permission)
+        return account
+
+    return Depends(check)

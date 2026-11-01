@@ -45,7 +45,8 @@ export interface paths {
          *
          *     The account's player is the one it plays as. Every account has one. A
          *     new player gets a default display name, such as `excited egret 387`. A
-         *     verified account has its email.
+         *     verified account has its email. `permissions` lists what the account's
+         *     roles let it do, such as `admin.view`.
          */
         post: operations["start_session"];
         delete?: never;
@@ -274,6 +275,167 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/admin/permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Permissions
+         * @description List every permission by key, with how many roles grant it. Needs
+         *     `admin.view`.
+         *
+         *     A `built_in` permission is one the code checks, such as `admin.view`.
+         */
+        get: operations["admin_permissions"];
+        put?: never;
+        /**
+         * Create Permission
+         * @description Add a permission that roles can grant. Needs `roles.manage`.
+         *
+         *     Code that checks its key can come later. The key never changes.
+         */
+        post: operations["create_permission"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/permissions/{key}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Permission
+         * @description Set the permission's description. Needs `roles.manage`.
+         */
+        put: operations["update_permission"];
+        post?: never;
+        /**
+         * Delete Permission
+         * @description Delete a permission. Every role that granted it loses it. Needs
+         *     `roles.manage`. A built-in permission can't be deleted.
+         */
+        delete: operations["delete_permission"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Roles
+         * @description List every role by name, with its permissions and how many accounts
+         *     hold it. Needs `admin.view`.
+         */
+        get: operations["admin_roles"];
+        put?: never;
+        /**
+         * Create Role
+         * @description Create a role with these permissions. Needs `roles.manage`.
+         *
+         *     The name is trimmed, and two roles can't share one, whatever its case.
+         *     A permission key that names no permission answers 422.
+         */
+        post: operations["create_role"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/roles/{role_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Role
+         * @description Set the role's name, description and exact set of permissions. Needs
+         *     `roles.manage`.
+         *
+         *     The API answers 409 if another role has the name, or if the change
+         *     would leave no account with `account_roles.manage`.
+         */
+        put: operations["update_role"];
+        post?: never;
+        /**
+         * Delete Role
+         * @description Delete the role. Every account that held it loses it. Needs
+         *     `roles.manage`.
+         *
+         *     The API answers 409 if no account would keep `account_roles.manage`.
+         */
+        delete: operations["delete_role"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Accounts
+         * @description List the verified accounts by email, with the roles each holds. Needs
+         *     `admin.view`.
+         *
+         *     `email` keeps the accounts whose email contains it, whatever its case.
+         *     The list holds at most 50. `meta.has_more` says that more match.
+         */
+        get: operations["admin_accounts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/admin/accounts/{account_id}/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Set Account Roles
+         * @description Give the account exactly these roles. Needs `account_roles.manage`.
+         *
+         *     Only a verified account holds roles. The API answers 409 if no account
+         *     would keep `account_roles.manage`, such as when the last administrator
+         *     revokes their own role.
+         */
+        put: operations["set_account_roles"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -303,6 +465,85 @@ export interface components {
         AccountPlayersResponse: {
             /** Data */
             data: components["schemas"]["AccountPlayer"][];
+        };
+        /** AccountRolesRequest */
+        AccountRolesRequest: {
+            /** Role Ids */
+            role_ids: string[];
+        };
+        /** AdminAccount */
+        AdminAccount: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Email */
+            email: string;
+            /** Display Name */
+            display_name: string | null;
+            /** Role Ids */
+            role_ids: string[];
+        };
+        /** AdminAccountResponse */
+        AdminAccountResponse: {
+            data: components["schemas"]["AdminAccount"];
+        };
+        /** AdminAccountsMeta */
+        AdminAccountsMeta: {
+            /** Has More */
+            has_more: boolean;
+        };
+        /** AdminAccountsResponse */
+        AdminAccountsResponse: {
+            /** Data */
+            data: components["schemas"]["AdminAccount"][];
+            meta: components["schemas"]["AdminAccountsMeta"];
+        };
+        /** AdminPermission */
+        AdminPermission: {
+            /** Key */
+            key: string;
+            /** Description */
+            description: string;
+            /** Built In */
+            built_in: boolean;
+            /** Role Count */
+            role_count: number;
+        };
+        /** AdminPermissionResponse */
+        AdminPermissionResponse: {
+            data: components["schemas"]["AdminPermission"];
+        };
+        /** AdminPermissionsResponse */
+        AdminPermissionsResponse: {
+            /** Data */
+            data: components["schemas"]["AdminPermission"][];
+        };
+        /** AdminRole */
+        AdminRole: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Permissions */
+            permissions: string[];
+            /** Account Count */
+            account_count: number;
+        };
+        /** AdminRoleResponse */
+        AdminRoleResponse: {
+            data: components["schemas"]["AdminRole"];
+        };
+        /** AdminRolesResponse */
+        AdminRolesResponse: {
+            /** Data */
+            data: components["schemas"]["AdminRole"][];
         };
         /**
          * Answer
@@ -412,6 +653,24 @@ export interface components {
              */
             merged: string;
         };
+        /** NewPermissionRequest */
+        NewPermissionRequest: {
+            /** Key */
+            key: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+        };
+        /** PermissionRequest */
+        PermissionRequest: {
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+        };
         /** RecentMatch */
         RecentMatch: {
             /**
@@ -424,6 +683,18 @@ export interface components {
              * Format: date-time
              */
             played_at: string;
+        };
+        /** RoleRequest */
+        RoleRequest: {
+            /** Name */
+            name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Permissions */
+            permissions: string[];
         };
         /** SessionAccount */
         SessionAccount: {
@@ -440,6 +711,8 @@ export interface components {
             /** Email */
             email: string | null;
             player: components["schemas"]["SessionPlayer"];
+            /** Permissions */
+            permissions: string[];
         };
         /** SessionData */
         SessionData: {
@@ -877,6 +1150,648 @@ export interface operations {
                 };
             };
             /** @description The body is invalid, or `player_id` is missing with `same_as` or set with another answer. If `player_id` is the answered player, the body is in the `errors` shape instead */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_permissions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPermissionsResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+        };
+    };
+    create_permission: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NewPermissionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPermissionResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Another permission has this key */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The request's Content-Type isn't application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_permission: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PermissionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminPermissionResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description No permission has this key */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The request's Content-Type isn't application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_permission: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description No permission has this key */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The permission is built in, because the code checks it */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The request's Content-Type isn't application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_roles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminRolesResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+        };
+    };
+    create_role: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminRoleResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Another role has this name, whatever its case */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The request's Content-Type isn't application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The body is invalid. If a permission key names no permission, the body is in the `errors` shape instead */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_role: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                role_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminRoleResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description No role has this id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Another role has this name, or the change would leave no account with `account_roles.manage` */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The request's Content-Type isn't application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The body is invalid. If a permission key names no permission, the body is in the `errors` shape instead */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_role: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                role_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description No role has this id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The change would leave no account with `account_roles.manage`, so nobody could grant a role again */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The request's Content-Type isn't application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_accounts: {
+        parameters: {
+            query?: {
+                email?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAccountsResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_account_roles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                account_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountRolesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAccountResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account's roles don't grant the permission the route needs */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description No verified account has this id, or a role doesn't exist */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The change would leave no account with `account_roles.manage`, so nobody could grant a role again */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The request's Content-Type isn't application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;

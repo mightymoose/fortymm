@@ -26,6 +26,9 @@ def errors(status: int, description: str, **extra: Any) -> Responses:
 
 
 NO_SESSION = errors(401, "The request has no valid session")
+FORBIDDEN = errors(
+    403, "The account's roles don't grant the permission the route needs"
+)
 UNSUPPORTED_MEDIA_TYPE = errors(
     415, "The request's Content-Type isn't application/json"
 )

@@ -13,10 +13,21 @@ from fortymm_api import v1
 from fortymm_api.auth import NoValidSession
 from fortymm_api.database import create_database_engine, migrate
 from fortymm_api.identity_provider import IdentityProvider
+from fortymm_api.services.authorization import MissingPermission
 from fortymm_api.services.players import (
     PlayerNotManaged,
     QuestionClosed,
     SameAsItself,
+)
+from fortymm_api.services.roles import (
+    AccountNotFound,
+    BuiltInPermission,
+    LastAdministrator,
+    PermissionKeyTaken,
+    PermissionNotFound,
+    RoleNameTaken,
+    RoleNotFound,
+    UnknownPermission,
 )
 from fortymm_api.services.sessions import AccountAdopted, GuestAccountLimitReached
 from fortymm_api.v1.auth import SignInUnavailable
@@ -31,6 +42,20 @@ PLAYER_ERRORS: dict[type[Exception], tuple[int, str]] = {
     PlayerNotManaged: (404, "You don't manage this player"),
     QuestionClosed: (409, "This question was already answered"),
     SameAsItself: (422, "A player can't be the same as itself"),
+}
+ROLE_ERRORS: dict[type[Exception], tuple[int, str]] = {
+    MissingPermission: (403, "You don't have permission to do this"),
+    RoleNotFound: (404, "The role doesn't exist"),
+    AccountNotFound: (404, "No verified account has this id"),
+    PermissionNotFound: (404, "The permission doesn't exist"),
+    RoleNameTaken: (409, "Another role has this name"),
+    PermissionKeyTaken: (409, "Another permission has this key"),
+    BuiltInPermission: (409, "The code checks this permission, so it stays"),
+    UnknownPermission: (422, "A permission in the role doesn't exist"),
+    LastAdministrator: (
+        409,
+        "At least one account must keep the permission to grant roles",
+    ),
 }
 AUTH0_SETTINGS = ("AUTH0_DOMAIN", "AUTH0_CLIENT_ID", "AUTH0_CLIENT_SECRET")
 
@@ -205,7 +230,7 @@ def create_app() -> FastAPI:
         SignInUnavailable,
         lambda _request, _error: error_response(503, SIGN_IN_UNAVAILABLE),
     )
-    for error, (status, title) in PLAYER_ERRORS.items():
+    for error, (status, title) in (PLAYER_ERRORS | ROLE_ERRORS).items():
         app.add_exception_handler(error, answers(status, title))
     require_json(app)
     # Added last so it runs first: a request without the secret learns nothing
