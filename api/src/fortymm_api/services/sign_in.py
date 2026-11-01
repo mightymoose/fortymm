@@ -8,7 +8,7 @@ from datetime import timedelta
 from enum import StrEnum
 from typing import Protocol
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from fortymm_api.accounts import (
@@ -18,13 +18,14 @@ from fortymm_api.accounts import (
     GuestAccount,
     VerifiedAccount,
 )
-from fortymm_api.identity_provider import ExchangeFailed, IdToken
+from fortymm_api.identity_provider import LEEWAY_SECONDS, ExchangeFailed, IdToken
 from fortymm_api.models import (
     Account,
     Identity,
     LoginAttempt,
 )
 from fortymm_api.services.adoption import adopt_guest, hand_over_players
+from fortymm_api.services.roles import claim_email_role_grants
 from fortymm_api.services.sessions import (
     ClientAddress,
     ValidSession,
@@ -129,9 +130,6 @@ class LoginStarted:
     state: str
     nonce: str
     code_verifier: str
-    # A verified account must see the sign-in page. Otherwise the provider's
-    # own session signs the same person in again with no page.
-    prompt_login: bool
 
 
 def begin_sign_in(
@@ -157,12 +155,10 @@ def begin_sign_in(
         attempt.started_with_session = True
         attempt.session_id = started.session_id
         session_token, login_state = started.token, None
-        prompt_login = isinstance(started.account, VerifiedAccount)
     else:
         count_start_without_session(session, address)
         attempt.started_with_session = False
         session_token, login_state = None, attempt.state
-        prompt_login = False
     session.add(attempt)
     return LoginStarted(
         token=session_token,
@@ -170,7 +166,6 @@ def begin_sign_in(
         state=attempt.state,
         nonce=attempt.nonce,
         code_verifier=attempt.code_verifier,
-        prompt_login=prompt_login,
     )
 
 
@@ -210,6 +205,15 @@ class SignInFailed:
 
 
 @dataclass(frozen=True)
+class WrongBrowser:
+    """The callback came from a browser other than the one that started the
+    attempt, such as a link-preview fetcher or another tab's older attempt.
+    The attempt stays for the browser that started it."""
+
+    return_to: str
+
+
+@dataclass(frozen=True)
 class Replayed:
     """The callback's state matches no login attempt, such as a second run of
     a callback that already finished."""
@@ -221,19 +225,21 @@ def finish_sign_in(
     login_state: str | None,
     callback: Callback,
     exchange: ExchangeCode,
-) -> SignedIn | SignInFailed | Replayed:
+) -> SignedIn | SignInFailed | WrongBrowser | Replayed:
     """Finish the login attempt that the callback's state names.
 
-    Deletes the attempt, whatever the result. A failure changes no account and
-    no session, and never raises, so the caller commits the delete. Each
-    success gives the browser a new session and token.
+    A callback from another browser changes nothing, and the attempt stays.
+    Once the browser checks out, the attempt is deleted, whatever the result.
+    A failure changes no account and no session, and never raises, so the
+    caller commits the delete. Each success gives the browser a new session
+    and token.
     """
     if callback.state is None:
         return Replayed()
     found = session.execute(
-        delete(LoginAttempt)
+        select(LoginAttempt, LoginAttempt.expires_at > func.now())
         .where(LoginAttempt.state == callback.state)
-        .returning(LoginAttempt, LoginAttempt.expires_at > func.now())
+        .with_for_update()
     ).one_or_none()
     if found is None:
         return Replayed()
@@ -252,12 +258,13 @@ def finish_sign_in(
         if login_state is None or not secrets.compare_digest(
             login_state, attempt.state
         ):
-            return failed(SignInError.FAILED)
+            return WrongBrowser(attempt.return_to)
     elif current is None or current.row.id != attempt.session_id:
         # Includes a session that ended after the attempt began, such as when
         # another tab's sign-in replaced it. The browser may be signed in as
         # someone else now, so the sign-in must say it failed.
-        return failed(SignInError.FAILED)
+        return WrongBrowser(attempt.return_to)
+    session.delete(attempt)
     if not unexpired:
         return failed(SignInError.EXPIRED)
     if callback.error == "access_denied":
@@ -268,6 +275,8 @@ def finish_sign_in(
         id_token = exchange(callback.code, attempt.code_verifier, attempt.nonce)
     except ExchangeFailed:
         return failed(SignInError.FAILED)
+    if not _authenticated_during(id_token, attempt):
+        return failed(SignInError.FAILED)
     if not id_token.email_verified or id_token.email is None:
         return failed(SignInError.EMAIL_NOT_VERIFIED)
 
@@ -276,10 +285,27 @@ def finish_sign_in(
     )
 
 
+def _authenticated_during(id_token: IdToken, attempt: LoginAttempt) -> bool:
+    """Whether the provider authenticated the person after the attempt
+    started, as max_age=0 asks it to.
+
+    Otherwise the provider signed in whoever its own session remembered, such
+    as the last person after a sign-out whose provider logout never finished.
+    A token with no auth_time proves nothing. The leeway covers the clock
+    difference between the provider and the database.
+    """
+    if id_token.auth_time is None:
+        return False
+    started = attempt.expires_at - LOGIN_ATTEMPT_LIFETIME
+    return id_token.auth_time >= started - timedelta(seconds=LEEWAY_SECONDS)
+
+
 def _sign_in(
     session: Session, current: ValidSession | None, sub: str, email: Email
 ) -> str:
     """Apply the login's outcome. Returns the new session's token.
+
+    The account it ends on claims the roles waiting for its email.
 
     The advisory lock makes sign-ins with one email take turns. So when two
     browsers verify one new email at once, the second finds the account the
@@ -319,6 +345,7 @@ def _sign_in(
 
     if sub_is_new:
         session.add(Identity(auth0_sub=sub, account_id=destination))
+    claim_email_role_grants(session, destination)
     return new_token
 
 

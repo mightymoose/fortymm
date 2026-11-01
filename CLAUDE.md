@@ -168,8 +168,10 @@ through FastAPI's `TestClient`).
   the NewTypes `AccountId`, `PlayerId` and `Email` from `accounts.py`.
   SQLAlchemy can't see through a NewType, so `Base.type_annotation_map`
   gives each one its column type. The tables are `accounts`, `players`,
-  `player_managers`, `sessions`, `guest_account_counts`, `identities` and
-  `login_attempts` (see Accounts and sessions, and Sign-in).
+  `player_managers`, `sessions`, `guest_account_counts`, `identities`,
+  `login_attempts`, `permissions`, `roles`, `role_permissions`,
+  `account_roles` and `email_role_grants` (see Accounts and sessions,
+  Sign-in, and Roles and permissions).
 - `/v1/health` runs `SELECT 1` and returns `{"data": {"database": "ok"}}`.
   The healthchecks, `api:smoke`, the 403 check and the post-deploy suite use
   it.
@@ -341,7 +343,9 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
 - The `oidc` Compose service runs navikt's mock-oauth2-server. Its issuer is
   `http://oidc:8080/default`. Its sign-in page signs in any `sub` with the
   claims typed into it, such as `{"email": "ann@example.com",
-  "email_verified": true}`. It has no published port.
+  "email_verified": true}`. It has no published port. From 6.1.0, it puts
+  `auth_time` in the ID token when the request has `max_age`, as Auth0
+  does, so the callback's check works against it.
 - The API reads `AUTH0_DOMAIN`, `AUTH0_CLIENT_ID` and `AUTH0_CLIENT_SECRET`.
   `AUTH0_DOMAIN` is Auth0's host, or a base URL with a scheme, such as the
   mock's. Compose points it at the mock. Without `AUTH0_DOMAIN`, the sign-in
@@ -350,14 +354,23 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
 - `identity_provider.py` talks to the provider. It finds the endpoints in
   the provider's discovery document, exchanges the code with PKCE and
   verifies the ID token against the provider's JWKS, with the nonce. It
-  lowercases the email.
+  lowercases the email. It reads `auth_time` into `IdToken`, or `None` if
+  the claim is missing or isn't a number.
 - The browser can't resolve `oidc`. So in Compose, `AUTH0_AUTHORIZE_URL` is
   `/oidc/default/authorize`, and the web-client dev server proxies `/oidc/*`
   to the mock. The API still reaches the mock at `http://oidc:8080`. The
   tests unset `AUTH0_AUTHORIZE_URL` and post the mock's form directly.
 - `GET /v1/auth/login?return_to=...` (`v1/auth.py`) stores a
-  `login_attempts` row for 10 minutes and answers 302 to the provider. A
-  verified account also gets `prompt=login`. The callback must come from the
+  `login_attempts` row for 10 minutes and answers 302 to the provider.
+  Every sign-in, with no session, a guest or a verified account, and from
+  the iOS app too, sends `prompt=login` and `max_age=0`. A sign-out deletes
+  FortyMM's session before the browser loads Auth0's logout. If that load
+  never finishes, Auth0 still remembers the person, and would sign the next
+  person on that browser in as them with no page (#130). `prompt=login` is
+  only a hint, which anyone can strip from the URL. `max_age=0` makes
+  Auth0 authenticate the person again and put `auth_time` in the ID token,
+  which the callback checks. Sessions last 400 days, so asking every time
+  costs little. The callback must come from the
   browser that started the attempt. A browser with a valid session proves
   it with that session (`login_attempts.session_id`). A browser without one
   gets no guest account. After a sign-out, a guest account would hold
@@ -367,18 +380,36 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   checks that the cookie matches the `state` in its URL. Another browser can
   open that URL, but it can't set this browser's cookie. Such a login
   counts toward the guest account limit, because nothing else bounds it.
+  Past the limit, the route answers 302 to
+  `/signed-out?sign_in_error=rate_limited&retry_after=<seconds>`, with no
+  cookie and no attempt. The seconds are the 429's `Retry-After`, from
+  `retry_after_seconds()` in `v1/errors.py`. `return_to` would usually be
+  `/`, which would start a guest account and get the same limit.
+  `/signed-out` starts none, and it is where such a browser usually clicked
+  Sign in. `POST /v1/auth/app-login` still answers 429 with `Retry-After`.
   `return_to` must start with `/`, its second character must be neither `/`
   nor `\`, and it must hold no control character. Any other value becomes
   `/`.
 - `GET /v1/auth/callback` runs `finish_sign_in()` in
-  `services/sign_in.py`, in one transaction. It deletes the attempt first.
-  `resolve_login()` is a pure function that picks the outcome from the
+  `services/sign_in.py`, in one transaction. It locks the attempt `FOR
+  UPDATE`, then checks that the callback comes from the browser that
+  started it. A callback from another browser, such as a link-preview
+  fetcher or an older tab, gets `WrongBrowser`. It changes nothing and
+  leaves the attempt, and the code isn't exchanged, so the right browser
+  can still finish (#111, #123). Only after the check does it delete the
+  attempt. After the code exchange, it fails the sign-in with `failed` if
+  the ID token has no `auth_time`, or one earlier than when the attempt
+  started (`expires_at` less the 10 minutes), less the token check's clock
+  leeway (`LEEWAY_SECONDS`). Then the provider signed in someone it
+  remembered rather than asking. `resolve_login()` is a pure function that picks the outcome from the
   current account and the identity's owner. The owner is the account with
   the `sub`, or else the account with the email.
 - A browser with no session at login has no current account, unless
   another tab started a guest account meanwhile. With no current account,
   `resolve_login()` gives `SwitchAccount` to the owner, or `CreateAccount`.
-  The callback expires the login cookie, whatever the result.
+  The callback expires the login cookie, except after `WrongBrowser`. That
+  cookie may hold a newer tab's `state`, so the newer tab still signs in
+  (#136).
 - Every outcome gives the browser a new session and token.
   `VerifyInPlace` calls `convert_guest()` in `services/sessions.py`, which
   deletes every session of the guest account. It also calls
@@ -412,15 +443,18 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   by itself only then.
 - A failed callback answers 302 to the attempt's `return_to` with
   `sign_in_error` added to its query: `cancelled`, `email_not_verified`,
-  `expired` or `failed`. It changes no account and sets no cookie. A
-  callback whose `state` matches no attempt, such as a replay, answers 302
-  to `/` with no error.
+  `expired` or `failed`. `WrongBrowser` answers `failed`. It changes no
+  account and sets no cookie. A callback whose `state` matches no attempt,
+  such as a replay, answers 302 to `/?sign_in_error=used`. The web client
+  shows `used` as a neutral message, because the person is often signed in
+  already.
 - Every outcome deletes the browser's session, so a second tab's sign-in
   ends the session that the first tab's attempt started with. A sign-out
   does too. The attempt stays: `login_attempts.session_id` is `ON DELETE
   SET NULL`, and `started_with_session` records that it had one. Its
-  callback answers `failed`, for a guest or a verified account, so the
-  person sees that their sign-in didn't happen (#134).
+  callback gets `WrongBrowser` and answers `failed`, for a guest or a
+  verified account, so the person sees that their sign-in didn't happen
+  (#134).
 - `POST /v1/auth/logout` deletes the session, expires the cookie and
   returns Auth0's `/v2/logout` URL as `data.logout_url`. Its `returnTo` is
   the origin's `/signed-out`, a public page that starts no session. `/`
@@ -438,8 +472,54 @@ Production and the Previews use the real tenant (see Auth0 under Deploy).
   The app sends that query's `state`, `code` and `error` to
   `POST /v1/auth/app-finish`, which runs `finish_sign_in()` with the app's
   cookies. It answers `data.outcome`: `signed_in` or a `sign_in_error`
-  code, and a replay is `expired`. A code that another app catches is
+  code. `WrongBrowser` is `failed` and keeps the login cookie, and a replay
+  is `expired`. A code that another app catches is
   useless without this app's session or login cookie.
+
+### Roles and permissions
+
+An account may do what its roles' permissions let it. Admins edit roles,
+permissions and who holds them on the admin page. `services/roles.py` holds
+the rules, `services/authorization.py` the check, and `v1/admin.py` the
+routes, under `/v1/admin`.
+
+- A permission is a row of `permissions`. Its key is lowercase words of
+  letters, digits and `_`, joined by dots, such as `games.record`, at most
+  64 characters. The key never changes, because code checks it by key.
+- The built-in permissions are the ones the code checks: `admin.view`,
+  `roles.manage` and `account_roles.manage`. They are the members of
+  `Permission` in `permissions.py`, and their rows have `built_in` set. A
+  test fails if the two differ, so a new check in code needs a migration
+  that adds its row. Nobody can delete a built-in permission (409).
+- Admins add other permissions, for code that checks their keys later.
+  Deleting one takes it from every role (`ON DELETE CASCADE`).
+- A role is a named set of permissions. Its name is trimmed, at most 50
+  characters, and unique whatever its case (`unique_role_name`). A role
+  that names an unknown permission gets a 422 in the `errors` shape.
+- Only a verified account holds a role (`account_roles`). A guest holds
+  no permission, whatever the table says.
+- `POST /v1/session` returns the account's `permissions`: the sorted keys
+  that its roles grant, custom ones included.
+- A route that needs a permission takes `require_permission()` from
+  `auth.py`, such as `Annotated[CurrentAccount,
+  require_permission(Permission.ADMIN_VIEW)]`. Without the permission, the
+  API answers 403 in the `errors` shape.
+- Every write takes one Postgres advisory lock (`RBAC_LOCK`), so two
+  writes take turns. Under the lock, the write checks the acting account's
+  permission again. So two administrators can't revoke each other at once.
+- No write may leave zero accounts holding `account_roles.manage`. A
+  revoke, a permission taken from a role or a role delete that would do it
+  answers 409.
+- `email_role_grants` holds a role waiting for an email. A sign-in that
+  ends on the account with that email moves it to `account_roles` and
+  deletes it, so a later revoke sticks.
+- The migration makes the role `Administrator`, with the built-in
+  permissions. It grants it to `mightymoose@fortymm.com`: to the account
+  if one exists, or else as an email grant. In dev, signing in through the
+  mock as that email makes an administrator.
+- `GET /v1/admin/accounts` lists verified accounts by email, at most 50,
+  with `meta.has_more`. `email` filters by a case-insensitive substring.
+  `PUT /v1/admin/accounts/{account_id}/roles` sets the exact set of roles.
 
 ### Migrations
 
@@ -567,29 +647,34 @@ it to `src/routes/`.
   (`src/pages/AppShell.tsx`): a topbar over a sidebar of
   the `_shell` pages, which folds to its icons and remembers it in
   `localStorage`. Below 900px the sidebar is a tab bar along the bottom. To
-  add a page to the sidebar, add its link in `AppShell`. Below 600px, the
-  tab bar also links to each mobile beta in `mobileApps`
-  (`src/mobileApps.ts`), in a new tab. From 600px up, where tablets and
-  desktops land, neither the tab bar nor the sidebar shows them.
-  `e2e/mobile-apps.spec.ts` checks the widths, because jsdom applies no
-  media queries. The topbar's right
+  add a page to the sidebar, add its link in `AppShell`. The topbar's right
   end shows `UserMenu` (`src/pages/userMenu/UserMenu.tsx`): a chip of the
   player's `PlayerAvatar` (`src/components/PlayerAvatar.tsx`, the initials
   of the display name, whose accessible name is the full name) and the
   name. Below 600px the chip hides the name. The chip opens the account
-  menu. A verified account gets Sign out, which signs out at once. A guest
+  menu. An account with `admin.view` gets an Administration link there. Below 600px
+  (`usePhoneLayout()`), where phones land, the menu also links to each
+  mobile beta in `mobileApps` (`src/mobileApps.ts`), in a new tab. A tablet
+  or a desktop can't install one. `e2e/mobile-apps.spec.ts` checks the
+  widths, because jsdom applies no media queries. A verified account gets
+  Sign out, which signs out at once. A guest
   gets Sign in, and Sign out behind a dialog. The dialog says nobody can
   get a guest account back after it signs out, and links to sign-in. The
   menu reads the session without suspending, so it never holds up the
   loading screen.
 - `SignInErrorAlert` (`src/pages/SignInErrorAlert.tsx`) sits in
-  `ShellLayout`, inside `AppShell` and above the page. If the URL
+  `ShellLayout`, inside `AppShell` and above the page, and on
+  `/signed-out`. If the URL
   has `sign_in_error`, it shows that code's message from `signInErrors`
   (`src/pages/signInErrors.ts`). An unknown code shows the `failed`
-  message. It keeps the message in state and removes the param with a
-  history replace, so a reload shows nothing. `cancelled` is a neutral
-  `fm-alert` with `role="status"`. The other codes are `fm-alert--error`
-  with `role="alert"`. Its Try again link starts another sign-in.
+  message. `rate_limited` also shows `RetryTime`, `retry_after` seconds
+  after the page loaded, if the URL has a positive number there. It keeps
+  the message in state and removes `sign_in_error` and `retry_after` with a
+  history replace, so a reload shows nothing. `cancelled` and `used` are
+  neutral `fm-alert`s with `role="status"`. The other codes are `fm-alert--error`
+  with `role="alert"`. Its link starts another sign-in, back to the page,
+  or to its `returnTo` prop. It reads Try again, or Sign in for `used`,
+  where nothing failed.
 - Home (`src/pages/Home.tsx`) shows `AdoptionReview`
   (`src/pages/adoption/`) above the roadmap.
 - The sign-in links come from `useSignInHref()`
@@ -651,13 +736,40 @@ it to `src/routes/`.
   That covers Review later, the last answer and a visit with no open
   question. Home then focuses the reminder's link while questions remain,
   or else its title, so focus doesn't fall to the document.
+- `_shell/admin.tsx`: the page `Admin` (`src/pages/admin/`), for an
+  account with `admin.view`. Its loader reads the session and sends any
+  other account to `/`. It has a tab each for roles, permissions and
+  accounts. `Tabs` is `lazy` there, so a tab loads its lists when it opens.
+  Each tab's list has its own `QueryBoundary` with a table skeleton.
+  `roles.manage` shows the controls that add, edit and delete roles and
+  permissions. `account_roles.manage` shows Edit roles on each account. A
+  built-in permission has no Delete. The accounts tab searches by email,
+  and says when it shows only the first 50.
+- The admin forms use react-hook-form and zod. Each zod schema repeats the
+  API's rules, such as the role name's 50 characters and the permission
+  key's pattern, so a mistake shows before the request. `TextField` marks
+  its input `aria-invalid` and describes it by its `FieldError`. A form
+  sits in a `FormSheet`, a drawer, and a delete in a `ConfirmDialog`. A
+  409 for a taken name or key lands on that field. Another refusal, such
+  as the last administrator, shows the API's title in the form, through
+  `ApiError.title`. A save shows a toast.
+- `useAdminWrite()` runs each admin write. After it, every admin list and
+  the session fetch again (`refreshAfterAdminWrite()` in `queries.ts`),
+  because a write can change the visitor's own permissions. Then
+  `router.invalidate()` runs the admin route's loader again, so a visitor
+  who takes `admin.view` from themselves goes to `/`. `can()` in
+  `src/api/permissions.ts` checks the session's permissions, by the
+  built-in keys in `Permission`. The API checks every request again.
 - `design-system.tsx`: a public page. Public pages go directly in
   `src/routes/`. They make no request and never show the loading screen.
   The design system page has no `AppShell`, and no page links to it.
 - `signed-out.tsx`: a public page, with component `SignedOut`
   (`src/pages/SignedOut.tsx`). Auth0 sends the browser there after
   sign-out. It is an `ErrorScreen` that says the visitor is signed out,
-  with Sign in (back to `/`) and Play as a guest (a link to `/`).
+  with Sign in (back to `/`) and Play as a guest (a link to `/`). A
+  rate-limited sign-in also lands there (see Sign-in), so the screen shows
+  `SignInErrorAlert` above its wordmark, with Try again back to `/`. It
+  still makes no request.
 - `sign-in-stopped.tsx`: a public page, with component `SignInStopped`
   (`src/pages/SignInStopped.tsx`). Auth0's error page sends the browser
   there, such as after Back from a sign-in that worked. It is an
@@ -723,6 +835,10 @@ doesn't show the loading screen again. If the session fails after the
 retries, the root route's error page shows (see Error pages). The web-client no
 longer calls `/v1/health`.
 
+Each request function in `queries.ts` goes through `send()`. It throws
+`ApiUnreachable` when no response came back, and `ApiError` when the
+response isn't ok. A bodyless `POST` or `DELETE` sends `JSON_HEADERS`.
+
 `logout(api)` in `queries.ts` sends `POST /v1/auth/logout` and returns
 `data.logout_url`. `useSignOut()` (`src/pages/useSignOut.ts`) runs it
 through `useMutation`, for `UserMenu`. On success, it
@@ -787,6 +903,21 @@ knowing. `failAnswers` makes every answer fail with a 500.
 `PlayerReviewPage` renders `/review-players` by default, or Home with or
 without `signed_in=1`. Its `clickTwiceAtOnce()` clicks a button twice before React
 renders again, as a quick double click can.
+
+`mockAdmin()` signs the mock API in as the verified account first in its
+`accounts`, and answers the admin routes from the state it gets, as the
+API does. The session's `permissions` come from that account's roles, so
+a write can change them. It counts each permission's roles and each
+role's accounts. It refuses a taken role name or permission key, a
+built-in permission's delete, and any write that leaves no account with
+`account_roles.manage`, with the API's titles. It answers 415 to a write
+without a JSON `Content-Type`. It returns the `state`, which a test changes
+as another tab would, and the `writes` it got. `builtInPermissions` and
+`administrator` are the rows the migration makes. `holdAdmin(list)` holds
+a list's responses, and `failAdminOnce(list, status)` fails the next one.
+The default handlers answer the admin lists with nothing. `AdminPage`
+renders `/admin`. Only the open tab's panel shows, so a test opens a tab
+first.
 
 `HomePage.render({ path })` renders the app at another path, such as one
 with a query. `homePage.href` is the router's current path and query, so a
@@ -861,7 +992,11 @@ signs a guest out from the account menu, through its dialog, to
 `/signed-out`. A third signs in again from `/signed-out`, and checks that
 the account keeps its one player.
 
-The suite counts about 25 guest accounts and sign-ins with no session,
+`e2e/admin.spec.ts` signs in as `mightymoose@fortymm.com`, whom the
+migration makes an administrator. On `/admin` it creates a role with a new
+name, because the dev database keeps its roles, then deletes it.
+
+The suite counts about 26 guest accounts and sign-ins with no session,
 under the limit of 30 a minute.
 
 The design system page is a copy of the reference's component gallery

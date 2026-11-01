@@ -1,20 +1,25 @@
 import { useQuery } from '@tanstack/react-query'
-import { useRouteContext } from '@tanstack/react-router'
+import { Link, useRouteContext } from '@tanstack/react-router'
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
+import { can, Permission } from '../../api/permissions'
 import { sessionQuery } from '../../api/queries'
 import { Button } from '../../components/Button'
 import { closeDialog } from '../../components/closeDialog'
 import { Dialog } from '../../components/Dialog'
 import { Icon } from '../../components/Icon'
 import { PlayerAvatar } from '../../components/PlayerAvatar'
+import { mobileApps } from '../../mobileApps'
 import { useSignInHref } from '../useSignInHref'
 import { useSignOut } from '../useSignOut'
+import { usePhoneLayout } from './usePhoneLayout'
 
 // The visitor's account at the topbar's right end, styled by `.user-menu` in
 // styles/base.css: a chip of the player's avatar and name that opens a menu.
 // A guest gets Sign in, and Sign out behind a dialog, because nobody can get
 // a guest account back after it signs out. A verified account signs out at
-// once. It shows nothing until the session has started, and it doesn't
+// once. An account with `admin.view` gets a link to the admin page. Below
+// 600px, phone widths, it links to each mobile beta. It
+// shows nothing until the session has started, and it doesn't
 // suspend, so the loading screen times only the page.
 export function UserMenu() {
   const { api } = useRouteContext({ from: '__root__' })
@@ -27,6 +32,7 @@ export function UserMenu() {
   const guestDialog = useRef<HTMLDialogElement>(null)
   const signInHref = useSignInHref()
   const { signOut, leaving, failed } = useSignOut()
+  const phone = usePhoneLayout()
 
   useEffect(() => {
     if (!open) return
@@ -90,6 +96,31 @@ export function UserMenu() {
           {account.kind === 'guest' ? 'Playing as a guest' : account.email}
         </div>
         <hr />
+        {can(account, Permission.adminView) && (
+          <Link
+            to="/admin"
+            className="fm-menu__item"
+            role="menuitem"
+            onClick={() => setOpen(false)}
+          >
+            Administration
+          </Link>
+        )}
+        {phone &&
+          mobileApps.map((app) => (
+            <a
+              key={app.href}
+              className="fm-menu__item"
+              role="menuitem"
+              href={app.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={app.name}
+              onClick={() => setOpen(false)}
+            >
+              {app.label}
+            </a>
+          ))}
         {failed && (
           <p className="user-menu__error" role="alert">
             Couldn’t sign you out. Check your connection, then try again.

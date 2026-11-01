@@ -1,0 +1,25 @@
+/* The admin page (Admin.tsx): a title, the tabs, then each tab's toolbar
+   over its table. */
+.admin{display:flex;flex-direction:column;gap:var(--s-6)}
+.admin [role=tabpanel]{padding-top:var(--s-6)}
+.admin-section{display:flex;flex-direction:column;gap:var(--s-5)}
+.admin-toolbar{display:flex;align-items:flex-start;justify-content:space-between;gap:var(--s-4);flex-wrap:wrap}
+.admin-lead{margin:0;max-width:60ch;font:400 var(--text-base)/var(--lh-normal) var(--font-ui);color:var(--fg-2)}
+.admin-search{display:flex;align-items:flex-start;gap:var(--s-3);flex-wrap:wrap}
+.admin-search .fm-field{flex:1 1 280px;max-width:420px}
+/* The button lines up with the input under the field's label. */
+.admin-search>.fm-btn{margin-top:26px}
+.admin-table-wrap{overflow-x:auto}
+.admin-table td{vertical-align:top}
+.admin-name{display:block;color:var(--fg-1);overflow-wrap:anywhere}
+.admin-desc{display:block;margin-top:2px;font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
+.admin-key{font-family:var(--font-num)}
+.admin-tags{display:flex;flex-wrap:wrap;gap:var(--s-1)}
+.admin-actions{text-align:right;white-space:nowrap}
+.admin-actions .fm-btn+.fm-btn{margin-left:var(--s-2)}
+.admin-form{display:flex;flex-direction:column;gap:var(--s-5)}
+.admin-check__text{display:flex;flex-direction:column}
+.admin-check__key{display:inline-flex;align-items:center;gap:var(--s-2);flex-wrap:wrap}
+.admin-skeleton{display:flex;flex-direction:column;gap:var(--s-3)}
+.admin-skeleton__bar{height:44px;max-width:420px}
+.admin-skeleton__row{height:44px}

@@ -38,8 +38,8 @@ export class HomePage {
   }
 
   // The sign-in message's link that starts another sign-in.
-  tryAgainLink(message: HTMLElement): HTMLElement {
-    return within(message).getByRole('link', { name: 'Try again' })
+  signInLink(message: HTMLElement): HTMLElement {
+    return within(message).getByRole('link')
   }
 
   // The sign-in message's button that hides it.
@@ -81,10 +81,6 @@ export class HomePage {
     return screen.queryByRole('link', { name: 'Home' })
   }
 
-  // The tab bar's link to a mobile beta, by its accessible name, or null.
-  mobileAppLink(name: string): HTMLElement | null {
-    return screen.queryByRole('link', { name })
-  }
 
   // A link to the design system page. The app has none, so this is null.
   get designSystemLink(): HTMLElement | null {

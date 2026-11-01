@@ -17,15 +17,22 @@ from fortymm_api.auth import (
 from fortymm_api.database import DatabaseSession
 from fortymm_api.identity_provider import IdentityProvider, IdToken
 from fortymm_api.services import sessions, sign_in
+from fortymm_api.services.sessions import GuestAccountLimitReached
 from fortymm_api.v1.errors import (
     GUEST_LIMIT,
     NO_PROVIDER,
     UNSUPPORTED_MEDIA_TYPE,
     Responses,
+    retry_after_seconds,
 )
 from fortymm_api.v1.session import client_address
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# Where a rate-limited web login sends the browser. It has no session, so `/`
+# would start a guest account and get the same limit. `/signed-out` starts
+# none, and it is where such a browser usually clicked Sign in.
+RATE_LIMITED_LOGIN = "/signed-out?sign_in_error=rate_limited"
 
 REDIRECT: Responses = {302: {"description": "A redirect"}}
 
@@ -79,7 +86,7 @@ def with_query(return_to: str, name: str, value: str) -> str:
     "/login",
     status_code=302,
     response_class=RedirectResponse,
-    responses={**REDIRECT, **GUEST_LIMIT, **NO_PROVIDER},
+    responses={**REDIRECT, **NO_PROVIDER},
 )
 def login(
     session: DatabaseSession,
@@ -94,17 +101,25 @@ def login(
     cookie instead, which the callback checks. After sign-in, the callback
     sends the visitor to `return_to`. It must be a path
     on this site, or the callback uses `/`.
+
+    Such a login counts toward the guest account limit. Past it, the visitor
+    goes to `/signed-out` with `sign_in_error=rate_limited` and
+    `retry_after`, the seconds until the network can sign in again.
     """
-    started = sign_in.begin_sign_in(
-        session, token, client_address(request), sign_in.safe_return_to(return_to)
-    )
+    try:
+        started = sign_in.begin_sign_in(
+            session, token, client_address(request), sign_in.safe_return_to(return_to)
+        )
+    except GuestAccountLimitReached as error:
+        return redirect(
+            f"{RATE_LIMITED_LOGIN}&retry_after={retry_after_seconds(error)}"
+        )
     response = redirect(
         provider.authorize_url(
             state=started.state,
             nonce=started.nonce,
             code_verifier=started.code_verifier,
             redirect_uri=callback_url(request),
-            prompt_login=started.prompt_login,
         )
     )
     if started.token is not None:
@@ -134,8 +149,10 @@ def callback(
 
     A successful sign-in adds `signed_in=1` to that path's query. A failed
     sign-in adds `sign_in_error` instead: `cancelled`, `email_not_verified`,
-    `expired` or `failed`. A callback whose `state` matches no login attempt,
-    such as a replay, goes to `/`.
+    `expired` or `failed`. A callback from another browser gets `failed`, and
+    keeps the login cookie, which may belong to a newer sign-in. A callback
+    whose `state` matches no login attempt, such as a replay, goes to `/`
+    with `sign_in_error=used`.
     """
     redirect_uri = callback_url(request)
 
@@ -151,9 +168,13 @@ def callback(
             set_session_cookie(response, new_token)
         case sign_in.SignInFailed(return_to, sign_in_error):
             response = redirect(with_query(return_to, "sign_in_error", sign_in_error))
+        case sign_in.WrongBrowser(return_to):
+            response = redirect(
+                with_query(return_to, "sign_in_error", sign_in.SignInError.FAILED)
+            )
         case sign_in.Replayed():
-            response = redirect("/")
-    if login_state is not None:
+            response = redirect("/?sign_in_error=used")
+    if login_state is not None and not isinstance(result, sign_in.WrongBrowser):
         delete_login_cookie(response)
     return response
 
@@ -196,7 +217,6 @@ def app_login(
         nonce=started.nonce,
         code_verifier=started.code_verifier,
         redirect_uri=app_callback_url(request),
-        prompt_login=started.prompt_login,
     )
     if started.token is not None:
         set_session_cookie(response, started.token)
@@ -262,7 +282,8 @@ def app_finish(
     `outcome` is `signed_in`, or why the sign-in failed: `cancelled`,
     `email_not_verified`, `expired` or `failed`. A sign-in sets a new session
     cookie. A `state` that matches no login attempt, such as a replay, is
-    `expired`. A failed sign-in changes no account.
+    `expired`. A failed sign-in changes no account. A request from another
+    browser is `failed`, and keeps the login cookie.
     """
     redirect_uri = app_callback_url(request)
 
@@ -282,9 +303,11 @@ def app_finish(
             set_session_cookie(response, new_token)
         case sign_in.SignInFailed(_, sign_in_error):
             outcome = AppSignInOutcome(sign_in_error.value)
+        case sign_in.WrongBrowser():
+            outcome = AppSignInOutcome.FAILED
         case sign_in.Replayed():
             outcome = AppSignInOutcome.EXPIRED
-    if login_state is not None:
+    if login_state is not None and not isinstance(result, sign_in.WrongBrowser):
         delete_login_cookie(response)
     response.headers["Cache-Control"] = "no-store"
     return AppFinishResponse(data=AppFinishData(outcome=outcome))

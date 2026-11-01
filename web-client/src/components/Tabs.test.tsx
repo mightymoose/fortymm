@@ -4,12 +4,13 @@ import { describe, expect, it } from 'vitest'
 import { Tabs } from './Tabs'
 import { ToastProvider } from './ToastProvider'
 
-function renderTabs() {
+function renderTabs({ lazy = false }: { lazy?: boolean } = {}) {
   render(
     <ToastProvider>
       <button type="button">Before</button>
       <Tabs
         label="Tournament sections"
+        lazy={lazy}
         tabs={[
           { label: 'Overview', panel: <p>32 players</p> },
           { label: 'Schedule', panel: <p>14 of 31 matches played.</p> },
@@ -35,6 +36,16 @@ function expectSelected(name: string) {
 }
 
 describe('Tabs', () => {
+  it('renders only the selected panel’s content when lazy', async () => {
+    const user = userEvent.setup()
+    renderTabs({ lazy: true })
+    expect(screen.queryByText('Groups A–D')).toBeNull()
+
+    await user.click(tab('Standings'))
+    expect(panel()).toHaveTextContent('Groups A–D')
+    expect(screen.queryByText('32 players')).toBeNull()
+  })
+
   it('starts on the first tab and shows only its panel', () => {
     renderTabs()
 

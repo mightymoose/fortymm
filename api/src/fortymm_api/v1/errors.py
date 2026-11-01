@@ -1,9 +1,12 @@
 """The `errors` shape of every error the API answers itself, and the OpenAPI
 entries that document it on each route."""
 
+from math import ceil
 from typing import Any
 
 from pydantic import BaseModel
+
+from fortymm_api.services.sessions import GuestAccountLimitReached
 
 type Responses = dict[int | str, dict[str, Any]]
 
@@ -23,6 +26,9 @@ def errors(status: int, description: str, **extra: Any) -> Responses:
 
 
 NO_SESSION = errors(401, "The request has no valid session")
+FORBIDDEN = errors(
+    403, "The account's roles don't grant the permission the route needs"
+)
 UNSUPPORTED_MEDIA_TYPE = errors(
     415, "The request's Content-Type isn't application/json"
 )
@@ -37,4 +43,13 @@ GUEST_LIMIT = errors(
         }
     },
 )
+
+
+def retry_after_seconds(error: GuestAccountLimitReached) -> int:
+    """The whole seconds until the network can start more guest accounts, at
+    least 1. The 429's Retry-After and a rate-limited web login's
+    `retry_after` both give it."""
+    return max(1, ceil(error.retry_after.total_seconds()))
+
+
 NO_PROVIDER = errors(503, "The API has no identity provider configured")

@@ -132,7 +132,6 @@ def test_login_sends_the_browser_to_the_providers_sign_in_page(
     assert query["redirect_uri"] == [CALLBACK]
     assert query["code_challenge_method"] == ["S256"]
     assert {"state", "nonce", "code_challenge", "client_id"} <= query.keys()
-    assert "prompt" not in query
 
 
 def test_login_gives_a_browser_with_no_session_a_login_cookie(
@@ -166,12 +165,42 @@ def test_signing_in_again_after_sign_out_starts_no_guest_account(
     assert [player["open_question"] for player in players] == [False]
 
 
-def test_login_makes_a_verified_account_sign_in_again(browser: TestClient) -> None:
-    signed_in(browser, "auth0|ann", "ann@example.com")
+def test_a_rate_limited_login_goes_to_signed_out_with_the_wait(
+    browser: TestClient,
+    spend_guest_budget: Callable[[str], None],
+    migrated_database: Engine,
+) -> None:
+    spend_guest_budget("203.0.113.7/32")
 
-    location = urlsplit(login(browser).headers["Location"])
+    response = login(browser)
 
-    assert parse_qs(location.query)["prompt"] == ["login"]
+    assert response.status_code == 302
+    assert response.headers["Cache-Control"] == "no-store"
+    location = urlsplit(response.headers["Location"])
+    assert location.path == "/signed-out"
+    query = parse_qs(location.query)
+    assert query.keys() == {"sign_in_error", "retry_after"}
+    assert query["sign_in_error"] == ["rate_limited"]
+    assert 1 <= int(query["retry_after"][0]) <= 60
+    assert "Set-Cookie" not in response.headers
+    with migrated_database.connect() as connection:
+        attempts = connection.scalar(text("SELECT count(*) FROM login_attempts"))
+    assert attempts == 0
+
+
+@pytest.mark.parametrize("visitor", ["no session", "guest", "verified"])
+def test_login_makes_every_visitor_sign_in_again(
+    browser: TestClient, visitor: str
+) -> None:
+    if visitor == "guest":
+        start_session(browser)
+    elif visitor == "verified":
+        signed_in(browser, "auth0|ann", "ann@example.com")
+
+    query = parse_qs(urlsplit(login(browser).headers["Location"]).query)
+
+    assert query["prompt"] == ["login"]
+    assert query["max_age"] == ["0"]
 
 
 def test_login_answers_503_without_a_provider(
@@ -272,7 +301,7 @@ def test_a_guest_signing_in_to_another_account_joins_it(
     assert start_session(stale_tab)["kind"] == "guest"
 
 
-def test_a_replayed_callback_goes_home_and_changes_nothing(
+def test_a_replayed_callback_goes_home_with_used_and_changes_nothing(
     browser: TestClient,
 ) -> None:
     authorize_url = login(browser).headers["Location"]
@@ -283,7 +312,7 @@ def test_a_replayed_callback_goes_home_and_changes_nothing(
     response = browser.get(callback)
 
     assert response.status_code == 302
-    assert response.headers["Location"] == "/"
+    assert response.headers["Location"] == "/?sign_in_error=used"
     assert "Set-Cookie" not in response.headers
     assert start_session(browser) == account
 
@@ -333,14 +362,21 @@ def test_a_failed_callback_returns_with_its_error_and_changes_nothing(
     assert start_session(browser) == guest
 
 
-def test_a_callback_whose_attempt_is_gone_returns_home_with_no_error(
+def test_an_older_tabs_callback_keeps_the_newer_tabs_login_cookie(
     browser: TestClient,
 ) -> None:
-    start_session(browser)
+    older = login(browser).headers["Location"]
+    newer = login(browser).headers["Location"]
+    older_callback = at_mock(older, "auth0|ann", "ann@example.com")
+    newer_callback = at_mock(newer, "auth0|bob", "bob@example.com")
 
-    response = browser.get("/v1/auth/callback?state=unknown&error=access_denied")
+    response = browser.get(older_callback)
 
-    assert response.headers["Location"] == "/"
+    assert response.headers["Location"] == "/games?tab=open&sign_in_error=failed"
+    assert "Set-Cookie" not in response.headers
+    response = browser.get(newer_callback)
+    assert response.headers["Location"] == "/games?tab=open&signed_in=1"
+    assert start_session(browser)["email"] == "bob@example.com"
 
 
 def test_an_unsafe_return_to_becomes_home(browser: TestClient) -> None:
@@ -473,6 +509,23 @@ def test_app_callback_with_no_query_opens_the_app(browser: TestClient) -> None:
 
     assert response.status_code == 302
     assert response.headers["Location"] == "fortymm://sign-in"
+
+
+def test_a_rate_limited_app_login_answers_429(
+    browser: TestClient, spend_guest_budget: Callable[[str], None]
+) -> None:
+    spend_guest_budget("203.0.113.7/32")
+
+    response = browser.post("/v1/auth/app-login", headers=JSON)
+
+    assert response.status_code == 429
+    assert 1 <= int(response.headers["Retry-After"]) <= 60
+    assert response.json() == {
+        "errors": [
+            {"status": "429", "title": "Too many new guest accounts from this network"}
+        ]
+    }
+    assert "Set-Cookie" not in response.headers
 
 
 def test_app_login_answers_503_without_a_provider(

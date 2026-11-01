@@ -106,8 +106,7 @@ a:hover{color:var(--ball-200)}
    The authenticated pages' frame (src/pages/AppShell.tsx): a topbar over a
    sidebar that folds to its icons, and below 900px a tab bar along the
    bottom. The bar is --bg-panel and the page is --bg-app. Orange marks only
-   the open page. The links to the mobile betas show only below 600px, as
-   tabs, because a desktop or a tablet can't install a phone beta.
+   the open page. The links to the mobile betas sit at the sidebar's foot.
    ========================================================================= */
 .app-shell {
   display: grid;
@@ -272,10 +271,6 @@ a:hover{color:var(--ball-200)}
   box-shadow: var(--focus-ring);
 }
 
-.app-link--app {
-  display: none;
-}
-
 .app-shell[data-folded='true'] .app-link {
   justify-content: center;
   width: 48px;
@@ -339,13 +334,6 @@ a:hover{color:var(--ball-200)}
     height: auto;
     overflow: visible;
     clip: auto;
-  }
-}
-
-/* The same width at which the topbar hides the player's name. */
-@media (max-width: 599px) {
-  .app-link.app-link--app {
-    display: flex;
   }
 }
 
@@ -514,4 +502,19 @@ a:hover{color:var(--ball-200)}
 .sign-in-error {
   max-width: 640px;
   margin: calc(-1 * var(--s-4)) 0 var(--s-12);
+}
+
+/* The same message above an error screen's wordmark, such as on /signed-out
+   (src/pages/SignedOut.tsx). The screen centres its text, and the alert reads
+   from the left like everywhere else. */
+.error-screen .sign-in-error {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 480px;
+  margin: 0 0 var(--s-4);
+  text-align: left;
+}
+
+.error-screen .sign-in-error p {
+  max-width: none;
 }

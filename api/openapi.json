@@ -33,7 +33,7 @@
           "session"
         ],
         "summary": "Start Session",
-        "description": "Resume the visitor's session, or start a guest account and its session.\n\nA valid session gets a later expiry and a fresh cookie. With no cookie, or\na cookie for an expired, unknown or adopted session, the visitor gets a\nnew guest account. The API deletes the session that cookie named. A\nclient network can start 30 guest accounts a minute. Past that, the API\nanswers 429.\n\nThe account's player is the one it plays as. Every account has one. A\nnew player gets a default display name, such as `excited egret 387`. A\nverified account has its email.",
+        "description": "Resume the visitor's session, or start a guest account and its session.\n\nA valid session gets a later expiry and a fresh cookie. With no cookie, or\na cookie for an expired, unknown or adopted session, the visitor gets a\nnew guest account. The API deletes the session that cookie named. A\nclient network can start 30 guest accounts a minute. Past that, the API\nanswers 429.\n\nThe account's player is the one it plays as. Every account has one. A\nnew player gets a default display name, such as `excited egret 387`. A\nverified account has its email. `permissions` lists what the account's\nroles let it do, such as `admin.view`.",
         "operationId": "start_session",
         "responses": {
           "200": {
@@ -88,7 +88,7 @@
           "auth"
         ],
         "summary": "Login",
-        "description": "Send the visitor to the identity provider's sign-in page.\n\nA request with no valid session gets no guest account. It gets a login\ncookie instead, which the callback checks. After sign-in, the callback\nsends the visitor to `return_to`. It must be a path\non this site, or the callback uses `/`.",
+        "description": "Send the visitor to the identity provider's sign-in page.\n\nA request with no valid session gets no guest account. It gets a login\ncookie instead, which the callback checks. After sign-in, the callback\nsends the visitor to `return_to`. It must be a path\non this site, or the callback uses `/`.\n\nSuch a login counts toward the guest account limit. Past it, the visitor\ngoes to `/signed-out` with `sign_in_error=rate_limited` and\n`retry_after`, the seconds until the network can sign in again.",
         "operationId": "login",
         "security": [
           {
@@ -116,24 +116,6 @@
         "responses": {
           "302": {
             "description": "A redirect"
-          },
-          "429": {
-            "description": "The client's network started too many guest accounts. Retry-After gives the seconds until it can start more.",
-            "headers": {
-              "Retry-After": {
-                "description": "The seconds until the network can start more",
-                "schema": {
-                  "type": "integer"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorsResponse"
-                }
-              }
-            }
           },
           "503": {
             "description": "The API has no identity provider configured",
@@ -164,7 +146,7 @@
           "auth"
         ],
         "summary": "Callback",
-        "description": "Finish a sign-in, then send the visitor back to its `return_to`.\n\nA successful sign-in adds `signed_in=1` to that path's query. A failed\nsign-in adds `sign_in_error` instead: `cancelled`, `email_not_verified`,\n`expired` or `failed`. A callback whose `state` matches no login attempt,\nsuch as a replay, goes to `/`.",
+        "description": "Finish a sign-in, then send the visitor back to its `return_to`.\n\nA successful sign-in adds `signed_in=1` to that path's query. A failed\nsign-in adds `sign_in_error` instead: `cancelled`, `email_not_verified`,\n`expired` or `failed`. A callback from another browser gets `failed`, and\nkeeps the login cookie, which may belong to a newer sign-in. A callback\nwhose `state` matches no login attempt, such as a replay, goes to `/`\nwith `sign_in_error=used`.",
         "operationId": "callback",
         "security": [
           {
@@ -350,7 +332,7 @@
           "auth"
         ],
         "summary": "App Finish",
-        "description": "Finish a sign-in that `app-login` started, with the query that\n`app-callback` handed to the app.\n\n`outcome` is `signed_in`, or why the sign-in failed: `cancelled`,\n`email_not_verified`, `expired` or `failed`. A sign-in sets a new session\ncookie. A `state` that matches no login attempt, such as a replay, is\n`expired`. A failed sign-in changes no account.",
+        "description": "Finish a sign-in that `app-login` started, with the query that\n`app-callback` handed to the app.\n\n`outcome` is `signed_in`, or why the sign-in failed: `cancelled`,\n`email_not_verified`, `expired` or `failed`. A sign-in sets a new session\ncookie. A `state` that matches no login attempt, such as a replay, is\n`expired`. A failed sign-in changes no account. A request from another\nbrowser is `failed`, and keeps the login cookie.",
         "operationId": "app_finish",
         "security": [
           {
@@ -611,6 +593,840 @@
           }
         }
       }
+    },
+    "/v1/admin/permissions": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin Permissions",
+        "description": "List every permission by key, with how many roles grant it. Needs\n`admin.view`.\n\nA `built_in` permission is one the code checks, such as `admin.view`.",
+        "operationId": "admin_permissions",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminPermissionsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Create Permission",
+        "description": "Add a permission that roles can grant. Needs `roles.manage`.\n\nCode that checks its key can come later. The key never changes.",
+        "operationId": "create_permission",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewPermissionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminPermissionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another permission has this key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/permissions/{key}": {
+      "put": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Update Permission",
+        "description": "Set the permission's description. Needs `roles.manage`.",
+        "operationId": "update_permission",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PermissionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminPermissionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No permission has this key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Delete Permission",
+        "description": "Delete a permission. Every role that granted it loses it. Needs\n`roles.manage`. A built-in permission can't be deleted.",
+        "operationId": "delete_permission",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No permission has this key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The permission is built in, because the code checks it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/roles": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin Roles",
+        "description": "List every role by name, with its permissions and how many accounts\nhold it. Needs `admin.view`.",
+        "operationId": "admin_roles",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminRolesResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Create Role",
+        "description": "Create a role with these permissions. Needs `roles.manage`.\n\nThe name is trimmed, and two roles can't share one, whatever its case.\nA permission key that names no permission answers 422.",
+        "operationId": "create_role",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminRoleResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another role has this name, whatever its case",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is invalid. If a permission key names no permission, the body is in the `errors` shape instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/admin/roles/{role_id}": {
+      "put": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Update Role",
+        "description": "Set the role's name, description and exact set of permissions. Needs\n`roles.manage`.\n\nThe API answers 409 if another role has the name, or if the change\nwould leave no account with `account_roles.manage`.",
+        "operationId": "update_role",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "role_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Role Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminRoleResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No role has this id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is invalid. If a permission key names no permission, the body is in the `errors` shape instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another role has this name, or the change would leave no account with `account_roles.manage`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Delete Role",
+        "description": "Delete the role. Every account that held it loses it. Needs\n`roles.manage`.\n\nThe API answers 409 if no account would keep `account_roles.manage`.",
+        "operationId": "delete_role",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "role_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Role Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No role has this id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The change would leave no account with `account_roles.manage`, so nobody could grant a role again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/accounts": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin Accounts",
+        "description": "List the verified accounts by email, with the roles each holds. Needs\n`admin.view`.\n\n`email` keeps the accounts whose email contains it, whatever its case.\nThe list holds at most 50. `meta.has_more` says that more match.",
+        "operationId": "admin_accounts",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "email",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Email"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAccountsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/accounts/{account_id}/roles": {
+      "put": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Set Account Roles",
+        "description": "Give the account exactly these roles. Needs `account_roles.manage`.\n\nOnly a verified account holds roles. The API answers 409 if no account\nwould keep `account_roles.manage`, such as when the last administrator\nrevokes their own role.",
+        "operationId": "set_account_roles",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Account Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountRolesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminAccountResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No verified account has this id, or a role doesn't exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The change would leave no account with `account_roles.manage`, so nobody could grant a role again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -676,6 +1492,225 @@
           "data"
         ],
         "title": "AccountPlayersResponse"
+      },
+      "AccountRolesRequest": {
+        "properties": {
+          "role_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Role Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "role_ids"
+        ],
+        "title": "AccountRolesRequest"
+      },
+      "AdminAccount": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Display Name"
+          },
+          "role_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Role Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "display_name",
+          "role_ids"
+        ],
+        "title": "AdminAccount"
+      },
+      "AdminAccountResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AdminAccount"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "AdminAccountResponse"
+      },
+      "AdminAccountsMeta": {
+        "properties": {
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "type": "object",
+        "required": [
+          "has_more"
+        ],
+        "title": "AdminAccountsMeta"
+      },
+      "AdminAccountsResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/AdminAccount"
+            },
+            "type": "array",
+            "title": "Data"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/AdminAccountsMeta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "title": "AdminAccountsResponse"
+      },
+      "AdminPermission": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "built_in": {
+            "type": "boolean",
+            "title": "Built In"
+          },
+          "role_count": {
+            "type": "integer",
+            "title": "Role Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "description",
+          "built_in",
+          "role_count"
+        ],
+        "title": "AdminPermission"
+      },
+      "AdminPermissionResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AdminPermission"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "AdminPermissionResponse"
+      },
+      "AdminPermissionsResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/AdminPermission"
+            },
+            "type": "array",
+            "title": "Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "AdminPermissionsResponse"
+      },
+      "AdminRole": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Permissions"
+          },
+          "account_count": {
+            "type": "integer",
+            "title": "Account Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "permissions",
+          "account_count"
+        ],
+        "title": "AdminRole"
+      },
+      "AdminRoleResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AdminRole"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "AdminRoleResponse"
+      },
+      "AdminRolesResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/AdminRole"
+            },
+            "type": "array",
+            "title": "Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "AdminRolesResponse"
       },
       "Answer": {
         "type": "string",
@@ -956,6 +1991,39 @@
         ],
         "title": "MergedOutcome"
       },
+      "NewPermissionRequest": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$",
+            "title": "Key"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Description",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "key"
+        ],
+        "title": "NewPermissionRequest"
+      },
+      "PermissionRequest": {
+        "properties": {
+          "description": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Description",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "PermissionRequest"
+      },
       "RecentMatch": {
         "properties": {
           "id": {
@@ -975,6 +2043,35 @@
           "played_at"
         ],
         "title": "RecentMatch"
+      },
+      "RoleRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 50,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Description",
+            "default": ""
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Permissions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "permissions"
+        ],
+        "title": "RoleRequest"
       },
       "SessionAccount": {
         "properties": {
@@ -1000,6 +2097,13 @@
           },
           "player": {
             "$ref": "#/components/schemas/SessionPlayer"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Permissions"
           }
         },
         "type": "object",
@@ -1007,7 +2111,8 @@
           "id",
           "kind",
           "email",
-          "player"
+          "player",
+          "permissions"
         ],
         "title": "SessionAccount"
       },

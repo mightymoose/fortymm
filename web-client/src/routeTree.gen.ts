@@ -16,6 +16,7 @@ import { Route as SignedOutRouteImport } from './routes/signed-out'
 import { Route as AuthenticatedShellRouteImport } from './routes/_authenticated/_shell'
 import { Route as AuthenticatedReviewPlayersRouteImport } from './routes/_authenticated/review-players'
 import { Route as AuthenticatedShellIndexRouteImport } from './routes/_authenticated/_shell/index'
+import { Route as AuthenticatedShellAdminRouteImport } from './routes/_authenticated/_shell/admin'
 
 const AuthenticatedRoute = AuthenticatedRouteImport.update({
   id: '/_authenticated',
@@ -51,6 +52,11 @@ const AuthenticatedShellIndexRoute = AuthenticatedShellIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AuthenticatedShellRoute,
 } as any)
+const AuthenticatedShellAdminRoute = AuthenticatedShellAdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
+  getParentRoute: () => AuthenticatedShellRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedShellIndexRoute
@@ -58,6 +64,7 @@ export interface FileRoutesByFullPath {
   '/sign-in-stopped': typeof SignInStoppedRoute
   '/signed-out': typeof SignedOutRoute
   '/review-players': typeof AuthenticatedReviewPlayersRoute
+  '/admin': typeof AuthenticatedShellAdminRoute
 }
 export interface FileRoutesByTo {
   '/': typeof AuthenticatedShellIndexRoute
@@ -65,6 +72,7 @@ export interface FileRoutesByTo {
   '/sign-in-stopped': typeof SignInStoppedRoute
   '/signed-out': typeof SignedOutRoute
   '/review-players': typeof AuthenticatedReviewPlayersRoute
+  '/admin': typeof AuthenticatedShellAdminRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -74,6 +82,7 @@ export interface FileRoutesById {
   '/signed-out': typeof SignedOutRoute
   '/_authenticated/_shell': typeof AuthenticatedShellRouteWithChildren
   '/_authenticated/review-players': typeof AuthenticatedReviewPlayersRoute
+  '/_authenticated/_shell/admin': typeof AuthenticatedShellAdminRoute
   '/_authenticated/_shell/': typeof AuthenticatedShellIndexRoute
 }
 export interface FileRouteTypes {
@@ -84,6 +93,7 @@ export interface FileRouteTypes {
     | '/sign-in-stopped'
     | '/signed-out'
     | '/review-players'
+    | '/admin'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -91,6 +101,7 @@ export interface FileRouteTypes {
     | '/sign-in-stopped'
     | '/signed-out'
     | '/review-players'
+    | '/admin'
   id:
     | '__root__'
     | '/_authenticated'
@@ -99,6 +110,7 @@ export interface FileRouteTypes {
     | '/signed-out'
     | '/_authenticated/_shell'
     | '/_authenticated/review-players'
+    | '/_authenticated/_shell/admin'
     | '/_authenticated/_shell/'
   fileRoutesById: FileRoutesById
 }
@@ -160,14 +172,23 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedShellIndexRouteImport
       parentRoute: typeof AuthenticatedShellRoute
     }
+    '/_authenticated/_shell/admin': {
+      id: '/_authenticated/_shell/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AuthenticatedShellAdminRouteImport
+      parentRoute: typeof AuthenticatedShellRoute
+    }
   }
 }
 
 interface AuthenticatedShellRouteChildren {
+  AuthenticatedShellAdminRoute: typeof AuthenticatedShellAdminRoute
   AuthenticatedShellIndexRoute: typeof AuthenticatedShellIndexRoute
 }
 
 const AuthenticatedShellRouteChildren: AuthenticatedShellRouteChildren = {
+  AuthenticatedShellAdminRoute: AuthenticatedShellAdminRoute,
   AuthenticatedShellIndexRoute: AuthenticatedShellIndexRoute,
 }
 

@@ -23,6 +23,7 @@ from sqlalchemy.dialects.postgresql import CIDR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from fortymm_api.accounts import AccountId, Email, PlayerId
+from fortymm_api.permissions import RoleId
 
 
 class Base(DeclarativeBase):
@@ -40,6 +41,7 @@ class Base(DeclarativeBase):
     type_annotation_map: ClassVar[dict[Any, Any]] = {
         AccountId: Uuid,
         PlayerId: Uuid,
+        RoleId: Uuid,
         Email: Text,
     }
 
@@ -218,3 +220,90 @@ class GuestAccountCount(Base):
         DateTime(timezone=True), index=True
     )
     started: Mapped[int]
+
+
+class StoredPermission(Base):
+    """A permission a role can grant. A built-in one is a `Permission`, which
+    the code checks. Admins add and delete the others."""
+
+    __tablename__ = "permissions"
+    __table_args__ = (
+        CheckConstraint(
+            r"key ~ '^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)*$'", name="key_format"
+        ),
+        CheckConstraint("char_length(key) <= 64", name="key_length"),
+    )
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    description: Mapped[str] = mapped_column(Text, server_default="")
+    built_in: Mapped[bool] = mapped_column(server_default=text("false"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class Role(Base):
+    """A named set of permissions that admins edit and grant to accounts."""
+
+    __tablename__ = "roles"
+    __table_args__ = (
+        CheckConstraint("name = btrim(name) AND name <> ''", name="name_trimmed"),
+        CheckConstraint("char_length(name) <= 50", name="name_length"),
+    )
+
+    id: Mapped[RoleId] = mapped_column(
+        primary_key=True, server_default=func.gen_random_uuid()
+    )
+    name: Mapped[str] = mapped_column(Text)
+    description: Mapped[str] = mapped_column(Text, server_default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+Index("unique_role_name", func.lower(Role.name), unique=True)
+
+
+class RolePermission(Base):
+    __tablename__ = "role_permissions"
+
+    role_id: Mapped[RoleId] = mapped_column(
+        ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True
+    )
+    permission_key: Mapped[str] = mapped_column(
+        ForeignKey("permissions.key", ondelete="CASCADE"), primary_key=True
+    )
+
+
+class AccountRole(Base):
+    """A role that a verified account holds."""
+
+    __tablename__ = "account_roles"
+
+    account_id: Mapped[AccountId] = mapped_column(
+        ForeignKey("accounts.id", ondelete="CASCADE"), primary_key=True
+    )
+    role_id: Mapped[RoleId] = mapped_column(
+        ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True
+    )
+    granted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    # Null for a grant that no account made, such as a claimed email grant.
+    granted_by: Mapped[AccountId | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="SET NULL")
+    )
+
+
+class EmailRoleGrant(Base):
+    """A role waiting for the account with this email. A sign-in that ends
+    on that account moves it to `account_roles` and deletes it, so a later
+    revoke sticks."""
+
+    __tablename__ = "email_role_grants"
+    __table_args__ = (CheckConstraint("email = lower(email)", name="email_lowercase"),)
+
+    email: Mapped[Email] = mapped_column(primary_key=True)
+    role_id: Mapped[RoleId] = mapped_column(
+        ForeignKey("roles.id", ondelete="CASCADE"), primary_key=True
+    )

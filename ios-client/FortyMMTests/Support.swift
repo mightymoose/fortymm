@@ -66,7 +66,9 @@ final class StubURLProtocol: URLProtocol {
         defer { stream.close() }
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
-        while stream.hasBytesAvailable {
+        // Read until the end: hasBytesAvailable can be false before the body
+        // arrives.
+        while true {
             let count = stream.read(&buffer, maxLength: buffer.count)
             guard count > 0 else { break }
             data.append(buffer, count: count)
