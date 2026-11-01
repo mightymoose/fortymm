@@ -16,6 +16,11 @@ export class HomePage {
   // The reminder of the players still to review, by its title.
   readonly reminder: Locator
 
+  // The app shell's link to the iPhone beta. It shows only below 600px.
+  readonly iphoneAppLink: Locator
+  // The topbar's button that folds the sidebar to its icons, from 900px up.
+  readonly sidebarLabelsButton: Locator
+
   constructor(page: Page) {
     this.page = page
     this.title = page.getByRole('heading', { level: 1 })
@@ -26,6 +31,8 @@ export class HomePage {
       name: 'Sign out of this guest account?',
     })
     this.reminder = page.getByText(/^\d+ players? to review$/)
+    this.iphoneAppLink = page.getByRole('link', { name: 'Get the iPhone app' })
+    this.sidebarLabelsButton = page.getByRole('button', { name: 'Sidebar labels' })
   }
 
   // Opens the account menu and picks `item`, such as Sign in. A verified

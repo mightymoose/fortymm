@@ -37,6 +37,9 @@ test('a guest that signs in to an account plays as the account’s player (Adopt
   const ann = newPerson('ann')
   await homePage.goto()
   await signInPage.signIn(ann, { returnTo: '/' })
+  // Home's own POST /v1/session sets Ann's cookie again. Wait for it, or it
+  // can land after forgetSession() and the next page load resumes Ann.
+  await homePage.title.waitFor()
   const anns = await signInPage.account()
 
   await signInPage.forgetSession()

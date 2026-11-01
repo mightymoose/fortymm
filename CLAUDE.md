@@ -561,9 +561,12 @@ it to `src/routes/`.
   (`src/pages/AppShell.tsx`): a topbar over a sidebar of
   the `_shell` pages, which folds to its icons and remembers it in
   `localStorage`. Below 900px the sidebar is a tab bar along the bottom. To
-  add a page to the sidebar, add its link in `AppShell`. The sidebar's
-  footer, and a tab below 900px, links to each mobile beta in `mobileApps`
-  (`src/mobileApps.ts`), in a new tab. The topbar's right
+  add a page to the sidebar, add its link in `AppShell`. Below 600px, the
+  tab bar also links to each mobile beta in `mobileApps`
+  (`src/mobileApps.ts`), in a new tab. From 600px up, where tablets and
+  desktops land, neither the tab bar nor the sidebar shows them.
+  `e2e/mobile-apps.spec.ts` checks the widths, because jsdom applies no
+  media queries. The topbar's right
   end shows `UserMenu` (`src/pages/userMenu/UserMenu.tsx`): a chip of the
   player's `PlayerAvatar` (`src/components/PlayerAvatar.tsx`, the initials
   of the display name, whose accessible name is the full name) and the
@@ -845,7 +848,7 @@ signs a guest out from the account menu, through its dialog, to
 `/signed-out`. A third signs in again from `/signed-out`, and checks that
 the account keeps its one player.
 
-The suite counts about 22 guest accounts and sign-ins with no session,
+The suite counts about 23 guest accounts and sign-ins with no session,
 under the limit of 30 a minute.
 
 The design system page is a copy of the reference's component gallery

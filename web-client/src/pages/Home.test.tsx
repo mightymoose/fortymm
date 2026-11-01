@@ -59,8 +59,5 @@ describe('Home', () => {
       expect.arrayContaining(['noopener', 'noreferrer']),
     )
     expect(homePage.mobileAppLink('Get the Android app')).not.toBeInTheDocument()
-
-    await userEvent.click(homePage.sidebarLabelsButton)
-    expect(homePage.mobileAppLink('Get the iPhone app')).toBeInTheDocument()
   })
 })

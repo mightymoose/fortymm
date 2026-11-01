@@ -81,7 +81,7 @@ export class HomePage {
     return screen.queryByRole('link', { name: 'Home' })
   }
 
-  // The sidebar's link to a mobile beta, by its accessible name, or null.
+  // The tab bar's link to a mobile beta, by its accessible name, or null.
   mobileAppLink(name: string): HTMLElement | null {
     return screen.queryByRole('link', { name })
   }

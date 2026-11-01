@@ -106,7 +106,8 @@ a:hover{color:var(--ball-200)}
    The authenticated pages' frame (src/pages/AppShell.tsx): a topbar over a
    sidebar that folds to its icons, and below 900px a tab bar along the
    bottom. The bar is --bg-panel and the page is --bg-app. Orange marks only
-   the open page. The links to the mobile betas sit at the sidebar's foot.
+   the open page. The links to the mobile betas show only below 600px, as
+   tabs, because a desktop or a tablet can't install a phone beta.
    ========================================================================= */
 .app-shell {
   display: grid;
@@ -272,11 +273,7 @@ a:hover{color:var(--ball-200)}
 }
 
 .app-link--app {
-  margin-top: auto;
-}
-
-.app-link--app ~ .app-link--app {
-  margin-top: 0;
+  display: none;
 }
 
 .app-shell[data-folded='true'] .app-link {
@@ -336,16 +333,19 @@ a:hover{color:var(--ball-200)}
     font-size: var(--text-xs);
   }
 
-  .app-link--app {
-    margin-top: 0;
-  }
-
   .app-shell[data-folded='true'] .app-link__label {
     position: static;
     width: auto;
     height: auto;
     overflow: visible;
     clip: auto;
+  }
+}
+
+/* The same width at which the topbar hides the player's name. */
+@media (max-width: 599px) {
+  .app-link.app-link--app {
+    display: flex;
   }
 }
 
