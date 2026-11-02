@@ -172,8 +172,9 @@ through FastAPI's `TestClient`).
   gives each one its column type. The tables are `accounts`, `players`,
   `player_managers`, `sessions`, `guest_account_counts`, `identities`,
   `login_attempts`, `permissions`, `roles`, `role_permissions`,
-  `account_roles`, `email_role_grants`, `leagues` and `league_members` (see
-  Accounts and sessions, Sign-in, Roles and permissions, and Leagues).
+  `account_roles`, `email_role_grants`, `leagues`, `league_members` and
+  `signing_keys` (see Accounts and sessions, Sign-in, Roles and
+  permissions, Leagues, and Signing keys).
 - `/v1/health` runs `SELECT 1` and returns `{"data": {"database": "ok"}}`.
   The healthchecks, `api:smoke`, the 403 check and the post-deploy suite use
   it.
@@ -571,8 +572,8 @@ checks (#182). No route reads a result yet.
 - `signing_keys.py` is the key type: `SigningPublicKey`, valid on
   construction, with its COSE_Key bytes and its `kid`, the RFC 9679
   thumbprint, and `SigningPrivateKey` for the tests and the generator.
-  Signatures are raw `r || s`. `tests/test_signing_keys.py` checks it with
-  the RFC's own example. `matches.py` holds `MatchId` and `BestOf`.
+  Signatures are raw `r || s`. `tests/test_signing_key_type.py` checks it
+  with the RFC's own example. `matches.py` holds `MatchId` and `BestOf`.
 - `tests/signed_result_vectors.py` writes `vectors.json`:
   `./bin/mise run api:signed-result-vectors`. Keys, ids and times are
   fixed and ECDSA signing is deterministic, so a rerun writes the same
@@ -589,6 +590,85 @@ checks (#182). No route reads a result yet.
   uv add <pkg>` (`uv add --dev <pkg>` for a dev one) and commit
   `pyproject.toml` with `uv.lock`. The production image installs without
   the dev group, so the app can't import one.
+
+### Signing keys
+
+Each device holds a P-256 signing key, and the account it signs for holds
+the public half, so a signed result's kid names an account (#183).
+`services/signing_keys.py` holds the rules, and `v1/signing_keys.py` the
+routes, under `/v1/account/signing-keys`. Guests may use them. No route
+reads a result yet (#188).
+
+- `signing_keys` holds one row per key. Its primary key `id` is the kid, 32
+  bytes, typed `KeyId` through `Base.type_annotation_map`. `public_key` is
+  the 75-byte COSE_Key, and `CHECK (id = sha256(public_key))` ties them.
+  `account_id` is `ON DELETE RESTRICT`, because a key attributes results to
+  its account, and `MOVES_ON_ADOPT`. `label` is trimmed and at most 50
+  characters. `tests/test_schema.py` ties `LABEL_MAX_LENGTH` to the CHECK.
+  `signed_out_at` and `revoked_at` are only ever set, never cleared. A live
+  key has neither. No column says "live". The service derives it.
+- The service is the only writer of the table. Its surface is
+  `register_key()`, `account_keys()`, `revoke_key()`, `sign_out_device()`
+  and `verification_keys()`. Its refusals are `InvalidDeviceLabel`,
+  `InvalidPublicKey` and `InvalidProof` (422), `KeyRegisteredElsewhere`
+  (409) and `SigningKeyNotFound` (404), mapped in `main.py`'s
+  `SIGNING_KEY_ERRORS`.
+- A device registers with `POST /v1/account/signing-keys` and a body of
+  `public_key`, `proof` and `label`. Every byte field in this API's JSON is
+  lowercase hex, through `HexBytes` in `v1/types.py`. A string that isn't
+  gets FastAPI's own 422. `proof` is the key registration proof that
+  `api/signed-results/README.md` specifies: a COSE_Sign1 of 160 bytes over
+  `{"fortymm/key-registration/v1": {1: <account id>}}`, with the kid in its
+  protected header. The `registrations` list in `vectors.json` pins it.
+  `SigningPrivateKey.registration_proof()` makes one, for the tests and
+  the generator. `SigningPublicKey.verify_registration()` checks one by
+  rebuilding the 96 fixed bytes and comparing, then verifying the last 64.
+  No CBOR decoder reads the client's bytes. There is no nonce. A replay
+  hits the idempotent case below.
+- The response is `{"data": {"id", "label", "created_at", "signed_out_at",
+  "revoked_at"}}`, with status 200 whether the key is new or already the
+  account's. Registering a key the account owns changes nothing and returns
+  it as it is, signed out or revoked included, so a retry gets the first
+  call's answer. Its label stays. A key another account owns answers 409. A
+  bad label, key or proof answers 422 in the `errors` shape before any
+  read, so a caller without the private key learns nothing about the key.
+  A label is trimmed with `str.strip()`, then 1 to 50 characters with no
+  control character.
+- An account keeps at most 20 live keys (`LIVE_KEY_LIMIT`). A registration
+  past the cap signs out the oldest live keys by `created_at`, then `id`,
+  and keeps the new key and the newest 19 others. Nothing is refused for
+  the cap. The registration locks the account row `FOR UPDATE`
+  (`lock_account_for_write(exclusive=True)`), so two registrations take
+  turns and the cap holds. The new key is kept by id, not by time. `now()`
+  is the transaction's start, so a registration that waited for the lock
+  can carry an older time than keys registered meanwhile.
+- `GET /v1/account/signing-keys` lists the account's keys, newest first,
+  signed out and revoked included.
+- `POST /v1/auth/logout` takes an optional body with `signing_key_id`.
+  `sign_out_device()` ends the session and sets `signed_out_at` on the key
+  if that session's account owns it. An id that is unknown, another
+  account's, already signed out or not 32 bytes changes nothing, so a
+  logout never fails over it. `end_session()` returns the deleted
+  session's account for this. A signed-out key still verifies what it
+  signed.
+- `POST /v1/account/signing-keys/{kid}/revoke` reports a device
+  compromised. It sets `revoked_at`, and a second call keeps the first
+  time. A signed-out key can be revoked. It answers 404 for a key the
+  account doesn't own, so another account's key looks like no key.
+- Adoption moves the guest's keys to the target account, as it moves every
+  other `MOVES_ON_ADOPT` column. It doesn't trim. The target's next
+  registration does.
+- `verification_keys(session, kids)` is #188's lookup. It returns the keys
+  among `kids` that aren't revoked, signed out or not, each with its
+  account, by kid. A kid missing from the result is unknown or revoked,
+  which `UnverifiedEnvelope.verify()` refuses as `unknown_key`.
+- A sign-in that switches accounts doesn't sign out the old account's key.
+  The device re-registers its key with a proof for the new account, and
+  reads 200 if adoption moved the key there, or 409 if another account owns
+  it. Then it makes a new key (#184).
+- `tests/services/test_signing_keys.py` tests the rules,
+  `tests/test_account_signing_keys.py` the routes' HTTP work, and
+  `tests/test_signing_key_type.py` the key type and the proof.
 
 ### Migrations
 

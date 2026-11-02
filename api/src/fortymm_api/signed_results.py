@@ -37,8 +37,9 @@ from fortymm_api.signing_keys import (
 )
 
 # The payload's key for the result. It is the domain tag, so a signature over
-# this payload can't pass as one over another CWT that the same key signs
-# (#183's proof of possession). A new version is a new key.
+# this payload can't pass as one over another CWT that the same key signs,
+# such as the key registration proof (signing_keys.REGISTRATION_TAG). A new
+# version is a new key.
 DOMAIN_TAG: Final = "fortymm/match-result/v1"
 QR_PREFIX: Final = "FMR1:"
 LINK_PREFIX: Final = "https://fortymm.com/r#"
