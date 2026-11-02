@@ -33,20 +33,35 @@ final class AppModel {
     /// Why the last sign-in didn't finish, until the person dismisses it.
     var signInError: SignInError?
 
-    private let api: any AccountAPI
+    /// The last key registration, which waits for the one before it. Nothing
+    /// on screen waits for it, so a slow network never holds up a button.
+    private(set) var registration: Task<Void, Never>?
 
-    init(api: any AccountAPI) {
+    private let api: any AccountAPI
+    private let keys: DeviceKeys
+
+    init(api: any AccountAPI, keys: DeviceKeys) {
         self.api = api
+        self.keys = keys
     }
 
-    /// Starts or resumes the session. Without a session cookie, that starts
-    /// a guest account.
+    /// Starts or resumes the session, then registers the device's signing
+    /// key to its account. Without a session cookie, that starts a guest
+    /// account.
     func start() async {
         phase = .starting
+        let account: Account
         do {
-            phase = .ready(try await api.startSession())
+            account = try await api.startSession()
         } catch {
             phase = .failed(error)
+            return
+        }
+        phase = .ready(account)
+        // One at a time, so two starts never both make a key.
+        registration = Task { [previous = registration, keys, api] in
+            await previous?.value
+            await keys.register(to: account, with: api)
         }
     }
 
@@ -79,8 +94,15 @@ final class AppModel {
     func signOut() async {
         guard signOutState != .signingOut, case .ready = phase else { return }
         signOutState = .signingOut
+        // A registration still in flight could land after the logout, and
+        // leave a key the device has forgotten live on the account.
+        await registration?.value
         do {
-            try await api.logout()
+            // The API signs the key out before the device forgets it. The
+            // key still verifies what it signed, so a queued result stays
+            // good.
+            try await api.logout(signingKey: keys.current)
+            keys.forget()
             signOutState = .idle
             signInError = nil
             phase = .signedOut

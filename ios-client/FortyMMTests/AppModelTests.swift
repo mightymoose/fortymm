@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import FortyMM
@@ -8,8 +9,13 @@ actor FakeAPI: AccountAPI {
     var logoutResult: Result<Void, Failure> = .success(())
     var beginResult: Result<URL, Failure> = .success(URL(string: "http://localhost/oidc/authorize")!)
     var finishResult: Result<SignInOutcome, Failure> = .success(.signedIn)
+    /// Each registration takes the next result, or `.registered` once none
+    /// are left.
+    var registrationResults: [Result<KeyRegistration.Outcome, Failure>] = []
     private(set) var calls: [String] = []
     private(set) var callbacks: [URL] = []
+    private(set) var registrations: [KeyRegistration] = []
+    private(set) var loggedOutKeys: [KeyID?] = []
 
     init(sessions: [Result<Account, Failure>]) {
         self.sessions = sessions
@@ -19,12 +25,14 @@ actor FakeAPI: AccountAPI {
         sessions: [Result<Account, Failure>]? = nil,
         logout: Result<Void, Failure>? = nil,
         begin: Result<URL, Failure>? = nil,
-        finish: Result<SignInOutcome, Failure>? = nil
+        finish: Result<SignInOutcome, Failure>? = nil,
+        registrations: [Result<KeyRegistration.Outcome, Failure>]? = nil
     ) {
         if let sessions { self.sessions = sessions }
         if let logout { logoutResult = logout }
         if let begin { beginResult = begin }
         if let finish { finishResult = finish }
+        if let registrations { registrationResults = registrations }
     }
 
     func startSession() async throws(Failure) -> Account {
@@ -32,9 +40,16 @@ actor FakeAPI: AccountAPI {
         return try sessions.removeFirst().get()
     }
 
-    func logout() async throws(Failure) {
+    func logout(signingKey: KeyID?) async throws(Failure) {
         calls.append("logout")
+        loggedOutKeys.append(signingKey)
         try logoutResult.get()
+    }
+
+    func registerSigningKey(_ registration: KeyRegistration) async throws(Failure) -> KeyRegistration.Outcome {
+        calls.append("registerSigningKey")
+        registrations.append(registration)
+        return try registrationResults.isEmpty ? .registered : registrationResults.removeFirst().get()
     }
 
     func beginSignIn() async throws(Failure) -> URL {
@@ -53,10 +68,17 @@ actor FakeAPI: AccountAPI {
 struct AppModelTests {
     let callback = URL(string: "fortymm://sign-in?code=c1&state=s1")!
 
+    let keys = MemoryDeviceKeyStore()
+
+    func model(_ api: FakeAPI) -> AppModel {
+        AppModel(api: api, keys: DeviceKeys(store: keys, label: "iPhone"))
+    }
+
     func ready(_ account: Account = .guest) async -> (AppModel, FakeAPI) {
         let api = FakeAPI(sessions: [.success(account)])
-        let model = AppModel(api: api)
+        let model = model(api)
         await model.start()
+        await model.registration?.value
         return (model, api)
     }
 
@@ -68,7 +90,7 @@ struct AppModelTests {
 
     @Test func aFailedStartShowsTheFailureAndCanTryAgain() async {
         let api = FakeAPI(sessions: [.failure(.rateLimited(retryAt: nil)), .success(.guest)])
-        let model = AppModel(api: api)
+        let model = model(api)
 
         await model.start()
         #expect(model.phase == .failed(.rateLimited(retryAt: nil)))
@@ -82,11 +104,12 @@ struct AppModelTests {
         await api.script(sessions: [.success(.verified)])
 
         await model.signIn { _ in callback }
+        await model.registration?.value
 
         #expect(model.phase == .ready(.verified))
         #expect(model.signInError == nil)
         #expect(model.signInState == .idle)
-        #expect(await api.calls == ["startSession", "beginSignIn", "finishSignIn", "startSession"])
+        #expect(await api.calls == ["startSession", "registerSigningKey", "beginSignIn", "finishSignIn", "startSession", "registerSigningKey"])
         #expect(await api.callbacks == [callback])
     }
 
@@ -121,7 +144,7 @@ struct AppModelTests {
 
         #expect(model.signInError == nil)
         #expect(model.signInState == .idle)
-        #expect(await api.calls == ["startSession", "beginSignIn"])
+        #expect(await api.calls == ["startSession", "registerSigningKey", "beginSignIn"])
     }
 
     @Test func aSignInPageThatFailsSaysSo() async {
@@ -170,7 +193,7 @@ struct AppModelTests {
 
         #expect(model.phase == .signedOut)
         #expect(model.signOutState == .idle)
-        #expect(await api.calls == ["startSession", "logout"])
+        #expect(await api.calls == ["startSession", "registerSigningKey", "logout"])
     }
 
     @Test func aFailedSignOutStaysSignedIn() async {
@@ -194,6 +217,180 @@ struct AppModelTests {
         await model.playAsGuest()
 
         #expect(model.phase == .ready(.otherGuest))
+    }
+
+    // MARK: The device's signing key
+
+    func kid(_ registration: KeyRegistration) throws -> KeyID {
+        try KeyID(bytes: Data(SHA256.hash(data: registration.publicKey)))
+    }
+
+    /// Whether the registration's proof is the one the API accepts: the
+    /// fixed bytes for its key and `account`, signed by the key it sends.
+    func proves(_ registration: KeyRegistration, for account: Account) throws -> Bool {
+        let cose = registration.publicKey
+        let key = SigningPublicKey(key: try P256.Signing.PublicKey(
+            x963Representation: [0x04] + cose[8..<40] + cose[43..<75]
+        ))
+        let protected = RegistrationProof.protected(kid: key.kid)
+        let payload = RegistrationProof.payload(account: account.id)
+        let unsigned = CBOR.tagged(18, .array([.bytes(protected), .map([]), .bytes(payload), .bytes(Data(count: 64))])).encoded
+        return key.coseKey == cose
+            && registration.proof.dropLast(64) == unsigned.dropLast(64)
+            && key.verifies(registration.proof.suffix(64), over: RegistrationProof.toBeSigned(protected: protected, payload: payload))
+    }
+
+    @Test func registersTheDevicesKeyOnceTheSessionStarts() async throws {
+        let (model, api) = await ready()
+
+        #expect(model.phase == .ready(.guest))
+        let registration = try #require(await api.registrations.first)
+        #expect(await api.registrations.count == 1)
+        #expect(registration.label == "iPhone")
+        #expect(try kid(registration) == keys.load()?.publicKey.kid)
+        #expect(try proves(registration, for: .guest))
+        #expect(try !proves(registration, for: .otherGuest))
+    }
+
+    @Test func eachStartRegistersTheSameKey() async throws {
+        let (model, api) = await ready()
+        await api.script(sessions: [.success(.guest)])
+
+        await model.start()
+        await model.registration?.value
+
+        let registrations = await api.registrations
+        #expect(registrations.count == 2)
+        #expect(try kid(registrations[0]) == kid(registrations[1]))
+    }
+
+    @Test func aNewGuestAccountAfterSignOutGetsANewKey() async throws {
+        let (model, api) = await ready()
+        let first = try kid(#require(await api.registrations.first))
+
+        await model.signOut()
+        #expect(await api.loggedOutKeys == [first])
+        #expect(keys.load() == nil)
+
+        await api.script(sessions: [.success(.otherGuest)])
+        await model.playAsGuest()
+        await model.registration?.value
+
+        let second = try #require(await api.registrations.last)
+        #expect(await api.registrations.count == 2)
+        #expect(try kid(second) != first)
+        #expect(try proves(second, for: .otherGuest))
+    }
+
+    @Test func aSignOutWaitsForTheRegistrationInFlight() async throws {
+        let api = FakeAPI(sessions: [.success(.guest)])
+        let model = model(api)
+
+        await model.start()
+        await model.signOut()
+
+        #expect(await api.calls == ["startSession", "registerSigningKey", "logout"])
+        #expect(try await api.loggedOutKeys == [kid(#require(api.registrations.first))])
+    }
+
+    @Test func aFailedSignOutKeepsTheKey() async throws {
+        let (model, api) = await ready()
+        let kid = keys.load()?.publicKey.kid
+        await api.script(logout: .failure(.unreachable))
+
+        await model.signOut()
+
+        #expect(model.phase == .ready(.guest))
+        #expect(keys.load()?.publicKey.kid == kid)
+    }
+
+    @Test func aSignInRegistersTheKeyToTheNewAccount() async throws {
+        let (model, api) = await ready()
+        await api.script(sessions: [.success(.verified)])
+
+        await model.signIn { _ in callback }
+        await model.registration?.value
+
+        let registrations = await api.registrations
+        #expect(registrations.count == 2)
+        #expect(try kid(registrations[1]) == kid(registrations[0]))
+        #expect(try proves(registrations[1], for: .verified))
+    }
+
+    @Test(arguments: [KeyRegistration.Outcome.ownedElsewhere, .revoked])
+    func aKeyThatCantSignForTheAccountIsReplaced(outcome: KeyRegistration.Outcome) async throws {
+        let api = FakeAPI(sessions: [.success(.verified)])
+        await api.script(registrations: [.success(outcome), .success(.registered)])
+        _ = try keys.create()
+        let model = model(api)
+
+        await model.start()
+        await model.registration?.value
+
+        let registrations = await api.registrations
+        #expect(registrations.count == 2)
+        #expect(try kid(registrations[1]) != kid(registrations[0]))
+        #expect(try kid(registrations[1]) == keys.load()?.publicKey.kid)
+        #expect(try proves(registrations[1], for: .verified))
+    }
+
+    @Test func aRegistrationThatFailsChangesNothingAndTheNextStartTriesAgain() async throws {
+        let api = FakeAPI(sessions: [.success(.guest), .success(.guest)])
+        await api.script(registrations: [.failure(.unreachable)])
+        let model = model(api)
+
+        await model.start()
+        await model.registration?.value
+        #expect(model.phase == .ready(.guest))
+        let kid = keys.load()?.publicKey.kid
+
+        await model.start()
+        await model.registration?.value
+
+        let registrations = await api.registrations
+        #expect(registrations.count == 2)
+        #expect(try self.kid(registrations[1]) == kid)
+    }
+}
+
+struct DeviceKeyTests {
+    /// The Keychain store the app uses, under an account no app run uses.
+    let store = KeychainDeviceKeyStore(account: "tests-\(UUID().uuidString)")
+
+    @Test func theKeychainKeepsTheKeyUntilItIsDeleted() throws {
+        defer { store.delete() }
+        #expect(store.load() == nil)
+
+        let key = try store.create()
+
+        let loaded = try #require(store.load())
+        #expect(loaded.publicKey == key.publicKey)
+        let message = Data("a result".utf8)
+        #expect(key.publicKey.verifies(try loaded.sign(message), over: message))
+
+        store.delete()
+        #expect(store.load() == nil)
+    }
+
+    @Test func creatingAgainReplacesTheKey() throws {
+        defer { store.delete() }
+        let first = try store.create()
+
+        let second = try store.create()
+
+        #expect(second.publicKey != first.publicKey)
+        #expect(store.load()?.publicKey == second.publicKey)
+    }
+
+    @Test func aKeyThatSignsGivesARawSignature() throws {
+        let key = try DeviceKey.make()
+        let message = Data("a result".utf8)
+
+        let signature = try key.sign(message)
+
+        #expect(signature.count == 64)
+        #expect(key.publicKey.verifies(signature, over: message))
+        #expect(key.publicKey.coseKey.count == 75)
     }
 }
 

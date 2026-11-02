@@ -584,8 +584,8 @@ checks (#182). No route reads a result yet.
   append every multi-signature vector's last signature byte for byte.
 - `test_every_two_signature_qr_text_fits_version_16_at_level_m` holds the
   QR budget, 656 alphanumeric characters. The longest two-signature vector
-  is 614. The web client checks the vectors in #184 and the iOS app in
-  #185, whose workflow runs when the file changes.
+  is 614. The web client checks the vectors in #184. The iOS app checks
+  them in `FortyMMTests`, and its workflow runs when the file changes.
 - To add a Python dependency, run `docker compose run --rm --no-deps -T api
   uv add <pkg>` (`uv add --dev <pkg>` for a dev one) and commit
   `pyproject.toml` with `uv.lock`. The production image installs without
@@ -1444,7 +1444,8 @@ container, e.g.
 ## ios-client
 
 `ios-client/` is the iOS app, in SwiftUI. It has the web client's guest
-accounts, sign-in and sign-out, with Home's roadmap. It builds on the macOS
+accounts, sign-in and sign-out, with Home's roadmap, and the device's
+signing key. It builds on the macOS
 host with Xcode, not in the dev container.
 
 ```sh
@@ -1500,6 +1501,44 @@ BUILD_NUMBER=7 ./bin/mise run ios-client:testflight  # archive and upload to Tes
   Closing the sheet shows nothing. A refused sign-in shows the web's
   `signInErrors` message in a banner above Home or on the signed-out
   screen.
+- The device's signing key (see Signing keys) is a `DeviceKey`
+  (`FortyMM/SigningKeys/`). CryptoKit makes it in the Secure Enclave. The
+  Simulator has none, so `DeviceKey.make()` makes a software key there.
+  That is the only branch, and everything above it runs the same code.
+  `KeychainDeviceKeyStore` keeps the key in the Keychain, one item per base
+  URL, as the cookies are. A Secure Enclave key's item is a handle that
+  only this device can use.
+- `AppModel.start()` registers the key after every session start, through
+  `DeviceKeys.register(to:with:)`, and makes the key first if there is
+  none. The API answers 200 for a key the account has, so a registration
+  that failed offline, or a sign-in to another account, needs no state of
+  its own. The next start registers again. A 409, or a 200 with
+  `revoked_at`, makes a new key and registers that. The registration runs
+  in its own `Task`, after the one before it, so two starts never both
+  make a key, and nothing on screen waits for it. It never fails the
+  start. The label is `UIDevice.current.name`, which iOS gives as the
+  model, such as "iPhone".
+- Sign-out waits for a registration in flight, sends the key's id with
+  `POST /v1/auth/logout`, then deletes the key. A failed sign-out keeps
+  it. The next session, a new guest account included, makes a new key.
+- The API writes times with microseconds, or with no fraction when they
+  are 0. The runtime's ISO 8601 transcoders each read one form, so
+  `FortyMMAPI` gives the client one that reads both.
+- `FortyMM/SignedResults/` is the signed result codec (see Signed match
+  results). `CBOR` encodes deterministically, and its decoder takes only
+  deterministic CBOR. `ResultPayload` and `SignedResult` read bytes only if
+  they would write the same bytes, so anything else is `Malformed`. The QR
+  text and the link are read as bytes, because Swift compares a
+  `Character` by canonical equivalence, which reads U+212A KELVIN SIGN as
+  `K`.
+  `SignedResult.sign(_:for:with:)` signs for a side, and
+  `appendingSignature(for:with:)` appends over the payload bytes it
+  received. `qrText`, `link` and `init(text:)` are the QR text and the
+  link. The app has no verifier, so it never resolves a kid.
+- `FortyMMTests` copies `api/signed-results/vectors.json` from where the
+  API writes it. `SignedResultVectorTests` runs the README's signer checks
+  K1 to K3, V1 to V7, R1, R2 and I2 against it, each test named by its
+  check.
 - Home has the wordmark as the navigation bar's centred title, where iOS
   puts it (a leading toolbar item crops it to a glass capsule), and the
   account menu at the right, whose label is the player's avatar. Its menu matches
@@ -1521,7 +1560,9 @@ BUILD_NUMBER=7 ./bin/mise run ios-client:testflight  # archive and upload to Tes
   bundle per run to `build/results/`.
 - `.github/workflows/ios-client.yml` runs `ios-client:ci` on a macOS runner,
   only on a push that changes the app, its design-system inputs,
-  `api/openapi.json`, `mise.toml`, `bin/mise` or the workflow. It uploads the result bundles as `ios-client-results`.
+  `api/openapi.json`, `api/signed-results/vectors.json`, `mise.toml`,
+  `bin/mise` or the workflow. It uploads the result bundles as
+  `ios-client-results`.
 - `bin/app-icon` writes the app icon, `AppIcon.png` in
   `FortyMM/Assets.xcassets`, from `references/design-system/assets/logo-mark.svg`
   on `--ink-950`. The PNG has no alpha channel, because the App Store

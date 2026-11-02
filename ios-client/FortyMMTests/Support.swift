@@ -16,6 +16,21 @@ final class MemoryCookieStore: CookieStore {
     func save(_ cookies: [String: String]) { self.cookies.withLock { $0 = cookies } }
 }
 
+/// A `DeviceKeyStore` that keeps the key in memory, in place of the Keychain.
+final class MemoryDeviceKeyStore: DeviceKeyStore {
+    private let key = Mutex<DeviceKey?>(nil)
+
+    func load() -> DeviceKey? { key.withLock { $0 } }
+
+    func create() throws -> DeviceKey {
+        let created = try DeviceKey.make()
+        key.withLock { $0 = created }
+        return created
+    }
+
+    func delete() { key.withLock { $0 = nil } }
+}
+
 /// Answers the requests of a `URLSession` that lists it, and records them.
 final class StubURLProtocol: URLProtocol {
     struct Reply: Sendable {
@@ -79,12 +94,12 @@ final class StubURLProtocol: URLProtocol {
 
 extension Account {
     static let guest = Account(
-        id: "a1", kind: .guest, player: Player(id: "p1", displayName: "excited egret 387")
+        id: UUID(uuidString: "00000000-0000-4000-8000-0000000000a1")!, kind: .guest, player: Player(id: "p1", displayName: "excited egret 387")
     )
     static let otherGuest = Account(
-        id: "a2", kind: .guest, player: Player(id: "p2", displayName: "brave badger 214")
+        id: UUID(uuidString: "00000000-0000-4000-8000-0000000000a2")!, kind: .guest, player: Player(id: "p2", displayName: "brave badger 214")
     )
     static let verified = Account(
-        id: "a3", kind: .verified(email: "ann@example.com"), player: Player(id: "p3", displayName: "calm crane 512")
+        id: UUID(uuidString: "00000000-0000-4000-8000-0000000000a3")!, kind: .verified(email: "ann@example.com"), player: Player(id: "p3", displayName: "calm crane 512")
     )
 }

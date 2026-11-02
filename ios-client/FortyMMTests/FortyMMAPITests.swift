@@ -17,11 +17,12 @@ struct FortyMMAPITests {
     }
 
     static let json = ["Content-Type": "application/json"]
+    static let accountID = "0a9c5b1e-4f7d-4c2a-9b3e-6d8f1a2b3c4d"
 
     static func session(kind: String = "guest", email: String? = nil) -> String {
         let email = email.map { "\"\($0)\"" } ?? "null"
         return """
-        {"data":{"account":{"id":"a1","kind":"\(kind)","email":\(email),\
+        {"data":{"account":{"id":"\(Self.accountID)","kind":"\(kind)","email":\(email),\
         "player":{"id":"p1","display_name":"excited egret 387"},"permissions":[]}}}
         """
     }
@@ -34,7 +35,7 @@ struct FortyMMAPITests {
 
         let account = try await api.startSession()
 
-        #expect(account == Account(id: "a1", kind: .guest, player: Player(id: "p1", displayName: "excited egret 387")))
+        #expect(account == Account(id: UUID(uuidString: Self.accountID)!, kind: .guest, player: Player(id: "p1", displayName: "excited egret 387")))
         let request = try #require(StubURLProtocol.recorded.first).request
         #expect(request.httpMethod == "POST")
         #expect(request.url?.absoluteString == "http://localhost:5173/api/v1/session")
@@ -122,12 +123,72 @@ struct FortyMMAPITests {
             body: #"{"data":{"logout_url":"http://oidc:8080/default/v2/logout"}}"#
         ))
 
-        try await api.logout()
+        try await api.logout(signingKey: nil)
 
         let request = try #require(StubURLProtocol.recorded.first).request
         #expect(request.url?.path == "/api/v1/auth/logout")
         #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
         #expect(store.saved.isEmpty)
+    }
+
+    @Test func logoutSignsOutTheDevicesKey() async throws {
+        StubURLProtocol.reply(.init(headers: Self.json, body: #"{"data":{"logout_url":"http://oidc:8080/default/v2/logout"}}"#))
+        let kid = try KeyID(bytes: Data(repeating: 0xab, count: 32))
+
+        try await api.logout(signingKey: kid)
+
+        let recorded = try #require(StubURLProtocol.recorded.first { $0.request.url?.path == "/api/v1/auth/logout" })
+        let body = try JSONSerialization.jsonObject(with: recorded.body) as? [String: Any]
+        #expect(body?["signing_key_id"] as? String == String(repeating: "ab", count: 32))
+    }
+
+    @Test func registersASigningKey() async throws {
+        StubURLProtocol.reply(.init(headers: Self.json, body: Self.signingKey()))
+        let registration = try KeyRegistration(key: TestKey.named("ann"), account: UUID(), label: "iPhone")
+
+        let outcome = try await api.registerSigningKey(registration)
+
+        #expect(outcome == .registered)
+        let recorded = try #require(StubURLProtocol.recorded.first { $0.request.url?.path == "/api/v1/account/signing-keys" })
+        #expect(recorded.request.httpMethod == "POST")
+        let body = try JSONSerialization.jsonObject(with: recorded.body) as? [String: Any]
+        #expect(body?["public_key"] as? String == registration.publicKey.hex)
+        #expect(body?["proof"] as? String == registration.proof.hex)
+        #expect(body?["label"] as? String == "iPhone")
+    }
+
+    @Test func aKeyAnotherAccountOwnsIsOwnedElsewhere() async throws {
+        StubURLProtocol.reply(.init(
+            status: 409,
+            headers: Self.json,
+            body: #"{"errors":[{"status":"409","title":"Another account registered this key"}]}"#
+        ))
+        let registration = try KeyRegistration(key: TestKey.named("ann"), account: UUID(), label: "iPhone")
+
+        #expect(try await api.registerSigningKey(registration) == .ownedElsewhere)
+    }
+
+    @Test func aRegistrationWithNoResponseIsUnreachable() async throws {
+        StubURLProtocol.reply(.init(error: URLError(.notConnectedToInternet)))
+        let registration = try KeyRegistration(key: TestKey.named("ann"), account: UUID(), label: "iPhone")
+
+        await #expect(throws: Failure.unreachable) { try await api.registerSigningKey(registration) }
+    }
+
+    /// The API writes microseconds, and no fraction when they are 0.
+    static func signingKey(revokedAt: String = "null") -> String {
+        """
+        {"data":{"id":"\(String(repeating: "ab", count: 32))","label":"iPhone",\
+        "created_at":"2026-11-02T12:00:00.123456Z","signed_out_at":"2026-11-02T13:00:00Z",\
+        "revoked_at":\(revokedAt)}}
+        """
+    }
+
+    @Test func aRevokedKeyIsRevoked() async throws {
+        StubURLProtocol.reply(.init(headers: Self.json, body: Self.signingKey(revokedAt: #""2026-11-02T14:00:00.5Z""#)))
+        let registration = try KeyRegistration(key: TestKey.named("ann"), account: UUID(), label: "iPhone")
+
+        #expect(try await api.registerSigningKey(registration) == .revoked)
     }
 
     @Test func beginSignInResolvesARelativeAuthorizeURL() async throws {

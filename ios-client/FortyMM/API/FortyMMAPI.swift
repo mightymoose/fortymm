@@ -8,8 +8,12 @@ import OpenAPIURLSession
 protocol AccountAPI: Sendable {
     /// `POST /v1/session`: resumes the session, or starts a guest account.
     func startSession() async throws(Failure) -> Account
-    /// `POST /v1/auth/logout`.
-    func logout() async throws(Failure)
+    /// `POST /v1/auth/logout`. With `signingKey`, the API signs out the
+    /// device's key too, if the session's account owns it.
+    func logout(signingKey: KeyID?) async throws(Failure)
+    /// `POST /v1/account/signing-keys`: registers the device's key to the
+    /// session's account.
+    func registerSigningKey(_ registration: KeyRegistration) async throws(Failure) -> KeyRegistration.Outcome
     /// `POST /v1/auth/app-login`: the provider's page to open.
     func beginSignIn() async throws(Failure) -> URL
     /// `POST /v1/auth/app-finish`, with the query of the URL that the
@@ -27,6 +31,7 @@ struct FortyMMAPI: AccountAPI {
         self.baseURL = baseURL
         client = Client(
             serverURL: baseURL.appending(path: "api"),
+            configuration: Configuration(dateTranscoder: APIDateTranscoder()),
             transport: URLSessionTransport(configuration: .init(session: session)),
             middlewares: [CookieMiddleware(jar: jar)]
         )
@@ -56,14 +61,34 @@ struct FortyMMAPI: AccountAPI {
         }
     }
 
-    func logout() async throws(Failure) {
-        switch try await call({ try await client.logout() }) {
+    func logout(signingKey: KeyID?) async throws(Failure) {
+        let body = signingKey.map { Operations.Logout.Input.Body.json(.init(signingKeyId: $0.hex)) }
+        switch try await call({ try await client.logout(body: body) }) {
         case .ok:
             return
         case .unsupportedMediaType, .unprocessableContent:
             throw .broken
         case .serviceUnavailable:
             throw .unreachable
+        case .undocumented(let status, let payload):
+            throw Failure(status: status, retryAfter: payload.headerFields[.retryAfter])
+        }
+    }
+
+    func registerSigningKey(_ registration: KeyRegistration) async throws(Failure) -> KeyRegistration.Outcome {
+        let request = Components.Schemas.RegisterKeyRequest(
+            publicKey: registration.publicKey.hex,
+            proof: registration.proof.hex,
+            label: registration.label
+        )
+        switch try await call({ try await client.registerSigningKey(body: .json(request)) }) {
+        case .ok(let ok):
+            let key = try decode { try ok.body.json.data }
+            return key.revokedAt == nil ? .registered : .revoked
+        case .conflict:
+            return .ownedElsewhere
+        case .unauthorized, .unsupportedMediaType, .unprocessableContent:
+            throw .broken
         case .undocumented(let status, let payload):
             throw Failure(status: status, retryAfter: payload.headerFields[.retryAfter])
         }
@@ -128,6 +153,21 @@ struct FortyMMAPI: AccountAPI {
     }
 }
 
+/// The API writes a time with microseconds, or with no fraction when they
+/// are 0. The runtime's own ISO 8601 transcoders each read only one form.
+private struct APIDateTranscoder: DateTranscoder {
+    func encode(_ date: Date) throws -> String {
+        date.formatted(.iso8601)
+    }
+
+    func decode(_ string: String) throws -> Date {
+        if let date = try? Date(string, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true)) {
+            return date
+        }
+        return try Date(string, strategy: .iso8601)
+    }
+}
+
 private extension Account {
     init(_ account: Components.Schemas.SessionAccount) throws(Failure) {
         let kind: Kind
@@ -138,8 +178,9 @@ private extension Account {
             guard let email = account.email else { throw .broken }
             kind = .verified(email: email)
         }
+        guard let id = UUID(uuidString: account.id) else { throw .broken }
         self.init(
-            id: account.id,
+            id: id,
             kind: kind,
             player: Player(id: account.player.id, displayName: account.player.displayName)
         )

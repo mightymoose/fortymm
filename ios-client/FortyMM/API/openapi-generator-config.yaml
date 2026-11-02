@@ -9,3 +9,4 @@ filter:
     - logout
     - app_login
     - app_finish
+    - register_signing_key
