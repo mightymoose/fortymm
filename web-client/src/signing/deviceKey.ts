@@ -9,9 +9,13 @@ import { coseKey, keyId, registrationProof, sign, type CoseSignature, type Side 
 
 const P256 = { name: 'ECDSA', namedCurve: 'P-256' } as const
 
-// Two tabs that load at once would each make a key. The lock makes the
-// second wait, then find the first one's key.
+// Every read and write of the stored key takes this lock, in every tab.
+// Two tabs that load at once would each make a key, and a registration that
+// finished after a sign-out would save a key for an account that left.
 const LOCK = 'fortymm.device-key'
+
+// The registrations this tab started, which a sign-out cancels.
+const registrations = new Set<AbortController>()
 
 // Registers the device's key to the session's account, after the session
 // starts. With no key, such as on a first visit or after Safari deleted the
@@ -23,22 +27,40 @@ const LOCK = 'fortymm.device-key'
 // another account. A failure, such as no network, throws, and the next
 // online load tries again.
 export async function registerDeviceKey(api: ApiClient, accountId: string): Promise<void> {
-  await withLock(async () => {
-    const key = (await loadDeviceKey()) ?? (await newDeviceKey())
-    if ((await register(api, key, accountId)) === 'usable') return
-    await register(api, await newDeviceKey(), accountId)
+  const cancel = new AbortController()
+  registrations.add(cancel)
+  try {
+    await withLock(async () => {
+      const { signal } = cancel
+      signal.throwIfAborted()
+      const key = (await loadDeviceKey()) ?? (await newDeviceKey())
+      if ((await register(api, key, accountId, signal)) === 'usable') return
+      signal.throwIfAborted()
+      await register(api, await newDeviceKey(), accountId, signal)
+    })
+  } finally {
+    registrations.delete(cancel)
+  }
+}
+
+// Signs the device out: `logout` ends the session on the API, given the id
+// of the device's key, or null with no key. Then the key is deleted, and the
+// next account on this browser gets a new one. If `logout` throws, such as
+// with no network, the key stays.
+//
+// It cancels this tab's registrations, so one waiting on a slow answer
+// doesn't hold up the sign-out, and none saves a key after it. It holds the
+// lock throughout, so another tab's registration waits or finishes first.
+export async function signOutDeviceKey<T>(
+  logout: (signingKeyId: string | null) => Promise<T>,
+): Promise<T> {
+  registrations.forEach((cancel) => cancel.abort())
+  return withLock(async () => {
+    const key = await loadDeviceKey().catch(() => null)
+    const result = await logout(key && toHex(key.kid))
+    await deleteDeviceKey().catch(() => {})
+    return result
   })
-}
-
-// The id the API knows the device's key by, for the sign-out.
-export async function deviceKeyId(): Promise<string | null> {
-  const key = await loadDeviceKey()
-  return key && toHex(key.kid)
-}
-
-// After a sign-out. The next account on this browser gets a new key.
-export async function forgetDeviceKey(): Promise<void> {
-  await deleteDeviceKey()
 }
 
 // Approves `payload` for `side` with the device's key, or null if the
@@ -55,8 +77,10 @@ async function register(
   api: ApiClient,
   key: DeviceKey,
   accountId: string,
+  signal: AbortSignal,
 ): Promise<'usable' | 'unusable'> {
   const { data, response } = await api.POST('/v1/account/signing-keys', {
+    signal,
     body: {
       public_key: toHex(key.coseKey),
       proof: toHex(await registrationProof(key, accountId)),
@@ -78,6 +102,12 @@ async function newDeviceKey(): Promise<DeviceKey> {
   return key
 }
 
-function withLock(run: () => Promise<void>): Promise<void> {
-  return 'locks' in navigator ? navigator.locks.request(LOCK, run) : run()
+// Without Web Locks, the tab's own calls still take turns.
+let queue: Promise<unknown> = Promise.resolve()
+
+function withLock<T>(run: () => Promise<T>): Promise<T> {
+  if ('locks' in navigator) return navigator.locks.request(LOCK, run)
+  const turn = queue.then(run)
+  queue = turn.catch(() => {})
+  return turn
 }

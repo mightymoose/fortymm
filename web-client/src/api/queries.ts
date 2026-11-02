@@ -3,7 +3,7 @@ import type { ApiClient } from './client'
 import type { components } from './schema'
 import { ApiError, ApiUnreachable, classifyFailure } from './errors'
 import { forgetAccount, saveAccount, savedAccount, type SessionAccount } from './savedSession'
-import { deviceKeyId, forgetDeviceKey, registerDeviceKey } from '../signing/deviceKey'
+import { registerDeviceKey, signOutDeviceKey } from '../signing/deviceKey'
 
 // Retries a network error or a 5xx only, which can pass. A 4xx comes back the
 // same. A retry after a lost POST /v1/session response can leave one unused
@@ -132,12 +132,12 @@ function raceSession(request: Promise<SessionAccount>): Promise<SessionOutcome> 
 // account that signed out. It signs out the device's key on the API, then
 // deletes it here. The queue of signed results stays.
 export async function logout(api: ApiClient): Promise<string> {
-  const signingKeyId = await deviceKeyId().catch(() => null)
-  const data = await send(
-    'POST /v1/auth/logout',
-    api.POST('/v1/auth/logout', { body: signingKeyId ? { signing_key_id: signingKeyId } : {} }),
+  const data = await signOutDeviceKey((signingKeyId) =>
+    send(
+      'POST /v1/auth/logout',
+      api.POST('/v1/auth/logout', { body: signingKeyId ? { signing_key_id: signingKeyId } : {} }),
+    ),
   )
-  await forgetDeviceKey().catch(() => {})
   forgetAccount()
   return data.data.logout_url
 }

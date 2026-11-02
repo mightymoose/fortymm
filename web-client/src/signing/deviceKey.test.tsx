@@ -1,6 +1,6 @@
 import { cleanup, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { http } from 'msw'
+import { http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { leavePage } from '../leavePage'
 import { clearSiteData, queuedResults, queueSignedResult } from '../test/deviceStorage'
@@ -69,16 +69,21 @@ describe('the device signing key', () => {
   })
 
   it('shows the page without waiting for the registration', async () => {
-    let held = false
+    let release: (() => void) | undefined
+    let answered = false
     server.use(
-      http.post(`${API_BASE_URL}/v1/account/signing-keys`, () => {
-        held = true
-        return new Promise<never>(() => {})
+      http.post(`${API_BASE_URL}/v1/account/signing-keys`, async () => {
+        await new Promise<void>((resolve) => (release = resolve))
+        answered = true
+        return HttpResponse.json({ errors: [{ status: '500', title: 'Failed' }] }, { status: 500 })
       }),
     )
     const homePage = await loadHome()
     expect(homePage.title).toBeVisible()
-    await vi.waitFor(() => expect(held).toBe(true))
+    await vi.waitFor(() => expect(release).toBeDefined())
+    // Registrations take turns, so the next test's would wait for this one.
+    release!()
+    await vi.waitFor(() => expect(answered).toBe(true))
   })
 
   it('registers the same key on every load', async () => {
@@ -188,5 +193,37 @@ describe('the device signing key', () => {
     await loadHome()
     await vi.waitFor(() => expect(keys.registrations).toHaveLength(2))
     expect(keys.registrations[1].public_key).not.toBe(signedOut)
+  })
+
+  it('signs out the key it holds when a sign-out overtakes a registration that gets a 409', async () => {
+    const keys = mockSigningKeys()
+    await loadHome()
+    await vi.waitFor(() => expect(keys.registrations).toHaveLength(1))
+    const held = keys.registrations[0].public_key
+    let release!: () => void
+    let reached = false
+    server.use(
+      http.post(`${API_BASE_URL}/v1/account/signing-keys`, async () => {
+        reached = true
+        await new Promise<void>((resolve) => (release = resolve))
+        return HttpResponse.json(
+          { errors: [{ status: '409', title: 'Another account registered this key' }] },
+          { status: 409 },
+        )
+      }),
+    )
+    const homePage = await loadHome()
+    await vi.waitFor(() => expect(reached).toBe(true))
+
+    await userEvent.click(homePage.accountButton!)
+    await userEvent.click(within(homePage.accountMenu).getByRole('menuitem', { name: 'Sign out' }))
+    await userEvent.click(within(homePage.guestSignOutDialog).getByRole('button', { name: 'Sign out' }))
+    release()
+    await vi.waitFor(() => expect(leavePage).toHaveBeenCalled())
+    await new Promise((resolve) => setTimeout(resolve, 100))
+
+    expect(keys.logouts).toEqual([{ signing_key_id: await kid(held) }])
+    expect(await signWithDeviceKey(0, Uint8Array.of(0xa0))).toBeNull()
+    expect(keys.registrations).toHaveLength(1)
   })
 })

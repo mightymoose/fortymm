@@ -1069,10 +1069,15 @@ it.
   and a label from `deviceLabel()`, such as `Safari on iOS`. A 409, or a
   200 with `revoked_at`, makes it replace the key and register the new one.
   Any other failure, such as no network, is dropped, and the next online
-  load tries again. A Web Lock (`fortymm.device-key`) makes two tabs take
-  turns, so they don't each make a key.
-- A sign-out sends the key's id in `POST /v1/auth/logout`, then deletes
-  the key. It keeps the queue, whose results no longer need the key and
+  load tries again.
+- Every read and write of the stored key takes one Web Lock
+  (`fortymm.device-key`), so two tabs don't each make a key. Without Web
+  Locks, the tab's own calls take turns.
+- `signOutDeviceKey()` runs the sign-out under the same lock. It reads the
+  key's id, sends it in `POST /v1/auth/logout`, then deletes the key. It
+  first cancels this tab's registrations, so a slow one doesn't hold up the
+  sign-out and none saves a key after it. A sign-out that fails keeps the
+  key. It keeps the queue, whose results no longer need the key and
   may be the only copy of a match. The next account on the browser gets a
   new key.
 - `signWithDeviceKey()` approves a payload with the stored key.
