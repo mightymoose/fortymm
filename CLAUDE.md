@@ -667,7 +667,9 @@ it to `src/routes/`.
   `_authenticated/`. The layout puts the page in `AppShell`
   (`src/pages/AppShell.tsx`): a topbar over a sidebar of
   the `_shell` pages, which folds to its icons and remembers it in
-  `localStorage`. Below 900px the sidebar is a tab bar along the bottom. To
+  `localStorage`. Below 900px the sidebar is a tab bar along the bottom. A
+  toast then sits above the tab bar, from `base.css`, because
+  `.fm-toast-region` is fixed to the bottom of the screen. To
   add a page to the sidebar, add its link in `AppShell`. The topbar's right
   end shows `UserMenu` (`src/pages/userMenu/UserMenu.tsx`): a chip of the
   player's `PlayerAvatar` (`src/components/PlayerAvatar.tsx`, the initials

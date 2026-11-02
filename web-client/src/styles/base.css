@@ -292,6 +292,10 @@ a:hover{color:var(--ball-200)}
 }
 
 @media (max-width: 899px) {
+  :root {
+    --app-tab-bar: calc(56px + 2 * var(--s-1) + env(safe-area-inset-bottom));
+  }
+
   .app-shell,
   .app-shell[data-folded='true'] {
     grid-template-columns: minmax(0, 1fr);
@@ -306,7 +310,7 @@ a:hover{color:var(--ball-200)}
     position: fixed;
     inset: auto 0 0 0;
     z-index: 20;
-    height: auto;
+    height: var(--app-tab-bar);
     display: grid;
     grid-auto-flow: column;
     grid-auto-columns: minmax(0, 1fr);
@@ -334,6 +338,10 @@ a:hover{color:var(--ball-200)}
     height: auto;
     overflow: visible;
     clip: auto;
+  }
+
+  body:has(.app-nav) .fm-toast-region {
+    bottom: calc(var(--app-tab-bar) + var(--s-6));
   }
 }
 

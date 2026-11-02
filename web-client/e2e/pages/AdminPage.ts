@@ -6,11 +6,15 @@ export class AdminPage {
   readonly page: Page
   readonly title: Locator
   readonly panel: Locator
+  readonly toastRegion: Locator
+  readonly mainNav: Locator
 
   constructor(page: Page) {
     this.page = page
     this.title = page.getByRole('heading', { level: 1, name: 'Administration' })
     this.panel = page.getByRole('tabpanel')
+    this.toastRegion = page.getByRole('status', { name: 'Notifications' })
+    this.mainNav = page.getByRole('navigation', { name: 'Main' })
   }
 
   async goto(): Promise<void> {
@@ -22,9 +26,13 @@ export class AdminPage {
     return this.panel.getByRole('row', { name: new RegExp(`^${escape(name)}`) })
   }
 
-  // Opens the account `email`'s page from the Accounts tab.
+  // Opens the account `email`'s page from the Accounts tab. It searches
+  // first, because the tab lists only the first 50 accounts and the dev
+  // database keeps every account that earlier runs signed in.
   async openAccount(email: string): Promise<void> {
     await this.page.getByRole('tab', { name: 'Accounts' }).click()
+    await this.panel.getByRole('searchbox', { name: 'Email' }).fill(email)
+    await this.panel.getByRole('button', { name: 'Search' }).click()
     await this.panel.getByRole('link', { name: email }).click()
   }
 
