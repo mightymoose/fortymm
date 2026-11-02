@@ -2384,7 +2384,6 @@
       "LogoutRequest": {
         "properties": {
           "signing_key_id": {
-            "pattern": "^(?:[0-9a-f]{2})*$",
             "type": [
               "string",
               "null"

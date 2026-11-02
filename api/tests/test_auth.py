@@ -441,11 +441,26 @@ def test_logout_signs_out_the_devices_key(
     assert signed_out_at is not None
 
 
-@pytest.mark.parametrize("signing_key_id", ["", "abcd", "00" * 33])
+@pytest.mark.parametrize(
+    "signing_key_id",
+    ["", "abcd", "00" * 33, "AB" * 32, "abc", "not hex", "0" * 64 + "\n"],
+    ids=[
+        "empty",
+        "short",
+        "long",
+        "uppercase",
+        "odd length",
+        "not hex",
+        "trailing newline",
+    ],
+)
 def test_logout_ignores_a_signing_key_id_that_isnt_a_kid(
     browser: TestClient, signing_key_id: str
 ) -> None:
-    start_session(browser)
+    """A logout never fails over its key, so a client with a broken id still
+    gets signed out."""
+    account = start_session(browser)
+    old_token = token(browser)
 
     response = browser.post(
         "/v1/auth/logout", headers=JSON, json={"signing_key_id": signing_key_id}
@@ -453,6 +468,8 @@ def test_logout_ignores_a_signing_key_id_that_isnt_a_kid(
 
     assert response.status_code == 200
     assert SimpleCookie(response.headers["Set-Cookie"])[COOKIE]["max-age"] == "0"
+    browser.cookies.set(COOKIE, old_token or "", domain="testserver")
+    assert start_session(browser)["id"] != account["id"]
 
 
 def app_login(phone: TestClient) -> httpx.Response:

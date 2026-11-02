@@ -5,16 +5,18 @@ from ipaddress import ip_address
 
 import cbor2
 import pytest
-from locks import wait_behind
-from sqlalchemy import Engine, delete, text, update
+from locks import overlap, wait_behind
+from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from fortymm_api.accounts import AccountId, Email
-from fortymm_api.models import Account, AuthSession, SigningKey
+from fortymm_api.models import Account
+from fortymm_api.services import adoption
 from fortymm_api.services.adoption import adopt_guest
 from fortymm_api.services.sessions import (
     AccountAdopted,
     authenticate,
+    convert_guest,
     new_session,
     start_session,
 )
@@ -259,6 +261,8 @@ def test_a_malformed_public_key_is_refused(
         "Ann\nphone",
         "Ann\x7f",
         "\x00",
+        "Ann\x85phone",
+        "Ann\u009f",
     ],
     ids=[
         "empty",
@@ -268,6 +272,8 @@ def test_a_malformed_public_key_is_refused(
         "newline",
         "delete",
         "nul",
+        "next line",
+        "c1 control",
     ],
 )
 def test_a_label_that_breaks_its_rule_is_refused(
@@ -293,26 +299,47 @@ def test_registering_a_key_twice_returns_it_unchanged(
     assert keys_of(migrated_database, account) == [first]
 
 
-def test_registering_a_signed_out_key_again_keeps_it_signed_out(
+def test_registering_a_signed_out_key_again_makes_it_live(
     migrated_database: Engine,
 ) -> None:
+    """The device signed out and signed back in. Its fresh proof shows it is
+    back, so the key is live again, with its label and created_at."""
     account = guest(migrated_database)
-    kid = register(migrated_database, account, key(1)).id
-    sign_out(migrated_database, session_token(migrated_database, account), kid)
+    first = register(migrated_database, account, key(1), "Ann's phone")
+    sign_out(migrated_database, session_token(migrated_database, account), first.id)
     [signed_out] = keys_of(migrated_database, account)
     assert signed_out.signed_out_at is not None
 
-    assert register(migrated_database, account, key(1)) == signed_out
-    assert keys_of(migrated_database, account) == [signed_out]
+    again = register(migrated_database, account, key(1), "Ann's other phone")
+
+    assert again == first
+    assert keys_of(migrated_database, account) == [first]
+
+
+def test_a_key_that_comes_back_live_counts_against_the_cap(
+    migrated_database: Engine,
+) -> None:
+    account = guest(migrated_database)
+    old = register(migrated_database, account, key(100)).id
+    sign_out(migrated_database, session_token(migrated_database, account), old)
+    created(migrated_database, old, days_ago=365)
+    kids = fill_to_the_cap(migrated_database, account)
+
+    revived = register(migrated_database, account, key(100))
+
+    keys = keys_of(migrated_database, account)
+    assert revived.signed_out_at is None
+    assert set(live(keys)) == {*kids[1:], old}
 
 
 def test_registering_a_revoked_key_again_keeps_it_revoked(
     migrated_database: Engine,
 ) -> None:
     account = guest(migrated_database)
-    revoked = revoke(
-        migrated_database, account, register(migrated_database, account, key(1)).id
-    )
+    kid = register(migrated_database, account, key(1)).id
+    sign_out(migrated_database, session_token(migrated_database, account), kid)
+    revoked = revoke(migrated_database, account, kid)
+    assert revoked.signed_out_at is not None
     assert revoked.revoked_at is not None
 
     assert register(migrated_database, account, key(1)) == revoked
@@ -326,6 +353,47 @@ def test_a_key_of_another_account_is_refused(migrated_database: Engine) -> None:
     with pytest.raises(KeyRegisteredElsewhere):
         register(migrated_database, account, key(1))
 
+    assert keys_of(migrated_database, account) == []
+    assert keys_of(migrated_database, other) == [theirs]
+
+
+def test_a_replayed_proof_for_another_accounts_key_is_refused_as_invalid(
+    migrated_database: Engine,
+) -> None:
+    """A caller without the private key learns nothing about the key, not
+    even that another account owns it."""
+    account, other = guest(migrated_database), guest(migrated_database)
+    theirs = register(migrated_database, other, key(1))
+
+    with pytest.raises(InvalidProof):
+        register(
+            migrated_database, account, key(1), proof=key(1).registration_proof(other)
+        )
+
+    assert keys_of(migrated_database, account) == []
+    assert keys_of(migrated_database, other) == [theirs]
+
+
+def test_two_accounts_that_register_one_key_at_once_take_turns(
+    migrated_database: Engine,
+) -> None:
+    account, other = guest(migrated_database), guest(migrated_database)
+
+    def registration(owner: AccountId) -> Callable[[Session], AccountSigningKey]:
+        return lambda session: register_key(
+            session,
+            owner,
+            public_key=key(1).public_key.to_cose_key(),
+            proof=key(1).registration_proof(owner),
+            label=LABEL,
+        )
+
+    theirs, waiter = wait_behind(
+        migrated_database, registration(other), registration(account)
+    )
+
+    with pytest.raises(KeyRegisteredElsewhere):
+        waiter.result()
     assert keys_of(migrated_database, account) == []
     assert keys_of(migrated_database, other) == [theirs]
 
@@ -473,7 +541,7 @@ def test_signing_out_without_a_session_changes_nothing(
 
 
 def test_a_logout_that_overlaps_an_adoption_waits_for_it(
-    migrated_database: Engine,
+    migrated_database: Engine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Adoption moves the guest's keys, then deletes its sessions. A logout
     between the two must wait for it, not deadlock with it."""
@@ -482,23 +550,22 @@ def test_a_logout_that_overlaps_an_adoption_waits_for_it(
     kid = register(migrated_database, guest_account, key(1)).id
     token = session_token(migrated_database, guest_account)
 
-    def move_keys(session: Session) -> None:
-        session.execute(
-            update(SigningKey)
-            .where(SigningKey.account_id == guest_account)
-            .values(account_id=bob)
-        )
+    def adoption_with_a_logout_between(
+        session: Session, let_logout_wait: Callable[[], None]
+    ) -> str:
+        def convert_guest_after_the_logout(
+            session: Session, guest: AccountId, into: AccountId
+        ) -> str:
+            let_logout_wait()
+            return convert_guest(session, guest, into)
 
-    def delete_sessions(session: Session) -> None:
-        session.execute(
-            delete(AuthSession).where(AuthSession.account_id == guest_account)
-        )
+        monkeypatch.setattr(adoption, "convert_guest", convert_guest_after_the_logout)
+        return adopt_guest(session, guest_account, bob)
 
-    _, waiter = wait_behind(
+    _, waiter = overlap(
         migrated_database,
-        move_keys,
+        adoption_with_a_logout_between,
         lambda session: sign_out_device(session, token, kid),
-        then=delete_sessions,
     )
 
     waiter.result()
@@ -511,12 +578,16 @@ def test_a_logout_that_overlaps_an_adoption_waits_for_it(
 def test_a_signed_out_key_still_verifies_for_its_account(
     migrated_database: Engine,
 ) -> None:
+    """The verifier sees when the device signed out, so #188 can weigh a
+    result signed after it. Results from a hall upload late, so it is told,
+    not refused."""
     account = guest(migrated_database)
     kid = register(migrated_database, account, key(1)).id
     sign_out(migrated_database, session_token(migrated_database, account), kid)
+    [signed_out] = keys_of(migrated_database, account)
 
     assert verifying(migrated_database, kid) == {
-        kid: VerificationKey(key(1).public_key, account)
+        kid: VerificationKey(key(1).public_key, account, signed_out.signed_out_at)
     }
 
 
@@ -530,7 +601,7 @@ def test_a_revoked_key_and_an_unknown_kid_do_not_verify(
     unknown = key(3).public_key.kid
 
     assert verifying(migrated_database, kept, revoked, unknown) == {
-        kept: VerificationKey(key(1).public_key, account)
+        kept: VerificationKey(key(1).public_key, account, None)
     }
     assert verifying(migrated_database) == {}
 
@@ -586,7 +657,7 @@ def test_adoption_moves_the_guests_keys(migrated_database: Engine) -> None:
     }
     assert keys_of(migrated_database, guest_account) == []
     assert verifying(migrated_database, guests[0].id) == {
-        guests[0].id: VerificationKey(key(2).public_key, bob)
+        guests[0].id: VerificationKey(key(2).public_key, bob, None)
     }
 
 

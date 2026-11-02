@@ -6,18 +6,21 @@ A key belongs to one account for good. Adoption moves it to the adopting
 account (MOVES_ON_ADOPT), and nothing else changes its owner.
 
 A live key has neither signed_out_at nor revoked_at. Signing out and the cap
-end a key's life on its device, but what it signed still verifies. Revoking
-says the device was compromised: the key verifies nothing more.
+end a key's life on its device, but what it signed still verifies. A device
+that registers its key again, with a fresh proof, is back, so the key is
+live again. Revoking says the device was compromised: the key verifies
+nothing more, and nothing brings it back.
 
 This module is the only writer of signed_out_at and revoked_at.
 """
 
+import unicodedata
 from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Final
 
-from sqlalchemy import ColumnElement, func, select, update
+from sqlalchemy import ColumnElement, case, func, null, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
@@ -51,10 +54,14 @@ class AccountSigningKey:
 
 @dataclass(frozen=True)
 class VerificationKey:
-    """A key that verifies signatures, and the account they speak for."""
+    """A key that verifies signatures, the account they speak for, and when
+    its device signed out, if it has. Results from a hall upload late, so a
+    signature after the sign-out still verifies. #188 decides what it is
+    worth."""
 
     public_key: SigningPublicKey
     account: AccountId
+    signed_out_at: datetime | None
 
 
 class InvalidDeviceLabel(Exception):
@@ -95,13 +102,15 @@ def register_key(
     key signed for this account, and `label` the device's name. The label is
     trimmed.
 
-    Registering a key the account already owns changes nothing and returns
-    the key as it is, signed out or revoked included, so a retry gets the
-    first call's answer. Its label stays. A key that another account owns
-    raises KeyRegisteredElsewhere.
+    Registering a key the account already owns returns it with its label
+    and created_at as they were, so a retry gets the first call's answer. A
+    signed-out key is live again: the fresh proof shows the device is back.
+    A revoked key stays as it is, signed out or not. A key that another
+    account owns raises KeyRegisteredElsewhere.
 
-    A new key signs out the account's oldest live keys (by created_at, then
-    id) past LIVE_KEY_LIMIT. Nothing is refused for the cap.
+    A registration that leaves the key live signs out the account's oldest
+    live keys (by created_at, then id) past LIVE_KEY_LIMIT. Nothing is
+    refused for the cap.
 
     Raises InvalidDeviceLabel, InvalidPublicKey and InvalidProof, in that
     order, before any read. So a caller that doesn't hold the private key
@@ -128,13 +137,21 @@ def register_key(
         .returning(SigningKey)
     )
     if row is None:
-        existing = session.scalars(
-            select(SigningKey).where(SigningKey.id == key.kid)
-        ).one()
-        if existing.account_id != account:
+        row = session.scalar(
+            update(SigningKey)
+            .where(SigningKey.id == key.kid, SigningKey.account_id == account)
+            .values(
+                signed_out_at=case(
+                    (SigningKey.revoked_at.is_(None), null()),
+                    else_=SigningKey.signed_out_at,
+                )
+            )
+            .returning(SigningKey)
+        )
+        if row is None:
             raise KeyRegisteredElsewhere
-        return _account_key(existing)
-    _sign_out(session, _past_the_cap(account, keeping=row.id))
+    if row.revoked_at is None:
+        _sign_out(session, _past_the_cap(account, keeping=row.id))
     return _account_key(row)
 
 
@@ -193,31 +210,32 @@ def verification_keys(
     session: Session, kids: Collection[KeyId]
 ) -> dict[KeyId, VerificationKey]:
     """The keys among `kids` that verify, by kid, each with the account its
-    signatures speak for: every registered key that isn't revoked, signed
-    out or not. A kid missing from the result is unknown or revoked.
-    UnverifiedEnvelope.verify() refuses either as unknown_key.
+    signatures speak for and when its device signed out, if it has: every
+    registered key that isn't revoked, signed out or not. A kid missing from
+    the result is unknown or revoked. UnverifiedEnvelope.verify() refuses
+    either as unknown_key.
     """
     rows = session.execute(
-        select(SigningKey.public_key, SigningKey.account_id).where(
-            SigningKey.id.in_(kids), SigningKey.revoked_at.is_(None)
-        )
+        select(
+            SigningKey.public_key, SigningKey.account_id, SigningKey.signed_out_at
+        ).where(SigningKey.id.in_(kids), SigningKey.revoked_at.is_(None))
     )
     keys = (
-        VerificationKey(SigningPublicKey.from_cose_key(cose_key), owner)
-        for cose_key, owner in rows
+        VerificationKey(SigningPublicKey.from_cose_key(cose_key), owner, signed_out_at)
+        for cose_key, owner, signed_out_at in rows
     )
     return {key.public_key.kid: key for key in keys}
 
 
 def _device_label(label: str) -> str:
     """The label trimmed, or InvalidDeviceLabel unless 1 to LABEL_MAX_LENGTH
-    characters remain, none of them a control character. str.strip() trims
-    every Unicode space, more than the CHECK's btrim(), so a label it passes
-    always meets the CHECK."""
+    characters remain, none of them a control character (Unicode category
+    Cc: C0, DEL and C1). str.strip() trims every Unicode space, more than
+    the CHECK's btrim(), so a label it passes always meets the CHECK."""
     label = label.strip()
     if not 1 <= len(label) <= LABEL_MAX_LENGTH:
         raise InvalidDeviceLabel
-    if any(ord(c) < 0x20 or ord(c) == 0x7F for c in label):
+    if any(unicodedata.category(c) == "Cc" for c in label):
         raise InvalidDeviceLabel
     return label
 

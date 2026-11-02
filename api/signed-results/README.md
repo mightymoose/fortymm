@@ -213,8 +213,10 @@ the proof but the signature is fixed, so the server builds those 96 bytes
 itself, compares them with the proof's, and verifies the trailing 64 over the
 Sig_structure it built. A proof whose bytes differ anywhere, for another key,
 for another account, or in its encoding, is refused with a 422. The server
-never decodes a proof. Registering a key twice changes nothing, so a replay
-gets the same answer as the first call.
+never decodes a proof. Registering a key twice keeps its label and
+`created_at`, so a replay gets the first call's answer. A key the device had
+signed out is live again, because the fresh proof shows the device is back. A
+revoked key stays revoked.
 
 A key belongs to one account for good. A device that finds its session on
 another account re-registers its key with a proof for that account. 200 means
