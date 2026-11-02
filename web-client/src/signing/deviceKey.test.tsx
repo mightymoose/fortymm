@@ -204,6 +204,58 @@ describe("the browser's signing key", () => {
     expect(keys.registrations).toHaveLength(1)
   })
 
+  it('leaves no key when a registration needs a new key while the logout is in flight', async () => {
+    signInVerified()
+    const keys = mockSigningKeys(['taken'], { hold: true })
+    const logouts: unknown[] = []
+    let answerLogout = () => {}
+    server.use(
+      http.post(`${API_BASE_URL}/v1/auth/logout`, async ({ request }) => {
+        logouts.push(await request.json())
+        await new Promise<void>((resolve) => (answerLogout = resolve))
+        return HttpResponse.json<components['schemas']['LogoutResponse']>({
+          data: { logout_url: 'https://fortymm.example/v2/logout' },
+        })
+      }),
+    )
+    const homePage = await load(keys.registrations, 1)
+    const kid = await kidOf(keys.registrations[0].public_key)
+
+    await userEvent.click(homePage.accountButton!)
+    await userEvent.click(within(homePage.accountMenu).getByRole('menuitem', { name: 'Sign out' }))
+    await vi.waitFor(() => expect(logouts).toEqual([{ signing_key_id: kid }]))
+    await keys.release()
+    // The replacement finds no key to replace. Give it time to write and
+    // register one if it were going to.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    answerLogout()
+    await vi.waitFor(() => expect(leavePage).toHaveBeenCalledOnce())
+
+    expect(await storedKid()).toBeNull()
+    expect(keys.registrations).toHaveLength(1)
+  })
+
+  it('keeps the key when the logout fails, and sends it again on the next sign-out', async () => {
+    signInVerified()
+    const { registrations } = mockSigningKeys()
+    const homePage = await load(registrations, 1)
+    const kid = await kidOf(registrations[0].public_key)
+    const logouts = recordLogouts()
+    server.use(http.post(`${API_BASE_URL}/v1/auth/logout`, () => HttpResponse.error(), { once: true }))
+
+    await userEvent.click(homePage.accountButton!)
+    await userEvent.click(within(homePage.accountMenu).getByRole('menuitem', { name: 'Sign out' }))
+    await vi.waitFor(async () => expect(await storedKid()).toBe(kid))
+    expect(leavePage).not.toHaveBeenCalled()
+
+    // The menu stays open after a failed sign-out.
+    await userEvent.click(within(homePage.accountMenu).getByRole('menuitem', { name: 'Sign out' }))
+    await vi.waitFor(() => expect(leavePage).toHaveBeenCalledOnce())
+
+    expect(logouts).toEqual([{ signing_key_id: kid }])
+    expect(await storedKid()).toBeNull()
+  })
+
   it('loads and signs out with no IndexedDB, sending no key', async () => {
     vi.stubGlobal('indexedDB', undefined)
     signInVerified()

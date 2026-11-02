@@ -1070,9 +1070,12 @@ page and the queue of signed results come with #195.
 - Every write is one readwrite transaction that reads the record and
   writes only if it is still the one it read. So two tabs keep one key,
   and a registration that a sign-out overtook makes no new key.
-- `logout()` sends the key's id as `signing_key_id`, then deletes the
-  key, so the next account gets a new one. With no key, or no IndexedDB,
-  it sends no body, and the sign-out still works.
+- `logout()` takes the key out of storage (`takeKey()`), then sends its
+  id as `signing_key_id`, so the next account gets a new one. A
+  registration still in flight then finds no key to replace, so it can't
+  leave a new key live on the account that signed out. A failed logout
+  puts the key back, unless another key was stored meanwhile. With no
+  key, or no IndexedDB, it sends no body, and the sign-out still works.
 - `signWithDeviceKey()` gives a `Signer` with the key, or null.
 
 ### Error pages

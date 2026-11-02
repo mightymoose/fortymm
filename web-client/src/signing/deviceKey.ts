@@ -58,25 +58,36 @@ export async function signWithDeviceKey(): Promise<Signer | null> {
   return key && signer(key)
 }
 
-// The id of this browser's key, in hex, or null if it has none or storage
-// fails. A sign-out sends it, so it never fails over the key.
-export async function deviceKeyId(): Promise<string | null> {
+// This browser's key, taken out of storage before a sign-out sends its id.
+// A registration still in flight then finds no key to replace, so it can't
+// leave a new key live on the account that signs out. `restore` puts the key
+// back if the sign-out fails, unless another key has been stored meanwhile.
+// It is null if there is no key or storage fails, so a sign-out never fails
+// over the key.
+export type TakenKey = { id: string; restore(): Promise<void> }
+
+export async function takeKey(): Promise<TakenKey | null> {
   try {
-    const key = await storedKey()
-    return key && hex(key.kid)
+    const key = await update((stored, store) => {
+      if (stored) store.delete(RECORD)
+      return stored
+    })
+    return (
+      key && {
+        id: hex(key.kid),
+        restore: async () => {
+          try {
+            await update((stored, store) => {
+              if (!stored) store.put(key, RECORD)
+            })
+          } catch {
+            // The next session answer makes a new key.
+          }
+        },
+      }
+    )
   } catch {
     return null
-  }
-}
-
-// Deletes the key, if it is still the one with id `kidHex`. It never throws.
-export async function forgetKey(kidHex: string): Promise<void> {
-  try {
-    await update((stored, store) => {
-      if (stored && hex(stored.kid) === kidHex) store.delete(RECORD)
-    })
-  } catch {
-    // Storage that fails holds no key to forget.
   }
 }
 
