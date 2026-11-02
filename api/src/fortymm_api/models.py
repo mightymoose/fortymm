@@ -25,6 +25,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from fortymm_api.accounts import AccountId, Email, PlayerId
 from fortymm_api.leagues import LeagueId
 from fortymm_api.permissions import RoleId
+from fortymm_api.signing_keys import KeyId
 
 
 class Base(DeclarativeBase):
@@ -45,6 +46,7 @@ class Base(DeclarativeBase):
         RoleId: Uuid,
         LeagueId: Uuid,
         Email: Text,
+        KeyId: LargeBinary,
     }
 
 
@@ -354,3 +356,37 @@ class LeagueMember(Base):
     joined_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class SigningKey(Base):
+    """A device's signing key: the public half, registered to the account
+    whose signatures it makes. The private half never leaves the device.
+
+    A live key has neither signed_out_at nor revoked_at. A signed-out key
+    still verifies the results it signed. A revoked key verifies nothing.
+    services/signing_keys.py holds the rules.
+    """
+
+    __tablename__ = "signing_keys"
+    __table_args__ = (
+        CheckConstraint("id = sha256(public_key)", name="id_is_thumbprint"),
+        CheckConstraint("octet_length(public_key) = 75", name="public_key_length"),
+        CheckConstraint("label = btrim(label) AND label <> ''", name="label_trimmed"),
+        CheckConstraint("char_length(label) <= 50", name="label_length"),
+    )
+
+    # The RFC 9679 thumbprint of public_key: the kid every signature cites.
+    id: Mapped[KeyId] = mapped_column(primary_key=True)
+    # SigningPublicKey.to_cose_key().
+    public_key: Mapped[bytes] = mapped_column(LargeBinary)
+    # A key attributes signed results to its account, so no delete may take
+    # the account out from under its keys.
+    account_id: Mapped[AccountId] = mapped_column(
+        ForeignKey("accounts.id", ondelete="RESTRICT"), index=True
+    )
+    label: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    signed_out_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

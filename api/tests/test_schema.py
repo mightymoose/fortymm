@@ -1,3 +1,4 @@
+import hashlib
 import uuid
 from collections.abc import Iterator
 
@@ -5,6 +6,9 @@ import psycopg
 import pytest
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import IntegrityError, ProgrammingError
+
+from fortymm_api.services.signing_keys import LABEL_MAX_LENGTH
+from fortymm_api.signing_keys import SigningPrivateKey
 
 
 @pytest.fixture
@@ -539,3 +543,117 @@ def test_a_league_with_members_is_never_deleted(connection: Connection) -> None:
         connection.execute(text("DELETE FROM leagues"))
 
     assert violated_constraint(error) == "fk_league_members_league_id_leagues"
+
+
+COSE_KEY = SigningPrivateKey(hashlib.sha256(b"schema test key").digest()).public_key
+
+
+def add_signing_key(
+    connection: Connection,
+    account_id: uuid.UUID,
+    *,
+    public_key: bytes = COSE_KEY.to_cose_key(),
+    id: bytes | None = None,
+    label: str = "Ann's phone",
+) -> None:
+    connection.execute(
+        text(
+            "INSERT INTO signing_keys (id, public_key, account_id, label)"
+            " VALUES (:id, :public_key, :account_id, :label)"
+        ),
+        {
+            "id": hashlib.sha256(public_key).digest() if id is None else id,
+            "public_key": public_key,
+            "account_id": account_id,
+            "label": label,
+        },
+    )
+
+
+def test_a_signing_keys_id_is_its_public_keys_thumbprint(
+    connection: Connection,
+) -> None:
+    with pytest.raises(IntegrityError) as error:
+        add_signing_key(connection, add_account(connection), id=bytes(32))
+
+    assert violated_constraint(error) == "ck_signing_keys_id_is_thumbprint"
+
+
+def test_a_signing_keys_public_key_is_75_bytes(connection: Connection) -> None:
+    with pytest.raises(IntegrityError) as error:
+        add_signing_key(
+            connection, add_account(connection), public_key=COSE_KEY.to_cose_key()[:74]
+        )
+
+    assert violated_constraint(error) == "ck_signing_keys_public_key_length"
+
+
+@pytest.mark.parametrize(
+    ("label", "constraint"),
+    [
+        (" Ann's phone", "ck_signing_keys_label_trimmed"),
+        ("Ann's phone ", "ck_signing_keys_label_trimmed"),
+        ("", "ck_signing_keys_label_trimmed"),
+        ("x" * 51, "ck_signing_keys_label_length"),
+    ],
+)
+def test_a_signing_key_label_is_trimmed_and_short(
+    connection: Connection, label: str, constraint: str
+) -> None:
+    with pytest.raises(IntegrityError) as error:
+        add_signing_key(connection, add_account(connection), label=label)
+
+    assert violated_constraint(error) == constraint
+
+
+def test_the_label_length_check_matches_the_services_limit(
+    connection: Connection,
+) -> None:
+    add_signing_key(connection, add_account(connection), label="x" * LABEL_MAX_LENGTH)
+
+    with pytest.raises(IntegrityError) as error:
+        add_signing_key(
+            connection,
+            add_account(connection),
+            public_key=SigningPrivateKey(
+                hashlib.sha256(b"another schema test key").digest()
+            ).public_key.to_cose_key(),
+            label="x" * (LABEL_MAX_LENGTH + 1),
+        )
+
+    assert violated_constraint(error) == "ck_signing_keys_label_length"
+
+
+def test_a_signing_key_is_registered_once(connection: Connection) -> None:
+    add_signing_key(connection, add_account(connection))
+
+    with pytest.raises(IntegrityError) as error:
+        add_signing_key(connection, add_account(connection))
+
+    assert violated_constraint(error) == "pk_signing_keys"
+
+
+def test_an_account_with_a_signing_key_is_never_deleted(
+    connection: Connection,
+) -> None:
+    account = add_account(connection)
+    add_signing_key(connection, account)
+
+    with pytest.raises(IntegrityError) as error:
+        connection.execute(text("DELETE FROM accounts WHERE id = :id"), {"id": account})
+
+    assert violated_constraint(error) == "fk_signing_keys_account_id_accounts"
+
+
+def test_signing_keys_are_indexed_by_account(connection: Connection) -> None:
+    indexdef = connection.scalar(
+        text(
+            "SELECT indexdef FROM pg_indexes WHERE tablename = 'signing_keys'"
+            " AND indexname = 'ix_signing_keys_account_id'"
+        )
+    )
+
+    assert indexdef == (
+        "CREATE INDEX ix_signing_keys_account_id ON public.signing_keys"
+        " USING btree (account_id)"
+    )
