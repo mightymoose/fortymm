@@ -22,9 +22,10 @@ server. Xcode asks once to trust the OpenAPI generator's build plugin.
 Sign in opens the mock provider's page. Type any subject, and claims such as
 `{"email": "ann@example.com", "email_verified": true}`.
 
-The app keeps its session cookie in the Keychain, one item per base URL, so
-a dev session never goes to production. Deleting the app doesn't clear the
-Keychain on iOS. Sign out to start over.
+The app keeps its session cookie and its signing key in the Keychain, one
+item per base URL, so a dev session never goes to production. Deleting the
+app doesn't clear the Keychain on iOS. Sign out to start over, which signs
+the key out and deletes it.
 
 To run the UI tests that need the dev API, pass the same URL:
 
