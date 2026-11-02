@@ -9,12 +9,10 @@ import './styles/kit.css'
 import './styles/page.css'
 
 // vite-plugin-pwa writes /sw.js only in a build, so the dev server has none.
-// A browser without service workers, such as Firefox's private windows, has
-// no `navigator.serviceWorker`.
 const appUpdate = createAppUpdate(
   import.meta.env.PROD && 'serviceWorker' in navigator ? navigator.serviceWorker : undefined,
 )
-const router = createAppRouter()
+const router = createAppRouter(undefined, { appUpdate })
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
