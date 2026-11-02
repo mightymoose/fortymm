@@ -74,7 +74,13 @@ targets:
   FortyMMTests:
     type: bundle.unit-test
     platform: iOS
-    sources: [FortyMMTests]
+    sources:
+      - FortyMMTests
+      # The signed result test vectors, where the API's generator writes
+      # them, so the app's tests can't check a stale copy.
+      - path: ../api/signed-results/vectors.json
+        group: FortyMMTests
+        buildPhase: resources
     dependencies:
       - target: FortyMM
     settings:
