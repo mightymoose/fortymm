@@ -9,6 +9,8 @@ on:
       - ios-client/**
       # The app generates its API client from the schema.
       - api/openapi.json
+      # The app's tests check the signed result vectors (#185).
+      - api/signed-results/vectors.json
       - references/design-system/colors_and_type.css
       - references/design-system/fonts/**
       - mise.toml
