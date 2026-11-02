@@ -607,8 +607,8 @@ reads a result yet (#188).
   characters. `tests/test_schema.py` ties `LABEL_MAX_LENGTH` to the CHECK.
   `revoked_at` is only ever set, never cleared. `signed_out_at` is set by
   a sign-out or the cap, and cleared when the device registers the key
-  again. A live key has neither. No column says "live". The service
-  derives it.
+  again, unless the key is revoked. A live key has neither. No column
+  says "live". The service derives it.
 - The service is the only writer of the table. Its surface is
   `register_key()`, `account_keys()`, `revoke_key()`, `sign_out_device()`
   and `verification_keys()`. Its refusals are `InvalidDeviceLabel`,
