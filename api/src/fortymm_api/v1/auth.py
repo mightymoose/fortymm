@@ -3,7 +3,7 @@ from enum import StrEnum
 from typing import Annotated
 from urllib.parse import urlsplit, urlunsplit
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Body, Depends, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
@@ -348,7 +348,9 @@ def logout(
     request: Request,
     response: Response,
     provider: Provider,
-    body: LogoutRequest | None = None,
+    # A default, not `| None`, because swift-openapi-generator skips a body
+    # that is `anyOf` with `null`. A request with no body gets the default.
+    body: Annotated[LogoutRequest, Body(default_factory=LogoutRequest)],
 ) -> LogoutResponse:
     """End the visitor's session and expire its cookie.
 
@@ -361,9 +363,7 @@ def logout(
     session's account owns it. It still verifies what it signed. Any other
     id is ignored, so a logout never fails over it.
     """
-    signing_keys.sign_out_device(
-        session, token, key_id(body.signing_key_id if body else None)
-    )
+    signing_keys.sign_out_device(session, token, key_id(body.signing_key_id))
     delete_session_cookie(response)
     response.headers["Cache-Control"] = "no-store"
     logout_url = provider.logout_url(f"{public_origin(request)}/signed-out")

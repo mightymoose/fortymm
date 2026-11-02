@@ -1196,7 +1196,7 @@ export interface operations {
         };
         requestBody?: {
             content: {
-                "application/json": components["schemas"]["LogoutRequest"] | null;
+                "application/json": components["schemas"]["LogoutRequest"];
             };
         };
         responses: {
