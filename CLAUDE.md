@@ -1072,11 +1072,14 @@ page and the queue of signed results come with #195.
   and a registration that a sign-out overtook makes no new key.
 - `logout()` takes the key out of storage (`takeKey()`), then sends its
   id as `signing_key_id`, so the next account gets a new one. A
-  registration still in flight then finds no key to replace. Until the
-  logout answers, the tab stores no new key, nor one whose making started
-  before the sign-out did. So no key stays live on the account that signed
-  out. A failed logout puts the key back, unless another key was stored
-  meanwhile. With no
+  registration still in flight then finds no key to replace. It also sets
+  a `sign-out` record beside the key, which every tab shares: a count and
+  the time the running sign-out started. Every key write checks it in the
+  same transaction. No tab stores a key until the logout answers, nor one
+  whose making started before the last sign-out. So no key stays live on
+  the account that signed out. A tab closed mid-logout leaves the time set,
+  so it stops counting after `SIGN_OUT_MS` (1 minute). A failed logout
+  puts the key back, unless another key was stored meanwhile. With no
   key, or no IndexedDB, it sends no body, and the sign-out still works.
 - `signWithDeviceKey()` gives a `Signer` with the key, or null.
 

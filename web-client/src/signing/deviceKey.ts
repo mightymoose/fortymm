@@ -13,22 +13,28 @@ type DeviceKey = {
   kid: Uint8Array<ArrayBuffer>
 }
 
-// One record under a fixed key. It holds no account and no "registered"
-// flag: every session answer registers the key again, which the API answers
-// 200 for a key the account already owns. So a switched account, a revoked
-// key and a lost key each heal with one request, and no local state drifts.
+// The key is one record under a fixed key. It holds no account and no
+// "registered" flag: every session answer registers the key again, which the
+// API answers 200 for a key the account already owns. So a switched account,
+// a revoked key and a lost key each heal with one request, and no local state
+// drifts.
 const DATABASE = 'fortymm-signing'
 const STORE = 'device-key'
 const RECORD = 'device'
 const LABEL = 'Web browser'
 
-const ECDSA = { name: 'ECDSA', hash: 'SHA-256' }
+// A key that a registration makes during a sign-out, in any tab, could stay
+// live on the account that signs out. So a sign-out leaves a record beside
+// the key, and every key write checks it in the same transaction: no key is
+// stored while a sign-out runs, nor one whose making started before the
+// last sign-out did. `since` is when the running sign-out started. A tab
+// closed mid-logout leaves it set, so after SIGN_OUT_MS it no longer counts.
+const SIGN_OUT = 'sign-out'
+export const SIGN_OUT_MS = 60_000
+type SignOut = { count: number; since: number | null }
+type Stored = { key: DeviceKey | null; signOut: SignOut }
 
-// A key that a registration makes during a sign-out could stay live on the
-// account that signs out. So this tab stores none while it signs out, nor
-// one whose making started before a sign-out did.
-let signingOut = false
-let signOuts = 0
+const ECDSA = { name: 'ECDSA', hash: 'SHA-256' }
 
 // Registers this browser's key to `accountId`, making the key first if
 // there is none. A key that is revoked, or that another account owns, is
@@ -37,10 +43,11 @@ let signOuts = 0
 // throws.
 export async function registerDeviceKey(api: ApiClient, accountId: string): Promise<void> {
   try {
-    const key = (await storedKey()) ?? (await createKey())
+    const { key: stored, signOut } = await update((current) => current)
+    const key = stored ?? (await createKey(signOut.count))
     if (!key) return
     if ((await register(api, key, accountId)) === 'kept') return
-    const replacement = await replaceKey(key.kid)
+    const replacement = await replaceKey(key.kid, signOut.count)
     if (replacement) await register(api, replacement, accountId)
   } catch {
     // The next session answer tries again.
@@ -65,39 +72,33 @@ export async function signWithDeviceKey(): Promise<Signer | null> {
   return key && signer(key)
 }
 
-// This browser's key, taken out of storage before a sign-out sends its id.
-// Until the logout answers, this tab stores no new key, so a registration
-// still in flight can't leave one live on the account that signs out. `id`
-// is null if there is no key or storage fails, so a sign-out never fails
-// over the key. After the logout, `release` lets a key be made again: the
-// session is gone, so no later key can be live on the old account. `restore`
-// puts the key back if the logout fails, unless another key has been stored
-// meanwhile.
-export type TakenKey = { id: string | null; release(): void; restore(): Promise<void> }
+// This browser's key, taken out of storage before a sign-out sends its id,
+// with the sign-out record set. `id` is null if there is no key or storage
+// fails, so a sign-out never fails over the key. After the logout, `release`
+// ends the sign-out: the session is gone, so no later key can be live on the
+// old account. `restore` ends it too if the logout fails, and puts the key
+// back unless another key has been stored meanwhile.
+export type TakenKey = { id: string | null; release(): Promise<void>; restore(): Promise<void> }
 
 export async function takeKey(): Promise<TakenKey> {
-  signingOut = true
-  signOuts += 1
-  const key = await update((stored, store) => {
-    if (stored) store.delete(RECORD)
-    return stored
+  const taken = await update(({ key, signOut }, store) => {
+    if (key) store.delete(RECORD)
+    const mark: SignOut = { count: signOut.count + 1, since: Date.now() }
+    store.put(mark, SIGN_OUT)
+    return { key, mark }
   }).catch(() => null)
+  const end = (putBack: boolean) =>
+    update(({ key, signOut }, store) => {
+      if (!taken) return
+      if (signOut.count === taken.mark.count) store.put({ ...signOut, since: null }, SIGN_OUT)
+      if (putBack && taken.key && !key) store.put(taken.key, RECORD)
+    }).catch(() => {
+      // A sign-out record left set stops counting after SIGN_OUT_MS.
+    })
   return {
-    id: key && hex(key.kid),
-    release: () => {
-      signingOut = false
-    },
-    restore: async () => {
-      signingOut = false
-      if (!key) return
-      try {
-        await update((stored, store) => {
-          if (!stored) store.put(key, RECORD)
-        })
-      } catch {
-        // The next session answer makes a new key.
-      }
-    },
+    id: taken?.key ? hex(taken.key.kid) : null,
+    release: () => end(false),
+    restore: () => end(true),
   }
 }
 
@@ -117,13 +118,20 @@ async function generateKey(): Promise<DeviceKey> {
   return { privateKey: pair.privateKey, coseKey: encoded, kid: await keyId(encoded) }
 }
 
+// Whether a key may be stored now by a write whose making started when the
+// sign-out count was `started`.
+function mayStore(signOut: SignOut, started: number): boolean {
+  const signingOut = signOut.since !== null && Date.now() - signOut.since < SIGN_OUT_MS
+  return !signingOut && signOut.count === started
+}
+
 // Stores a new key, unless another tab stored one first. Then that one is
-// this browser's key. During a sign-out it stores none.
-async function createKey(): Promise<DeviceKey | null> {
-  const started = signOuts
+// this browser's key. During or after a sign-out that started meanwhile, it
+// stores none.
+async function createKey(started: number): Promise<DeviceKey | null> {
   const fresh = await generateKey()
-  return update((stored, store) => {
-    if (stored || signingOut || signOuts !== started) return stored
+  return update(({ key, signOut }, store) => {
+    if (key || !mayStore(signOut, started)) return key
     store.put(fresh, RECORD)
     return fresh
   })
@@ -132,35 +140,37 @@ async function createKey(): Promise<DeviceKey | null> {
 // Replaces the key with id `oldKid`. If the stored key is another one,
 // because another tab replaced it, that one stays. If there is none, because
 // a sign-out took it, none is made.
-async function replaceKey(oldKid: Uint8Array<ArrayBuffer>): Promise<DeviceKey | null> {
-  const started = signOuts
+async function replaceKey(
+  oldKid: Uint8Array<ArrayBuffer>,
+  started: number,
+): Promise<DeviceKey | null> {
   const fresh = await generateKey()
-  return update((stored, store) => {
-    if (!stored || signingOut || signOuts !== started || !equalBytes(stored.kid, oldKid)) return stored
+  return update(({ key, signOut }, store) => {
+    if (!key || !mayStore(signOut, started) || !equalBytes(key.kid, oldKid)) return key
     store.put(fresh, RECORD)
     return fresh
   })
 }
 
 async function storedKey(): Promise<DeviceKey | null> {
-  return update((stored) => stored)
+  return update(({ key }) => key)
 }
 
-// Runs `change` on the stored key inside one readwrite transaction, so the
-// read and the write it decides on are atomic across tabs. No await may
-// come between them, or the transaction commits.
-async function update<T>(
-  change: (stored: DeviceKey | null, store: IDBObjectStore) => T,
-): Promise<T> {
+// Runs `change` on the stored key and sign-out record inside one readwrite
+// transaction, so the read and the write it decides on are atomic across
+// tabs. No await may come between them, or the transaction commits.
+async function update<T>(change: (stored: Stored, store: IDBObjectStore) => T): Promise<T> {
   const database = await open()
   try {
     return await new Promise<T>((resolve, reject) => {
       const transaction = database.transaction(STORE, 'readwrite')
       const store = transaction.objectStore(STORE)
       let result: T
-      const read = store.get(RECORD)
-      read.onsuccess = () => {
-        result = change(parse(read.result), store)
+      const key = store.get(RECORD)
+      const signOut = store.get(SIGN_OUT)
+      // Requests in one transaction succeed in order, so the key is read.
+      signOut.onsuccess = () => {
+        result = change({ key: parse(key.result), signOut: parseSignOut(signOut.result) }, store)
       }
       transaction.oncomplete = () => resolve(result)
       transaction.onerror = () => reject(transaction.error)
@@ -190,4 +200,13 @@ function parse(record: unknown): DeviceKey | null {
   return privateKey && bytes(coseKey, 75) && bytes(kid, 32)
     ? { privateKey, coseKey: coseKey!, kid: kid! }
     : null
+}
+
+function parseSignOut(record: unknown): SignOut {
+  if (typeof record !== 'object' || record === null) return { count: 0, since: null }
+  const { count, since } = record as Partial<SignOut>
+  return {
+    count: typeof count === 'number' ? count : 0,
+    since: typeof since === 'number' ? since : null,
+  }
 }

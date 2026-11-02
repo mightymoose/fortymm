@@ -143,7 +143,7 @@ export async function logout(api: ApiClient): Promise<string> {
     await key.restore()
     throw error
   })
-  key.release()
+  await key.release()
   forgetAccount()
   return data.data.logout_url
 }

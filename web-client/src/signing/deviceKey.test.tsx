@@ -9,7 +9,7 @@ import { API_BASE_URL, mockSigningKeys, server, sessionResponse } from '../test/
 import { fromHex, hex, uuidText } from './bytes'
 import { decode, encode, type CborMap, type Tagged } from './cbor'
 import { keyId } from './cose'
-import { signWithDeviceKey } from './deviceKey'
+import { SIGN_OUT_MS, signWithDeviceKey } from './deviceKey'
 import { base64url } from './text'
 
 vi.mock('../leavePage', () => ({ leavePage: vi.fn() }))
@@ -70,6 +70,24 @@ function deleteDatabase(): Promise<void> {
     const request = indexedDB.deleteDatabase('fortymm-signing')
     request.onsuccess = () => resolve()
     request.onerror = () => reject(request.error)
+  })
+}
+
+// Another tab's sign-out, as it leaves its record in the shared database.
+function otherTabSignsOut(since: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const opened = indexedDB.open('fortymm-signing', 1)
+    opened.onupgradeneeded = () => opened.result.createObjectStore('device-key')
+    opened.onsuccess = () => {
+      const transaction = opened.result.transaction('device-key', 'readwrite')
+      transaction.objectStore('device-key').put({ count: 1, since }, 'sign-out')
+      transaction.oncomplete = () => {
+        opened.result.close()
+        resolve()
+      }
+      transaction.onerror = () => reject(transaction.error)
+    }
+    opened.onerror = () => reject(opened.error)
   })
 }
 
@@ -260,6 +278,28 @@ describe("the browser's signing key", () => {
     expect(logouts).toEqual([null])
     expect(await storedKid()).toBeNull()
     expect(keys.registrations).toHaveLength(0)
+  })
+
+  it('stores no key while another tab signs out', async () => {
+    const { registrations } = mockSigningKeys()
+    await otherTabSignsOut(Date.now())
+
+    const homePage = await HomePage.render()
+    expect(homePage.title).toHaveTextContent('What’s coming, and when.')
+    // Give a key time to be stored and registered if it were going to.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    expect(await storedKid()).toBeNull()
+    expect(registrations).toHaveLength(0)
+  })
+
+  it('makes a key when another tab closed during its sign-out long ago', async () => {
+    const { registrations } = mockSigningKeys()
+    await otherTabSignsOut(Date.now() - SIGN_OUT_MS - 1000)
+
+    await load(registrations, 1)
+
+    expect(await storedKid()).toBe(await kidOf(registrations[0].public_key))
   })
 
   it('keeps the key when the logout fails, and sends it again on the next sign-out', async () => {
