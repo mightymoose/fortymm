@@ -442,11 +442,34 @@ def _unknown_kid(envelopes: dict[str, bytes]) -> bytes:
     return append_signature(envelopes["half-signed"], UNLISTED, BO)
 
 
-def _tampered_payload(envelopes: dict[str, bytes]) -> bytes:
-    def change(claims: dict[Any, Any]) -> None:
-        claims[6] += 1
+def _later_iat(claims: dict[Any, Any]) -> None:
+    claims[6] += 1
 
-    return replace_payload(envelopes["completed-best-of-3"], change)
+
+def _tampered_payload(envelopes: dict[str, bytes]) -> bytes:
+    return replace_payload(envelopes["completed-best-of-3"], _later_iat)
+
+
+def _unknown_kid_and_tampered_payload(envelopes: dict[str, bytes]) -> bytes:
+    return replace_payload(_unknown_kid(envelopes), _later_iat)
+
+
+def _unknown_kid_then_short_signature(envelopes: dict[str, bytes]) -> bytes:
+    def change(parts: list[Any]) -> None:
+        known, unknown = parts[SIGNATURES]
+        known[SIGNATURE] = known[SIGNATURE][:63]
+        parts[SIGNATURES] = [unknown, known]
+
+    return replace_body(_unknown_kid(envelopes), change)
+
+
+def _bad_signature_then_short_signature(envelopes: dict[str, bytes]) -> bytes:
+    def change(parts: list[Any]) -> None:
+        first, second = parts[SIGNATURES]
+        first[SIGNATURE] = first[SIGNATURE][:-1] + bytes([first[SIGNATURE][-1] ^ 1])
+        second[SIGNATURE] = second[SIGNATURE][:63]
+
+    return replace_body(envelopes["completed-best-of-3"], change)
 
 
 def _result_change(
@@ -730,6 +753,40 @@ INVALID: tuple[InvalidCase, ...] = (
         "best_of (key 2) twice in the result map.",
         "malformed",
         _duplicate_result_key,
+    ),
+    InvalidCase(
+        "unknown-kid-and-tampered-payload",
+        "The unknown-kid envelope with iat one second later and both signatures"
+        " kept. The first signature fails and the second kid is unknown, so"
+        " unknown_key wins.",
+        "unknown_key",
+        _unknown_kid_and_tampered_payload,
+    ),
+    InvalidCase(
+        "unknown-kid-then-short-signature",
+        "The first signature is by a key the directory doesn't hold, and the"
+        " second is 63 bytes. malformed wins.",
+        "malformed",
+        _unknown_kid_then_short_signature,
+    ),
+    InvalidCase(
+        "bad-signature-then-short-signature",
+        "The first signature has one bit of s flipped, so it is well formed and"
+        " fails to verify, and the second is 63 bytes. malformed wins.",
+        "malformed",
+        _bad_signature_then_short_signature,
+    ),
+    InvalidCase(
+        "points-as-bignum",
+        "The first game's first points as 2^64, which only a bignum (tag 2) can hold.",
+        "malformed",
+        _result_change("completed-best-of-3", _set(5, [[2**64, 7], [9, 11], [11, 4]])),
+    ),
+    InvalidCase(
+        "issued-at-after-9999",
+        "iat 253402300800, one second after 9999-12-31T23:59:59Z.",
+        "malformed",
+        _claims_change("completed-best-of-3", _set(6, 253402300800)),
     ),
 )
 

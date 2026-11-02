@@ -372,12 +372,14 @@ def test_envelope_from_text_refuses_a_text_that_is_not_canonical(text: str) -> N
         {"players": (ANN, ANN)},
         {"games": ((11, 1), (11, 2), (11, 3), (11, 4))},
         {"games": ((11, -1),)},
+        {"games": ((2**64, 7),)},
         {"replaces": ResultHash(b"short")},
     ],
     ids=[
         "equal players",
         "more games than best_of",
         "negative points",
+        "points a CBOR integer can't hold",
         "short replaces",
     ],
 )

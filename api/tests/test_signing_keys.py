@@ -24,6 +24,16 @@ RFC_9679_THUMBPRINT = bytes.fromhex(
     "496bd8afadf307e5b08c64b0421bf9dc01528a344a43bda88fadd1669da253ec"
 )
 
+# P-256's field prime and curve constant b (SEC 2 section 2.4.2). The point
+# with x = 5 is on the curve, and 5 + p still fits in 32 bytes, so it is a
+# second encoding of the same x.
+P256_PRIME = 2**256 - 2**224 + 2**192 + 2**96 - 1
+P256_B = 0x5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B
+X_OF_5 = 5
+Y_OF_5 = pow(
+    (X_OF_5**3 - 3 * X_OF_5 + P256_B) % P256_PRIME, (P256_PRIME + 1) // 4, P256_PRIME
+)
+
 
 def test_a_signature_verifies_with_the_signers_public_key() -> None:
     signature = KEY.sign(MESSAGE)
@@ -127,6 +137,32 @@ def test_a_public_key_refuses_a_point_off_the_curve() -> None:
 def test_a_public_key_refuses_a_coordinate_of_another_length() -> None:
     with pytest.raises(InvalidKey):
         SigningPublicKey(KEY.public_key.x[:31], KEY.public_key.y)
+
+
+def _coordinate(n: int) -> bytes:
+    return n.to_bytes(32, "big")
+
+
+def test_a_public_key_refuses_a_coordinate_written_as_itself_plus_the_prime() -> None:
+    SigningPublicKey(_coordinate(X_OF_5), _coordinate(Y_OF_5))
+
+    with pytest.raises(InvalidKey):
+        SigningPublicKey(_coordinate(X_OF_5 + P256_PRIME), _coordinate(Y_OF_5))
+
+
+def test_from_cose_key_refuses_a_coordinate_written_as_itself_plus_the_prime() -> None:
+    data = cbor2.dumps(
+        {
+            1: 2,
+            -1: 1,
+            -2: _coordinate(X_OF_5 + P256_PRIME),
+            -3: _coordinate(Y_OF_5),
+        },
+        canonical=True,
+    )
+
+    with pytest.raises(InvalidKey):
+        SigningPublicKey.from_cose_key(data)
 
 
 @pytest.mark.parametrize(
