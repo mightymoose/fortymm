@@ -50,4 +50,34 @@ export class HomePage {
   async open(): Promise<void> {
     await this.page.goto('/')
   }
+
+  // Waits for the app to register the browser's signing key, which it does
+  // after the session starts. Call it before the load that starts one.
+  async keyRegistered(): Promise<void> {
+    const response = await this.page.waitForResponse(
+      (response) =>
+        response.url().endsWith('/api/v1/account/signing-keys') &&
+        response.request().method() === 'POST',
+    )
+    if (!response.ok()) throw new Error(`The key's registration answered ${response.status()}`)
+  }
+
+  // The id of the signing key in the browser's IndexedDB, in hex, or null.
+  // A string, because the e2e suite's types have no DOM.
+  storedKeyId(): Promise<string | null> {
+    return this.page.evaluate(`new Promise((resolve, reject) => {
+      const opened = indexedDB.open('fortymm-signing', 1)
+      opened.onupgradeneeded = () => opened.result.createObjectStore('device-key')
+      opened.onerror = () => reject(opened.error)
+      opened.onsuccess = () => {
+        const read = opened.result.transaction('device-key').objectStore('device-key').get('device')
+        read.onerror = () => reject(read.error)
+        read.onsuccess = () => {
+          opened.result.close()
+          const kid = read.result?.kid
+          resolve(kid ? Array.from(kid, (b) => b.toString(16).padStart(2, '0')).join('') : null)
+        }
+      }
+    })`)
+  }
 }
