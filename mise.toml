@@ -115,6 +115,10 @@ docker compose run --rm -T api uv run --locked python -m fortymm_api.openapi
 docker compose run --rm -T -w /app/web-client dev sh -c 'npm install && npm run generate:api'
 """
 
+[tasks."api:signed-result-vectors"]
+description = "Regenerate api/signed-results/vectors.json, the signed result test vectors that every client's tests check"
+run = "docker compose run --rm --no-deps -T api uv run --locked python tests/signed_result_vectors.py"
+
 [tasks."api:build"]
 description = "Build the API's production image (api/Dockerfile) as fortymm-api-production, with the Python and uv versions pinned in mise.container.toml"
 # Not fortymm-api: that's what Compose names the dev `api` service's image.
