@@ -1,9 +1,16 @@
 import hashlib
+from uuid import UUID
 
 import cbor2
 import pytest
+from pycose.algorithms import Es256
+from pycose.headers import KID, Algorithm
+from signed_result_vectors import pycose_sign1, pycose_verifies_registration
 
+from fortymm_api.accounts import AccountId
 from fortymm_api.signing_keys import (
+    REGISTRATION_PROOF_BYTES,
+    REGISTRATION_TAG,
     InvalidKey,
     SigningPrivateKey,
     SigningPublicKey,
@@ -184,3 +191,77 @@ def test_a_private_key_refuses_a_scalar_outside_the_curve(d: bytes) -> None:
 
 def test_a_private_key_keeps_its_scalar_out_of_repr() -> None:
     assert KEY.d.hex() not in repr(KEY)
+
+
+ACCOUNT = AccountId(UUID(int=0xA))
+OTHER_ACCOUNT = AccountId(UUID(int=0xB))
+
+
+def test_a_registration_proof_verifies_for_its_key_and_account() -> None:
+    proof = KEY.registration_proof(ACCOUNT)
+
+    assert KEY.public_key.verify_registration(proof, ACCOUNT) is True
+
+
+def test_a_registration_proof_for_another_account_is_refused() -> None:
+    proof = KEY.registration_proof(OTHER_ACCOUNT)
+
+    assert KEY.public_key.verify_registration(proof, ACCOUNT) is False
+
+
+def test_a_registration_proof_by_another_key_is_refused() -> None:
+    proof = OTHER_KEY.registration_proof(ACCOUNT)
+
+    assert KEY.public_key.verify_registration(proof, ACCOUNT) is False
+
+
+@pytest.mark.parametrize("key", [KEY, OTHER_KEY], ids=["key", "other key"])
+@pytest.mark.parametrize(
+    "account",
+    [ACCOUNT, OTHER_ACCOUNT, AccountId(UUID(int=2**128 - 1))],
+    ids=["account", "other account", "all ones"],
+)
+def test_every_registration_proof_is_160_bytes(
+    key: SigningPrivateKey, account: AccountId
+) -> None:
+    assert len(key.registration_proof(account)) == REGISTRATION_PROOF_BYTES == 160
+
+
+def test_a_registration_proof_with_any_bit_flipped_is_refused() -> None:
+    proof = KEY.registration_proof(ACCOUNT)
+
+    for bit in range(len(proof) * 8):
+        flipped = bytearray(proof)
+        flipped[bit // 8] ^= 1 << (bit % 8)
+        assert KEY.public_key.verify_registration(bytes(flipped), ACCOUNT) is False, (
+            f"bit {bit}"
+        )
+
+
+@pytest.mark.parametrize(
+    "proof",
+    [
+        b"",
+        b"\x00",
+        KEY.registration_proof(ACCOUNT)[:-1],
+        KEY.registration_proof(ACCOUNT) + b"\x00",
+        *(hashlib.shake_256(bytes([n])).digest(n) for n in range(1, 200, 7)),
+        b"\xff" * REGISTRATION_PROOF_BYTES,
+    ],
+    ids=lambda proof: f"{len(proof)} bytes",
+)
+def test_garbage_is_refused_without_raising(proof: bytes) -> None:
+    assert KEY.public_key.verify_registration(proof, ACCOUNT) is False
+
+
+def test_a_registration_proof_is_a_cose_sign1_that_pycose_verifies() -> None:
+    proof = KEY.registration_proof(ACCOUNT)
+
+    message = pycose_sign1(proof)
+
+    assert message.phdr == {Algorithm: Es256, KID: KEY.public_key.kid}
+    assert message.uhdr == {}
+    assert message.payload is not None
+    assert cbor2.loads(message.payload) == {REGISTRATION_TAG: {1: ACCOUNT.bytes}}
+    assert pycose_verifies_registration(proof, KEY.public_key)
+    assert pycose_verifies_registration(proof, OTHER_KEY.public_key) is False

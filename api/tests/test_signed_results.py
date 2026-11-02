@@ -13,18 +13,20 @@ from signed_result_vectors import (
     SIGNATURES,
     VECTORS_PATH,
     InvalidJson,
+    RegistrationJson,
     ValidJson,
     VectorsJson,
     build,
     public_keys,
     pycose_append,
     pycose_verifies,
+    pycose_verifies_registration,
     render,
     replace_payload,
     result_from_json,
 )
 
-from fortymm_api.accounts import PlayerId
+from fortymm_api.accounts import AccountId, PlayerId
 from fortymm_api.matches import MatchId
 from fortymm_api.signed_results import (
     BadSignature,
@@ -44,7 +46,7 @@ from fortymm_api.signed_results import (
     qr_text,
     sign,
 )
-from fortymm_api.signing_keys import SigningPrivateKey
+from fortymm_api.signing_keys import SigningPrivateKey, SigningPublicKey
 
 ANN_KEY = SigningPrivateKey(hashlib.sha256(b"ann's key").digest())
 BO_KEY = SigningPrivateKey(hashlib.sha256(b"bo's key").digest())
@@ -76,6 +78,9 @@ multi_signed = pytest.mark.parametrize(
     ids=lambda v: v["name"],
 )
 invalid = pytest.mark.parametrize("vector", VECTORS["invalid"], ids=lambda v: v["name"])
+registration = pytest.mark.parametrize(
+    "vector", VECTORS["registrations"], ids=lambda v: v["name"]
+)
 
 
 def _envelope(vector: ValidJson) -> bytes:
@@ -207,6 +212,69 @@ def test_derives_every_key(name: str) -> None:
     assert key.y.hex() == expected["y"]
     assert key.to_cose_key().hex() == expected["cose_key"]
     assert key.kid.hex() == expected["kid"]
+
+
+def _registration_key(vector: RegistrationJson) -> SigningPrivateKey:
+    return SigningPrivateKey(bytes.fromhex(VECTORS["keys"][vector["key"]]["d"]))
+
+
+@registration
+def test_makes_and_verifies_every_registration_vector(
+    vector: RegistrationJson,
+) -> None:
+    key = _registration_key(vector)
+    account = AccountId(UUID(vector["account"]))
+
+    assert key.registration_proof(account).hex() == vector["proof"]
+    assert key.public_key.verify_registration(bytes.fromhex(vector["proof"]), account)
+
+
+@registration
+def test_every_registration_vector_records_the_steps_behind_its_proof(
+    vector: RegistrationJson,
+) -> None:
+    kid = _registration_key(vector).public_key.kid
+    protected = bytes.fromhex(vector["protected"])
+    payload = bytes.fromhex(vector["payload"])
+    signature = bytes.fromhex(vector["signature"])
+
+    assert cbor2.loads(protected) == {1: -7, 4: kid}
+    assert cbor2.loads(payload) == {
+        "fortymm/key-registration/v1": {1: UUID(vector["account"]).bytes}
+    }
+    assert bytes.fromhex(vector["to_be_signed"]) == cbor2.dumps(
+        ["Signature1", protected, b"", payload], canonical=True
+    )
+    assert len(signature) == 64
+    assert bytes.fromhex(vector["proof"]) == cbor2.dumps(
+        cbor2.CBORTag(18, [protected, {}, payload, signature]), canonical=True
+    )
+
+
+@registration
+def test_pycose_verifies_every_registration_vector(vector: RegistrationJson) -> None:
+    key = _registration_key(vector).public_key
+
+    assert pycose_verifies_registration(bytes.fromhex(vector["proof"]), key)
+
+
+def test_a_registration_vector_is_refused_for_another_account() -> None:
+    by_name = {v["name"]: v for v in VECTORS["registrations"]}
+    for_a, for_b = by_name["ann-for-account-a"], by_name["ann-for-account-b"]
+    key = _registration_key(for_a).public_key
+    account_b = AccountId(UUID(for_b["account"]))
+
+    assert for_a["proof"] != for_b["proof"]
+    assert key.verify_registration(bytes.fromhex(for_a["proof"]), account_b) is False
+
+
+def test_a_registration_vector_is_refused_for_another_key() -> None:
+    by_name = {v["name"]: v for v in VECTORS["registrations"]}
+    ann, cy = by_name["ann-for-account-a"], by_name["cy-for-account-a"]
+    account = AccountId(UUID(ann["account"]))
+    cy_key: SigningPublicKey = _registration_key(cy).public_key
+
+    assert cy_key.verify_registration(bytes.fromhex(ann["proof"]), account) is False
 
 
 def test_the_first_vector_matches_the_spec_example() -> None:

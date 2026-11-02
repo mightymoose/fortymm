@@ -132,20 +132,29 @@ def find_session(
     return ValidSession(row, kind)
 
 
-def lock_account_for_write(session: Session, account: AccountId) -> None:
+def lock_account_for_write(
+    session: Session, account: AccountId, *, exclusive: bool = False
+) -> None:
     """Hold the account row FOR SHARE until the transaction ends, or raise
     AccountAdopted. A service that writes as an account calls it first.
 
     Adoption takes the row FOR UPDATE, so the two take turns. A write that
     waited reads adopted_into after the lock, so it can't land on an account
     whose data adoption already moved.
+
+    `exclusive` holds the row FOR UPDATE instead, so writes as the account
+    also take turns with each other. A write whose rule counts rows that
+    another write could add meanwhile needs it, such as the live key cap: a
+    row lock can't see a row that moves in. Take it as the transaction's
+    first lock on the account. Two transactions that both hold FOR SHARE and
+    then ask for it deadlock.
     """
     # A scalar, not the entity: the ORM keeps a loaded Account's old
     # attributes, but this needs the row as the lock found it.
     adopted_into = session.scalar(
         select(Account.adopted_into)
         .where(Account.id == account)
-        .with_for_update(read=True)
+        .with_for_update(read=not exclusive)
     )
     if adopted_into is not None:
         raise AccountAdopted
@@ -259,6 +268,19 @@ def convert_guest(session: Session, guest: AccountId, into: AccountId) -> str:
     session.execute(delete(AuthSession).where(AuthSession.account_id == guest))
     _, token = new_session(session, into)
     return token
+
+
+def session_account(session: Session, token: str | None) -> AccountId | None:
+    """The account of the session the token names, expired or not, with no
+    lock. None if no session has the token."""
+    if token is None:
+        return None
+    account: AccountId | None = session.scalar(
+        select(AuthSession.account_id).where(
+            AuthSession.token_hash == hash_token(token)
+        )
+    )
+    return account
 
 
 def end_session(session: Session, token: str | None) -> None:

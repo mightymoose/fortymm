@@ -1,7 +1,7 @@
-"""Write api/signed-results/vectors.json, the signed result test vectors that
-every client's tests check: `./bin/mise run api:signed-result-vectors`.
-Changing an existing vector's bytes is a format change, which breaks every
-client.
+"""Write api/signed-results/vectors.json, the signed result and key
+registration test vectors that every client's tests check:
+`./bin/mise run api:signed-result-vectors`. Changing an existing vector's
+bytes is a format change, which breaks every client.
 """
 
 import base64
@@ -21,10 +21,11 @@ from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 from pycose.algorithms import Es256
 from pycose.headers import KID, Algorithm
 from pycose.keys.ec2 import EC2Key
+from pycose.messages.sign1message import Sign1Message
 from pycose.messages.signer import CoseSignature
 from pycose.messages.signmessage import SignMessage
 
-from fortymm_api.accounts import PlayerId
+from fortymm_api.accounts import AccountId, PlayerId
 from fortymm_api.matches import MatchId
 from fortymm_api.signed_results import (
     DOMAIN_TAG,
@@ -42,7 +43,11 @@ from fortymm_api.signed_results import (
     qr_text,
     sign,
 )
-from fortymm_api.signing_keys import SigningPrivateKey, SigningPublicKey
+from fortymm_api.signing_keys import (
+    REGISTRATION_PROOF_BYTES,
+    SigningPrivateKey,
+    SigningPublicKey,
+)
 
 VECTORS_PATH = Path(__file__).resolve().parents[1] / "signed-results" / "vectors.json"
 GENERATED_BY = (
@@ -107,12 +112,25 @@ class InvalidJson(TypedDict):
     text: NotRequired[str]  # a QR text or a link
 
 
+class RegistrationJson(TypedDict):
+    name: str
+    description: str
+    key: str  # a name in VectorsJson.keys
+    account: str  # UUID, lowercase with hyphens
+    protected: str  # hex of {1: -7, 4: kid}
+    payload: str  # hex of {REGISTRATION_TAG: {1: account}}
+    to_be_signed: str  # hex of ["Signature1", protected, h'', payload]
+    signature: str  # hex, 64 bytes r || s
+    proof: str  # hex, REGISTRATION_PROOF_BYTES
+
+
 class VectorsJson(TypedDict):
     format: str  # DOMAIN_TAG
     generated_by: str
     keys: dict[str, KeyJson]  # the key directory every vector verifies against
     valid: list[ValidJson]
     invalid: list[InvalidJson]
+    registrations: list[RegistrationJson]
 
 
 def _test_key(name: str) -> SigningPrivateKey:
@@ -130,6 +148,8 @@ _NS = uuid5(NAMESPACE_URL, "https://fortymm.com/signed-results/v1/vectors")
 ANN = PlayerId(uuid5(_NS, "player ann"))
 BO = PlayerId(uuid5(_NS, "player bo"))
 MERGED = PlayerId(uuid5(_NS, "player merged later"))
+ACCOUNT_A = AccountId(uuid5(_NS, "account a"))
+ACCOUNT_B = AccountId(uuid5(_NS, "account b"))
 ISSUED_AT = datetime(2026, 11, 1, 12, tzinfo=UTC)
 
 
@@ -794,6 +814,37 @@ INVALID: tuple[InvalidCase, ...] = (
 )
 
 
+@dataclass(frozen=True)
+class RegistrationCase:
+    name: str
+    description: str
+    key: str
+    account: AccountId
+
+
+REGISTRATIONS: tuple[RegistrationCase, ...] = (
+    RegistrationCase(
+        "ann-for-account-a",
+        "ann's key registers to account a.",
+        "ann",
+        ACCOUNT_A,
+    ),
+    RegistrationCase(
+        "cy-for-account-a",
+        "cy's key registers to the same account. An account holds many keys.",
+        "cy",
+        ACCOUNT_A,
+    ),
+    RegistrationCase(
+        "ann-for-account-b",
+        "ann's key registers to account b. The same key's proof differs by"
+        " account, and the server refuses it for account a.",
+        "ann",
+        ACCOUNT_B,
+    ),
+)
+
+
 def build() -> VectorsJson:
     valid = [_valid_vector(case) for case in VALID]
     envelopes = {v["name"]: bytes.fromhex(v["envelope"]) for v in valid}
@@ -803,6 +854,7 @@ def build() -> VectorsJson:
         keys={name: _key_json(key) for name, key in KEYS.items()},
         valid=valid,
         invalid=[_invalid_vector(case, envelopes) for case in INVALID],
+        registrations=[_registration_vector(case) for case in REGISTRATIONS],
     )
 
 
@@ -910,6 +962,35 @@ def _invalid_vector(case: InvalidCase, envelopes: dict[str, bytes]) -> InvalidJs
     )
 
 
+def _sign1_structure_by_cbor2(protected: bytes, payload: bytes) -> bytes:
+    # Built here, not imported from the codec, so the vectors cross-check it.
+    return cbor2.dumps(["Signature1", protected, b"", payload], canonical=True)
+
+
+def _registration_vector(case: RegistrationCase) -> RegistrationJson:
+    key = KEYS[case.key]
+    proof = key.registration_proof(case.account)
+    assert len(proof) == REGISTRATION_PROOF_BYTES
+    tagged = cbor2.loads(proof)
+    assert tagged.tag == 18
+    protected, unprotected, payload, signature = tagged.value
+    assert unprotected == {}
+    to_be_signed = _sign1_structure_by_cbor2(protected, payload)
+    _check_with_cryptography(key.public_key, signature, to_be_signed)
+    assert pycose_verifies_registration(proof, key.public_key)
+    return RegistrationJson(
+        name=case.name,
+        description=case.description,
+        key=case.key,
+        account=str(case.account),
+        protected=protected.hex(),
+        payload=payload.hex(),
+        to_be_signed=to_be_signed.hex(),
+        signature=signature.hex(),
+        proof=proof.hex(),
+    )
+
+
 def result_json(result: MatchResult) -> ResultJson:
     return ResultJson(
         match=str(result.match),
@@ -979,6 +1060,22 @@ def pycose_append(envelope: bytes, key: SigningPrivateKey, player: PlayerId) -> 
     message = SignMessage(phdr={}, payload=parts[PAYLOAD], signers=[signer])
     parts[SIGNATURES].append(_parts(message.encode())[SIGNATURES][0])
     return _assemble(parts)
+
+
+def pycose_sign1(proof: bytes) -> Sign1Message:
+    tagged = cbor2.loads(proof)
+    assert tagged.tag == 18
+    return Sign1Message.from_cose_obj(_thaw(tagged.value), True)
+
+
+def pycose_verifies_registration(proof: bytes, key: SigningPublicKey) -> bool:
+    """Whether pycose reads `proof` as a COSE_Sign1 by `key` and verifies it."""
+    message = pycose_sign1(proof)
+    if message.phdr.get(KID) != key.kid:
+        return False
+    message.key = _pycose_key(key)
+    verified: bool = message.verify_signature()
+    return verified
 
 
 def pycose_verifies(envelope: bytes, keys: Iterable[SigningPublicKey]) -> bool:

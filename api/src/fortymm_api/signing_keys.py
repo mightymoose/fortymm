@@ -3,9 +3,15 @@ COSE_Key bytes, its thumbprint (the `kid` every signature cites, RFC 9679)
 and ES256 over a raw `r || s` signature.
 
 The API holds no private key. SigningPrivateKey is the clients' reference
-recipe. tests/test_signing_keys.py guards this module.
+recipe. tests/test_signing_key_type.py guards this module.
 
-#183's `signing_keys.public_key` column stores to_cose_key(), so
+A device proves that it holds a key, and names the account it registers
+the key to, with a registration proof: a COSE_Sign1 that
+api/signed-results/README.md ("Key registration proof") specifies.
+SigningPrivateKey.registration_proof() makes one (the clients' recipe),
+and SigningPublicKey.verify_registration() checks one.
+
+The `signing_keys` table stores to_cose_key() as `public_key`, so
 `sha256(public_key) == kid` holds for every row.
 """
 
@@ -23,6 +29,8 @@ from cryptography.hazmat.primitives.asymmetric.utils import (
     encode_dss_signature,
 )
 
+from fortymm_api.accounts import AccountId
+
 # 32 bytes: the SHA-256 of the key's COSE_Key bytes, its RFC 9679 thumbprint.
 KeyId = NewType("KeyId", bytes)
 
@@ -38,6 +46,20 @@ _EC2: Final = 2
 _P256: Final = 1
 _P256_ORDER: Final = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
 _P256_PRIME: Final = 2**256 - 2**224 + 2**192 + 2**96 - 1
+
+# The proof payload's only key. signed_results.DOMAIN_TAG is the other tag a
+# device key signs under, so a proof can't pass as a result signature, or the
+# reverse. A new version is a new tag.
+REGISTRATION_TAG: Final = "fortymm/key-registration/v1"
+# Every proof has this length, whatever the key and account.
+REGISTRATION_PROOF_BYTES: Final = 160
+
+_COSE_SIGN1: Final = 18
+# Header labels (RFC 9052), not the COSE_Key labels above.
+_HEADER_ALG: Final = 1
+_HEADER_KID: Final = 4
+_ES256: Final = -7
+_ACCOUNT: Final = 1
 
 
 class InvalidKey(ValueError):
@@ -114,6 +136,25 @@ class SigningPublicKey:
             return False
         return True
 
+    def verify_registration(self, proof: bytes, account: AccountId) -> bool:
+        """Whether `proof` is this key's registration proof for `account`:
+        exactly the bytes that registration_proof() makes for this key and
+        this account, with a signature that verifies with this key. False
+        otherwise. Never raises.
+
+        Rebuilding the fixed bytes and comparing means no CBOR decoder reads
+        the client's bytes.
+        """
+        protected, payload = _registration_parts(self.kid, account)
+        unsigned = _sign1(protected, payload, bytes(SIGNATURE_BYTES))
+        if len(proof) != len(unsigned):
+            return False
+        if proof[:-SIGNATURE_BYTES] != unsigned[:-SIGNATURE_BYTES]:
+            return False
+        return self.verify(
+            proof[-SIGNATURE_BYTES:], _sign1_structure(protected, payload)
+        )
+
 
 @dataclass(frozen=True)
 class SigningPrivateKey:
@@ -144,6 +185,22 @@ class SigningPrivateKey:
         r, s = decode_dss_signature(der)
         return r.to_bytes(COORDINATE_BYTES, "big") + s.to_bytes(COORDINATE_BYTES, "big")
 
+    def registration_proof(self, account: AccountId) -> bytes:
+        """The COSE_Sign1 that registers this key's public half to `account`:
+
+            18([h'<protected>', {}, h'<payload>', h'<signature>'])
+
+        protected is {1: -7, 4: kid}, payload is
+        {REGISTRATION_TAG: {1: the account id's 16 bytes}}, both in
+        deterministic CBOR, and the signature is ES256, raw r || s, over
+        ["Signature1", protected, h'', payload]. REGISTRATION_PROOF_BYTES
+        long. Deterministic (RFC 6979), so the vectors pin its bytes.
+        """
+        protected, payload = _registration_parts(self.public_key.kid, account)
+        return _sign1(
+            protected, payload, self.sign(_sign1_structure(protected, payload))
+        )
+
 
 def _point(key: SigningPublicKey) -> ec.EllipticCurvePublicKey:
     numbers = ec.EllipticCurvePublicNumbers(
@@ -157,3 +214,23 @@ def _point(key: SigningPublicKey) -> ec.EllipticCurvePublicKey:
 
 def _private(key: SigningPrivateKey) -> ec.EllipticCurvePrivateKey:
     return ec.derive_private_key(int.from_bytes(key.d, "big"), ec.SECP256R1())
+
+
+def _registration_parts(kid: KeyId, account: AccountId) -> tuple[bytes, bytes]:
+    """The protected header and the payload: everything (kid, account) fix."""
+    protected = cbor2.dumps({_HEADER_ALG: _ES256, _HEADER_KID: kid}, canonical=True)
+    payload = cbor2.dumps({REGISTRATION_TAG: {_ACCOUNT: account.bytes}}, canonical=True)
+    return protected, payload
+
+
+def _sign1_structure(protected: bytes, payload: bytes) -> bytes:
+    """RFC 9052 section 4.4 for COSE_Sign1: ["Signature1", protected, no
+    external AAD, payload]."""
+    return cbor2.dumps(["Signature1", protected, b"", payload], canonical=True)
+
+
+def _sign1(protected: bytes, payload: bytes, signature: bytes) -> bytes:
+    return cbor2.dumps(
+        cbor2.CBORTag(_COSE_SIGN1, [protected, {}, payload, signature]),
+        canonical=True,
+    )

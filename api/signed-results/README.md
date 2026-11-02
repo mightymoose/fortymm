@@ -2,9 +2,11 @@
 
 A signed result is a match result that each player's device signed. It is the
 only form in which a result reaches the FortyMM server, by QR code between
-phones or by link. This document specifies the format. `vectors.json` beside
-it holds the test vectors that the API's, the web client's and the iOS app's
-test suites check, so a client whose encoding drifts fails its own suite.
+phones or by link. This document specifies the format, and the proof a device
+sends to register the key it signs with (see Key registration proof).
+`vectors.json` beside it holds the test vectors that the API's, the web
+client's and the iOS app's test suites check, so a client whose encoding
+drifts fails its own suite.
 
 The format uses these standards:
 
@@ -174,6 +176,51 @@ The precedence is part of the format. A `malformed` input gets that class from
 every implementation, including a client that holds no keys. A repeated (kid,
 player) signature counts once in what a verifier returns.
 
+## Key registration proof
+
+A device registers its key with `POST /v1/account/signing-keys`. The request
+carries the key's COSE_Key and a proof that the device holds the private key
+and means it for this account. The proof is a COSE_Sign1 (RFC 9052 section
+4.2, CBOR tag 18) of exactly 160 bytes, in deterministic CBOR:
+
+```
+18([
+  h'<protected>',           ; {1: -7, 4: kid}
+  {},                       ; unprotected header: empty
+  h'<payload>',             ; {"fortymm/key-registration/v1": {1: <account id, bstr(16)>}}
+  h'<64-byte signature>'    ; ES256, raw r || s
+])
+```
+
+The protected header has exactly the labels `1` (alg, `-7` for ES256) and `4`
+(kid, the key's own thumbprint). The payload is a map with one key, the
+registration tag `"fortymm/key-registration/v1"`, whose value is a map with
+one key, `1`, the 16 bytes of the account's id. The account id is
+`data.account.id` from `POST /v1/session`. The tag differs from the result
+format's domain tag, so a signature over a proof can't pass as a signature
+over a result, or the reverse. The signature is ECDSA P-256 with SHA-256
+over the Sig_structure for COSE_Sign1:
+
+```
+["Signature1", <protected bytes>, h'', <payload bytes>]
+```
+
+The third element is the external data, empty. The signature is `r || s`, as
+in a result's signature.
+
+There is no nonce and no time. Given the key and the account, every byte of
+the proof but the signature is fixed, so the server builds those 96 bytes
+itself, compares them with the proof's, and verifies the trailing 64 over the
+Sig_structure it built. A proof whose bytes differ anywhere, for another key,
+for another account, or in its encoding, is refused with a 422. The server
+never decodes a proof. Registering a key twice changes nothing, so a replay
+gets the same answer as the first call.
+
+A key belongs to one account for good. A device that finds its session on
+another account re-registers its key with a proof for that account. 200 means
+an adoption moved the key there, and the device keeps it. 409 means another
+account owns it, and the device makes a new key.
+
 ## Test vectors
 
 `vectors.json` is the shared test data. `api/tests/signed_result_vectors.py`
@@ -198,6 +245,7 @@ the tables give.
 | `keys` | object, name to Key | The test keys. This is also the key directory. A verifier resolves every vector's kids against all of these keys and nothing else. |
 | `valid` | array of Valid | Vectors that every implementation accepts. |
 | `invalid` | array of Invalid | Vectors that every implementation refuses, each with one error class. |
+| `registrations` | array of Registration | Key registration proofs, with the steps behind each one. |
 
 ### Key
 
@@ -263,6 +311,19 @@ vector carries a signature by a fourth key that the file doesn't list.
 | `envelope` | hex, optional | The bad envelope. |
 | `text` | string, optional | A bad QR text or link. Exactly one of `envelope` and `text` is present. |
 
+### Registration
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `name`, `description` | string | As in Valid. |
+| `key` | string | A name in `keys`. |
+| `account` | UUID | The account the proof registers the key to. |
+| `protected` | hex | The protected header, `{1: -7, 4: kid}`. |
+| `payload` | hex | The payload, `{"fortymm/key-registration/v1": {1: account}}`. |
+| `to_be_signed` | hex | The Sig_structure, `["Signature1", protected, h'', payload]`. The generator works it out separately from the API's codec and checks it against `signature` before it writes the file. |
+| `signature` | hex, 64 bytes | ECDSA P-256 SHA-256 over `to_be_signed`, as raw `r || s`. Deterministic (RFC 6979). |
+| `proof` | hex, 160 bytes | The COSE_Sign1 the client sends. |
+
 ### Checks a client's suite runs
 
 Signer checks are for every client, because every client signs. Verifier
@@ -307,6 +368,17 @@ Every valid vector, verifier:
 
 - V8. Decoding and verifying `envelope` against the key directory gives
   `issued_at`, `result` and `hash`, and `approvals` as a set.
+
+Every registration vector, signer:
+
+- R1. The protected header built from the key's `kid` equals `protected`, the
+  payload built from `account` equals `payload`, and the Sig_structure built
+  from both equals `to_be_signed`.
+- R2. `signature` verifies over `to_be_signed` with the key's (`x`, `y`).
+  Then sign `to_be_signed` with the key's `d` through the platform's own
+  signer, assemble the proof, and check that it differs from `proof` only in
+  its last 64 bytes and that its signature verifies. A deterministic signer
+  gets `proof` byte for byte.
 
 Every invalid vector:
 
@@ -379,6 +451,14 @@ picks.
 | `bad-signature-then-short-signature` | Precedence. A well-formed signature with one bit flipped, which fails to verify, then a 63-byte signature. `malformed` wins over `bad_signature`. |
 | `points-as-bignum` | The first game's first points as 2^64, a tag 2 bignum. |
 | `issued-at-after-9999` | `iat` 253402300800, one second after 9999-12-31T23:59:59Z. |
+
+Registrations:
+
+| Name | What it pins |
+| --- | --- |
+| `ann-for-account-a` | `ann`'s key registers to account a. |
+| `cy-for-account-a` | `cy`'s key registers to the same account. |
+| `ann-for-account-b` | `ann`'s key registers to account b. The same key's proof differs by account, and the server refuses it for account a. |
 
 ### Traps the vectors pin
 

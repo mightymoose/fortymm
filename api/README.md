@@ -15,6 +15,7 @@ Docker Compose service; see the repo's `CLAUDE.md` for the tasks that drive it.
   Regenerate it (and the web-client's types) with `./bin/mise run api:openapi`.
 - `src/fortymm_api/signed_results.py`: the signed match result codec, and
   `src/fortymm_api/signing_keys.py` the device signing key type.
-- `signed-results/`: the signed result format's specification (`README.md`)
-  and the test vectors every client checks (`vectors.json`). Regenerate the
-  vectors with `./bin/mise run api:signed-result-vectors`.
+- `signed-results/`: the specification of the signed result format and the
+  key registration proof (`README.md`), and the test vectors every client
+  checks (`vectors.json`). Regenerate the vectors with
+  `./bin/mise run api:signed-result-vectors`.

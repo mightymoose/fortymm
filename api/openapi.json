@@ -417,8 +417,25 @@
           "auth"
         ],
         "summary": "Logout",
-        "description": "End the visitor's session and expire its cookie.\n\n`logout_url` is the identity provider's logout page. The client follows\nit, so the provider's own session ends too. The provider then sends the\nbrowser to `/signed-out`, which starts no session. `/` would start a new\nguest account, and it wouldn't look like a sign-out.",
+        "description": "End the visitor's session and expire its cookie.\n\n`logout_url` is the identity provider's logout page. The client follows\nit, so the provider's own session ends too. The provider then sends the\nbrowser to `/signed-out`, which starts no session. `/` would start a new\nguest account, and it wouldn't look like a sign-out.\n\nWith `signing_key_id`, the device's key is signed out too, if the\nsession's account owns it. It still verifies what it signed. Any other\nid is ignored, so a logout never fails over it.",
         "operationId": "logout",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/LogoutRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -446,6 +463,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -583,6 +610,197 @@
           },
           "422": {
             "description": "The body is invalid, or `player_id` is missing with `same_as` or set with another answer. If `player_id` is the answered player, the body is in the `errors` shape instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/account/signing-keys": {
+      "get": {
+        "tags": [
+          "signing-keys"
+        ],
+        "summary": "Account Signing Keys",
+        "description": "List the account's signing keys, newest first, signed out and revoked\nones included.",
+        "operationId": "account_signing_keys",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SigningKeysResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "signing-keys"
+        ],
+        "summary": "Register Signing Key",
+        "description": "Register this device's signing key to the account, and return it.\n\n`proof` is the COSE_Sign1 that api/signed-results/README.md specifies,\nsigned by the key over the session's account id. Registering a key the\naccount already has returns it unchanged, signed out or revoked\nincluded. A key that another account registered answers 409.\n\nAn account keeps at most 20 live keys. A new key signs out the oldest.",
+        "operationId": "register_signing_key",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterKeyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SigningKeyResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Another account registered this key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is invalid. If the label, the public key or the proof breaks its rule, the body is in the `errors` shape instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ]
+      }
+    },
+    "/v1/account/signing-keys/{key_id}/revoke": {
+      "post": {
+        "tags": [
+          "signing-keys"
+        ],
+        "summary": "Revoke Signing Key",
+        "description": "Report a device compromised. Its key verifies nothing from now on.\nRevoking a revoked key changes nothing.",
+        "operationId": "revoke_signing_key",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "key_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Key Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SigningKeyResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The account has no key with this id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
@@ -1589,6 +1807,49 @@
         ],
         "title": "AccountRolesRequest"
       },
+      "AccountSigningKey": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{2})*$",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "signed_out_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Signed Out At"
+          },
+          "revoked_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Revoked At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "created_at",
+          "signed_out_at",
+          "revoked_at"
+        ],
+        "title": "AccountSigningKey"
+      },
       "AdminAccount": {
         "properties": {
           "id": {
@@ -2120,6 +2381,20 @@
         ],
         "title": "LogoutData"
       },
+      "LogoutRequest": {
+        "properties": {
+          "signing_key_id": {
+            "pattern": "^(?:[0-9a-f]{2})*$",
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Signing Key Id"
+          }
+        },
+        "type": "object",
+        "title": "LogoutRequest"
+      },
       "LogoutResponse": {
         "properties": {
           "data": {
@@ -2210,6 +2485,31 @@
           "played_at"
         ],
         "title": "RecentMatch"
+      },
+      "RegisterKeyRequest": {
+        "properties": {
+          "public_key": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{2})*$",
+            "title": "Public Key"
+          },
+          "proof": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{2})*$",
+            "title": "Proof"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "public_key",
+          "proof",
+          "label"
+        ],
+        "title": "RegisterKeyRequest"
       },
       "RoleRequest": {
         "properties": {
@@ -2344,6 +2644,34 @@
           "outcome"
         ],
         "title": "SettledOutcome"
+      },
+      "SigningKeyResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AccountSigningKey"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "SigningKeyResponse"
+      },
+      "SigningKeysResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/AccountSigningKey"
+            },
+            "type": "array",
+            "title": "Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "SigningKeysResponse"
       },
       "ValidationError": {
         "properties": {

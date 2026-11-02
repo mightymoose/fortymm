@@ -2,11 +2,13 @@
 the `oidc` Compose service. tests/services/test_sign_in.py covers the rules.
 """
 
+import hashlib
 import json
 from collections.abc import Callable, Iterator
 from http.cookies import SimpleCookie
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
+from uuid import UUID
 
 import httpx2 as httpx
 import pytest
@@ -14,8 +16,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
+from fortymm_api.accounts import AccountId
 from fortymm_api.auth import RequestAccount
 from fortymm_api.main import create_app
+from fortymm_api.signing_keys import SigningPrivateKey
 
 COOKIE = "__Host-fortymm_session"
 LOGIN_COOKIE = "__Host-fortymm_login"
@@ -406,6 +410,49 @@ def test_logout_ends_the_session_and_expires_the_cookie(
     assert parse_qs(logout_url.query)["returnTo"] == ["https://testserver/signed-out"]
     browser.cookies.set(COOKIE, old_token or "", domain="testserver")
     assert start_session(browser)["id"] != ann["id"]
+
+
+def test_logout_signs_out_the_devices_key(
+    browser: TestClient, migrated_database: Engine
+) -> None:
+    account = start_session(browser)
+    key = SigningPrivateKey(hashlib.sha256(b"ann's phone").digest())
+    kid = key.public_key.kid
+    registered = browser.post(
+        "/v1/account/signing-keys",
+        headers=JSON,
+        json={
+            "public_key": key.public_key.to_cose_key().hex(),
+            "proof": key.registration_proof(AccountId(UUID(account["id"]))).hex(),
+            "label": "Ann's phone",
+        },
+    )
+    assert registered.status_code == 200
+
+    response = browser.post(
+        "/v1/auth/logout", headers=JSON, json={"signing_key_id": kid.hex()}
+    )
+
+    assert response.status_code == 200
+    with migrated_database.connect() as connection:
+        signed_out_at = connection.scalar(
+            text("SELECT signed_out_at FROM signing_keys WHERE id = :id"), {"id": kid}
+        )
+    assert signed_out_at is not None
+
+
+@pytest.mark.parametrize("signing_key_id", ["", "abcd", "00" * 33])
+def test_logout_ignores_a_signing_key_id_that_isnt_a_kid(
+    browser: TestClient, signing_key_id: str
+) -> None:
+    start_session(browser)
+
+    response = browser.post(
+        "/v1/auth/logout", headers=JSON, json={"signing_key_id": signing_key_id}
+    )
+
+    assert response.status_code == 200
+    assert SimpleCookie(response.headers["Set-Cookie"])[COOKIE]["max-age"] == "0"
 
 
 def app_login(phone: TestClient) -> httpx.Response:
