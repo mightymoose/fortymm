@@ -30,6 +30,13 @@ from fortymm_api.services.roles import (
     UnknownPermission,
 )
 from fortymm_api.services.sessions import AccountAdopted, GuestAccountLimitReached
+from fortymm_api.services.signing_keys import (
+    InvalidDeviceLabel,
+    InvalidProof,
+    InvalidPublicKey,
+    KeyRegisteredElsewhere,
+    SigningKeyNotFound,
+)
 from fortymm_api.v1.auth import SignInUnavailable
 from fortymm_api.v1.errors import Error, ErrorsResponse, retry_after_seconds
 
@@ -56,6 +63,16 @@ ROLE_ERRORS: dict[type[Exception], tuple[int, str]] = {
         409,
         "At least one account must keep the permission to grant roles",
     ),
+}
+SIGNING_KEY_ERRORS: dict[type[Exception], tuple[int, str]] = {
+    InvalidDeviceLabel: (422, "A device label is 1 to 50 characters, after trimming"),
+    InvalidPublicKey: (422, "The public key isn't a P-256 COSE_Key in the format"),
+    InvalidProof: (
+        422,
+        "The proof doesn't show that this device holds the key for this account",
+    ),
+    KeyRegisteredElsewhere: (409, "Another account registered this key"),
+    SigningKeyNotFound: (404, "The account has no key with this id"),
 }
 AUTH0_SETTINGS = ("AUTH0_DOMAIN", "AUTH0_CLIENT_ID", "AUTH0_CLIENT_SECRET")
 
@@ -230,7 +247,9 @@ def create_app() -> FastAPI:
         SignInUnavailable,
         lambda _request, _error: error_response(503, SIGN_IN_UNAVAILABLE),
     )
-    for error, (status, title) in (PLAYER_ERRORS | ROLE_ERRORS).items():
+    for error, (status, title) in (
+        PLAYER_ERRORS | ROLE_ERRORS | SIGNING_KEY_ERRORS
+    ).items():
         app.add_exception_handler(error, answers(status, title))
     require_json(app)
     # Added last so it runs first: a request without the secret learns nothing

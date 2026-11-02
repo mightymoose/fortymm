@@ -60,7 +60,7 @@ struct FortyMMAPI: AccountAPI {
         switch try await call({ try await client.logout() }) {
         case .ok:
             return
-        case .unsupportedMediaType:
+        case .unsupportedMediaType, .unprocessableContent:
             throw .broken
         case .serviceUnavailable:
             throw .unreachable

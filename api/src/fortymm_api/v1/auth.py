@@ -16,8 +16,9 @@ from fortymm_api.auth import (
 )
 from fortymm_api.database import DatabaseSession
 from fortymm_api.identity_provider import IdentityProvider, IdToken
-from fortymm_api.services import sessions, sign_in
+from fortymm_api.services import sign_in, signing_keys
 from fortymm_api.services.sessions import GuestAccountLimitReached
+from fortymm_api.signing_keys import KeyId
 from fortymm_api.v1.errors import (
     GUEST_LIMIT,
     NO_PROVIDER,
@@ -26,6 +27,7 @@ from fortymm_api.v1.errors import (
     retry_after_seconds,
 )
 from fortymm_api.v1.session import client_address
+from fortymm_api.v1.types import HexBytes
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -313,12 +315,23 @@ def app_finish(
     return AppFinishResponse(data=AppFinishData(outcome=outcome))
 
 
+class LogoutRequest(BaseModel):
+    # This device's signing key id, in lowercase hex. The key is signed out
+    # if the session's account owns it. Any other value is ignored.
+    signing_key_id: HexBytes | None = None
+
+
 class LogoutData(BaseModel):
     logout_url: str
 
 
 class LogoutResponse(BaseModel):
     data: LogoutData
+
+
+def key_id(data: bytes | None) -> KeyId | None:
+    """The kid `data` holds, or None unless it is 32 bytes."""
+    return KeyId(data) if data is not None and len(data) == 32 else None
 
 
 @router.post("/logout", responses={**UNSUPPORTED_MEDIA_TYPE, **NO_PROVIDER})
@@ -328,6 +341,7 @@ def logout(
     request: Request,
     response: Response,
     provider: Provider,
+    body: LogoutRequest | None = None,
 ) -> LogoutResponse:
     """End the visitor's session and expire its cookie.
 
@@ -335,8 +349,14 @@ def logout(
     it, so the provider's own session ends too. The provider then sends the
     browser to `/signed-out`, which starts no session. `/` would start a new
     guest account, and it wouldn't look like a sign-out.
+
+    With `signing_key_id`, the device's key is signed out too, if the
+    session's account owns it. It still verifies what it signed. Any other
+    id is ignored, so a logout never fails over it.
     """
-    sessions.end_session(session, token)
+    signing_keys.sign_out_device(
+        session, token, key_id(body.signing_key_id if body else None)
+    )
     delete_session_cookie(response)
     response.headers["Cache-Control"] = "no-store"
     logout_url = provider.logout_url(f"{public_origin(request)}/signed-out")

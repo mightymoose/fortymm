@@ -207,6 +207,10 @@ export interface paths {
          *     it, so the provider's own session ends too. The provider then sends the
          *     browser to `/signed-out`, which starts no session. `/` would start a new
          *     guest account, and it wouldn't look like a sign-out.
+         *
+         *     With `signing_key_id`, the device's key is signed out too, if the
+         *     session's account owns it. It still verifies what it signed. Any other
+         *     id is ignored, so a logout never fails over it.
          */
         post: operations["logout"];
         delete?: never;
@@ -269,6 +273,59 @@ export interface paths {
          *     `already_answered`, but a second `not_mine` answers 409.
          */
         post: operations["answer_question"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/account/signing-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Account Signing Keys
+         * @description List the account's signing keys, newest first, signed out and revoked
+         *     ones included.
+         */
+        get: operations["account_signing_keys"];
+        put?: never;
+        /**
+         * Register Signing Key
+         * @description Register this device's signing key to the account, and return it.
+         *
+         *     `proof` is the COSE_Sign1 that api/signed-results/README.md specifies,
+         *     signed by the key over the session's account id. Registering a key the
+         *     account already has returns it unchanged, signed out or revoked
+         *     included. A key that another account registered answers 409.
+         *
+         *     An account keeps at most 20 live keys. A new key signs out the oldest.
+         */
+        post: operations["register_signing_key"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/account/signing-keys/{key_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Signing Key
+         * @description Report a device compromised. Its key verifies nothing from now on.
+         *     Revoking a revoked key changes nothing.
+         */
+        post: operations["revoke_signing_key"];
         delete?: never;
         options?: never;
         head?: never;
@@ -492,6 +549,28 @@ export interface components {
             /** Role Ids */
             role_ids: string[];
         };
+        /** AccountSigningKey */
+        AccountSigningKey: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Signed Out At
+             * Format: date-time
+             */
+            signed_out_at: string | null;
+            /**
+             * Revoked At
+             * Format: date-time
+             */
+            revoked_at: string | null;
+        };
         /** AdminAccount */
         AdminAccount: {
             /**
@@ -694,6 +773,11 @@ export interface components {
             /** Logout Url */
             logout_url: string;
         };
+        /** LogoutRequest */
+        LogoutRequest: {
+            /** Signing Key Id */
+            signing_key_id?: string | null;
+        };
         /** LogoutResponse */
         LogoutResponse: {
             data: components["schemas"]["LogoutData"];
@@ -746,6 +830,15 @@ export interface components {
              * Format: date-time
              */
             played_at: string;
+        };
+        /** RegisterKeyRequest */
+        RegisterKeyRequest: {
+            /** Public Key */
+            public_key: string;
+            /** Proof */
+            proof: string;
+            /** Label */
+            label: string;
         };
         /** RoleRequest */
         RoleRequest: {
@@ -802,6 +895,15 @@ export interface components {
              * @enum {string}
              */
             outcome: "already_answered" | "managed" | "removed" | "self";
+        };
+        /** SigningKeyResponse */
+        SigningKeyResponse: {
+            data: components["schemas"]["AccountSigningKey"];
+        };
+        /** SigningKeysResponse */
+        SigningKeysResponse: {
+            /** Data */
+            data: components["schemas"]["AccountSigningKey"][];
         };
         /** ValidationError */
         ValidationError: {
@@ -1092,7 +1194,11 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["LogoutRequest"] | null;
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -1110,6 +1216,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
             /** @description The API has no identity provider configured */
@@ -1213,6 +1328,153 @@ export interface operations {
                 };
             };
             /** @description The body is invalid, or `player_id` is missing with `same_as` or set with another answer. If `player_id` is the answered player, the body is in the `errors` shape instead */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    account_signing_keys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SigningKeysResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+        };
+    };
+    register_signing_key: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SigningKeyResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Another account registered this key */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The request's Content-Type isn't application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The body is invalid. If the label, the public key or the proof breaks its rule, the body is in the `errors` shape instead */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_signing_key: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                key_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SigningKeyResponse"];
+                };
+            };
+            /** @description The request has no valid session */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The account has no key with this id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The request's Content-Type isn't application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description Validation Error */
             422: {
                 headers: {
                     [name: string]: unknown;
