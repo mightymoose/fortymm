@@ -104,6 +104,25 @@ describe('ToastProvider', () => {
     expect(region()).toBeEmptyDOMElement()
   })
 
+  it('keeps pinned content under the toasts while they time out and a fourth evicts the first', async () => {
+    render(
+      <ToastProvider pinned={<p>Pinned</p>}>
+        {['One', 'Two', 'Three', 'Four'].map((message) => (
+          <Raise key={message} message={message} />
+        ))}
+      </ToastProvider>,
+    )
+
+    for (const message of ['One', 'Two', 'Three', 'Four']) {
+      await user.click(screen.getByRole('button', { name: `Raise ${message}` }))
+    }
+    expect(region()).toHaveTextContent(/^TwoThreeFourPinned$/)
+
+    act(() => vi.advanceTimersByTime(TOAST_MS))
+
+    expect(region()).toHaveTextContent(/^Pinned$/)
+  })
+
   it('shows at most three toasts, newest last', async () => {
     renderWith(
       { message: 'One' },

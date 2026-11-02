@@ -1,13 +1,12 @@
-import { Outlet } from '@tanstack/react-router'
+import { Outlet, useRouteContext } from '@tanstack/react-router'
 import { ToastProvider } from '../components/ToastProvider'
 import { TooltipProvider } from '../components/TooltipProvider'
+import { UpdateNotice } from './UpdateNotice'
 
-// Gives every page toasts and tooltips. Each page brings its own frame: the
-// authenticated pages sit in AppShell, and the design system page in
-// `.page` (styles/page.css).
 export function Root() {
+  const { appUpdate } = useRouteContext({ from: '__root__' })
   return (
-    <ToastProvider>
+    <ToastProvider pinned={<UpdateNotice appUpdate={appUpdate} />}>
       <TooltipProvider>
         <Outlet />
       </TooltipProvider>

@@ -7,14 +7,14 @@ export class AdminPage {
   readonly title: Locator
   readonly panel: Locator
   readonly toastRegion: Locator
-  readonly mainNav: Locator
+  readonly tabBar: Locator
 
   constructor(page: Page) {
     this.page = page
     this.title = page.getByRole('heading', { level: 1, name: 'Administration' })
     this.panel = page.getByRole('tabpanel')
     this.toastRegion = page.getByRole('status', { name: 'Notifications' })
-    this.mainNav = page.getByRole('navigation', { name: 'Main' })
+    this.tabBar = page.getByRole('navigation', { name: 'Main' })
   }
 
   async goto(): Promise<void> {

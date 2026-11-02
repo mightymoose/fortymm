@@ -293,7 +293,10 @@ a:hover{color:var(--ball-200)}
 
 @media (max-width: 899px) {
   :root {
-    --app-tab-bar: calc(56px + 2 * var(--s-1) + env(safe-area-inset-bottom));
+    --app-tab-link: 56px;
+    /* The sum of .app-nav's and .app-link's boxes below. e2e/admin.spec.ts
+       measures it at 390x844. */
+    --app-tab-bar: calc(var(--app-tab-link) + 4 * var(--s-1) + env(safe-area-inset-bottom));
   }
 
   .app-shell,
@@ -310,7 +313,7 @@ a:hover{color:var(--ball-200)}
     position: fixed;
     inset: auto 0 0 0;
     z-index: 20;
-    height: var(--app-tab-bar);
+    height: auto;
     display: grid;
     grid-auto-flow: column;
     grid-auto-columns: minmax(0, 1fr);
@@ -327,7 +330,7 @@ a:hover{color:var(--ball-200)}
     gap: 2px;
     width: auto;
     height: auto;
-    min-height: 56px;
+    min-height: var(--app-tab-link);
     padding: var(--s-1) 0;
     font-size: var(--text-xs);
   }

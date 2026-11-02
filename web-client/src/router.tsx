@@ -3,21 +3,20 @@ import { createRouter, type RouterHistory } from '@tanstack/react-router'
 import { api as defaultApi, type ApiClient } from './api/client'
 import { createQueryClient } from './api/queries'
 import { routeTree } from './routeTree.gen'
+import { createAppUpdate, type AppUpdate } from './serviceWorker'
 
-// Builds the app's router. Tests pass a memory history to start on a given
-// path, a QueryClient that doesn't retry, and an API client with a stub
-// fetch. The app uses the browser history and the defaults.
 export function createAppRouter(
   history?: RouterHistory,
   {
     queryClient = createQueryClient(),
     api = defaultApi,
-  }: { queryClient?: QueryClient; api?: ApiClient } = {},
+    appUpdate = createAppUpdate(undefined),
+  }: { queryClient?: QueryClient; api?: ApiClient; appUpdate?: AppUpdate } = {},
 ) {
   return createRouter({
     routeTree,
     history,
-    context: { api, queryClient },
+    context: { api, queryClient, appUpdate },
     Wrap: ({ children }) => (
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     ),
