@@ -26,21 +26,21 @@ struct RoadmapView: View {
     static let parts: [Part] = [
         Part(
             title: "Your account",
-            body: "You can sign in now. Next, your matches, leagues and rating stay with your account on every device.",
+            body: "Sign in on any device. Your matches, leagues and rating stay with your account.",
             symbol: "person",
-            stage: .building
+            stage: .ready
         ),
         Part(
             title: "Leagues",
             body: "Play a season with your club or your friends, and follow the standings.",
             symbol: "list.bullet",
-            stage: .next
+            stage: .ready
         ),
         Part(
             title: "Matches",
             body: "Log the matches you play and follow your rating after each one.",
             symbol: "figure.table.tennis",
-            stage: .later
+            stage: .building
         ),
         Part(
             title: "Basic tournaments",
