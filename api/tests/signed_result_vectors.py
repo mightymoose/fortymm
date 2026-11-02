@@ -678,7 +678,7 @@ INVALID: tuple[InvalidCase, ...] = (
         "signer-alg-label-true",
         "The second signer's alg label is CBOR true, not the integer 1. A"
         " decoder whose maps treat true as 1 (Python's dict does) accepts it."
-        " A true key can't sort the same way as the text key \"player\" under"
+        ' A true key can\'t sort the same way as the text key "player" under'
         " both length-first and bytewise order, so a decoder that checks"
         " bytewise order refuses it for that. Both faults are malformed.",
         "malformed",
