@@ -3,7 +3,7 @@ COSE_Key bytes, its thumbprint (the `kid` every signature cites, RFC 9679)
 and ES256 over a raw `r || s` signature.
 
 The API holds no private key. SigningPrivateKey is the clients' reference
-recipe. tests/test_signing_keys.py guards this module.
+recipe. tests/test_signing_key_type.py guards this module.
 
 A device proves that it holds a key, and names the account it registers
 the key to, with a registration proof: a COSE_Sign1 that
