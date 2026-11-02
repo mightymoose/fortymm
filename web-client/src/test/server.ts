@@ -36,6 +36,10 @@ export const server = setupServer(
     HttpResponse.json(sessionResponse),
   ),
   http.post(`${API_BASE_URL}/v1/auth/logout`, () => HttpResponse.json(logoutResponse)),
+  http.post(`${API_BASE_URL}/v1/account/signing-keys`, async ({ request }) => {
+    const { public_key, label } = (await request.json()) as RegisterKeyRequest
+    return HttpResponse.json(await registeredKey(public_key, label))
+  }),
   http.get(`${API_BASE_URL}/v1/account/players`, () =>
     HttpResponse.json<components['schemas']['AccountPlayersResponse']>({ data: [] }),
   ),
@@ -477,4 +481,60 @@ export function failAdminOnce(list: AdminList, status: number) {
       { once: true },
     ),
   )
+}
+
+type RegisterKeyRequest = components['schemas']['RegisterKeyRequest']
+type SigningKeyResponse = components['schemas']['SigningKeyResponse']
+
+async function registeredKey(
+  publicKey: string,
+  label: string,
+  revokedAt: string | null = null,
+): Promise<SigningKeyResponse> {
+  const bytes = Uint8Array.from(publicKey.match(/../g) ?? [], (pair) => parseInt(pair, 16))
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
+  const id = Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')
+  return {
+    data: {
+      id,
+      label,
+      created_at: new Date().toISOString(),
+      signed_out_at: null,
+      revoked_at: revokedAt,
+    },
+  }
+}
+
+// Records the device key registrations and the logouts that the mock API
+// gets. A key in `ownedElsewhere` belongs to another account, so its
+// registration gets a 409. A key in `revoked` comes back revoked. Both hold
+// public keys as hex. `offline` makes every registration fail with no
+// response. The key registers in the background, so a test waits for each
+// registration it causes before it ends, or the next test receives it.
+export function mockSigningKeys({ offline = false }: { offline?: boolean } = {}) {
+  const registrations: RegisterKeyRequest[] = []
+  const logouts: (components['schemas']['LogoutRequest'] | null)[] = []
+  const ownedElsewhere = new Set<string>()
+  const revoked = new Set<string>()
+  server.use(
+    http.post(`${API_BASE_URL}/v1/account/signing-keys`, async ({ request }) => {
+      const body = (await request.json()) as RegisterKeyRequest
+      registrations.push(body)
+      if (offline) return HttpResponse.error()
+      if (ownedElsewhere.has(body.public_key)) {
+        return HttpResponse.json(
+          { errors: [{ status: '409', title: 'Another account registered this key' }] },
+          { status: 409 },
+        )
+      }
+      const revokedAt = revoked.has(body.public_key) ? '2026-11-01T12:00:00Z' : null
+      return HttpResponse.json(await registeredKey(body.public_key, body.label, revokedAt))
+    }),
+    http.post(`${API_BASE_URL}/v1/auth/logout`, async ({ request }) => {
+      const text = await request.text()
+      logouts.push(text ? JSON.parse(text) : null)
+      return HttpResponse.json(logoutResponse)
+    }),
+  )
+  return { registrations, logouts, ownedElsewhere, revoked }
 }

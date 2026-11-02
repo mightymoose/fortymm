@@ -584,8 +584,8 @@ checks (#182). No route reads a result yet.
   append every multi-signature vector's last signature byte for byte.
 - `test_every_two_signature_qr_text_fits_version_16_at_level_m` holds the
   QR budget, 656 alphanumeric characters. The longest two-signature vector
-  is 614. The web client checks the vectors in #184 and the iOS app in
-  #185, whose workflow runs when the file changes.
+  is 614. The web client checks the vectors (see Device signing key) and
+  the iOS app in #185, whose workflow runs when the file changes.
 - To add a Python dependency, run `docker compose run --rm --no-deps -T api
   uv add <pkg>` (`uv add --dev <pkg>` for a dev one) and commit
   `pyproject.toml` with `uv.lock`. The production image installs without
@@ -1024,14 +1024,58 @@ Each request function in `queries.ts` goes through `send()`. It throws
 `ApiUnreachable` when no response came back, and `ApiError` when the
 response isn't ok. A bodyless `POST` or `DELETE` sends `JSON_HEADERS`.
 
-`logout(api)` in `queries.ts` sends `POST /v1/auth/logout` and returns
-`data.logout_url`. `useSignOut()` (`src/pages/useSignOut.ts`) runs it
-through `useMutation`, for `UserMenu`. On success, it
-calls `leavePage()` (`src/leavePage.ts`), which loads the URL with
+`logout(api)` in `queries.ts` sends `POST /v1/auth/logout` with the
+device key's `signing_key_id`, deletes the key, and returns
+`data.logout_url` (see Device signing key). `useSignOut()`
+(`src/pages/useSignOut.ts`) runs it through `useMutation`, for
+`UserMenu`. On success, it calls `leavePage()` (`src/leavePage.ts`), which loads the URL with
 `window.location.assign`. `reloadPage()` in the same module reloads the
 page, for the update notice. jsdom's `location` can't be spied on, so
 tests `vi.mock` that module. If the request fails, the menu
 says so and offers Sign out again.
+
+### Device signing key
+
+Each browser holds one P-256 signing key, which signs the results it
+approves (see Signing keys and Signed match results). `src/signing/` holds
+it.
+
+- `signedResults.ts` is the codec of `api/signed-results/README.md`:
+  `encodePayload()`, `decodePayload()`, `sign()`, `encodeEnvelope()`,
+  `decodeEnvelope()`, `appendSignature()`, `qrText()`, `link()`,
+  `envelopeFromText()`, `coseKey()`, `keyId()` and `registrationProof()`.
+  `MatchResult` names its ending as a union, so a completed result can't
+  carry `retired_by`. `decodeEnvelope()` throws `Malformed` for the inputs
+  that every implementation refuses from the bytes alone. The client
+  doesn't verify signatures.
+- `cbor.ts` is a vendored encoder and decoder for the CBOR items the
+  format uses, and nothing else. It writes the core deterministic encoding.
+  The decoder refuses floats, `null`, indefinite lengths and trailing
+  bytes, and re-encodes what it read to refuse bytes that aren't
+  deterministic. A decoded integer is a `bigint` and a map a `Map`, so `1`,
+  `true` and `"1"` stay apart. `textEncodings.ts` holds strict Base45 and
+  base64url.
+- `signedResults.test.ts` runs the signer checks of the README against
+  `vectors.json`: K1 to K3, V1 to V7, R1, R2 and I2. It imports the private
+  scalar as PKCS#8, which makes WebCrypto work out the public point.
+- `deviceStore.ts` holds the IndexedDB database `fortymm`. Its
+  `device-key` store holds the key, a non-extractable `CryptoKey` with its
+  COSE_Key and kid. Its `signed-results` store is the queue of signed
+  results, which the offline exchange (#195) fills.
+- `registerDeviceKey()` in `deviceKey.ts` runs in the background each time
+  `POST /v1/session` answers, so it never holds up the loading screen.
+  With no stored key, such as after Safari deleted the site's storage, it
+  makes one first. It sends the key with a proof for the session's account
+  and a label from `deviceLabel()`, such as `Safari on iOS`. A 409, or a
+  200 with `revoked_at`, makes it replace the key and register the new one.
+  Any other failure, such as no network, is dropped, and the next online
+  load tries again. A Web Lock (`fortymm.device-key`) makes two tabs take
+  turns, so they don't each make a key.
+- A sign-out sends the key's id in `POST /v1/auth/logout`, then deletes
+  the key. It keeps the queue, whose results no longer need the key and
+  may be the only copy of a match. The next account on the browser gets a
+  new key.
+- `signWithDeviceKey()` approves a payload with the stored key.
 
 ### Error pages
 
@@ -1057,8 +1101,9 @@ data. It carries the status and the time from `Retry-After`. A query throws
 
 Vitest is configured in the `test` block of `web-client/vite.config.ts` (jsdom
 environment). `web-client/src/setupTests.ts` loads the jest-dom matchers,
-starts the mock API, and cleans up rendered components and `localStorage`
-after each test, so a saved session doesn't leak into the next test. Tests
+starts the mock API, and cleans up rendered components, `localStorage` and
+IndexedDB after each test, so a saved session or a device key doesn't leak
+into the next test. IndexedDB is `fake-indexeddb`. Tests
 live next to the code as `*.test.tsx`.
 
 Tests go through page objects in `web-client/src/test/pages/`. A static async
@@ -1078,7 +1123,13 @@ e.g. `components['schemas']['SessionResponse']`. The default handler answers
 `POST /v1/session` with `sessionResponse`, a guest account whose player is
 `excited egret 387`. Another default handler answers `POST /v1/auth/logout`
 with `logoutResponse`, and another answers `GET /v1/account/players` with
-no players. `listedPlayer()` makes a player for the players list, with no
+no players. Another answers `POST /v1/account/signing-keys` with 200.
+`mockSigningKeys()` records the registrations and the logouts it gets. A
+public key added to its `ownedElsewhere` gets a 409, and one added to
+`revoked` comes back revoked. The key registers in the background, so a
+test waits for each registration it causes, or the next test gets it.
+`src/test/deviceStorage.ts` clears the site's data and reads the queue, as
+a browser would. `listedPlayer()` makes a player for the players list, with no
 matches. `mockVerifiedAccount()` signs the mock API in as a verified
 account with the players it gets. One of them must be `self`, and their
 order is the order the API made them. It answers "Is this you?" as the API
@@ -1197,7 +1248,12 @@ to its `returnTo`. The API builds `returnTo` from the browser's `Host`, so
 in the e2e suite it is `http://localhost:5173/signed-out`. A second test
 signs a guest out from the account menu, through its dialog, to
 `/signed-out`. A third signs in again from `/signed-out`, and checks that
-the account keeps its one player.
+the account keeps its one player. A fourth checks that the API registered
+the device key, puts a result in the queue and signs the guest out. The
+logout carries the key's id, the key is gone and the queue keeps the
+result. Then Play as a guest registers a new key. `DeviceStorage`
+(`e2e/pages/DeviceStorage.ts`) reads the key and the queue from the
+page's IndexedDB.
 
 `e2e/admin.spec.ts` signs in as `mightymoose@fortymm.com`, whom the
 migration makes an administrator. On `/admin` it creates a role with a new
@@ -1207,7 +1263,7 @@ holds Administrator. A second test does the same at 390x844, where the
 sidebar is a tab bar, and checks that the toast sits 24px above the bar
 (#150).
 
-The suite counts about 26 guest accounts and sign-ins with no session,
+The suite counts about 28 guest accounts and sign-ins with no session,
 under the limit of 30 a minute.
 
 The design system page is a copy of the reference's component gallery

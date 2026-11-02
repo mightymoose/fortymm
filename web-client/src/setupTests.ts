@@ -1,4 +1,6 @@
 import '@testing-library/jest-dom/vitest'
+import 'fake-indexeddb/auto'
+import { IDBFactory } from 'fake-indexeddb'
 import { cleanup } from '@testing-library/react'
 import { afterAll, afterEach, beforeAll } from 'vitest'
 import { server } from './test/server'
@@ -35,8 +37,10 @@ beforeAll(() => {
 afterEach(() => {
   cleanup()
   server.resetHandlers()
-  // The saved session, and the sidebar's choice, must not leak between tests.
+  // The saved session, the sidebar's choice and the device's key must not
+  // leak between tests.
   localStorage.clear()
+  globalThis.indexedDB = new IDBFactory()
 })
 
 afterAll(() => {

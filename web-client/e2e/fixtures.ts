@@ -1,6 +1,7 @@
 import { test as base } from '@playwright/test'
 import { AdminPage } from './pages/AdminPage.ts'
 import { DesignSystemPage } from './pages/DesignSystemPage.ts'
+import { DeviceStorage } from './pages/DeviceStorage.ts'
 import { HomePage } from './pages/HomePage.ts'
 import { ReferenceKitPage } from './pages/ReferenceKitPage.ts'
 import { SignInPage } from './pages/SignInPage.ts'
@@ -11,6 +12,7 @@ import { SignedOutPage } from './pages/SignedOutPage.ts'
 export const test = base.extend<{
   adminPage: AdminPage
   designSystemPage: DesignSystemPage
+  deviceStorage: DeviceStorage
   homePage: HomePage
   referenceKitPage: ReferenceKitPage
   signInPage: SignInPage
@@ -23,6 +25,9 @@ export const test = base.extend<{
   },
   designSystemPage: async ({ page }, provide) => {
     await provide(new DesignSystemPage(page))
+  },
+  deviceStorage: async ({ page }, provide) => {
+    await provide(new DeviceStorage(page))
   },
   homePage: async ({ page }, provide) => {
     await provide(new HomePage(page))

@@ -103,3 +103,37 @@ test('signs in again after sign-out to the same account and player', async ({
   expect(await signInPage.account()).toEqual(anns)
   expect((await signInPage.players()).map((player) => player.id)).toEqual([anns.player.id])
 })
+
+test('signs the device key out on sign-out, deletes it and keeps the queue of signed results', async ({
+  homePage,
+  signedOutPage,
+  deviceStorage,
+  page,
+}) => {
+  await answerLogout(page)
+  const registered = deviceStorage.nextRegistration()
+  await homePage.goto()
+  const key = await registered
+  // Playwright's Desktop Chrome says it runs on Windows.
+  expect(key).toMatchObject({ label: 'Chrome on Windows', signed_out_at: null, revoked_at: null })
+  expect(await deviceStorage.deviceKeyId()).toBe(key.id)
+  await deviceStorage.queueSignedResult('a-result', 'd862')
+
+  const logout = page.waitForRequest(
+    (request) => request.url().endsWith('/api/v1/auth/logout') && request.method() === 'POST',
+  )
+  await homePage.fromAccountMenu('Sign out')
+  await homePage.guestSignOutDialog.getByRole('button', { name: 'Sign out' }).click()
+  await expect(signedOutPage.title).toHaveText('You’re signed out')
+
+  expect((await logout).postDataJSON()).toEqual({ signing_key_id: key.id })
+  expect(await deviceStorage.deviceKeyId()).toBeNull()
+  expect(await deviceStorage.queuedResults()).toEqual(['d862'])
+
+  // The next guest account gets a new key.
+  const next = deviceStorage.nextRegistration()
+  await signedOutPage.guestLink.click()
+  const nextKey = await next
+  expect(nextKey.id).not.toBe(key.id)
+  expect(await deviceStorage.deviceKeyId()).toBe(nextKey.id)
+})
