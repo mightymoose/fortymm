@@ -56,6 +56,12 @@ _COMPLETED: Final = 0
 _RETIRED: Final = 1
 _SHA256_BYTES: Final = 32
 _UUID_BYTES: Final = 16
+# CBOR's integers (major types 0 and 1) lie in [-2^64, 2^64). cbor2 decodes a
+# bignum (tag 2 or 3) to an int as well, and writes it back the same, so the
+# determinism check can't see one.
+_CBOR_INT_LIMIT: Final = 2**64
+# 9999-12-31T23:59:59Z, the last second a datetime holds.
+_MAX_IAT: Final = 253402300799
 
 # 32 bytes: the SHA-256 of the payload bytes, the result's identity. Two
 # envelopes with the same payload bytes are the same result.
@@ -107,8 +113,10 @@ class MatchResult:
             raise ValueError("the players are the same player")
         if len(self.games) > self.best_of:
             raise ValueError("more games than best_of")
-        if any(points < 0 for game in self.games for points in game):
-            raise ValueError("negative points")
+        if any(
+            not 0 <= points < _CBOR_INT_LIMIT for game in self.games for points in game
+        ):
+            raise ValueError("points outside 0 to 2^64 - 1")
         if self.replaces is not None and len(self.replaces) != _SHA256_BYTES:
             raise ValueError("replaces isn't 32 bytes")
 
@@ -240,9 +248,10 @@ def encode_payload(result: MatchResult, issued_at: datetime) -> bytes:
     CBOR. These are the exact bytes every signer signs, and their SHA-256 is
     the result's hash.
 
-    issued_at must be timezone-aware, in whole seconds and not before 1970
-    (ValueError otherwise), because iat is an unsigned integer of seconds,
-    and decoding a payload must give back what was encoded.
+    issued_at must be timezone-aware, in whole seconds and from 1970 to
+    9999-12-31T23:59:59Z (ValueError otherwise), because iat is an unsigned
+    integer of seconds, and decoding a payload must give back what was
+    encoded.
     """
     if issued_at.utcoffset() is None:
         raise ValueError("issued_at has no timezone")
@@ -251,6 +260,8 @@ def encode_payload(result: MatchResult, issued_at: datetime) -> bytes:
     iat = int(issued_at.timestamp())
     if iat < 0:
         raise ValueError("issued_at is before 1970")
+    if iat > _MAX_IAT:
+        raise ValueError("issued_at is after 9999-12-31T23:59:59Z")
     claims: dict[int | str, object] = {_IAT: iat, DOMAIN_TAG: _result_map(result)}
     return _dumps(claims)
 
@@ -291,10 +302,11 @@ def append_signature(
 def decode_envelope(envelope: bytes) -> UnverifiedEnvelope:
     """Parse envelope bytes. Check everything that needs no key, and raise
     Malformed for anything that isn't this format: a non-deterministic
-    envelope, payload or signer header, a tag other than 98, a body header
-    that isn't empty, a payload with other claims or another result shape,
-    a signer header with other labels, another alg, a side that isn't 0 or
-    1, or a signature that isn't 64 bytes.
+    envelope, payload or signer header, a bignum, an iat after 9999, a tag
+    other than 98, a body header that isn't empty, a payload with other
+    claims or another result shape, a signer header with other labels,
+    another alg, a side that isn't 0 or 1, or a signature that isn't 64
+    bytes.
     """
     item = _loads_deterministic(envelope)
     if not isinstance(item, cbor2.CBORTag) or item.tag != _COSE_SIGN:
@@ -374,10 +386,10 @@ def _loads_deterministic(data: bytes) -> object:
 
 def _decode_payload(payload: bytes) -> tuple[MatchResult, datetime]:
     claims = _exact_keys(_loads_deterministic(payload), required={_IAT, DOMAIN_TAG})
-    try:
-        issued_at = datetime.fromtimestamp(_uint(claims[_IAT]), UTC)
-    except (OverflowError, OSError, ValueError) as error:
-        raise Malformed("iat is out of range") from error
+    iat = _uint(claims[_IAT])
+    if iat > _MAX_IAT:
+        raise Malformed("iat is after 9999-12-31T23:59:59Z")
+    issued_at = datetime.fromtimestamp(iat, UTC)
     r = _exact_keys(
         claims[DOMAIN_TAG],
         required={_MATCH, _BEST_OF, _RATED, _PLAYERS, _GAMES, _ENDING},
@@ -450,6 +462,8 @@ def _exact_keys(
 def _int(value: object) -> int:
     if type(value) is not int:
         raise Malformed("not an integer")
+    if not -_CBOR_INT_LIMIT <= value < _CBOR_INT_LIMIT:
+        raise Malformed("a bignum, not a CBOR integer")
     return value
 
 

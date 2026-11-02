@@ -33,7 +33,7 @@ The payload is a CWT claims map with exactly two claims.
 
 | Key | Name | Type | Meaning |
 | --- | --- | --- | --- |
-| `6` | iat | uint | Seconds since the Unix epoch when the payload was made. The server trusts nothing from it. |
+| `6` | iat | uint | Seconds since the Unix epoch when the payload was made, at most 253402300799, which is 9999-12-31T23:59:59Z. The server trusts nothing from it. |
 | `"fortymm/match-result/v1"` | the domain tag | map | The result. The key is the domain tag, so a signature over this payload can't be mistaken for a signature over another CWT that the same key signs. A new version of the format is a new key. |
 
 The result map:
@@ -51,7 +51,8 @@ The result map:
 
 No other keys. A UUID is always its 16 bytes in a byte string, never CBOR tag
 37. A boolean is CBOR `true` or `false`, never 1 or 0. An integer is a CBOR
-integer, never a float.
+integer, never a float and never a bignum (tag 2 or 3). So a uint is CBOR
+major type 0, below 2^64.
 
 A payload names player ids as they were when it was signed. A player that a
 merge later points at another player is still a valid payload. The server
@@ -93,8 +94,9 @@ Each signer's protected header is deterministic CBOR with exactly these keys:
 
 A key id is the RFC 9679 thumbprint: the SHA-256 of the deterministic CBOR of
 the COSE_Key map `{1: 2, -1: 1, -2: x, -3: y}`, which is kty EC2, crv P-256,
-and the coordinates as 32-byte strings. The map has no other parameter. The
-encoded key is 75 bytes.
+and the coordinates as 32-byte strings. Each coordinate is a field element
+below p, P-256's field prime, so one key has exactly one encoding and one
+kid. The map has no other parameter. The encoded key is 75 bytes.
 
 The signature is ECDSA P-256 with SHA-256 over the Sig_structure of RFC 9052
 section 4.4, in deterministic CBOR:
@@ -158,10 +160,11 @@ input has exactly one class.
    `malformed`.
 2. Decode. The envelope, the payload and every signer header must be
    deterministic CBOR, with every map key and every integer of the exact type
-   the tables give. A tag other than 98, a non-empty body header, an empty
-   signature array, a payload with another claim or another result shape, a
-   signer header with other labels, an alg other than -7, a side that isn't 0
-   or 1, or a signature that isn't 64 bytes is `malformed`.
+   the tables give. A bignum, an iat after 9999-12-31T23:59:59Z, a tag other
+   than 98, a non-empty body header, an empty signature array, a payload with
+   another claim or another result shape, a signer header with other labels,
+   an alg other than -7, a side that isn't 0 or 1, or a signature that isn't
+   64 bytes is `malformed`.
 3. Keys. Every kid is resolved before any signature is checked. A kid with no
    key is `unknown_key`.
 4. Signatures. The first COSE_Signature, in envelope order, that doesn't verify
@@ -330,9 +333,11 @@ Valid:
 | `two-keys-for-one-player` | `ann` and `cy` both approve for side 0, then `bo` for side 1. Three signatures, 459 bytes. |
 | `same-signature-twice` | The same COSE_Signature twice. `approvals` has one entry. |
 
-Invalid, `malformed` unless marked:
+Invalid, `malformed` unless marked. Every vector has one fault, except the
+three precedence vectors. They carry two faults on purpose, and their class is
+the one the refusal order picks.
 
-| Name | The one fault |
+| Name | What it pins |
 | --- | --- |
 | `tampered-payload` | `bad_signature`. `iat` plus one, re-encoded deterministically, with the signatures kept. |
 | `unknown-kid` | `unknown_key`. The second signature is by a key the directory doesn't hold. |
@@ -364,11 +369,17 @@ Invalid, `malformed` unless marked:
 | `more-games-than-best-of` | Four games in a best of 3. |
 | `missing-result-key` | No `rated` in the result map. |
 | `duplicate-result-key` | `best_of` twice in the result map. |
+| `unknown-kid-and-tampered-payload` | `unknown_key`. Precedence. The `unknown-kid` envelope with `iat` plus one. The first signature fails and the second kid is unknown, so `unknown_key` wins over `bad_signature`. |
+| `unknown-kid-then-short-signature` | Precedence. A signature by the unlisted key, then a 63-byte signature. `malformed` wins over `unknown_key`. |
+| `bad-signature-then-short-signature` | Precedence. A well-formed signature with one bit flipped, which fails to verify, then a 63-byte signature. `malformed` wins over `bad_signature`. |
+| `points-as-bignum` | The first game's first points as 2^64, a tag 2 bignum. |
+| `issued-at-after-9999` | `iat` 253402300800, one second after 9999-12-31T23:59:59Z. |
 
 ### Traps the vectors pin
 
 - Python. `True == 1 == 1.0` as dict keys and in `in` tests. Check every key
-  and integer with `type(x) is int`.
+  and integer with `type(x) is int`. cbor2 decodes a bignum to an `int` too,
+  so check each integer's range as well.
 - JavaScript. A plain object merges the integer key `1` with the text key
   `"1"`. Decode maps as `Map`.
 - Every platform. A CBOR library that tags UUIDs (tag 37), writes `iat` as a

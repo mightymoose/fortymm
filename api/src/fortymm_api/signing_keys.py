@@ -37,6 +37,7 @@ _Y: Final = -3
 _EC2: Final = 2
 _P256: Final = 1
 _P256_ORDER: Final = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+_P256_PRIME: Final = 2**256 - 2**224 + 2**192 + 2**96 - 1
 
 
 class InvalidKey(ValueError):
@@ -45,8 +46,9 @@ class InvalidKey(ValueError):
 
 @dataclass(frozen=True)
 class SigningPublicKey:
-    """A P-256 public point, each coordinate 32 bytes big-endian. Valid by
-    construction, so every instance verifies and has a thumbprint."""
+    """A P-256 public point, each coordinate 32 bytes big-endian and below
+    the field prime. Valid by construction, so every instance verifies and
+    has a thumbprint."""
 
     x: bytes
     y: bytes
@@ -54,6 +56,10 @@ class SigningPublicKey:
     def __post_init__(self) -> None:
         if len(self.x) != COORDINATE_BYTES or len(self.y) != COORDINATE_BYTES:
             raise InvalidKey("a coordinate isn't 32 bytes")
+        # OpenSSL reduces a coordinate modulo p, so x + p would be the same
+        # point with a second COSE_Key encoding and a second kid.
+        if any(int.from_bytes(c, "big") >= _P256_PRIME for c in (self.x, self.y)):
+            raise InvalidKey("a coordinate isn't below the field prime")
         _point(self)
 
     @classmethod

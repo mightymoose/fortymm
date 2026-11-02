@@ -394,8 +394,9 @@ def test_a_result_refuses_what_its_types_cant_hold(changes: dict[str, Any]) -> N
         datetime(2026, 11, 1, 12),
         datetime(2026, 11, 1, 12, microsecond=1, tzinfo=UTC),
         datetime(1969, 12, 31, tzinfo=UTC),
+        datetime(9999, 12, 31, 23, 59, 59, tzinfo=timezone(timedelta(hours=-1))),
     ],
-    ids=["no timezone", "microseconds", "before 1970"],
+    ids=["no timezone", "microseconds", "before 1970", "after 9999 in UTC"],
 )
 def test_encode_refuses_an_issued_at_the_payload_cant_carry(
     issued_at: datetime,
