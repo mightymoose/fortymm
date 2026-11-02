@@ -18,6 +18,10 @@ struct FortyMMApp: App {
     private static func makeModel() -> AppModel {
         let baseURL = AppEnvironment.apiBaseURL
         let jar = CookieJar(store: KeychainCookieStore(account: baseURL.absoluteString))
-        return AppModel(api: FortyMMAPI(baseURL: baseURL, jar: jar))
+        return AppModel(
+            api: FortyMMAPI(baseURL: baseURL, jar: jar),
+            keys: KeychainKeyStore(account: baseURL.absoluteString),
+            deviceLabel: UIDevice.current.name
+        )
     }
 }

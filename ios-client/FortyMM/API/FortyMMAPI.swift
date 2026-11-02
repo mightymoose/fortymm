@@ -8,13 +8,28 @@ import OpenAPIURLSession
 protocol AccountAPI: Sendable {
     /// `POST /v1/session`: resumes the session, or starts a guest account.
     func startSession() async throws(Failure) -> Account
-    /// `POST /v1/auth/logout`.
-    func logout() async throws(Failure)
+    /// `POST /v1/auth/logout`. With the device's key, the server signs the
+    /// key out too.
+    func logout(signingKey: KeyId?) async throws(Failure)
     /// `POST /v1/auth/app-login`: the provider's page to open.
     func beginSignIn() async throws(Failure) -> URL
     /// `POST /v1/auth/app-finish`, with the query of the URL that the
     /// provider sent back to the app.
     func finishSignIn(callback: URL) async throws(Failure) -> SignInOutcome
+    /// `POST /v1/account/signing-keys`, with the key's registration proof
+    /// for the session's account.
+    func registerSigningKey(_ key: SigningPublicKey, proof: Data, label: String) async throws(Failure) -> KeyRegistration
+}
+
+/// What the server said about the device's key.
+enum KeyRegistration: Equatable, Sendable {
+    /// The session's account has the key, and it signs.
+    case registered
+    /// The account has the key, but someone reported the device
+    /// compromised. It stays revoked.
+    case revoked
+    /// Another account has the key, for good.
+    case ownedElsewhere
 }
 
 /// `AccountAPI` through the client generated from `api/openapi.json`. This
@@ -56,8 +71,9 @@ struct FortyMMAPI: AccountAPI {
         }
     }
 
-    func logout() async throws(Failure) {
-        switch try await call({ try await client.logout() }) {
+    func logout(signingKey: KeyId?) async throws(Failure) {
+        let request = Components.Schemas.LogoutRequest(signingKeyId: signingKey?.hex)
+        switch try await call({ try await client.logout(body: .json(request)) }) {
         case .ok:
             return
         case .unsupportedMediaType, .unprocessableContent:
@@ -109,6 +125,21 @@ struct FortyMMAPI: AccountAPI {
         }
     }
 
+    func registerSigningKey(_ key: SigningPublicKey, proof: Data, label: String) async throws(Failure) -> KeyRegistration {
+        let request = Components.Schemas.RegisterKeyRequest(publicKey: key.coseKey.hex, proof: proof.hex, label: label)
+        switch try await call({ try await client.registerSigningKey(body: .json(request)) }) {
+        case .ok(let ok):
+            let registered = try decode { try ok.body.json.data }
+            return registered.revokedAt == nil ? .registered : .revoked
+        case .conflict:
+            return .ownedElsewhere
+        case .unauthorized, .unsupportedMediaType, .unprocessableContent:
+            throw .broken
+        case .undocumented(let status, let payload):
+            throw Failure(status: status, retryAfter: payload.headerFields[.retryAfter])
+        }
+    }
+
     private func retryAt(seconds: Int?) -> Date? {
         seconds.map { Date.now.addingTimeInterval(TimeInterval($0)) }
     }
@@ -138,8 +169,9 @@ private extension Account {
             guard let email = account.email else { throw .broken }
             kind = .verified(email: email)
         }
+        guard let id = UUID(uuidString: account.id) else { throw .broken }
         self.init(
-            id: account.id,
+            id: id,
             kind: kind,
             player: Player(id: account.player.id, displayName: account.player.displayName)
         )
