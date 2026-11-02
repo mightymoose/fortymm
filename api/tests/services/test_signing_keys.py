@@ -6,11 +6,11 @@ from ipaddress import ip_address
 import cbor2
 import pytest
 from locks import wait_behind
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, delete, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from fortymm_api.accounts import AccountId, Email
-from fortymm_api.models import Account
+from fortymm_api.models import Account, AuthSession, SigningKey
 from fortymm_api.services.adoption import adopt_guest
 from fortymm_api.services.sessions import (
     AccountAdopted,
@@ -470,6 +470,42 @@ def test_signing_out_without_a_session_changes_nothing(
     sign_out(migrated_database, "not a token", kid)
 
     assert keys_of(migrated_database, account) == before
+
+
+def test_a_logout_that_overlaps_an_adoption_waits_for_it(
+    migrated_database: Engine,
+) -> None:
+    """Adoption moves the guest's keys, then deletes its sessions. A logout
+    between the two must wait for it, not deadlock with it."""
+    bob = verified(migrated_database, "bob@example.com")
+    guest_account = guest(migrated_database)
+    kid = register(migrated_database, guest_account, key(1)).id
+    token = session_token(migrated_database, guest_account)
+
+    def move_keys(session: Session) -> None:
+        session.execute(
+            update(SigningKey)
+            .where(SigningKey.account_id == guest_account)
+            .values(account_id=bob)
+        )
+
+    def delete_sessions(session: Session) -> None:
+        session.execute(
+            delete(AuthSession).where(AuthSession.account_id == guest_account)
+        )
+
+    _, waiter = wait_behind(
+        migrated_database,
+        move_keys,
+        lambda session: sign_out_device(session, token, kid),
+        then=delete_sessions,
+    )
+
+    waiter.result()
+    [moved] = keys_of(migrated_database, bob)
+    assert moved.id == kid
+    assert moved.signed_out_at is None
+    assert not signed_in(migrated_database, token)
 
 
 def test_a_signed_out_key_still_verifies_for_its_account(

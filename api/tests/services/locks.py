@@ -21,10 +21,12 @@ def wait_behind[H, W](
     database: Engine,
     holder: Callable[[Session], H],
     waiter: Callable[[Session], W],
+    then: Callable[[Session], None] | None = None,
 ) -> tuple[H, Future[W]]:
     """Run `holder` in an open transaction, then `waiter` in another one on
-    another thread. Commits the holder once the waiter waits for a lock.
-    Returns the holder's result and the waiter's finished future."""
+    another thread. Once the waiter waits for a lock, runs `then` in the
+    holder's transaction, if given, and commits the holder. Returns the
+    holder's result and the waiter's finished future."""
     sessions = sessionmaker(database)
     pids: list[int] = []
 
@@ -44,6 +46,8 @@ def wait_behind[H, W](
                 assert not future.done(), "the waiter never waited"
                 assert time.monotonic() < deadline, "the waiter never waited"
                 time.sleep(0.05)
+            if then is not None:
+                then(held)
             held.commit()
             wait([future], timeout=10)
     finally:

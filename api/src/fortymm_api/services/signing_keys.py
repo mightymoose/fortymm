@@ -23,7 +23,11 @@ from sqlalchemy.orm import Session
 
 from fortymm_api.accounts import AccountId
 from fortymm_api.models import SigningKey
-from fortymm_api.services.sessions import end_session, lock_account_for_write
+from fortymm_api.services.sessions import (
+    end_session,
+    lock_account_for_write,
+    session_account,
+)
 from fortymm_api.signing_keys import InvalidKey, KeyId, SigningPublicKey
 
 # After a registration, the account has at most this many live keys: the new
@@ -166,20 +170,23 @@ def revoke_key(session: Session, account: AccountId, key: KeyId) -> AccountSigni
 
 
 def sign_out_device(session: Session, token: str | None, key: KeyId | None) -> None:
-    """Sign a device out: end the session the token names, and sign out `key`
-    if that session's account owns it.
+    """Sign a device out: sign out `key` if the account of the session the
+    token names owns it, then end the session.
 
     A key that is None, unknown, another account's or already signed out
     changes nothing, so a sign-out never fails over its key. A signed-out key
     still verifies what it signed.
 
-    It takes no account lock. If an adoption moves the key meanwhile, the
-    update finds it on another account and skips it, as it skips any other
-    account's key.
+    It takes no account lock. The key goes before the session because
+    adoption moves a guest's keys before it deletes its sessions. In the
+    other order, a logout that overlaps an adoption deadlocks with it. In
+    this order it waits, then finds the key on another account and skips it,
+    as it skips any other account's key.
     """
-    owner = end_session(session, token)
+    owner = session_account(session, token)
     if owner is not None and key is not None:
         _sign_out(session, (SigningKey.id == key) & (SigningKey.account_id == owner))
+    end_session(session, token)
 
 
 def verification_keys(

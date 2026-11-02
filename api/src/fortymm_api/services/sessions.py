@@ -270,16 +270,25 @@ def convert_guest(session: Session, guest: AccountId, into: AccountId) -> str:
     return token
 
 
-def end_session(session: Session, token: str | None) -> AccountId | None:
-    """Delete the session the token names, if any, and return its account."""
+def session_account(session: Session, token: str | None) -> AccountId | None:
+    """The account of the session the token names, expired or not, with no
+    lock. None if no session has the token."""
     if token is None:
         return None
     account: AccountId | None = session.scalar(
-        delete(AuthSession)
-        .where(AuthSession.token_hash == hash_token(token))
-        .returning(AuthSession.account_id)
+        select(AuthSession.account_id).where(
+            AuthSession.token_hash == hash_token(token)
+        )
     )
     return account
+
+
+def end_session(session: Session, token: str | None) -> None:
+    """Delete the session the token names, if any."""
+    if token is not None:
+        session.execute(
+            delete(AuthSession).where(AuthSession.token_hash == hash_token(token))
+        )
 
 
 def _self_player(session: Session, account_id: AccountId) -> SelfPlayer | None:

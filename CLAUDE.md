@@ -645,12 +645,13 @@ reads a result yet (#188).
 - `GET /v1/account/signing-keys` lists the account's keys, newest first,
   signed out and revoked included.
 - `POST /v1/auth/logout` takes an optional body with `signing_key_id`.
-  `sign_out_device()` ends the session and sets `signed_out_at` on the key
-  if that session's account owns it. An id that is unknown, another
+  `sign_out_device()` sets `signed_out_at` on the key if the session's
+  account owns it, then ends the session. An id that is unknown, another
   account's, already signed out or not 32 bytes changes nothing, so a
-  logout never fails over it. `end_session()` returns the deleted
-  session's account for this. A signed-out key still verifies what it
-  signed.
+  logout never fails over it. The key goes before the session because
+  adoption moves a guest's keys before it deletes its sessions. In the
+  other order, a logout that overlaps an adoption deadlocks with it. A
+  signed-out key still verifies what it signed.
 - `POST /v1/account/signing-keys/{kid}/revoke` reports a device
   compromised. It sets `revoked_at`, and a second call keeps the first
   time. A signed-out key can be revoked. It answers 404 for a key the
