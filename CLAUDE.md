@@ -1067,19 +1067,21 @@ it.
   With no stored key, such as after Safari deleted the site's storage, it
   makes one first. It sends the key with a proof for the session's account
   and a label from `deviceLabel()`, such as `Safari on iOS`. A 409, or a
-  200 with `revoked_at`, makes it replace the key and register the new one.
-  Any other failure, such as no network, is dropped, and the next online
-  load tries again.
+  200 with `revoked_at`, makes it register a new key. It keeps the new key
+  only if the old one is still stored. Any other failure, such as no
+  network, is dropped, and the next online load tries again. A registration
+  gives up after 30 seconds.
 - Every read and write of the stored key takes one Web Lock
-  (`fortymm.device-key`), so two tabs don't each make a key. Without Web
-  Locks, the tab's own calls take turns.
-- `signOutDeviceKey()` runs the sign-out under the same lock. It reads the
-  key's id, sends it in `POST /v1/auth/logout`, then deletes the key. It
-  first cancels this tab's registrations, so a slow one doesn't hold up the
-  sign-out and none saves a key after it. A sign-out that fails keeps the
-  key. It keeps the queue, whose results no longer need the key and
-  may be the only copy of a match. The next account on the browser gets a
-  new key.
+  (`fortymm.device-key`), so two tabs don't each make a key. The lock is
+  never held across a request, so a request that never answers in one tab
+  can't hold up another. Without Web Locks, the tab's own calls take turns.
+- `signOutDeviceKey()` cancels this tab's registrations, reads the key's
+  id, and sends it in `POST /v1/auth/logout`. Then it deletes whatever key
+  is stored, because another tab's registration for the same session may
+  have replaced it. A registration that a sign-out overtook saves nothing.
+  A sign-out that fails keeps the key. It keeps the queue, whose results no
+  longer need the key and may be the only copy of a match. The next account
+  on the browser gets a new key.
 - `signWithDeviceKey()` approves a payload with the stored key.
 
 ### Error pages

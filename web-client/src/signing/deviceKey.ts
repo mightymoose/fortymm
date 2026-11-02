@@ -1,5 +1,5 @@
 import type { ApiClient } from '../api/client'
-import { toHex, type Bytes } from './bytes'
+import { equalBytes, toHex, type Bytes } from './bytes'
 import { deviceLabel } from './deviceLabel'
 import { deleteDeviceKey, loadDeviceKey, saveDeviceKey, type DeviceKey } from './deviceStore'
 import { coseKey, keyId, registrationProof, sign, type CoseSignature, type Side } from './signedResults'
@@ -10,9 +10,14 @@ import { coseKey, keyId, registrationProof, sign, type CoseSignature, type Side 
 const P256 = { name: 'ECDSA', namedCurve: 'P-256' } as const
 
 // Every read and write of the stored key takes this lock, in every tab.
-// Two tabs that load at once would each make a key, and a registration that
-// finished after a sign-out would save a key for an account that left.
+// Nothing holds it across a request, so a request that never answers in one
+// tab can't hold up another. A replacement is saved only if the stored key
+// is still the one it replaces, so a registration that a sign-out overtook
+// saves nothing.
 const LOCK = 'fortymm.device-key'
+
+// A backstop for a registration that never answers.
+const REGISTRATION_TIMEOUT_MS = 30_000
 
 // The registrations this tab started, which a sign-out cancels.
 const registrations = new Set<AbortController>()
@@ -20,7 +25,8 @@ const registrations = new Set<AbortController>()
 // Registers the device's key to the session's account, after the session
 // starts. With no key, such as on a first visit or after Safari deleted the
 // site's storage, it makes one first. A key that another account owns, or
-// that was revoked, can't sign for this account, so it makes a new one.
+// that was revoked, can't sign for this account, so it registers a new one,
+// and keeps it if the old one is still stored.
 //
 // The API answers 200 for a key the account already owns, so every online
 // load registers again. That also covers a sign-in that moved the session to
@@ -29,14 +35,15 @@ const registrations = new Set<AbortController>()
 export async function registerDeviceKey(api: ApiClient, accountId: string): Promise<void> {
   const cancel = new AbortController()
   registrations.add(cancel)
+  const signal = AbortSignal.any([cancel.signal, AbortSignal.timeout(REGISTRATION_TIMEOUT_MS)])
   try {
+    const key = (await withLock(loadDeviceKey)) ?? (await keepFirst(await newDeviceKey()))
+    if ((await register(api, key, accountId, signal)) === 'usable') return
+    const replacement = await newDeviceKey()
+    if ((await register(api, replacement, accountId, signal)) !== 'usable') return
     await withLock(async () => {
-      const { signal } = cancel
       signal.throwIfAborted()
-      const key = (await loadDeviceKey()) ?? (await newDeviceKey())
-      if ((await register(api, key, accountId, signal)) === 'usable') return
-      signal.throwIfAborted()
-      await register(api, await newDeviceKey(), accountId, signal)
+      if (await isStored(key)) await saveDeviceKey(replacement)
     })
   } finally {
     registrations.delete(cancel)
@@ -48,19 +55,17 @@ export async function registerDeviceKey(api: ApiClient, accountId: string): Prom
 // next account on this browser gets a new one. If `logout` throws, such as
 // with no network, the key stays.
 //
-// It cancels this tab's registrations, so one waiting on a slow answer
-// doesn't hold up the sign-out, and none saves a key after it. It holds the
-// lock throughout, so another tab's registration waits or finishes first.
+// It cancels this tab's registrations first, so none replaces the key in
+// between. It deletes whatever key is stored by then, because another tab's
+// registration, for the same session, may have replaced it meanwhile.
 export async function signOutDeviceKey<T>(
   logout: (signingKeyId: string | null) => Promise<T>,
 ): Promise<T> {
   registrations.forEach((cancel) => cancel.abort())
-  return withLock(async () => {
-    const key = await loadDeviceKey().catch(() => null)
-    const result = await logout(key && toHex(key.kid))
-    await deleteDeviceKey().catch(() => {})
-    return result
-  })
+  const key = await withLock(loadDeviceKey).catch(() => null)
+  const result = await logout(key && toHex(key.kid))
+  await withLock(deleteDeviceKey).catch(() => {})
+  return result
 }
 
 // Approves `payload` for `side` with the device's key, or null if the
@@ -92,14 +97,29 @@ async function register(
   return data.data.revoked_at === null ? 'usable' : 'unusable'
 }
 
+// A key in memory, not stored yet.
 async function newDeviceKey(): Promise<DeviceKey> {
   const pair = await crypto.subtle.generateKey(P256, false, ['sign'])
   // 0x04, then the 32-byte x and y.
   const point = new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey))
   const cose = coseKey(point.slice(1, 33), point.slice(33))
-  const key = { privateKey: pair.privateKey, coseKey: cose, kid: await keyId(cose) }
-  await saveDeviceKey(key)
-  return key
+  return { privateKey: pair.privateKey, coseKey: cose, kid: await keyId(cose) }
+}
+
+// Stores `key` unless another tab stored one meanwhile, and returns the
+// stored key.
+function keepFirst(key: DeviceKey): Promise<DeviceKey> {
+  return withLock(async () => {
+    const stored = await loadDeviceKey()
+    if (stored) return stored
+    await saveDeviceKey(key)
+    return key
+  })
+}
+
+async function isStored(key: DeviceKey): Promise<boolean> {
+  const stored = await loadDeviceKey()
+  return stored !== null && equalBytes(stored.kid, key.kid)
 }
 
 // Without Web Locks, the tab's own calls still take turns.

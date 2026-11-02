@@ -2,6 +2,7 @@ import { cleanup, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { http, HttpResponse } from 'msw'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createApiClient } from '../api/client'
 import { leavePage } from '../leavePage'
 import { clearSiteData, queuedResults, queueSignedResult } from '../test/deviceStorage'
 import { HomePage } from '../test/pages/HomePage'
@@ -81,7 +82,7 @@ describe('the device signing key', () => {
     const homePage = await loadHome()
     expect(homePage.title).toBeVisible()
     await vi.waitFor(() => expect(release).toBeDefined())
-    // Registrations take turns, so the next test's would wait for this one.
+    // Answered here, so the next test doesn't get it.
     release!()
     await vi.waitFor(() => expect(answered).toBe(true))
   })
@@ -225,5 +226,51 @@ describe('the device signing key', () => {
     expect(keys.logouts).toEqual([{ signing_key_id: await kid(held) }])
     expect(await signWithDeviceKey(0, Uint8Array.of(0xa0))).toBeNull()
     expect(keys.registrations).toHaveLength(1)
+  })
+
+  it("signs out at once while another tab's registration waits for an answer", async () => {
+    // The browser's Web Locks, shared by every tab. Each tab is its own copy
+    // of the module, with the same IndexedDB.
+    const held = new Map<string, Promise<unknown>>()
+    Object.defineProperty(navigator, 'locks', {
+      configurable: true,
+      value: {
+        request(name: string, run: () => Promise<unknown>) {
+          const turn = (held.get(name) ?? Promise.resolve()).then(run)
+          held.set(name, turn.catch(() => {}))
+          return turn
+        },
+      },
+    })
+    try {
+      const keys = mockSigningKeys()
+      const homePage = await loadHome()
+      await vi.waitFor(() => expect(keys.registrations).toHaveLength(1))
+      const registered = keys.registrations[0].public_key
+
+      let release: (() => void) | undefined
+      server.use(
+        http.post(`${API_BASE_URL}/v1/account/signing-keys`, async () => {
+          await new Promise<void>((resolve) => (release = resolve))
+          return HttpResponse.json({ errors: [{ status: '500', title: 'Failed' }] }, { status: 500 })
+        }),
+      )
+      vi.resetModules()
+      const otherTab = await import('./deviceKey')
+      const otherRegistration = otherTab
+        .registerDeviceKey(createApiClient({ baseUrl: API_BASE_URL }), accountId)
+        .catch(() => {})
+      await vi.waitFor(() => expect(release).toBeDefined())
+
+      await signOutAsGuest(homePage)
+
+      expect(keys.logouts).toEqual([{ signing_key_id: await kid(registered) }])
+      expect(await signWithDeviceKey(0, Uint8Array.of(0xa0))).toBeNull()
+      release!()
+      await otherRegistration
+      expect(await signWithDeviceKey(0, Uint8Array.of(0xa0))).toBeNull()
+    } finally {
+      Reflect.deleteProperty(navigator, 'locks')
+    }
   })
 })
