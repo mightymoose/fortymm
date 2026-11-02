@@ -14,9 +14,9 @@ describe('Home', () => {
 
     expect(homePage.title).toHaveTextContent('What’s coming, and when.')
     expect(homePage.parts).toEqual([
-      { name: 'Your account', stage: 'Building now' },
-      { name: 'Leagues', stage: 'Next' },
-      { name: 'Matches', stage: 'Later' },
+      { name: 'Your account', stage: 'Ready' },
+      { name: 'Leagues', stage: 'Ready' },
+      { name: 'Matches', stage: 'Building now' },
       { name: 'Basic tournaments', stage: 'Later' },
     ])
   })

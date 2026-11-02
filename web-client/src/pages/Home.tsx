@@ -16,21 +16,21 @@ const stageLabels: Record<Stage, string> = {
 const parts: readonly { title: string; body: string; icon: IconName; stage: Stage }[] = [
   {
     title: 'Your account',
-    body: 'You can sign in now. Next, your matches, leagues and rating stay with your account on every device.',
+    body: 'Sign in on any device. Your matches, leagues and rating stay with your account.',
     icon: 'user',
-    stage: 'building',
+    stage: 'ready',
   },
   {
     title: 'Leagues',
     body: 'Play a season with your club or your friends, and follow the standings.',
     icon: 'list',
-    stage: 'next',
+    stage: 'ready',
   },
   {
     title: 'Matches',
     body: 'Log the matches you play and follow your rating after each one.',
     icon: 'table',
-    stage: 'later',
+    stage: 'building',
   },
   {
     title: 'Basic tournaments',
