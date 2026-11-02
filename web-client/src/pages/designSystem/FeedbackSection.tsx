@@ -126,7 +126,7 @@ export function FeedbackSection() {
         <Toast
           role="status"
           message="Chen vs Ali called to Table 1"
-          onUndo={ignore}
+          action={{ label: 'Undo', onClick: ignore }}
           onDismiss={ignore}
         />
         <p className="doc-vo">Static copy above is visual only</p>

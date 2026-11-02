@@ -3,10 +3,12 @@ import { createRootRouteWithContext } from '@tanstack/react-router'
 import type { ApiClient } from '../api/client'
 import { ErrorPage, NotFoundPage } from '../pages/ErrorPages'
 import { Root } from '../pages/Root'
+import type { AppUpdate } from '../serviceWorker'
 
 type RouterContext = {
   api: ApiClient
   queryClient: QueryClient
+  appUpdate: AppUpdate
 }
 
 // The root route catches every error and unknown path, so the error pages

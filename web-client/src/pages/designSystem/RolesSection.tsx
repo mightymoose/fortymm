@@ -82,7 +82,7 @@ export function RolesSection() {
                 Result saved. Nguyen <RatingChange change={12} />
               </>
             }
-            onUndo={() => {}}
+            action={{ label: 'Undo', onClick: () => {} }}
           />
           <p className="doc-cap" style={{ marginTop: 40 }}>
             Tooltip — supplementary

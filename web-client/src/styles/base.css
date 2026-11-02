@@ -292,6 +292,13 @@ a:hover{color:var(--ball-200)}
 }
 
 @media (max-width: 899px) {
+  :root {
+    --app-tab-link: 56px;
+    /* The sum of .app-nav's and .app-link's boxes below. e2e/admin.spec.ts
+       measures it at 390x844. */
+    --app-tab-bar: calc(var(--app-tab-link) + 4 * var(--s-1) + env(safe-area-inset-bottom));
+  }
+
   .app-shell,
   .app-shell[data-folded='true'] {
     grid-template-columns: minmax(0, 1fr);
@@ -323,7 +330,7 @@ a:hover{color:var(--ball-200)}
     gap: 2px;
     width: auto;
     height: auto;
-    min-height: 56px;
+    min-height: var(--app-tab-link);
     padding: var(--s-1) 0;
     font-size: var(--text-xs);
   }
@@ -334,6 +341,10 @@ a:hover{color:var(--ball-200)}
     height: auto;
     overflow: visible;
     clip: auto;
+  }
+
+  body:has(.app-nav) .fm-toast-region {
+    bottom: calc(var(--app-tab-bar) + var(--s-6));
   }
 }
 

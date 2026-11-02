@@ -23,3 +23,25 @@ test('an administrator creates a role, deletes it, then opens their account', as
   await expect(adminPage.accountHeading(administrator.email)).toBeVisible()
   await expect(adminPage.roleCheckbox('Administrator')).toBeChecked()
 })
+
+test.describe('on a phone', () => {
+  test.use({ viewport: { width: 390, height: 844 } })
+
+  // `.fm-toast-region` in kit.css, which the tab bar's top edge replaces.
+  const KIT_TOAST_BOTTOM_PX = 24
+
+  test('a toast sits above the tab bar', async ({ adminPage, signInPage }) => {
+    await signInPage.signIn(administrator)
+    await adminPage.goto()
+    const name = `Umpire ${randomUUID().slice(0, 8)}`
+    await adminPage.createRole(name, ['admin.view'])
+    await expect(adminPage.toastRegion).toContainText('Role created')
+
+    const toast = await adminPage.toastRegion.boundingBox()
+    const tabBar = await adminPage.tabBar.boundingBox()
+    if (!toast || !tabBar) throw new Error('The toast or the tab bar has no box')
+    expect(tabBar.y - (toast.y + toast.height)).toBeCloseTo(KIT_TOAST_BOTTOM_PX, 0)
+
+    await adminPage.deleteRole(name)
+  })
+})

@@ -2,21 +2,22 @@ import type { ComponentProps, ReactNode } from 'react'
 import { Icon } from './Icon'
 import type { ToastIcon } from './toastContext'
 
-// One toast, styled by `.fm-toast` in styles/kit.css: an icon, the message,
-// Undo when `onUndo` is given, and Dismiss when `onDismiss` is. It only
-// draws the toast.
-// ToastProvider shows it in the toast region and times it out.
+export type ToastAction = {
+  label: string
+  onClick: () => void
+}
+
 export function Toast({
   message,
   icon = 'check',
-  onUndo,
+  action,
   onDismiss,
   className,
   ...props
 }: ComponentProps<'div'> & {
   message: ReactNode
   icon?: ToastIcon
-  onUndo?: () => void
+  action?: ToastAction
   onDismiss?: () => void
 }) {
   const classes = ['fm-toast']
@@ -28,9 +29,9 @@ export function Toast({
       <span className="fm-toast__msg">{message}</span>
       {/* The toast's buttons take no variant: .fm-toast__action and
           .fm-toast__close set their colours. */}
-      {onUndo && (
-        <button type="button" className="fm-btn fm-btn--sm fm-toast__action" onClick={onUndo}>
-          Undo
+      {action && (
+        <button type="button" className="fm-btn fm-btn--sm fm-toast__action" onClick={action.onClick}>
+          {action.label}
         </button>
       )}
       {onDismiss && (
