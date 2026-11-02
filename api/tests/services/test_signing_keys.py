@@ -553,8 +553,6 @@ def test_a_logout_that_overlaps_an_adoption_waits_for_it(
     def adoption_with_a_logout_between(
         session: Session, let_logout_wait: Callable[[], None]
     ) -> str:
-        # adopt_guest() deletes the guest's sessions through convert_guest(),
-        # after it moved the keys. The logout starts between the two.
         def convert_guest_after_the_logout(
             session: Session, guest: AccountId, into: AccountId
         ) -> str:

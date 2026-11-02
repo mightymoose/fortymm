@@ -1,3 +1,4 @@
+import re
 from enum import StrEnum
 from typing import Annotated
 from urllib.parse import urlsplit, urlunsplit
@@ -27,7 +28,7 @@ from fortymm_api.v1.errors import (
     retry_after_seconds,
 )
 from fortymm_api.v1.session import client_address
-from fortymm_api.v1.types import HexBytes
+from fortymm_api.v1.types import HEX_PATTERN
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -317,8 +318,10 @@ def app_finish(
 
 class LogoutRequest(BaseModel):
     # This device's signing key id, in lowercase hex. The key is signed out
-    # if the session's account owns it. Any other value is ignored.
-    signing_key_id: HexBytes | None = None
+    # if the session's account owns it. Any other value is ignored. A plain
+    # string, not HexBytes: a logout never fails over its key, so a broken
+    # id can't earn a 422 that would leave the session in place.
+    signing_key_id: str | None = None
 
 
 class LogoutData(BaseModel):
@@ -329,9 +332,13 @@ class LogoutResponse(BaseModel):
     data: LogoutData
 
 
-def key_id(data: bytes | None) -> KeyId | None:
-    """The kid `data` holds, or None unless it is 32 bytes."""
-    return KeyId(data) if data is not None and len(data) == 32 else None
+def key_id(value: str | None) -> KeyId | None:
+    """The kid `value` spells, or None unless it is 32 bytes in lowercase
+    hex."""
+    if value is None or not re.fullmatch(HEX_PATTERN, value):
+        return None
+    data = bytes.fromhex(value)
+    return KeyId(data) if len(data) == 32 else None
 
 
 @router.post("/logout", responses={**UNSUPPORTED_MEDIA_TYPE, **NO_PROVIDER})

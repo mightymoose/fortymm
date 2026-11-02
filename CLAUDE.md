@@ -605,8 +605,10 @@ reads a result yet (#188).
   `account_id` is `ON DELETE RESTRICT`, because a key attributes results to
   its account, and `MOVES_ON_ADOPT`. `label` is trimmed and at most 50
   characters. `tests/test_schema.py` ties `LABEL_MAX_LENGTH` to the CHECK.
-  `signed_out_at` and `revoked_at` are only ever set, never cleared. A live
-  key has neither. No column says "live". The service derives it.
+  `revoked_at` is only ever set, never cleared. `signed_out_at` is set by
+  a sign-out or the cap, and cleared when the device registers the key
+  again. A live key has neither. No column says "live". The service
+  derives it.
 - The service is the only writer of the table. Its surface is
   `register_key()`, `account_keys()`, `revoke_key()`, `sign_out_device()`
   and `verification_keys()`. Its refusals are `InvalidDeviceLabel`,
@@ -627,16 +629,19 @@ reads a result yet (#188).
   hits the idempotent case below.
 - The response is `{"data": {"id", "label", "created_at", "signed_out_at",
   "revoked_at"}}`, with status 200 whether the key is new or already the
-  account's. Registering a key the account owns changes nothing and returns
-  it as it is, signed out or revoked included, so a retry gets the first
-  call's answer. Its label stays. A key another account owns answers 409. A
-  bad label, key or proof answers 422 in the `errors` shape before any
-  read, so a caller without the private key learns nothing about the key.
-  A label is trimmed with `str.strip()`, then 1 to 50 characters with no
-  control character.
+  account's. Registering a key the account owns keeps its label and
+  `created_at`, so a retry gets the first call's answer. A signed-out key
+  is live again: the fresh proof shows the device is back. A revoked key
+  stays as it is. A key another account owns answers 409. A bad label, key
+  or proof answers 422 in the `errors` shape before any read, so a caller
+  without the private key learns nothing about the key. A replay of
+  another account's proof is a bad proof, not a 409. A label is trimmed
+  with `str.strip()`, then 1 to 50 characters with no control character
+  (Unicode category Cc: C0, DEL and C1).
 - An account keeps at most 20 live keys (`LIVE_KEY_LIMIT`). A registration
-  past the cap signs out the oldest live keys by `created_at`, then `id`,
-  and keeps the new key and the newest 19 others. Nothing is refused for
+  that leaves its key live, new or back from signed out, signs out the
+  oldest live keys by `created_at`, then `id`, past the cap, and keeps
+  that key and the newest 19 others. Nothing is refused for
   the cap. The registration locks the account row `FOR UPDATE`
   (`lock_account_for_write(exclusive=True)`), so two registrations take
   turns and the cap holds. The new key is kept by id, not by time. `now()`
@@ -647,8 +652,10 @@ reads a result yet (#188).
 - `POST /v1/auth/logout` takes an optional body with `signing_key_id`.
   `sign_out_device()` sets `signed_out_at` on the key if the session's
   account owns it, then ends the session. An id that is unknown, another
-  account's, already signed out or not 32 bytes changes nothing, so a
-  logout never fails over it. The key goes before the session because
+  account's, already signed out or not 32 bytes of lowercase hex changes
+  nothing, so a logout never fails over it. The field is a plain string,
+  not `HexBytes`, so a broken id gets no 422 that would leave the session
+  in place. The key goes before the session because
   adoption moves a guest's keys before it deletes its sessions. In the
   other order, a logout that overlaps an adoption deadlocks with it. A
   signed-out key still verifies what it signed.
@@ -661,8 +668,10 @@ reads a result yet (#188).
   registration does.
 - `verification_keys(session, kids)` is #188's lookup. It returns the keys
   among `kids` that aren't revoked, signed out or not, each with its
-  account, by kid. A kid missing from the result is unknown or revoked,
-  which `UnverifiedEnvelope.verify()` refuses as `unknown_key`.
+  account and its `signed_out_at`, by kid. A kid missing from the result
+  is unknown or revoked, which `UnverifiedEnvelope.verify()` refuses as
+  `unknown_key`. Results from a hall upload late, so a sign-out refuses
+  nothing. #188 decides what a signature after it is worth.
 - A sign-in that switches accounts doesn't sign out the old account's key.
   The device re-registers its key with a proof for the new account, and
   reads 200 if adoption moved the key there, or 409 if another account owns
