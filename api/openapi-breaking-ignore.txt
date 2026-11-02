@@ -10,3 +10,8 @@ POST /v1/session added `#/components/schemas/SessionPlayer, subschema #2` to the
 # The models write a nullable as `type: [X, "null"]`, not `anyOf`, for the iOS
 # client's generator. oasdiff reads that as removing `null`, but it means the same.
 POST /v1/account/players/{player_id}/answer request property `player_id` list-of-types was narrowed by removing types `null` from media type `application/json`
+# #185: the logout body is optional with no `null` branch, which
+# swift-openapi-generator skips. A body of `null` now answers 422. No client
+# sends one, and the web client sends no body.
+POST /v1/auth/logout the request's body `type` changed from `any` to `object`
+POST /v1/auth/logout removed `#/components/schemas/LogoutRequest, subschema #2` from the request body `anyOf` list

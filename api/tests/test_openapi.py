@@ -25,3 +25,15 @@ def test_guest_limit_documents_retry_after() -> None:
         assert too_many["content"]["application/json"]["schema"] == {
             "$ref": "#/components/schemas/ErrorsResponse"
         }
+
+
+def test_the_logout_body_is_optional_with_no_null_branch() -> None:
+    """swift-openapi-generator skips a request body that is `anyOf` with
+    `null`, so the iOS app couldn't send `signing_key_id`."""
+    paths: dict[str, Any] = create_app().openapi()["paths"]
+
+    body = paths["/v1/auth/logout"]["post"]["requestBody"]
+    assert body.get("required", False) is False
+    assert body["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/LogoutRequest"
+    }

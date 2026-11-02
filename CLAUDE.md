@@ -732,7 +732,10 @@ swift-openapi-generator drops a property whose schema is `anyOf` with
 `null`, which is how Pydantic writes a nullable. So `create_app()` rewrites
 each such schema in `components.schemas` as `type: [X, "null"]`, which means
 the same. Parameters keep `anyOf`, because oasdiff reads a parameter's type
-array as a break. `tests/test_openapi.py` checks both.
+array as a break. The generator also skips a request body that is `anyOf`
+with `null`, which `body: Model | None = None` writes. So an optional body
+takes a default instead, as `POST /v1/auth/logout` does. `tests/test_openapi.py`
+checks all three.
 
 A published API version (today `/v1`) never changes in a breaking way. Released
 iOS and Android apps stay installed for months, and they call the API that
