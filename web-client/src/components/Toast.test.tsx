@@ -10,21 +10,25 @@ describe('Toast', () => {
     expect(screen.getByText('Table 4 marked free')).toBeVisible()
   })
 
-  it('offers Undo only when it can undo', () => {
+  it('offers a button only when it has an action', () => {
     render(<Toast message="Table 4 marked free" onDismiss={() => {}} />)
 
     expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument()
   })
 
-  it('runs onUndo on Undo', async () => {
-    const onUndo = vi.fn()
+  it('runs the action on its button', async () => {
+    const undo = vi.fn()
     render(
-      <Toast message="Chen vs Ali called to Table 1" onUndo={onUndo} onDismiss={() => {}} />,
+      <Toast
+        message="Chen vs Ali called to Table 1"
+        action={{ label: 'Undo', onClick: undo }}
+        onDismiss={() => {}}
+      />,
     )
 
     await userEvent.click(screen.getByRole('button', { name: 'Undo' }))
 
-    expect(onUndo).toHaveBeenCalledOnce()
+    expect(undo).toHaveBeenCalledOnce()
   })
 
   it('offers Dismiss only when it can be dismissed', () => {

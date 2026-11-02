@@ -28,7 +28,7 @@ type LiveToast = {
 // test mode toasts stay until dismissed, as the gallery's do. It also gives
 // useAnnounce(), which reads a message out through the same polite region
 // that announces an Undo.
-export function ToastProvider({ children }: { children: ReactNode }) {
+export function ToastProvider({ children, pinned }: { children: ReactNode; pinned?: ReactNode }) {
   const [toasts, setToasts] = useState<LiveToast[]>([])
   const [announcement, setAnnouncement] = useState('')
   const lastId = useRef(0)
@@ -73,6 +73,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 announce={announce}
               />
             ))}
+            {pinned}
           </div>
           <div className="fm-sr" aria-live="polite">
             {announcement}
@@ -106,13 +107,15 @@ function TimedToast({
     <Toast
       message={message}
       icon={icon}
-      onUndo={
-        undo &&
-        (() => {
-          undo()
-          dismiss(id)
-          announce('Undone')
-        })
+      action={
+        undo && {
+          label: 'Undo',
+          onClick: () => {
+            undo()
+            dismiss(id)
+            announce('Undone')
+          },
+        }
       }
       onDismiss={() => dismiss(id)}
       onMouseEnter={() => setHovered(true)}
