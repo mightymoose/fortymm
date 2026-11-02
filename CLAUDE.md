@@ -55,7 +55,9 @@ starts after the `postgres` service is healthy (`pg_isready`). To add a project'
 
 `api:ci` runs `uv sync --locked`, ruff (lint and format), mypy, pytest and
 `alembic check` in the running `api` container. `alembic check` fails when
-the models and the migrations disagree. `api:smoke` then builds the API's production
+the models and the migrations disagree. pytest also fails when
+`api/signed-results/vectors.json` differs from what its generator writes
+(see Signed match results). `api:smoke` then builds the API's production
 image (`api:build`), runs it with `PORT` set on the `postgres` service's
 network, and checks that `/v1/health` reaches the database.
 It then sends 31 `POST /v1/session` from one IPv6 `X-Forwarded-For` address
@@ -541,6 +543,52 @@ reads leagues yet.
 - A league with members can't be deleted (`ON DELETE RESTRICT`).
 - A player merge keeps both players' memberships
   (`STAYS_ON_PLAYER_MERGE`).
+
+### Signed match results
+
+Every result reaches the server as an envelope that the players' devices
+signed. `api/signed-results/README.md` specifies the format, and
+`api/signed-results/vectors.json` holds the test vectors every client
+checks (#182). No route reads a result yet.
+
+- `signed_results.py` is the codec: `MatchResult`, `encode_payload()`,
+  `sign()`, `append_signature()`, `decode_envelope()`, `qr_text()`,
+  `link()` and `envelope_from_text()`. A payload is a CWT claims map in
+  deterministic CBOR, signed in a COSE_Sign envelope with ES256. The
+  result's hash is the SHA-256 of the payload bytes.
+- `decode_envelope()` gives an `UnverifiedEnvelope`, which gives the
+  result out only through `verify(keys)`. `verify()` takes each key's kid
+  from the key, so a caller can't pair a kid with the wrong key.
+- A refusal is `Malformed`, `UnknownKey` or `BadSignature`, each with a
+  `code`, in that order of precedence. `Malformed` is decided from the
+  bytes alone: decode, re-encode with cbor2 canonical, compare, plus the
+  exact type of every map key and integer, because Python's dict treats
+  `True` as `1`. The order is part of the format, and
+  `tests/test_signed_results.py` checks it through the vectors.
+- The second signer appends over the received payload bytes and never
+  re-encodes them. Base45 (RFC 9285) is vendored in the codec. Base45 and
+  base64url decode strictly.
+- `signing_keys.py` is the key type: `SigningPublicKey`, valid on
+  construction, with its COSE_Key bytes and its `kid`, the RFC 9679
+  thumbprint, and `SigningPrivateKey` for the tests and the generator.
+  Signatures are raw `r || s`. `tests/test_signing_keys.py` checks it with
+  the RFC's own example. `matches.py` holds `MatchId` and `BestOf`.
+- `tests/signed_result_vectors.py` writes `vectors.json`:
+  `./bin/mise run api:signed-result-vectors`. Keys, ids and times are
+  fixed and ECDSA signing is deterministic, so a rerun writes the same
+  bytes. `test_the_committed_vectors_are_fresh` fails on a stale file.
+  Changing an existing vector's bytes breaks every client. The generator
+  is also the adapter to pycose, a dev dependency and the second
+  implementation. The tests have pycose verify every valid vector and
+  append every multi-signature vector's last signature byte for byte.
+- `test_every_two_signature_qr_text_fits_version_16_at_level_m` holds the
+  QR budget, 656 alphanumeric characters. The longest two-signature vector
+  is 614. The web client checks the vectors in #184 and the iOS app in
+  #185, whose workflow runs when the file changes.
+- To add a Python dependency, run `docker compose run --rm --no-deps -T api
+  uv add <pkg>` (`uv add --dev <pkg>` for a dev one) and commit
+  `pyproject.toml` with `uv.lock`. The production image installs without
+  the dev group, so the app can't import one.
 
 ### Migrations
 
