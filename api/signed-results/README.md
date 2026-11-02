@@ -172,7 +172,7 @@ input has exactly one class.
 
 The precedence is part of the format. A `malformed` input gets that class from
 every implementation, including a client that holds no keys. A repeated (kid,
-side) signature counts once in what a verifier returns.
+player) signature counts once in what a verifier returns.
 
 ## Test vectors
 
@@ -224,7 +224,7 @@ vector carries a signature by a fourth key that the file doesn't list.
 | `payload` | hex | The payload bytes. |
 | `hash` | hex, 32 bytes | `SHA-256(payload)`. |
 | `signatures` | array of Signature | The envelope's COSE_Signatures, in envelope order, with the steps behind each one. |
-| `approvals` | array of `{kid, player}` | What a verifier returns. The set of (kid, player) pairs with repeats counted once, sorted by `player` then `kid`. Compare it as a set. |
+| `approvals` | array of `{kid, player}` | What a verifier returns. The set of (kid, player) pairs, where `player` is the UUID `result.players[side]`, with repeats counted once, sorted by `player` then `kid`. Compare it as a set. |
 | `envelope` | hex | The COSE_Sign envelope. |
 | `qr` | string | The QR text. |
 | `link` | string | The link. |
@@ -272,7 +272,10 @@ tests verify.
 Every key, signer:
 
 - K1. The public key derived from `d` is (`x`, `y`). Import `d` as a software
-  key in tests. A hardware key can't be imported.
+  key in tests. A hardware key can't be imported. WebCrypto's JWK import needs
+  `x` and `y` with `d`, and each key entry carries all three. Deriving (`x`,
+  `y`) from `d` needs a point multiplication, or an import format such as
+  PKCS#8 that computes it.
 - K2. The COSE_Key encoding of (`x`, `y`) equals `cose_key` byte for byte.
 - K3. `SHA-256(cose_key)` equals `kid`.
 
@@ -291,9 +294,10 @@ Every valid vector, signer:
   random nonce, so compare by verifying, not by bytes. A platform that makes
   DER converts to raw `r || s` first.
 - V5. Assembling an envelope from `payload` and the `signatures` (protected,
-  signature) in order gives `envelope` byte for byte. Appending the last
-  signature to the envelope made of the others gives the same bytes. That is
-  the second signer's step, and it never re-encodes the payload.
+  signature) in order gives `envelope` byte for byte. For a vector with two
+  or more signatures, appending the last signature to the envelope made of
+  the others gives the same bytes. That is the second signer's step, and it
+  never re-encodes the payload.
 - V6. The QR text of `envelope` equals `qr`, its link equals `link`, and
   reading `qr` and `link` back gives `envelope`.
 - V7. `qr` uses only QR alphanumeric characters, and every vector with at most
@@ -334,8 +338,9 @@ Valid:
 | `same-signature-twice` | The same COSE_Signature twice. `approvals` has one entry. |
 
 Invalid, `malformed` unless marked. Every vector has one fault, except the
-three precedence vectors. They carry two faults on purpose, and their class is
-the one the refusal order picks.
+three precedence vectors and `signer-alg-label-true`. The precedence vectors
+carry two faults on purpose, and their class is the one the refusal order
+picks.
 
 | Name | What it pins |
 | --- | --- |
@@ -357,7 +362,7 @@ the one the refusal order picks.
 | `no-signatures` | An empty signature array. |
 | `signer-unprotected-header-not-empty` | The kid copied into the unprotected header. |
 | `signer-alg-es384` | `alg` -35. |
-| `signer-alg-label-true` | `alg`'s label as CBOR `true`. A decoder whose maps treat `true` as 1 accepts it. |
+| `signer-alg-label-true` | `alg`'s label as CBOR `true`. A decoder whose maps treat `true` as 1 accepts it. A `true` key sorts before `"player"` in length-first order and after it in bytewise order, so the header breaks one order whichever it follows. A decoder may refuse it for either fault. Both are `malformed`. |
 | `signer-side-2` | The signer's `"player"` is 2. |
 | `signer-side-as-bool` | The signer's `"player"` is CBOR `true`. |
 | `signer-missing-player` | No `"player"` header. |

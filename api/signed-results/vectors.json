@@ -970,7 +970,7 @@
     },
     {
       "name": "signer-alg-label-true",
-      "description": "The second signer's alg label is CBOR true, not the integer 1. A decoder whose maps treat true as 1 (Python's dict does) accepts it.",
+      "description": "The second signer's alg label is CBOR true, not the integer 1. A decoder whose maps treat true as 1 (Python's dict does) accepts it. A true key can't sort the same way as the text key \"player\" under both length-first and bytewise order, so a decoder that checks bytewise order refuses it for that. Both faults are malformed.",
       "error": "malformed",
       "envelope": "d8628440a05867a2061a6ae729c077666f7274796d6d2f6d617463682d726573756c742f7631a60150653e264099fe56ba9f0114dd69f69a2d020303f50482501f67b354b11e52edbf28a480821231cc506c47577f0fea50869939e4f81f2a7b1c0583820b0782090b820b0406008283582ea3012604582077517e3498d560ace130b511db2f41114abccf80abb69e82ef0d343c39b2675566706c6179657200a058402949f9f171baa315606870acc6d134748f68cc43b1a662f18968d01e4ce31dcc4564983949010e7e3fbd57d0c421cd8251c5b33570cc236ea8418c826e25376983582ea304582078babf92bf12a33fae574704e8b17c3a47e76b9e05afac9605fc067712c93b12f52666706c6179657201a058405dbc298ed99c160daf8dad2f3db1e1c75f4354727e4e3c85438122fe6184ba77c3f5678936936cb67adf037ad8fcda11ecd5233b18f1e316a0c89e582c94a6a5"
     },
