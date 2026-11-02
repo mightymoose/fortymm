@@ -653,8 +653,9 @@ To add a page, add its component to `src/pages/` and a route file that shows
 it to `src/routes/`.
 
 - `__root.tsx`: the root route, with component `Root` (`src/pages/Root.tsx`),
-  and the router context type (`api` and `queryClient`). `Root` gives every
-  page toasts and tooltips, and no frame.
+  and the router context type (`api`, `queryClient` and `appUpdate`). `Root`
+  gives every page toasts, tooltips and the update notice (see Service
+  worker), and no frame.
 - `_authenticated.tsx`: a pathless layout route with no path segment and no
   component. Pages that will need a signed-in user go in `_authenticated/`.
   Its loader starts the session, and its `pendingComponent` is the loading
@@ -889,7 +890,8 @@ response isn't ok. A bodyless `POST` or `DELETE` sends `JSON_HEADERS`.
 `data.logout_url`. `useSignOut()` (`src/pages/useSignOut.ts`) runs it
 through `useMutation`, for `UserMenu`. On success, it
 calls `leavePage()` (`src/leavePage.ts`), which loads the URL with
-`window.location.assign`. jsdom's `location.assign` can't be spied on, so
+`window.location.assign`. `reloadPage()` in the same module reloads the
+page, for the update notice. jsdom's `location` can't be spied on, so
 tests `vi.mock` that module. If the request fails, the menu
 says so and offers Sign out again.
 
@@ -994,6 +996,21 @@ waits for the session, because the page doesn't start one.
 render can load another chunk. So `PlayerReviewPage.findQuestion()` waits
 for the review's heading after Home sends the browser there.
 
+`renderRoute` also takes `appUpdate`, an `AppUpdate` (see Service worker)
+around a `FakeServiceWorkerContainer` from `src/test/fakeServiceWorker.ts`.
+`HomePage.render()` and `DesignSystemPage.render()` pass it through. Without
+one, the router gets an `AppUpdate` with no service worker, so no test sees
+the update notice by accident. The fake plays the browser's objects, as much
+of them as `src/serviceWorker.ts` reads. `deploy()` installs a new worker
+that waits. `startInstall()` and `finishInstall()` split that, for a worker
+still downloading. `firstInstall()` is a browser's first worker, which takes
+over at once. `takeOver()` lets the waiting worker take over and fires
+`controllerchange` on a controlled tab. Its workers record the messages the
+page posts, and its registration's `update` is a spy. `UpdateNotice`
+(`src/test/pages/UpdateNotice.ts`) reads the notice on any page. A test of
+anything that reloads or leaves the page mocks `src/leavePage.ts` with
+`vi.mock('../leavePage')`, which makes `leavePage` and `reloadPage` spies.
+
 ### End-to-end tests
 
 The Playwright suite lives in `web-client/e2e/` (`*.spec.ts`, excluded from
@@ -1048,9 +1065,11 @@ the account keeps its one player.
 migration makes an administrator. On `/admin` it creates a role with a new
 name, because the dev database keeps its roles, then deletes it. Then it
 opens its own account's page from the Accounts tab, and checks that it
-holds Administrator.
+holds Administrator. A second test does the same at 390x844, where the
+sidebar is a tab bar, and checks that the toast sits 24px above the bar
+(#150).
 
-The suite counts about 25 guest accounts and sign-ins with no session,
+The suite counts about 26 guest accounts and sign-ins with no session,
 under the limit of 30 a minute.
 
 The design system page is a copy of the reference's component gallery
@@ -1155,7 +1174,8 @@ The design system's styles apply to the whole app; `main.tsx` imports them:
   in `src/assets/fonts/`.
 - `src/styles/base.css`: the base, type roles, status markers and motion of
   the same file. Then the app's own styles: the loading screen,
-  `.app-shell` (`src/pages/AppShell.tsx`), `.roadmap`, the list of what's
+  `.app-shell` (`src/pages/AppShell.tsx`), which below 900px also moves the
+  toast region above its tab bar (#150), `.roadmap`, the list of what's
   ready and what's coming that Home shows (`src/pages/Home.tsx`), and
   `.sign-in-error` (`SignInErrorAlert`).
 - `src/styles/kit.css`: the component classes (`fm-*`) of
@@ -1195,8 +1215,10 @@ reference (see the screenshot tests above).
 A production build has a service worker, `/sw.js`, which caches the app so
 it loads with no network, as in a hall with no signal. `vite-plugin-pwa`
 writes it with Workbox (`VitePWA` in `vite.config.ts`).
-`registerServiceWorker()` (`src/serviceWorker.ts`) registers it after the
-page loads, only in a build, so the dev server and the tests have none.
+`createAppUpdate()` (`src/serviceWorker.ts`) makes the `AppUpdate` that
+registers it after the page loads, only in a build, so the dev server and
+the tests have none. `main.tsx` makes one and puts it in the router
+context.
 
 - It precaches every JS, CSS, HTML, SVG and font file of the build, about
   830 KB. So a navigation to a route whose chunk hasn't loaded yet never
@@ -1207,10 +1229,57 @@ page loads, only in a build, so the dev server and the tests have none.
   account that the last session saved (see API client). So offline they
   work in a browser that loaded the app online once. A browser with nothing
   saved shows "Can’t reach FortyMM".
-- A new version waits until every tab of the old one has closed. It never
-  calls `skipWaiting`, which would delete the precache that an open tab
-  still loads its chunks from (#153). The API never breaks `/v1`, so an old
-  version keeps working.
+- A new version waits until every tab of the old one has closed, or until
+  someone presses Reload. It never calls `skipWaiting` on its own, which
+  would delete the precache that an open tab still loads its chunks from
+  (#153). The API never breaks `/v1`, so an old version keeps working.
+- A tab that stays open learns of a new build three ways. A worker that
+  waits when a controlled page loads. A worker that starts installing
+  (`updatefound`) while another is active, in any tab. And a controller
+  change, when another tab's Reload let the new worker take over. An
+  uncontrolled tab (a first visit, a Shift-reload) ignores a worker that
+  already waited: it loaded its build from the network, most likely the
+  very one that waits. The first install ever has no active worker and
+  says nothing.
+- It tells the person only once the install finished (`installed`). Then
+  every file of the new build is in the precache, so Reload needs no
+  network. The tab's phase is `UpdatePhase` (`none`, `ready`, `dismissed`,
+  `reloading`), moved by the pure `transition()` table and read with
+  `useSyncExternalStore`.
+- `UpdateNotice` (`src/pages/UpdateNotice.tsx`) shows "FortyMM has been
+  updated." with Reload and Dismiss, as an info toast pinned in the toast
+  region (`ToastProvider`'s `pinned`), so it stays under any toasts until a
+  press. `Root` renders it, so it shows on every page, the public ones
+  included, and above the tab bar below 900px (#150). After Reload the
+  button reads "Reloading…" and Dismiss goes.
+- Nothing reloads without a press. Reload posts `{type: 'SKIP_WAITING'}` to
+  the waiting worker and reloads on the worker's next `statechange`. A
+  plain reload before that serves the old build again, because the old
+  document is still a client during the navigation. With nothing waiting,
+  because another tab already reloaded, it reloads at once. A second
+  press changes nothing.
+- When one tab reloads, every other tab of the old build gets
+  `controllerchange` and shows the notice, dismissed or not. Its precache
+  is gone, so its next unloaded route goes to the network (#153). It never
+  reloads by itself: the person may be mid-way through a result.
+- Dismiss hides the notice for the page. A later deploy stays hidden. A
+  controller change shows it again.
+- The browser checks `/sw.js` on full navigations, which a TanStack
+  navigation isn't. So the tab calls `registration.update()` when it
+  becomes visible and every `UPDATE_CHECK_MS` (1 h), only while visible and
+  `navigator.onLine`. A check that fails is dropped, with nothing logged,
+  so a hall with no signal sees nothing.
+- The rest of #153 stays open: a CSS chunk that fails to load after a
+  takeover reaches `ErrorPage`, and the Worker answers a missing
+  `/assets/*` with the app's `index.html`. The notice shrinks the window,
+  because the person hears before they navigate.
+- `AppUpdate` reads `navigator.serviceWorker` through the narrow types
+  `ContainerLike`, `RegistrationLike` and `WorkerLike`, which the fake in
+  `src/test/fakeServiceWorker.ts` also fits (see Tests). `reloadPage()` in
+  `src/leavePage.ts` does the reload. The app doesn't use
+  `virtual:pwa-register`. That module registers at once rather than after
+  `load`, reloads every tab that saw the prompt unless told not to, raises
+  `onNeedRefresh` twice per update, and stubs to a no-op under Vitest.
 
 ### Dev server
 
