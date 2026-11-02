@@ -108,6 +108,7 @@ describe("the browser's signing key", () => {
   afterEach(() => {
     vi.mocked(leavePage).mockReset()
     vi.unstubAllGlobals()
+    vi.restoreAllMocks()
   })
 
   it('registers a new key after the session starts, with a proof for the account', async () => {
@@ -235,6 +236,32 @@ describe("the browser's signing key", () => {
     expect(keys.registrations).toHaveLength(1)
   })
 
+  it('stores no key when a sign-out starts while the first key is being made', async () => {
+    signInVerified()
+    const keys = mockSigningKeys()
+    const logouts = recordLogouts()
+    const generateKey = crypto.subtle.generateKey.bind(crypto.subtle)
+    let finishKey = () => {}
+    const held = new Promise<void>((resolve) => (finishKey = resolve))
+    const generating = vi
+      .spyOn(crypto.subtle, 'generateKey')
+      .mockImplementation(async (...args: Parameters<SubtleCrypto['generateKey']>) => {
+        await held
+        return generateKey(...args)
+      })
+    const homePage = await HomePage.render()
+    await vi.waitFor(() => expect(generating).toHaveBeenCalled())
+
+    await signOut(homePage)
+    finishKey()
+    // Give the held key time to be stored and registered if it were going to.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    expect(logouts).toEqual([null])
+    expect(await storedKid()).toBeNull()
+    expect(keys.registrations).toHaveLength(0)
+  })
+
   it('keeps the key when the logout fails, and sends it again on the next sign-out', async () => {
     signInVerified()
     const { registrations } = mockSigningKeys()
@@ -245,7 +272,8 @@ describe("the browser's signing key", () => {
 
     await userEvent.click(homePage.accountButton!)
     await userEvent.click(within(homePage.accountMenu).getByRole('menuitem', { name: 'Sign out' }))
-    await vi.waitFor(async () => expect(await storedKid()).toBe(kid))
+    await within(homePage.accountMenu).findByText(/Couldn’t sign you out/)
+    expect(await storedKid()).toBe(kid)
     expect(leavePage).not.toHaveBeenCalled()
 
     // The menu stays open after a failed sign-out.

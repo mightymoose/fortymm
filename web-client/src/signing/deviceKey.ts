@@ -24,6 +24,12 @@ const LABEL = 'Web browser'
 
 const ECDSA = { name: 'ECDSA', hash: 'SHA-256' }
 
+// A key that a registration makes during a sign-out could stay live on the
+// account that signs out. So this tab stores none while it signs out, nor
+// one whose making started before a sign-out did.
+let signingOut = false
+let signOuts = 0
+
 // Registers this browser's key to `accountId`, making the key first if
 // there is none. A key that is revoked, or that another account owns, is
 // replaced, and the new one registered, once. Any other failure, such as no
@@ -32,6 +38,7 @@ const ECDSA = { name: 'ECDSA', hash: 'SHA-256' }
 export async function registerDeviceKey(api: ApiClient, accountId: string): Promise<void> {
   try {
     const key = (await storedKey()) ?? (await createKey())
+    if (!key) return
     if ((await register(api, key, accountId)) === 'kept') return
     const replacement = await replaceKey(key.kid)
     if (replacement) await register(api, replacement, accountId)
@@ -59,35 +66,38 @@ export async function signWithDeviceKey(): Promise<Signer | null> {
 }
 
 // This browser's key, taken out of storage before a sign-out sends its id.
-// A registration still in flight then finds no key to replace, so it can't
-// leave a new key live on the account that signs out. `restore` puts the key
-// back if the sign-out fails, unless another key has been stored meanwhile.
-// It is null if there is no key or storage fails, so a sign-out never fails
-// over the key.
-export type TakenKey = { id: string; restore(): Promise<void> }
+// Until the logout answers, this tab stores no new key, so a registration
+// still in flight can't leave one live on the account that signs out. `id`
+// is null if there is no key or storage fails, so a sign-out never fails
+// over the key. After the logout, `release` lets a key be made again: the
+// session is gone, so no later key can be live on the old account. `restore`
+// puts the key back if the logout fails, unless another key has been stored
+// meanwhile.
+export type TakenKey = { id: string | null; release(): void; restore(): Promise<void> }
 
-export async function takeKey(): Promise<TakenKey | null> {
-  try {
-    const key = await update((stored, store) => {
-      if (stored) store.delete(RECORD)
-      return stored
-    })
-    return (
-      key && {
-        id: hex(key.kid),
-        restore: async () => {
-          try {
-            await update((stored, store) => {
-              if (!stored) store.put(key, RECORD)
-            })
-          } catch {
-            // The next session answer makes a new key.
-          }
-        },
+export async function takeKey(): Promise<TakenKey> {
+  signingOut = true
+  signOuts += 1
+  const key = await update((stored, store) => {
+    if (stored) store.delete(RECORD)
+    return stored
+  }).catch(() => null)
+  return {
+    id: key && hex(key.kid),
+    release: () => {
+      signingOut = false
+    },
+    restore: async () => {
+      signingOut = false
+      if (!key) return
+      try {
+        await update((stored, store) => {
+          if (!stored) store.put(key, RECORD)
+        })
+      } catch {
+        // The next session answer makes a new key.
       }
-    )
-  } catch {
-    return null
+    },
   }
 }
 
@@ -108,11 +118,12 @@ async function generateKey(): Promise<DeviceKey> {
 }
 
 // Stores a new key, unless another tab stored one first. Then that one is
-// this browser's key.
-async function createKey(): Promise<DeviceKey> {
+// this browser's key. During a sign-out it stores none.
+async function createKey(): Promise<DeviceKey | null> {
+  const started = signOuts
   const fresh = await generateKey()
   return update((stored, store) => {
-    if (stored) return stored
+    if (stored || signingOut || signOuts !== started) return stored
     store.put(fresh, RECORD)
     return fresh
   })
@@ -120,11 +131,12 @@ async function createKey(): Promise<DeviceKey> {
 
 // Replaces the key with id `oldKid`. If the stored key is another one,
 // because another tab replaced it, that one stays. If there is none, because
-// a sign-out deleted it, none is made.
+// a sign-out took it, none is made.
 async function replaceKey(oldKid: Uint8Array<ArrayBuffer>): Promise<DeviceKey | null> {
+  const started = signOuts
   const fresh = await generateKey()
   return update((stored, store) => {
-    if (!stored || !equalBytes(stored.kid, oldKid)) return stored
+    if (!stored || signingOut || signOuts !== started || !equalBytes(stored.kid, oldKid)) return stored
     store.put(fresh, RECORD)
     return fresh
   })

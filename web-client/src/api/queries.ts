@@ -128,20 +128,22 @@ function raceSession(request: Promise<SessionAccount>): Promise<SessionOutcome> 
 // Ends the visitor's session, and returns the identity provider's logout
 // page, which the browser follows to end the provider's session too. It
 // deletes this browser's signing key and signs it out on the API, so the
-// next account gets a new one. A failed logout puts the key back. It forgets the saved account, so an offline
-// load after it doesn't show the account that signed out.
+// next account gets a new one. A failed logout puts the key back. It
+// forgets the saved account, so an offline load after it doesn't show the
+// account that signed out.
 export async function logout(api: ApiClient): Promise<string> {
   const key = await takeKey()
   const data = await send(
     'POST /v1/auth/logout',
     api.POST(
       '/v1/auth/logout',
-      key ? { body: { signing_key_id: key.id } } : { headers: JSON_HEADERS },
+      key.id ? { body: { signing_key_id: key.id } } : { headers: JSON_HEADERS },
     ),
   ).catch(async (error: unknown) => {
-    await key?.restore()
+    await key.restore()
     throw error
   })
+  key.release()
   forgetAccount()
   return data.data.logout_url
 }
