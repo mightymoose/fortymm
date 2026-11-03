@@ -94,7 +94,7 @@ type Ending = Completed | Retired
 class MatchResult:
     """What a signed result says happened in a match. The format fixes only
     its shape and types. Whether the scores are a legal ending (games to 11,
-    win by 2, the majority reached) is #188's rule.
+    win by 2, the majority reached) is services/match_results.check_ending().
     """
 
     match: MatchId
@@ -202,7 +202,8 @@ class _Signature:
 class UnverifiedEnvelope:
     """A decoded envelope whose signatures aren't checked yet. It gives the
     result out only through verify(), so no caller can act on an unverified
-    result. Its one other use is to name the keys to look up.
+    result. Its other uses are to name the keys to look up and the match the
+    envelope is for.
     """
 
     _payload: bytes = field(repr=False)
@@ -215,6 +216,12 @@ class UnverifiedEnvelope:
         """The kids of the envelope's signatures. The caller finds their keys
         and passes them to verify()."""
         return frozenset(s.kid for s in self._signatures)
+
+    @property
+    def match(self) -> MatchId:
+        """The match the payload names, so a caller can refuse an envelope
+        sent for another match before it looks up any key."""
+        return self._result.match
 
     def verify(self, keys: Iterable[SigningPublicKey]) -> VerifiedResult:
         """Check every signature with the key its kid names, and return the

@@ -332,6 +332,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/matches/{match_id}/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Match Approval
+         * @description Check a result that the match's players signed, and accept it.
+         *
+         *     It needs no session: the signatures are the authority. Today it checks
+         *     the envelope's format, the match, every signature and that the scores
+         *     are a legal ending, and stores nothing.
+         */
+        post: operations["create_match_approval"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/admin/permissions": {
         parameters: {
             query?: never;
@@ -847,6 +871,27 @@ export interface components {
          * @enum {string}
          */
         AppSignInOutcome: "signed_in" | "cancelled" | "email_not_verified" | "expired" | "failed";
+        /** ApprovalRequest */
+        ApprovalRequest: {
+            /** Envelope */
+            envelope: string;
+        };
+        /** ApprovalResponse */
+        ApprovalResponse: {
+            data: components["schemas"]["CheckedResult"];
+        };
+        /** CheckedResult */
+        CheckedResult: {
+            /** Hash */
+            hash: string;
+            /**
+             * Match Id
+             * Format: uuid
+             */
+            match_id: string;
+            /** Approvals */
+            approvals: components["schemas"]["MatchApproval"][];
+        };
         /** Error */
         Error: {
             /** Status */
@@ -894,6 +939,16 @@ export interface components {
         /** LogoutResponse */
         LogoutResponse: {
             data: components["schemas"]["LogoutData"];
+        };
+        /** MatchApproval */
+        MatchApproval: {
+            /** Key Id */
+            key_id: string;
+            /**
+             * Player Id
+             * Format: uuid
+             */
+            player_id: string;
         };
         /** MergedOutcome */
         MergedOutcome: {
@@ -1588,6 +1643,50 @@ export interface operations {
                 };
             };
             /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_match_approval: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                match_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApprovalResponse"];
+                };
+            };
+            /** @description The request's Content-Type isn't application/json */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorsResponse"];
+                };
+            };
+            /** @description The body is invalid. If the envelope isn't a signed result, is for another match, cites a key that isn't registered or was revoked, has a signature that doesn't verify, or its scores aren't a legal ending, the body is in the `errors` shape instead */
             422: {
                 headers: {
                     [name: string]: unknown;

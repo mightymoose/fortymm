@@ -14,6 +14,7 @@ from fortymm_api.auth import NoValidSession
 from fortymm_api.database import create_database_engine, migrate
 from fortymm_api.identity_provider import IdentityProvider
 from fortymm_api.services.authorization import MissingPermission
+from fortymm_api.services.match_results import IllegalEnding, WrongMatch
 from fortymm_api.services.players import (
     PlayerNotManaged,
     QuestionClosed,
@@ -38,6 +39,7 @@ from fortymm_api.services.signing_keys import (
     SigningKeyNotFound,
     UnknownSigningKey,
 )
+from fortymm_api.signed_results import BadSignature, Malformed, UnknownKey
 from fortymm_api.v1.auth import SignInUnavailable
 from fortymm_api.v1.errors import Error, ErrorsResponse, retry_after_seconds
 
@@ -75,6 +77,13 @@ SIGNING_KEY_ERRORS: dict[type[Exception], tuple[int, str]] = {
     KeyRegisteredElsewhere: (409, "Another account registered this key"),
     SigningKeyNotFound: (404, "The account has no key with this id"),
     UnknownSigningKey: (404, "No key has this id"),
+}
+APPROVAL_ERRORS: dict[type[Exception], tuple[int, str]] = {
+    Malformed: (422, "The envelope isn't a FortyMM signed result"),
+    WrongMatch: (422, "The result is for another match"),
+    UnknownKey: (422, "A signature's key isn't registered, or was revoked"),
+    BadSignature: (422, "A signature doesn't match the result"),
+    IllegalEnding: (422, "The scores aren't a legal ending to the match"),
 }
 AUTH0_SETTINGS = ("AUTH0_DOMAIN", "AUTH0_CLIENT_ID", "AUTH0_CLIENT_SECRET")
 
@@ -250,7 +259,7 @@ def create_app() -> FastAPI:
         lambda _request, _error: error_response(503, SIGN_IN_UNAVAILABLE),
     )
     for error, (status, title) in (
-        PLAYER_ERRORS | ROLE_ERRORS | SIGNING_KEY_ERRORS
+        PLAYER_ERRORS | ROLE_ERRORS | SIGNING_KEY_ERRORS | APPROVAL_ERRORS
     ).items():
         app.add_exception_handler(error, answers(status, title))
     require_json(app)
