@@ -16,6 +16,7 @@ import { signWithDeviceKey } from '../../signing/deviceKey'
 import { decodePayload, type MatchResult } from '../../signing/result'
 import { base64url, fromBase64url } from '../../signing/text'
 import { gamesWon, PATH, sidesFor } from '../scoring/sides'
+import { ServerCheck } from './ServerCheck'
 import '../scoring/scoring.css'
 
 const ROUTE = '/_authenticated/matches/$matchId/scores/approvals/new'
@@ -102,6 +103,7 @@ function Result({ opened }: { opened: Opened }) {
               <span>Approved on this device</span>
             </p>
           )}
+          {approved && <ServerCheck matchId={result.match} envelope={opened.envelope} />}
         </div>
         <section className="fm-card approval-card" aria-label="Result">
           <div className="approval-games">
@@ -168,8 +170,10 @@ function Result({ opened }: { opened: Opened }) {
 
 // Approve signs the link's payload for the viewer's side, then puts the
 // result with both signatures in the URL, so a reload shows it approved.
-// It all happens on this device. The page never says "sign": to a player,
-// signing is approving. Edit scores goes back to the match's scores.
+// The approval happens on this device, so it works with no network. The
+// approved page then sends the result to FortyMM to check. The page never
+// says "sign": to a player, signing is approving. Edit scores goes back to
+// the match's scores.
 function ApproveForm({
   envelope,
   games,

@@ -1,7 +1,8 @@
+import { waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AcceptResultPage } from '../../test/pages/AcceptResultPage'
 import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
-import { server, sessionResponse } from '../../test/server'
+import { mockApprovals, server, sessionResponse } from '../../test/server'
 import { saveGame } from '../../scoring/scratchpad'
 import { hex } from '../../signing/bytes'
 import { signWithDeviceKey, takeKey } from '../../signing/deviceKey'
@@ -113,7 +114,7 @@ describe('AcceptResult', () => {
     const signer = await signWithDeviceKey()
     expect(signatures.map(({ side }) => side)).toEqual([0, 1])
     expect(hex(signatures[1].kid)).toBe(hex(signer!.kid))
-    expect(requests).toEqual([])
+    expect(requests).toEqual([`/api/v1/matches/${result().match}/approvals`])
 
     const href = page.router.state.location.href
     page.close()
@@ -198,6 +199,62 @@ describe('AcceptResult', () => {
     const page = await AcceptResultPage.render(`/matches/demo/scores/approvals/new${fragment}`)
 
     expect(page.heading).toHaveTextContent('This link isn’t a FortyMM result')
+  })
+})
+
+describe('AcceptResult’s check with FortyMM', () => {
+  async function approved(): Promise<AcceptResultPage> {
+    const page = await AcceptResultPage.render(await link())
+    await page.waitForKey()
+    await page.approve()
+    await page.findStatus()
+    return page
+  }
+
+  it('sends the result with both approvals to its match', async () => {
+    const approvals = mockApprovals()
+    const page = await approved()
+
+    expect(await page.findChecked()).toBeInTheDocument()
+    expect(approvals.checks).toHaveLength(1)
+    const [check] = approvals.checks
+    expect(check.matchId).toBe(result().match)
+    expect(check.envelope).toBe(hex(fromBase64url(page.hash)))
+    const { signatures } = decodeEnvelope(fromBase64url(page.hash))
+    expect(signatures.map(({ side }) => side)).toEqual([0, 1])
+  })
+
+  it('shows its skeleton until FortyMM answers', async () => {
+    const approvals = mockApprovals('accepted', { hold: true })
+    const page = await approved()
+
+    await waitFor(() => expect(page.checking).toBe(true))
+    await approvals.release()
+    expect(await page.findChecked()).toBeInTheDocument()
+    expect(page.checking).toBe(false)
+  })
+
+  it('shows FortyMM’s reason when it refuses the result', async () => {
+    mockApprovals({ refused: 'A signature’s key isn’t registered, or was revoked' })
+    const page = await approved()
+
+    const refusal = await page.findRefusal()
+    expect(refusal).toHaveTextContent('A signature’s key isn’t registered, or was revoked')
+    expect(page.status).toHaveTextContent('Approved on this device')
+  })
+
+  it('keeps the approval with no network, and checks again on Try again', async () => {
+    const approvals = mockApprovals('unreachable')
+    const page = await approved()
+
+    const alert = await page.findAlert()
+    expect(alert).toHaveTextContent('Try again')
+    expect(page.status).toHaveTextContent('Approved on this device')
+
+    approvals.answer = 'accepted'
+    await page.tryAgain(alert)
+    expect(await page.findChecked()).toBeInTheDocument()
+    expect(approvals.checks).toHaveLength(2)
   })
 })
 

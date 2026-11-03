@@ -87,6 +87,7 @@
 .approval-title{margin:0;font:700 var(--text-2xl)/1.1 var(--font-ui);letter-spacing:-0.01em;color:var(--fg-1)}
 .approval-lede{margin:0;font:400 var(--text-md)/var(--lh-snug) var(--font-ui);color:var(--fg-2)}
 .approval-status,.approval-status>.fm-ic{color:var(--success)}
+.server-check-skeleton{display:block;width:min(100%,320px);height:var(--text-md)}
 .approval-card{padding:var(--s-2) var(--s-5) var(--s-5);gap:var(--s-4)}
 .approval-games{overflow-x:auto}
 .approval-games .fm-games{width:100%}
