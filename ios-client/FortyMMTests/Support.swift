@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Synchronization
 @testable import FortyMM
@@ -77,14 +78,47 @@ final class StubURLProtocol: URLProtocol {
     }
 }
 
+/// A `DeviceKeyStore` that keeps software keys in memory, in place of the
+/// Keychain and the Secure Enclave.
+final class MemoryKeyStore: DeviceKeyStore {
+    private let state = Mutex<(key: SigningKey?, made: [P256.Signing.PublicKey])>((nil, []))
+
+    var current: SigningKey? { state.withLock { $0.key } }
+
+    /// The public half of the key with this kid, among those it made.
+    func publicKey(_ kid: KeyId) -> P256.Signing.PublicKey? {
+        state.withLock { $0.made }.first { SigningPublicKey($0).kid == kid }
+    }
+
+    func load() -> SigningKey? { current }
+
+    func create() throws -> SigningKey {
+        let privateKey = P256.Signing.PrivateKey()
+        let key = SigningKey(software: privateKey)
+        state.withLock {
+            $0.key = key
+            $0.made.append(privateKey.publicKey)
+        }
+        return key
+    }
+
+    func delete() { state.withLock { $0.key = nil } }
+}
+
 extension Account {
     static let guest = Account(
-        id: "a1", kind: .guest, player: Player(id: "p1", displayName: "excited egret 387")
+        id: UUID(uuidString: "00000000-0000-4000-8000-0000000000a1")!,
+        kind: .guest,
+        player: Player(id: "p1", displayName: "excited egret 387")
     )
     static let otherGuest = Account(
-        id: "a2", kind: .guest, player: Player(id: "p2", displayName: "brave badger 214")
+        id: UUID(uuidString: "00000000-0000-4000-8000-0000000000a2")!,
+        kind: .guest,
+        player: Player(id: "p2", displayName: "brave badger 214")
     )
     static let verified = Account(
-        id: "a3", kind: .verified(email: "ann@example.com"), player: Player(id: "p3", displayName: "calm crane 512")
+        id: UUID(uuidString: "00000000-0000-4000-8000-0000000000a3")!,
+        kind: .verified(email: "ann@example.com"),
+        player: Player(id: "p3", displayName: "calm crane 512")
     )
 }

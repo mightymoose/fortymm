@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import FortyMM
@@ -18,10 +19,12 @@ struct FortyMMAPITests {
 
     static let json = ["Content-Type": "application/json"]
 
+    static let accountId = UUID(uuidString: "75d282fa-d928-5d21-9e78-600d66f7f377")!
+
     static func session(kind: String = "guest", email: String? = nil) -> String {
         let email = email.map { "\"\($0)\"" } ?? "null"
         return """
-        {"data":{"account":{"id":"a1","kind":"\(kind)","email":\(email),\
+        {"data":{"account":{"id":"\(Self.accountId.uuidString.lowercased())","kind":"\(kind)","email":\(email),\
         "player":{"id":"p1","display_name":"excited egret 387"},"permissions":[]}}}
         """
     }
@@ -34,7 +37,7 @@ struct FortyMMAPITests {
 
         let account = try await api.startSession()
 
-        #expect(account == Account(id: "a1", kind: .guest, player: Player(id: "p1", displayName: "excited egret 387")))
+        #expect(account == Account(id: Self.accountId, kind: .guest, player: Player(id: "p1", displayName: "excited egret 387")))
         let request = try #require(StubURLProtocol.recorded.first).request
         #expect(request.httpMethod == "POST")
         #expect(request.url?.absoluteString == "http://localhost:5173/api/v1/session")
@@ -108,6 +111,14 @@ struct FortyMMAPITests {
         await #expect(throws: Failure.broken) { try await api.startSession() }
     }
 
+    @Test func anAccountIdThatIsntAUUIDIsBroken() async {
+        StubURLProtocol.reply(.init(headers: Self.json, body: Self.session().replacingOccurrences(
+            of: Self.accountId.uuidString.lowercased(), with: "a1"
+        )))
+
+        await #expect(throws: Failure.broken) { try await api.startSession() }
+    }
+
     @Test func logoutForgetsTheSession() async throws {
         store.save(["__Host-fortymm_session": "abc"])
         let api = FortyMMAPI(
@@ -122,12 +133,84 @@ struct FortyMMAPITests {
             body: #"{"data":{"logout_url":"http://oidc:8080/default/v2/logout"}}"#
         ))
 
-        try await api.logout()
+        try await api.logout(signingKey: nil)
 
-        let request = try #require(StubURLProtocol.recorded.first).request
-        #expect(request.url?.path == "/api/v1/auth/logout")
-        #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
+        let recorded = try #require(StubURLProtocol.recorded.first)
+        #expect(recorded.request.url?.path == "/api/v1/auth/logout")
+        #expect(recorded.request.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("application/json") == true)
+        let body = try JSONSerialization.jsonObject(with: recorded.body) as? [String: Any]
+        #expect(body?["signing_key_id"] == nil || body?["signing_key_id"] is NSNull)
         #expect(store.saved.isEmpty)
+    }
+
+    @Test func logoutSendsTheKeysIdInHex() async throws {
+        StubURLProtocol.reply(.init(headers: Self.json, body: Self.logout))
+        let kid = Self.key.publicKey.kid
+
+        try await api.logout(signingKey: kid)
+
+        let body = try JSONSerialization.jsonObject(with: try #require(StubURLProtocol.recorded.first).body) as? [String: Any]
+        #expect(body?["signing_key_id"] as? String == kid.hex)
+        #expect(kid.hex.wholeMatch(of: /[0-9a-f]{64}/) != nil)
+    }
+
+    static let logout = #"{"data":{"logout_url":"http://oidc:8080/default/v2/logout"}}"#
+    static let key = SigningKey(software: P256.Signing.PrivateKey())
+
+    static func signingKey(revokedAt: String? = nil) -> String {
+        let revokedAt = revokedAt.map { "\"\($0)\"" } ?? "null"
+        return """
+        {"data":{"id":"\(key.publicKey.kid.hex)","label":"Ann’s iPhone","created_at":"2026-11-02T12:00:00Z",\
+        "signed_out_at":null,"revoked_at":\(revokedAt)}}
+        """
+    }
+
+    @Test func registersASigningKeyInHex() async throws {
+        StubURLProtocol.reply(.init(headers: Self.json, body: Self.signingKey()))
+        let proof = try RegistrationProof.make(key: Self.key, account: Self.accountId)
+
+        let registration = try await api.registerSigningKey(Self.key.publicKey, proof: proof, label: "Ann’s iPhone")
+
+        #expect(registration == .registered)
+        let recorded = try #require(StubURLProtocol.recorded.first)
+        #expect(recorded.request.httpMethod == "POST")
+        #expect(recorded.request.url?.path == "/api/v1/account/signing-keys")
+        #expect(recorded.request.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("application/json") == true)
+        let body = try #require(try JSONSerialization.jsonObject(with: recorded.body) as? [String: String])
+        #expect(body == ["public_key": Self.key.publicKey.coseKey.hex, "proof": proof.hex, "label": "Ann’s iPhone"])
+        #expect(body["public_key"]?.wholeMatch(of: /[0-9a-f]{150}/) != nil)
+    }
+
+    @Test func aRevokedKeySaysSo() async throws {
+        StubURLProtocol.reply(.init(headers: Self.json, body: Self.signingKey(revokedAt: "2026-11-02T13:00:00Z")))
+
+        let registration = try await api.registerSigningKey(Self.key.publicKey, proof: Data(), label: "iPhone")
+
+        #expect(registration == .revoked)
+    }
+
+    @Test func aKeyAnotherAccountOwnsSaysSo() async throws {
+        StubURLProtocol.reply(.init(
+            status: 409,
+            headers: Self.json,
+            body: #"{"errors":[{"status":"409","title":"Another account registered this key"}]}"#
+        ))
+
+        let registration = try await api.registerSigningKey(Self.key.publicKey, proof: Data(), label: "iPhone")
+
+        #expect(registration == .ownedElsewhere)
+    }
+
+    @Test func aRefusedProofIsBroken() async {
+        StubURLProtocol.reply(.init(
+            status: 422,
+            headers: Self.json,
+            body: #"{"errors":[{"status":"422","title":"The proof doesn't verify"}]}"#
+        ))
+
+        await #expect(throws: Failure.broken) {
+            try await api.registerSigningKey(Self.key.publicKey, proof: Data(), label: "iPhone")
+        }
     }
 
     @Test func beginSignInResolvesARelativeAuthorizeURL() async throws {

@@ -1,3 +1,5 @@
+import Foundation
+
 /// The account of a valid session. A guest has no email and a verified
 /// account always has one, so the kind carries it.
 struct Account: Equatable, Sendable {
@@ -6,7 +8,7 @@ struct Account: Equatable, Sendable {
         case verified(email: String)
     }
 
-    let id: String
+    let id: UUID
     let kind: Kind
     let player: Player
 }
