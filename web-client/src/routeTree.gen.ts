@@ -11,6 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as AuthenticatedRouteImport } from './routes/_authenticated'
 import { Route as DesignSystemRouteImport } from './routes/design-system'
+import { Route as RRouteImport } from './routes/r'
 import { Route as SignInStoppedRouteImport } from './routes/sign-in-stopped'
 import { Route as SignedOutRouteImport } from './routes/signed-out'
 import { Route as AuthenticatedShellRouteImport } from './routes/_authenticated/_shell'
@@ -29,6 +30,11 @@ const AuthenticatedRoute = AuthenticatedRouteImport.update({
 const DesignSystemRoute = DesignSystemRouteImport.update({
   id: '/design-system',
   path: '/design-system',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const RRoute = RRouteImport.update({
+  id: '/r',
+  path: '/r',
   getParentRoute: () => rootRouteImport,
 } as any)
 const SignInStoppedRoute = SignInStoppedRouteImport.update({
@@ -90,6 +96,7 @@ const AuthenticatedMatchesMatchIdScoresGameGameNumberEditRoute =
 export interface FileRoutesByFullPath {
   '/': typeof AuthenticatedShellIndexRoute
   '/design-system': typeof DesignSystemRoute
+  '/r': typeof RRoute
   '/sign-in-stopped': typeof SignInStoppedRoute
   '/signed-out': typeof SignedOutRoute
   '/review-players': typeof AuthenticatedReviewPlayersRoute
@@ -102,6 +109,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof AuthenticatedShellIndexRoute
   '/design-system': typeof DesignSystemRoute
+  '/r': typeof RRoute
   '/sign-in-stopped': typeof SignInStoppedRoute
   '/signed-out': typeof SignedOutRoute
   '/review-players': typeof AuthenticatedReviewPlayersRoute
@@ -114,6 +122,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_authenticated': typeof AuthenticatedRouteWithChildren
   '/design-system': typeof DesignSystemRoute
+  '/r': typeof RRoute
   '/sign-in-stopped': typeof SignInStoppedRoute
   '/signed-out': typeof SignedOutRoute
   '/_authenticated/_shell': typeof AuthenticatedShellRouteWithChildren
@@ -130,6 +139,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/design-system'
+    | '/r'
     | '/sign-in-stopped'
     | '/signed-out'
     | '/review-players'
@@ -142,6 +152,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/design-system'
+    | '/r'
     | '/sign-in-stopped'
     | '/signed-out'
     | '/review-players'
@@ -153,6 +164,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_authenticated'
     | '/design-system'
+    | '/r'
     | '/sign-in-stopped'
     | '/signed-out'
     | '/_authenticated/_shell'
@@ -168,6 +180,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   AuthenticatedRoute: typeof AuthenticatedRouteWithChildren
   DesignSystemRoute: typeof DesignSystemRoute
+  RRoute: typeof RRoute
   SignInStoppedRoute: typeof SignInStoppedRoute
   SignedOutRoute: typeof SignedOutRoute
 }
@@ -186,6 +199,13 @@ declare module '@tanstack/react-router' {
       path: '/design-system'
       fullPath: '/design-system'
       preLoaderRoute: typeof DesignSystemRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/r': {
+      id: '/r'
+      path: '/r'
+      fullPath: '/r'
+      preLoaderRoute: typeof RRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/sign-in-stopped': {
@@ -314,6 +334,7 @@ const AuthenticatedRouteWithChildren = AuthenticatedRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   AuthenticatedRoute: AuthenticatedRouteWithChildren,
   DesignSystemRoute: DesignSystemRoute,
+  RRoute: RRoute,
   SignInStoppedRoute: SignInStoppedRoute,
   SignedOutRoute: SignedOutRoute,
 }
