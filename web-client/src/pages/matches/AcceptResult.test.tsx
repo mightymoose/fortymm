@@ -1,9 +1,8 @@
-import { waitFor } from '@testing-library/react'
+import { screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AcceptResultPage } from '../../test/pages/AcceptResultPage'
 import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
 import { mockApprovals, server, sessionResponse } from '../../test/server'
-import { saveGame } from '../../scoring/scratchpad'
 import { hex } from '../../signing/bytes'
 import { signWithDeviceKey, takeKey } from '../../signing/deviceKey'
 import { appendSignature, decodeEnvelope, signResult, type Signer } from '../../signing/envelope'
@@ -14,6 +13,7 @@ const ME = sessionResponse.data.account.player
 const ALICE = '6f1d2c43-8b5e-4a0f-9c71-2e4b8d0a5f13'
 const BOB = '0c9e7b21-3d4a-4f68-a1b5-7e2f9c8d6a40'
 const ISSUED_AT = 1_793_700_000
+const PREFIX = '/matches/demo/scores/approvals/new'
 
 function result(overrides: Partial<MatchResult> = {}): MatchResult {
   return {
@@ -93,14 +93,6 @@ describe('AcceptResult', () => {
     expect(page.gameScores.map((row) => row[0])).toEqual([`You · ${ME.display_name}`, 'Your opponent'])
   })
 
-  it('shows only the opponent’s username when only theirs is on this device', async () => {
-    saveGame('demo', 1, [11, 5], { playerId: ALICE, name: 'brave badger 214' })
-    const page = await AcceptResultPage.render(await link())
-
-    expect(page.gameScores.map((row) => row[0])).toEqual(['You', 'Your opponent · brave badger 214'])
-    expect(requests).toEqual([])
-  })
-
   it('approves on this device, and keeps the approval in the URL', async () => {
     const page = await AcceptResultPage.render(await link())
     await page.waitForKey()
@@ -123,40 +115,6 @@ describe('AcceptResult', () => {
     expect(reloaded.gameScores[0][0]).toBe('You')
   })
 
-  it('goes back to edit the scores, carrying the reviewed games to an empty pad', async () => {
-    const page = await AcceptResultPage.render(await link())
-    await page.editScores()
-
-    await page.waitForScores('/matches/demo/scores/game/1/edit')
-    const pad = new ScoreGamePage(page.router)
-    expect([1, 2, 3, 4].map((game) => pad.slotScore(game))).toEqual(['5–11', '11–7', '9–11', '4–11'])
-    expect(requests).toEqual([])
-  })
-
-  it('keeps the games a pad already has when going back to edit', async () => {
-    saveGame('demo', 1, [11, 2], { playerId: ME.id, name: ME.display_name })
-    const page = await AcceptResultPage.render(await link())
-    await page.editScores()
-
-    await page.waitForScores('/matches/demo/scores/game/1/edit')
-    const pad = new ScoreGamePage(page.router)
-    expect([1, 2].map((game) => pad.slotScore(game))).toEqual(['11–2', '–'])
-  })
-
-  it('shows every game of a best of 7', async () => {
-    const seven = result({
-      bestOf: 7,
-      games: [[11, 9], [9, 11], [12, 10], [10, 12], [11, 7], [7, 11], [14, 12]],
-    })
-    const page = await AcceptResultPage.render(await link(seven))
-
-    expect(page.columns).toHaveLength(9)
-    expect(page.gameScores).toEqual([
-      ['You', '9', '11', '10', '12', '7', '11', '12', '3'],
-      ['Your opponent', '11', '9', '12', '10', '11', '7', '14', '4'],
-    ])
-  })
-
   it('shows a result with both approvals as approved', async () => {
     const envelope = await appendSignature(
       await otherDevice(),
@@ -169,15 +127,31 @@ describe('AcceptResult', () => {
     expect(page.approveForm).toBeNull()
   })
 
-  it('marks who retired, counting only finished games', async () => {
-    const retired = result({ games: [[11, 5], [7, 5]], ending: 'retired', retiredBy: 0 } as Partial<MatchResult>)
-    const page = await AcceptResultPage.render(await link(retired))
+  it('goes back to edit the scores with the reviewed result, unchanged', async () => {
+    const reported = result({ players: [BOB, ALICE] })
+    const path = await link(reported)
+    const page = await AcceptResultPage.render(path)
+    const fragment = page.hash
+    await page.editScores()
 
-    expect(page.text).toContain('Your opponent reported that they retired, so you won.')
-    expect(page.gameScores).toEqual([
-      ['You', '5', '5', '0'],
-      ['Your opponentRetired', '11', '7', '1'],
-    ])
+    await page.waitForScores('/matches/demo/scores/game/1/edit')
+    const pad = new ScoreGamePage(page.router)
+    expect(pad.hash).toBe(fragment)
+    expect(pad.sides).toEqual(['You', 'Your opponent'])
+    expect([1, 2, 3, 4].map((game) => pad.slotScore(game))).toEqual(['5–11', '11–7', '9–11', '4–11'])
+    expect(requests).toEqual([])
+  })
+
+  it('carries both approvals to the scores after approving', async () => {
+    const page = await AcceptResultPage.render(await link())
+    await page.waitForKey()
+    await page.approve()
+    await page.findStatus()
+    const approved = page.hash
+
+    expect(screen.getByRole('link', { name: 'Edit scores' }).getAttribute('href')).toBe(
+      `/matches/demo/scores/game/1/edit#${approved}`,
+    )
   })
 
   it('says when the result corrects an earlier one', async () => {
@@ -195,8 +169,14 @@ describe('AcceptResult', () => {
     expect(page.approveForm).toBeInTheDocument()
   })
 
-  it.each(['', '#not-a-result'])('says a link with fragment “%s” isn’t a result', async (fragment) => {
-    const page = await AcceptResultPage.render(`/matches/demo/scores/approvals/new${fragment}`)
+  it.each([
+    ['no result', async () => ''],
+    ['a damaged result', async () => '#not-a-result'],
+    ['a retirement', async () => (await link(result({ games: [[11, 5], [7, 5]], ending: 'retired', retiredBy: 0 } as Partial<MatchResult>))).slice(PREFIX.length)],
+    ['another best of', async () => (await link(result({ bestOf: 7 }))).slice(PREFIX.length)],
+    ['an illegal game', async () => (await link(result({ games: [[11, 10]] }))).slice(PREFIX.length)],
+  ])('says a link with %s isn’t a result', async (_, fragment) => {
+    const page = await AcceptResultPage.render(`${PREFIX}${await fragment()}`)
 
     expect(page.heading).toHaveTextContent('This link isn’t a FortyMM result')
   })

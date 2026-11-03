@@ -5,9 +5,9 @@ import { renderRoute, type AppRouter } from '../renderRoute'
 // Page object for the page a player lands on after submitting a result,
 // which shows the signed result's QR code and link.
 export class AwaitingValidationPage {
-  // Renders the page for `matchId` directly, as a reload does.
-  static async render(matchId = 'demo'): Promise<AwaitingValidationPage> {
-    return new AwaitingValidationPage(await renderRoute(`/matches/${matchId}/scores/submission`))
+  // Renders the page at `path`, with its fragment, as a reload does.
+  static async render(path = '/matches/demo/scores/submission'): Promise<AwaitingValidationPage> {
+    return new AwaitingValidationPage(await renderRoute(path))
   }
 
   readonly router: AppRouter
@@ -18,6 +18,19 @@ export class AwaitingValidationPage {
 
   get href(): string {
     return this.router.state.location.href
+  }
+
+  get pathname(): string {
+    return this.router.state.location.pathname
+  }
+
+  // The fragment, without its `#`: the signed result.
+  get hash(): string {
+    return this.router.state.location.hash
+  }
+
+  get backLink(): HTMLElement {
+    return screen.getByRole('link', { name: 'Back to the scores' })
   }
 
   get heading(): HTMLElement {
@@ -37,7 +50,7 @@ export class AwaitingValidationPage {
     return screen.getByRole('img', { name: 'QR code of the signed result' })
   }
 
-  // The link that carries the signed result, once it is signed.
+  // The link that carries the signed result.
   async findLink(): Promise<HTMLAnchorElement> {
     return (await screen.findByRole('link', { name: /\/scores\/approvals\/new#/ })) as HTMLAnchorElement
   }

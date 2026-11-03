@@ -106,7 +106,7 @@ export class AcceptResultPage {
     await userEvent.click(screen.getByRole('link', { name: 'Edit scores' }))
   }
 
-  // Waits for the scratchpad page that Edit scores opens.
+  // Waits for the scores page that Edit scores opens.
   async waitForScores(path: string): Promise<void> {
     await screen.findByRole('heading', { level: 1, name: 'Game 1' })
     if (this.router.state.location.pathname !== path) throw new Error(this.router.state.location.pathname)

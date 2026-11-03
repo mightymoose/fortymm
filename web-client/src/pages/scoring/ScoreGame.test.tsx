@@ -1,9 +1,15 @@
-import { act, screen, waitFor } from '@testing-library/react'
+import { act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
-import { serverKey, setDemoNetwork } from '../../scoring/demoServer'
-import { markSent, pendingChanges, readBoard, saveGame as saveOnDevice, storageKey, writeBoard } from '../../scoring/scratchpad'
+import { describe, expect, it } from 'vitest'
 import { saveAccount } from '../../api/savedSession'
+import type { GamePoints } from '../../scoring/board'
+import { demoMatch } from '../../scoring/demoMatches'
+import { draftHash, resultOf } from '../../scoring/fragment'
+import { hex } from '../../signing/bytes'
+import { takeKey } from '../../signing/deviceKey'
+import { appendSignature, decodeEnvelope, signResult, type Signer } from '../../signing/envelope'
+import { decodePayload, encodePayload, resultHash, type MatchResult } from '../../signing/result'
+import { base64url, fromBase64url } from '../../signing/text'
 import { ErrorPage } from '../../test/pages/ErrorPage'
 import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
 import { holdSession, sessionResponse } from '../../test/server'
@@ -11,11 +17,38 @@ import { holdSession, sessionResponse } from '../../test/server'
 // The pad names the players to a player as You and Your opponent.
 const ME = 'You'
 const OPPONENT = 'Your opponent'
+const player = sessionResponse.data.account.player
+const match = demoMatch('demo', { id: player.id, name: player.display_name })
+const EDIT = '/matches/demo/scores/game'
+const DISCARDED = 'This link’s scores couldn’t be read, so the scores start empty.'
 
 async function saveGame(page: ScoreGamePage, game: number, me: string, opponent: string) {
-  if (!page.href.endsWith(`/game/${game}/edit`)) await page.goToGame(game)
+  if (!page.pathname.endsWith(`/game/${game}/edit`)) await page.goToGame(game)
   await page.enter({ [ME]: me, [OPPONENT]: opponent })
   await page.save()
+}
+
+// The result the fragment holds, whether a draft or signed.
+function resultIn(hash: string): MatchResult {
+  const bytes = fromBase64url(hash)
+  try {
+    return decodePayload(decodeEnvelope(bytes).payload).result
+  } catch {
+    return decodePayload(bytes).result
+  }
+}
+
+function draft(games: GamePoints[], replaces: Uint8Array<ArrayBuffer> | null = null): string {
+  return draftHash(match, games, replaces, 1_793_700_000)
+}
+
+async function otherDevice(): Promise<Signer> {
+  const pair = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign'])
+  return {
+    kid: crypto.getRandomValues(new Uint8Array(32)),
+    sign: async (bytes) =>
+      new Uint8Array(await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, pair.privateKey, bytes)),
+  }
 }
 
 describe('ScoreGame', () => {
@@ -28,12 +61,12 @@ describe('ScoreGame', () => {
     expect(page.sides).toEqual([ME, OPPONENT])
     expect(page.tally).toBe('0–0')
     expect(page.slot(1)).toHaveAttribute('aria-current', 'page')
+    expect(page.notices).toEqual([])
   })
 
   it('scores as the session’s player when it differs from the saved account', async () => {
-    const account = sessionResponse.data.account
     saveAccount({
-      ...account,
+      ...sessionResponse.data.account,
       player: { id: 'c5a1f0e2-0000-4000-8000-0000000000aa', display_name: 'old otter 111' },
     })
     const session = holdSession()
@@ -45,7 +78,7 @@ describe('ScoreGame', () => {
     await act(async () => {})
     await page.enter({ [ME]: '11', [OPPONENT]: '5' })
     await page.save()
-    expect(readBoard(storageKey('demo')).games[1].savedBy.playerId).toBe(account.player.id)
+    expect(resultIn(page.hash).players[0]).toBe(player.id)
   })
 
   it('focuses the left score when a game opens', async () => {
@@ -70,202 +103,6 @@ describe('ScoreGame', () => {
     expect(page.input(ME)).toHaveFocus()
   })
 
-  it('moves on as soon as a game is saved, and syncs it in the background', async () => {
-    const page = await ScoreGamePage.render()
-    await page.enter({ [ME]: '11', [OPPONENT]: '3' })
-
-    await userEvent.click(page.saveButton!)
-
-    expect(page.href).toBe('/matches/demo/scores/game/2/edit')
-    expect(page.slotSync(1)).toBe('Syncing')
-    expect(page.serverScore(1)).toBeNull()
-
-    await page.settle()
-
-    expect(page.slotSync(1)).toBe('Synced')
-    expect(page.serverScore(1)).toEqual([11, 3])
-  })
-
-  it('keeps scores on the device while offline, and syncs them once back online', async () => {
-    const page = await ScoreGamePage.render()
-    await page.switchNetwork('offline')
-
-    await page.enter({ [ME]: '11', [OPPONENT]: '9' })
-    await page.save()
-
-    expect(page.slotScore(1)).toBe('11–9')
-    expect(page.slotSync(1)).toBe('Not synced')
-    expect(screen.getByText('Offline. Saved on this device.')).toBeInTheDocument()
-    expect(page.serverScore(1)).toBeNull()
-
-    await page.reconnect()
-
-    expect(page.serverScore(1)).toEqual([11, 9])
-    expect(page.slotSync(1)).toBe('Synced')
-  })
-
-  it('marks a stuck game, and shows it sending as well when it tries again', async () => {
-    const page = await ScoreGamePage.render()
-    await page.switchNetwork('broken')
-    await page.enter({ [ME]: '11', [OPPONENT]: '8' })
-    await page.save()
-
-    expect(page.slotSyncMarks(1)).toEqual({ sending: false, stuck: true })
-
-    act(() => setDemoNetwork('normal'))
-
-    await waitFor(() => expect(page.slotSyncMarks(1)).toEqual({ sending: true, stuck: true }))
-    await waitFor(() => expect(page.serverScore(1)).toEqual([11, 8]))
-    await waitFor(() => expect(page.slotSyncMarks(1)).toEqual({ sending: false, stuck: false }))
-  })
-
-  it('sends a stuck score and the edit made after it in order, so the edit wins', async () => {
-    const page = await ScoreGamePage.render()
-    await page.switchNetwork('broken')
-    await page.enter({ [ME]: '11', [OPPONENT]: '8' })
-    await page.save()
-    await page.goToGame(1)
-    await page.enter({ [ME]: '11', [OPPONENT]: '9' })
-    await page.save()
-
-    expect(pendingChanges('demo').map(({ edit }) => edit.kind === 'save' && edit.points)).toEqual([
-      [11, 8],
-      [11, 9],
-    ])
-    expect(page.slotScore(1)).toBe('11–9')
-
-    const shown = new Set<string>()
-    const watch = setInterval(() => shown.add(page.slotScore(1)), 20)
-    act(() => setDemoNetwork('normal'))
-    await waitFor(() => expect(pendingChanges('demo')).toEqual([]))
-    await page.settle()
-    clearInterval(watch)
-
-    expect(page.serverScore(1)).toEqual([11, 9])
-    expect([...shown]).toEqual(['11–9'])
-  })
-
-  it('sends nothing while the browser knows it is offline, and syncs when it comes back', async () => {
-    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
-    const page = await ScoreGamePage.render()
-    await page.enter({ [ME]: '11', [OPPONENT]: '7' })
-    await page.save()
-    await new Promise((resolve) => setTimeout(resolve, 500))
-
-    expect(page.slotSync(1)).toBe('Not synced')
-    expect(page.serverScore(1)).toBeNull()
-
-    onLine.mockReturnValue(true)
-    window.dispatchEvent(new Event('online'))
-
-    await waitFor(() => expect(page.serverScore(1)).toEqual([11, 7]))
-    onLine.mockRestore()
-  })
-
-  it('syncs a score saved offline after the scoring page has closed', async () => {
-    const page = await ScoreGamePage.render()
-    await page.switchNetwork('offline')
-    await page.enter({ [ME]: '11', [OPPONENT]: '5' })
-    await page.save()
-    expect(page.serverScore(1)).toBeNull()
-
-    await page.router.navigate({ to: '/' })
-    act(() => setDemoNetwork('normal'))
-
-    await waitFor(() => expect(readBoard(serverKey('demo')).games[1]?.points).toEqual([11, 5]))
-    expect(pendingChanges('demo')).toEqual([])
-  })
-
-  it('switches the demo network from the testing panel, and keeps it after a reload', async () => {
-    const page = await ScoreGamePage.render()
-
-    await userEvent.click(page.network('Offline'))
-    await page.enter({ [ME]: '11', [OPPONENT]: '4' })
-    await page.save()
-
-    expect(page.network('Offline')).toHaveAttribute('aria-checked', 'true')
-    expect(page.slotSync(1)).toBe('Not synced')
-
-    page.close()
-    const reloaded = await ScoreGamePage.render()
-
-    expect(reloaded.network('Offline')).toHaveAttribute('aria-checked', 'true')
-    expect(reloaded.serverScore(1)).toBeNull()
-
-    await userEvent.click(reloaded.network('Normal'))
-    await reloaded.settle()
-
-    expect(reloaded.serverScore(1)).toEqual([11, 4])
-  })
-
-  it('resets the match on the device and the server', async () => {
-    const page = await ScoreGamePage.render()
-    await saveGame(page, 1, '11', '2')
-    await saveGame(page, 2, '11', '3')
-
-    await page.click('Reset match')
-
-    expect(page.href).toBe('/matches/demo/scores/game/1/edit')
-    expect([1, 2].map((game) => page.slotScore(game))).toEqual(['–', '–'])
-    expect(page.serverScore(1)).toBeNull()
-  })
-
-  it('clears every demo match and saved copy', async () => {
-    const page = await ScoreGamePage.render()
-    await saveGame(page, 1, '11', '2')
-
-    await page.switchNetwork('offline')
-
-    await page.click('Clear everything')
-
-    expect(Object.keys(localStorage).filter((key) => key.startsWith('fortymm-'))).toEqual([])
-    expect(page.slotScore(1)).toBe('–')
-    expect(page.network('Normal')).toHaveAttribute('aria-checked', 'true')
-  })
-
-  it('shows the scores another device synced', async () => {
-    writeBoard(serverKey('demo'), {
-      games: { 2: { points: [4, 11], savedBy: { playerId: 'someone', name: 'calm crane 552' } } },
-      submission: { phase: 'open' },
-    })
-
-    const page = await ScoreGamePage.render()
-
-    expect(page.slotScore(2)).toBe('4–11')
-  })
-
-  it('keeps the board on this device when the server fails', async () => {
-    saveOnDevice('demo', 1, [11, 5], { playerId: 'someone', name: 'calm crane 552' })
-    for (const change of pendingChanges('demo')) markSent('demo', change.id)
-
-    setDemoNetwork('broken')
-    const page = await ScoreGamePage.render()
-    await new Promise((resolve) => setTimeout(resolve, 600))
-
-    expect(page.slotScore(1)).toBe('11–5')
-    expect(screen.queryByRole('alert')).toBeNull()
-  })
-
-  it('opens an empty board with no connection and nothing saved', async () => {
-    setDemoNetwork('offline')
-    const page = await ScoreGamePage.render()
-
-    expect(page.input(ME)).toHaveFocus()
-    expect([1, 2, 3, 4, 5].map((game) => page.slotScore(game))).toEqual(['–', '–', '–', '–', '–'])
-    expect(screen.queryByRole('alert')).toBeNull()
-  })
-
-  it('saves a legal game when Enter is pressed in a score', async () => {
-    const page = await ScoreGamePage.render()
-
-    await page.enter({ [ME]: '11', [OPPONENT]: '6' })
-    await userEvent.type(page.input(OPPONENT), '{Enter}')
-    await page.settle()
-
-    expect(page.slotScore(1)).toBe('11–6')
-    expect(page.href).toBe('/matches/demo/scores/game/2/edit')
-  })
-
   it('saves nothing when Enter is pressed on an illegal score', async () => {
     const page = await ScoreGamePage.render()
 
@@ -274,25 +111,100 @@ describe('ScoreGame', () => {
     await page.settle()
 
     expect(page.slotScore(1)).toBe('–')
-    expect(page.href).toBe('/matches/demo/scores/game/1/edit')
+    expect(page.href).toBe(`${EDIT}/1/edit`)
   })
 
-  it('saves a legal game, shows it in the strip and moves to the next game', async () => {
+  it('puts the games in the URL, so a reload shows them', async () => {
     const page = await ScoreGamePage.render()
+    await saveGame(page, 1, '7', '11')
+    await saveGame(page, 2, '11', '9')
 
-    await page.enter({ [ME]: '7', [OPPONENT]: '11' })
-    await page.save()
+    expect(page.pathname).toBe(`${EDIT}/3/edit`)
+    expect(resultIn(page.hash)).toMatchObject({
+      match: match.uuid,
+      players: [player.id, match.players[1].id],
+      games: [[7, 11], [11, 9]],
+      replaces: null,
+    })
+    const href = page.href
+    page.close()
+    const reloaded = await ScoreGamePage.render(href)
 
-    expect(page.slotScore(1)).toBe('7–11')
-    expect(page.slotWinner(1)).toBe('11')
-    expect(page.tally).toBe('0–1')
-    expect(page.href).toBe('/matches/demo/scores/game/2/edit')
-    expect(page.heading).toHaveTextContent('Game 2')
-    expect(page.input(ME)).toHaveValue('')
+    expect(reloaded.heading).toHaveTextContent('Game 3')
+    expect([1, 2, 3].map((game) => reloaded.slotScore(game))).toEqual(['7–11', '11–9', '–'])
+    expect(reloaded.slotWinner(1)).toBe('11')
+    expect(reloaded.tally).toBe('1–1')
+  })
+
+  it('opens a saved game with its score, and keeps the games on the strip’s links', async () => {
+    const page = await ScoreGamePage.render()
+    await saveGame(page, 1, '7', '11')
+    const hash = page.hash
 
     await page.goToGame(1)
+
+    expect(page.hash).toBe(hash)
     expect(page.input(ME)).toHaveValue('7')
-    expect(page.text).toContain('Saved by you')
+    expect(page.text).not.toContain('Saved by')
+  })
+
+  it('changes an earlier game in place', async () => {
+    const page = await ScoreGamePage.render(`${EDIT}/1/edit#${draft([[11, 3], [3, 11]])}`)
+
+    await page.enter({ [ME]: '11', [OPPONENT]: '5' })
+    await page.save()
+
+    expect(page.pathname).toBe(`${EDIT}/3/edit`)
+    expect(resultIn(page.hash).games).toEqual([[11, 5], [3, 11]])
+  })
+
+  it('links only to the games that can open', async () => {
+    const page = await ScoreGamePage.render(`${EDIT}/1/edit#${draft([[11, 3]])}`)
+
+    expect([1, 2, 3, 4, 5].map((game) => page.slotLink(game) !== null)).toEqual([true, true, false, false, false])
+  })
+
+  it('sends a game after the next empty one to the next empty one, keeping the games', async () => {
+    const hash = draft([[11, 3], [3, 11]])
+    const page = await ScoreGamePage.render(`${EDIT}/5/edit#${hash}`)
+
+    expect(page.pathname).toBe(`${EDIT}/3/edit`)
+    expect(page.hash).toBe(hash)
+    expect(page.heading).toHaveTextContent('Game 3')
+  })
+
+  it.each(['0', '6', 'two', '1.5'])('sends game %s of an empty board to game 1', async (game) => {
+    const page = await ScoreGamePage.render(`${EDIT}/${game}/edit`)
+
+    expect(page.pathname).toBe(`${EDIT}/1/edit`)
+    expect(page.heading).toHaveTextContent('Game 1')
+  })
+
+  it('reads a fragment typed into the URL by hand', async () => {
+    const page = await ScoreGamePage.render()
+
+    await act(() => page.router.history.push(`${EDIT}/1/edit#${draft([[11, 3]])}`))
+    await page.settle()
+
+    expect(page.slotScore(1)).toBe('11–3')
+    expect(page.input(ME)).toHaveValue('11')
+  })
+
+  it('clears only the last game', async () => {
+    const page = await ScoreGamePage.render(`${EDIT}/1/edit#${draft([[11, 3], [3, 11]])}`)
+    expect(page.button('Clear game')).toBeNull()
+
+    await page.goToGame(2)
+    await page.click('Clear game')
+
+    expect(page.pathname).toBe(`${EDIT}/2/edit`)
+    expect(page.slotScore(2)).toBe('–')
+    expect(page.input(ME)).toHaveValue('')
+    expect(resultIn(page.hash).games).toEqual([[11, 3]])
+
+    await page.goToGame(1)
+    await page.click('Clear game')
+    expect(page.hash).toBe('')
   })
 
   it('shows why an illegal score can’t be saved', async () => {
@@ -311,81 +223,48 @@ describe('ScoreGame', () => {
     expect(page.saveButton).toBeEnabled()
   })
 
-  it('takes games in any order', async () => {
-    const page = await ScoreGamePage.render('/matches/demo/scores/game/4/edit')
-
-    await saveGame(page, 4, '11', '3')
-    expect(page.href).toBe('/matches/demo/scores/game/5/edit')
-    await saveGame(page, 2, '11', '9')
-    expect(page.href).toBe('/matches/demo/scores/game/3/edit')
-
-    expect([1, 2, 3, 4, 5].map((game) => page.slotScore(game))).toEqual(['–', '11–9', '–', '11–3', '–'])
-    expect(page.tally).toBe('2–0')
-  })
-
-  it('turns Save into Submit result when the score decides the match', async () => {
-    const page = await ScoreGamePage.render()
-    await saveGame(page, 1, '11', '5')
-    await saveGame(page, 2, '8', '11')
-    await saveGame(page, 4, '11', '9')
-    await page.goToGame(5)
+  it('submits the games as a result this device approved for the viewer’s side', async () => {
+    const page = await ScoreGamePage.render(`${EDIT}/4/edit#${draft([[11, 5], [8, 11], [11, 9]])}`)
+    await page.waitForKey()
 
     await page.enter({ [ME]: '9', [OPPONENT]: '11' })
-    expect(page.saveButton).toHaveTextContent('Save game 5')
+    expect(page.saveButton).toHaveTextContent('Save game 4')
 
     await page.enter({ [ME]: '13', [OPPONENT]: '11' })
     expect(page.button('Submit result')).toBeInTheDocument()
-    expect(page.feedback ?? page.text).toContain('You win 3–1, with the empty games left out')
+    expect(page.text).toContain('You win 3–1')
 
     await page.click('Submit result')
+    await page.waitForPath('/matches/demo/scores/submission')
 
-    expect(page.href).toBe('/matches/demo/scores/submission')
-    await page.router.navigate({ to: '/matches/$matchId/scores/game/$gameNumber/edit', params: { matchId: 'demo', gameNumber: '5' } })
-    await page.settle()
-    expect(page.slotScore(5)).toBe('13–11')
-    expect(page.result).toHaveTextContent('Submitted by you. You win 3–1.')
-    expect(page.result).toHaveTextContent('Waiting for your opponent')
-    expect(page.input(ME)).toBeDisabled()
-    expect(page.button('Submit result')).toBeNull()
-    expect(page.button('Clear game')).toBeNull()
-
-    await page.click('Edit scores')
-    expect(page.input(ME)).toBeEnabled()
-    expect(page.button('Clear game')).toBeInTheDocument()
-  })
-
-  it('submits a reopened board from a game with nothing new to save', async () => {
-    const page = await ScoreGamePage.render()
-    await saveGame(page, 1, '11', '1')
-    await saveGame(page, 2, '11', '2')
-    await page.enter({ [ME]: '11', [OPPONENT]: '3' })
-    await page.click('Submit result')
-    await page.router.navigate({ to: '/matches/$matchId/scores/game/$gameNumber/edit', params: { matchId: 'demo', gameNumber: '1' } })
-    await page.settle()
-    await page.click('Edit scores')
-
-    expect(page.saveButton).toBeNull()
-    await page.click('Submit result')
-
-    expect(page.href).toBe('/matches/demo/scores/submission')
-    expect(readBoard(storageKey('demo')).submission).toMatchObject({
-      phase: 'submitted',
-      games: [
-        [11, 1],
-        [11, 2],
-        [11, 3],
-      ],
+    const { payload, signatures } = decodeEnvelope(fromBase64url(page.hash))
+    expect(signatures.map(({ side }) => side)).toEqual([0])
+    expect(decodePayload(payload).result).toMatchObject({
+      players: [player.id, match.players[1].id],
+      games: [[11, 5], [8, 11], [11, 9], [13, 11]],
+      ending: 'completed',
+      replaces: null,
     })
   })
 
-  it('says which game to clear when one was played after the decider', async () => {
-    const page = await ScoreGamePage.render()
-    await saveGame(page, 1, '11', '1')
-    await saveGame(page, 2, '11', '2')
-    await saveGame(page, 5, '4', '11')
-    await saveGame(page, 3, '11', '3')
+  it('says so when this browser has no signing key', async () => {
+    const page = await ScoreGamePage.render(`${EDIT}/3/edit#${draft([[11, 1], [11, 2], [11, 3]])}`)
+    // A sign-out in progress keeps the session's registration from making one.
+    await takeKey()
 
-    expect(page.text).toContain('Match decided after game 3. Clear game 5 to submit.')
+    await page.click('Submit result')
+
+    expect(await page.findAlert()).toHaveTextContent('This browser can’t sign the result yet')
+    expect(page.pathname).toBe(`${EDIT}/3/edit`)
+  })
+
+  it('says which game to clear when one was played after the decider', async () => {
+    const page = await ScoreGamePage.render(`${EDIT}/2/edit#${draft([[11, 1], [1, 11], [11, 2], [11, 3]])}`)
+
+    await page.enter({ [ME]: '11', [OPPONENT]: '4' })
+    await page.save()
+
+    expect(page.text).toContain('Match decided after game 3. Clear game 4 to submit.')
     expect(page.button('Submit result')).toBeNull()
   })
 
@@ -398,24 +277,70 @@ describe('ScoreGame', () => {
     )
 
     for (const game of [1, 2, 3]) {
-      if (game > 1) await page.goToGame(game)
+      expect(page.heading).toHaveTextContent(`Game ${game}`)
       await page.enter({ 'calm crane 552': '11', 'gentle gecko 731': '6' })
       await page.save()
+      if (game < 3) expect(page.saveButton).toHaveTextContent(`Save game ${game + 1}`)
     }
     expect(page.slotScore(3)).toBe('11–6')
     expect(page.button('Submit result')).toBeNull()
+  })
+
+  it('opens a result the opponent reported, and corrects it from the first save', async () => {
+    const reported = resultOf(match, [[5, 11], [11, 7], [11, 9], [11, 4]], null)
+    const envelope = await signResult(await otherDevice(), 1_793_700_000, reported, 1)
+    const page = await ScoreGamePage.render(`${EDIT}/1/edit#${base64url(envelope)}`)
+    await page.waitForKey()
+
+    expect([1, 2, 3, 4].map((game) => page.slotScore(game))).toEqual(['5–11', '11–7', '11–9', '11–4'])
+    expect(page.notices).toEqual(['Reported by your opponent. A change makes a new result that corrects it.'])
+    expect(page.text).not.toMatch(/sign/i)
+
+    await page.goToGame(4)
+    await page.enter({ [ME]: '4', [OPPONENT]: '11' })
+    await page.save()
+
+    const replaced = hex(await resultHash(decodeEnvelope(envelope).payload))
+    const corrected = resultIn(page.hash)
+    expect(page.pathname).toBe(`${EDIT}/5/edit`)
+    expect(corrected.games).toEqual([[5, 11], [11, 7], [11, 9], [4, 11]])
+    expect(hex(corrected.replaces!)).toBe(replaced)
+    expect(page.notices).toEqual(['This corrects an earlier result.'])
+
+    await page.enter({ [ME]: '11', [OPPONENT]: '3' })
+    await page.click('Submit result')
+    await page.waitForPath('/matches/demo/scores/submission')
+
+    const submitted = decodePayload(decodeEnvelope(fromBase64url(page.hash)).payload).result
+    expect(submitted.games).toEqual([[5, 11], [11, 7], [11, 9], [4, 11], [11, 3]])
+    expect(hex(submitted.replaces!)).toBe(replaced)
+  })
+
+  it('says when both players approved the result on screen', async () => {
+    const reported = resultOf(match, [[11, 5], [11, 7], [11, 9]], null)
+    const once = await signResult(await otherDevice(), 1_793_700_000, reported, 0)
+    const twice = await appendSignature(await otherDevice(), once, 1)
+    const page = await ScoreGamePage.render(`${EDIT}/1/edit#${base64url(twice)}`)
+
+    expect(page.notices).toEqual(['Approved by both players. A change makes a new result that corrects it.'])
+  })
+
+  it.each([
+    ['damaged', '#not-a-result'],
+    ['for another match', `#${base64url(encodePayload(1, { ...resultOf(match, [[11, 3]], null), match: demoMatch('demo-spectator', { id: player.id, name: '' }).uuid }))}`],
+    ['with an illegal game', `#${base64url(encodePayload(1, resultOf(match, [[11, 10]], null)))}`],
+  ])('drops scores that are %s, and says so', async (_, fragment) => {
+    const page = await ScoreGamePage.render(`${EDIT}/3/edit${fragment}`)
+
+    expect(page.pathname).toBe(`${EDIT}/1/edit`)
+    expect(page.hash).toBe('')
+    expect(page.slotScore(1)).toBe('–')
+    expect(page.notices).toEqual([DISCARDED])
   })
 
   it('shows the not-found page for an unknown match', async () => {
     const page = await ErrorPage.render('/matches/nope/scores/game/1/edit')
 
     expect(page.title).toHaveTextContent('We can’t find that page')
-  })
-
-  it.each(['0', '6', 'two', '1.5'])('sends game %s to game 1', async (game) => {
-    const page = await ScoreGamePage.render(`/matches/demo/scores/game/${game}/edit`)
-
-    expect(page.href).toBe('/matches/demo/scores/game/1/edit')
-    expect(page.heading).toHaveTextContent('Game 1')
   })
 })

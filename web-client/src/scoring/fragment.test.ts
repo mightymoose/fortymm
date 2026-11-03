@@ -5,7 +5,7 @@ import { encodePayload, resultHash, type MatchResult } from '../signing/result'
 import { base64url } from '../signing/text'
 import type { GamePoints } from './board'
 import { demoMatch } from './demoMatches'
-import { draftHash, fragmentResultSchema, openFragment, replacesOf, resultOf } from './fragment'
+import { draftHash, fragmentResultSchema, readFragment, replacesOf, resultOf } from './fragment'
 
 const SELF = { id: 'c4a8f6a2-1f0e-4a63-8d2e-7f5b9e1c3d42', name: 'excited egret 387' }
 const match = demoMatch('demo', SELF)
@@ -44,22 +44,18 @@ describe('fragmentResultSchema', () => {
   })
 })
 
-describe('openFragment', () => {
+describe('readFragment', () => {
   it('opens an empty fragment as no games', () => {
-    expect(openFragment('', 'demo', SELF)).toEqual({ fragment: { kind: 'empty' }, match })
+    expect(readFragment('', match)).toEqual({ kind: 'empty' })
   })
 
   it('opens a draft', () => {
-    const opened = openFragment(draftHash(match, GAMES, null, 1), 'demo', SELF)
-
-    expect(opened?.fragment).toEqual({ kind: 'draft', result: result() })
+    expect(readFragment(draftHash(match, GAMES, null, 1), match)).toEqual({ kind: 'draft', result: result() })
   })
 
   it('opens a signed result with its signers', async () => {
     const envelope = await signResult(await signer(), 1, result(), 1)
-    const opened = openFragment(base64url(envelope), 'demo', SELF)
-
-    expect(opened?.fragment).toMatchObject({ kind: 'signed', result: result(), signers: [1] })
+    expect(readFragment(base64url(envelope), match)).toMatchObject({ kind: 'signed', result: result(), signers: [1] })
   })
 
   it.each([
@@ -68,18 +64,18 @@ describe('openFragment', () => {
     ['an illegal game', base64url(encodePayload(1, result({ games: [[11, 10]] })))],
     ['another match', base64url(encodePayload(1, result({ match: demoMatch('demo-spectator', SELF).uuid })))],
   ])('is null for %s', (_, hash) => {
-    expect(openFragment(hash, 'demo', SELF)).toBeNull()
+    expect(readFragment(hash, match)).toBeNull()
   })
 })
 
 describe('replacesOf', () => {
   it('names the signed result, or what the draft names', async () => {
     const envelope = await signResult(await signer(), 1, result(), 0)
-    const signed = openFragment(base64url(envelope), 'demo', SELF)!.fragment
+    const signed = readFragment(base64url(envelope), match)!
     const hash = await replacesOf(signed)
 
     expect(hex(hash!)).toBe(hex(await resultHash(encodePayload(1, result()))))
-    const draft = openFragment(draftHash(match, GAMES, hash, 2), 'demo', SELF)!.fragment
+    const draft = readFragment(draftHash(match, GAMES, hash, 2), match)!
     expect(hex((await replacesOf(draft))!)).toBe(hex(hash!))
     expect(await replacesOf({ kind: 'empty' })).toBeNull()
   })

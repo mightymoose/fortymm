@@ -1,14 +1,12 @@
-import { act, cleanup, screen, waitFor, within } from '@testing-library/react'
-import { expect } from 'vitest'
+import { cleanup, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { GamePoints } from '../../scoring/board'
-import { serverKey, setDemoNetwork, type Network } from '../../scoring/demoServer'
-import { readBoard } from '../../scoring/scratchpad'
+import { signWithDeviceKey } from '../../signing/deviceKey'
 import { renderRoute, type AppRouter } from '../renderRoute'
 
-// Page object for a match's scratchpad, the page that edits one game's
-// score. The mock session's player is `excited egret 387`, who plays the
-// `demo` match against `brave badger 214`.
+// Page object for the page that edits one game of a match's scores. The
+// mock session's player is `excited egret 387`, who plays the `demo` match
+// against `brave badger 214`. The scores live in the URL's fragment, so
+// `href` includes it, and rendering an `href` again is a reload.
 export class ScoreGamePage {
   static async render(path = '/matches/demo/scores/game/1/edit'): Promise<ScoreGamePage> {
     const page = new ScoreGamePage(await renderRoute(path))
@@ -16,30 +14,30 @@ export class ScoreGamePage {
     return page
   }
 
-  // Switches the demo server's network, as a connection that drops or
-  // comes back, and waits for the sync it starts.
-  async switchNetwork(network: Network): Promise<void> {
-    act(() => setDemoNetwork(network))
-    await this.settle()
-  }
-
-  async reconnect(): Promise<void> {
-    await this.switchNetwork('normal')
-  }
-
   readonly router: AppRouter
+
+  constructor(router: AppRouter) {
+    this.router = router
+  }
 
   // Closes the page, as a reload does before the page renders again.
   close(): void {
     cleanup()
   }
 
-  constructor(router: AppRouter) {
-    this.router = router
+  // The path, query and fragment.
+  get href(): string {
+    const { href, hash } = this.router.state.location
+    return hash && !href.includes('#') ? `${href}#${hash}` : href
   }
 
-  get href(): string {
-    return this.router.state.location.href
+  get pathname(): string {
+    return this.router.state.location.pathname
+  }
+
+  // The fragment, without its `#`.
+  get hash(): string {
+    return this.router.state.location.hash
   }
 
   get text(): string {
@@ -70,46 +68,41 @@ export class ScoreGamePage {
     return [...document.querySelectorAll('.score-player__name')].map((name) => name.textContent ?? '')
   }
 
-  // The game strip's link to game `game`.
+  // The notices above the pad, such as what the scores correct.
+  get notices(): string[] {
+    return [...document.querySelectorAll('.score-content > .fm-notice')].map((notice) => notice.textContent ?? '')
+  }
+
+  private get strip(): HTMLElement {
+    return screen.getByRole('navigation', { name: 'Games' })
+  }
+
+  // The strip's cell for game `game`.
+  private cell(game: number): HTMLElement {
+    const cell = within(this.strip).getAllByRole('listitem')[game - 1]
+    return cell.firstElementChild as HTMLElement
+  }
+
+  // The strip's link to game `game`, or null when the game can't open yet.
+  slotLink(game: number): HTMLElement | null {
+    const cell = this.cell(game)
+    return cell.tagName === 'A' ? cell : null
+  }
+
   slot(game: number): HTMLElement {
-    return within(screen.getByRole('navigation', { name: 'Games' })).getByRole('link', {
-      name: new RegExp(`^Game ${game} `),
-    })
+    const link = this.slotLink(game)
+    if (!link) throw new Error(`game ${game} has no link`)
+    return link
   }
 
   // The score the strip shows for game `game`, such as "11–7", or "–".
   slotScore(game: number): string {
-    return this.slot(game).querySelector('.score-slot__pts')?.textContent ?? ''
-  }
-
-  // Where game `game`'s last change stands in the strip: "Syncing", "Not
-  // synced", "Synced", or null once it settles.
-  slotSync(game: number): string | null {
-    return this.slot(game).querySelector('.score-slot__sync')?.textContent?.trim() ?? null
-  }
-
-  // Whether game `game` shows its change on its way to the server (the dot)
-  // and its sync stuck (the dashed edge). Each is on its own.
-  slotSyncMarks(game: number): { sending: boolean; stuck: boolean } {
-    const slot = this.slot(game)
-    return {
-      sending: slot.classList.contains('score-slot--sending'),
-      stuck: slot.classList.contains('score-slot--stuck'),
-    }
-  }
-
-  // Game `game`'s points on the demo server, or null when it has none.
-  serverScore(game: number): GamePoints | null {
-    return readBoard(serverKey(this.matchId)).games[game]?.points ?? null
-  }
-
-  get matchId(): string {
-    return this.href.split('/')[2]
+    return this.cell(game).querySelector('.score-slot__pts')?.textContent ?? ''
   }
 
   // The bold points of game `game` in the strip, the winner's.
   slotWinner(game: number): string | null {
-    return this.slot(game).querySelector('b')?.textContent ?? null
+    return this.cell(game).querySelector('b')?.textContent ?? null
   }
 
   // The score input for `player`.
@@ -131,8 +124,7 @@ export class ScoreGamePage {
   }
 
   async save(): Promise<void> {
-    await userEvent.click(this.saveButton!)
-    await this.settle()
+    await this.pressAndWait(this.saveButton!)
   }
 
   // The reason or hint under the pad that its inputs point to, or null.
@@ -145,17 +137,28 @@ export class ScoreGamePage {
     return screen.queryByRole('button', { name })
   }
 
+  // Presses a button that moves the page on, such as Clear game or Submit
+  // result, and waits until it has.
   async click(name: string): Promise<void> {
-    await userEvent.click(screen.getByRole('button', { name }))
+    await this.pressAndWait(screen.getByRole('button', { name }))
+  }
+
+  // A press hashes the result it corrects, or signs, before the URL
+  // changes, so it waits for the URL or for an alert that says why not.
+  private async pressAndWait(button: HTMLElement): Promise<void> {
+    const before = this.href
+    await userEvent.click(button)
+    await waitFor(() => {
+      if (this.href === before && !screen.queryByRole('alert')) throw new Error('the page didn’t move on')
+    })
     await this.settle()
   }
 
-  // The testing panel's choice of network.
-  network(label: string): HTMLElement {
-    return screen.getByRole('radio', { name: label })
+  async findAlert(): Promise<HTMLElement> {
+    return screen.findByRole('alert')
   }
 
-  // The match's result section: a spectator's note or the submitted result.
+  // The spectator's note about who submits.
   get result(): HTMLElement {
     return screen.getByRole('region', { name: 'Result' })
   }
@@ -166,10 +169,26 @@ export class ScoreGamePage {
     await this.settle()
   }
 
-  // Waits until the page has nothing loading or saving, as the demo server
-  // answers after a delay.
+  // This browser makes its signing key in the background once the session
+  // answers, so a test that submits waits for it first.
+  async waitForKey(): Promise<void> {
+    await waitFor(async () => {
+      if (!(await signWithDeviceKey())) throw new Error('no signing key yet')
+    })
+  }
+
+  async waitForPath(path: string): Promise<void> {
+    await waitFor(() => {
+      if (this.pathname !== path) throw new Error(`at ${this.pathname}`)
+    })
+    await this.settle()
+  }
+
+  // Waits for the router to finish loading the page it's going to.
   async settle(): Promise<void> {
-    await waitFor(() => expect(document.querySelector('[aria-busy=true]')).toBeNull(), { timeout: 3000 })
+    await waitFor(() => {
+      if (this.router.state.status !== 'idle') throw new Error('still loading')
+    })
     for (let tick = 0; tick < 5; tick++) {
       await new Promise((resolve) => setTimeout(resolve))
     }

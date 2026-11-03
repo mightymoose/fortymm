@@ -27,16 +27,8 @@ export type Slots = readonly (GamePoints | null)[]
 // What a board says about the match.
 export type Review =
   // `games` are the filled games in game order, up to and including the
-  // decider. `closedGaps` says that empty games before the decider were left
-  // out, so later games moved up.
-  | {
-      kind: 'decided'
-      decidedAtGame: number
-      winner: Side
-      games: GamePoints[]
-      tally: [number, number]
-      closedGaps: boolean
-    }
+  // decider.
+  | { kind: 'decided'; decidedAtGame: number; winner: Side; games: GamePoints[]; tally: [number, number] }
   | { kind: 'undecided'; tally: [number, number]; gamesToWin: number }
   // Games were filled in after the game that decided the match.
   | { kind: 'overrun'; decidedAtGame: number; extraGames: number[] }
@@ -117,7 +109,7 @@ export function reviewBoard(slots: Slots, bestOf: BestOf): Review {
     const decidedAtGame = index + 1
     const extraGames = slots.flatMap((later, at) => (later && at > index ? [at + 1] : []))
     if (extraGames.length > 0) return { kind: 'overrun', decidedAtGame, extraGames }
-    return { kind: 'decided', decidedAtGame, winner, games, tally: won, closedGaps: games.length < decidedAtGame }
+    return { kind: 'decided', decidedAtGame, winner, games, tally: won }
   }
   return { kind: 'undecided', tally: won, gamesToWin: needed }
 }

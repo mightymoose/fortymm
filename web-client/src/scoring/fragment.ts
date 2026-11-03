@@ -4,7 +4,10 @@ import { decodeEnvelope } from '../signing/envelope'
 import { decodePayload, encodePayload, resultHash, type MatchResult } from '../signing/result'
 import { base64url, fromBase64url } from '../signing/text'
 import { checkGame, type GamePoints } from './board'
-import { demoMatch, matchFor, type Match, type MatchPlayer } from './demoMatches'
+import type { Match } from './demoMatches'
+
+// What a result must share with the match it's for.
+type MatchRules = Pick<Match, 'uuid' | 'bestOf' | 'rated'>
 
 // A match's scores live in the URL's fragment, so any scoring URL can be
 // shared and nothing else holds them. The fragment is empty, a bare payload
@@ -23,16 +26,12 @@ export type Fragment =
       signers: Side[]
     }
 
-// A fragment that holds the match's scores, and the match as this device
-// knows it.
-export type Opened = { fragment: Fragment; match: Match }
-
 const COSE_SIGN = 98
 
 // What the scoring pages can open for `match`: a completed result of legal
 // games, no more than the match's best of. The players are matchFor()'s
 // rule, because only this device knows who it stands in for.
-export function fragmentResultSchema(match: Match) {
+export function fragmentResultSchema(match: MatchRules) {
   const legalGame = z
     .tuple([z.int(), z.int()])
     .refine((points) => checkGame(points).kind === 'legal', 'a game isn’t a legal final score')
@@ -47,9 +46,10 @@ export function fragmentResultSchema(match: Match) {
   })
 }
 
-// The fragment's scores for the match `matchId` names, or null when they
-// can't be read or don't fit the match.
-export function openFragment(hash: string, matchId: string, self: MatchPlayer): Opened | null {
+// The fragment's scores for `match`, or null when they can't be read or
+// don't fit the match. The scoring routes' loaders call it, so each page
+// gets a fragment it can trust.
+export function readFragment(hash: string, match: MatchRules): Fragment | null {
   let fragment: Fragment
   try {
     fragment = decodeFragment(hash)
@@ -57,10 +57,8 @@ export function openFragment(hash: string, matchId: string, self: MatchPlayer): 
     if (error instanceof Malformed) return null
     throw error
   }
-  if (fragment.kind === 'empty') return { fragment, match: demoMatch(matchId, self) }
-  if (!fragmentResultSchema(demoMatch(matchId, self)).safeParse(fragment.result).success) return null
-  const match = matchFor(matchId, self, fragment.result)
-  return match && { fragment, match }
+  if (fragment.kind === 'empty') return fragment
+  return fragmentResultSchema(match).safeParse(fragment.result).success ? fragment : null
 }
 
 function decodeFragment(hash: string): Fragment {
