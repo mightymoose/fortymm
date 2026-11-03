@@ -37,8 +37,30 @@ describe('planPress', () => {
     })
   })
 
+  it('submits when a player’s score decides the match', () => {
+    const decided = board({ 1: [11, 5], 2: [8, 11], 4: [11, 9] })
 
+    expect(planPress(decided, player, 5, parseGameScore('13', '11'), 5)).toEqual({
+      kind: 'submit',
+      save: [13, 11],
+      games: [[11, 5], [8, 11], [11, 9], [13, 11]],
+      winner: 0,
+      closedGaps: true,
+    })
+  })
 
+  it('submits a decided board with nothing new to save', () => {
+    const decided = board({ 1: [11, 1], 2: [11, 2], 3: [11, 3] })
+
+    expect(planPress(decided, player, 1, parseGameScore('11', '1'), 5)).toMatchObject({ kind: 'submit', save: null })
+    expect(planPress(decided, player, 4, parseGameScore('', ''), 5)).toMatchObject({ kind: 'submit', save: null })
+  })
+
+  it('saves rather than submits while the score being typed isn’t legal', () => {
+    const decided = board({ 1: [11, 1], 2: [11, 2], 3: [11, 3] })
+
+    expect(planPress(decided, player, 1, parseGameScore('11', ''), 5)).toEqual({ kind: 'disabled' })
+  })
 
   it('only saves for a spectator, and stays once the match is decided', () => {
     expect(planPress(board({ 1: [11, 1], 2: [11, 2] }), spectator, 3, parseGameScore('11', '3'), 5)).toEqual({

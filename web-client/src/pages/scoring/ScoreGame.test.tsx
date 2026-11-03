@@ -2,7 +2,7 @@ import { act, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { serverKey, setDemoNetwork } from '../../scoring/demoServer'
-import { markSent, pendingChanges, readBoard, saveGame as saveOnDevice, writeBoard } from '../../scoring/scratchpad'
+import { markSent, pendingChanges, readBoard, saveGame as saveOnDevice, storageKey, writeBoard } from '../../scoring/scratchpad'
 import { ErrorPage } from '../../test/pages/ErrorPage'
 import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
 
@@ -302,7 +302,60 @@ describe('ScoreGame', () => {
     expect(page.tally).toBe('2–0')
   })
 
+  it('turns Save into Submit result when the score decides the match', async () => {
+    const page = await ScoreGamePage.render()
+    await saveGame(page, 1, '11', '5')
+    await saveGame(page, 2, '8', '11')
+    await saveGame(page, 4, '11', '9')
+    await page.goToGame(5)
 
+    await page.enter({ [ME]: '9', [OPPONENT]: '11' })
+    expect(page.saveButton).toHaveTextContent('Save game 5')
+
+    await page.enter({ [ME]: '13', [OPPONENT]: '11' })
+    expect(page.button('Submit result')).toBeInTheDocument()
+    expect(page.feedback ?? page.text).toContain(`${ME} wins 3–1, with the empty games left out`)
+
+    await page.click('Submit result')
+
+    expect(page.href).toBe('/matches/demo')
+    await page.router.navigate({ to: '/matches/$matchId/scores/game/$gameNumber/edit', params: { matchId: 'demo', gameNumber: '5' } })
+    await page.settle()
+    expect(page.slotScore(5)).toBe('13–11')
+    expect(page.result).toHaveTextContent(`Submitted by ${ME}. ${ME} wins 3–1.`)
+    expect(page.result).toHaveTextContent(`Waiting for ${OPPONENT}`)
+    expect(page.input(ME)).toBeDisabled()
+    expect(page.button('Submit result')).toBeNull()
+    expect(page.button('Clear game')).toBeNull()
+
+    await page.click('Edit scores')
+    expect(page.input(ME)).toBeEnabled()
+    expect(page.button('Clear game')).toBeInTheDocument()
+  })
+
+  it('submits a reopened board from a game with nothing new to save', async () => {
+    const page = await ScoreGamePage.render()
+    await saveGame(page, 1, '11', '1')
+    await saveGame(page, 2, '11', '2')
+    await page.enter({ [ME]: '11', [OPPONENT]: '3' })
+    await page.click('Submit result')
+    await page.router.navigate({ to: '/matches/$matchId/scores/game/$gameNumber/edit', params: { matchId: 'demo', gameNumber: '1' } })
+    await page.settle()
+    await page.click('Edit scores')
+
+    expect(page.saveButton).toBeNull()
+    await page.click('Submit result')
+
+    expect(page.href).toBe('/matches/demo')
+    expect(readBoard(storageKey('demo')).submission).toMatchObject({
+      phase: 'submitted',
+      games: [
+        [11, 1],
+        [11, 2],
+        [11, 3],
+      ],
+    })
+  })
 
   it('says which game to clear when one was played after the decider', async () => {
     const page = await ScoreGamePage.render()

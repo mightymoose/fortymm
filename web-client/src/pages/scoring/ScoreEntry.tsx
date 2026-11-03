@@ -6,8 +6,8 @@ import { PlayerAvatar } from '../../components/PlayerAvatar'
 import { otherSide, parseGameScore, tally, type Side } from '../../scoring/board'
 import type { Match, Viewer } from '../../scoring/demoMatches'
 import { planPress } from '../../scoring/planPress'
-import { clearGame, saveGame, slotsOf, type Board, type Scorer } from '../../scoring/scratchpad'
-import { PATH, shown, type Sides } from './sides'
+import { clearGame, saveGame, slotsOf, submitResult, type Board, type Scorer } from '../../scoring/scratchpad'
+import { gamesWon, PATH, shown, type Sides } from './sides'
 
 // The pad that edits one game: a score input per player with the games
 // tally between them, then the actions. A save stays on this device and the
@@ -66,6 +66,10 @@ export function ScoreEntry({
         if (!saveGame(match.id, gameNumber, press.points, me) || press.next === null) return
         void navigate({ to: PATH, params: { matchId: match.id, gameNumber: String(press.next) }, search: true })
         return
+      case 'submit':
+        if (press.save) saveGame(match.id, gameNumber, press.save, me)
+        submitResult(match.id, me.playerId, press.games)
+        void navigate({ to: '/matches/$matchId', params: { matchId: match.id }, search: true })
     }
   }
 
@@ -135,7 +139,15 @@ export function ScoreEntry({
         <div className="score-actions">
           {/* A line that keeps its height, so typing doesn't move the buttons. */}
           <div className="score-actions__note">
-            {message ?? (saved && <span className="fm-help">Saved by {saved.savedBy.name}</span>)}
+            {message ??
+              (press.kind === 'submit' ? (
+                <span className="fm-help">
+                  {match.players[press.winner].name} wins {gamesWon(tally(press.games), press.winner)}
+                  {press.closedGaps && ', with the empty games left out'}
+                </span>
+              ) : (
+                saved && <span className="fm-help">Saved by {saved.savedBy.name}</span>
+              ))}
           </div>
           <div className="score-actions__buttons">
             {saved && (
@@ -144,7 +156,7 @@ export function ScoreEntry({
               </Button>
             )}
             <Button type="submit" variant="primary" disabled={press.kind === 'disabled'}>
-              Save game {gameNumber}
+              {press.kind === 'submit' ? 'Submit result' : `Save game ${gameNumber}`}
             </Button>
           </div>
         </div>

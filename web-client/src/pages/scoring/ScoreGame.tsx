@@ -71,7 +71,14 @@ function ScoreBoard({ gameNumber }: { gameNumber: number }) {
         sync={sync}
         canSubmit={viewer.role === 'player' && pad.submission.phase === 'open'}
       />
-      <ResultPanel match={match} viewer={viewer} />
+      <ResultPanel
+        match={match}
+        submission={pad.submission}
+        resultUnsynced={edits.some((edit) => edit.kind === 'submit' || edit.kind === 'reopen')}
+        stuck={sync.stuck !== null}
+        viewer={viewer}
+        me={me}
+      />
     </>
   )
 }
