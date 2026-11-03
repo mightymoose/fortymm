@@ -274,6 +274,7 @@ function DeletePermission({
     <ConfirmDialog
       title={`Delete ${permission.key}?`}
       confirmLabel="Delete permission"
+      busyLabel="Deleting…"
       onConfirm={async () => {
         await remove.mutateAsync(permission.key)
         showToast('Permission deleted')

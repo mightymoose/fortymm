@@ -1,16 +1,27 @@
 import { useNavigate, useSearch } from '@tanstack/react-router'
+import type { ReactNode } from 'react'
 import { Tabs } from '../../components/Tabs'
 import { AccountsSection } from './AccountsSection'
 import { PermissionsSection } from './PermissionsSection'
 import { RolesSection } from './RolesSection'
-import { adminTabs } from './tabs'
+import { SigningKeysSection } from './SigningKeysSection'
+import { adminTabs, type AdminTab } from './tabs'
 import './admin.css'
 
-// The admin page, for accounts with `admin.view`: roles, permissions and
-// which accounts hold which roles, one tab each. Each tab is its own task
-// with its own table and actions, so tabs keep each one's table at the top.
-// A tab loads its lists when it opens. The URL names the open tab, so Back
-// from an account's page returns to Accounts.
+// Each tab's label and panel. A Record, so a tab id without a panel fails
+// tsc instead of shifting every index after it.
+const tabs: Record<AdminTab, { label: string; panel: ReactNode }> = {
+  roles: { label: 'Roles', panel: <RolesSection /> },
+  permissions: { label: 'Permissions', panel: <PermissionsSection /> },
+  accounts: { label: 'Accounts', panel: <AccountsSection /> },
+  'signing-keys': { label: 'Signing keys', panel: <SigningKeysSection /> },
+}
+
+// The admin page, for accounts with `admin.view`: roles, permissions, which
+// accounts hold which roles, and every device's signing key, one tab each.
+// Each tab is its own task with its own table and actions, so tabs keep each
+// one's table at the top. A tab loads its lists when it opens. The URL names
+// the open tab, so Back from an account's page returns to Accounts.
 export function Admin() {
   const { tab = 'roles' } = useSearch({ from: '/_authenticated/_shell/admin/' })
   const navigate = useNavigate()
@@ -24,11 +35,7 @@ export function Admin() {
         onChange={(index) =>
           navigate({ to: '/admin', search: { tab: adminTabs[index] }, replace: true })
         }
-        tabs={[
-          { label: 'Roles', panel: <RolesSection /> },
-          { label: 'Permissions', panel: <PermissionsSection /> },
-          { label: 'Accounts', panel: <AccountsSection /> },
-        ]}
+        tabs={adminTabs.map((id) => tabs[id])}
       />
     </div>
   )

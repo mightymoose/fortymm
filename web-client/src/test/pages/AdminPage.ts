@@ -2,7 +2,7 @@ import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderRoute, type AppRouter } from '../renderRoute'
 
-export type AdminTab = 'Roles' | 'Permissions' | 'Accounts'
+export type AdminTab = 'Roles' | 'Permissions' | 'Accounts' | 'Signing keys'
 
 // Page object for the admin page and an account's admin page in unit tests.
 // Mock the admin routes with mockAdmin() from ../server first. Only the
@@ -112,7 +112,8 @@ export class AdminPage {
   // The text field in `container` whose label starts with `label`, such as
   // "Description" for "Description (optional)".
   field(container: HTMLElement, label: string): HTMLElement {
-    return within(container).getByRole(label === 'Email' ? 'searchbox' : 'textbox', {
+    const search = label === 'Email' || label === 'Account'
+    return within(container).getByRole(search ? 'searchbox' : 'textbox', {
       name: new RegExp(`^${escape(label)}`),
     })
   }
@@ -137,6 +138,12 @@ export class AdminPage {
   // Searches the accounts by email.
   async search(email: string): Promise<void> {
     await this.type(this.panel, 'Email', email)
+    await this.click('Search')
+  }
+
+  // Searches the signing keys by account.
+  async searchKeys(text: string): Promise<void> {
+    await this.type(this.panel, 'Account', text)
     await this.click('Search')
   }
 

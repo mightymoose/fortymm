@@ -207,6 +207,7 @@ export type AdminPermission = components['schemas']['AdminPermission']
 export type AdminRole = components['schemas']['AdminRole']
 export type AdminAccount = components['schemas']['AdminAccount']
 export type AdminAccountDetail = components['schemas']['AdminAccountDetail']
+export type AdminSigningKey = components['schemas']['AdminSigningKey']
 export type RoleDraft = components['schemas']['RoleRequest']
 export type PermissionDraft = components['schemas']['NewPermissionRequest']
 
@@ -279,6 +280,24 @@ export function adminAccountQuery(api: ApiClient, id: string) {
   })
 }
 
+// The newest 50 keys of every account whose email or player name contains
+// `search`, and whether more match.
+export function adminSigningKeysQuery(api: ApiClient, search: string) {
+  return queryOptions({
+    queryKey: [...ADMIN_KEY, 'signing-keys', search],
+    queryFn: async ({ signal }) => {
+      const data = await send(
+        'GET /v1/admin/signing-keys',
+        api.GET('/v1/admin/signing-keys', {
+          params: { query: search ? { search } : {} },
+          signal,
+        }),
+      )
+      return { keys: data.data, hasMore: data.meta.has_more }
+    },
+  })
+}
+
 export async function createPermission(api: ApiClient, draft: PermissionDraft): Promise<void> {
   await send('POST /v1/admin/permissions', api.POST('/v1/admin/permissions', { body: draft }))
 }
@@ -330,6 +349,17 @@ export async function deleteRole(api: ApiClient, id: string): Promise<void> {
   )
 }
 
+// Revokes any account's key, by its kid.
+export async function revokeSigningKey(api: ApiClient, id: string): Promise<void> {
+  await send(
+    'POST /v1/admin/signing-keys/{key_id}/revoke',
+    api.POST('/v1/admin/signing-keys/{key_id}/revoke', {
+      params: { path: { key_id: id } },
+      headers: JSON_HEADERS,
+    }),
+  )
+}
+
 // Gives the account exactly the roles `roleIds` names.
 export async function setAccountRoles(
   api: ApiClient,
@@ -344,8 +374,8 @@ export async function setAccountRoles(
   )
 }
 
-// After a write to roles, permissions or who holds them. Each list counts
-// what the others hold, so all of them fetch again. The visitor's own
+// After an admin write. Each list counts what the others hold, so all of
+// them fetch again. The visitor's own
 // permissions can change too, but the session never goes stale, so it
 // fetches again here. A resumed session starts no guest account.
 export async function refreshAfterAdminWrite(

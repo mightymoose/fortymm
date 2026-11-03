@@ -1,12 +1,16 @@
 import { screen, waitFor, within } from '@testing-library/react'
+import { http, HttpResponse } from 'msw'
 import { describe, expect, it } from 'vitest'
+import type { AdminSigningKey } from '../../api/queries'
 import { AdminPage, type AdminTab } from '../../test/pages/AdminPage'
 import {
   administrator,
+  API_BASE_URL,
   builtInPermissions,
   failAdminOnce,
   holdAdmin,
   mockAdmin,
+  server,
   type AdminList,
   type AdminState,
 } from '../../test/server'
@@ -30,6 +34,46 @@ const ben = {
   role_ids: [],
 }
 const gamesRecord = { key: 'games.record', description: 'Record a match.', built_in: false }
+const guest = { id: '9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a', email: null, display_name: 'curious crane 512' }
+
+// A live key registered on 2 Nov 2026, unless `changes` say otherwise. Its
+// kid is `digit` 64 times.
+function signingKey(
+  digit: string,
+  label: string,
+  { id, email, display_name }: AdminSigningKey['account'],
+  changes: Partial<AdminSigningKey> = {},
+): AdminSigningKey {
+  return {
+    id: digit.repeat(64),
+    label,
+    created_at: '2026-11-02T12:00:00Z',
+    state: 'live',
+    signed_out_at: null,
+    revoked_at: null,
+    revoked_by: null,
+    revoked_by_email: null,
+    account: { id, email, display_name },
+    ...changes,
+  }
+}
+const annsPhone = signingKey('a', 'Ann’s iPhone', ann)
+const guestsBrowser = signingKey('b', 'Web browser', guest)
+const bensLaptop = signingKey('c', 'Ben’s laptop', ben, {
+  state: 'signed_out',
+  signed_out_at: '2026-11-02T13:00:00Z',
+})
+const bensPhone = signingKey('d', 'Ben’s phone', ben, {
+  state: 'revoked',
+  revoked_at: '2026-11-02T14:00:00Z',
+  revoked_by: ann.id,
+  revoked_by_email: ann.email,
+})
+const guestsOldBrowser = signingKey('e', 'Old browser', guest, {
+  state: 'revoked',
+  revoked_at: '2026-11-02T14:00:00Z',
+  revoked_by: guest.id,
+})
 
 // Ann, signed in, is the administrator.
 function admin(state: Partial<AdminState> = {}) {
@@ -37,6 +81,7 @@ function admin(state: Partial<AdminState> = {}) {
     permissions: [...builtInPermissions, gamesRecord],
     roles: [administrator, viewer],
     accounts: [ann, ben],
+    signingKeys: [annsPhone, guestsBrowser, bensLaptop, bensPhone, guestsOldBrowser],
     ...state,
   })
 }
@@ -69,6 +114,7 @@ describe('the admin page', () => {
     { tab: 'Roles', list: 'roles', label: 'Loading roles', content: 'Administrator' },
     { tab: 'Permissions', list: 'permissions', label: 'Loading permissions', content: 'games.record' },
     { tab: 'Accounts', list: 'accounts', label: 'Loading accounts', content: 'ben@example.com' },
+    { tab: 'Signing keys', list: 'signing-keys', label: 'Loading signing keys', content: 'Ann’s iPhone' },
   ]
 
   it.each(sections)('shows a skeleton while the $tab load', async ({ tab, list, label, content }) => {
@@ -102,7 +148,7 @@ describe('roles', () => {
     expect(page.rows).toEqual([
       [
         'AdministratorEverything on the admin page.',
-        'account_roles.manageadmin.viewroles.manage',
+        'account_roles.manageadmin.viewroles.managesigning_keys.revoke',
         '1',
         'EditDelete…',
       ],
@@ -301,6 +347,138 @@ describe('accounts', () => {
   })
 })
 
+describe('signing keys', () => {
+  async function openSigningKeys(state: Partial<AdminState> = {}) {
+    const api = admin(state)
+    const page = await AdminPage.render()
+    await page.openTab('Signing keys')
+    await page.findRow('Ann’s iPhone')
+    return { api, page }
+  }
+
+  it('lists each key with its device, account and state', async () => {
+    const { page } = await openSigningKeys()
+    expect(page.rows.map(([device, account, , state]) => [device, account, state])).toEqual([
+      ['Ann’s iPhoneaaaaaaaa…', 'ann@example.comexcited egret 387', 'Live'],
+      ['Web browserbbbbbbbb…', 'Guestcurious crane 512', 'Live'],
+      ['Ben’s laptopcccccccc…', 'ben@example.combrave badger 214', expect.stringMatching(/^Signed out/)],
+      ['Ben’s phonedddddddd…', 'ben@example.combrave badger 214', expect.stringMatching(/^Revoked.* by ann@example\.com$/)],
+      ['Old browsereeeeeeee…', 'Guestcurious crane 512', expect.stringMatching(/^Revoked.* by the owner$/)],
+    ])
+    const [bensLink] = within(page.panel).getAllByRole('link', { name: 'ben@example.com' })
+    expect(bensLink).toHaveAttribute('href', `/admin/accounts/${ben.id}`)
+  })
+
+  it('finds keys by part of an account’s email or player name', async () => {
+    const { page } = await openSigningKeys()
+    await page.searchKeys('CRANE')
+    await waitFor(() =>
+      expect(page.rows.map(([device]) => device)).toEqual(['Web browserbbbbbbbb…', 'Old browsereeeeeeee…']),
+    )
+    await page.searchKeys('ben@')
+    await waitFor(() =>
+      expect(page.rows.map(([device]) => device)).toEqual(['Ben’s laptopcccccccc…', 'Ben’s phonedddddddd…']),
+    )
+  })
+
+  it('says when no key matches', async () => {
+    const { page } = await openSigningKeys()
+    await page.searchKeys('nobody')
+    await waitFor(() => expect(page.panel).toHaveTextContent('No signing keys match'))
+  })
+
+  it('says when it shows only the newest 50', async () => {
+    const many = Array.from({ length: 50 }, (_, index) =>
+      signingKey('f', 'Web browser', guest, { id: index.toString(16).padStart(64, '0') }),
+    )
+    const { page } = await openSigningKeys({ signingKeys: [annsPhone, ...many] })
+    expect(page.panel).toHaveTextContent('Showing the newest 50.')
+  })
+
+  it('revokes a key after it asks', async () => {
+    const { api, page } = await openSigningKeys()
+    await page.click('Revoke key cccccccc')
+    const dialog = page.dialog('Revoke this signing key?')!
+    for (const text of [
+      'Ben’s laptop',
+      'ben@example.com',
+      'brave badger 214',
+      'FortyMM will refuse every result this key signs from now on, and every result it signed that hasn’t reached FortyMM yet. Results FortyMM already has stay as they are.',
+      'The device stays signed in. The next time it opens FortyMM online, it makes a new key.',
+      'This can’t be undone.',
+    ]) {
+      expect(dialog).toHaveTextContent(text)
+    }
+    await page.press(dialog, 'Revoke key')
+
+    expect(await page.findToast('Signing key revoked')).toBeInTheDocument()
+    expect(api.writes).toEqual([
+      { method: 'POST', path: `/v1/admin/signing-keys/${bensLaptop.id}/revoke`, body: null },
+    ])
+    expect(page.rows[2][3]).toMatch(/^Revoked.* by ann@example\.com$/)
+    expect(page.button('Revoke key cccccccc')).toBeNull()
+  })
+
+  it('names a guest’s account in the dialog', async () => {
+    const { page } = await openSigningKeys()
+    await page.click('Revoke key bbbbbbbb')
+    const dialog = page.dialog('Revoke this signing key?')!
+    expect(dialog).toHaveTextContent('Guest')
+    expect(dialog).toHaveTextContent('curious crane 512')
+  })
+
+  it('reads Revoking… while the revoke is in flight', async () => {
+    const { page } = await openSigningKeys()
+    let release = () => {}
+    server.use(
+      http.post(
+        `${API_BASE_URL}/v1/admin/signing-keys/:id/revoke`,
+        () => new Promise<Response>((resolve) => {
+          release = () => resolve(HttpResponse.json({ data: annsPhone }))
+        }),
+      ),
+    )
+    await page.click('Revoke key aaaaaaaa')
+    const dialog = page.dialog('Revoke this signing key?')!
+    await page.press(dialog, 'Revoke key')
+    expect(within(dialog).getByRole('button', { name: 'Revoking…' })).toBeDisabled()
+    release()
+    expect(await page.findToast('Signing key revoked')).toBeInTheDocument()
+  })
+
+  it('sends nothing when the visitor keeps the key', async () => {
+    const { api, page } = await openSigningKeys()
+    await page.click('Revoke key aaaaaaaa')
+    await page.press(page.dialog('Revoke this signing key?')!, 'Keep')
+    await waitFor(() => expect(page.dialog('Revoke this signing key?')).toBeNull())
+    expect(api.writes).toEqual([])
+  })
+
+  it('says why a revoke failed and keeps the dialog open', async () => {
+    const { api, page } = await openSigningKeys()
+    await page.click('Revoke key aaaaaaaa')
+    api.state.signingKeys = []
+    const dialog = page.dialog('Revoke this signing key?')!
+    await page.press(dialog, 'Revoke key')
+    await waitFor(() => expect(dialog).toHaveTextContent('No key has this id'))
+    expect(page.dialog('Revoke this signing key?')).toBeInTheDocument()
+  })
+
+  it('offers no revoke for a revoked key', async () => {
+    const { page } = await openSigningKeys()
+    expect(page.button('Revoke key cccccccc')).toBeInTheDocument()
+    expect(page.button('Revoke key dddddddd')).toBeNull()
+    expect(page.button('Revoke key eeeeeeee')).toBeNull()
+  })
+
+  it('opens from the URL', async () => {
+    admin()
+    const page = await AdminPage.render('/admin?tab=signing-keys')
+    expect(page.selectedTab).toBe('Signing keys')
+    expect(await page.findRow('Ann’s iPhone')).toBeInTheDocument()
+  })
+})
+
 describe('an account’s page', () => {
   it('shows who the account is', async () => {
     admin()
@@ -433,5 +611,15 @@ describe('an account with only admin.view', () => {
     expect(page.rolesCard).not.toHaveTextContent('Viewer')
     expect(within(page.rolesCard).queryByRole('checkbox')).toBeNull()
     expect(within(page.rolesCard).queryByRole('button', { name: 'Save roles' })).toBeNull()
+  })
+
+  it('sees every signing key, with no way to revoke one', async () => {
+    admin({ accounts: [{ ...ann, role_ids: [viewer.id] }, { ...ben, role_ids: [administrator.id] }] })
+    const page = await AdminPage.render()
+    await page.openTab('Signing keys')
+    await page.findRow('Ann’s iPhone')
+    expect(page.rows).toHaveLength(5)
+    expect(within(page.panel).queryByRole('button', { name: /^Revoke key/ })).toBeNull()
+    expect(within(page.panel).queryByText('Actions')).toBeNull()
   })
 })

@@ -4,18 +4,21 @@ import { closeDialog } from '../../components/closeDialog'
 import { Dialog } from '../../components/Dialog'
 import { WriteError } from './WriteError'
 
-// Asks before a delete, open from when it mounts. Keep is the safe choice,
-// first. `onConfirm` runs the delete. The dialog closes once it succeeds,
-// and says why if it fails. `onClose` unmounts it.
+// Asks before a change that can't be undone, open from when it mounts. Keep
+// is the safe choice, first. `onConfirm` makes the change. The dialog closes
+// once it succeeds, and says why if it fails. `onClose` unmounts it.
 export function ConfirmDialog({
   title,
   confirmLabel,
+  busyLabel,
   onConfirm,
   onClose,
   children,
 }: {
   title: string
   confirmLabel: string
+  // The confirm button's label while `onConfirm` runs, such as "Deleting…".
+  busyLabel: string
   onConfirm: () => Promise<void>
   onClose: () => void
   children: ReactNode
@@ -51,7 +54,7 @@ export function ConfirmDialog({
             Keep
           </Button>
           <Button variant="danger-solid" busy={busy} disabled={busy} onClick={confirm}>
-            {busy ? 'Deleting…' : confirmLabel}
+            {busy ? busyLabel : confirmLabel}
           </Button>
         </>
       }

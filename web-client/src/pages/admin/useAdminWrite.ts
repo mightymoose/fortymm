@@ -4,8 +4,8 @@ import type { ApiClient } from '../../api/client'
 import { can, type BuiltInPermission } from '../../api/permissions'
 import { refreshAfterAdminWrite, sessionQuery } from '../../api/queries'
 
-// A write to roles, permissions or who holds them. After it, the admin lists
-// and the session fetch again. Then the admin route's loader checks the
+// An admin write: roles, permissions, who holds them, or a signing key's
+// revoke. After it, the admin lists and the session fetch again. Then the admin route's loader checks the
 // session again, so a visitor who took `admin.view` from themselves goes to
 // Home. Its promise settles once all of that is done.
 export function useAdminWrite<Variables>(
