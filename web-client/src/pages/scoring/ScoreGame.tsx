@@ -445,7 +445,7 @@ function ScorePad({
           </div>
           <div className="score-actions__buttons">
             {saved && (
-              <Button variant="ghost" onClick={() => clearGame(match.id, gameNumber)}>
+              <Button variant="secondary" onClick={() => clearGame(match.id, gameNumber)}>
                 Clear game
               </Button>
             )}

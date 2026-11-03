@@ -89,8 +89,12 @@
   .score-mid{min-width:44px;padding:var(--s-3) var(--s-1)}
   .score-tally{font-size:var(--text-base)}
   .score-actions{flex-direction:column;align-items:stretch;gap:var(--s-2)}
-  /* Save sits at the right, under most people's thumb. */
-  .score-actions__buttons .fm-btn--primary{flex:0 1 60%;min-height:48px}
+  /* Clear and Save or Submit take half the width each. Save or Submit
+     keeps the right half, under most people's thumb, with or without
+     Clear. */
+  .score-actions__buttons{display:grid;grid-template-columns:1fr 1fr}
+  .score-actions__buttons .fm-btn{min-height:48px}
+  .score-actions__buttons .fm-btn--primary{grid-column:2}
   .score-strip-wrap{gap:var(--s-2);padding:var(--s-3)}
   .score-strip{grid-auto-columns:minmax(0,1fr)}
   .score-slot{padding:var(--s-2) var(--s-1)}
