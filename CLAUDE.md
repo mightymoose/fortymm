@@ -960,26 +960,33 @@ it to `src/routes/`.
   closed up), `undecided` or `overrun` (games after the decider). Only
   the two players see Review result, a `Sheet` that submits a `decided`
   board. A spectator sees who submits instead. A submitted board is
-  frozen for everyone, and its submitter can Edit scores. Nothing is
-  signed or sent.
-- `src/scoring/demoServer.ts` stands in for the API's match routes. The
-  page loads the match through it in a `QueryBoundary`, with a skeleton,
-  and saves, clears, submits and reopens through it with mutations. Each
-  call waits, then may fail, as the page's `network` search param says:
-  `normal` (300ms), `slow` (2.5s), `flaky` (every second request answers
-  503), `offline` (no response) or `broken` (500). The app's query client
-  retries a failed load, so a load fails only after its retries. A failed
-  write keeps the typed score and shows Try again, except a 409, which
-  means the result was submitted. The inputs are read-only while a write
-  is in flight, so focus stays put.
-- `src/scoring/scratchpad.ts` keeps each match's scratchpad in
-  `localStorage`, under `fortymm-scratchpad:<matchId>`: the games by
-  game number, who saved each, and the submission (`open` or
-  `submitted`). `useScratchpad()` reads it with `useSyncExternalStore`
-  and follows the `storage` event, so two tabs on one match stay in
-  step. It refuses game writes while the result is submitted, and works
-  in this tab when storage throws. The server will hold the shared board
-  later.
+  frozen for everyone, and its submitter can Edit scores. The submission
+  syncs like a game, and nothing is signed yet.
+- A save stays on this device and the page moves on at once. Nothing
+  about saving waits on the network or can fail. `src/scoring/scratchpad.ts`
+  keeps each match's scratchpad in `localStorage`, under
+  `fortymm-scratchpad:<matchId>`: the board (the games by game number, who
+  saved each, and the submission, `open` or `submitted`) and an outbox of
+  the changes the server hasn't taken. `applyChange()` applies one change
+  to a board, the same way here and on the server. `useScratchpad()`
+  reads it with `useSyncExternalStore` and follows the `storage` event, so
+  two tabs on one match stay in step. It refuses game writes while the
+  result is submitted, and works in this tab when storage throws.
+- `src/scoring/sync.ts` sends the outbox while the page is open, oldest
+  change first, one at a time. A change that can't get through waits,
+  with a backoff from 2 to 30 seconds, and goes as soon as the browser
+  fires `online`. A 4xx drops the change, since sending it again can't
+  help. Each game in the strip says `Syncing`, `Not synced` while the
+  outbox waits, or `Synced` for a moment once it lands. A note under the
+  strip says when the device is offline. Only the open page syncs today.
+- `src/scoring/demoServer.ts` stands in for the API's match routes, with
+  its own board under `fortymm-demo-server:<matchId>`. The page loads the
+  match through it in a `QueryBoundary`, with a skeleton, and keeps the
+  last match it loaded in `fortymm-match:<matchId>`, so a load that can't
+  reach the server opens that copy. Each call waits, then may fail, as
+  the page's `network` search param says: `normal` (300ms), `slow`
+  (2.5s), `flaky` (every second request answers 503), `offline` (no
+  response) or `broken` (500).
 - `design-system.tsx`: a public page. Public pages go directly in
   `src/routes/`. They make no request and never show the loading screen.
   The design system page has no `AppShell`, and no page links to it.

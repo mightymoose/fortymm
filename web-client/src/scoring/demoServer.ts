@@ -1,13 +1,14 @@
 import { queryOptions } from '@tanstack/react-query'
-import { ApiError, ApiUnreachable } from '../api/errors'
-import type { GamePoints } from './board'
+import { ApiError, ApiUnreachable, classifyFailure } from '../api/errors'
 import { demoMatch, type Match, type MatchPlayer } from './demoMatches'
-import { clearGame, reopen, saveGame, submitResult, type Scorer, type Submission } from './scratchpad'
+import { applyChange, readBoard, writeBoard, type Change } from './scratchpad'
 
-// Stands in for the API's match routes until they exist. Each call waits and
-// may fail the way the chosen network does, so the page's loading, saving and
-// failure states can be seen and tested. The page picks the network from its
-// `network` search param, such as `?network=flaky`.
+// Stands in for the API's match routes until they exist. It keeps its own
+// board per match, apart from the scratchpad on the device, and takes the
+// device's changes one at a time. Each call waits and may fail the way the
+// chosen network does, so the page's loading and syncing can be seen and
+// tested. The page picks the network from its `network` search param, such
+// as `?network=flaky`.
 
 export const NETWORKS = ['normal', 'slow', 'flaky', 'offline', 'broken'] as const
 export type Network = (typeof NETWORKS)[number]
@@ -15,7 +16,7 @@ export type Network = (typeof NETWORKS)[number]
 type Failure = 'unreachable' | number
 
 // `fails` gets the count of requests sent so far, so `flaky` fails every
-// second one and a test can tell which.
+// second one.
 const BEHAVIOUR: Record<Network, { latencyMs: number; fails: (count: number) => Failure | null }> = {
   normal: { latencyMs: 300, fails: () => null },
   slow: { latencyMs: 2500, fails: () => null },
@@ -41,54 +42,60 @@ async function send<T>(request: string, network: Network, work: () => T): Promis
   return work()
 }
 
-// The store refuses a game write once the result is submitted. The API will
-// answer that with a 409.
-function frozenUnless(request: string, written: boolean): void {
-  if (!written) throw new ApiError(request, new Response(null, { status: 409 }))
+export function serverKey(matchId: string): string {
+  return `fortymm-demo-server:${matchId}`
 }
 
-export function fetchMatch(id: string, self: MatchPlayer, network: Network): Promise<Match> {
-  return send(`GET /v1/matches/${id}`, network, () => demoMatch(id, self))
-}
-
-export function putGame(
-  matchId: string,
-  game: number,
-  points: GamePoints,
-  savedBy: Scorer,
-  network: Network,
-): Promise<void> {
-  const request = `PUT /v1/matches/${matchId}/games/${game}`
-  return send(request, network, () => frozenUnless(request, saveGame(matchId, game, points, savedBy)))
-}
-
-export function deleteGame(matchId: string, game: number, network: Network): Promise<void> {
-  const request = `DELETE /v1/matches/${matchId}/games/${game}`
-  return send(request, network, () => frozenUnless(request, clearGame(matchId, game)))
-}
-
-export function postResult(
-  matchId: string,
-  submission: Omit<Extract<Submission, { phase: 'submitted' }>, 'phase' | 'submittedAt'>,
-  network: Network,
-): Promise<void> {
-  return send(`POST /v1/matches/${matchId}/result`, network, () => {
-    submitResult(matchId, submission)
+// Applies one change to the server's board. A game write after the result
+// was submitted answers 409, as the API will.
+export function sendChange(matchId: string, change: Change, network: Network): Promise<void> {
+  const request = `POST /v1/matches/${matchId}/changes`
+  return send(request, network, () => {
+    const board = applyChange(readBoard(serverKey(matchId)), change)
+    if (!board) throw new ApiError(request, new Response(null, { status: 409 }))
+    writeBoard(serverKey(matchId), board)
   })
 }
 
-export function deleteResult(matchId: string, network: Network): Promise<void> {
-  return send(`DELETE /v1/matches/${matchId}/result`, network, () => {
-    reopen(matchId)
-  })
+function matchKey(id: string): string {
+  return `fortymm-match:${id}`
 }
 
-// The network isn't part of the key: a connection that drops or comes back
-// doesn't make the match another one.
+// The match as the last load got it, so the page opens with no signal.
+function savedMatch(id: string): Match | null {
+  try {
+    const raw = localStorage.getItem(matchKey(id))
+    return raw === null ? null : (JSON.parse(raw) as Match)
+  } catch {
+    return null
+  }
+}
+
+function saveMatch(match: Match): void {
+  try {
+    localStorage.setItem(matchKey(match.id), JSON.stringify(match))
+  } catch {
+    // The page still works online without it.
+  }
+}
+
+// Loads the match, or the saved copy when the server can't be reached.
 export function matchQuery(id: string, self: MatchPlayer, network: Network) {
   return queryOptions({
+    // The network isn't part of the key: a connection that drops or comes
+    // back doesn't make the match another one.
     queryKey: ['demo-match', id, self.id],
-    queryFn: () => fetchMatch(id, self, network),
+    queryFn: async () => {
+      try {
+        const match = await send(`GET /v1/matches/${id}`, network, () => demoMatch(id, self))
+        saveMatch(match)
+        return match
+      } catch (error) {
+        const saved = savedMatch(id)
+        if (saved && classifyFailure(error).kind === 'unreachable') return saved
+        throw error
+      }
+    },
     staleTime: Infinity,
   })
 }

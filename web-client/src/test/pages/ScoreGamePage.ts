@@ -1,7 +1,9 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import { expect } from 'vitest'
 import userEvent from '@testing-library/user-event'
-import type { Network } from '../../scoring/demoServer'
+import type { GamePoints } from '../../scoring/board'
+import { serverKey, type Network } from '../../scoring/demoServer'
+import { readBoard } from '../../scoring/scratchpad'
 import { renderRoute, type AppRouter } from '../renderRoute'
 
 // Page object for a match's scratchpad, the page that edits one game's
@@ -79,6 +81,21 @@ export class ScoreGamePage {
     return this.slot(game).querySelector('.score-slot__pts')?.textContent ?? ''
   }
 
+  // Where game `game`'s last change stands in the strip: "Syncing", "Not
+  // synced", "Synced", or null once it settles.
+  slotSync(game: number): string | null {
+    return this.slot(game).querySelector('.score-slot__sync')?.textContent?.trim() ?? null
+  }
+
+  // Game `game`'s points on the demo server, or null when it has none.
+  serverScore(game: number): GamePoints | null {
+    return readBoard(serverKey(this.matchId)).games[game]?.points ?? null
+  }
+
+  get matchId(): string {
+    return this.href.split('/')[2]
+  }
+
   // The bold points of game `game` in the strip, the winner's.
   slotWinner(game: number): string | null {
     return this.slot(game).querySelector('b')?.textContent ?? null
@@ -113,9 +130,6 @@ export class ScoreGamePage {
     return id ? (document.getElementById(id)?.textContent ?? null) : null
   }
 
-  get toasts(): string[] {
-    return [...document.querySelectorAll('.fm-toast__msg')].map((toast) => toast.textContent ?? '')
-  }
 
   button(name: string): HTMLElement | null {
     return screen.queryByRole('button', { name })

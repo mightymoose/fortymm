@@ -32,7 +32,7 @@
 
 .score-actions{display:flex;align-items:center;justify-content:space-between;gap:var(--s-4)}
 .score-actions__note{margin:0}
-.score-actions__buttons{display:flex;gap:var(--s-2)}
+.score-actions__buttons{display:flex;justify-content:flex-end;gap:var(--s-2)}
 
 /* One link per game. The current game is selected, and games after the
    decider step back. */
@@ -48,6 +48,10 @@
 .score-slot__pts{font:700 var(--text-base)/var(--lh-snug) var(--font-num);font-variant-numeric:tabular-nums;color:var(--loser)}
 .score-slot__pts b{color:var(--winner)}
 .score-slot--after{border-style:dashed}
+.score-slot__sync{display:inline-flex;align-items:center;gap:2px;font:500 var(--text-xs)/1 var(--font-ui);color:var(--fg-3)}
+.score-slot__sync .fm-ic{width:12px;height:12px}
+.score-slot__sync--synced{color:var(--success)}
+.score-sync-note{margin:0}
 .score-slot--after,.score-slot--after .score-slot__pts,.score-slot--after .score-slot__pts b{color:var(--fg-disabled)}
 
 .score-result{display:flex;flex-direction:column;align-items:flex-start;gap:var(--s-3)}
@@ -69,8 +73,8 @@
   .score-tally{font-size:var(--text-base)}
   .score-actions{flex-direction:column;align-items:stretch;gap:var(--s-2)}
   .score-actions__note:empty{display:none}
-  .score-actions__buttons{flex-direction:row-reverse}
-  .score-actions__buttons .fm-btn{flex:1}
+  /* Save sits at the right, under most people's thumb. */
+  .score-actions__buttons .fm-btn--primary{flex:0 1 60%;min-height:48px}
   .score-strip-wrap{flex-direction:column;align-items:stretch;gap:var(--s-2);padding:var(--s-3)}
   .score-strip{grid-auto-columns:minmax(0,1fr)}
   .score-slot{padding:var(--s-2) var(--s-1)}

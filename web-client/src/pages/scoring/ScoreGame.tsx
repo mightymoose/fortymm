@@ -1,7 +1,6 @@
-import { useMutation, useSuspenseQuery } from '@tanstack/react-query'
+import { useSuspenseQuery } from '@tanstack/react-query'
 import { Link, useLoaderData, useNavigate, useParams, useRouteContext, useSearch } from '@tanstack/react-router'
-import { useId, useRef, useState, type ReactNode } from 'react'
-import { ApiError, classifyFailure } from '../../api/errors'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { sessionQuery } from '../../api/queries'
 import { Button } from '../../components/Button'
 import { closeDialog } from '../../components/closeDialog'
@@ -10,7 +9,6 @@ import { Icon } from '../../components/Icon'
 import { PlayerAvatar } from '../../components/PlayerAvatar'
 import { QueryBoundary } from '../../components/QueryBoundary'
 import { Sheet } from '../../components/Sheet'
-import { useToast } from '../../components/toastContext'
 import { Wordmark } from '../../components/Wordmark'
 import {
   deciderGame,
@@ -22,20 +20,27 @@ import {
   type Side,
 } from '../../scoring/board'
 import { viewerOf, type Match, type Viewer } from '../../scoring/demoMatches'
+import { matchQuery, parseNetwork } from '../../scoring/demoServer'
 import {
-  deleteGame,
-  deleteResult,
-  matchQuery,
-  parseNetwork,
-  postResult,
-  putGame,
-  type Network,
-} from '../../scoring/demoServer'
-import { slotsOf, useScratchpad, type SavedGame, type Scorer, type Submission } from '../../scoring/scratchpad'
+  clearGame,
+  reopen,
+  saveGame,
+  slotsOf,
+  submitResult,
+  useScratchpad,
+  type Change,
+  type SavedGame,
+  type Scorer,
+  type Submitted,
+} from '../../scoring/scratchpad'
+import { useSync, type SyncStatus } from '../../scoring/sync'
 import './scoring.css'
 
 const ROUTE = '/_authenticated/matches/$matchId/scores/game/$gameNumber/edit'
 const PATH = '/matches/$matchId/scores/game/$gameNumber/edit'
+
+// How long a game's "Synced" mark shows once its change reaches the server.
+const SYNCED_MS = 1200
 
 // The two sides as the page shows them, left then right: the viewer's side
 // first when they play. The points stay stored in the match's order.
@@ -55,10 +60,15 @@ function games(won: [number, number], winner: Side): string {
   return `${won[winner]}–${won[other(winner)]}`
 }
 
+// The games whose save or clear hasn't reached the server.
+function unsyncedGames(outbox: readonly Change[]): Set<number> {
+  return new Set(outbox.flatMap((change) => ('game' in change ? [change.game] : [])))
+}
+
 // The scratchpad of one match, open at one game. Anyone who can open the
 // match can enter or change any game, in any order, as long as each game's
-// score is legal. The match rules apply only when a player reviews the
-// board to submit it.
+// score is legal. A save stays on this device and syncs in the background.
+// The match rules apply only when a player reviews the board to submit it.
 export function ScoreGame() {
   const { gameNumber } = useLoaderData({ from: ROUTE })
   return (
@@ -90,19 +100,16 @@ function ScoreSkeleton() {
   )
 }
 
-function useNetwork(): Network {
-  return parseNetwork(useSearch({ from: ROUTE }).network)
-}
-
 function ScoreBoard({ gameNumber }: { gameNumber: number }) {
   const { matchId } = useParams({ from: ROUTE })
   const { api } = useRouteContext({ from: '__root__' })
-  const network = useNetwork()
+  const network = parseNetwork(useSearch({ from: ROUTE }).network)
   const { data: account } = useSuspenseQuery(sessionQuery(api))
   const me: Scorer = { playerId: account.player.id, name: account.player.display_name }
   const { data: match } = useSuspenseQuery(
     matchQuery(matchId, { id: me.playerId, name: me.name }, network),
   )
+  const sync = useSync(match.id, network)
   const viewer = viewerOf(match, me.playerId)
   const pad = useScratchpad(match.id)
   const left: Side = viewer.role === 'player' ? viewer.side : 0
@@ -121,17 +128,24 @@ function ScoreBoard({ gameNumber }: { gameNumber: number }) {
         sides={sides}
         frozen={pad.submission.phase === 'submitted'}
         me={me}
-        network={network}
       />
-      <GameStrip match={match} slots={slots} current={gameNumber} sides={sides} />
+      <GameStrip
+        match={match}
+        slots={slots}
+        current={gameNumber}
+        sides={sides}
+        unsynced={unsyncedGames(pad.outbox)}
+        sync={sync}
+      />
       <Result
         match={match}
         submission={pad.submission}
+        resultUnsynced={pad.outbox.some((change) => change.kind === 'submit' || change.kind === 'reopen')}
+        sync={sync}
         viewer={viewer}
         slots={slots}
         sides={sides}
         me={me}
-        network={network}
       />
     </>
   )
@@ -142,43 +156,112 @@ function GameStrip({
   slots,
   current,
   sides,
+  unsynced,
+  sync,
 }: {
   match: Match
   slots: (GamePoints | null)[]
   current: number
   sides: Sides
+  unsynced: Set<number>
+  sync: SyncStatus
 }) {
   const decider = deciderGame(slots, match.bestOf)
   return (
-    <nav className="score-strip-wrap" aria-label="Games">
+    <nav className="score-strip-wrap" aria-label="Games" aria-busy={sync.kind === 'sending' || undefined}>
       <p className="score-strip__label">Games</p>
       <ol className="score-strip">
-        {slots.map((points, index) => {
-          const game = index + 1
-          const classes = ['score-slot']
-          if (decider !== null && game > decider) classes.push('score-slot--after')
-          return (
-            <li key={game}>
-              <Link
-                to={PATH}
-                params={{ matchId: match.id, gameNumber: String(game) }}
-                search={true}
-                className={classes.join(' ')}
-                aria-current={game === current ? 'page' : undefined}
-              >
-                <span className="score-slot__label">Game {game}</span>{' '}
-                <span className="score-slot__pts">
-                  {points ? <SlotScore points={points} sides={sides} /> : '–'}
-                </span>
-              </Link>
-            </li>
-          )
-        })}
+        {slots.map((points, index) => (
+          <GameSlot
+            key={index + 1}
+            match={match}
+            game={index + 1}
+            points={points}
+            current={index + 1 === current}
+            after={decider !== null && index + 1 > decider}
+            sides={sides}
+            unsynced={unsynced.has(index + 1)}
+            waiting={sync.kind === 'waiting'}
+          />
+        ))}
       </ol>
       {decider !== null && decider < match.bestOf && (
         <p className="fm-help">Match decided after game {decider}</p>
       )}
+      {sync.kind === 'waiting' && unsynced.size > 0 && <SyncWaiting reason={sync.reason} />}
     </nav>
+  )
+}
+
+function SyncWaiting({ reason }: { reason: 'offline' | 'failed' }) {
+  return (
+    <p className="fm-notice score-sync-note" role="status">
+      <Icon name="info" />
+      <span>
+        {reason === 'offline'
+          ? 'You’re offline. Your scores are saved on this device and sync when you’re back online.'
+          : 'Couldn’t sync your scores. They’re saved on this device, and we’ll keep trying.'}
+      </span>
+    </p>
+  )
+}
+
+// One game in the strip, with where its last change stands: syncing, not
+// synced while the outbox waits, or a moment of "Synced" once it lands.
+function GameSlot({
+  match,
+  game,
+  points,
+  current,
+  after,
+  sides,
+  unsynced,
+  waiting,
+}: {
+  match: Match
+  game: number
+  points: GamePoints | null
+  current: boolean
+  after: boolean
+  sides: Sides
+  unsynced: boolean
+  waiting: boolean
+}) {
+  const [justSynced, setJustSynced] = useState(false)
+  const wasUnsynced = useRef(unsynced)
+  useEffect(() => {
+    const landed = wasUnsynced.current && !unsynced
+    wasUnsynced.current = unsynced
+    if (!landed) return
+    setJustSynced(true)
+    const timer = setTimeout(() => setJustSynced(false), SYNCED_MS)
+    return () => clearTimeout(timer)
+  }, [unsynced])
+
+  const state = unsynced ? (waiting ? 'waiting' : 'syncing') : justSynced ? 'synced' : null
+  const classes = ['score-slot']
+  if (after) classes.push('score-slot--after')
+  return (
+    <li>
+      <Link
+        to={PATH}
+        params={{ matchId: match.id, gameNumber: String(game) }}
+        search={true}
+        className={classes.join(' ')}
+        aria-current={current ? 'page' : undefined}
+      >
+        <span className="score-slot__label">Game {game}</span>{' '}
+        <span className="score-slot__pts">{points ? <SlotScore points={points} sides={sides} /> : '–'}</span>
+        {state && (
+          <span className={`score-slot__sync score-slot__sync--${state}`}>
+            {' '}
+            {state === 'synced' && <Icon name="check" />}
+            {state === 'waiting' && <Icon name="alert" />}
+            {state === 'syncing' ? 'Syncing' : state === 'waiting' ? 'Not synced' : 'Synced'}
+          </span>
+        )}
+      </Link>
+    </li>
   )
 }
 
@@ -193,35 +276,6 @@ function SlotScore({ points, sides }: { points: GamePoints; sides: Sides }) {
   )
 }
 
-// A write that failed: what didn't happen, why, and Try again when another
-// try could work. A 409 means the result was submitted meanwhile, so the
-// board is frozen and trying again can't help.
-function WriteError({ what, error, onRetry }: { what: string; error: Error; onRetry: () => void }) {
-  const titleId = useId()
-  const frozen = error instanceof ApiError && error.status === 409
-  const sentence = frozen
-    ? 'A player submitted the result, so the scores are frozen.'
-    : classifyFailure(error).kind === 'unreachable'
-      ? 'FortyMM isn’t answering. Check your connection, then try again.'
-      : 'Something went wrong on our side. Try again. If it keeps happening, tell us what you were doing.'
-  return (
-    <div className="fm-alert fm-alert--error" role="alert" aria-labelledby={titleId}>
-      <Icon name="error" />
-      <p className="fm-alert__title" id={titleId}>
-        Couldn’t {what}
-      </p>
-      <p className="fm-alert__body">{sentence}</p>
-      {!frozen && (
-        <div className="fm-alert__actions">
-          <Button variant="primary" size="sm" onClick={onRetry}>
-            Try again
-          </Button>
-        </div>
-      )}
-    </div>
-  )
-}
-
 function ScorePad({
   match,
   gameNumber,
@@ -230,7 +284,6 @@ function ScorePad({
   sides,
   frozen,
   me,
-  network,
 }: {
   match: Match
   gameNumber: number
@@ -239,10 +292,8 @@ function ScorePad({
   sides: Sides
   frozen: boolean
   me: Scorer
-  network: Network
 }) {
   const navigate = useNavigate()
-  const showToast = useToast()
   const feedbackId = useId()
   // In the match's player order, like the stored points.
   const [draft, setDraft] = useState<[string, string]>(
@@ -251,29 +302,6 @@ function ScorePad({
   const inputs = useRef<[HTMLInputElement | null, HTMLInputElement | null]>([null, null])
   const entry = parseGameScore(draft[0], draft[1])
   const invalid = entry.kind === 'malformed' || entry.kind === 'illegal'
-
-  // The callbacks live on the mutations, not on mutate(), because a saved
-  // game remounts this pad before the request's promise settles.
-  const saveMutation = useMutation({
-    mutationFn: (points: GamePoints) => putGame(match.id, gameNumber, points, me, network),
-    onSuccess: (_, points) => {
-      const winner = winnerOf(points)
-      showToast(`Game ${gameNumber} saved. ${points[winner]}–${points[other(winner)]}.`)
-      const after = slots.map((slot, index) => (index === gameNumber - 1 ? points : slot))
-      // Once the match is decided, the next empty game would only be an extra
-      // one, so the page stays.
-      if (deciderGame(after, match.bestOf) !== null) return
-      const next = after.findIndex((slot, index) => index >= gameNumber && slot === null)
-      if (next !== -1) {
-        void navigate({ to: PATH, params: { matchId: match.id, gameNumber: String(next + 1) }, search: true })
-      }
-    },
-  })
-  const clearMutation = useMutation({
-    mutationFn: () => deleteGame(match.id, gameNumber, network),
-    onSuccess: () => showToast(`Game ${gameNumber} cleared.`),
-  })
-  const busy = saveMutation.isPending || clearMutation.isPending
 
   function feedback(): ReactNode {
     switch (entry.kind) {
@@ -294,16 +322,17 @@ function ScorePad({
   }
   const message = feedback()
 
+  // Saves on this device and moves on. The strip shows the game syncing.
   function save() {
-    if (entry.kind !== 'legal' || busy) return
-    clearMutation.reset()
-    saveMutation.mutate(entry.points)
-  }
-
-  function clear() {
-    if (busy) return
-    saveMutation.reset()
-    clearMutation.mutate()
+    if (entry.kind !== 'legal' || !saveGame(match.id, gameNumber, entry.points, me)) return
+    const after = slots.map((slot, index) => (index === gameNumber - 1 ? entry.points : slot))
+    // Once the match is decided, the next empty game would only be an extra
+    // one, so the page stays.
+    if (deciderGame(after, match.bestOf) !== null) return
+    const next = after.findIndex((slot, index) => index >= gameNumber && slot === null)
+    if (next !== -1) {
+      void navigate({ to: PATH, params: { matchId: match.id, gameNumber: String(next + 1) }, search: true })
+    }
   }
 
   const side = (side: Side) => {
@@ -327,9 +356,6 @@ function ScorePad({
           // The left score is where a game's entry starts.
           autoFocus={side === sides[0] && !frozen}
           disabled={frozen}
-          // Read-only rather than disabled while a write is in flight, so
-          // focus stays put if it fails.
-          readOnly={busy}
           aria-label={name}
           aria-invalid={invalid || undefined}
           aria-describedby={message ? feedbackId : undefined}
@@ -371,33 +397,17 @@ function ScorePad({
         {side(sides[1])}
       </section>
       {message}
-      {saveMutation.isError && (
-        <WriteError what={`save game ${gameNumber}`} error={saveMutation.error} onRetry={save} />
-      )}
-      {clearMutation.isError && (
-        <WriteError what={`clear game ${gameNumber}`} error={clearMutation.error} onRetry={clear} />
-      )}
       {!frozen && (
         <div className="score-actions">
           <p className="fm-help score-actions__note">{saved ? `Saved by ${saved.savedBy.name}` : ''}</p>
           <div className="score-actions__buttons">
             {saved && (
-              <Button
-                variant="ghost"
-                onClick={clear}
-                disabled={saveMutation.isPending}
-                aria-busy={clearMutation.isPending || undefined}
-              >
-                {clearMutation.isPending ? 'Clearing…' : 'Clear game'}
+              <Button variant="ghost" onClick={() => clearGame(match.id, gameNumber)}>
+                Clear game
               </Button>
             )}
-            <Button
-              type="submit"
-              variant="primary"
-              disabled={entry.kind !== 'legal' || clearMutation.isPending}
-              aria-busy={saveMutation.isPending || undefined}
-            >
-              {saveMutation.isPending ? 'Saving…' : `Save game ${gameNumber}`}
+            <Button type="submit" variant="primary" disabled={entry.kind !== 'legal'}>
+              Save game {gameNumber}
             </Button>
           </div>
         </div>
@@ -411,22 +421,49 @@ function ScorePad({
 function Result({
   match,
   submission,
+  resultUnsynced,
+  sync,
   viewer,
   slots,
   sides,
   me,
-  network,
 }: {
   match: Match
-  submission: Submission
+  submission: { phase: 'open' } | Submitted
+  resultUnsynced: boolean
+  sync: SyncStatus
   viewer: Viewer
   slots: (GamePoints | null)[]
   sides: Sides
   me: Scorer
-  network: Network
 }) {
   if (submission.phase === 'submitted') {
-    return <Submitted match={match} submission={submission} me={me} network={network} />
+    const submitter = match.players.find((player) => player.id === submission.by)
+    const waitingFor = match.players.find((player) => player.id !== submission.by)
+    return (
+      <section className="score-result" aria-label="Result">
+        <p className="fm-notice fm-notice--success" role="status">
+          <Icon name="check" />
+          <span>
+            Submitted by <b>{submitter?.name ?? 'a player'}</b>.{' '}
+            <b>{match.players[submission.winner].name}</b> wins{' '}
+            {games(tally(submission.games), submission.winner)}.
+          </span>
+        </p>
+        <p className="fm-help">
+          {resultUnsynced
+            ? sync.kind === 'waiting'
+              ? 'Saved on this device. It reaches the server when you’re back online.'
+              : 'Syncing the result…'
+            : waitingFor && `Waiting for ${waitingFor.name}`}
+        </p>
+        {submission.by === me.playerId && (
+          <Button variant="secondary" onClick={() => reopen(match.id)}>
+            Edit scores
+          </Button>
+        )}
+      </section>
+    )
   }
   if (viewer.role === 'spectator') {
     return (
@@ -441,45 +478,7 @@ function Result({
       </section>
     )
   }
-  return <ReviewResult match={match} slots={slots} sides={sides} me={me} network={network} />
-}
-
-function Submitted({
-  match,
-  submission,
-  me,
-  network,
-}: {
-  match: Match
-  submission: Extract<Submission, { phase: 'submitted' }>
-  me: Scorer
-  network: Network
-}) {
-  const reopenMutation = useMutation({ mutationFn: () => deleteResult(match.id, network) })
-  const submitter = match.players.find((player) => player.id === submission.by)
-  const waitingFor = match.players.find((player) => player.id !== submission.by)
-  const reopen = () => reopenMutation.mutate()
-  return (
-    <section className="score-result" aria-label="Result">
-      <p className="fm-notice fm-notice--success" role="status">
-        <Icon name="check" />
-        <span>
-          Submitted by <b>{submitter?.name ?? 'a player'}</b>.{' '}
-          <b>{match.players[submission.winner].name}</b> wins{' '}
-          {games(tally(submission.games), submission.winner)}.
-        </span>
-      </p>
-      {waitingFor && <p className="fm-help">Waiting for {waitingFor.name}</p>}
-      {reopenMutation.isError && (
-        <WriteError what="reopen the scores" error={reopenMutation.error} onRetry={reopen} />
-      )}
-      {submission.by === me.playerId && (
-        <Button variant="secondary" onClick={reopen} aria-busy={reopenMutation.isPending || undefined}>
-          {reopenMutation.isPending ? 'Reopening…' : 'Edit scores'}
-        </Button>
-      )}
-    </section>
-  )
+  return <ReviewResult match={match} slots={slots} sides={sides} me={me} />
 }
 
 function ReviewResult({
@@ -487,26 +486,20 @@ function ReviewResult({
   slots,
   sides,
   me,
-  network,
 }: {
   match: Match
   slots: (GamePoints | null)[]
   sides: Sides
   me: Scorer
-  network: Network
 }) {
   const sheet = useRef<HTMLDialogElement>(null)
   const review = reviewBoard(slots, match.bestOf)
   const name = (side: Side) => match.players[side].name
-  const submitMutation = useMutation({
-    mutationFn: (submission: { games: GamePoints[]; winner: Side }) =>
-      postResult(match.id, { by: me.playerId, ...submission }, network),
-    onSuccess: () => sheet.current?.close(),
-  })
 
   function submit() {
-    if (review.kind !== 'decided' || submitMutation.isPending) return
-    submitMutation.mutate({ games: review.games, winner: review.winner })
+    if (review.kind !== 'decided') return
+    submitResult(match.id, { by: me.playerId, games: review.games, winner: review.winner })
+    sheet.current?.close()
   }
 
   function body(): ReactNode {
@@ -532,9 +525,6 @@ function ReviewResult({
                 <Icon name="info" />
                 <span>Empty games were left out, so the games after them move up.</span>
               </p>
-            )}
-            {submitMutation.isError && (
-              <WriteError what="submit the result" error={submitMutation.error} onRetry={submit} />
             )}
           </>
         )
@@ -583,13 +573,7 @@ function ReviewResult({
 
   return (
     <section className="score-result" aria-label="Result">
-      <Button
-        variant="secondary"
-        onClick={() => {
-          submitMutation.reset()
-          sheet.current?.showModal()
-        }}
-      >
+      <Button variant="secondary" onClick={() => sheet.current?.showModal()}>
         Review result
       </Button>
       <Sheet
@@ -598,8 +582,8 @@ function ReviewResult({
         subtitle={`${name(0)} v ${name(1)}`}
         footer={
           review.kind === 'decided' ? (
-            <Button variant="primary" onClick={submit} aria-busy={submitMutation.isPending || undefined}>
-              {submitMutation.isPending ? 'Submitting…' : 'Submit result'}
+            <Button variant="primary" onClick={submit}>
+              Submit result
             </Button>
           ) : (
             <Button variant="secondary" onClick={closeDialog}>

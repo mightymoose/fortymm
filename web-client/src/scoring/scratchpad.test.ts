@@ -1,7 +1,10 @@
 import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import {
+  applyChange,
   clearGame,
+  markSent,
+  pendingChanges,
   reopen,
   saveGame,
   slotsOf,
@@ -64,5 +67,30 @@ describe('scratchpad', () => {
 
     expect(slotsOf(result.current, 3)).toEqual([null, [11, 4], null])
     expect(result.current.submission).toEqual({ phase: 'open' })
+  })
+
+  it('queues each change for the server, in order, until it is sent', () => {
+    saveGame('m5', 1, [11, 6], ann)
+    clearGame('m5', 1)
+    saveGame('m5', 2, [11, 8], ann)
+
+    const outbox = pendingChanges('m5')
+    expect(outbox.map((change) => change.kind)).toEqual(['save', 'clear', 'save'])
+
+    markSent('m5', outbox[0].id)
+    expect(pendingChanges('m5').map((change) => change.id)).toEqual([outbox[1].id, outbox[2].id])
+  })
+
+  it('applies a change to a board the same way on the device and the server', () => {
+    const open = { games: {}, submission: { phase: 'open' } } as const
+    const saved = applyChange(open, { id: 'a', kind: 'save', game: 1, points: [11, 2], savedBy: ann })
+    expect(saved?.games[1]?.points).toEqual([11, 2])
+
+    const submitted = applyChange(saved!, {
+      id: 'b',
+      kind: 'submit',
+      submission: { phase: 'submitted', by: ann.playerId, games: [[11, 2]], winner: 0, submittedAt: 'now' },
+    })
+    expect(applyChange(submitted!, { id: 'c', kind: 'clear', game: 1 })).toBeNull()
   })
 })
