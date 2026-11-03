@@ -968,6 +968,115 @@ it to `src/routes/`.
   who takes `admin.view` from themselves goes to `/`. `can()` in
   `src/api/permissions.ts` checks the session's permissions, by the
   built-in keys in `Permission`. The API checks every request again.
+- `matches/$matchId/scores/game/$gameNumber/edit.tsx`: the page
+  `ScoreGame` (`src/pages/scoring/`), a match's scoring scratchpad, with
+  the wordmark, a link to Home and no `AppShell`. It edits one game. The
+  route's loader reads the match from `demoMatch()`
+  (`src/scoring/demoMatches.ts`), because the API has no matches yet.
+  `demo` is a best of 5 between the session's player and `brave badger
+  214`. In `demo-spectator`, two other players play, so the viewer is a
+  spectator. Any other id throws `notFound()`. A game number that isn't
+  a whole number from 1 to the match's `bestOf` goes to game 1, with a
+  replace. One pad holds a big score input per player and the games
+  tally between them, the viewer's player on the left, then the actions
+  (`ScoreEntry.tsx`). The left score has focus when a game opens. Enter
+  moves to the other score while it is empty, and otherwise submits the
+  pad's form. A strip (`GameStrip.tsx`) links to each game, with its
+  score in mono and the game winner's points bold. Games after the
+  decider step back, under "Match decided after game N", and stay
+  editable. Below 880px the two sides stay side by side and the buttons
+  split the width, with Save or Submit on the right.
+- `matches/$matchId/index.tsx`: the page `MatchPage`
+  (`src/pages/matches/`), where a submitted result lands. It shows
+  nothing yet.
+- Anyone who can open the match can save any game, in any order. The
+  only check is that the game's score is legal (`parseGameScore()` in
+  `src/scoring/board.ts`). The match rules apply only at submit.
+  `reviewBoard()` reads the board in one pass and gives `decided`
+  (empty games before the decider are closed up), `undecided` or
+  `overrun` (games after the decider), with the decider's game number.
+  `planPress()` (`src/scoring/planPress.ts`) decides what the pad's
+  button does, from the board, the viewer, the game and what is typed:
+  `disabled`, `save` with the game to open next, or `submit`. Save goes
+  to the next empty game after this one, unless the match is decided.
+  When a player's press would leave a `decided` board, the button reads
+  Submit result, and the line beside it says who wins. It saves the game
+  if its score changed and submits in one press, with no sheet to
+  confirm, then goes to the match's page. On an `overrun` board, the
+  strip tells a player which games to clear. A spectator's button only
+  saves, and the page says who submits instead (`ResultPanel.tsx`). The
+  submission keeps the games the player approved, because another
+  device's save can reach the server first. The winner comes from those
+  games. A submitted board is frozen for everyone, and its submitter can
+  Edit scores. The submission syncs like a game, and nothing is signed
+  yet.
+- A save stays on this device and the page moves on at once. Nothing
+  about saving waits on the network or can fail. `src/scoring/scratchpad.ts`
+  keeps each match's scratchpad in `localStorage`, under
+  `fortymm-scratchpad:<matchId>`: the board (the games by game number, who
+  saved each, and the submission, `open` or `submitted`) and an outbox of
+  the changes the server hasn't taken. Each change is an `id` and an
+  `edit`. `applyEdit()` applies one edit to a board, the same way here
+  and on the demo server. The record is read through zod schemas, because
+  another tab or an older build may have written it. A game or change
+  that isn't valid is left out, and the rest of the record stays. A
+  record whose board is empty is removed rather than written.
+  `useScratchpad()` reads it with `useSyncExternalStore` and follows the
+  `storage` event, so two tabs on one match stay in step. It refuses game
+  writes while the result is submitted, and works in this tab when
+  storage throws.
+- `src/scoring/sync.ts` keeps one sync per match, whose state is one of
+  `idle`, `sending`, `waitingRetry`, `waitingOnline`, `pulling` or
+  `stopped`, with why the last send got stuck kept beside it. It sends
+  the outbox oldest change first, one at a time. While the browser knows
+  it's offline (`navigator.onLine`, or the demo's `offline`), it sends
+  nothing and waits for `online`. `navigator.onLine` can be true with
+  nothing getting through, as on hall Wi-Fi with no internet, so a
+  request can still fail. A change that can't get through waits, with a
+  backoff of 2, 4, 8, 15 and then 30 seconds, and goes as soon as the
+  browser fires `online`. A 4xx other than 429 drops the change, since
+  sending it again can't help. `useAppSync()` runs in `Root`, on every
+  page, for each match whose outbox has changes, so a score saved with no
+  signal syncs once the device is back online, even after the scoring
+  page has closed. The page holds its match's sync too, so it pulls even
+  with nothing to send. A sync stops when its last holder lets go, and a
+  response that lands after that changes nothing.
+  Each game in the strip shows its state as a badge in its corner and a
+  tint on its edge, so the cell never changes size. The two are separate:
+  a dot while its change is on its way to the server, and a dashed amber
+  edge and label from a send that didn't get through until one does, so
+  a stuck game that tries again shows both. It goes green for 1.2
+  seconds once it lands. Screen readers hear `Syncing`, `Not synced` or
+  `Synced`. The strip's header line says when the device is offline, or
+  else where the match was decided. That line, and the line beside the
+  buttons that holds the score hint or "Saved by", keep their height, so
+  saving and typing don't move the page.
+- `src/scoring/demoServer.ts` stands in for the API's match routes, with
+  its own board under `fortymm-demo-server:<matchId>`. It takes the
+  outbox's changes and answers `fetchBoard()`. It answers 409 to a game
+  write on a submitted board, as the API will. Each call waits, then may
+  fail, as the demo network says: `normal` (300ms), `slow` (2.5s),
+  `flaky` (every second request answers 503), `offline` (the browser
+  knows it's offline, so each request fails at once) or `broken` (500).
+  The network is the demo server's setting, in `localStorage` under
+  `fortymm-demo-network`, so a reload keeps it. Each request reads it, so
+  switching it restarts nothing. A switch to any network but `offline`
+  fires `online`, as a connection that came back does, so a waiting
+  outbox sends at once. Tests set it with `setDemoNetwork()`.
+- The page has no loading or error state. The match comes with the
+  route, and the board comes from this device, so the page draws at once
+  with or without a connection. With nothing saved it shows an empty
+  board. Once the outbox is empty, sync pulls the server's board, so
+  the page shows what other devices synced. `receiveBoard()` takes it as
+  the base and applies the unsent changes on top again, so a pull never
+  undoes what was entered here. A pull that fails leaves the device's
+  board, and the next sync pulls again. A Testing panel at the bottom of
+  the page (`TestingPanel.tsx`) switches the network, resets the match
+  on the device and the server, or clears every demo match and saved
+  copy and sets the network back to `normal`. It goes when the API has
+  matches. Reset match and Clear everything drop the demo server's
+  requests in flight, so a late one can't bring back what they cleared,
+  and the Vitest setup drops them after each test.
 - `design-system.tsx`: a public page. Public pages go directly in
   `src/routes/`. They make no request and never show the loading screen.
   The design system page has no `AppShell`, and no page links to it.
@@ -1204,6 +1313,11 @@ account's page. `holdAdmin(list)` holds a list's responses, and
 admin lists with nothing. `AdminPage` renders `/admin`, and
 `AdminPage.renderAccount(id)` an account's page. Only the open tab's panel
 shows, so a test opens a tab first.
+
+`ScoreGamePage` renders the scoring page, at `/matches/demo/scores/game/1/edit`
+by default. It types scores, saves them, switches the demo network and
+reads the strip, the tally, the feedback and the result. `close()`
+unmounts the page, so a test can render it again as a reload does.
 
 `HomePage.render({ path })` renders the app at another path, such as one
 with a query. `homePage.href` is the router's current path and query, so a
