@@ -1,0 +1,98 @@
+/* The match scratchpad (ScoreGame.tsx), laid out like fortymm-real's score
+   entry: the game's heading, one pad with a side per player and the games
+   tally between them, the actions, then the strip of games and the result.
+   The root isn't `.score`, which is the design system's 96px score type
+   role. */
+.score-page{box-sizing:border-box;min-height:100dvh;max-width:960px;margin:0 auto;padding:0 var(--s-4) var(--s-8);display:flex;flex-direction:column;background:var(--bg-app)}
+.score-top{display:flex;align-items:center;justify-content:space-between;gap:var(--s-3);padding:var(--s-4) 0}
+.score-top .app-wordmark{padding:0}
+.score-content{display:flex;flex-direction:column;gap:var(--s-6);padding-top:var(--s-4)}
+
+.score-title{margin:0;font:600 var(--text-2xl)/var(--lh-snug) var(--font-ui);letter-spacing:-0.01em;color:var(--fg-1)}
+
+.score-entry{display:flex;flex-direction:column;gap:var(--s-3)}
+.score-pad{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--r-lg);overflow:hidden}
+.score-side{display:flex;flex-direction:column;gap:var(--s-4);min-width:0;padding:var(--s-6) var(--s-8) var(--s-8)}
+.score-side:last-child .score-player{flex-direction:row-reverse;text-align:right}
+.score-player{display:flex;align-items:center;gap:var(--s-3);margin:0;min-width:0;font:600 var(--text-lg)/var(--lh-snug) var(--font-ui);color:var(--fg-1)}
+.score-player .fm-avatar{width:48px;height:48px;font-size:var(--text-base)}
+.score-player__name{min-width:0;overflow-wrap:anywhere}
+
+.score-input{box-sizing:border-box;width:100%;margin:0;padding:var(--s-2) 0;background:var(--bg-app);border:1px solid var(--border-subtle);border-radius:var(--r-lg);color:var(--fg-1);font:700 clamp(54px,14vw,160px)/1 var(--font-num);font-variant-numeric:tabular-nums;letter-spacing:-0.04em;text-align:center;caret-color:var(--accent);outline:none;transition:border-color var(--dur-change) var(--ease-out)}
+.score-input::placeholder{color:var(--ink-500);font-weight:400}
+.score-input:focus::placeholder{color:transparent}
+.score-input:hover:not(:disabled){border-color:var(--border-control)}
+.score-input:focus-visible{border-color:var(--accent);box-shadow:var(--focus-ring)}
+.score-input[aria-invalid=true]{border-color:var(--danger)}
+.score-input:disabled{color:var(--fg-2);cursor:not-allowed}
+
+.score-mid{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--s-2);min-width:120px;padding:var(--s-6) var(--s-3);background:var(--bg-group);border-inline:1px solid var(--border-subtle)}
+.score-mid__vs{font:500 var(--text-sm)/1 var(--font-ui);color:var(--fg-3)}
+.score-tally{margin:0;font:700 var(--text-xl)/1 var(--font-num);font-variant-numeric:tabular-nums;color:var(--fg-1)}
+
+.score-actions{display:flex;align-items:center;justify-content:space-between;gap:var(--s-4)}
+.score-actions__note{min-width:0;min-height:var(--s-5)}
+.score-actions__note>*{margin:0}
+.score-actions__buttons{display:flex;justify-content:flex-end;gap:var(--s-2)}
+
+/* One link per game. The current game is selected, and games after the
+   decider step back. */
+.score-strip-wrap{display:flex;flex-direction:column;gap:var(--s-3);padding:var(--s-4) var(--s-5);background:var(--bg-panel);border:1px solid var(--border-subtle);border-radius:var(--r-lg)}
+.score-strip__head{display:flex;align-items:baseline;justify-content:space-between;gap:var(--s-3);min-height:calc(var(--text-sm) * var(--lh-snug))}
+.score-strip__label{margin:0;flex:none;font:500 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
+.score-strip__note{margin:0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
+.score-strip__note--waiting{color:var(--conflict)}
+.score-strip{list-style:none;margin:0;padding:0;display:grid;grid-auto-flow:column;grid-auto-columns:92px;gap:var(--s-2)}
+.score-slot{position:relative;display:flex;flex-direction:column;align-items:center;gap:var(--s-1);padding:var(--s-2);border:1px solid var(--border-subtle);border-radius:var(--r-md);background:var(--bg-group);color:var(--fg-3);text-decoration:none;transition:border-color var(--dur-change) var(--ease-out)}
+.score-slot:hover{border-color:var(--border-field-hover);color:var(--fg-2)}
+.score-slot:focus-visible{outline:none;box-shadow:var(--focus-ring)}
+.score-slot[aria-current=page]{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-text)}
+.score-slot__label{font:500 var(--text-xs)/var(--lh-snug) var(--font-ui)}
+.score-slot__pts{font:700 var(--text-base)/var(--lh-snug) var(--font-num);font-variant-numeric:tabular-nums;color:var(--loser)}
+.score-slot__pts b{color:var(--winner)}
+.score-slot--after{border-style:dashed}
+/* A game's sync state: a dot in the corner while it sends, a dashed amber
+   edge while it's stuck, each on its own, and green once it lands. The
+   cell never changes size. */
+.score-slot__badge{position:absolute;top:4px;right:4px;display:grid;place-items:center;width:14px;height:14px;border-radius:50%;color:var(--ink-950)}
+.score-slot__badge .fm-ic{width:10px;height:10px}
+.score-slot__badge .fm-ic svg{stroke-width:3}
+.score-slot--sending .score-slot__badge{width:6px;height:6px;top:8px;right:8px;background:var(--fg-3)}
+.score-slot--stuck{border-color:var(--conflict);border-style:dashed}
+.score-slot--stuck .score-slot__label{color:var(--conflict)}
+.score-slot--synced{border-color:var(--success)}
+.score-slot--synced .score-slot__badge{background:var(--success)}
+.score-slot--after,.score-slot--after .score-slot__pts,.score-slot--after .score-slot__pts b{color:var(--fg-disabled)}
+
+.score-result{display:flex;flex-direction:column;align-items:flex-start;gap:var(--s-3)}
+
+/* The testing tools, set apart from the match by a rule above them. */
+.score-testing{display:flex;flex-direction:column;gap:var(--s-3);margin-top:var(--s-6);padding-top:var(--s-6);border-top:1px solid var(--border-subtle)}
+.score-testing__title{margin:0;font:600 var(--text-md)/var(--lh-snug) var(--font-ui);color:var(--fg-2)}
+.score-testing__network{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-3)}
+.score-testing__network .fm-seg{max-width:100%;overflow-x:auto}
+.score-testing__actions{display:flex;flex-wrap:wrap;gap:var(--s-2)}
+
+/* Phones keep the two sides next to each other, so the whole pad stays
+   above the fold, and the type shrinks instead. */
+@media (max-width:880px){
+  .score-content{gap:var(--s-4);padding-top:0}
+  .score-title{font-size:var(--text-xl)}
+  .score-side{gap:var(--s-3);padding:var(--s-3) var(--s-3) var(--s-4)}
+  .score-player{gap:var(--s-2);font-size:var(--text-sm)}
+  .score-player .fm-avatar{width:32px;height:32px;font-size:var(--text-xs)}
+  .score-mid{min-width:44px;padding:var(--s-3) var(--s-1)}
+  .score-tally{font-size:var(--text-base)}
+  .score-actions{flex-direction:column;align-items:stretch;gap:var(--s-2)}
+  /* Clear and Save or Submit take half the width each. Save or Submit
+     keeps the right half, under most people's thumb, with or without
+     Clear. */
+  .score-actions__buttons{display:grid;grid-template-columns:1fr 1fr}
+  .score-actions__buttons .fm-btn{min-height:48px}
+  .score-actions__buttons .fm-btn--primary{grid-column:2}
+  .score-strip-wrap{gap:var(--s-2);padding:var(--s-3)}
+  .score-strip{grid-auto-columns:minmax(0,1fr)}
+  .score-slot{padding:var(--s-2) var(--s-1)}
+  .score-slot__pts{font-size:var(--text-sm)}
+}
+
