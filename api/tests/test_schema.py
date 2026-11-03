@@ -657,3 +657,18 @@ def test_signing_keys_are_indexed_by_account(connection: Connection) -> None:
         "CREATE INDEX ix_signing_keys_account_id ON public.signing_keys"
         " USING btree (account_id)"
     )
+
+
+@pytest.mark.parametrize(
+    "values",
+    ["revoked_at = now()", "revoked_by = account_id"],
+)
+def test_a_signing_key_is_revoked_by_someone_and_only_a_revoked_one(
+    connection: Connection, values: str
+) -> None:
+    add_signing_key(connection, add_account(connection))
+
+    with pytest.raises(IntegrityError) as error:
+        connection.execute(text(f"UPDATE signing_keys SET {values}"))
+
+    assert violated_constraint(error) == "ck_signing_keys_revoked_by_with_revoked_at"

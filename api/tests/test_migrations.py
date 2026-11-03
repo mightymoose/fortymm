@@ -1,3 +1,4 @@
+import hashlib
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -12,6 +13,7 @@ from sqlalchemy import Column, Integer, MetaData, Table, text
 
 from fortymm_api.database import create_database_engine
 from fortymm_api.models import Base
+from fortymm_api.signing_keys import SigningPrivateKey
 
 API = Path(__file__).parent.parent
 # Test revisions in place of the real ones, run by the real env.py.
@@ -180,3 +182,73 @@ def test_the_upgrade_puts_every_existing_player_in_the_default_league(
         ).all()
 
     assert members == [("Ann", "FortyMM"), ("Bob", "FortyMM")]
+
+
+def test_the_upgrade_records_each_revoked_keys_account_as_its_revoker(
+    throwaway_database_url: str,
+) -> None:
+    keys = [
+        SigningPrivateKey(hashlib.sha256(f"migration key {n}".encode()).digest())
+        for n in (1, 2)
+    ]
+    with connected(throwaway_database_url) as config:
+        command.upgrade(config, "bb0605636f12")
+        connection = config.attributes["connection"]
+        account = connection.scalar(
+            text("INSERT INTO accounts DEFAULT VALUES RETURNING id")
+        )
+        for n, key in enumerate(keys):
+            connection.execute(
+                text(
+                    "INSERT INTO signing_keys"
+                    " (id, public_key, account_id, label, revoked_at)"
+                    " VALUES (:id, :public_key, :account, 'Phone',"
+                    " CASE WHEN :revoked THEN now() END)"
+                ),
+                {
+                    "id": key.public_key.kid,
+                    "public_key": key.public_key.to_cose_key(),
+                    "account": account,
+                    "revoked": n == 0,
+                },
+            )
+        connection.commit()
+        command.upgrade(config, "head")
+        connection.commit()
+
+        revokers = dict(
+            connection.execute(text("SELECT id, revoked_by FROM signing_keys")).all()
+        )
+
+    assert revokers == {keys[0].public_key.kid: account, keys[1].public_key.kid: None}
+
+
+def test_the_upgrade_lets_each_role_that_grants_roles_revoke_signing_keys(
+    throwaway_database_url: str,
+) -> None:
+    with connected(throwaway_database_url) as config:
+        command.upgrade(config, "bb0605636f12")
+        connection = config.attributes["connection"]
+        connection.execute(
+            text("UPDATE roles SET name = 'Owners' WHERE name = 'Administrator'")
+        )
+        connection.execute(text("INSERT INTO roles (name) VALUES ('Viewer')"))
+        connection.execute(
+            text(
+                "INSERT INTO role_permissions (role_id, permission_key)"
+                " SELECT id, 'admin.view' FROM roles WHERE name = 'Viewer'"
+            )
+        )
+        connection.commit()
+        command.upgrade(config, "head")
+        connection.commit()
+
+        granted = connection.scalars(
+            text(
+                "SELECT roles.name FROM role_permissions"
+                " JOIN roles ON roles.id = role_id"
+                " WHERE permission_key = 'signing_keys.revoke'"
+            )
+        ).all()
+
+    assert granted == ["Owners"]

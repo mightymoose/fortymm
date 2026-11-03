@@ -174,7 +174,12 @@ def test_lists_the_roles(
                 "id": administrator(migrated_database),
                 "name": "Administrator",
                 "description": "Manages roles, permissions and who holds them.",
-                "permissions": ["account_roles.manage", "admin.view", "roles.manage"],
+                "permissions": [
+                    "account_roles.manage",
+                    "admin.view",
+                    "roles.manage",
+                    "signing_keys.revoke",
+                ],
                 "account_count": 1,
             }
         ]

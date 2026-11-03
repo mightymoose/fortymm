@@ -116,7 +116,12 @@ def test_answers_with_a_verified_accounts_email_player_and_permissions(
                 "kind": "verified",
                 "email": "ann@example.com",
                 "player": {"id": player["id"], "display_name": player["display_name"]},
-                "permissions": ["account_roles.manage", "admin.view", "roles.manage"],
+                "permissions": [
+                    "account_roles.manage",
+                    "admin.view",
+                    "roles.manage",
+                    "signing_keys.revoke",
+                ],
             }
         }
     }

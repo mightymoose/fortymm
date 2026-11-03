@@ -363,7 +363,8 @@ class SigningKey(Base):
     whose signatures it makes. The private half never leaves the device.
 
     A live key has neither signed_out_at nor revoked_at. A signed-out key
-    still verifies the results it signed. A revoked key verifies nothing.
+    still verifies the results it signed. A revoked key verifies nothing,
+    and names who revoked it: its own account or an administrator.
     services/signing_keys.py holds the rules.
     """
 
@@ -373,6 +374,10 @@ class SigningKey(Base):
         CheckConstraint("octet_length(public_key) = 75", name="public_key_length"),
         CheckConstraint("label = btrim(label) AND label <> ''", name="label_trimmed"),
         CheckConstraint("char_length(label) <= 50", name="label_length"),
+        CheckConstraint(
+            "(revoked_at IS NULL) = (revoked_by IS NULL)",
+            name="revoked_by_with_revoked_at",
+        ),
     )
 
     # The RFC 9679 thumbprint of public_key: the kid every signature cites.
@@ -390,3 +395,7 @@ class SigningKey(Base):
     )
     signed_out_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The account that revoked the key: its own, or an administrator's.
+    revoked_by: Mapped[AccountId | None] = mapped_column(
+        ForeignKey("accounts.id", ondelete="RESTRICT")
+    )
