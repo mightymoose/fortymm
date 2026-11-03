@@ -91,6 +91,17 @@ export class SignInPage {
     return body.data
   }
 
+  // The account's signing keys, from GET /v1/account/signing-keys with the
+  // browser's cookies.
+  async signingKeys(): Promise<components['schemas']['AccountSigningKey'][]> {
+    const response = await this.page.request.get('/api/v1/account/signing-keys')
+    if (!response.ok()) {
+      throw new Error(`GET /api/v1/account/signing-keys answered ${response.status()}`)
+    }
+    const body: components['schemas']['SigningKeysResponse'] = await response.json()
+    return body.data
+  }
+
   // Drops the session cookie, as a new browser on the same device would.
   async forgetSession(): Promise<void> {
     await this.page.context().clearCookies()

@@ -1029,7 +1029,8 @@ Each request function in `queries.ts` goes through `send()`. It throws
 `ApiUnreachable` when no response came back, and `ApiError` when the
 response isn't ok. A bodyless `POST` or `DELETE` sends `JSON_HEADERS`.
 
-`logout(api)` in `queries.ts` sends `POST /v1/auth/logout` and returns
+`logout(api)` in `queries.ts` sends `POST /v1/auth/logout`, with the
+browser's signing key id if it has one (see Signing keys), and returns
 `data.logout_url`. `useSignOut()` (`src/pages/useSignOut.ts`) runs it
 through `useMutation`, for `UserMenu`. On success, it
 calls `leavePage()` (`src/leavePage.ts`), which loads the URL with
@@ -1037,6 +1038,52 @@ calls `leavePage()` (`src/leavePage.ts`), which loads the URL with
 page, for the update notice. jsdom's `location` can't be spied on, so
 tests `vi.mock` that module. If the request fails, the menu
 says so and offers Sign out again.
+
+### Signing keys
+
+Each browser holds a P-256 signing key, which signs results in the format
+of `api/signed-results/README.md` (see Signed match results and Signing
+keys under api). `src/signing/` holds the codec and the key. The signing
+page and the queue of signed results come with #195.
+
+- The codec is pure, with no app imports. `cbor.ts` encodes and strictly
+  decodes the format's CBOR items, the `Cbor` union. A map is a `Map`, so
+  the integer key `1` and the text key `"1"` stay apart. `result.ts` holds
+  `MatchResult` and the payload, `envelope.ts` the COSE_Sign envelope and
+  `Signer`, `cose.ts` the COSE_Key, the kid and the registration proof, and
+  `text.ts` the QR text and the link. Every refusal is `Malformed`. The
+  client never verifies a signature. The API does.
+- `appendSignature()` signs the received payload bytes and never encodes
+  the payload again.
+- Byte checks use `ArrayBuffer.isView()`, not `instanceof Uint8Array`.
+  Under jsdom, the arrays that TextEncoder, WebCrypto and IndexedDB make
+  come from another realm.
+- `deviceKey.ts` keeps the key in the IndexedDB database `fortymm-signing`,
+  store `device-key`, as one record under `device`: the non-extractable
+  `CryptoKey`, the COSE_Key and the kid. It stores no account and no
+  "registered" flag.
+- `sessionQuery` calls `registerDeviceKey()` after each `POST /v1/session`
+  answer, without waiting, so the key never holds up the loading screen.
+  It makes a key if there is none, as after Safari deletes the site's
+  storage, and registers it with a proof for the session's account. The
+  API answers 200 for a key the account owns. A 409, or a 200 with
+  `revoked_at`, makes a new key and registers it, once. Any other failure
+  waits for the next session answer. It never throws.
+- Every write is one readwrite transaction that reads the record and
+  writes only if it is still the one it read. So two tabs keep one key,
+  and a registration that a sign-out overtook makes no new key.
+- `logout()` takes the key out of storage (`takeKey()`), then sends its
+  id as `signing_key_id`, so the next account gets a new one. A
+  registration still in flight then finds no key to replace. It also sets
+  a `sign-out` record beside the key, which every tab shares: a count and
+  the time the running sign-out started. Every key write checks it in the
+  same transaction. No tab stores a key until the logout answers, nor one
+  whose making started before the last sign-out. So no key stays live on
+  the account that signed out. A tab closed mid-logout leaves the time set,
+  so it stops counting after `SIGN_OUT_MS` (1 minute). A failed logout
+  puts the key back, unless another key was stored meanwhile. With no
+  key, or no IndexedDB, it sends no body, and the sign-out still works.
+- `signWithDeviceKey()` gives a `Signer` with the key, or null.
 
 ### Error pages
 
@@ -1063,7 +1110,9 @@ data. It carries the status and the time from `Retry-After`. A query throws
 Vitest is configured in the `test` block of `web-client/vite.config.ts` (jsdom
 environment). `web-client/src/setupTests.ts` loads the jest-dom matchers,
 starts the mock API, and cleans up rendered components and `localStorage`
-after each test, so a saved session doesn't leak into the next test. Tests
+after each test, so a saved session doesn't leak into the next test. It
+loads `fake-indexeddb`, and gives each test a new `IDBFactory`, so a
+signing key, or a registration still in flight, doesn't leak either. Tests
 live next to the code as `*.test.tsx`.
 
 Tests go through page objects in `web-client/src/test/pages/`. A static async
@@ -1092,6 +1141,14 @@ closed question it changes nothing and returns `already_answered`, except
 that `not_mine` gets a 409. It returns the answers it got, and
 `answerInAnotherTab()`, which answers a question without the page
 knowing. `failAnswers` makes every answer fail with a 500.
+A default handler answers `POST /v1/account/signing-keys` with a live
+key. `mockSigningKeys(answers)` records each registration and answers
+with `answers` in order, each a `KeyAnswer` (`live`, `revoked` or
+`taken`, a 409), then `live`. With `hold`, each answer waits for
+`release()`. `src/signing/vectors.test.ts` runs the README's signer
+checks K1-K3, V1-V7, R1-R2 and I2 over every vector in
+`api/signed-results/vectors.json`, and `src/signing/deviceKey.test.tsx`
+tests the key through the app.
 `PlayerReviewPage` renders `/review-players` by default, or Home with or
 without `signed_in=1`. Its `clickTwiceAtOnce()` clicks a button twice before React
 renders again, as a quick double click can.
@@ -1196,7 +1253,11 @@ Vitest unit tests cover the "Is this you?" page.
 fills the mock's form with `SignInPage.completeSignIn()`. It lands back on
 `/` as a verified account, with the guest's player, signs out and ends on
 `/signed-out`. Then Play as a guest opens `/` as a new
-guest account. The mock answers 405 to the
+guest account. It checks the signing key on the way. After the first
+load, `GET /v1/account/signing-keys` lists one live key, the one in
+IndexedDB (`HomePage.storedKeyId()`). The logout sends that key's id,
+and IndexedDB has no key after it. The new guest registers a different
+key. `HomePage.keyRegistered()` waits for a registration. The mock answers 405 to the
 logout URL. So the spec answers that navigation with `page.route()`, a 302
 to its `returnTo`. The API builds `returnTo` from the browser's `Host`, so
 in the e2e suite it is `http://localhost:5173/signed-out`. A second test
