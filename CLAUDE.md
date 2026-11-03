@@ -1027,6 +1027,14 @@ it to `src/routes/`.
   writes while the result is submitted. When a write to storage throws,
   as in a private window or with storage full, the record stays in memory
   and this tab reads it from there.
+- A known race, left for #192: each save, clear and acknowledgment reads
+  the whole record, changes it and writes it back. Two tabs on one match
+  can both read it before either writes, and then the last write drops
+  the other tab's game and its queued change. localStorage has no
+  transaction, and another tab's read can be stale, so a lock can't fix
+  it. #192 moves the scratchpad to IndexedDB, where each change runs in
+  one `readwrite` transaction. Until then the scratchpad syncs only to
+  the demo server, so no real result is at risk.
 - `src/scoring/sync.ts` keeps one sync per match, whose state is one of
   `idle`, `sending`, `waitingRetry`, `waitingOnline`, `pulling` or
   `stopped`, with why the last send got stuck kept beside it. It sends
