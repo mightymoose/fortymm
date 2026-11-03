@@ -1023,8 +1023,9 @@ it to `src/routes/`.
   record whose board is empty is removed rather than written.
   `useScratchpad()` reads it with `useSyncExternalStore` and follows the
   `storage` event, so two tabs on one match stay in step. It refuses game
-  writes while the result is submitted, and works in this tab when
-  storage throws.
+  writes while the result is submitted. When a write to storage throws,
+  as in a private window or with storage full, the record stays in memory
+  and this tab reads it from there.
 - `src/scoring/sync.ts` keeps one sync per match, whose state is one of
   `idle`, `sending`, `waitingRetry`, `waitingOnline`, `pulling` or
   `stopped`, with why the last send got stuck kept beside it. It sends
@@ -1054,7 +1055,11 @@ it to `src/routes/`.
 - `src/scoring/demoServer.ts` stands in for the API's match routes, with
   its own board under `fortymm-demo-server:<matchId>`. It takes the
   outbox's changes and answers `fetchBoard()`. It answers 409 to a game
-  write on a submitted board, as the API will. Each call waits, then may
+  write on a submitted board, as the API will. It applies each change
+  once, by its id, under `fortymm-demo-server:<matchId>:applied`. Two tabs
+  on one match can both send a change, and a late copy of an old score
+  must not undo the correction that landed after it. The API must do the
+  same. Each call waits, then may
   fail, as the demo network says: `normal` (300ms), `slow` (2.5s),
   `flaky` (every second request answers 503), `offline` (the browser
   knows it's offline, so each request fails at once) or `broken` (500).

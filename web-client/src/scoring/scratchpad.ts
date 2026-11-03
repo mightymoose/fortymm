@@ -198,8 +198,8 @@ function notify(): void {
   for (const listener of listeners) listener()
 }
 
-// Used only when localStorage throws, as it can in a private window, so the
-// page still works in this tab.
+// Holds a record whose write to localStorage threw, as it can in a private
+// window or with storage full, so the page still works in this tab.
 const memory = new Map<string, string>()
 
 function allKeys(): string[] {
@@ -225,16 +225,19 @@ function store(key: string, pad: Scratchpad): void {
     if (empty) localStorage.removeItem(key)
     else localStorage.setItem(key, raw)
   } catch {
-    if (!empty) memory.set(key, raw)
+    memory.set(key, raw)
   }
   notify()
 }
 
+// A write can fail while reads still work, as when storage is full, so a
+// record in memory is newer than the one in storage.
 function load(key: string): string | null {
+  if (memory.has(key)) return memory.get(key) ?? null
   try {
     return localStorage.getItem(key)
   } catch {
-    return memory.get(key) ?? null
+    return null
   }
 }
 

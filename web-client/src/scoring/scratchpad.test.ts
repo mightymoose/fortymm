@@ -116,6 +116,23 @@ describe('scratchpad', () => {
     }
   })
 
+  it('keeps a save in this tab when storage is full but still reads', () => {
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new DOMException('Storage is full', 'QuotaExceededError')
+    })
+    try {
+      const { result } = renderHook(() => useScratchpad('m-full'))
+      act(() => {
+        saveGame('m-full', 1, [11, 2], ann)
+      })
+
+      expect(slotsOf(result.current, 3)).toEqual([[11, 2], null, null])
+      expect(pendingChanges('m-full')).toHaveLength(1)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('queues each change for the server, in order, until it is sent', () => {
     saveGame('m5', 1, [11, 6], ann)
     clearGame('m5', 1)

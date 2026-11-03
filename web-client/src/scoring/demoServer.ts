@@ -95,14 +95,46 @@ export function serverKey(matchId: string): string {
   return `fortymm-demo-server:${matchId}`
 }
 
-// Applies one change to the server's board. A game write after the result
-// was submitted answers 409, as the API will.
+function appliedKey(matchId: string): string {
+  return `${serverKey(matchId)}:applied`
+}
+
+const appliedInMemory = new Map<string, string[]>()
+
+function appliedChanges(matchId: string): string[] {
+  const key = appliedKey(matchId)
+  if (appliedInMemory.has(key)) return appliedInMemory.get(key) ?? []
+  try {
+    const ids: unknown = JSON.parse(localStorage.getItem(key) ?? '[]')
+    return Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+function recordApplied(matchId: string, ids: string[]): void {
+  const key = appliedKey(matchId)
+  appliedInMemory.delete(key)
+  try {
+    localStorage.setItem(key, JSON.stringify(ids))
+  } catch {
+    appliedInMemory.set(key, ids)
+  }
+}
+
+// Applies one change to the server's board, once. Two tabs on one match can
+// both send a change, and a late copy of an old score must not undo the
+// correction that landed after it. A game write after the result was
+// submitted answers 409, as the API will.
 export function sendChange(matchId: string, change: Change): Promise<void> {
   const request = `POST /v1/matches/${matchId}/changes`
   return send(request, () => {
+    const applied = appliedChanges(matchId)
+    if (applied.includes(change.id)) return
     const board = applyEdit(readBoard(serverKey(matchId)), change.edit)
     if (!board) throw new ApiError(request, new Response(null, { status: 409 }))
     writeBoard(serverKey(matchId), board)
+    recordApplied(matchId, [...applied, change.id])
   })
 }
 
@@ -114,7 +146,8 @@ export function fetchBoard(matchId: string): Promise<Board> {
 // Starts the match over: its scratchpad, its outbox and the server's board.
 export function resetMatch(matchId: string): void {
   dropRequestsInFlight()
-  const keys = [storageKey(matchId), serverKey(matchId)]
+  const keys = [storageKey(matchId), serverKey(matchId), appliedKey(matchId)]
+  appliedInMemory.delete(appliedKey(matchId))
   forgetRecords((key) => keys.includes(key))
 }
 
@@ -123,6 +156,7 @@ export function resetMatch(matchId: string): void {
 export function clearEverything(): void {
   dropRequestsInFlight()
   const prefixes = [storageKey(''), serverKey('')]
+  appliedInMemory.clear()
   forgetRecords((key) => prefixes.some((prefix) => key.startsWith(prefix)))
   setDemoNetwork('normal')
 }
