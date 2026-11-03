@@ -1,0 +1,136 @@
+import { screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { renderRoute, type AppRouter } from '../renderRoute'
+
+// Page object for a match's scratchpad, the page that edits one game's
+// score. The mock session's player is `excited egret 387`, who plays the
+// `demo` match against `brave badger 214`.
+export class ScoreGamePage {
+  static async render(
+    path = '/matches/demo/scores/game/1/edit',
+  ): Promise<ScoreGamePage> {
+    const page = new ScoreGamePage(await renderRoute(path))
+    await page.settle()
+    return page
+  }
+
+  readonly router: AppRouter
+
+  constructor(router: AppRouter) {
+    this.router = router
+  }
+
+  get href(): string {
+    return this.router.state.location.href
+  }
+
+  get text(): string {
+    return document.body.textContent ?? ''
+  }
+
+  // "Game N", the game the pad edits.
+  get heading(): HTMLElement {
+    return screen.getByRole('heading', { level: 1 })
+  }
+
+  get wordmark(): HTMLElement {
+    return screen.getByRole('img', { name: 'FortyMM' })
+  }
+
+  get homeLink(): HTMLElement {
+    return screen.getByRole('link', { name: 'Home' })
+  }
+
+  // The games tally, left side first, such as "2–1".
+  get tally(): string {
+    const tally = screen.getByRole('region', { name: 'Match' }).querySelector('.score-tally')
+    return tally?.textContent?.replace('Games ', '') ?? ''
+  }
+
+  // The players by name, left then right.
+  get sides(): string[] {
+    return [...document.querySelectorAll('.score-player__name')].map((name) => name.textContent ?? '')
+  }
+
+  // The game strip's link to game `game`.
+  slot(game: number): HTMLElement {
+    return within(screen.getByRole('navigation', { name: 'Games' })).getByRole('link', {
+      name: new RegExp(`^Game ${game} `),
+    })
+  }
+
+  // The score the strip shows for game `game`, such as "11–7", or "–".
+  slotScore(game: number): string {
+    return this.slot(game).querySelector('.score-slot__pts')?.textContent ?? ''
+  }
+
+  // The bold points of game `game` in the strip, the winner's.
+  slotWinner(game: number): string | null {
+    return this.slot(game).querySelector('b')?.textContent ?? null
+  }
+
+  // The score input for `player`.
+  input(player: string): HTMLInputElement {
+    return screen.getByRole('textbox', { name: player }) as HTMLInputElement
+  }
+
+  // Types a score for each player, replacing what the inputs held.
+  async enter(scores: Record<string, string>): Promise<void> {
+    for (const [player, score] of Object.entries(scores)) {
+      const input = this.input(player)
+      await userEvent.clear(input)
+      if (score !== '') await userEvent.type(input, score)
+    }
+  }
+
+  get saveButton(): HTMLButtonElement | null {
+    return screen.queryByRole('button', { name: /^Save game \d+$/ }) as HTMLButtonElement | null
+  }
+
+  async save(): Promise<void> {
+    await userEvent.click(this.saveButton!)
+    await this.settle()
+  }
+
+  // The reason or hint under the pad that its inputs point to, or null.
+  get feedback(): string | null {
+    const id = this.input(this.sides[0]).getAttribute('aria-describedby')
+    return id ? (document.getElementById(id)?.textContent ?? null) : null
+  }
+
+  get toasts(): string[] {
+    return [...document.querySelectorAll('.fm-toast__msg')].map((toast) => toast.textContent ?? '')
+  }
+
+  button(name: string): HTMLElement | null {
+    return screen.queryByRole('button', { name })
+  }
+
+  async click(name: string): Promise<void> {
+    await userEvent.click(screen.getByRole('button', { name }))
+    await this.settle()
+  }
+
+  // The review sheet, open after Review result.
+  get review(): HTMLElement {
+    return screen.getByRole('dialog', { name: 'Review result' })
+  }
+
+  // The match's result section: the review, a spectator's note or the
+  // submitted result.
+  get result(): HTMLElement {
+    return screen.getByRole('region', { name: 'Result' })
+  }
+
+  // Goes to a game the way the strip's link does.
+  async goToGame(game: number): Promise<void> {
+    await userEvent.click(this.slot(game))
+    await this.settle()
+  }
+
+  async settle(): Promise<void> {
+    for (let tick = 0; tick < 5; tick++) {
+      await new Promise((resolve) => setTimeout(resolve))
+    }
+  }
+}
