@@ -987,9 +987,30 @@ it to `src/routes/`.
   decider step back, under "Match decided after game N", and stay
   editable. Below 880px the two sides stay side by side and the buttons
   split the width, with Save or Submit on the right.
-- `matches/$matchId/index.tsx`: the page `MatchPage`
-  (`src/pages/matches/`), where a submitted result lands. It shows
-  nothing yet.
+- `matches/$matchId/validation.tsx`: the page `AwaitingValidation`
+  (`src/pages/matches/`), where a submitted result lands, with the
+  scratchpad's frame. It says which player must confirm, and shows the
+  games and the winner. Then it shows the signed result as a QR code
+  (`QrCode` in `src/components/`, the `FMR1:` text at level M) and as a
+  link. The link is same-origin `/r#` and the envelope in base64url, so it
+  opens in dev and on a Preview, and it is the format's
+  `https://fortymm.com/r#` link in production. Copy link copies it.
+  `signedResultOf()` (`src/scoring/signedResult.ts`) builds the result
+  from the match and the submission, and `signedResultQuery()` signs it
+  with this browser's key, in its own `QueryBoundary`. With no key, the
+  boundary says the browser can't sign yet. The query keeps the envelope
+  for the page load, because ECDSA in WebCrypto is randomized, so a
+  reload signs the same payload with other signature bytes. A pad that
+  isn't submitted by the session's player goes to its game 1, with a
+  replace. A demo match has a fixed `uuid` for the result, and is
+  unrated.
+- `r.tsx`: a public page, with component `ResultLink`
+  (`src/pages/results/`). It decodes the link's fragment alone and lists
+  what the result holds: the match, best of, rated, the player ids, the
+  games, the ending, what it replaces, when it was issued, each
+  signature's side and kid, and the result hash. It makes no request and
+  checks no signature, so it says the result isn't validated. A missing
+  or malformed fragment shows "This link isn’t a FortyMM result".
 - Anyone who can open the match can save any game, in any order. The
   only check is that the game's score is legal (`parseGameScore()` in
   `src/scoring/board.ts`). The match rules apply only at submit.
@@ -1003,14 +1024,13 @@ it to `src/routes/`.
   When a player's press would leave a `decided` board, the button reads
   Submit result, and the line beside it says who wins. It saves the game
   if its score changed and submits in one press, with no sheet to
-  confirm, then goes to the match's page. On an `overrun` board, the
+  confirm, then goes to the match's validation page, which signs it. On an `overrun` board, the
   strip tells a player which games to clear. A spectator's button only
   saves, and the page says who submits instead (`ResultPanel.tsx`). The
   submission keeps the games the player approved, because another
   device's save can reach the server first. The winner comes from those
   games. A submitted board is frozen for everyone, and its submitter can
-  Edit scores. The submission syncs like a game, and nothing is signed
-  yet.
+  Edit scores. The submission syncs like a game.
 - A save stays on this device and the page moves on at once. Nothing
   about saving waits on the network or can fail. `src/scoring/scratchpad.ts`
   keeps each match's scratchpad in `localStorage`, under
@@ -1332,6 +1352,10 @@ shows, so a test opens a tab first.
 by default. It types scores, saves them, switches the demo network and
 reads the strip, the tally, the feedback and the result. `close()`
 unmounts the page, so a test can render it again as a reload does.
+`AwaitingValidationPage` wraps the router after a submit, or renders the
+validation page directly, and finds its link and QR code.
+`ResultLinkPage` renders `/r` with a link's fragment, such as a vector's,
+and reads each listed value by its term.
 
 `HomePage.render({ path })` renders the app at another path, such as one
 with a query. `homePage.href` is the router's current path and query, so a
@@ -1588,7 +1612,7 @@ the tests have none. `main.tsx` makes one and puts it in the router
 context.
 
 - It precaches every JS, CSS, HTML, SVG and font file of the build, about
-  830 KB. So a navigation to a route whose chunk hasn't loaded yet never
+  940 KB. So a navigation to a route whose chunk hasn't loaded yet never
   waits on the network.
 - A navigation gets the precached `index.html`, except under `/api/`. Those
   navigations, such as sign-in and its callback, go to the Worker.
