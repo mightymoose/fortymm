@@ -46,6 +46,19 @@ function signingKeyResponse(answer: 'live' | 'revoked'): components['schemas']['
   }
 }
 
+type ApprovalRequest = components['schemas']['ApprovalRequest']
+
+// The API's 201 to a result whose approvals check out.
+function approvalResponse(matchId: string): components['schemas']['ApprovalResponse'] {
+  return {
+    data: {
+      hash: '9c1185a5c5e9fc54612808977ee8f548b2258d31f9c5c8a5bbbf3f0d0f0e0a7b',
+      match_id: matchId,
+      approvals: [],
+    },
+  }
+}
+
 // The mock API for unit tests, started in setupTests.ts. Tests override a
 // handler for themselves with `server.use()`.
 export const server = setupServer(
@@ -58,6 +71,9 @@ export const server = setupServer(
   ),
   http.get(`${API_BASE_URL}/v1/account/players`, () =>
     HttpResponse.json<components['schemas']['AccountPlayersResponse']>({ data: [] }),
+  ),
+  http.post<{ matchId: string }>(`${API_BASE_URL}/v1/matches/:matchId/approvals`, ({ params }) =>
+    HttpResponse.json(approvalResponse(params.matchId), { status: 201 }),
   ),
   http.get(`${API_BASE_URL}/v1/admin/permissions`, () =>
     HttpResponse.json<components['schemas']['AdminPermissionsResponse']>({ data: [] }),
@@ -108,6 +124,44 @@ export function mockSigningKeys(answers: KeyAnswer[] = [], { hold = false } = {}
       await act(async () => pending.splice(0).forEach((resolve) => resolve()))
     },
   }
+}
+
+// How the mock API answers a result's approvals: they check out, it refuses
+// them with this title (a 422), or no response comes back.
+export type ApprovalAnswer = 'accepted' | { refused: string } | 'unreachable'
+
+// Records each approval check, by match id and envelope, and answers with
+// `answer`, which a test can change. With `hold`, each answer waits until
+// the test calls release().
+export function mockApprovals(answer: ApprovalAnswer = 'accepted', { hold = false } = {}) {
+  const checks: { matchId: string; envelope: string }[] = []
+  const pending: (() => void)[] = []
+  const mock = {
+    checks,
+    answer,
+    async release(): Promise<void> {
+      await act(async () => pending.splice(0).forEach((resolve) => resolve()))
+    },
+  }
+  server.use(
+    http.post<{ matchId: string }, ApprovalRequest>(
+      `${API_BASE_URL}/v1/matches/:matchId/approvals`,
+      async ({ params, request }) => {
+        const { envelope } = await request.json()
+        checks.push({ matchId: params.matchId, envelope })
+        if (hold) await new Promise<void>((resolve) => pending.push(resolve))
+        if (mock.answer === 'unreachable') return HttpResponse.error()
+        if (mock.answer === 'accepted') {
+          return HttpResponse.json(approvalResponse(params.matchId), { status: 201 })
+        }
+        return HttpResponse.json(
+          { errors: [{ status: '422', title: mock.answer.refused }] },
+          { status: 422 },
+        )
+      },
+    ),
+  )
+  return mock
 }
 
 // Holds the mock API's session responses until the test sends them.

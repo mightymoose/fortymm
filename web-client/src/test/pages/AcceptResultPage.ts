@@ -80,6 +80,28 @@ export class AcceptResultPage {
       .map((header) => header.querySelector('.fm-sr')?.textContent ?? header.textContent ?? '')
   }
 
+  // Whether FortyMM's check of the approved result is still loading.
+  get checking(): boolean {
+    return screen.queryByText('Checking with FortyMM') !== null
+  }
+
+  // The line that says FortyMM checked the approved result.
+  async findChecked(): Promise<HTMLElement> {
+    return screen.findByText('FortyMM checked the signatures and the scores')
+  }
+
+  // The alert that says FortyMM refused the approved result.
+  async findRefusal(): Promise<HTMLElement> {
+    const title = await screen.findByText('FortyMM refused this result')
+    return title.closest<HTMLElement>('[role=alert]')!
+  }
+
+  // Clicks Try again on the check's error, which the alert shows when
+  // FortyMM couldn't be reached.
+  async tryAgain(alert: HTMLElement): Promise<void> {
+    await userEvent.click(within(alert).getByRole('button', { name: 'Try again' }))
+  }
+
   async editScores(): Promise<void> {
     await userEvent.click(screen.getByRole('link', { name: 'Edit scores' }))
   }

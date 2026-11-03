@@ -804,6 +804,70 @@
         }
       }
     },
+    "/v1/matches/{match_id}/approvals": {
+      "post": {
+        "tags": [
+          "matches"
+        ],
+        "summary": "Create Match Approval",
+        "description": "Check a result that the match's players signed, and accept it.\n\nIt needs no session: the signatures are the authority. Today it checks\nthe envelope's format, the match, every signature and that the scores\nare a legal ending, and stores nothing.",
+        "operationId": "create_match_approval",
+        "parameters": [
+          {
+            "name": "match_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Match Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The body is invalid. If the envelope isn't a signed result, is for another match, cites a key that isn't registered or was revoked, has a signature that doesn't verify, or its scores aren't a legal ending, the body is in the `errors` shape instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/admin/permissions": {
       "get": {
         "tags": [
@@ -2588,6 +2652,60 @@
         ],
         "title": "AppSignInOutcome"
       },
+      "ApprovalRequest": {
+        "properties": {
+          "envelope": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{2})*$",
+            "title": "Envelope"
+          }
+        },
+        "type": "object",
+        "required": [
+          "envelope"
+        ],
+        "title": "ApprovalRequest"
+      },
+      "ApprovalResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/CheckedResult"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "ApprovalResponse"
+      },
+      "CheckedResult": {
+        "properties": {
+          "hash": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{2})*$",
+            "title": "Hash"
+          },
+          "match_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Match Id"
+          },
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/MatchApproval"
+            },
+            "type": "array",
+            "title": "Approvals"
+          }
+        },
+        "type": "object",
+        "required": [
+          "hash",
+          "match_id",
+          "approvals"
+        ],
+        "title": "CheckedResult"
+      },
       "Error": {
         "properties": {
           "status": {
@@ -2707,6 +2825,26 @@
           "data"
         ],
         "title": "LogoutResponse"
+      },
+      "MatchApproval": {
+        "properties": {
+          "key_id": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{2})*$",
+            "title": "Key Id"
+          },
+          "player_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Player Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key_id",
+          "player_id"
+        ],
+        "title": "MatchApproval"
       },
       "MergedOutcome": {
         "properties": {

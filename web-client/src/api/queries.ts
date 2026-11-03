@@ -3,6 +3,7 @@ import type { ApiClient } from './client'
 import type { components } from './schema'
 import { ApiError, ApiUnreachable, classifyFailure } from './errors'
 import { forgetAccount, saveAccount, savedAccount, type SessionAccount } from './savedSession'
+import { hex } from '../signing/bytes'
 import { registerDeviceKey, takeKey } from '../signing/deviceKey'
 
 // Retries a network error or a 5xx only, which can pass. A 4xx comes back the
@@ -201,6 +202,42 @@ export function answerQuestionMutation(api: ApiClient, queryClient: QueryClient)
       )
     },
   }
+}
+
+// What FortyMM said of an approved result: it checked out, or it refused
+// the result, with the API's reason.
+export type ApprovalVerdict = { kind: 'accepted' } | { kind: 'refused'; title: string }
+
+// Sends an approved result to FortyMM, which checks its format, its
+// signatures and its scores. The check stores nothing and gives the same
+// verdict every time, so it is a query keyed by the envelope, and a reload
+// of an approved link checks again. `matchId` is the payload's match. A 422
+// is a verdict. Anything else, such as no network, throws to the boundary.
+export function approvalCheckQuery(api: ApiClient, matchId: string, envelope: Uint8Array<ArrayBuffer>) {
+  const envelopeHex = hex(envelope)
+  return queryOptions({
+    queryKey: ['v1', 'matches', matchId, 'approvals', envelopeHex],
+    staleTime: Infinity,
+    // Offline, the check fails and shows Try again rather than pausing.
+    networkMode: 'always',
+    queryFn: async (): Promise<ApprovalVerdict> => {
+      try {
+        await send(
+          'POST /v1/matches/{match_id}/approvals',
+          api.POST('/v1/matches/{match_id}/approvals', {
+            params: { path: { match_id: matchId } },
+            body: { envelope: envelopeHex },
+          }),
+        )
+        return { kind: 'accepted' }
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 422 && error.title) {
+          return { kind: 'refused', title: error.title }
+        }
+        throw error
+      }
+    },
+  })
 }
 
 export type AdminPermission = components['schemas']['AdminPermission']

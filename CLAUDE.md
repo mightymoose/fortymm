@@ -556,7 +556,8 @@ reads leagues yet.
 Every result reaches the server as an envelope that the players' devices
 signed. `api/signed-results/README.md` specifies the format, and
 `api/signed-results/vectors.json` holds the test vectors every client
-checks (#182). No route reads a result yet.
+checks (#182). `POST /v1/matches/{match_id}/approvals` checks one and
+stores nothing (see Approving a result).
 
 - `signed_results.py` is the codec: `MatchResult`, `encode_payload()`,
   `sign()`, `append_signature()`, `decode_envelope()`, `qr_text()`,
@@ -564,8 +565,9 @@ checks (#182). No route reads a result yet.
   deterministic CBOR, signed in a COSE_Sign envelope with ES256. The
   result's hash is the SHA-256 of the payload bytes.
 - `decode_envelope()` gives an `UnverifiedEnvelope`, which gives the
-  result out only through `verify(keys)`. `verify()` takes each key's kid
-  from the key, so a caller can't pair a kid with the wrong key.
+  result out only through `verify(keys)`. Before that, it names only its
+  `kids` and its `match`. `verify()` takes each key's kid from the key, so
+  a caller can't pair a kid with the wrong key.
 - A refusal is `Malformed`, `UnknownKey` or `BadSignature`, each with a
   `code`, in that order of precedence. `Malformed` is decided from the
   bytes alone: decode, re-encode with cbor2 canonical, compare, plus the
@@ -598,13 +600,41 @@ checks (#182). No route reads a result yet.
   `pyproject.toml` with `uv.lock`. The production image installs without
   the dev group, so the app can't import one.
 
+### Approving a result
+
+`POST /v1/matches/{match_id}/approvals` takes a signed envelope as
+`{"envelope": "<hex>"}` and checks it. It stores nothing. #188 replaces
+its insides with real recording, and keeps the URL and the shapes.
+`services/match_results.py` holds the rules, and `v1/matches.py` the route.
+
+- It needs no session. Anyone who holds the link may send it, so the
+  signatures are the only authority. It checks no authority either. Who
+  may approve for which player is #188's rule, and the demo match's
+  opponent is a player no account manages.
+- `check_approval()` runs the checks in this order, and the first that
+  fails answers 422 in the `errors` shape, through `APPROVAL_ERRORS` in
+  `main.py`: `Malformed` ("The envelope isn't a FortyMM signed result"),
+  `WrongMatch` ("The result is for another match"), `UnknownKey` ("A
+  signature's key isn't registered, or was revoked"), `BadSignature` ("A
+  signature doesn't match the result") and `IllegalEnding` ("The scores
+  aren't a legal ending to the match"). A signed-out key still verifies.
+- `check_ending()` is pure, with the rules of `checkGame()` and
+  `reviewBoard()` in the web client's `board.ts`. A finished game isn't
+  level, and its winner has 11 with at most 9 for the loser, or more than
+  11 and exactly 2 ahead. A completed match has only finished games, and a
+  side reaches its wins at the last game. A retired match has finished
+  games but its last, which may be unfinished, and no side has its wins.
+  It may have no games.
+- It answers 201 with `{"data": {"hash", "match_id", "approvals"}}`. Each
+  approval is a `key_id` and a `player_id`, sorted by key id.
+
 ### Signing keys
 
 Each device holds a P-256 signing key, and the account it signs for holds
 the public half, so a signed result's kid names an account (#183).
 `services/signing_keys.py` holds the rules, and `v1/signing_keys.py` the
-routes, under `/v1/account/signing-keys`. Guests may use them. No route
-reads a result yet (#188).
+routes, under `/v1/account/signing-keys`. Guests may use them. Only the
+approval check reads a result yet (#188).
 
 - `signing_keys` holds one row per key. Its primary key `id` is the kid, 32
   bytes, typed `KeyId` through `Base.type_annotation_map`. `public_key` is
@@ -1027,8 +1057,16 @@ it to `src/routes/`.
   says "sign". Approve result appends this browser's signature
   (`appendSignature()`) and replaces the URL's fragment with the new
   envelope, so the page says "Approved on this device" from the link
-  alone, after a reload too. Nothing sends or keeps the approved result
-  yet (#195). Edit scores goes to the match's game 1. If this device's
+  alone, after a reload too. The approval never waits on the network.
+  Then `ServerCheck` sends the envelope to `POST
+  /v1/matches/{match_id}/approvals`, with the payload's match id, through
+  `approvalCheckQuery()`, in its own `QueryBoundary`. Its verdict is
+  `accepted`, or `refused` with the API's title for a 422. Accepted says
+  "FortyMM checked the signatures and the scores". Refused shows "FortyMM
+  refused this result" with the title. No network shows the boundary's
+  error with Try again, under "Approved on this device". The query is
+  keyed by the envelope, so a reload checks again. Nothing keeps the
+  approved result yet (#195). Edit scores goes to the match's game 1. If this device's
   pad for the match is empty, it first saves the reviewed games there,
   each player's points on their side, so the opponent edits them rather
   than typing them again. It checks no
@@ -1344,7 +1382,12 @@ A default handler answers `POST /v1/account/signing-keys` with a live
 key. `mockSigningKeys(answers)` records each registration and answers
 with `answers` in order, each a `KeyAnswer` (`live`, `revoked` or
 `taken`, a 409), then `live`. With `hold`, each answer waits for
-`release()`. `src/signing/vectors.test.ts` runs the README's signer
+`release()`. A default handler answers `POST
+/v1/matches/{match_id}/approvals` with a 201. `mockApprovals(answer)`
+records each check's match id and envelope, and answers `accepted`,
+`{ refused: title }` (a 422) or `unreachable`. A test can change its
+`answer`, and with `hold` each answer waits for `release()`.
+`src/signing/vectors.test.ts` runs the README's signer
 checks K1-K3, V1-V7, R1-R2 and I2 over every vector in
 `api/signed-results/vectors.json`, and `src/signing/deviceKey.test.tsx`
 tests the key through the app.
@@ -1379,7 +1422,7 @@ unmounts the page, so a test can render it again as a reload does.
 submission page directly, and finds its link and QR code.
 `AcceptResultPage` renders a link's path and fragment, approves the
 result or goes to edit the scores, and reads the game scores table, the
-approval status and the URL's fragment.
+approval status, the check with FortyMM and the URL's fragment.
 
 `HomePage.render({ path })` renders the app at another path, such as one
 with a query. `homePage.href` is the router's current path and query, so a

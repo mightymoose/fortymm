@@ -1,0 +1,45 @@
+import { useSuspenseQuery } from '@tanstack/react-query'
+import { useRouteContext } from '@tanstack/react-router'
+import { approvalCheckQuery } from '../../api/queries'
+import { Icon } from '../../components/Icon'
+import { QueryBoundary } from '../../components/QueryBoundary'
+
+type Props = { matchId: string; envelope: Uint8Array<ArrayBuffer> }
+
+// FortyMM's check of an approved result, under "Approved on this device".
+// The approval never waits on it, so with no network the page still says
+// the result is approved, and the check shows Try again.
+export function ServerCheck(props: Props) {
+  return (
+    <QueryBoundary
+      skeleton={
+        <p className="fm-notice" aria-busy="true">
+          <span className="fm-skeleton server-check-skeleton" />
+          <span className="fm-sr">Checking with FortyMM</span>
+        </p>
+      }
+    >
+      <Verdict {...props} />
+    </QueryBoundary>
+  )
+}
+
+function Verdict({ matchId, envelope }: Props) {
+  const { api } = useRouteContext({ from: '__root__' })
+  const { data: verdict } = useSuspenseQuery(approvalCheckQuery(api, matchId, envelope))
+  if (verdict.kind === 'refused') {
+    return (
+      <div className="fm-alert fm-alert--error" role="alert">
+        <Icon name="error" />
+        <p className="fm-alert__title">FortyMM refused this result</p>
+        <p className="fm-alert__body">{verdict.title}</p>
+      </div>
+    )
+  }
+  return (
+    <p className="fm-notice" role="status">
+      <Icon name="check" />
+      <span>FortyMM checked the signatures and the scores</span>
+    </p>
+  )
+}
