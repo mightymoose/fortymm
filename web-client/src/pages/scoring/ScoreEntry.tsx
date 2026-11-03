@@ -7,7 +7,7 @@ import { otherSide, parseGameScore, tally, type Side } from '../../scoring/board
 import type { Match, Viewer } from '../../scoring/demoMatches'
 import { planPress } from '../../scoring/planPress'
 import { clearGame, saveGame, slotsOf, submitResult, type Board, type Scorer } from '../../scoring/scratchpad'
-import { gamesWon, PATH, shown, type Sides } from './sides'
+import { gamesWon, midSentence, PATH, playerLabel, shown, wins, type Sides } from './sides'
 
 // The pad that edits one game: a score input per player with the games
 // tally between them, then the actions. A save stays on this device and the
@@ -69,16 +69,17 @@ export function ScoreEntry({
       case 'submit':
         if (press.save) saveGame(match.id, gameNumber, press.save, me)
         submitResult(match.id, me.playerId, press.games)
-        void navigate({ to: '/matches/$matchId/score-validations/new', params: { matchId: match.id }, search: true })
+        void navigate({ to: '/matches/$matchId/scores/submission', params: { matchId: match.id }, search: true })
     }
   }
 
   const side = (side: Side) => {
-    const name = match.players[side].name
+    const name = playerLabel(match, viewer, match.players[side].id)
     return (
       <div className="score-side">
         <p className="score-player">
-          <PlayerAvatar name={name} />
+          {/* Initials of "You" or "Your opponent" would read as a name. */}
+          {viewer.role === 'spectator' && <PlayerAvatar name={name} />}
           <span className="score-player__name">{name}</span>
         </p>
         <input
@@ -142,11 +143,15 @@ export function ScoreEntry({
             {message ??
               (press.kind === 'submit' ? (
                 <span className="fm-help">
-                  {match.players[press.winner].name} wins {gamesWon(tally(press.games), press.winner)}
+                  {wins(playerLabel(match, viewer, match.players[press.winner].id), gamesWon(tally(press.games), press.winner))}
                   {press.closedGaps && ', with the empty games left out'}
                 </span>
               ) : (
-                saved && <span className="fm-help">Saved by {saved.savedBy.name}</span>
+                saved && (
+                  <span className="fm-help">
+                    Saved by {midSentence(playerLabel(match, viewer, saved.savedBy.playerId, saved.savedBy.name))}
+                  </span>
+                )
               ))}
           </div>
           <div className="score-actions__buttons">

@@ -7,7 +7,7 @@ import { renderRoute, type AppRouter } from '../renderRoute'
 export class AwaitingValidationPage {
   // Renders the page for `matchId` directly, as a reload does.
   static async render(matchId = 'demo'): Promise<AwaitingValidationPage> {
-    return new AwaitingValidationPage(await renderRoute(`/matches/${matchId}/score-validations/new`))
+    return new AwaitingValidationPage(await renderRoute(`/matches/${matchId}/scores/submission`))
   }
 
   readonly router: AppRouter
@@ -39,7 +39,7 @@ export class AwaitingValidationPage {
 
   // The link that carries the signed result, once it is signed.
   async findLink(): Promise<HTMLAnchorElement> {
-    return (await screen.findByRole('link', { name: /\/r#/ })) as HTMLAnchorElement
+    return (await screen.findByRole('link', { name: /\/scores\/approvals\/new#/ })) as HTMLAnchorElement
   }
 
   async findAlert(): Promise<HTMLElement> {

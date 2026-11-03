@@ -67,7 +67,8 @@
 .score-result{display:flex;flex-direction:column;align-items:flex-start;gap:var(--s-3)}
 
 /* The waiting page (AwaitingValidation.tsx): the result, then its QR code
-   and link. The link is long, so it breaks anywhere. */
+   and link. The link is long, so it breaks anywhere. The accept page
+   (AcceptResult.tsx) has its own styles below. */
 .validation-summary{display:flex;flex-direction:column;gap:var(--s-2)}
 .validation-summary p{margin:0;font:500 var(--text-lg)/var(--lh-snug) var(--font-ui);color:var(--fg-1)}
 .validation-games{margin:0;padding-left:var(--s-5);color:var(--fg-2)}
@@ -76,6 +77,30 @@
 .validation-link{max-width:100%;font-size:var(--text-sm);overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden}
 .validation-link-skeleton{width:min(100%,480px);height:calc(var(--text-sm) * 3)}
 .validation-back{align-self:flex-start}
+
+/* The approval page (AcceptResult.tsx): what the opponent reported, the
+   game scores with the games won last, then Approve and Edit. Each row is
+   a role, You or Your opponent, with the username beside it when this
+   device has one. The winner's row is bold, as a final match row is. */
+.approval{max-width:640px;width:100%;margin:0 auto}
+.approval-hero{display:flex;flex-direction:column;gap:var(--s-2)}
+.approval-title{margin:0;font:700 var(--text-2xl)/1.1 var(--font-ui);letter-spacing:-0.01em;color:var(--fg-1)}
+.approval-lede{margin:0;font:400 var(--text-md)/var(--lh-snug) var(--font-ui);color:var(--fg-2)}
+.approval-status,.approval-status>.fm-ic{color:var(--success)}
+.approval-card{padding:var(--s-2) var(--s-5) var(--s-5);gap:var(--s-4)}
+.approval-games{overflow-x:auto}
+.approval-games .fm-games{width:100%}
+.approval-games th[scope=row]{color:var(--fg-2)}
+.approval-games th[scope=row] small{display:block;font:400 var(--text-xs)/1.3 var(--font-ui);color:var(--fg-3)}
+.approval-role{font-weight:600;color:var(--fg-1)}
+.approval-username{font-weight:400;color:var(--fg-3);overflow-wrap:anywhere}
+.approval-winner .approval-role{font-weight:700}
+.approval-games .approval-total{border-left:1px solid var(--border-subtle)}
+.approval-games td.approval-total{font-weight:700;color:var(--loser)}
+.approval-winner td.approval-total{color:var(--fg-1)}
+.approval-facts{margin:0;font:400 var(--text-sm)/var(--lh-snug) var(--font-ui);color:var(--fg-3)}
+.approval-form{display:flex;flex-direction:column;gap:var(--s-4)}
+.approval-actions{display:flex;flex-wrap:wrap;gap:var(--s-3)}
 
 /* The testing tools, set apart from the match by a rule above them. */
 .score-testing{display:flex;flex-direction:column;gap:var(--s-3);margin-top:var(--s-6);padding-top:var(--s-6);border-top:1px solid var(--border-subtle)}
@@ -89,6 +114,17 @@
 @media (max-width:880px){
   .score-content{gap:var(--s-4);padding-top:0}
   .score-title{font-size:var(--text-xl)}
+  .approval-title{font-size:var(--text-xl)}
+  .approval-card{padding:var(--s-1) var(--s-3) var(--s-4)}
+  /* The username drops under its role, so the game columns keep their
+     width up to a best of 7. */
+  .approval-username{display:block}
+  .approval-username>[aria-hidden]{display:none}
+  .approval-games .fm-games td,.approval-games .fm-games th[scope=col]{padding:6px 4px;min-width:20px}
+  .approval-games th[scope=row]{padding-right:var(--s-2)}
+  /* Submit sits on top, under the thumb, and both take the full width. */
+  .approval-actions{flex-direction:column}
+  .approval-actions .fm-btn{width:100%;min-height:52px}
   .score-side{gap:var(--s-3);padding:var(--s-3) var(--s-3) var(--s-4)}
   .score-player{gap:var(--s-2);font-size:var(--text-sm)}
   .score-player .fm-avatar{width:32px;height:32px;font-size:var(--text-xs)}
