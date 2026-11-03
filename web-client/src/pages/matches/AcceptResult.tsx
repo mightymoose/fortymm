@@ -7,8 +7,9 @@ import { Button } from '../../components/Button'
 import { ErrorScreen } from '../../components/ErrorScreen'
 import { Icon } from '../../components/Icon'
 import { Wordmark } from '../../components/Wordmark'
-import { checkGame, otherSide, tally, type Side } from '../../scoring/board'
-import { useScratchpad } from '../../scoring/scratchpad'
+import { checkGame, otherSide, tally, type GamePoints, type Side } from '../../scoring/board'
+import { demoMatch, viewerOf } from '../../scoring/demoMatches'
+import { readBoard, saveGame, storageKey, useScratchpad, type Scorer } from '../../scoring/scratchpad'
 import { Malformed } from '../../signing/cbor'
 import { appendSignature, decodeEnvelope } from '../../signing/envelope'
 import { signWithDeviceKey } from '../../signing/deviceKey'
@@ -151,7 +152,15 @@ function Result({ opened }: { opened: Opened }) {
             {result.replaces && ' · Corrects an earlier result'}
           </p>
         </section>
-        {!approved && <ApproveForm envelope={opened.envelope} side={mySide} matchId={matchId} />}
+        {!approved && (
+          <ApproveForm
+            envelope={opened.envelope}
+            games={result.games}
+            side={mySide}
+            matchId={matchId}
+            me={{ playerId: account.player.id, name: account.player.display_name }}
+          />
+        )}
       </main>
     </div>
   )
@@ -161,7 +170,19 @@ function Result({ opened }: { opened: Opened }) {
 // result with both signatures in the URL, so a reload shows it approved.
 // It all happens on this device. The page never says "sign": to a player,
 // signing is approving. Edit scores goes back to the match's scores.
-function ApproveForm({ envelope, side, matchId }: { envelope: Uint8Array<ArrayBuffer>; side: Side; matchId: string }) {
+function ApproveForm({
+  envelope,
+  games,
+  side,
+  matchId,
+  me,
+}: {
+  envelope: Uint8Array<ArrayBuffer>
+  games: GamePoints[]
+  side: Side
+  matchId: string
+  me: Scorer
+}) {
   const navigate = useNavigate()
   const submit = useMutation({
     networkMode: 'always',
@@ -192,12 +213,32 @@ function ApproveForm({ envelope, side, matchId }: { envelope: Uint8Array<ArrayBu
         <Button type="submit" variant="primary" size="lg" busy={submit.isPending}>
           {submit.isPending ? 'Approving…' : 'Approve result'}
         </Button>
-        <Link to={PATH} params={{ matchId, gameNumber: '1' }} className="fm-btn fm-btn--secondary fm-btn--lg">
+        <Link
+          to={PATH}
+          params={{ matchId, gameNumber: '1' }}
+          className="fm-btn fm-btn--secondary fm-btn--lg"
+          onClick={() => carryScores(matchId, games, side, me)}
+        >
           Edit scores
         </Link>
       </div>
     </form>
   )
+}
+
+// The opponent's device is often the first to see the match, so its pad is
+// empty. Edit scores saves the reviewed games there first, each player's
+// points on their side of the pad. A pad with games or a result keeps them.
+function carryScores(matchId: string, games: GamePoints[], reviewer: Side, me: Scorer): void {
+  const pad = readBoard(storageKey(matchId))
+  if (pad.submission.phase === 'submitted' || Object.keys(pad.games).length > 0) return
+  const viewer = viewerOf(demoMatch(matchId, { id: me.playerId, name: me.name }), me.playerId)
+  if (viewer.role !== 'player') return
+  games.forEach((points, game) => {
+    if (checkGame(points).kind !== 'legal') return
+    const onPad: GamePoints = viewer.side === reviewer ? points : [points[1], points[0]]
+    saveGame(matchId, game + 1, onPad, me)
+  })
 }
 
 function wonGame(points: [number, number], side: Side): boolean {

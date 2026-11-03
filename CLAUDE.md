@@ -1014,7 +1014,7 @@ it to `src/routes/`.
   come from the API, every viewer stands in as the player whose side
   hasn't signed, or once both have, the side that signed last. It shows
   only what the link's payload, the session and this device's scratchpad
-  say, and never reads `demoMatch()`. "Review match score" heads it, then
+  say. "Review match score" heads it, then
   the outcome for the viewer, such as "Your opponent reported that you
   lost 3–1. Do these scores look right?" One `.fm-games` table follows:
   a row for You, then one for Your opponent, each game's points, then
@@ -1028,7 +1028,10 @@ it to `src/routes/`.
   (`appendSignature()`) and replaces the URL's fragment with the new
   envelope, so the page says "Approved on this device" from the link
   alone, after a reload too. Nothing sends or keeps the approved result
-  yet (#195). Edit scores goes to the match's game 1. It checks no
+  yet (#195). Edit scores goes to the match's game 1. If this device's
+  pad for the match is empty, it first saves the reviewed games there,
+  each player's points on their side, so the opponent edits them rather
+  than typing them again. It checks no
   signature. With no key, it says the browser can't sign yet. A missing
   or malformed fragment shows "This link isn’t a FortyMM result".
 - Anyone who can open the match can save any game, in any order. The

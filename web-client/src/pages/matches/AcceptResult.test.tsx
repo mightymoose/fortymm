@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AcceptResultPage } from '../../test/pages/AcceptResultPage'
+import { ScoreGamePage } from '../../test/pages/ScoreGamePage'
 import { server, sessionResponse } from '../../test/server'
 import { saveGame } from '../../scoring/scratchpad'
 import { hex } from '../../signing/bytes'
@@ -121,12 +122,24 @@ describe('AcceptResult', () => {
     expect(reloaded.gameScores[0][0]).toBe('You')
   })
 
-  it('goes back to edit the scores', async () => {
+  it('goes back to edit the scores, carrying the reviewed games to an empty pad', async () => {
     const page = await AcceptResultPage.render(await link())
     await page.editScores()
 
     await page.waitForScores('/matches/demo/scores/game/1/edit')
+    const pad = new ScoreGamePage(page.router)
+    expect([1, 2, 3, 4].map((game) => pad.slotScore(game))).toEqual(['5–11', '11–7', '9–11', '4–11'])
     expect(requests).toEqual([])
+  })
+
+  it('keeps the games a pad already has when going back to edit', async () => {
+    saveGame('demo', 1, [11, 2], { playerId: ME.id, name: ME.display_name })
+    const page = await AcceptResultPage.render(await link())
+    await page.editScores()
+
+    await page.waitForScores('/matches/demo/scores/game/1/edit')
+    const pad = new ScoreGamePage(page.router)
+    expect([1, 2].map((game) => pad.slotScore(game))).toEqual(['11–2', '–'])
   })
 
   it('shows every game of a best of 7', async () => {
