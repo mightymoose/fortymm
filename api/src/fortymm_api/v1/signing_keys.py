@@ -50,8 +50,8 @@ class AccountSigningKey(BaseModel):
     # When the device signed out, or a newer device took its place past the
     # account's 20 live keys. The key still verifies what it signed.
     signed_out_at: datetime | None
-    # When the account reported the device compromised. The key verifies
-    # nothing since.
+    # When the account or an administrator reported the device compromised.
+    # The key verifies nothing since, not even what it signed before.
     revoked_at: datetime | None
 
 

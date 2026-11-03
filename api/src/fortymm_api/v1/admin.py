@@ -1,18 +1,20 @@
-"""The admin page's routes: permissions, the roles that grant them, and the
-accounts that hold the roles."""
+"""The admin page's routes: permissions, the roles that grant them, the
+accounts that hold the roles, and every account's signing keys."""
 
 from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Path
 from pydantic import BaseModel, StringConstraints
 
 from fortymm_api.accounts import AccountId, CurrentAccount
 from fortymm_api.auth import require_permission
 from fortymm_api.database import DatabaseSession
 from fortymm_api.permissions import Permission, RoleId
-from fortymm_api.services import roles
+from fortymm_api.services import roles, signing_keys
+from fortymm_api.services.signing_keys import KeyState
+from fortymm_api.signing_keys import KeyId
 from fortymm_api.v1.errors import (
     FORBIDDEN,
     NO_SESSION,
@@ -20,6 +22,8 @@ from fortymm_api.v1.errors import (
     Responses,
     errors,
 )
+from fortymm_api.v1.signing_keys import KEY_ID_PATTERN
+from fortymm_api.v1.types import HexBytes
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -27,6 +31,9 @@ AdminViewer = Annotated[CurrentAccount, require_permission(Permission.ADMIN_VIEW
 RoleManager = Annotated[CurrentAccount, require_permission(Permission.ROLES_MANAGE)]
 AccountRoleManager = Annotated[
     CurrentAccount, require_permission(Permission.ACCOUNT_ROLES_MANAGE)
+]
+SigningKeyRevoker = Annotated[
+    CurrentAccount, require_permission(Permission.SIGNING_KEYS_REVOKE)
 ]
 
 READ_ERRORS: Responses = {**NO_SESSION, **FORBIDDEN}
@@ -49,6 +56,7 @@ INVALID_ROLE: Responses = {
     }
 }
 NO_ACCOUNT = errors(404, "No verified account has this id")
+NO_KEY = errors(404, "No key has this id")
 LAST_ADMINISTRATOR = errors(
     409,
     "The change would leave no account with `account_roles.manage`, so nobody"
@@ -174,6 +182,50 @@ class AccountRolesRequest(BaseModel):
     role_ids: list[UUID]
 
 
+class AdminKeyAccount(BaseModel):
+    id: UUID
+    # Null for a guest account.
+    email: str | None
+    # As in AdminAccount.
+    display_name: str | None
+
+
+class AdminSigningKey(BaseModel):
+    # The key's kid, the thumbprint its signatures cite, in lowercase hex.
+    id: HexBytes
+    label: str
+    created_at: datetime
+    # Revoked wins over signed out, which wins over live.
+    state: KeyState
+    # When the device signed out, or a newer device took its place past the
+    # account's 20 live keys. The key still verifies what it signed.
+    signed_out_at: datetime | None
+    # When the key was revoked. It verifies nothing since, not even what it
+    # signed before.
+    revoked_at: datetime | None
+    # Who revoked it: the key's own account, or an administrator. Flat
+    # rather than a nullable object, because the schema has no `anyOf` with
+    # null (tests/test_openapi.py).
+    revoked_by: UUID | None
+    # Null unless revoked, or when the key's own guest account revoked it.
+    revoked_by_email: str | None
+    account: AdminKeyAccount
+
+
+class AdminSigningKeysMeta(BaseModel):
+    # More keys match than `data` holds. Narrow `search` to see them.
+    has_more: bool
+
+
+class AdminSigningKeysResponse(BaseModel):
+    data: list[AdminSigningKey]
+    meta: AdminSigningKeysMeta
+
+
+class AdminSigningKeyResponse(BaseModel):
+    data: AdminSigningKey
+
+
 def permission_model(permission: roles.PermissionSummary) -> AdminPermission:
     return AdminPermission(
         key=permission.key,
@@ -199,6 +251,25 @@ def account_model(account: roles.AdminAccount) -> AdminAccount:
         email=account.email,
         display_name=account.display_name,
         role_ids=list(account.role_ids),
+    )
+
+
+def signing_key_model(key: signing_keys.AdminSigningKey) -> AdminSigningKey:
+    revocation = key.revocation
+    return AdminSigningKey(
+        id=key.id,
+        label=key.label,
+        created_at=key.created_at,
+        state=key.state,
+        signed_out_at=key.signed_out_at,
+        revoked_at=revocation.at if revocation else None,
+        revoked_by=revocation.by if revocation else None,
+        revoked_by_email=revocation.by_email if revocation else None,
+        account=AdminKeyAccount(
+            id=key.account.id,
+            email=key.account.email,
+            display_name=key.account.display_name,
+        ),
     )
 
 
@@ -393,3 +464,38 @@ def set_account_roles(
         frozenset(RoleId(role) for role in body.role_ids),
     )
     return AdminAccountResponse(data=account_model(updated))
+
+
+@router.get("/signing-keys", responses=READ_ERRORS)
+def admin_signing_keys(
+    session: DatabaseSession, account: AdminViewer, search: str = ""
+) -> AdminSigningKeysResponse:
+    """List every account's signing keys, guests' too, newest first, with
+    each key's account and who revoked it. Needs `admin.view`.
+
+    `search` keeps the keys whose account's email or player name contains
+    it, whatever its case. The list holds at most 50. `meta.has_more` says
+    that more match.
+    """
+    page = signing_keys.find_keys(session, search)
+    return AdminSigningKeysResponse(
+        data=[signing_key_model(key) for key in page.keys],
+        meta=AdminSigningKeysMeta(has_more=page.has_more),
+    )
+
+
+@router.post("/signing-keys/{key_id}/revoke", responses={**WRITE_ERRORS, **NO_KEY})
+def revoke_any_signing_key(
+    session: DatabaseSession,
+    account: SigningKeyRevoker,
+    key_id: Annotated[str, Path(pattern=KEY_ID_PATTERN)],
+) -> AdminSigningKeyResponse:
+    """Revoke any account's signing key. Needs `signing_keys.revoke`.
+
+    The key verifies nothing from now on, not even what it signed before.
+    Results already accepted stay. The key's account stays signed in, and
+    its device makes a new key at its next registration. Revoking a revoked
+    key changes nothing.
+    """
+    key = signing_keys.revoke_any_key(session, account.id, KeyId(bytes.fromhex(key_id)))
+    return AdminSigningKeyResponse(data=signing_key_model(key))

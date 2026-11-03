@@ -1716,6 +1716,164 @@
           }
         }
       }
+    },
+    "/v1/admin/signing-keys": {
+      "get": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Admin Signing Keys",
+        "description": "List every account's signing keys, guests' too, newest first, with\neach key's account and who revoked it. Needs `admin.view`.\n\n`search` keeps the keys whose account's email or player name contains\nit, whatever its case. The list holds at most 50. `meta.has_more` says\nthat more match.",
+        "operationId": "admin_signing_keys",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Search"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminSigningKeysResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/signing-keys/{key_id}/revoke": {
+      "post": {
+        "tags": [
+          "admin"
+        ],
+        "summary": "Revoke Any Signing Key",
+        "description": "Revoke any account's signing key. Needs `signing_keys.revoke`.\n\nThe key verifies nothing from now on, not even what it signed before.\nResults already accepted stay. The key's account stays signed in, and\nits device makes a new key at its next registration. Revoking a revoked\nkey changes nothing.",
+        "operationId": "revoke_any_signing_key",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "key_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Key Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminSigningKeyResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request has no valid session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account's roles don't grant the permission the route needs",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request's Content-Type isn't application/json",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No key has this id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -2011,6 +2169,36 @@
         ],
         "title": "AdminAccountsResponse"
       },
+      "AdminKeyAccount": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Email"
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Display Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "email",
+          "display_name"
+        ],
+        "title": "AdminKeyAccount"
+      },
       "AdminPermission": {
         "properties": {
           "key": {
@@ -2131,6 +2319,119 @@
           "data"
         ],
         "title": "AdminRolesResponse"
+      },
+      "AdminSigningKey": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^(?:[0-9a-f]{2})*$",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "state": {
+            "$ref": "#/components/schemas/KeyState"
+          },
+          "signed_out_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Signed Out At"
+          },
+          "revoked_at": {
+            "format": "date-time",
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Revoked At"
+          },
+          "revoked_by": {
+            "format": "uuid",
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Revoked By"
+          },
+          "revoked_by_email": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "title": "Revoked By Email"
+          },
+          "account": {
+            "$ref": "#/components/schemas/AdminKeyAccount"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "created_at",
+          "state",
+          "signed_out_at",
+          "revoked_at",
+          "revoked_by",
+          "revoked_by_email",
+          "account"
+        ],
+        "title": "AdminSigningKey"
+      },
+      "AdminSigningKeyResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AdminSigningKey"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "AdminSigningKeyResponse"
+      },
+      "AdminSigningKeysMeta": {
+        "properties": {
+          "has_more": {
+            "type": "boolean",
+            "title": "Has More"
+          }
+        },
+        "type": "object",
+        "required": [
+          "has_more"
+        ],
+        "title": "AdminSigningKeysMeta"
+      },
+      "AdminSigningKeysResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/AdminSigningKey"
+            },
+            "type": "array",
+            "title": "Data"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/AdminSigningKeysMeta"
+          }
+        },
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "title": "AdminSigningKeysResponse"
       },
       "Answer": {
         "type": "string",
@@ -2359,6 +2660,16 @@
           "database"
         ],
         "title": "HealthStatus"
+      },
+      "KeyState": {
+        "type": "string",
+        "enum": [
+          "live",
+          "signed_out",
+          "revoked"
+        ],
+        "title": "KeyState",
+        "description": "A key's state. Nothing stores it: _state() derives it."
       },
       "LogoutData": {
         "properties": {

@@ -1,14 +1,18 @@
 """The HTTP layer of the admin routes. tests/services/test_roles.py covers the
 rules."""
 
+import hashlib
 from collections.abc import Iterator
 from typing import Any
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 
+from fortymm_api.accounts import AccountId
 from fortymm_api.main import create_app
+from fortymm_api.signing_keys import SigningPrivateKey
 
 JSON = {"Content-Type": "application/json"}
 FORBIDDEN = {
@@ -364,3 +368,154 @@ def test_a_guest_account_is_not_found(
     assert response.json() == {
         "errors": [{"status": "404", "title": "No verified account has this id"}]
     }
+
+
+KEY = SigningPrivateKey(hashlib.sha256(b"admin route test key").digest())
+KID = KEY.public_key.kid.hex()
+
+
+def register_key(client: TestClient, account: dict[str, Any]) -> None:
+    response = client.post(
+        "/v1/account/signing-keys",
+        json={
+            "public_key": KEY.public_key.to_cose_key().hex(),
+            "proof": KEY.registration_proof(AccountId(UUID(account["id"]))).hex(),
+            "label": "Ann's phone",
+        },
+    )
+    assert response.status_code == 200
+
+
+@pytest.fixture
+def viewer(client: TestClient, migrated_database: Engine) -> dict[str, Any]:
+    """The session's account, verified and holding only `admin.view`."""
+    account: dict[str, Any] = client.post("/v1/session", headers=JSON).json()["data"][
+        "account"
+    ]
+    with migrated_database.begin() as connection:
+        connection.execute(
+            text("UPDATE accounts SET email = 'vic@example.com' WHERE id = :id"),
+            {"id": account["id"]},
+        )
+        role = connection.scalar(
+            text("INSERT INTO roles (name) VALUES ('Viewer') RETURNING id")
+        )
+        connection.execute(
+            text(
+                "INSERT INTO role_permissions (role_id, permission_key)"
+                " VALUES (:role, 'admin.view')"
+            ),
+            {"role": role},
+        )
+        connection.execute(
+            text("INSERT INTO account_roles (account_id, role_id) VALUES (:id, :role)"),
+            {"id": account["id"], "role": role},
+        )
+    return account
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/v1/admin/signing-keys"),
+        ("POST", f"/v1/admin/signing-keys/{KID}/revoke"),
+    ],
+)
+def test_the_signing_key_routes_need_a_session(
+    client: TestClient, method: str, path: str
+) -> None:
+    response = client.request(method, path, headers=JSON)
+
+    assert response.status_code == 401
+
+
+def test_lists_the_signing_keys(client: TestClient, admin: dict[str, Any]) -> None:
+    register_key(client, admin)
+
+    response = client.get("/v1/admin/signing-keys", params={"search": "ANN@"})
+
+    assert response.status_code == 200
+    [key] = response.json()["data"]
+    assert key == {
+        "id": KID,
+        "label": "Ann's phone",
+        "created_at": key["created_at"],
+        "state": "live",
+        "signed_out_at": None,
+        "revoked_at": None,
+        "revoked_by": None,
+        "revoked_by_email": None,
+        "account": {
+            "id": admin["id"],
+            "email": "ann@example.com",
+            "display_name": admin["player"]["display_name"],
+        },
+    }
+    assert response.json()["meta"] == {"has_more": False}
+    assert (
+        client.get("/v1/admin/signing-keys", params={"search": "bob@"}).json()["data"]
+        == []
+    )
+
+
+def test_listing_signing_keys_needs_admin_view(client: TestClient) -> None:
+    client.post("/v1/session", headers=JSON)
+
+    response = client.get("/v1/admin/signing-keys")
+
+    assert response.status_code == 403
+    assert response.json() == FORBIDDEN
+
+
+def test_revokes_any_signing_key(client: TestClient, admin: dict[str, Any]) -> None:
+    register_key(client, admin)
+
+    response = client.post(f"/v1/admin/signing-keys/{KID}/revoke", headers=JSON)
+
+    assert response.status_code == 200
+    key = response.json()["data"]
+    assert key["id"] == KID
+    assert key["state"] == "revoked"
+    assert key["revoked_at"] is not None
+    assert key["revoked_by"] == admin["id"]
+    assert key["revoked_by_email"] == "ann@example.com"
+
+
+def test_revoking_needs_signing_keys_revoke(
+    client: TestClient, viewer: dict[str, Any]
+) -> None:
+    register_key(client, viewer)
+
+    assert client.get("/v1/admin/signing-keys").status_code == 200
+    response = client.post(f"/v1/admin/signing-keys/{KID}/revoke", headers=JSON)
+
+    assert response.status_code == 403
+    assert response.json() == FORBIDDEN
+
+
+def test_revoking_an_unknown_key_is_not_found(
+    client: TestClient, admin: dict[str, Any]
+) -> None:
+    response = client.post(f"/v1/admin/signing-keys/{KID}/revoke", headers=JSON)
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "errors": [{"status": "404", "title": "No key has this id"}]
+    }
+
+
+@pytest.mark.parametrize("key_id", [KID.upper(), KID[:-1]])
+def test_a_revoke_path_that_is_not_a_kid_is_unprocessable(
+    client: TestClient, admin: dict[str, Any], key_id: str
+) -> None:
+    response = client.post(f"/v1/admin/signing-keys/{key_id}/revoke", headers=JSON)
+
+    assert response.status_code == 422
+
+
+def test_a_revoke_without_json_is_unsupported(
+    client: TestClient, admin: dict[str, Any]
+) -> None:
+    response = client.post(f"/v1/admin/signing-keys/{KID}/revoke")
+
+    assert response.status_code == 415
