@@ -946,8 +946,9 @@ it to `src/routes/`.
   a whole number from 1 to the match's `bestOf` goes to game 1, with a
   replace. It is laid out like fortymm-real's score entry: one pad with
   a big score input per player and the games tally between them, the
-  viewer's player on the left, then the actions. The pad is a form, so
-  Enter saves a legal score. A strip
+  viewer's player on the left, then the actions. The left score has
+  focus when a game opens. Enter moves to the other score while it is
+  empty, and saves a legal score once both are in. A strip
   links to each game, with its score in mono and the game winner's
   points bold. Games after the decider step back, under "Match decided
   after game N", and stay editable.
@@ -961,6 +962,16 @@ it to `src/routes/`.
   board. A spectator sees who submits instead. A submitted board is
   frozen for everyone, and its submitter can Edit scores. Nothing is
   signed or sent.
+- `src/scoring/demoServer.ts` stands in for the API's match routes. The
+  page loads the match through it in a `QueryBoundary`, with a skeleton,
+  and saves, clears, submits and reopens through it with mutations. Each
+  call waits, then may fail, as the page's `network` search param says:
+  `normal` (300ms), `slow` (2.5s), `flaky` (every second request answers
+  503), `offline` (no response) or `broken` (500). The app's query client
+  retries a failed load, so a load fails only after its retries. A failed
+  write keeps the typed score and shows Try again, except a 409, which
+  means the result was submitted. The inputs are read-only while a write
+  is in flight, so focus stays put.
 - `src/scoring/scratchpad.ts` keeps each match's scratchpad in
   `localStorage`, under `fortymm-scratchpad:<matchId>`: the games by
   game number, who saved each, and the submission (`open` or

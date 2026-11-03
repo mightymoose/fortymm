@@ -1,17 +1,32 @@
-import { screen, within } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
+import { expect } from 'vitest'
 import userEvent from '@testing-library/user-event'
+import type { Network } from '../../scoring/demoServer'
 import { renderRoute, type AppRouter } from '../renderRoute'
 
 // Page object for a match's scratchpad, the page that edits one game's
 // score. The mock session's player is `excited egret 387`, who plays the
 // `demo` match against `brave badger 214`.
 export class ScoreGamePage {
+  // `settle: false` returns while the match is still loading.
   static async render(
     path = '/matches/demo/scores/game/1/edit',
+    { settle = true }: { settle?: boolean } = {},
   ): Promise<ScoreGamePage> {
     const page = new ScoreGamePage(await renderRoute(path))
-    await page.settle()
+    if (settle) await page.settle()
     return page
+  }
+
+  // Switches the demo server's network for the page's next requests, as a
+  // connection that drops or comes back.
+  async switchNetwork(network: Network): Promise<void> {
+    await this.router.navigate({ to: '.', search: network === 'normal' ? {} : { network } })
+    await this.settle()
+  }
+
+  async reconnect(): Promise<void> {
+    await this.switchNetwork('normal')
   }
 
   readonly router: AppRouter
@@ -128,7 +143,10 @@ export class ScoreGamePage {
     await this.settle()
   }
 
+  // Waits until the page has nothing loading or saving, as the demo server
+  // answers after a delay.
   async settle(): Promise<void> {
+    await waitFor(() => expect(document.querySelector('[aria-busy=true]')).toBeNull(), { timeout: 3000 })
     for (let tick = 0; tick < 5; tick++) {
       await new Promise((resolve) => setTimeout(resolve))
     }

@@ -1,4 +1,4 @@
-import { within } from '@testing-library/react'
+import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { ErrorPage } from '../../test/pages/ErrorPage'
@@ -25,11 +25,86 @@ describe('ScoreGame', () => {
     expect(page.slot(1)).toHaveAttribute('aria-current', 'page')
   })
 
+  it('focuses the left score when a game opens', async () => {
+    const page = await ScoreGamePage.render()
+
+    expect(page.input(ME)).toHaveFocus()
+  })
+
+  it('moves to the other score on Enter while it is empty', async () => {
+    const page = await ScoreGamePage.render()
+
+    await userEvent.type(page.input(ME), '11{Enter}')
+
+    expect(page.input(OPPONENT)).toHaveFocus()
+    expect(page.slotScore(1)).toBe('–')
+
+    await userEvent.type(page.input(OPPONENT), '4{Enter}')
+    await page.settle()
+
+    expect(page.slotScore(1)).toBe('11–4')
+    expect(page.heading).toHaveTextContent('Game 2')
+    expect(page.input(ME)).toHaveFocus()
+  })
+
+  it('shows the match loading, then the pad', async () => {
+    const page = await ScoreGamePage.render(undefined, { settle: false })
+
+    expect(screen.getByLabelText('Loading the match')).toBeInTheDocument()
+
+    await page.settle()
+
+    expect(page.input(ME)).toBeInTheDocument()
+  })
+
+  it('says when the match cannot load, and loads it on Try again', async () => {
+    const page = await ScoreGamePage.render('/matches/demo/scores/game/1/edit?network=offline')
+
+    expect(await screen.findByRole('alert', {}, { timeout: 3000 })).toHaveTextContent('Can’t reach FortyMM')
+
+    await page.reconnect()
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await page.settle()
+
+    expect(page.input(ME)).toBeInTheDocument()
+  })
+
+  it('shows a save in flight and keeps the inputs focused', async () => {
+    const page = await ScoreGamePage.render()
+    await page.enter({ [ME]: '11', [OPPONENT]: '3' })
+
+    await userEvent.click(page.saveButton!)
+
+    expect(screen.getByRole('button', { name: 'Saving…' })).toHaveAttribute('aria-busy', 'true')
+    expect(page.input(ME)).toHaveAttribute('readonly')
+    await page.settle()
+    expect(page.slotScore(1)).toBe('11–3')
+  })
+
+  it('keeps the score after a failed save, and saves it on Try again', async () => {
+    const page = await ScoreGamePage.render()
+    await page.switchNetwork('broken')
+    await page.enter({ [ME]: '11', [OPPONENT]: '9' })
+
+    await page.save()
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Couldn’t save game 1')
+    expect(page.slotScore(1)).toBe('–')
+    expect(page.input(ME)).toHaveValue('11')
+
+    await page.reconnect()
+    await page.click('Try again')
+
+    expect(page.slotScore(1)).toBe('11–9')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
   it('saves a legal game when Enter is pressed in a score', async () => {
     const page = await ScoreGamePage.render()
 
     await page.enter({ [ME]: '11', [OPPONENT]: '6' })
     await userEvent.type(page.input(OPPONENT), '{Enter}')
+    await page.settle()
 
     expect(page.slotScore(1)).toBe('11–6')
     expect(page.href).toBe('/matches/demo/scores/game/2/edit')
@@ -40,6 +115,7 @@ describe('ScoreGame', () => {
 
     await page.enter({ [ME]: '11', [OPPONENT]: '10' })
     await userEvent.type(page.input(OPPONENT), '{Enter}')
+    await page.settle()
 
     expect(page.slotScore(1)).toBe('–')
     expect(page.href).toBe('/matches/demo/scores/game/1/edit')
